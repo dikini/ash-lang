@@ -1,0 +1,31 @@
+{
+  "status": "five final connected checks pass on frozen Arena source; not yet a verified source commit or integrated gate",
+  "source_manifest_sha256": "3d351316ad975160a55343e3f0f6cc37de4c23655e2bbd6e431219d360feabc3",
+  "recovery": "bbcfd8bded6da3366dace324468327767ffa30ae",
+  "files": {
+    "round-retention-lint-pins.json": "3d351316ad975160a55343e3f0f6cc37de4c23655e2bbd6e431219d360feabc3",
+    "round-retention-lint-checks.json": "9e103c5128bff9c0562e0b2145278c261321fd9b45e1f7b63cb2307e06a33eab",
+    "round-retention-lint-carrier-inventory.log": "2e36fc7dce2b57e8ed259ab5fdf818fdaf7cc27d25ef1e88a00344a94adcf1c6",
+    "round-retention-lint-strict-clippy.log": "a146df6eeabb307f51be07b015be5c587d7399e2a6b78fae131a4a58843ef6c6",
+    "round-retention-lint-adapter.log": "1d719f829ed9d1a26376c2e1e31d32476519422caef3b547e88ab2973bc0ed90",
+    "round-retention-lint-native41.log": "fe527275fa83cee6d66cbba57c3cfbea3752a8f163e582e695f0aaf1b8cae132",
+    "round-retention-lint-format.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "native41": {
+    "result": "Completed(41, Closed)",
+    "completed_phase_work": {
+      "SourceChecking": 88793,
+      "FinalElaboration": 27096,
+      "IndependentCore": 82277
+    }
+  },
+  "adapter_summaries": [
+    "test result: ok. 41 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s",
+    "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+    "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+  ],
+  "environment": {
+    "CARGO_BUILD_JOBS": "1",
+    "RUSTC_WRAPPER": ""
+  }
+}

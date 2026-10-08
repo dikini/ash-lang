@@ -70,7 +70,8 @@ where
             .charge(1)
             .map_err(|()| EvidenceAuditFailure::ConstraintResource)?;
         match &expression.kind {
-            ResolvedExprKind::Integer(_)
+            ResolvedExprKind::String(_)
+            | ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)
             | ResolvedExprKind::Unit
             | ResolvedExprKind::Constructor(_) => {}
@@ -116,6 +117,11 @@ where
                 pending.push(matched.scrutinee.as_ref());
                 pending.extend(matched.arms.iter().map(|arm| &arm.body));
             }
+            ResolvedExprKind::ProviderResource(resource) => reserve_and_extend(
+                &mut pending,
+                [resource.initializer.as_ref(), resource.body.as_ref()],
+                budget,
+            )?,
             ResolvedExprKind::Resource(resource) => reserve_and_extend(
                 &mut pending,
                 [resource.initializer.as_ref(), resource.body.as_ref()],
@@ -412,8 +418,8 @@ mod tests {
                     spelling: "Show".into(),
                     origin: Origin::Source(span),
                 },
-                arguments: vec![ResolvedType {
-                    ty: Type::Unit,
+                arguments: vec![crate::resolved::ResolvedOwnerArgument {
+                    ty: crate::types::KindedArgument::TypeArg(Type::Unit),
                     provenance: ResolvedTypeProvenance::new(
                         vec![ResolvedTypeProvenanceNode::Fact(span)],
                         0,

@@ -41,6 +41,7 @@ parse-found =
     { $found ->
         [identifier] Тук има име.
         [uppercase-identifier] Тук има име с начална главна буква.
+        [string-literal] Тук има низов литерал.
         [integer] Тук има целочислен литерал.
         [line-end] Тук свършва логически ред.
         [end-of-file] Входът свършва тук.
@@ -1068,6 +1069,7 @@ runtime-missing-binding = Средата за изпълнение не наме
 runtime-unexpected-recursive-binding = Рекурсивно свързване няма проверената форма на инициализатор.
 runtime-environment-capacity = Средата за изпълнение не може да запази още едно лексикално свързване.
 runtime-invalid-control-state = Средата за изпълнение достигна несъгласувано състояние на управление.
+runtime-foreign-binding = Нарушен е договорът за изпълнима външна връзка или преобразуване.
 runtime-heap-capacity = Динамичната памет на средата за изпълнение не може да побере още една клетка.
 runtime-captured-control-capacity = Средата за изпълнение не може да запази още един прихванат кадър на управление.
 runtime-resource-capacity = Средата за изпълнение не може да представи още един активен ресурс или ново активиране.
@@ -1078,6 +1080,10 @@ runtime-impossible-match = Съпоставяне, проверено като �
 runtime-capacity-exhausted = Зададен лимит на ресурс или граница на представянето не допуска заявката.
 runtime-allocator-refused = Разпределителят на памет на хоста отказа заявка за заделяне.
 runtime-storage-reservation-failed = Заделянето на памет на хоста е неуспешно; първопричината не е определена.
+runtime-resource-admission-refused = Заявката за ресурс е отказана; първопричината не е определена.
+runtime-resource-packed-bytes = пакетирани байтове
+runtime-resource-foreign-admission = приемане на външна операция
+runtime-resource-foreign-codec-storage = памет за външно кодиране и декодиране
 runtime-work-budget-exhausted = Бюджетът за работа на средата за изпълнение не допуска заявената работа.
 runtime-phase-acquisition = придобиване на ресурс
 runtime-phase-capture = прихващане или възстановяване на продължение
@@ -1266,3 +1272,11 @@ resolve-work-state = Вътрешното състояние на компила
     [right-operand] десен операнд
     [left-operand] ляв операнд
     }.
+
+module-unknown-foreign = Този импорт не посочва регистриран чужд модул.
+
+foreign-privilege-unavailable = Контролираните чужди извиквания изискват проверка в контекста на доставчик.
+
+lex-invalid-string-escape = Това екраниране не е позволено в низ.
+lex-unterminated-string = Низът няма затваряща двойна кавичка.
+lex-invalid-string-character = Низът съдържа нов ред или неекраниран контролен ASCII символ.

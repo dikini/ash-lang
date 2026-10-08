@@ -201,6 +201,14 @@ fn structural_weight(node: &ConcreteNode) -> usize {
             super::PATTERN_STRUCTURAL_WEIGHT
         }
         NodeKind::MatchExpression | NodeKind::HandlerExpression => super::MATCH_STRUCTURAL_WEIGHT,
+        NodeKind::AtomicType
+        | NodeKind::EffectInstance
+        | NodeKind::InterfaceApplication
+        | NodeKind::OperationReference
+            if child_nodes(node).any(|child| child.kind == NodeKind::EffectRow) =>
+        {
+            1
+        }
         NodeKind::Type if child_nodes(node).any(|child| child.kind == NodeKind::Type) => 1,
         NodeKind::Kind if child_nodes(node).any(|child| child.kind == NodeKind::Kind) => 1,
         _ => 0,
@@ -259,6 +267,7 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             while shape.peek_node_is(NodeKind::TypeDeclaration)
                 || shape.peek_node_is(NodeKind::NewtypeDeclaration)
                 || shape.peek_node_is(NodeKind::InterfaceDeclaration)
+                || shape.peek_node_is(NodeKind::ResourceDefinition)
                 || shape.peek_node_is(NodeKind::EffectDeclaration)
                 || shape.peek_node_is(NodeKind::ImplementationDeclaration)
                 || shape.peek_node_is(NodeKind::EquationalGlobal)
@@ -463,10 +472,10 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
                 shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
             }
             shape.token(&TokenKind::Less)?;
-            shape.node(NodeKind::Type)?;
+            shape.owner_argument()?;
             while shape.peek_token_is(&TokenKind::Comma) {
                 shape.token(&TokenKind::Comma)?;
-                shape.node(NodeKind::Type)?;
+                shape.owner_argument()?;
             }
             shape.token(&TokenKind::Greater)?;
         }
@@ -669,6 +678,119 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             shape.token(&TokenKind::Resume)?;
             shape.expression()?;
         }
+        NodeKind::ResourceDefinition => {
+            if shape.peek_token_is(&TokenKind::Pub) {
+                shape.token(&TokenKind::Pub)?;
+            }
+            shape.token(&TokenKind::Resource)?;
+            shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
+            shape.node(NodeKind::TypeParameters)?;
+            shape.token(&TokenKind::LeftBrace)?;
+            shape.token(&TokenKind::LineEnd)?;
+            for index in 0..9 {
+                if index == 6 && shape.peek_node_is(NodeKind::ResourceFamily) {
+                    shape.node(NodeKind::ResourceFamily)?;
+                    shape.token(&TokenKind::LineEnd)?;
+                }
+                shape.node(NodeKind::ResourceField)?;
+                if index < 8 || shape.peek_token_is(&TokenKind::LineEnd) {
+                    shape.token(&TokenKind::LineEnd)?;
+                }
+            }
+            shape.token(&TokenKind::RightBrace)?;
+        }
+        NodeKind::ResourceFamily => {
+            shape.token_matching(
+                |kind| matches!(kind, TokenKind::Identifier(word) if word == "family"),
+            )?;
+            shape.node(NodeKind::TypeParameters)?;
+            shape.node(NodeKind::WhereClause)?;
+            shape.token(&TokenKind::LeftBrace)?;
+            shape.token(&TokenKind::LineEnd)?;
+            for (index, role) in ["provider", "effect", "interpret", "handlers"]
+                .into_iter()
+                .enumerate()
+            {
+                let field = shape.peek_node().ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
+                let matches_role =
+                    direct_tokens(field, tokens)
+                        .next()
+                        .is_some_and(|token| match &token.kind {
+                            TokenKind::Effect => role == "effect",
+                            TokenKind::Identifier(word) => role != "effect" && word == role,
+                            _ => false,
+                        });
+                if !matches_role {
+                    return malformed(InternalReason::UnexpectedShape);
+                }
+                shape.node(NodeKind::ResourceField)?;
+                if index < 3 || shape.peek_token_is(&TokenKind::LineEnd) {
+                    shape.token(&TokenKind::LineEnd)?;
+                }
+            }
+            shape.token(&TokenKind::RightBrace)?;
+        }
+        NodeKind::ResourceField => {
+            let word = direct_tokens(node, tokens)
+                .next()
+                .ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
+            let TokenKind::Identifier(word) = &word.kind else {
+                shape.token(&TokenKind::Effect)?;
+                shape.node(NodeKind::EffectInstance)?;
+                return shape.finish();
+            };
+            shape.token_matching(|kind| matches!(kind, TokenKind::Identifier(_)))?;
+            match word.as_str() {
+                "input" | "state" => {
+                    shape.node(NodeKind::Type)?;
+                }
+                "result" => {
+                    shape.node(NodeKind::Type)?;
+                    shape.token_matching(
+                        |kind| matches!(kind, TokenKind::Identifier(word) if word == "for"),
+                    )?;
+                    shape.node(NodeKind::TypeParameters)?;
+                }
+                "provider" => {
+                    shape.node(NodeKind::InterfaceApplication)?;
+                }
+                "interpret" => {
+                    shape.node(NodeKind::EffectInstance)?;
+                }
+                "acquire" | "finish" => {
+                    shape.node(NodeKind::Binder)?;
+                    shape.token(&TokenKind::FatArrow)?;
+                    shape.expression()?;
+                }
+                "handlers" => {
+                    shape.node(NodeKind::Binder)?;
+                    shape.token(&TokenKind::LeftBrace)?;
+                    shape.token(&TokenKind::LineEnd)?;
+                    shape.node(NodeKind::HandlerClause)?;
+                    while shape.peek_token_is(&TokenKind::LineEnd) {
+                        shape.token(&TokenKind::LineEnd)?;
+                        if !shape.peek_node_is(NodeKind::HandlerClause) {
+                            break;
+                        }
+                        shape.node(NodeKind::HandlerClause)?;
+                    }
+                    shape.token(&TokenKind::RightBrace)?;
+                }
+                _ => return malformed(InternalReason::UnexpectedShape),
+            }
+        }
+        NodeKind::ProviderResourceExpression => {
+            shape.token(&TokenKind::Resource)?;
+            shape.node(NodeKind::EffectInstance)?;
+            shape.node(NodeKind::Binder)?;
+            shape.token(&TokenKind::Equal)?;
+            shape.node(NodeKind::PrimaryExpression)?;
+            shape.node(NodeKind::Block)?;
+        }
         NodeKind::ResourceExpression => {
             shape.token(&TokenKind::Resource)?;
             shape.token_matching(
@@ -711,10 +833,10 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             }
             if shape.peek_token_is(&TokenKind::Less) {
                 shape.token(&TokenKind::Less)?;
-                shape.node(NodeKind::Type)?;
+                shape.owner_argument()?;
                 while shape.peek_token_is(&TokenKind::Comma) {
                     shape.token(&TokenKind::Comma)?;
-                    shape.node(NodeKind::Type)?;
+                    shape.owner_argument()?;
                 }
                 shape.token(&TokenKind::Greater)?;
             }
@@ -746,6 +868,7 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
                     matches!(
                         kind,
                         TokenKind::Integer(_)
+                            | TokenKind::StringLiteral(_)
                             | TokenKind::Discard
                             | TokenKind::True
                             | TokenKind::False
@@ -873,10 +996,10 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             }
             if shape.peek_token_is(&TokenKind::Less) {
                 shape.token(&TokenKind::Less)?;
-                shape.node(NodeKind::Type)?;
+                shape.owner_argument()?;
                 while shape.peek_token_is(&TokenKind::Comma) {
                     shape.token(&TokenKind::Comma)?;
-                    shape.node(NodeKind::Type)?;
+                    shape.owner_argument()?;
                 }
                 shape.token(&TokenKind::Greater)?;
             }
@@ -910,6 +1033,8 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
                         matches!(
                             kind,
                             TokenKind::IntType
+                                | TokenKind::BytesType
+                                | TokenKind::StringType
                                 | TokenKind::BoolType
                                 | TokenKind::UnitType
                                 | TokenKind::UpperIdentifier(_)
@@ -918,10 +1043,10 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
                 }
                 if shape.peek_token_is(&TokenKind::Less) {
                     shape.token(&TokenKind::Less)?;
-                    shape.node(NodeKind::Type)?;
+                    shape.owner_argument()?;
                     while shape.peek_token_is(&TokenKind::Comma) {
                         shape.token(&TokenKind::Comma)?;
-                        shape.node(NodeKind::Type)?;
+                        shape.owner_argument()?;
                     }
                     shape.token(&TokenKind::Greater)?;
                 }
@@ -1030,6 +1155,14 @@ impl<'a> ShapeCursor<'a> {
         Ok(())
     }
 
+    fn owner_argument(&mut self) -> Result<(), ProjectionError> {
+        if self.peek_node_is(NodeKind::EffectRow) {
+            self.node(NodeKind::EffectRow)
+        } else {
+            self.node(NodeKind::Type)
+        }
+    }
+
     fn any_node(&mut self) -> Result<(), ProjectionError> {
         let Some(ConcreteElement::Node(_)) = self.children.get(self.position) else {
             return malformed(InternalReason::UnexpectedShape);
@@ -1110,6 +1243,7 @@ fn project_surface_module(
     let mut interfaces = Vec::new();
     let mut effects = Vec::new();
     let mut implementations = Vec::new();
+    let mut resources = Vec::new();
     let mut definitions = Vec::new();
     for child in child_nodes(node) {
         match child.kind {
@@ -1125,6 +1259,10 @@ fn project_surface_module(
             NodeKind::InterfaceDeclaration => {
                 declaration_order.push(SurfaceDeclarationIndex::Interface(interfaces.len()));
                 interfaces.push(project_interface_declaration(source, child, tokens)?);
+            }
+            NodeKind::ResourceDefinition => {
+                declaration_order.push(SurfaceDeclarationIndex::Resource(resources.len()));
+                resources.push(project_resource_definition(source, child, tokens)?);
             }
             NodeKind::EffectDeclaration => {
                 declaration_order.push(SurfaceDeclarationIndex::Effect(effects.len()));
@@ -1151,6 +1289,7 @@ fn project_surface_module(
         effects,
         implementations,
         definitions,
+        resources,
         span: node_span(source, node, tokens)?,
     })
 }
@@ -1668,7 +1807,7 @@ fn project_interface_application(
         SurfaceReference::Unqualified(surface_name(name)?)
     };
     let arguments = child_nodes(node)
-        .filter(|child| child.kind == NodeKind::Type)
+        .filter(|child| matches!(child.kind, NodeKind::Type | NodeKind::EffectRow))
         .map(|argument| project_type(source, argument, tokens))
         .collect::<Result<Vec<_>, _>>()?;
     if arguments.is_empty() {
@@ -1814,6 +1953,46 @@ fn project_expression(
                         source, node, tokens,
                     )?));
                     tasks.push(ExpressionTask::Visit(value));
+                }
+                NodeKind::ProviderResourceExpression => {
+                    let family = project_effect_instance(
+                        source,
+                        only_child_of_kind(node, NodeKind::EffectInstance)?,
+                        tokens,
+                    )?;
+                    let Some(argument) = family.arguments.first() else {
+                        return malformed(InternalReason::UnexpectedShape);
+                    };
+                    let SurfaceTypeKind::Named(SurfaceReference::Unqualified(identity)) =
+                        &argument.kind
+                    else {
+                        return malformed(InternalReason::UnexpectedShape);
+                    };
+                    let identity = identity.clone();
+                    let mut arguments = family.arguments;
+                    let _ = arguments.remove(0);
+                    let arguments = if arguments.is_empty() {
+                        None
+                    } else {
+                        Some(arguments)
+                    };
+                    let handle =
+                        project_binder(only_child_of_kind(node, NodeKind::Binder)?, tokens)?;
+                    tasks.push(ExpressionTask::FinishProviderResource {
+                        identity,
+                        arguments,
+                        family: family.effect,
+                        handle: handle.name,
+                        span: node_span(source, node, tokens)?,
+                    });
+                    tasks.push(ExpressionTask::Visit(only_child_of_kind(
+                        node,
+                        NodeKind::Block,
+                    )?));
+                    tasks.push(ExpressionTask::Visit(only_child_of_kind(
+                        node,
+                        NodeKind::PrimaryExpression,
+                    )?));
                 }
                 NodeKind::ResourceExpression => {
                     let identity = direct_tokens(node, tokens)
@@ -2076,6 +2255,31 @@ fn project_expression(
                     span,
                 });
             }
+            ExpressionTask::FinishProviderResource {
+                family,
+                identity,
+                arguments,
+                handle,
+                span,
+            } => {
+                let (initializer, body) = take_expression_pair(&mut projected)?;
+                let SurfaceExprKind::Block(body) = body.kind else {
+                    return malformed(InternalReason::UnexpectedShape);
+                };
+                projected.push(SurfaceExpr {
+                    kind: SurfaceExprKind::ProviderResource(Box::new(
+                        crate::surface::SurfaceProviderResourceExpr {
+                            family,
+                            identity,
+                            arguments,
+                            handle,
+                            initializer,
+                            body,
+                        },
+                    )),
+                    span,
+                });
+            }
             ExpressionTask::FinishResource {
                 kind,
                 identity,
@@ -2316,6 +2520,13 @@ enum ExpressionTask<'a> {
     },
     FinishResume(Span),
     FinishCleanup(Span),
+    FinishProviderResource {
+        family: SurfaceReference,
+        identity: SurfaceName,
+        arguments: Option<Vec<SurfaceType>>,
+        handle: SurfaceName,
+        span: Span,
+    },
     FinishResource {
         kind: crate::surface::SurfaceResourceKind,
         identity: SurfaceName,
@@ -2601,6 +2812,7 @@ fn project_primitive(
     let token = only_direct_token(node, tokens)?;
     let kind = match &token.kind {
         TokenKind::Integer(value) => SurfaceExprKind::Integer(value.clone()),
+        TokenKind::StringLiteral(value) => SurfaceExprKind::String(value.clone()),
         TokenKind::True => SurfaceExprKind::Boolean(true),
         TokenKind::False => SurfaceExprKind::Boolean(false),
         TokenKind::Discard => SurfaceExprKind::Discard,
@@ -2868,16 +3080,60 @@ fn project_type(
     while let Some(task) = tasks.pop() {
         match task {
             TypeTask::VisitType(node) => {
+                if node.kind == NodeKind::EffectRow {
+                    let instances = child_nodes(node)
+                        .filter(|child| child.kind == NodeKind::EffectInstance)
+                        .collect::<Vec<_>>();
+                    let tail = direct_tokens(node, tokens)
+                        .filter(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
+                        .last()
+                        .map(surface_name)
+                        .transpose()?;
+                    let mut shapes = Vec::new();
+                    let mut arguments = Vec::new();
+                    for instance in instances {
+                        let qualified = optional_child_of_kind(instance, NodeKind::QualifiedName)?
+                            .map(|name| project_qualified_name(source, name, tokens))
+                            .transpose()?;
+                        let effect = if let Some(name) = qualified {
+                            SurfaceReference::Qualified(name)
+                        } else {
+                            let token = direct_tokens(instance, tokens)
+                                .find(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
+                                .ok_or(ProjectionError::MalformedTree(
+                                    InternalReason::UnexpectedShape,
+                                ))?;
+                            SurfaceReference::Unqualified(surface_name(token)?)
+                        };
+                        let start = arguments.len();
+                        arguments.extend(child_nodes(instance).filter(|child| {
+                            matches!(child.kind, NodeKind::Type | NodeKind::EffectRow)
+                        }));
+                        shapes.push((
+                            effect,
+                            arguments.len() - start,
+                            node_span(source, instance, tokens)?,
+                        ));
+                    }
+                    tasks.push(TypeTask::FinishRow {
+                        shapes,
+                        tail,
+                        span: node_span(source, node, tokens)?,
+                    });
+                    tasks.extend(arguments.into_iter().rev().map(TypeTask::VisitType));
+                    continue;
+                }
                 require_kind(node, NodeKind::Type)?;
                 let atomic = only_child_of_kind(node, NodeKind::AtomicType)?;
                 if let Some(codomain) = optional_child_of_kind(node, NodeKind::Type)? {
-                    let effects = optional_child_of_kind(node, NodeKind::EffectRow)?
-                        .map(|row| project_effect_row(source, row, tokens))
-                        .transpose()?;
+                    let effects = optional_child_of_kind(node, NodeKind::EffectRow)?;
                     tasks.push(TypeTask::FinishFunction {
                         span: node_span(source, node, tokens)?,
-                        effects,
+                        has_effects: effects.is_some(),
                     });
+                    if let Some(row) = effects {
+                        tasks.push(TypeTask::VisitType(row));
+                    }
                     tasks.push(TypeTask::VisitType(codomain));
                     tasks.push(TypeTask::VisitAtomic(atomic));
                 } else {
@@ -2908,7 +3164,7 @@ fn project_type(
                     }
                 } else {
                     let arguments = child_nodes(node)
-                        .filter(|child| child.kind == NodeKind::Type)
+                        .filter(|child| matches!(child.kind, NodeKind::Type | NodeKind::EffectRow))
                         .collect::<Vec<_>>();
                     let qualified = optional_child_of_kind(node, NodeKind::QualifiedName)?
                         .map(|name| project_qualified_name(source, name, tokens))
@@ -2942,7 +3198,46 @@ fn project_type(
                     }
                 }
             }
-            TypeTask::FinishFunction { span, effects } => {
+            TypeTask::FinishRow { shapes, tail, span } => {
+                let count = shapes.iter().map(|(_, count, _)| *count).sum::<usize>();
+                let split =
+                    projected
+                        .len()
+                        .checked_sub(count)
+                        .ok_or(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        ))?;
+                let mut arguments = projected.split_off(split).into_iter();
+                let effects = shapes
+                    .into_iter()
+                    .map(|(effect, count, span)| SurfaceEffectInstance {
+                        effect,
+                        arguments: arguments.by_ref().take(count).collect(),
+                        span,
+                    })
+                    .collect();
+                projected.push(SurfaceType {
+                    kind: SurfaceTypeKind::RowArgument(SurfaceEffectRow {
+                        effects,
+                        tail,
+                        span,
+                    }),
+                    span,
+                });
+            }
+            TypeTask::FinishFunction { span, has_effects } => {
+                let effects = if has_effects {
+                    let Some(SurfaceType {
+                        kind: SurfaceTypeKind::RowArgument(row),
+                        ..
+                    }) = projected.pop()
+                    else {
+                        return malformed(InternalReason::UnexpectedShape);
+                    };
+                    Some(row)
+                } else {
+                    None
+                };
                 let codomain = projected.pop().ok_or(ProjectionError::MalformedTree(
                     InternalReason::UnexpectedShape,
                 ))?;
@@ -3015,20 +3310,14 @@ fn project_effect_row(
     tokens: &[Token],
 ) -> Result<SurfaceEffectRow, ProjectionError> {
     require_kind(node, NodeKind::EffectRow)?;
-    let mut effects = Vec::new();
-    for instance in child_nodes(node).filter(|child| child.kind == NodeKind::EffectInstance) {
-        effects.push(project_effect_instance(source, instance, tokens)?);
-    }
-    let tail = direct_tokens(node, tokens)
-        .filter(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
-        .last()
-        .map(surface_name)
-        .transpose()?;
-    Ok(SurfaceEffectRow {
-        effects,
-        tail,
-        span: node_span(source, node, tokens)?,
-    })
+    let SurfaceType {
+        kind: SurfaceTypeKind::RowArgument(row),
+        ..
+    } = project_type(source, node, tokens)?
+    else {
+        return malformed(InternalReason::UnexpectedShape);
+    };
+    Ok(row)
 }
 
 fn project_effect_instance(
@@ -3051,7 +3340,7 @@ fn project_effect_instance(
         SurfaceReference::Unqualified(surface_name(token)?)
     };
     let arguments = child_nodes(instance)
-        .filter(|child| child.kind == NodeKind::Type)
+        .filter(|child| matches!(child.kind, NodeKind::Type | NodeKind::EffectRow))
         .map(|argument| project_type(source, argument, tokens))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(SurfaceEffectInstance {
@@ -3078,7 +3367,7 @@ fn project_operation_reference(
         SurfaceReference::Unqualified(surface_name(token)?)
     };
     let arguments = child_nodes(node)
-        .filter(|child| child.kind == NodeKind::Type)
+        .filter(|child| matches!(child.kind, NodeKind::Type | NodeKind::EffectRow))
         .map(|argument| project_type(source, argument, tokens))
         .collect::<Result<Vec<_>, _>>()?;
     let operation = direct_tokens(node, tokens)
@@ -3094,7 +3383,12 @@ enum TypeTask<'a> {
     VisitAtomic(&'a ConcreteNode),
     FinishFunction {
         span: Span,
-        effects: Option<SurfaceEffectRow>,
+        has_effects: bool,
+    },
+    FinishRow {
+        shapes: Vec<(SurfaceReference, usize, Span)>,
+        tail: Option<SurfaceName>,
+        span: Span,
     },
     FinishTuple {
         count: usize,
@@ -3115,6 +3409,8 @@ fn project_atomic_primitive(
     let token = only_direct_token(node, tokens)?;
     let kind = match token.kind {
         TokenKind::IntType => SurfaceTypeKind::Int,
+        TokenKind::BytesType => SurfaceTypeKind::Bytes,
+        TokenKind::StringType => SurfaceTypeKind::String,
         TokenKind::BoolType => SurfaceTypeKind::Bool,
         TokenKind::UnitType => SurfaceTypeKind::Unit,
         TokenKind::UpperIdentifier(ref text) => {
@@ -3207,6 +3503,7 @@ const fn is_expression_kind(kind: NodeKind) -> bool {
             | NodeKind::MatchExpression
             | NodeKind::HandlerExpression
             | NodeKind::ResumeExpression
+            | NodeKind::ProviderResourceExpression
             | NodeKind::ResourceExpression
             | NodeKind::HookExpression
             | NodeKind::RegistrationExpression
@@ -3317,11 +3614,157 @@ fn malformed<T>(reason: InternalReason) -> Result<T, ProjectionError> {
     Err(ProjectionError::MalformedTree(reason))
 }
 
+fn project_resource_definition(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &[Token],
+) -> Result<crate::surface::SurfaceResourceDefinition, ProjectionError> {
+    let fields = child_nodes(node)
+        .filter(|child| child.kind == NodeKind::ResourceField)
+        .collect::<Vec<_>>();
+    let [
+        input,
+        state,
+        result,
+        provider,
+        provided,
+        interpreted,
+        acquire,
+        finish,
+        handlers,
+    ] = fields.as_slice()
+    else {
+        return malformed(InternalReason::UnexpectedShape);
+    };
+    let answer_parameters = project_optional_type_parameters(source, result, tokens)?.ok_or(
+        ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
+    )?;
+    let [answer] = answer_parameters.as_slice() else {
+        return malformed(InternalReason::UnexpectedShape);
+    };
+    let project_field_type =
+        |field| project_type(source, only_child_of_kind(field, NodeKind::Type)?, tokens);
+    let project_field_binder = |field| {
+        project_binder(only_child_of_kind(field, NodeKind::Binder)?, tokens)
+            .map(|binder| binder.name)
+    };
+    let clauses = project_resource_handler_clauses(source, handlers, tokens)?;
+    Ok(crate::surface::SurfaceResourceDefinition {
+        public: direct_tokens(node, tokens).any(|token| token.kind == TokenKind::Pub),
+        name: surface_name(
+            direct_tokens(node, tokens)
+                .find(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
+                .ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?,
+        )?,
+        parameters: project_optional_type_parameters(source, node, tokens)?.ok_or(
+            ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
+        )?,
+        input: project_field_type(input)?,
+        state: project_field_type(state)?,
+        result: project_field_type(result)?,
+        answer: answer.clone(),
+        provider: project_interface_application(
+            source,
+            only_child_of_kind(provider, NodeKind::InterfaceApplication)?,
+            tokens,
+        )?,
+        provided: project_effect_instance(
+            source,
+            only_child_of_kind(provided, NodeKind::EffectInstance)?,
+            tokens,
+        )?,
+        interpreted: project_effect_instance(
+            source,
+            only_child_of_kind(interpreted, NodeKind::EffectInstance)?,
+            tokens,
+        )?,
+        family: optional_child_of_kind(node, NodeKind::ResourceFamily)?
+            .map(|family| project_resource_family(source, family, tokens))
+            .transpose()?,
+        acquire_binder: project_field_binder(acquire)?,
+        acquire: project_expression(source, expression_child(acquire)?, tokens)?,
+        finish_binder: project_field_binder(finish)?,
+        finish: project_expression(source, expression_child(finish)?, tokens)?,
+        handlers_binder: project_field_binder(handlers)?,
+        handlers: clauses,
+        span: node_span(source, node, tokens)?,
+    })
+}
+
+fn project_resource_handler_clauses(
+    source: &SourceFile,
+    handlers: &ConcreteNode,
+    tokens: &[Token],
+) -> Result<Vec<SurfaceHandlerClause>, ProjectionError> {
+    child_nodes(handlers)
+        .filter(|child| child.kind == NodeKind::HandlerClause)
+        .map(|clause| {
+            Ok(SurfaceHandlerClause {
+                operation: project_binder(only_child_of_kind(clause, NodeKind::Binder)?, tokens)?
+                    .name,
+                pattern: project_pattern(
+                    source,
+                    only_child_of_kind(clause, NodeKind::Pattern)?,
+                    tokens,
+                )?,
+                body: project_expression(source, expression_child(clause)?, tokens)?,
+                span: node_span(source, clause, tokens)?,
+            })
+        })
+        .collect()
+}
+
+fn project_resource_family(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &[Token],
+) -> Result<crate::surface::SurfaceResourceFamily, ProjectionError> {
+    let fields = child_nodes(node)
+        .filter(|child| child.kind == NodeKind::ResourceField)
+        .collect::<Vec<_>>();
+    let [provider, provided, interpreted, handlers] = fields.as_slice() else {
+        return malformed(InternalReason::UnexpectedShape);
+    };
+    let parameters = project_optional_type_parameters(source, node, tokens)?.ok_or(
+        ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
+    )?;
+    let [parameter] = parameters.as_slice() else {
+        return malformed(InternalReason::UnexpectedShape);
+    };
+    Ok(crate::surface::SurfaceResourceFamily {
+        parameter: parameter.clone(),
+        requirements: project_requirements(source, node, tokens)?,
+        provider: project_interface_application(
+            source,
+            only_child_of_kind(provider, NodeKind::InterfaceApplication)?,
+            tokens,
+        )?,
+        provided: project_effect_instance(
+            source,
+            only_child_of_kind(provided, NodeKind::EffectInstance)?,
+            tokens,
+        )?,
+        interpreted: project_effect_instance(
+            source,
+            only_child_of_kind(interpreted, NodeKind::EffectInstance)?,
+            tokens,
+        )?,
+        handlers_binder: project_binder(only_child_of_kind(handlers, NodeKind::Binder)?, tokens)?
+            .name,
+        handlers: project_resource_handler_clauses(source, handlers, tokens)?,
+        span: node_span(source, node, tokens)?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
         lexer::lex,
-        parser::{ResourceFailure, STRUCTURAL_DEPTH_LIMIT, parse},
+        parser::{
+            ExpectedForm, FoundToken, ParseReason, ResourceFailure, STRUCTURAL_DEPTH_LIMIT, parse,
+        },
         source::SourceFile,
     };
 
@@ -3344,6 +3787,210 @@ mod tests {
             | ConcreteElement::Missing { .. }
             | ConcreteElement::Error(_) => None,
         })
+    }
+
+    const RESOURCE_FAMILY_SHAPE: &str = "pub resource Arena<R> {
+input ArenaConfig
+state Native.ArenaState<R>
+result Provider.Scope<InitError, FinishError, T> for <T>
+provider ArenaProvider<R>
+effect ArenaOps<R>
+interpret Native.Arena<R>
+family<T> where Native.Layout<T> {
+provider StorageProvider<R, T>
+effect StorageOps<R, T>
+interpret Native.Storage<R, T>
+handlers state {
+allocate operand => resume operand
+load operand => resume operand
+}
+}
+acquire config => perform Native.Arena<R>.acquire config
+finish state => perform Native.Arena<R>.finish state
+handlers state {
+usage arena => resume arena
+}
+}
+";
+
+    #[test]
+    fn family_projection_rejects_recovery_free_field_role_mutations() {
+        for field_slot in [1, 2] {
+            let source = SourceFile::new("family-shape.ash", RESOURCE_FAMILY_SHAPE)
+                .expect("the family fixture should fit");
+            let mut tree = parse(lex(&source).expect("the family fixture should lex"));
+            assert!(tree.parse_diagnostics.is_empty());
+            let keyword = {
+                let root = tree.root.as_mut().expect("the fixture has a root");
+                let family = find_node_mut(root, NodeKind::ResourceFamily)
+                    .expect("the fixture has a family");
+                let field = child_nodes(family)
+                    .filter(|child| child.kind == NodeKind::ResourceField)
+                    .nth(field_slot)
+                    .expect("the family has the selected effect field");
+                let ConcreteElement::Token(index) = &field.children[0] else {
+                    panic!("the resource field starts with its keyword");
+                };
+                *index
+            };
+            tree.tokens[keyword].kind = if field_slot == 1 {
+                TokenKind::Identifier("interpret".into())
+            } else {
+                TokenKind::Effect
+            };
+            let root = tree.root.as_ref().expect("the fixture still has its root");
+            assert!(!has_recovery(root));
+            assert_eq!(validate_tokens(&source, &tree.tokens), Ok(()));
+            assert_eq!(
+                validate_concrete_token_coverage(root, tree.tokens.len()),
+                Ok(())
+            );
+
+            assert_eq!(
+                project_module(&source, &tree),
+                Err(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn family_projection_rejects_empty_handlers_after_expected_recovery_is_removed() {
+        let text = RESOURCE_FAMILY_SHAPE.replace(
+            "allocate operand => resume operand\nload operand => resume operand\n",
+            "",
+        );
+        let source = SourceFile::new("empty-family-handlers.ash", text)
+            .expect("the empty family fixture should fit");
+        let mut tree = parse(lex(&source).expect("the empty family fixture should lex"));
+        assert_eq!(tree.parse_diagnostics.len(), 1);
+        assert_eq!(
+            tree.parse_diagnostics[0].expected_form(),
+            Some(ExpectedForm::Identifier)
+        );
+        assert_eq!(
+            tree.parse_diagnostics[0].found_token(),
+            Some(FoundToken::Spelling("}"))
+        );
+        let root = tree.root.as_mut().expect("the fixture has a root");
+        let family =
+            find_node_mut(root, NodeKind::ResourceFamily).expect("the fixture has a family");
+        let handlers = family
+            .children
+            .iter_mut()
+            .filter_map(|child| match child {
+                ConcreteElement::Node(child) if child.kind == NodeKind::ResourceField => {
+                    Some(child)
+                }
+                _ => None,
+            })
+            .nth(3)
+            .expect("the family has a handlers field");
+        let mut errors = 0;
+        let mut missing = 0;
+        // Remove only the empty-handler report and its zero-token markers.
+        handlers.children.retain(|child| match child {
+            ConcreteElement::Error(ParseReason::ExpectedForm) => {
+                errors += 1;
+                false
+            }
+            ConcreteElement::Missing {
+                expected: ExpectedForm::Identifier,
+                ..
+            } => {
+                missing += 1;
+                false
+            }
+            _ => true,
+        });
+        assert_eq!((errors, missing), (1, 1));
+        tree.parse_diagnostics.clear();
+        let root = tree.root.as_ref().expect("the fixture still has its root");
+        assert!(!has_recovery(root));
+        assert_eq!(validate_tokens(&source, &tree.tokens), Ok(()));
+        assert_eq!(
+            validate_concrete_token_coverage(root, tree.tokens.len()),
+            Ok(())
+        );
+
+        assert_eq!(
+            project_module(&source, &tree),
+            Err(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape
+            ))
+        );
+    }
+
+    #[test]
+    fn family_projection_rejects_a_missing_handler_separator_with_complete_token_coverage() {
+        let source = SourceFile::new("family-separator.ash", RESOURCE_FAMILY_SHAPE)
+            .expect("the family fixture should fit");
+        let mut tree = parse(lex(&source).expect("the family fixture should lex"));
+        assert!(tree.parse_diagnostics.is_empty());
+        let removed = {
+            let tokens = &tree.tokens;
+            let root = tree.root.as_mut().expect("the fixture has a root");
+            let family =
+                find_node_mut(root, NodeKind::ResourceFamily).expect("the fixture has a family");
+            let handlers = family
+                .children
+                .iter_mut()
+                .filter_map(|child| match child {
+                    ConcreteElement::Node(child) if child.kind == NodeKind::ResourceField => {
+                        Some(child)
+                    }
+                    _ => None,
+                })
+                .nth(3)
+                .expect("the family has a handlers field");
+            let separator = handlers
+                .children
+                .windows(3)
+                .position(|children| {
+                    matches!(&children[0], ConcreteElement::Node(node) if node.kind == NodeKind::HandlerClause)
+                        && matches!(&children[1], ConcreteElement::Token(index) if tokens[*index].kind == TokenKind::LineEnd)
+                        && matches!(&children[2], ConcreteElement::Node(node) if node.kind == NodeKind::HandlerClause)
+                })
+                .map(|index| index + 1)
+                .expect("the family clauses have a separator");
+            let ConcreteElement::Token(index) = handlers.children.remove(separator) else {
+                panic!("the separator is a retained token");
+            };
+            index
+        };
+        // Remove both representations and reindex every retained token, so a
+        // coverage failure cannot mask the missing logical-line shape.
+        assert_eq!(tree.tokens.remove(removed).kind, TokenKind::LineEnd);
+        let mut pending = vec![tree.root.as_mut().expect("the fixture still has its root")];
+        while let Some(node) = pending.pop() {
+            for child in &mut node.children {
+                match child {
+                    ConcreteElement::Node(child) => pending.push(child),
+                    ConcreteElement::Token(index) => {
+                        assert_ne!(*index, removed);
+                        if *index > removed {
+                            *index -= 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let root = tree.root.as_ref().expect("the fixture still has its root");
+        assert!(!has_recovery(root));
+        assert_eq!(validate_tokens(&source, &tree.tokens), Ok(()));
+        assert_eq!(
+            validate_concrete_token_coverage(root, tree.tokens.len()),
+            Ok(())
+        );
+
+        assert_eq!(
+            project_module(&source, &tree),
+            Err(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape
+            ))
+        );
     }
 
     #[test]

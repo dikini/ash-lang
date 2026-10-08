@@ -1,0 +1,11 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/arena-provider)
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/arena-provider/foreign-adapter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.39s
+     Running tests/architecture.rs (target/debug/deps/architecture-8c64aa6c64089a8c)
+
+running 2 tests
+test carrier_scanner_module_value_reexports_preserve_generic_type_and_wrapper_paths ... ok
+test every_production_type_field_is_manifested_bidirectionally ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out; finished in 14.74s
+

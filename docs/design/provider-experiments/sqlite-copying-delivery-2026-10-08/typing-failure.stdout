@@ -1,0 +1,4 @@
+compiler work: SourceChecking used=39 budget=1245184 hard_limit=1369702 completed=false assessment=WithinBudget optimization_target=false
+compiler work: FinalElaboration unobserved
+compiler work: IndependentCore unobserved
+retained owners: 0

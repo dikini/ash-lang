@@ -305,6 +305,15 @@ pub struct SourceFile {
 }
 
 impl SourceFile {
+    pub(crate) fn snapshot_work(&self) -> Result<usize, ()> {
+        self.display_path
+            .len()
+            .checked_add(self.text.len())
+            .ok_or(())?
+            .checked_add(self.line_starts.len())
+            .ok_or(())
+    }
+
     /// Admits a UTF-8 source file after checking representation limits.
     ///
     /// # Errors

@@ -1,0 +1,43 @@
+{
+  "common_commit": "caa0fcf825a2ec382e221f73891f8621451dcc0c",
+  "integration_commit": "dadac04356c69bc3491ebd83c62ca9b2d1b81e70",
+  "files": {
+    "src/elaborate/provider.rs": "af1263891335731e5578223933d2013c6d0e089689ab83fb08fd64dd0a7be067",
+    "src/elaborate/provider_instance.rs": "a572963a744714c7d8f23e1948020d0a2bb8b57ffcc8aa96047bd2bd6e79789a",
+    "src/eval/foreign.rs": "cf433356b151c2036df35db3fe310a61e6802c9057fefabb08caba28412d6d6b",
+    "src/eval/machine.rs": "3c5dce78b7dc05a2e3cbbd4de0635457d77665ae4ab3c6eae7b83b73a9dcbe4f",
+    "src/evidence_validation/provider_sources.rs": "2cb858ad6e7a019feedcf0a0c582b4edbb3d2b21bd552a045ca065aa05965703",
+    "src/foreign.rs": "5f64d28f8dc8e9fccefa47799fdd55cb20bd6683377f2ed10d168b4a23d60c0d",
+    "src/resolve.rs": "db65ad7e5fd72f6a6ebb50e1a1ba08b63761017ba56588a90a0397c2ebbb0d21",
+    "src/resolved.rs": "fbfd4bb0d69e57505f8e074389531331d5b0b2f6cd15d99ca7de94d765a539ef",
+    "tests/architecture.rs": "83c1c720c26496aa5cf0fd12b5f7e8f9435593d74e10cfb697c260ddba2a3b1f"
+  },
+  "connected_result": {
+    "architecture": 45,
+    "arena_public": 7,
+    "sqlite_control": 2,
+    "sqlite_copying": 8,
+    "sqlite_sessions": 8,
+    "late_actual_small_stack_regression": 1,
+    "passed": 71,
+    "failed": 0,
+    "ignored": 0
+  },
+  "reviewers": [
+    "arena_capture_composition: ownership, resolution order, tagged arguments, partial/final disposal and diagnostic acceptance GO",
+    "calibrated_admission_review: canonical authentication, exact Core path inventories, caller work boundaries and measured regression GO",
+    "Arena workstream: independent read-only ownership/assembly/regression/diagnostic review GO"
+  ],
+  "preserved": [
+    "original manifest/operation/owner identities",
+    "declaration-order complete TypeArg/RowArg vectors",
+    "all measured charges and caller prefixes",
+    "fallible reservation and iterative disposal",
+    "independent Core authentication and closed runtime vocabulary",
+    "existing native programs and assertions",
+    "all source/depth limits and 64 KiB test stack"
+  ],
+  "diagnostic_change": "Ownership guard records every independent owner/file panic and still rejects any violation; nested test result summaries are excluded from outer Cargo target counts.",
+  "new_disposal_regression": "A deep first canonical actual remains owned when the second actual copy refuses; measured boundary, prefixes0/17, fresh exact-budget retries on64KiB.",
+  "full_integrated_gate": "Pending when source review was recorded; subsequent gate results have separate exact-HEAD receipts."
+}

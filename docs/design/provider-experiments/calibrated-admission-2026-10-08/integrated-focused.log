@@ -1,0 +1,46 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/provider-experiments)
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/provider-experiments/foreign-adapter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 27.21s
+  Executable tests/architecture.rs (target/debug/deps/architecture-8c64aa6c64089a8c)
+  Executable tests/compiler_work_reporting.rs (target/debug/deps/compiler_work_reporting-7b05e54d16601fce)
+  Executable tests/provider_arena_source.rs (target/debug/deps/provider_arena_source-92dfb16534e1853c)
+  Executable tests/provider_sqlite_source.rs (target/debug/deps/provider_sqlite_source-51cc827a60b0b13c)
+
+running 1 test
+test every_production_type_field_is_manifested_bidirectionally ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out; finished in 11.37s
+
+
+running 4 tests
+test constrained_entry_rejection_reports_source_work_after_its_closure_walk ... ok
+test entry_rejection_retains_observed_checking_without_fabricated_later_costs ... ok
+test ordinary_public_execution_reports_completed_costs_without_changing_the_value ... ok
+test source_rejection_preserves_its_reason_and_partial_phase_measurement ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 10 tests
+test copying_sqlite_session_executes_through_public_foreign_runtime ... ok
+test first_copying_sqlite_source_bundle_parses_with_the_ordinary_frontend ... ok
+test imported_resource_report_dependencies_do_not_require_a_client_type_annotation ... ok
+test local_resource_definitions_execute_through_public_foreign_runtime ... ok
+test original_four_match_client_exhausts_projection_depth_before_provider_checking ... ok
+test refused_statement_acquisition_executes_no_statement_body_or_finish ... ok
+test repeated_and_simultaneous_sqlite_scopes_resolve_their_actual_activations ... ok
+test resource_initializer_executes_once_in_the_preceding_scope ... ok
+test sqlite_library_declarations_check_against_registered_dependencies ... ok
+test static_foreign_registration_does_not_authorize_native_execution ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.80s
+
+
+running 4 tests
+test arena_acquires_queries_actual_usage_and_releases_through_public_driver ... ok
+test arena_native_configuration_refusal_executes_no_body_or_release ... ok
+test repeated_and_nested_arenas_have_unique_native_owners_and_one_release_each ... ok
+test resource_dependent_arena_access_cannot_escape ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+

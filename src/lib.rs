@@ -9,6 +9,10 @@
 //! interfaces and their implementation do not define additional language
 //! behavior.
 
+mod calibration;
+#[cfg(feature = "resource-calibration")]
+mod calibration_features;
+pub mod compiler_work;
 pub mod core;
 pub mod diagnostic;
 pub mod driver;
@@ -17,6 +21,7 @@ pub mod eval;
 mod evidence;
 mod evidence_audit;
 pub mod evidence_validation;
+pub mod foreign;
 #[cfg(test)]
 pub(crate) use evidence_validation::validate_interface_evidence as validate_linked_facts_for_test;
 pub mod diagnostic_options;

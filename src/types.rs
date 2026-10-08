@@ -1,6 +1,7 @@
 //! Structural types shared by elaboration and Core.
 
 use std::{
+    borrow::Borrow,
     cmp::Ordering,
     collections::HashMap,
     fmt,
@@ -8,6 +9,19 @@ use std::{
 };
 
 use crate::module::ModuleId;
+
+mod owner_arguments;
+pub(crate) use owner_arguments::{
+    IterativeArgumentOwner, clone_kinded_argument_with_budget, clone_kinded_arguments_with_budget,
+    discard_kinded_argument_iteratively, extend_owner_type_children_with_charge,
+    extend_owner_type_pairs_with_charge, map_kinded_argument_types_with_budget,
+    type_arguments_to_kinded_with_budget, visit_owner_components_with_charge,
+    visit_owner_type_children_with_charge, visit_owner_type_pairs_with_charge,
+};
+use owner_arguments::{
+    StructuralRoot, StructuralValue, charge_structural, clone_kind_precharged, clone_structural,
+    clone_structural_with_failure, discard_row_iteratively,
+};
 
 /// Shared base capacity for cumulative structural Type cells, Kind nodes, and
 /// retained or visited binder-kind records.
@@ -28,7 +42,10 @@ impl Default for TypeWorkBudget {
     fn default() -> Self {
         Self {
             used: 0,
-            limit: TYPE_WORK_LIMIT,
+            limit: crate::calibration::limit(
+                TYPE_WORK_LIMIT,
+                crate::calibration::DiagnosticOwner::Structural,
+            ),
         }
     }
 }
@@ -47,6 +64,10 @@ impl TypeWorkBudget {
 
     pub(crate) const fn used(&self) -> usize {
         self.used
+    }
+
+    pub(crate) const fn limit(&self) -> usize {
+        self.limit
     }
 
     pub(crate) const fn remaining(&self) -> usize {
@@ -82,7 +103,7 @@ impl<E, F: FnMut(usize) -> Result<(), E>> TypeWorkMeter for F {
     }
 }
 
-fn allocation_error<B: TypeWorkMeter>(budget: &mut B) -> B::Error {
+pub(crate) fn allocation_error<B: TypeWorkMeter>(budget: &mut B) -> B::Error {
     budget.charge(usize::MAX).expect_err("allocation failure")
 }
 
@@ -161,98 +182,28 @@ pub(crate) fn charge_type_cells<B: TypeWorkMeter>(
     ty: &Type,
     budget: &mut B,
 ) -> Result<(), B::Error> {
-    enum Task<'a> {
-        Visit(&'a Type),
-        Sequence(std::slice::Iter<'a, Type>),
-    }
-    let mut work = vec![Task::Visit(ty)];
-    while let Some(task) = work.pop() {
-        let Task::Visit(ty) = task else {
-            let Task::Sequence(mut remaining) = task else {
-                unreachable!()
-            };
-            if let Some(ty) = remaining.next() {
-                work.push(Task::Sequence(remaining));
-                work.push(Task::Visit(ty));
-            }
-            continue;
-        };
-        budget.charge(1)?;
-        match ty {
-            Type::Tuple(elements) => work.push(Task::Sequence(elements.iter())),
-            Type::Application(function, argument) => {
-                work.push(Task::Visit(argument));
-                work.push(Task::Visit(function));
-            }
-            Type::Function(domain, codomain) => {
-                work.push(Task::Visit(codomain));
-                work.push(Task::Visit(domain));
-            }
-            Type::EffectfulFunction(domain, codomain) => {
-                budget.charge(1)?;
-                budget.charge(1)?;
-                for instance in &codomain.effects.known {
-                    budget.charge(1)?;
-                    work.push(Task::Sequence(instance.arguments.iter()));
-                }
-                if let Some(tail) = &codomain.effects.tail {
-                    budget.charge(1)?;
-                    for instance in &tail.lacks {
-                        budget.charge(1)?;
-                        work.push(Task::Sequence(instance.arguments.iter()));
-                    }
-                }
-                work.push(Task::Visit(&codomain.value));
-                work.push(Task::Visit(domain));
-            }
-            Type::Forall(parameters, body) => {
-                charge_kinded_type_parameters(parameters, budget)?;
-                work.push(Task::Visit(body));
-            }
-            Type::Int
-            | Type::Bool
-            | Type::Unit
-            | Type::Nominal(_)
-            | Type::Variable(_)
-            | Type::Inference(_) => {}
-        }
-    }
-    Ok(())
+    charge_structural(StructuralRoot::Type(ty), budget)
+}
+
+pub(crate) fn charge_kinded_argument_with_budget<B: TypeWorkMeter>(
+    argument: &KindedArgument,
+    budget: &mut B,
+) -> Result<(), B::Error> {
+    charge_structural(StructuralRoot::Argument(argument), budget)
 }
 
 pub(crate) fn charge_effect_row_cells<B: TypeWorkMeter>(
     row: &EffectRow,
     budget: &mut B,
 ) -> Result<(), B::Error> {
-    budget.charge(1)?;
-    for instance in &row.known {
-        budget.charge(1)?;
-        for argument in &instance.arguments {
-            charge_type_cells(argument, budget)?;
-        }
-    }
-    if let Some(tail) = &row.tail {
-        budget.charge(1)?;
-        for instance in &tail.lacks {
-            budget.charge(1)?;
-            for argument in &instance.arguments {
-                charge_type_cells(argument, budget)?;
-            }
-        }
-    }
-    Ok(())
+    charge_structural(StructuralRoot::Row(row), budget)
 }
 
 pub(crate) fn clone_effect_row_with_budget<B: TypeWorkMeter>(
     row: &EffectRow,
     budget: &mut B,
 ) -> Result<EffectRow, B::Error> {
-    charge_effect_row_cells(row, budget)?;
-    Ok(clone_effect_row(row))
-}
-
-fn clone_effect_row(row: &EffectRow) -> EffectRow {
-    clone_effect_row_with_failure(row, || ()).expect("an in-memory row can reserve its clone")
+    clone_effect_row_with_budget_and_failure(row, budget, allocation_error)
 }
 
 pub(crate) fn clone_effect_row_with_budget_and_failure<B: TypeWorkMeter>(
@@ -260,61 +211,11 @@ pub(crate) fn clone_effect_row_with_budget_and_failure<B: TypeWorkMeter>(
     budget: &mut B,
     mut storage_error: impl FnMut(&mut B) -> B::Error,
 ) -> Result<EffectRow, B::Error> {
-    charge_effect_row_cells(row, budget)?;
-    clone_effect_row_with_failure(row, || storage_error(budget))
-}
-
-fn clone_effect_row_with_failure<E>(
-    row: &EffectRow,
-    mut storage_error: impl FnMut() -> E,
-) -> Result<EffectRow, E> {
-    fn clone_instance<E>(
-        instance: &EffectInstance,
-        storage_error: &mut impl FnMut() -> E,
-    ) -> Result<EffectInstance, E> {
-        let mut arguments = Vec::new();
-        reserve_row(
-            &mut arguments,
-            instance.arguments.len(),
-            RowReservationSite::CloneArguments,
-        )
-        .map_err(|_| storage_error())?;
-        for argument in &instance.arguments {
-            arguments.push(clone_type(argument));
-        }
-        Ok(EffectInstance::new(
-            instance.effect,
-            arguments.into_boxed_slice(),
-        ))
-    }
-    let mut known = Vec::new();
-    reserve_row(
-        &mut known,
-        row.known.len(),
-        RowReservationSite::CloneMembers,
+    Ok(
+        clone_structural_with_failure(StructuralRoot::Row(row), budget, &mut storage_error)?
+            .into_row()
+            .expect("row root shape"),
     )
-    .map_err(|_| storage_error())?;
-    for instance in &row.known {
-        known.push(clone_instance(instance, &mut storage_error)?);
-    }
-    let tail = if let Some(tail) = &row.tail {
-        let mut lacks = Vec::new();
-        reserve_row(&mut lacks, tail.lacks.len(), RowReservationSite::CloneLacks)
-            .map_err(|_| storage_error())?;
-        for instance in &tail.lacks {
-            lacks.push(clone_instance(instance, &mut storage_error)?);
-        }
-        Some(EffectRowTail {
-            variable: tail.variable,
-            lacks: lacks.into_boxed_slice(),
-        })
-    } else {
-        None
-    };
-    Ok(EffectRow {
-        known: known.into_boxed_slice(),
-        tail,
-    })
 }
 
 #[allow(
@@ -351,157 +252,9 @@ pub(crate) fn clone_type_with_budget<B: TypeWorkMeter>(
     ty: &Type,
     budget: &mut B,
 ) -> Result<Type, B::Error> {
-    struct RowShape {
-        known: Box<[(EffectId, usize)]>,
-        tail: Option<(EffectRowVariable, Box<[(EffectId, usize)]>)>,
-        argument_count: usize,
-    }
-
-    enum Task<'a> {
-        Visit(&'a Type),
-        Sequence(std::slice::Iter<'a, Type>),
-        Tuple(usize),
-        Application,
-        Function,
-        EffectfulFunction(RowShape),
-        Forall(Box<[(TypeVariableId, Kind)]>),
-    }
-
-    charge_type_cells(ty, budget)?;
-    let mut work = vec![Task::Visit(ty)];
-    let mut rebuilt = Vec::new();
-    while let Some(task) = work.pop() {
-        match task {
-            Task::Visit(Type::Int) => rebuilt.push(Type::Int),
-            Task::Visit(Type::Bool) => rebuilt.push(Type::Bool),
-            Task::Visit(Type::Unit) => rebuilt.push(Type::Unit),
-            Task::Visit(Type::Nominal(id)) => rebuilt.push(Type::Nominal(*id)),
-            Task::Visit(Type::Variable(id)) => rebuilt.push(Type::Variable(*id)),
-            Task::Visit(Type::Inference(id)) => rebuilt.push(Type::Inference(*id)),
-            Task::Visit(Type::Tuple(elements)) => {
-                work.push(Task::Tuple(elements.len()));
-                work.push(Task::Sequence(elements.iter()));
-            }
-            Task::Visit(Type::Application(function, argument)) => {
-                work.push(Task::Application);
-                work.push(Task::Visit(argument));
-                work.push(Task::Visit(function));
-            }
-            Task::Visit(Type::Function(domain, codomain)) => {
-                work.push(Task::Function);
-                work.push(Task::Visit(codomain));
-                work.push(Task::Visit(domain));
-            }
-            Task::Visit(Type::EffectfulFunction(domain, codomain)) => {
-                let known = codomain
-                    .effects
-                    .known
-                    .iter()
-                    .map(|instance| (instance.effect, instance.arguments.len()))
-                    .collect::<Vec<_>>()
-                    .into_boxed_slice();
-                let tail = codomain.effects.tail.as_ref().map(|tail| {
-                    (
-                        tail.variable,
-                        tail.lacks
-                            .iter()
-                            .map(|instance| (instance.effect, instance.arguments.len()))
-                            .collect::<Vec<_>>()
-                            .into_boxed_slice(),
-                    )
-                });
-                let arguments = codomain
-                    .effects
-                    .known
-                    .iter()
-                    .chain(
-                        codomain
-                            .effects
-                            .tail
-                            .iter()
-                            .flat_map(|tail| tail.lacks.iter()),
-                    )
-                    .flat_map(|instance| instance.arguments.iter())
-                    .collect::<Vec<_>>();
-                let shape = RowShape {
-                    known,
-                    tail,
-                    argument_count: arguments.len(),
-                };
-                work.push(Task::EffectfulFunction(shape));
-                for argument in arguments.into_iter().rev() {
-                    work.push(Task::Visit(argument));
-                }
-                work.push(Task::Visit(&codomain.value));
-                work.push(Task::Visit(domain));
-            }
-            Task::Visit(Type::Forall(parameters, body)) => {
-                work.push(Task::Forall(parameters.clone()));
-                work.push(Task::Visit(body));
-            }
-            Task::Sequence(mut remaining) => {
-                if let Some(next) = remaining.next() {
-                    work.push(Task::Sequence(remaining));
-                    work.push(Task::Visit(next));
-                }
-            }
-            Task::Tuple(count) => {
-                let elements = rebuilt.split_off(rebuilt.len() - count);
-                rebuilt.push(Type::Tuple(elements.into_boxed_slice()));
-            }
-            Task::Application => {
-                let argument = rebuilt.pop().expect("cloned application argument");
-                let function = rebuilt.pop().expect("cloned application function");
-                rebuilt.push(Type::Application(Box::new(function), Box::new(argument)));
-            }
-            Task::Function => {
-                let codomain = rebuilt.pop().expect("cloned function codomain");
-                let domain = rebuilt.pop().expect("cloned function domain");
-                rebuilt.push(Type::function(domain, codomain));
-            }
-            Task::EffectfulFunction(shape) => {
-                let arguments = rebuilt.split_off(rebuilt.len() - shape.argument_count);
-                let mut arguments = arguments.into_iter();
-                let rebuild_instances =
-                    |instances: Box<[(EffectId, usize)]>,
-                     arguments: &mut std::vec::IntoIter<Type>| {
-                        instances
-                            .into_vec()
-                            .into_iter()
-                            .map(|(effect, count)| {
-                                EffectInstance::new(
-                                    effect,
-                                    arguments
-                                        .by_ref()
-                                        .take(count)
-                                        .collect::<Vec<_>>()
-                                        .into_boxed_slice(),
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .into_boxed_slice()
-                    };
-                let known = rebuild_instances(shape.known, &mut arguments);
-                let tail = shape.tail.map(|(variable, lacks)| EffectRowTail {
-                    variable,
-                    lacks: rebuild_instances(lacks, &mut arguments),
-                });
-                debug_assert!(arguments.next().is_none());
-                let effects = EffectRow { known, tail };
-                let codomain = rebuilt.pop().expect("cloned function codomain");
-                let domain = rebuilt.pop().expect("cloned function domain");
-                rebuilt.push(Type::function_computation(
-                    domain,
-                    ComputationType::new(codomain, effects),
-                ));
-            }
-            Task::Forall(parameters) => {
-                let body = rebuilt.pop().expect("cloned scheme body");
-                rebuilt.push(Type::Forall(parameters, Box::new(body)));
-            }
-        }
-    }
-    Ok(rebuilt.pop().expect("one cloned type"))
+    Ok(clone_structural(StructuralRoot::Type(ty), budget)?
+        .into_type()
+        .expect("type root shape"))
 }
 
 fn clone_type(ty: &Type) -> Type {
@@ -510,6 +263,123 @@ fn clone_type(ty: &Type) -> Type {
         Ok(cloned) => cloned,
         Err(()) => unreachable!("an in-memory type cannot exceed the address-space work bound"),
     }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum TypeStructureNode<'a> {
+    Type(&'a Type),
+    Tail(&'a EffectRowTail),
+}
+
+/// Visits all Type payloads and row tails, including recursively nested owner
+/// arguments and lacks members, without recursing on the Rust stack.
+pub(crate) fn visit_type_structure_with_budget<B: TypeWorkMeter>(
+    root: &Type,
+    budget: &mut B,
+    visit: impl FnMut(TypeStructureNode<'_>, &mut B) -> Result<bool, B::Error>,
+) -> Result<bool, B::Error> {
+    visit_structural_components(StructuralRoot::Type(root), budget, visit)
+}
+
+pub(crate) fn visit_argument_structure_with_budget<B: TypeWorkMeter>(
+    root: &KindedArgument,
+    budget: &mut B,
+    visit: impl FnMut(TypeStructureNode<'_>, &mut B) -> Result<bool, B::Error>,
+) -> Result<bool, B::Error> {
+    visit_structural_components(StructuralRoot::Argument(root), budget, visit)
+}
+
+fn visit_structural_components<B: TypeWorkMeter>(
+    root: StructuralRoot<'_>,
+    budget: &mut B,
+    mut visit: impl FnMut(TypeStructureNode<'_>, &mut B) -> Result<bool, B::Error>,
+) -> Result<bool, B::Error> {
+    let mut pending = Vec::new();
+    fn push<'a, B: TypeWorkMeter>(
+        pending: &mut Vec<StructuralRoot<'a>>,
+        root: StructuralRoot<'a>,
+        budget: &mut B,
+    ) -> Result<(), B::Error> {
+        budget.charge(1)?;
+        pending
+            .try_reserve(1)
+            .map_err(|_| allocation_error(budget))?;
+        pending.push(root);
+        Ok(())
+    }
+    push(&mut pending, root, budget)?;
+    while let Some(root) = pending.pop() {
+        match root {
+            StructuralRoot::Type(ty) => {
+                if visit(TypeStructureNode::Type(ty), budget)? {
+                    return Ok(true);
+                }
+                match ty {
+                    Type::Tuple(elements) => {
+                        for ty in elements.iter().rev() {
+                            push(&mut pending, StructuralRoot::Type(ty), budget)?;
+                        }
+                    }
+                    Type::ResourceApply(_, arguments) => {
+                        for argument in arguments.iter().rev() {
+                            push(&mut pending, StructuralRoot::Argument(argument), budget)?;
+                        }
+                    }
+                    Type::Application(left, right) | Type::Function(left, right) => {
+                        push(&mut pending, StructuralRoot::Type(right), budget)?;
+                        push(&mut pending, StructuralRoot::Type(left), budget)?;
+                    }
+                    Type::EffectfulFunction(domain, codomain) => {
+                        push(
+                            &mut pending,
+                            StructuralRoot::Row(codomain.effects()),
+                            budget,
+                        )?;
+                        push(&mut pending, StructuralRoot::Type(codomain.value()), budget)?;
+                        push(&mut pending, StructuralRoot::Type(domain), budget)?;
+                    }
+                    Type::Forall(parameters, body) => {
+                        charge_kinded_type_parameters(parameters, budget)?;
+                        push(&mut pending, StructuralRoot::Type(body), budget)?;
+                    }
+                    Type::Bytes
+                    | Type::String
+                    | Type::Int
+                    | Type::Bool
+                    | Type::Unit
+                    | Type::Nominal(_)
+                    | Type::Variable(_)
+                    | Type::Inference(_) => {}
+                }
+            }
+            StructuralRoot::Argument(KindedArgument::TypeArg(ty)) => {
+                push(&mut pending, StructuralRoot::Type(ty), budget)?
+            }
+            StructuralRoot::Argument(KindedArgument::RowArg(row)) => {
+                push(&mut pending, StructuralRoot::Row(row), budget)?
+            }
+            StructuralRoot::Instance(instance) => {
+                for argument in instance.arguments().iter().rev() {
+                    push(&mut pending, StructuralRoot::Argument(argument), budget)?;
+                }
+            }
+            StructuralRoot::Row(row) => {
+                if let Some(tail) = row.tail() {
+                    budget.charge(1)?;
+                    if visit(TypeStructureNode::Tail(tail), budget)? {
+                        return Ok(true);
+                    }
+                    for instance in tail.lacks().iter().rev() {
+                        push(&mut pending, StructuralRoot::Instance(instance), budget)?;
+                    }
+                }
+                for instance in row.known().iter().rev() {
+                    push(&mut pending, StructuralRoot::Instance(instance), budget)?;
+                }
+            }
+        }
+    }
+    Ok(false)
 }
 
 /// Stable identity of one nominal type declaration.
@@ -687,17 +557,142 @@ impl EffectRowVariable {
     }
 }
 
+/// Defining identity of an experimental source resource assembly.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ResourceDefinitionId {
+    module: ModuleId,
+    ordinal: u32,
+}
+
+impl ResourceDefinitionId {
+    /// Constructs a module-owned declaration identity.
+    #[must_use]
+    pub const fn new(module: ModuleId, ordinal: u32) -> Self {
+        Self { module, ordinal }
+    }
+    /// Returns the defining module identity.
+    #[must_use]
+    pub const fn module(self) -> ModuleId {
+        self.module
+    }
+    /// Returns the category-local declaration ordinal.
+    #[must_use]
+    pub const fn ordinal(self) -> u32 {
+        self.ordinal
+    }
+}
+
+/// One complete owner argument in declaration order. Rows are not value types.
+pub enum KindedArgument {
+    /// An ordinary value or constructor-kinded type argument.
+    TypeArg(Type),
+    /// One complete row, including its exact members, tail and lacks facts.
+    RowArg(EffectRow),
+}
+
+impl fmt::Debug for KindedArgument {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write_structural_debug(StructuralRoot::Argument(self), formatter)
+    }
+}
+
+impl fmt::Debug for EffectInstance {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write_structural_debug(StructuralRoot::Instance(self), formatter)
+    }
+}
+
+impl fmt::Debug for Type {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write_structural_debug(StructuralRoot::Type(self), formatter)
+    }
+}
+
+impl KindedArgument {
+    pub(crate) fn outer_nominal(&self) -> Option<NominalTypeId> {
+        match self {
+            Self::TypeArg(ty) => ty.outer_nominal(),
+            Self::RowArg(_) => None,
+        }
+    }
+    pub(crate) fn is_bare_variable(&self) -> bool {
+        match self {
+            Self::TypeArg(Type::Variable(_)) => true,
+            Self::RowArg(row) => {
+                row.known().is_empty()
+                    && matches!(
+                        row.tail().map(|tail| tail.variable()),
+                        Some(EffectRowVariable::Rigid(_))
+                    )
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Clone for KindedArgument {
+    fn clone(&self) -> Self {
+        clone_kinded_argument_with_budget(self, &mut TypeWorkBudget::unbounded())
+            .expect("an in-memory argument fits the address-space work bound")
+    }
+}
+
+impl PartialEq for KindedArgument {
+    fn eq(&self, other: &Self) -> bool {
+        compare_kinded_arguments_with_budget(self, other, &mut TypeWorkBudget::unbounded())
+            .expect("an in-memory argument comparison fits the address-space work bound")
+            == Ordering::Equal
+    }
+}
+impl Eq for KindedArgument {}
+
+impl Hash for KindedArgument {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_type_or_effect_row(TypeHashTask::Argument(self), state);
+    }
+}
+
+impl fmt::Display for KindedArgument {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write_structural(StructuralRoot::Argument(self), formatter)
+    }
+}
+
 /// One exact effect application in a computation row.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Eq, Hash, PartialEq)]
 pub struct EffectInstance {
     effect: EffectId,
-    arguments: Box<[Type]>,
+    arguments: Box<[KindedArgument]>,
 }
 
 impl EffectInstance {
+    pub(crate) fn from_type_arguments_with_budget<B: TypeWorkMeter>(
+        effect: EffectId,
+        arguments: Box<[Type]>,
+        budget: &mut B,
+    ) -> Result<Self, B::Error> {
+        Ok(Self::new_kinded(
+            effect,
+            type_arguments_to_kinded_with_budget(arguments, budget)?,
+        ))
+    }
+
     /// Creates one exact effect instance from its stable identity and arguments.
     #[must_use]
-    pub const fn new(effect: EffectId, arguments: Box<[Type]>) -> Self {
+    pub fn new(effect: EffectId, arguments: Box<[Type]>) -> Self {
+        // Public Type-only construction. Compiler-owned copies use the charged
+        // argument-buffer path rather than this convenience adapter.
+        let arguments = arguments
+            .into_vec()
+            .into_iter()
+            .map(KindedArgument::TypeArg)
+            .collect();
+        Self { effect, arguments }
+    }
+
+    /// Creates an exact application with complete tagged owner arguments.
+    #[must_use]
+    pub const fn new_kinded(effect: EffectId, arguments: Box<[KindedArgument]>) -> Self {
         Self { effect, arguments }
     }
 
@@ -709,11 +704,11 @@ impl EffectInstance {
 
     /// Borrows the complete ordered type arguments.
     #[must_use]
-    pub const fn arguments(&self) -> &[Type] {
+    pub const fn arguments(&self) -> &[KindedArgument] {
         &self.arguments
     }
 
-    pub(crate) fn into_parts(mut self) -> (EffectId, Box<[Type]>) {
+    pub(crate) fn into_parts(mut self) -> (EffectId, Box<[KindedArgument]>) {
         (self.effect, std::mem::take(&mut self.arguments))
     }
 }
@@ -721,7 +716,7 @@ impl EffectInstance {
 impl Drop for EffectInstance {
     fn drop(&mut self) {
         for argument in std::mem::take(&mut self.arguments).into_vec() {
-            discard_type_iteratively(argument);
+            discard_kinded_argument_iteratively(argument);
         }
     }
 }
@@ -730,26 +725,7 @@ pub(crate) fn clone_effect_instance_with_budget(
     instance: &EffectInstance,
     budget: &mut TypeWorkBudget,
 ) -> Result<EffectInstance, ()> {
-    budget.charge(instance.arguments().len())?;
-    let mut arguments = Vec::new();
-    arguments
-        .try_reserve_exact(instance.arguments().len())
-        .map_err(|_| ())?;
-    for argument in instance.arguments() {
-        arguments.push(IterativeTypeOwner::new(clone_type_with_budget(
-            argument, budget,
-        )?));
-    }
-    budget.charge(instance.arguments().len())?;
-    let mut retained = Vec::new();
-    retained
-        .try_reserve_exact(instance.arguments().len())
-        .map_err(|_| ())?;
-    retained.extend(arguments.into_iter().map(IterativeTypeOwner::into_inner));
-    Ok(EffectInstance::new(
-        instance.effect(),
-        retained.into_boxed_slice(),
-    ))
+    clone_structural(StructuralRoot::Instance(instance), budget)?.into_instance()
 }
 
 /// One effect-row tail and the exact instances known absent from it.
@@ -1026,6 +1002,27 @@ impl EffectRow {
         )
     }
 
+    pub(crate) fn substitute_type_variables_borrowed_with_budget(
+        &self,
+        replacements: &HashMap<TypeVariableId, &Type>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, ()> {
+        rebuild_effect_row_with_budget(
+            self.known.iter(),
+            self.tail.as_ref().map(|tail| tail.variable),
+            self.tail.iter().flat_map(|tail| tail.lacks.iter()),
+            |argument, budget| {
+                substitute_type_variables_borrowed_with(
+                    argument,
+                    replacements,
+                    |cells| budget.charge(cells),
+                    || (),
+                )
+            },
+            budget,
+        )
+    }
+
     pub(crate) fn substitute_tail_once_with_budget<B: TypeWorkMeter>(
         &self,
         target: EffectRowVariable,
@@ -1095,6 +1092,7 @@ impl EffectRow {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn map_type_arguments_with_budget<E>(
         &self,
         map: impl FnMut(&Type, &mut TypeWorkBudget) -> Result<Type, E>,
@@ -1148,7 +1146,12 @@ where
     {
         let mut arguments = Vec::new();
         for argument in &instance.arguments {
-            let argument = IterativeTypeOwner::new(map(argument, budget)?);
+            let argument = IterativeArgumentOwner::new(map_kinded_argument_types_with_budget(
+                argument,
+                map,
+                budget,
+                storage_error,
+            )?);
             budget.charge(1).map_err(E::from)?;
             reserve_row(&mut arguments, 1, RowReservationSite::RebuildArguments)
                 .map_err(|_| E::from(storage_error(budget)))?;
@@ -1162,8 +1165,12 @@ where
             RowReservationSite::RebuildRetained,
         )
         .map_err(|_| E::from(storage_error(budget)))?;
-        retained.extend(arguments.into_iter().map(IterativeTypeOwner::into_inner));
-        Ok(EffectInstance::new(
+        retained.extend(
+            arguments
+                .into_iter()
+                .map(IterativeArgumentOwner::into_inner),
+        );
+        Ok(EffectInstance::new_kinded(
             instance.effect,
             retained.into_boxed_slice(),
         ))
@@ -1349,7 +1356,12 @@ fn compare_effect_instances_with_charge<B: TypeWorkMeter>(
         return Ok(lengths);
     }
     for (left, right) in left.arguments.iter().zip(&right.arguments) {
-        let ordering = compare_types_with_charge(left, right, charge, storage_error)?;
+        let ordering = compare_structural_with_charge(
+            StructuralRoot::Argument(left),
+            StructuralRoot::Argument(right),
+            charge,
+            storage_error,
+        )?;
         if ordering != Ordering::Equal {
             return Ok(ordering);
         }
@@ -1405,14 +1417,51 @@ pub(crate) fn same_effect_rows_with_charge(
     Ok(true)
 }
 
-fn compare_types_with_charge<B: TypeWorkMeter>(
+pub(crate) fn same_kinded_argument_with_budget(
+    left: &KindedArgument,
+    right: &KindedArgument,
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, ()> {
+    compare_kinded_arguments_with_budget(left, right, budget)
+        .map(|ordering| ordering == Ordering::Equal)
+}
+
+fn compare_kinded_arguments_with_budget(
+    left: &KindedArgument,
+    right: &KindedArgument,
+    budget: &mut TypeWorkBudget,
+) -> Result<Ordering, ()> {
+    compare_structural_with_charge(
+        StructuralRoot::Argument(left),
+        StructuralRoot::Argument(right),
+        budget,
+        &mut allocation_error,
+    )
+}
+
+pub(crate) fn compare_types_with_charge<B: TypeWorkMeter>(
     left: &Type,
     right: &Type,
     charge: &mut B,
     storage_error: &mut impl FnMut(&mut B) -> B::Error,
 ) -> Result<Ordering, B::Error> {
+    compare_structural_with_charge(
+        StructuralRoot::Type(left),
+        StructuralRoot::Type(right),
+        charge,
+        storage_error,
+    )
+}
+
+fn compare_structural_with_charge<B: TypeWorkMeter>(
+    left: StructuralRoot<'_>,
+    right: StructuralRoot<'_>,
+    charge: &mut B,
+    storage_error: &mut impl FnMut(&mut B) -> B::Error,
+) -> Result<Ordering, B::Error> {
     enum Task<'a> {
         Types(&'a Type, &'a Type),
+        Arguments(&'a KindedArgument, &'a KindedArgument),
         Kinds(&'a Kind, &'a Kind),
         Rows(&'a EffectRow, &'a EffectRow),
         Instances(&'a EffectInstance, &'a EffectInstance),
@@ -1420,6 +1469,8 @@ fn compare_types_with_charge<B: TypeWorkMeter>(
 
     fn type_tag(ty: &Type) -> u8 {
         match ty {
+            Type::Bytes => 11,
+            Type::String => 12,
             Type::Int => 0,
             Type::Bool => 1,
             Type::Unit => 2,
@@ -1428,6 +1479,7 @@ fn compare_types_with_charge<B: TypeWorkMeter>(
             Type::Variable(_) => 5,
             Type::Inference(_) => 6,
             Type::Application(_, _) => 7,
+            Type::ResourceApply(_, _) => 10,
             Type::Forall(_, _) => 8,
             Type::Function(_, _) | Type::EffectfulFunction(_, _) => 9,
         }
@@ -1461,20 +1513,64 @@ fn compare_types_with_charge<B: TypeWorkMeter>(
             work.push($task);
         }};
     }
-    schedule!(Task::Types(left, right));
+    match (left, right) {
+        (StructuralRoot::Type(left), StructuralRoot::Type(right)) => {
+            schedule!(Task::Types(left, right))
+        }
+        (StructuralRoot::Argument(left), StructuralRoot::Argument(right)) => {
+            schedule!(Task::Arguments(left, right))
+        }
+        (StructuralRoot::Row(left), StructuralRoot::Row(right)) => {
+            schedule!(Task::Rows(left, right))
+        }
+        (StructuralRoot::Instance(left), StructuralRoot::Instance(right)) => {
+            schedule!(Task::Instances(left, right))
+        }
+        _ => unreachable!("comparison roots have the same structural category"),
+    }
     while let Some(task) = work.pop() {
         let ordering = match task {
+            Task::Arguments(left, right) => match (left, right) {
+                (KindedArgument::TypeArg(left), KindedArgument::TypeArg(right)) => {
+                    schedule!(Task::Types(left, right));
+                    Ordering::Equal
+                }
+                (KindedArgument::RowArg(left), KindedArgument::RowArg(right)) => {
+                    schedule!(Task::Rows(left, right));
+                    Ordering::Equal
+                }
+                (KindedArgument::TypeArg(_), KindedArgument::RowArg(_)) => Ordering::Less,
+                (KindedArgument::RowArg(_), KindedArgument::TypeArg(_)) => Ordering::Greater,
+            },
             Task::Types(left, right) => {
                 let tags = type_tag(left).cmp(&type_tag(right));
                 if tags != Ordering::Equal {
                     tags
                 } else {
                     match (left, right) {
-                        (Type::Int, Type::Int)
+                        (Type::Bytes, Type::Bytes)
+                        | (Type::String, Type::String)
+                        | (Type::Int, Type::Int)
                         | (Type::Bool, Type::Bool)
                         | (Type::Unit, Type::Unit) => Ordering::Equal,
                         (Type::Nominal(left), Type::Nominal(right)) => left.cmp(right),
                         (Type::Variable(left), Type::Variable(right)) => left.cmp(right),
+                        (
+                            Type::ResourceApply(left_id, left),
+                            Type::ResourceApply(right_id, right),
+                        ) => {
+                            let identity = left_id.cmp(right_id);
+                            if identity != Ordering::Equal {
+                                return Ok(identity);
+                            }
+                            let lengths = left.len().cmp(&right.len());
+                            if lengths == Ordering::Equal {
+                                for (left, right) in left.iter().zip(right).rev() {
+                                    schedule!(Task::Arguments(left, right));
+                                }
+                            }
+                            lengths
+                        }
                         (Type::Inference(left), Type::Inference(right)) => {
                             left.value().cmp(&right.value())
                         }
@@ -1612,7 +1708,7 @@ fn compare_types_with_charge<B: TypeWorkMeter>(
                     let lengths = left.arguments.len().cmp(&right.arguments.len());
                     if lengths == Ordering::Equal {
                         for (left, right) in left.arguments.iter().zip(&right.arguments).rev() {
-                            schedule!(Task::Types(left, right));
+                            schedule!(Task::Arguments(left, right));
                         }
                     }
                     lengths
@@ -1628,36 +1724,21 @@ fn compare_types_with_charge<B: TypeWorkMeter>(
 
 impl Clone for EffectRow {
     fn clone(&self) -> Self {
-        Self {
-            known: self.known.clone(),
-            tail: self.tail.clone(),
-        }
+        clone_effect_row_with_budget(self, &mut TypeWorkBudget::unbounded())
+            .expect("an in-memory row fits the address-space work bound")
     }
 }
 
 impl PartialEq for EffectRow {
     fn eq(&self, other: &Self) -> bool {
-        fn same_instances(left: &[EffectInstance], right: &[EffectInstance]) -> bool {
-            left.len() == right.len()
-                && left.iter().zip(right).all(|(left, right)| {
-                    left.effect == right.effect
-                        && left.arguments.len() == right.arguments.len()
-                        && left
-                            .arguments
-                            .iter()
-                            .zip(right.arguments.iter())
-                            .all(|(left, right)| same_type(left, right))
-                })
-        }
-
-        same_instances(&self.known, &other.known)
-            && match (&self.tail, &other.tail) {
-                (None, None) => true,
-                (Some(left), Some(right)) => {
-                    left.variable == right.variable && same_instances(&left.lacks, &right.lacks)
-                }
-                _ => false,
-            }
+        compare_structural_with_charge(
+            StructuralRoot::Row(self),
+            StructuralRoot::Row(other),
+            &mut TypeWorkBudget::unbounded(),
+            &mut allocation_error,
+        )
+        .expect("an in-memory row comparison fits the address-space work bound")
+            == Ordering::Equal
     }
 }
 
@@ -1671,54 +1752,20 @@ impl Hash for EffectRow {
 
 impl Drop for EffectRow {
     fn drop(&mut self) {
-        drop(std::mem::take(&mut self.known));
-        if let Some(tail) = self.tail.take() {
-            drop(tail.lacks);
+        if self.known.is_empty() && self.tail.is_none() {
+            return;
         }
+        let row = EffectRow {
+            known: std::mem::take(&mut self.known),
+            tail: self.tail.take(),
+        };
+        discard_row_iteratively(row);
     }
 }
 
 impl fmt::Display for EffectRow {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("{")?;
-        for (index, instance) in self.known.iter().enumerate() {
-            if index > 0 {
-                formatter.write_str(", ")?;
-            }
-            write!(
-                formatter,
-                "<effect:{}:{}>",
-                instance.effect.module, instance.effect.declaration
-            )?;
-            if !instance.arguments.is_empty() {
-                formatter.write_str("<")?;
-                for (argument_index, argument) in instance.arguments.iter().enumerate() {
-                    if argument_index > 0 {
-                        formatter.write_str(", ")?;
-                    }
-                    write!(formatter, "{argument}")?;
-                }
-                formatter.write_str(">")?;
-            }
-        }
-        if let Some(tail) = &self.tail {
-            if !self.known.is_empty() {
-                formatter.write_str(" ")?;
-            }
-            formatter.write_str("| ")?;
-            match tail.variable {
-                EffectRowVariable::Rigid(TypeVariableId::Resolved { module, local }) => {
-                    write!(formatter, "<row-variable:{module}:{local}>")?;
-                }
-                EffectRowVariable::Rigid(TypeVariableId::Generated(local)) => {
-                    write!(formatter, "<row-variable:generated:{local}>")?;
-                }
-                EffectRowVariable::Inference(identity) => {
-                    write!(formatter, "?row{}", identity.value())?;
-                }
-            }
-        }
-        formatter.write_str("}")
+        write_structural(StructuralRoot::Row(self), formatter)
     }
 }
 
@@ -1758,7 +1805,7 @@ impl ComputationType {
         self.effects.tail.as_ref().map(|tail| tail.variable)
     }
 
-    pub(crate) fn effect_arguments(&self) -> impl Iterator<Item = &Type> {
+    pub(crate) fn effect_arguments(&self) -> impl DoubleEndedIterator<Item = &KindedArgument> {
         self.effects
             .known
             .iter()
@@ -1768,10 +1815,6 @@ impl ComputationType {
 
     pub(crate) fn effect_argument_count(&self) -> usize {
         self.effect_arguments().count()
-    }
-
-    pub(crate) fn extend_effect_arguments<'a>(&'a self, output: &mut Vec<&'a Type>) {
-        output.extend(self.effect_arguments());
     }
 }
 
@@ -1836,8 +1879,11 @@ impl NominalTypeId {
 }
 
 /// A structural Ash type.
-#[derive(Debug)]
 pub enum Type {
+    /// Immutable packed arbitrary bytes.
+    Bytes,
+    /// Immutable packed valid UTF-8.
+    String,
     /// Arbitrary-precision integers.
     Int,
     /// Boolean values.
@@ -1854,6 +1900,8 @@ pub enum Type {
     Inference(InferenceVariableId),
     /// One structural application of a type function to one type argument.
     Application(Box<Type>, Box<Type>),
+    /// One saturated row-bearing resource owner application.
+    ResourceApply(ResourceDefinitionId, Box<[KindedArgument]>),
     /// A rank-1 type scheme binding variables in its monotype body.
     Forall(Box<[(TypeVariableId, Kind)]>, Box<Type>),
     /// A unary function whose canonical computation codomain has an empty row.
@@ -2055,6 +2103,27 @@ fn observe_type_discard_visit(children: usize) {
     TYPE_DISCARD_PENDING_PEAK.set(TYPE_DISCARD_PENDING_PEAK.get().max(pending));
 }
 
+#[cfg(test)]
+fn argument_type_child_count(arguments: &[KindedArgument]) -> usize {
+    let mut pending: Vec<_> = arguments.iter().collect();
+    let mut count = 0;
+    while let Some(argument) = pending.pop() {
+        match argument {
+            KindedArgument::TypeArg(_) => count += 1,
+            KindedArgument::RowArg(row) => {
+                for instance in row
+                    .known
+                    .iter()
+                    .chain(row.tail.iter().flat_map(|tail| tail.lacks.iter()))
+                {
+                    pending.extend(instance.arguments.iter());
+                }
+            }
+        }
+    }
+    count
+}
+
 /// Destroys an owned type without following host-language recursion.
 ///
 /// Use this when consuming a potentially deep [`Type`] returned by a public
@@ -2065,6 +2134,9 @@ pub fn discard_type_iteratively(root: Type) {
         Visit(Type),
         Sequence(std::vec::IntoIter<Type>),
         EffectInstances(std::vec::IntoIter<EffectInstance>),
+        Arguments(std::vec::IntoIter<KindedArgument>),
+        Argument(KindedArgument),
+        Row(EffectRow),
     }
 
     let mut work = crate::eval::disposal::Pending::new(crate::eval::RuntimeResource::TypeDisposal);
@@ -2076,6 +2148,7 @@ pub fn discard_type_iteratively(root: Type) {
         if let Task::Visit(ty) = &task {
             let children = match ty {
                 Type::Tuple(elements) => elements.len(),
+                Type::ResourceApply(_, arguments) => argument_type_child_count(arguments),
                 Type::Application(_, _) => 2,
                 Type::Function(_, _) => 2,
                 Type::EffectfulFunction(_, codomain) => {
@@ -2090,11 +2163,13 @@ pub fn discard_type_iteratively(root: Type) {
                                 .iter()
                                 .flat_map(|tail| tail.lacks.iter()),
                         )
-                        .map(|instance| instance.arguments.len())
+                        .map(|instance| argument_type_child_count(&instance.arguments))
                         .sum::<usize>()
                 }
                 Type::Forall(_, _) => 1,
-                Type::Int
+                Type::Bytes
+                | Type::String
+                | Type::Int
                 | Type::Bool
                 | Type::Unit
                 | Type::Nominal(_)
@@ -2104,6 +2179,9 @@ pub fn discard_type_iteratively(root: Type) {
             observe_type_discard_visit(children);
         }
         match task {
+            Task::Visit(Type::ResourceApply(_, arguments)) => {
+                work.push(Task::Arguments(arguments.into_vec().into_iter()));
+            }
             Task::Visit(Type::Tuple(elements)) => {
                 work.push(Task::Sequence(elements.into_vec().into_iter()));
             }
@@ -2132,7 +2210,9 @@ pub fn discard_type_iteratively(root: Type) {
             }
             Task::Visit(Type::Forall(_, body)) => work.push(Task::Visit(*body)),
             Task::Visit(
-                Type::Int
+                Type::Bytes
+                | Type::String
+                | Type::Int
                 | Type::Bool
                 | Type::Unit
                 | Type::Nominal(_)
@@ -2145,6 +2225,21 @@ pub fn discard_type_iteratively(root: Type) {
                     work.push(Task::Visit(ty));
                 }
             }
+            Task::Arguments(mut remaining) => {
+                if let Some(argument) = remaining.next() {
+                    work.push(Task::Arguments(remaining));
+                    work.push(Task::Argument(argument));
+                }
+            }
+            Task::Argument(KindedArgument::TypeArg(ty)) => work.push(Task::Visit(ty)),
+            Task::Argument(KindedArgument::RowArg(row)) => work.push(Task::Row(row)),
+            Task::Row(mut row) => {
+                let known = std::mem::take(&mut row.known).into_vec().into_iter();
+                if let Some(tail) = row.tail.take() {
+                    work.push(Task::EffectInstances(tail.lacks.into_vec().into_iter()));
+                }
+                work.push(Task::EffectInstances(known));
+            }
             Task::EffectInstances(mut remaining) => {
                 if let Some(mut instance) = remaining.next() {
                     let arguments = std::mem::take(&mut instance.arguments)
@@ -2152,7 +2247,7 @@ pub fn discard_type_iteratively(root: Type) {
                         .into_iter();
                     drop(instance);
                     work.push(Task::EffectInstances(remaining));
-                    work.push(Task::Sequence(arguments));
+                    work.push(Task::Arguments(arguments));
                 }
             }
         }
@@ -2176,8 +2271,29 @@ impl fmt::Display for Type {
 }
 
 fn write_type(ty: &Type, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    write_structural(StructuralRoot::Type(ty), formatter)
+}
+
+fn write_structural(root: StructuralRoot<'_>, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    write_structural_inner(root, formatter, false)
+}
+
+fn write_structural_debug(
+    root: StructuralRoot<'_>,
+    formatter: &mut fmt::Formatter<'_>,
+) -> fmt::Result {
+    write_structural_inner(root, formatter, true)
+}
+
+fn write_structural_inner(
+    root: StructuralRoot<'_>,
+    formatter: &mut fmt::Formatter<'_>,
+    include_lacks: bool,
+) -> fmt::Result {
     enum Task<'a> {
         Visit(&'a Type),
+        Argument(&'a KindedArgument),
+        Arguments(std::slice::Iter<'a, KindedArgument>),
         ApplicationSpine(&'a Type),
         EffectRow(&'a EffectRow),
         EffectInstances(std::slice::Iter<'a, EffectInstance>),
@@ -2187,9 +2303,26 @@ fn write_type(ty: &Type, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         Sequence(std::slice::Iter<'a, Type>),
     }
 
-    let mut work = vec![Task::Visit(ty)];
+    let initial = match root {
+        StructuralRoot::Type(ty) => Task::Visit(ty),
+        StructuralRoot::Argument(arg) => Task::Argument(arg),
+        StructuralRoot::Row(row) => Task::EffectRow(row),
+        StructuralRoot::Instance(instance) => Task::EffectInstance(instance),
+    };
+    let mut work = vec![initial];
     while let Some(task) = work.pop() {
         match task {
+            Task::Argument(KindedArgument::TypeArg(ty)) => work.push(Task::Visit(ty)),
+            Task::Argument(KindedArgument::RowArg(row)) => work.push(Task::EffectRow(row)),
+            Task::Arguments(mut remaining) => {
+                if let Some(next) = remaining.next() {
+                    if !remaining.as_slice().is_empty() {
+                        work.push(Task::Arguments(remaining));
+                        work.push(Task::Text(", "));
+                    }
+                    work.push(Task::Argument(next));
+                }
+            }
             Task::Text(text) => formatter.write_str(text)?,
             Task::EffectRow(row) => {
                 formatter.write_str("{")?;
@@ -2216,7 +2349,7 @@ fn write_type(ty: &Type, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 )?;
                 if !instance.arguments.is_empty() {
                     work.push(Task::Text(">"));
-                    work.push(Task::Sequence(instance.arguments.iter()));
+                    work.push(Task::Arguments(instance.arguments.iter()));
                     work.push(Task::Text("<"));
                 }
             }
@@ -2233,6 +2366,11 @@ fn write_type(ty: &Type, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                         write!(formatter, "?row{}", identity.value())?;
                     }
                 }
+                if include_lacks && !tail.lacks.is_empty() {
+                    formatter.write_str(" lacks [")?;
+                    work.push(Task::Text("]"));
+                    work.push(Task::EffectInstances(tail.lacks.iter()));
+                }
             }
             Task::Sequence(mut remaining) => {
                 if let Some(next) = remaining.next() {
@@ -2243,6 +2381,8 @@ fn write_type(ty: &Type, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                     work.push(Task::Visit(next));
                 }
             }
+            Task::Visit(Type::Bytes) => formatter.write_str("Bytes")?,
+            Task::Visit(Type::String) => formatter.write_str("String")?,
             Task::Visit(Type::Int) => formatter.write_str("Int")?,
             Task::Visit(Type::Bool) => formatter.write_str("Bool")?,
             Task::Visit(Type::Unit) => formatter.write_str("Unit")?,
@@ -2250,6 +2390,12 @@ fn write_type(ty: &Type, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 work.push(Task::Text(")"));
                 work.push(Task::Sequence(elements.iter()));
                 work.push(Task::Text("("));
+            }
+            Task::Visit(Type::ResourceApply(id, arguments)) => {
+                write!(formatter, "<resource:{}:{}>", id.module(), id.ordinal())?;
+                work.push(Task::Text(">"));
+                work.push(Task::Arguments(arguments.iter()));
+                work.push(Task::Text("<"));
             }
             Task::Visit(Type::Nominal(identity)) => {
                 if identity.is_lexical() {
@@ -2364,6 +2510,13 @@ pub fn same_type(left: &Type, right: &Type) -> bool {
     enum Task<'a> {
         Compare(&'a Type, &'a Type),
         CompareRows(&'a EffectRow, &'a EffectRow),
+        CompareArguments(&'a KindedArgument, &'a KindedArgument),
+        ArgumentSequence(
+            std::iter::Zip<
+                std::slice::Iter<'a, KindedArgument>,
+                std::slice::Iter<'a, KindedArgument>,
+            >,
+        ),
         Sequence(std::iter::Zip<std::slice::Iter<'a, Type>, std::slice::Iter<'a, Type>>),
     }
     let mut pending = vec![Task::Compare(left, right)];
@@ -2376,6 +2529,21 @@ pub fn same_type(left: &Type, right: &Type) -> bool {
                         pending.push(Task::Compare(left, right));
                     }
                 }
+                Task::CompareArguments(left, right) => match (left, right) {
+                    (KindedArgument::TypeArg(left), KindedArgument::TypeArg(right)) => {
+                        pending.push(Task::Compare(left, right))
+                    }
+                    (KindedArgument::RowArg(left), KindedArgument::RowArg(right)) => {
+                        pending.push(Task::CompareRows(left, right))
+                    }
+                    _ => return false,
+                },
+                Task::ArgumentSequence(mut remaining) => {
+                    if let Some((left, right)) = remaining.next() {
+                        pending.push(Task::ArgumentSequence(remaining));
+                        pending.push(Task::CompareArguments(left, right));
+                    }
+                }
                 Task::CompareRows(left, right) => {
                     if left.known.len() != right.known.len() {
                         return false;
@@ -2386,7 +2554,7 @@ pub fn same_type(left: &Type, right: &Type) -> bool {
                         {
                             return false;
                         }
-                        pending.push(Task::Sequence(
+                        pending.push(Task::ArgumentSequence(
                             left.arguments.iter().zip(right.arguments.iter()),
                         ));
                     }
@@ -2402,7 +2570,7 @@ pub fn same_type(left: &Type, right: &Type) -> bool {
                                 {
                                     return false;
                                 }
-                                pending.push(Task::Sequence(
+                                pending.push(Task::ArgumentSequence(
                                     left.arguments.iter().zip(right.arguments.iter()),
                                 ));
                             }
@@ -2415,9 +2583,18 @@ pub fn same_type(left: &Type, right: &Type) -> bool {
             continue;
         };
         match (left, right) {
-            (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
+            (Type::Bytes, Type::Bytes)
+            | (Type::String, Type::String)
+            | (Type::Int, Type::Int)
+            | (Type::Bool, Type::Bool)
+            | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
             (Type::Variable(left), Type::Variable(right)) if left == right => {}
+            (Type::ResourceApply(left_id, left), Type::ResourceApply(right_id, right))
+                if left_id == right_id && left.len() == right.len() =>
+            {
+                pending.push(Task::ArgumentSequence(left.iter().zip(right.iter())));
+            }
             (Type::Inference(left), Type::Inference(right)) if left == right => {}
             (
                 Type::Application(left_function, left_argument),
@@ -2515,32 +2692,96 @@ pub(crate) fn same_type_with_budget(
     enum Task<'a> {
         Compare(&'a Type, &'a Type),
         CompareRows(&'a EffectRow, &'a EffectRow),
+        ArgumentSequence(
+            std::iter::Zip<
+                std::slice::Iter<'a, KindedArgument>,
+                std::slice::Iter<'a, KindedArgument>,
+            >,
+        ),
         Sequence(std::iter::Zip<std::slice::Iter<'a, Type>, std::slice::Iter<'a, Type>>),
     }
 
-    let mut pending = vec![Task::Compare(left, right)];
+    fn push_type<'a>(
+        pending: &mut Vec<Task<'a>>,
+        left: &'a Type,
+        right: &'a Type,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ()> {
+        budget.charge(1)?;
+        reserve_row(pending, 1, RowReservationSite::ComparisonWork).map_err(|_| ())?;
+        pending.push(Task::Compare(left, right));
+        Ok(())
+    }
+    fn push_row<'a>(
+        pending: &mut Vec<Task<'a>>,
+        left: &'a EffectRow,
+        right: &'a EffectRow,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ()> {
+        budget.charge(1)?;
+        reserve_row(pending, 1, RowReservationSite::ComparisonWork).map_err(|_| ())?;
+        pending.push(Task::CompareRows(left, right));
+        Ok(())
+    }
+    fn push_argument<'a>(
+        pending: &mut Vec<Task<'a>>,
+        left: &'a KindedArgument,
+        right: &'a KindedArgument,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<bool, ()> {
+        match (left, right) {
+            (KindedArgument::TypeArg(left), KindedArgument::TypeArg(right)) => {
+                push_type(pending, left, right, budget)?
+            }
+            (KindedArgument::RowArg(left), KindedArgument::RowArg(right)) => {
+                push_row(pending, left, right, budget)?
+            }
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+    let mut pending = Vec::new();
+    push_type(&mut pending, left, right, budget)?;
     while let Some(task) = pending.pop() {
         let Task::Compare(left, right) = task else {
             match task {
                 Task::Sequence(mut remaining) => {
                     if let Some((left, right)) = remaining.next() {
+                        // The container token remains admitted while its next child gets its own cell.
+                        reserve_row(&mut pending, 1, RowReservationSite::ComparisonWork)
+                            .map_err(|_| ())?;
                         pending.push(Task::Sequence(remaining));
-                        pending.push(Task::Compare(left, right));
+                        push_type(&mut pending, left, right, budget)?;
+                    }
+                }
+                Task::ArgumentSequence(mut remaining) => {
+                    if let Some((left, right)) = remaining.next() {
+                        reserve_row(&mut pending, 1, RowReservationSite::ComparisonWork)
+                            .map_err(|_| ())?;
+                        pending.push(Task::ArgumentSequence(remaining));
+                        if !push_argument(&mut pending, left, right, budget)? {
+                            return Ok(false);
+                        }
                     }
                 }
                 Task::CompareRows(left, right) => {
-                    budget.charge(1)?;
                     if left.known.len() != right.known.len() {
                         return Ok(false);
                     }
                     budget.charge(left.known.len())?;
+                    reserve_row(
+                        &mut pending,
+                        left.known.len(),
+                        RowReservationSite::ComparisonWork,
+                    )
+                    .map_err(|_| ())?;
                     for (left, right) in left.known.iter().zip(right.known.iter()) {
                         if left.effect != right.effect
                             || left.arguments.len() != right.arguments.len()
                         {
                             return Ok(false);
                         }
-                        pending.push(Task::Sequence(
+                        pending.push(Task::ArgumentSequence(
                             left.arguments.iter().zip(right.arguments.iter()),
                         ));
                     }
@@ -2550,14 +2791,20 @@ pub(crate) fn same_type_with_budget(
                             if left.variable == right.variable
                                 && left.lacks.len() == right.lacks.len() =>
                         {
-                            budget.charge(1_usize.saturating_add(left.lacks.len()))?;
+                            budget.charge(left.lacks.len().checked_add(1).ok_or(())?)?;
+                            reserve_row(
+                                &mut pending,
+                                left.lacks.len(),
+                                RowReservationSite::ComparisonWork,
+                            )
+                            .map_err(|_| ())?;
                             for (left, right) in left.lacks.iter().zip(right.lacks.iter()) {
                                 if left.effect != right.effect
                                     || left.arguments.len() != right.arguments.len()
                                 {
                                     return Ok(false);
                                 }
-                                pending.push(Task::Sequence(
+                                pending.push(Task::ArgumentSequence(
                                     left.arguments.iter().zip(right.arguments.iter()),
                                 ));
                             }
@@ -2569,18 +2816,27 @@ pub(crate) fn same_type_with_budget(
             }
             continue;
         };
-        budget.charge(1)?;
         match (left, right) {
-            (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
+            (Type::Bytes, Type::Bytes)
+            | (Type::String, Type::String)
+            | (Type::Int, Type::Int)
+            | (Type::Bool, Type::Bool)
+            | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
             (Type::Variable(left), Type::Variable(right)) if left == right => {}
+            (Type::ResourceApply(left_id, left), Type::ResourceApply(right_id, right))
+                if left_id == right_id && left.len() == right.len() =>
+            {
+                reserve_row(&mut pending, 1, RowReservationSite::ComparisonWork).map_err(|_| ())?;
+                pending.push(Task::ArgumentSequence(left.iter().zip(right.iter())));
+            }
             (Type::Inference(left), Type::Inference(right)) if left == right => {}
             (
                 Type::Application(left_function, left_argument),
                 Type::Application(right_function, right_argument),
             ) => {
-                pending.push(Task::Compare(left_argument, right_argument));
-                pending.push(Task::Compare(left_function, right_function));
+                push_type(&mut pending, left_argument, right_argument, budget)?;
+                push_type(&mut pending, left_function, right_function, budget)?;
             }
             (Type::Forall(left_parameters, left), Type::Forall(right_parameters, right))
                 if left_parameters.len() == right_parameters.len() =>
@@ -2592,29 +2848,37 @@ pub(crate) fn same_type_with_budget(
                 )? {
                     return Ok(false);
                 }
-                pending.push(Task::Compare(left, right));
+                push_type(&mut pending, left, right, budget)?;
             }
             (Type::Tuple(left), Type::Tuple(right)) if left.len() == right.len() => {
+                reserve_row(&mut pending, 1, RowReservationSite::ComparisonWork).map_err(|_| ())?;
                 pending.push(Task::Sequence(left.iter().zip(right.iter())));
             }
             (
                 Type::Function(left_domain, left_codomain),
                 Type::Function(right_domain, right_codomain),
             ) => {
-                pending.push(Task::Compare(left_codomain, right_codomain));
-                pending.push(Task::Compare(left_domain, right_domain));
+                push_type(&mut pending, left_codomain, right_codomain, budget)?;
+                push_type(&mut pending, left_domain, right_domain, budget)?;
             }
             (
                 Type::EffectfulFunction(left_domain, left_codomain),
                 Type::EffectfulFunction(right_domain, right_codomain),
             ) => {
                 budget.charge(1)?;
-                pending.push(Task::CompareRows(
+                push_row(
+                    &mut pending,
                     &left_codomain.effects,
                     &right_codomain.effects,
-                ));
-                pending.push(Task::Compare(&left_codomain.value, &right_codomain.value));
-                pending.push(Task::Compare(left_domain, right_domain));
+                    budget,
+                )?;
+                push_type(
+                    &mut pending,
+                    &left_codomain.value,
+                    &right_codomain.value,
+                    budget,
+                )?;
+                push_type(&mut pending, left_domain, right_domain, budget)?;
             }
             (
                 Type::Function(left_domain, left_codomain),
@@ -2625,8 +2889,8 @@ pub(crate) fn same_type_with_budget(
                 Type::Function(left_domain, left_codomain),
             ) if right_codomain.effects.is_empty() => {
                 budget.charge(2)?;
-                pending.push(Task::Compare(left_codomain, &right_codomain.value));
-                pending.push(Task::Compare(left_domain, right_domain));
+                push_type(&mut pending, left_codomain, &right_codomain.value, budget)?;
+                push_type(&mut pending, left_domain, right_domain, budget)?;
             }
             _ => return Ok(false),
         }
@@ -2636,10 +2900,15 @@ pub(crate) fn same_type_with_budget(
 
 enum TypeHashTask<'a> {
     Visit(&'a Type),
+    Argument(&'a KindedArgument),
+    Arguments(std::slice::Iter<'a, KindedArgument>),
     EffectRow(&'a EffectRow),
     Instances(std::slice::Iter<'a, EffectInstance>),
     Instance(&'a EffectInstance),
     Sequence(std::slice::Iter<'a, Type>),
+    Parameters(std::slice::Iter<'a, (TypeVariableId, Kind)>),
+    Parameter(&'a (TypeVariableId, Kind)),
+    Kind(&'a Kind),
 }
 
 fn hash_type<H: Hasher>(ty: &Type, state: &mut H) {
@@ -2647,13 +2916,64 @@ fn hash_type<H: Hasher>(ty: &Type, state: &mut H) {
 }
 
 fn hash_type_or_effect_row<H: Hasher>(root: TypeHashTask<'_>, state: &mut H) {
-    let mut work = vec![root];
+    hash_type_or_effect_row_with_reservation(root, state, |_, _| Ok(()))
+        .expect("ordinary type hashing has no fallible admission");
+}
+
+fn hash_type_or_effect_row_with_reservation<'a, H: Hasher>(
+    root: TypeHashTask<'a>,
+    state: &mut H,
+    mut reserve: impl FnMut(&mut Vec<TypeHashTask<'a>>, &TypeHashTask<'a>) -> Result<(), ()>,
+) -> Result<(), ()> {
+    let mut work = Vec::new();
+    reserve(&mut work, &root)?;
+    work.push(root);
+    macro_rules! push {
+        ($task:expr) => {{
+            let task = $task;
+            reserve(&mut work, &task)?;
+            work.push(task);
+        }};
+    }
     while let Some(task) = work.pop() {
         match task {
+            TypeHashTask::Parameters(mut remaining) => {
+                if let Some(parameter) = remaining.next() {
+                    push!(TypeHashTask::Parameters(remaining));
+                    push!(TypeHashTask::Parameter(parameter));
+                }
+            }
+            TypeHashTask::Parameter((identity, kind)) => {
+                identity.hash(state);
+                push!(TypeHashTask::Kind(kind));
+            }
+            TypeHashTask::Kind(kind) => match kind {
+                Kind::Type => 0_u8.hash(state),
+                Kind::EffectRow => 1_u8.hash(state),
+                Kind::Arrow(domain, codomain) => {
+                    2_u8.hash(state);
+                    push!(TypeHashTask::Kind(codomain));
+                    push!(TypeHashTask::Kind(domain));
+                }
+            },
+            TypeHashTask::Argument(KindedArgument::TypeArg(ty)) => {
+                0_u8.hash(state);
+                push!(TypeHashTask::Visit(ty));
+            }
+            TypeHashTask::Argument(KindedArgument::RowArg(row)) => {
+                1_u8.hash(state);
+                push!(TypeHashTask::EffectRow(row));
+            }
+            TypeHashTask::Arguments(mut remaining) => {
+                if let Some(next) = remaining.next() {
+                    push!(TypeHashTask::Arguments(remaining));
+                    push!(TypeHashTask::Argument(next));
+                }
+            }
             TypeHashTask::Sequence(mut remaining) => {
                 if let Some(next) = remaining.next() {
-                    work.push(TypeHashTask::Sequence(remaining));
-                    work.push(TypeHashTask::Visit(next));
+                    push!(TypeHashTask::Sequence(remaining));
+                    push!(TypeHashTask::Visit(next));
                 }
             }
             TypeHashTask::EffectRow(row) => {
@@ -2665,29 +2985,31 @@ fn hash_type_or_effect_row<H: Hasher>(root: TypeHashTask<'_>, state: &mut H) {
                         1_u8.hash(state);
                         tail.variable.hash(state);
                         tail.lacks.len().hash(state);
-                        work.push(TypeHashTask::Instances(tail.lacks.iter()));
+                        push!(TypeHashTask::Instances(tail.lacks.iter()));
                     }
                 }
-                work.push(TypeHashTask::Instances(row.known.iter()));
+                push!(TypeHashTask::Instances(row.known.iter()));
             }
             TypeHashTask::Instances(mut remaining) => {
                 if let Some(next) = remaining.next() {
-                    work.push(TypeHashTask::Instances(remaining));
-                    work.push(TypeHashTask::Instance(next));
+                    push!(TypeHashTask::Instances(remaining));
+                    push!(TypeHashTask::Instance(next));
                 }
             }
             TypeHashTask::Instance(instance) => {
                 instance.effect.hash(state);
                 instance.arguments.len().hash(state);
-                work.push(TypeHashTask::Sequence(instance.arguments.iter()));
+                push!(TypeHashTask::Arguments(instance.arguments.iter()));
             }
+            TypeHashTask::Visit(Type::Bytes) => 11_u8.hash(state),
+            TypeHashTask::Visit(Type::String) => 12_u8.hash(state),
             TypeHashTask::Visit(Type::Int) => 0_u8.hash(state),
             TypeHashTask::Visit(Type::Bool) => 1_u8.hash(state),
             TypeHashTask::Visit(Type::Unit) => 2_u8.hash(state),
             TypeHashTask::Visit(Type::Tuple(elements)) => {
                 3_u8.hash(state);
                 elements.len().hash(state);
-                work.push(TypeHashTask::Sequence(elements.iter()));
+                push!(TypeHashTask::Sequence(elements.iter()));
             }
             TypeHashTask::Visit(Type::Nominal(identity)) => {
                 4_u8.hash(state);
@@ -2701,47 +3023,90 @@ fn hash_type_or_effect_row<H: Hasher>(root: TypeHashTask<'_>, state: &mut H) {
                 6_u8.hash(state);
                 identity.hash(state);
             }
+            TypeHashTask::Visit(Type::ResourceApply(id, arguments)) => {
+                10_u8.hash(state);
+                id.hash(state);
+                arguments.len().hash(state);
+                push!(TypeHashTask::Arguments(arguments.iter()));
+            }
             TypeHashTask::Visit(Type::Application(function, argument)) => {
                 7_u8.hash(state);
-                work.push(TypeHashTask::Visit(argument));
-                work.push(TypeHashTask::Visit(function));
+                push!(TypeHashTask::Visit(argument));
+                push!(TypeHashTask::Visit(function));
             }
             TypeHashTask::Visit(Type::Forall(parameters, body)) => {
                 8_u8.hash(state);
-                parameters.hash(state);
-                work.push(TypeHashTask::Visit(body));
+                parameters.len().hash(state);
+                push!(TypeHashTask::Visit(body));
+                push!(TypeHashTask::Parameters(parameters.iter()));
             }
             TypeHashTask::Visit(Type::Function(domain, codomain)) => {
                 9_u8.hash(state);
-                EffectRow::empty().hash(state);
-                work.push(TypeHashTask::Visit(codomain));
-                work.push(TypeHashTask::Visit(domain));
+                10_u8.hash(state);
+                0_usize.hash(state);
+                0_u8.hash(state);
+                push!(TypeHashTask::Visit(codomain));
+                push!(TypeHashTask::Visit(domain));
             }
             TypeHashTask::Visit(Type::EffectfulFunction(domain, codomain)) => {
                 9_u8.hash(state);
-                work.push(TypeHashTask::Visit(&codomain.value));
-                work.push(TypeHashTask::Visit(domain));
-                work.push(TypeHashTask::EffectRow(&codomain.effects));
+                push!(TypeHashTask::Visit(&codomain.value));
+                push!(TypeHashTask::Visit(domain));
+                push!(TypeHashTask::EffectRow(&codomain.effects));
             }
         }
     }
+    Ok(())
 }
 
-#[cfg(test)]
 pub(crate) fn hash_type_with_budget<H: Hasher>(
     ty: &Type,
     state: &mut H,
     budget: &mut TypeWorkBudget,
 ) -> Result<(), ()> {
-    charge_type_cells(ty, budget)?;
-    hash_type(ty, state);
-    Ok(())
+    hash_type_or_effect_row_with_reservation(TypeHashTask::Visit(ty), state, |work, task| {
+        // The same complete cells as structural admission, paid before scratch retention.
+        // Iterator continuations reuse their admitted container and child cells.
+        let cells = match task {
+            TypeHashTask::Visit(Type::EffectfulFunction(_, _)) => 2,
+            TypeHashTask::Visit(_)
+            | TypeHashTask::Instance(_)
+            | TypeHashTask::Parameter(_)
+            | TypeHashTask::Kind(_) => 1,
+            TypeHashTask::EffectRow(row) => 1 + usize::from(row.tail.is_some()),
+            TypeHashTask::Argument(_)
+            | TypeHashTask::Arguments(_)
+            | TypeHashTask::Instances(_)
+            | TypeHashTask::Sequence(_)
+            | TypeHashTask::Parameters(_) => 0,
+        };
+        budget.charge(cells)?;
+        work.try_reserve(1).map_err(|_| ())
+    })
 }
 
 /// Charges the expanded result before applying one capture-free substitution.
 pub(crate) fn substitute_type_variables_with<E>(
     ty: &Type,
     replacements: &HashMap<TypeVariableId, Type>,
+    mut charge: impl FnMut(usize) -> Result<(), E>,
+    mut allocation_error: impl FnMut() -> E,
+) -> Result<Type, E> {
+    match substitute_type_and_row_variables(
+        ty,
+        replacements,
+        &HashMap::new(),
+        &mut charge,
+        &mut allocation_error,
+    )? {
+        Ok(ty) => Ok(ty),
+        Err(_) => unreachable!("ordinary type substitution cannot violate row constraints"),
+    }
+}
+
+pub(crate) fn substitute_type_variables_borrowed_with<E>(
+    ty: &Type,
+    replacements: &HashMap<TypeVariableId, &Type>,
     mut charge: impl FnMut(usize) -> Result<(), E>,
     mut allocation_error: impl FnMut() -> E,
 ) -> Result<Type, E> {
@@ -2773,17 +3138,443 @@ pub(crate) fn substitute_type_and_row_variables_with<E>(
     )
 }
 
-#[allow(
-    clippy::type_complexity,
-    reason = "the local traversal shape mirrors substitution state without a module-level alias"
-)]
-fn substitute_type_and_row_variables<E>(
+pub(crate) fn substitute_type_and_row_variables_borrowed_with<E>(
+    ty: &Type,
+    replacements: &HashMap<TypeVariableId, &Type>,
+    row_replacements: &HashMap<TypeVariableId, EffectRow>,
+    mut charge: impl FnMut(usize) -> Result<(), E>,
+    mut allocation_error: impl FnMut() -> E,
+) -> Result<Result<Type, EffectRowError>, E> {
+    substitute_type_and_row_variables(
+        ty,
+        replacements,
+        row_replacements,
+        &mut charge,
+        &mut allocation_error,
+    )
+}
+
+pub(crate) fn substitute_effect_and_template_rows_with<E>(
+    row: &EffectRow,
+    replacements: &HashMap<TypeVariableId, Type>,
+    row_replacements: &HashMap<TypeVariableId, EffectRow>,
+    inference_rows: &HashMap<InferenceVariableId, EffectRow>,
+    mut charge: impl FnMut(usize) -> Result<(), E>,
+    mut allocation_error: impl FnMut() -> E,
+) -> Result<Result<EffectRow, EffectRowError>, E> {
+    substitute_structural_type_and_row_variables(
+        SubstitutionRoot::Row(row),
+        replacements,
+        row_replacements,
+        Some(TemplateRowReplacements {
+            inference_rows,
+            renaming: None,
+        }),
+        &mut charge,
+        &mut allocation_error,
+        None,
+    )
+    .map(|result| result.map(|value| value.into_row().expect("row substitution root")))
+}
+
+pub(crate) fn substitute_argument_and_template_rows_with<E>(
+    argument: &KindedArgument,
+    replacements: &HashMap<TypeVariableId, Type>,
+    row_replacements: &HashMap<TypeVariableId, EffectRow>,
+    inference_rows: &HashMap<InferenceVariableId, EffectRow>,
+    mut charge: impl FnMut(usize) -> Result<(), E>,
+    mut allocation_error: impl FnMut() -> E,
+) -> Result<Result<KindedArgument, EffectRowError>, E> {
+    substitute_structural_type_and_row_variables(
+        SubstitutionRoot::Argument(argument),
+        replacements,
+        row_replacements,
+        Some(TemplateRowReplacements {
+            inference_rows,
+            renaming: None,
+        }),
+        &mut charge,
+        &mut allocation_error,
+        None,
+    )
+    .map(|result| result.map(|value| value.into_argument().expect("argument substitution root")))
+}
+
+/// Renames copied local declarations, including binders underneath `forall`.
+/// Canonical external declarations and actual substitution payloads retain
+/// their identities. These maps express a claim; Core checks their freshness.
+pub(crate) struct TemplateIdentityRenaming<'a> {
+    pub(crate) nominals: &'a HashMap<NominalTypeId, NominalTypeId>,
+    pub(crate) variables: &'a HashMap<TypeVariableId, TypeVariableId>,
+}
+
+#[derive(Clone, Copy)]
+struct TemplateRowReplacements<'a> {
+    inference_rows: &'a HashMap<InferenceVariableId, EffectRow>,
+    renaming: Option<&'a TemplateIdentityRenaming<'a>>,
+}
+
+pub(crate) fn substitute_type_for_template_with<E>(
     ty: &Type,
     replacements: &HashMap<TypeVariableId, Type>,
+    row_replacements: &HashMap<TypeVariableId, EffectRow>,
+    inference_rows: &HashMap<InferenceVariableId, EffectRow>,
+    renaming: &TemplateIdentityRenaming<'_>,
+    mut charge: impl FnMut(usize) -> Result<(), E>,
+    mut allocation_error: impl FnMut() -> E,
+) -> Result<Result<Type, EffectRowError>, E> {
+    substitute_structural_type_and_row_variables(
+        SubstitutionRoot::Type(ty),
+        replacements,
+        row_replacements,
+        Some(TemplateRowReplacements {
+            inference_rows,
+            renaming: Some(renaming),
+        }),
+        &mut charge,
+        &mut allocation_error,
+        None,
+    )
+    .map(|result| result.map(StructuralValue::into_inner))
+}
+
+pub(crate) fn substitute_row_for_template_with<E>(
+    row: &EffectRow,
+    replacements: &HashMap<TypeVariableId, Type>,
+    row_replacements: &HashMap<TypeVariableId, EffectRow>,
+    inference_rows: &HashMap<InferenceVariableId, EffectRow>,
+    renaming: &TemplateIdentityRenaming<'_>,
+    mut charge: impl FnMut(usize) -> Result<(), E>,
+    mut allocation_error: impl FnMut() -> E,
+) -> Result<Result<EffectRow, EffectRowError>, E> {
+    substitute_structural_type_and_row_variables(
+        SubstitutionRoot::Row(row),
+        replacements,
+        row_replacements,
+        Some(TemplateRowReplacements {
+            inference_rows,
+            renaming: Some(renaming),
+        }),
+        &mut charge,
+        &mut allocation_error,
+        None,
+    )
+    .map(|result| result.map(|value| value.into_row().expect("row substitution root")))
+}
+
+pub(crate) fn substitute_argument_for_template_with<E>(
+    argument: &KindedArgument,
+    replacements: &HashMap<TypeVariableId, Type>,
+    row_replacements: &HashMap<TypeVariableId, EffectRow>,
+    inference_rows: &HashMap<InferenceVariableId, EffectRow>,
+    renaming: &TemplateIdentityRenaming<'_>,
+    mut charge: impl FnMut(usize) -> Result<(), E>,
+    mut allocation_error: impl FnMut() -> E,
+) -> Result<Result<KindedArgument, EffectRowError>, E> {
+    substitute_structural_type_and_row_variables(
+        SubstitutionRoot::Argument(argument),
+        replacements,
+        row_replacements,
+        Some(TemplateRowReplacements {
+            inference_rows,
+            renaming: Some(renaming),
+        }),
+        &mut charge,
+        &mut allocation_error,
+        None,
+    )
+    .map(|result| result.map(|value| value.into_argument().expect("argument substitution root")))
+}
+
+/// Substitute an implementation's complete source type after requiring every
+/// free source binder to have a checked replacement. Replacement values retain
+/// the caller's scope. Missing bindings fail inside the shared reconstruction,
+/// so already rebuilt fragments remain protected by iterative owners.
+#[cfg(test)]
+pub(crate) fn substitute_type_and_row_variables_strict_source_with<E>(
+    ty: &Type,
+    replacements: &HashMap<TypeVariableId, Type>,
+    row_replacements: &HashMap<TypeVariableId, EffectRow>,
+    mut charge: impl FnMut(usize) -> Result<(), E>,
+    mut allocation_error: impl FnMut() -> E,
+    mut invalid_source: impl FnMut() -> E,
+) -> Result<Result<Type, EffectRowError>, E> {
+    substitute_structural_type_and_row_variables(
+        SubstitutionRoot::Type(ty),
+        replacements,
+        row_replacements,
+        None,
+        &mut charge,
+        &mut allocation_error,
+        Some(&mut invalid_source),
+    )
+    .map(|result| result.map(StructuralValue::into_inner))
+}
+
+/// The same strict source policy for an ordered owner argument, including
+/// nested row payloads; replacement bodies remain caller-scoped.
+pub(crate) fn substitute_kinded_argument_strict_source_with<E>(
+    argument: &KindedArgument,
+    replacements: &HashMap<TypeVariableId, Type>,
+    row_replacements: &HashMap<TypeVariableId, EffectRow>,
+    mut charge: impl FnMut(usize) -> Result<(), E>,
+    mut allocation_error: impl FnMut() -> E,
+    mut invalid_source: impl FnMut() -> E,
+) -> Result<Result<KindedArgument, EffectRowError>, E> {
+    substitute_structural_type_and_row_variables(
+        SubstitutionRoot::Argument(argument),
+        replacements,
+        row_replacements,
+        None,
+        &mut charge,
+        &mut allocation_error,
+        Some(&mut invalid_source),
+    )
+    .map(|result| result.map(|value| value.into_argument().expect("argument substitution root")))
+}
+
+enum SubstitutionRoot<'a> {
+    Row(&'a EffectRow),
+    Type(&'a Type),
+    Argument(&'a KindedArgument),
+}
+
+/// Applies existing facts from a rigid expected row to matching occurrences
+/// throughout one complete owner argument. The caller authenticates that row;
+/// this operation neither infers exclusions nor changes other tail identities.
+/// No replacement means the original argument needs no qualification.
+pub(crate) fn qualify_kinded_argument_with_expected_row_with_budget(
+    argument: &KindedArgument,
+    expected: Option<&EffectRow>,
+    budget: &mut TypeWorkBudget,
+) -> Result<Result<Option<KindedArgument>, EffectRowError>, ()> {
+    let Some(expected) = expected else {
+        return Ok(Ok(None));
+    };
+    let Some(tail) = expected.tail() else {
+        return Ok(Ok(None));
+    };
+    let EffectRowVariable::Rigid(binder) = tail.variable() else {
+        return Ok(Ok(None));
+    };
+    if tail.lacks().is_empty() && expected.known().is_empty() {
+        return Ok(Ok(None));
+    }
+    let qualified = rebuild_effect_row_with_budget(
+        std::iter::empty(),
+        Some(tail.variable()),
+        tail.lacks().iter().chain(expected.known()),
+        clone_type_with_budget,
+        budget,
+    )?;
+    budget.charge(1)?;
+    let mut rows = HashMap::new();
+    rows.try_reserve(1).map_err(|_| ())?;
+    rows.insert(binder, qualified);
+    substitute_kinded_argument_with(argument, &HashMap::new(), &rows, |cells| {
+        budget.charge(cells)
+    })
+    .map(|result| result.map(Some))
+}
+
+/// Qualifies a complete argument with independently authenticated enclosing
+/// declaration facts. Structural substitution preserves nested binder scope.
+pub(crate) fn qualify_kinded_argument_with_row_contexts_with_budget<'a>(
+    argument: &KindedArgument,
+    contexts: impl IntoIterator<Item = &'a HashMap<TypeVariableId, EffectRow>>,
+    budget: &mut TypeWorkBudget,
+) -> Result<Result<Option<KindedArgument>, EffectRowError>, ()> {
+    let mut qualified: Option<IterativeArgumentOwner> = None;
+    for rows in contexts {
+        if rows.is_empty() {
+            continue;
+        }
+        let original = qualified.as_deref().unwrap_or(argument);
+        let value =
+            match substitute_kinded_argument_with(original, &HashMap::new(), rows, |cells| {
+                budget.charge(cells)
+            })? {
+                Ok(value) => value,
+                Err(error) => return Ok(Err(error)),
+            };
+        qualified = Some(IterativeArgumentOwner::new(value));
+    }
+    Ok(Ok(qualified.map(IterativeArgumentOwner::into_inner)))
+}
+
+/// A paid structural gate for lazy reconstruction of original ambient facts.
+/// It includes latent function rows and rows in complete effect owner payloads.
+pub(crate) fn kinded_arguments_have_rigid_rows_with_budget<'a>(
+    arguments: impl IntoIterator<Item = &'a KindedArgument>,
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, ()> {
+    enum Task<'a> {
+        Type(&'a Type),
+        Argument(&'a KindedArgument),
+        Row(&'a EffectRow),
+    }
+    let mut pending = Vec::new();
+    let mut found = false;
+    for argument in arguments {
+        budget.charge(1)?;
+        pending.try_reserve(1).map_err(|_| ())?;
+        pending.push(Task::Argument(argument));
+    }
+    while let Some(task) = pending.pop() {
+        budget.charge(1)?;
+        if let Task::Row(row) = &task {
+            let labels = row
+                .known()
+                .len()
+                .checked_add(row.tail().map_or(0, |tail| tail.lacks().len()))
+                .ok_or(())?;
+            budget.charge(labels)?;
+        }
+        let mut push = |task| -> Result<(), ()> {
+            budget.charge(1)?;
+            pending.try_reserve(1).map_err(|_| ())?;
+            pending.push(task);
+            Ok(())
+        };
+        match task {
+            Task::Argument(KindedArgument::TypeArg(ty)) => push(Task::Type(ty))?,
+            Task::Argument(KindedArgument::RowArg(row)) => push(Task::Row(row))?,
+            Task::Type(Type::Application(left, right) | Type::Function(left, right)) => {
+                push(Task::Type(left))?;
+                push(Task::Type(right))?;
+            }
+            Task::Type(Type::EffectfulFunction(domain, codomain)) => {
+                push(Task::Type(domain))?;
+                push(Task::Type(&codomain.value))?;
+                push(Task::Row(&codomain.effects))?;
+            }
+            Task::Type(Type::Tuple(elements)) => {
+                for ty in elements {
+                    push(Task::Type(ty))?;
+                }
+            }
+            Task::Type(Type::ResourceApply(_, arguments)) => {
+                for argument in arguments {
+                    push(Task::Argument(argument))?;
+                }
+            }
+            Task::Type(Type::Forall(_, body)) => push(Task::Type(body))?,
+            Task::Row(row) => {
+                found |= matches!(
+                    row.tail().map(|tail| tail.variable()),
+                    Some(EffectRowVariable::Rigid(_))
+                );
+                for instance in row
+                    .known()
+                    .iter()
+                    .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
+                {
+                    for argument in instance.arguments() {
+                        push(Task::Argument(argument))?;
+                    }
+                }
+            }
+            Task::Type(
+                Type::Bytes
+                | Type::String
+                | Type::Int
+                | Type::Bool
+                | Type::Unit
+                | Type::Nominal(_)
+                | Type::Variable(_)
+                | Type::Inference(_),
+            ) => {}
+        }
+    }
+    Ok(found)
+}
+
+pub(crate) fn substitute_kinded_argument_with(
+    argument: &KindedArgument,
+    replacements: &HashMap<TypeVariableId, Type>,
+    row_replacements: &HashMap<TypeVariableId, EffectRow>,
+    mut charge: impl FnMut(usize) -> Result<(), ()>,
+) -> Result<Result<KindedArgument, EffectRowError>, ()> {
+    substitute_structural_type_and_row_variables(
+        SubstitutionRoot::Argument(argument),
+        replacements,
+        row_replacements,
+        None,
+        &mut charge,
+        &mut || (),
+        None,
+    )
+    .map(|result| result.map(|value| value.into_argument().expect("argument substitution root")))
+}
+
+pub(crate) fn substitute_kinded_argument_borrowed_with(
+    argument: &KindedArgument,
+    replacements: &HashMap<TypeVariableId, &Type>,
+    row_replacements: &HashMap<TypeVariableId, EffectRow>,
+    mut charge: impl FnMut(usize) -> Result<(), ()>,
+) -> Result<Result<KindedArgument, EffectRowError>, ()> {
+    substitute_structural_type_and_row_variables(
+        SubstitutionRoot::Argument(argument),
+        replacements,
+        row_replacements,
+        None,
+        &mut charge,
+        &mut || (),
+        None,
+    )
+    .map(|result| result.map(|value| value.into_argument().expect("argument substitution root")))
+}
+
+pub(crate) fn substitute_effect_row_with(
+    row: &EffectRow,
+    replacements: &HashMap<TypeVariableId, Type>,
+    row_replacements: &HashMap<TypeVariableId, EffectRow>,
+    mut charge: impl FnMut(usize) -> Result<(), ()>,
+) -> Result<Result<EffectRow, EffectRowError>, ()> {
+    substitute_structural_type_and_row_variables(
+        SubstitutionRoot::Row(row),
+        replacements,
+        row_replacements,
+        None,
+        &mut charge,
+        &mut || (),
+        None,
+    )
+    .map(|result| result.map(|value| value.into_row().expect("row substitution root")))
+}
+
+fn substitute_type_and_row_variables<E, R: Borrow<Type>>(
+    ty: &Type,
+    replacements: &HashMap<TypeVariableId, R>,
     row_replacements: &HashMap<TypeVariableId, EffectRow>,
     charge: &mut impl FnMut(usize) -> Result<(), E>,
     allocation_error: &mut impl FnMut() -> E,
 ) -> Result<Result<Type, EffectRowError>, E> {
+    substitute_structural_type_and_row_variables(
+        SubstitutionRoot::Type(ty),
+        replacements,
+        row_replacements,
+        None,
+        charge,
+        allocation_error,
+        None,
+    )
+    .map(|result| result.map(StructuralValue::into_inner))
+}
+
+#[allow(
+    clippy::type_complexity,
+    reason = "the local traversal shape mirrors substitution state without a module-level alias"
+)]
+fn substitute_structural_type_and_row_variables<E, R: Borrow<Type>>(
+    root: SubstitutionRoot<'_>,
+    replacements: &HashMap<TypeVariableId, R>,
+    row_replacements: &HashMap<TypeVariableId, EffectRow>,
+    template: Option<TemplateRowReplacements<'_>>,
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+    allocation_error: &mut impl FnMut() -> E,
+    mut invalid_source: Option<&mut dyn FnMut() -> E>,
+) -> Result<Result<StructuralValue, EffectRowError>, E> {
     struct RowShape<'a> {
         known: Box<[(EffectId, usize)]>,
         tail: Option<(EffectRowVariable, Box<[(EffectId, usize)]>)>,
@@ -2793,37 +3584,75 @@ fn substitute_type_and_row_variables<E>(
 
     enum Task<'a> {
         Visit(&'a Type, bool),
+        VisitArgument(&'a KindedArgument, bool),
+        VisitRow(&'a EffectRow, bool),
+        FinishTypeArgument,
+        FinishRowArgument,
+        FinishResource(ResourceDefinitionId, usize),
+        FinishRow(RowShape<'a>),
         Sequence(std::slice::Iter<'a, Type>, bool),
         EnterForall(&'a [(TypeVariableId, Kind)]),
         ExitForall(&'a [(TypeVariableId, Kind)]),
         FinishTuple(usize),
         FinishApplication,
         FinishFunction,
-        FinishEffectfulFunction(RowShape<'a>),
+        FinishEffectfulFunction,
         FinishForall(Box<[(TypeVariableId, Kind)]>),
     }
 
     let mut active_shadows = HashMap::new();
-    let mut work = vec![Task::Visit(ty, true)];
-    let mut rebuilt: Vec<IterativeTypeOwner> = Vec::new();
+    let mut work = Vec::new();
+    charge(1)?;
+    work.try_reserve_exact(1).map_err(|_| allocation_error())?;
+    work.push(match root {
+        SubstitutionRoot::Row(row) => Task::VisitRow(row, true),
+        SubstitutionRoot::Type(ty) => Task::Visit(ty, true),
+        SubstitutionRoot::Argument(argument) => Task::VisitArgument(argument, true),
+    });
+    let mut rebuilt: Vec<StructuralValue> = Vec::new();
     while let Some(task) = work.pop() {
+        work.try_reserve(4).map_err(|_| allocation_error())?;
+        rebuilt.try_reserve(1).map_err(|_| allocation_error())?;
         match task {
             Task::Visit(Type::Variable(identity), true) => {
-                if active_shadows
+                if let Some(renamed) = template
+                    .and_then(|template| template.renaming)
+                    .and_then(|renaming| renaming.variables.get(identity))
+                {
+                    charge(1)?;
+                    rebuilt.push(StructuralValue::type_value(Type::Variable(*renamed)));
+                } else if active_shadows
                     .get(identity)
                     .is_some_and(|count| *count != 0)
                 {
                     charge(1)?;
-                    rebuilt.push(IterativeTypeOwner::new(Type::Variable(*identity)));
+                    rebuilt.push(StructuralValue::type_value(Type::Variable(*identity)));
                 } else if let Some(replacement) = replacements.get(identity) {
-                    work.push(Task::Visit(replacement, false));
+                    work.push(Task::Visit(replacement.borrow(), false));
+                } else if let Some(invalid_source) = invalid_source.as_mut() {
+                    return Err(invalid_source());
                 } else {
                     charge(1)?;
-                    rebuilt.push(IterativeTypeOwner::new(Type::Variable(*identity)));
+                    rebuilt.push(StructuralValue::type_value(Type::Variable(*identity)));
                 }
             }
+            Task::Visit(Type::Nominal(identity), true) => {
+                charge(1)?;
+                let identity = template
+                    .and_then(|template| template.renaming)
+                    .and_then(|renaming| renaming.nominals.get(identity))
+                    .unwrap_or(identity);
+                rebuilt.push(StructuralValue::type_value(Type::Nominal(*identity)));
+            }
+            Task::Visit(Type::Inference(_) | Type::Forall(_, _), true)
+                if invalid_source.is_some() =>
+            {
+                return Err(invalid_source.as_mut().expect("strict source policy")());
+            }
             Task::Visit(
-                ty @ (Type::Int
+                ty @ (Type::Bytes
+                | Type::String
+                | Type::Int
                 | Type::Bool
                 | Type::Unit
                 | Type::Nominal(_)
@@ -2832,7 +3661,7 @@ fn substitute_type_and_row_variables<E>(
                 _,
             ) => {
                 charge(1)?;
-                rebuilt.push(IterativeTypeOwner::new(clone_type(ty)));
+                rebuilt.push(StructuralValue::type_value(clone_type(ty)));
             }
             Task::Visit(Type::Tuple(elements), substitute) => {
                 charge(1)?;
@@ -2852,19 +3681,59 @@ fn substitute_type_and_row_variables<E>(
                 work.push(Task::Visit(domain, substitute));
             }
             Task::Visit(Type::EffectfulFunction(domain, codomain), substitute) => {
-                charge(3)?;
-                charge(codomain.effects.known.len())?;
-                if let Some(tail) = &codomain.effects.tail {
+                charge(2)?;
+                work.try_reserve(4).map_err(|_| allocation_error())?;
+                work.push(Task::FinishEffectfulFunction);
+                work.push(Task::VisitRow(&codomain.effects, substitute));
+                work.push(Task::Visit(&codomain.value, substitute));
+                work.push(Task::Visit(domain, substitute));
+            }
+            Task::Visit(Type::ResourceApply(definition, arguments), substitute) => {
+                charge(1)?;
+                charge(arguments.len())?;
+                work.try_reserve(
+                    arguments
+                        .len()
+                        .checked_add(1)
+                        .ok_or_else(&mut *allocation_error)?,
+                )
+                .map_err(|_| allocation_error())?;
+                work.push(Task::FinishResource(*definition, arguments.len()));
+                for argument in arguments.iter().rev() {
+                    work.push(Task::VisitArgument(argument, substitute));
+                }
+            }
+            Task::VisitArgument(KindedArgument::TypeArg(ty), substitute) => {
+                work.try_reserve(2).map_err(|_| allocation_error())?;
+                work.push(Task::FinishTypeArgument);
+                work.push(Task::Visit(ty, substitute));
+            }
+            Task::VisitArgument(KindedArgument::RowArg(row), substitute) => {
+                work.try_reserve(2).map_err(|_| allocation_error())?;
+                work.push(Task::FinishRowArgument);
+                work.push(Task::VisitRow(row, substitute));
+            }
+            Task::VisitRow(row, substitute) => {
+                if substitute
+                    && let Some(invalid_source) = invalid_source.as_mut()
+                    && let Some(tail) = &row.tail
+                {
+                    match tail.variable {
+                        EffectRowVariable::Rigid(identity)
+                            if row_replacements.contains_key(&identity) => {}
+                        _ => return Err(invalid_source()),
+                    }
+                }
+                charge(1)?;
+                charge(row.known.len())?;
+                if let Some(tail) = &row.tail {
                     charge(1)?;
                     charge(tail.lacks.len())?;
                 }
-                let instances = codomain.effects.known.iter().chain(
-                    codomain
-                        .effects
-                        .tail
-                        .iter()
-                        .flat_map(|tail| tail.lacks.iter()),
-                );
+                let instances = row
+                    .known
+                    .iter()
+                    .chain(row.tail.iter().flat_map(|tail| tail.lacks.iter()));
                 let argument_count = instances.clone().try_fold(0usize, |count, instance| {
                     count
                         .checked_add(instance.arguments.len())
@@ -2879,34 +3748,33 @@ fn substitute_type_and_row_variables<E>(
                 work.try_reserve(pending).map_err(|_| allocation_error())?;
                 let mut known = Vec::new();
                 known
-                    .try_reserve(codomain.effects.known.len())
+                    .try_reserve(row.known.len())
                     .map_err(|_| allocation_error())?;
                 known.extend(
-                    codomain
-                        .effects
-                        .known
+                    row.known
                         .iter()
                         .map(|instance| (instance.effect, instance.arguments.len())),
                 );
-                let replacement =
-                    codomain
-                        .effects
-                        .tail
-                        .as_ref()
-                        .and_then(|tail| match tail.variable {
-                            EffectRowVariable::Rigid(identity)
-                                if substitute
-                                    && !active_shadows
-                                        .get(&identity)
-                                        .is_some_and(|count| *count != 0) =>
-                            {
-                                row_replacements
-                                    .get(&identity)
-                                    .map(|row| (tail.variable, row))
-                            }
-                            _ => None,
-                        });
-                let tail = if let Some(tail) = &codomain.effects.tail {
+                let replacement = row.tail.as_ref().and_then(|tail| match tail.variable {
+                    EffectRowVariable::Rigid(identity)
+                        if substitute
+                            && template.and_then(|template| template.renaming).is_none_or(
+                                |renaming| !renaming.variables.contains_key(&identity),
+                            )
+                            && !active_shadows
+                                .get(&identity)
+                                .is_some_and(|count| *count != 0) =>
+                    {
+                        row_replacements
+                            .get(&identity)
+                            .map(|row| (tail.variable, row))
+                    }
+                    EffectRowVariable::Inference(identity) if substitute => template
+                        .and_then(|template| template.inference_rows.get(&identity))
+                        .map(|row| (tail.variable, row)),
+                    _ => None,
+                });
+                let tail = if let Some(tail) = &row.tail {
                     let mut lacks = Vec::new();
                     lacks
                         .try_reserve(tail.lacks.len())
@@ -2916,11 +3784,24 @@ fn substitute_type_and_row_variables<E>(
                             .iter()
                             .map(|instance| (instance.effect, instance.arguments.len())),
                     );
-                    Some((tail.variable, lacks.into_boxed_slice()))
+                    let variable = if substitute {
+                        match tail.variable {
+                            EffectRowVariable::Rigid(identity) => template
+                                .and_then(|template| template.renaming)
+                                .and_then(|renaming| renaming.variables.get(&identity))
+                                .map_or(tail.variable, |identity| {
+                                    EffectRowVariable::Rigid(*identity)
+                                }),
+                            _ => tail.variable,
+                        }
+                    } else {
+                        tail.variable
+                    };
+                    Some((variable, lacks.into_boxed_slice()))
                 } else {
                     None
                 };
-                work.push(Task::FinishEffectfulFunction(RowShape {
+                work.push(Task::FinishRow(RowShape {
                     known: known.into_boxed_slice(),
                     tail,
                     argument_count,
@@ -2928,11 +3809,9 @@ fn substitute_type_and_row_variables<E>(
                 }));
                 for instance in instances.rev() {
                     for argument in instance.arguments.iter().rev() {
-                        work.push(Task::Visit(argument, substitute));
+                        work.push(Task::VisitArgument(argument, substitute));
                     }
                 }
-                work.push(Task::Visit(&codomain.value, substitute));
-                work.push(Task::Visit(domain, substitute));
             }
             Task::Visit(Type::Forall(parameters, body), substitute) => {
                 charge(1)?;
@@ -2940,7 +3819,25 @@ fn substitute_type_and_row_variables<E>(
                 for (_, kind) in parameters {
                     charge_kind_with_charge(kind, || charge(1))?;
                 }
-                work.push(Task::FinishForall(parameters.clone()));
+                let mut retained = Vec::new();
+                retained
+                    .try_reserve_exact(parameters.len())
+                    .map_err(|_| allocation_error())?;
+                for (identity, kind) in parameters {
+                    let identity = if substitute {
+                        template
+                            .and_then(|template| template.renaming)
+                            .and_then(|renaming| renaming.variables.get(identity))
+                            .unwrap_or(identity)
+                    } else {
+                        identity
+                    };
+                    retained.push((
+                        *identity,
+                        clone_kind_precharged(kind, charge, &mut |_| allocation_error())?,
+                    ));
+                }
+                work.push(Task::FinishForall(retained.into_boxed_slice()));
                 if substitute {
                     work.push(Task::ExitForall(parameters));
                     work.push(Task::Visit(body, substitute));
@@ -2990,12 +3887,16 @@ fn substitute_type_and_row_variables<E>(
                 }
             }
             Task::FinishTuple(count) => {
-                let elements = rebuilt.split_off(rebuilt.len() - count);
-                rebuilt.push(IterativeTypeOwner::new(Type::Tuple(
-                    elements
-                        .into_iter()
-                        .map(IterativeTypeOwner::into_inner)
-                        .collect(),
+                charge(count)?;
+                let mut elements = Vec::new();
+                elements
+                    .try_reserve_exact(count)
+                    .map_err(|_| allocation_error())?;
+                for value in rebuilt.drain(rebuilt.len() - count..) {
+                    elements.push(value.into_inner());
+                }
+                rebuilt.push(StructuralValue::type_value(Type::Tuple(
+                    elements.into_boxed_slice(),
                 )));
             }
             Task::FinishApplication => {
@@ -3007,7 +3908,7 @@ fn substitute_type_and_row_variables<E>(
                     .pop()
                     .expect("type reconstruction function")
                     .into_inner();
-                rebuilt.push(IterativeTypeOwner::new(Type::Application(
+                rebuilt.push(StructuralValue::type_value(Type::Application(
                     Box::new(function),
                     Box::new(argument),
                 )));
@@ -3021,34 +3922,99 @@ fn substitute_type_and_row_variables<E>(
                     .pop()
                     .expect("type reconstruction domain")
                     .into_inner();
-                rebuilt.push(IterativeTypeOwner::new(Type::function(domain, codomain)));
+                rebuilt.push(StructuralValue::type_value(Type::function(
+                    domain, codomain,
+                )));
             }
-            Task::FinishEffectfulFunction(shape) => {
-                let arguments = rebuilt.split_off(rebuilt.len() - shape.argument_count);
-                let mut arguments = arguments.into_iter();
-                let rebuild_instances =
-                    |instances: Box<[(EffectId, usize)]>,
-                     arguments: &mut std::vec::IntoIter<IterativeTypeOwner>| {
-                        instances
-                            .into_vec()
-                            .into_iter()
-                            .map(|(effect, count)| {
-                                EffectInstance::new(
-                                    effect,
-                                    arguments
-                                        .by_ref()
-                                        .take(count)
-                                        .map(IterativeTypeOwner::into_inner)
-                                        .collect::<Vec<_>>()
-                                        .into_boxed_slice(),
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                    };
-                let known = rebuild_instances(shape.known, &mut arguments);
-                let tail = shape
-                    .tail
-                    .map(|(variable, lacks)| (variable, rebuild_instances(lacks, &mut arguments)));
+            Task::FinishEffectfulFunction => {
+                let row = rebuilt
+                    .pop()
+                    .expect("function row")
+                    .into_row()
+                    .expect("row shape");
+                let codomain = rebuilt.pop().expect("function value").into_inner();
+                let domain = rebuilt.pop().expect("function domain").into_inner();
+                rebuilt.push(StructuralValue::type_value(Type::function_computation(
+                    domain,
+                    ComputationType::new(codomain, row),
+                )));
+            }
+            Task::FinishTypeArgument => {
+                let ty = rebuilt.pop().expect("Type argument").into_inner();
+                rebuilt.push(StructuralValue::argument_value(KindedArgument::TypeArg(ty)));
+            }
+            Task::FinishRowArgument => {
+                let row = rebuilt
+                    .pop()
+                    .expect("row argument")
+                    .into_row()
+                    .expect("row shape");
+                rebuilt.push(StructuralValue::argument_value(KindedArgument::RowArg(row)));
+            }
+            Task::FinishResource(definition, count) => {
+                charge(count)?;
+                let mut arguments = Vec::new();
+                arguments
+                    .try_reserve_exact(count)
+                    .map_err(|_| allocation_error())?;
+                for value in rebuilt.drain(rebuilt.len() - count..) {
+                    arguments.push(value.into_argument_inner());
+                }
+                rebuilt.push(StructuralValue::type_value(Type::ResourceApply(
+                    definition,
+                    arguments.into_boxed_slice(),
+                )));
+            }
+            Task::FinishRow(shape) => {
+                charge(shape.argument_count)?;
+                let mut suffix = Vec::new();
+                suffix
+                    .try_reserve_exact(shape.argument_count)
+                    .map_err(|_| allocation_error())?;
+                suffix.extend(rebuilt.drain(rebuilt.len() - shape.argument_count..));
+                let mut arguments = suffix.into_iter();
+                fn rebuild_instances<E>(
+                    shapes: Box<[(EffectId, usize)]>,
+                    arguments: &mut std::vec::IntoIter<StructuralValue>,
+                    charge: &mut impl FnMut(usize) -> Result<(), E>,
+                    allocation_error: &mut impl FnMut() -> E,
+                ) -> Result<Vec<EffectInstance>, E> {
+                    charge(shapes.len())?;
+                    let mut instances = Vec::new();
+                    instances
+                        .try_reserve_exact(shapes.len())
+                        .map_err(|_| allocation_error())?;
+                    for (effect, count) in shapes.into_vec() {
+                        charge(count)?;
+                        let mut actuals = Vec::new();
+                        actuals
+                            .try_reserve_exact(count)
+                            .map_err(|_| allocation_error())?;
+                        for _ in 0..count {
+                            actuals.push(
+                                arguments
+                                    .next()
+                                    .expect("counted row argument")
+                                    .into_argument_inner(),
+                            );
+                        }
+                        instances.push(EffectInstance::new_kinded(
+                            effect,
+                            actuals.into_boxed_slice(),
+                        ));
+                    }
+                    Ok(instances)
+                }
+                let known =
+                    rebuild_instances(shape.known, &mut arguments, charge, allocation_error)?;
+                let tail = if let Some((variable, lacks)) = shape.tail {
+                    Some((
+                        variable,
+                        rebuild_instances(lacks, &mut arguments, charge, allocation_error)?,
+                    ))
+                } else {
+                    None
+                };
                 debug_assert!(arguments.next().is_none());
                 let effects = effect_row_from_owned_parts_with_budget_and_failure(
                     known,
@@ -3091,25 +4057,14 @@ fn substitute_type_and_row_variables<E>(
                 } else {
                     effects
                 };
-                let codomain = rebuilt
-                    .pop()
-                    .expect("type reconstruction codomain")
-                    .into_inner();
-                let domain = rebuilt
-                    .pop()
-                    .expect("type reconstruction domain")
-                    .into_inner();
-                rebuilt.push(IterativeTypeOwner::new(Type::function_computation(
-                    domain,
-                    ComputationType::new(codomain, effects),
-                )));
+                rebuilt.push(StructuralValue::row_value(effects));
             }
             Task::FinishForall(parameters) => {
                 let body = rebuilt
                     .pop()
                     .expect("type reconstruction scheme body")
                     .into_inner();
-                rebuilt.push(IterativeTypeOwner::new(Type::Forall(
+                rebuilt.push(StructuralValue::type_value(Type::Forall(
                     parameters,
                     Box::new(body),
                 )));
@@ -3119,8 +4074,7 @@ fn substitute_type_and_row_variables<E>(
     debug_assert!(active_shadows.values().all(|count| *count == 0));
     Ok(Ok(rebuilt
         .pop()
-        .expect("one reconstructed type")
-        .into_inner()))
+        .expect("one reconstructed substitution root")))
 }
 
 /// The internal kind language used to check type constructors.
@@ -3616,6 +4570,188 @@ mod tests {
         collections::hash_map::DefaultHasher,
         hash::{Hash, Hasher},
     };
+
+    #[test]
+    fn copied_templates_freshen_local_schemes_and_solve_nested_owner_rows_once() {
+        let module = ModuleId::new(71);
+        let formal = TypeVariableId::resolved(module, 0);
+        let local = TypeVariableId::resolved(module, 1);
+        let local_row = TypeVariableId::resolved(module, 2);
+        let fresh = TypeVariableId::generated(91);
+        let fresh_row = TypeVariableId::generated(92);
+        let pending = InferenceVariableId::new(3);
+        let nominal = NominalTypeId::new(module, 0);
+        let copied_nominal = NominalTypeId::new(module, 1);
+        let effect = EffectId::new(module, 0);
+        let excluded = EffectId::new(module, 1);
+        let instance = |id, argument| EffectInstance::new(id, vec![argument].into_boxed_slice());
+        let source = IterativeTypeOwner::new(Type::Forall(
+            vec![(local, Kind::Type), (local_row, Kind::EffectRow)].into_boxed_slice(),
+            Box::new(Type::Tuple(
+                vec![
+                    Type::Variable(local),
+                    Type::Nominal(nominal),
+                    Type::ResourceApply(
+                        ResourceDefinitionId::new(module, 0),
+                        vec![
+                            KindedArgument::TypeArg(Type::Variable(formal)),
+                            KindedArgument::RowArg(EffectRow::with_tail(
+                                Box::new([]),
+                                EffectRowVariable::Inference(pending),
+                                vec![instance(excluded, Type::Variable(formal))].into_boxed_slice(),
+                            )),
+                            KindedArgument::RowArg(EffectRow::with_tail(
+                                Box::new([]),
+                                EffectRowVariable::Rigid(local_row),
+                                vec![instance(excluded, Type::Variable(local))].into_boxed_slice(),
+                            )),
+                        ]
+                        .into_boxed_slice(),
+                    ),
+                ]
+                .into_boxed_slice(),
+            )),
+        ));
+        let types = HashMap::from([(formal, Type::Nominal(nominal))]);
+        let rows = HashMap::new();
+        let solved = HashMap::from([(
+            pending,
+            EffectRow::singleton(instance(effect, Type::Variable(formal))),
+        )]);
+        let nominals = HashMap::from([(nominal, copied_nominal)]);
+        let variables = HashMap::from([(local, fresh), (local_row, fresh_row)]);
+        let renaming = TemplateIdentityRenaming {
+            nominals: &nominals,
+            variables: &variables,
+        };
+        let mut work = TypeWorkBudget::unbounded();
+        let copied = IterativeTypeOwner::new(
+            substitute_type_for_template_with(
+                &source,
+                &types,
+                &rows,
+                &solved,
+                &renaming,
+                |units| work.charge(units),
+                || (),
+            )
+            .unwrap()
+            .unwrap(),
+        );
+        let Type::Forall(parameters, body) = &*copied else {
+            panic!("scheme preserved")
+        };
+        assert_eq!(
+            parameters.as_ref(),
+            &[(fresh, Kind::Type), (fresh_row, Kind::EffectRow)]
+        );
+        let Type::Tuple(fields) = &**body else {
+            panic!("tuple preserved")
+        };
+        assert_eq!(fields[0], Type::Variable(fresh));
+        assert_eq!(fields[1], Type::Nominal(copied_nominal));
+        let Type::ResourceApply(_, arguments) = &fields[2] else {
+            panic!("owner application preserved")
+        };
+        assert_eq!(
+            arguments[0],
+            KindedArgument::TypeArg(Type::Nominal(nominal))
+        );
+        let KindedArgument::RowArg(solved_row) = &arguments[1] else {
+            panic!("row tag preserved")
+        };
+        assert_eq!(
+            solved_row.known(),
+            &[instance(effect, Type::Variable(formal))]
+        );
+        assert!(solved_row.tail().is_none());
+        let KindedArgument::RowArg(bound_row) = &arguments[2] else {
+            panic!("bound row tag preserved")
+        };
+        let tail = bound_row.tail().unwrap();
+        assert_eq!(tail.variable(), EffectRowVariable::Rigid(fresh_row));
+        assert_eq!(tail.lacks(), &[instance(excluded, Type::Variable(fresh))]);
+        let mut short = TypeWorkBudget::with_limit(work.used() - 1);
+        assert!(
+            substitute_type_for_template_with(
+                &source,
+                &types,
+                &rows,
+                &solved,
+                &renaming,
+                |units| short.charge(units),
+                || (),
+            )
+            .is_err()
+        );
+        let forbidden = HashMap::from([(
+            pending,
+            EffectRow::singleton(instance(excluded, Type::Nominal(nominal))),
+        )]);
+        assert!(
+            substitute_type_for_template_with(
+                &source,
+                &types,
+                &rows,
+                &forbidden,
+                &renaming,
+                |units| work.charge(units),
+                || (),
+            )
+            .unwrap()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn direct_owner_row_substitution_is_simultaneous_and_checks_substituted_lacks() {
+        let source = crate::source::SourceFile::new("owner-row-sigma.ash", "owner").unwrap();
+        let module = ModuleId::from(source.id());
+        let ty = TypeVariableId::resolved(module, 0);
+        let row = TypeVariableId::resolved(module, 1);
+        let h = EffectId::new(module, 0);
+        let g = EffectId::new(module, 1);
+        let excluded = EffectId::new(module, 2);
+        let instance = |effect, argument| {
+            EffectInstance::new_kinded(
+                effect,
+                vec![KindedArgument::TypeArg(argument)].into_boxed_slice(),
+            )
+        };
+        let original = KindedArgument::RowArg(EffectRow::with_tail(
+            vec![instance(h, Type::Variable(ty))].into_boxed_slice(),
+            EffectRowVariable::Rigid(row),
+            vec![instance(excluded, Type::Variable(ty))].into_boxed_slice(),
+        ));
+        let types = HashMap::from([(ty, Type::Int)]);
+        let rows = HashMap::from([(row, EffectRow::singleton(instance(g, Type::Variable(ty))))]);
+        let mut work = TypeWorkBudget::unbounded();
+        let substituted =
+            substitute_kinded_argument_with(&original, &types, &rows, |units| work.charge(units))
+                .unwrap()
+                .unwrap();
+        let KindedArgument::RowArg(result) = substituted else {
+            panic!("row tag retained")
+        };
+        assert!(result.tail().is_none());
+        assert!(result.known().contains(&instance(h, Type::Int)));
+        // The replacement is inserted once; its own free Type variable is not
+        // rewritten by the simultaneously applied Type replacement.
+        assert!(result.known().contains(&instance(g, Type::Variable(ty))));
+        let forbidden = HashMap::from([(row, EffectRow::singleton(instance(excluded, Type::Int)))]);
+        assert!(
+            substitute_kinded_argument_with(&original, &types, &forbidden, |units| work
+                .charge(units))
+            .unwrap()
+            .is_err()
+        );
+        assert!(
+            substitute_kinded_argument_with(&original, &types, &rows, |units| {
+                TypeWorkBudget::with_limit(0).charge(units)
+            })
+            .is_err()
+        );
+    }
 
     #[test]
     fn arrow_folding_stops_domain_consumption_at_budget_failure() {
@@ -4133,6 +5269,79 @@ mod tests {
     }
 
     #[test]
+    fn complete_budgeted_type_hash_preserves_rows_kinds_and_pure_function_equivalence() {
+        let module = ModuleId::new(0);
+        let variable = TypeVariableId::new(0);
+        let owner = ResourceDefinitionId::new(module, 0);
+        let effect = EffectId::new(module, 0);
+        let row = EffectRow::with_tail(
+            Box::new([EffectInstance::new_kinded(
+                effect,
+                Box::new([
+                    KindedArgument::RowArg(EffectRow::empty()),
+                    KindedArgument::TypeArg(Type::Bytes),
+                ]),
+            )]),
+            EffectRowVariable::rigid(variable),
+            Box::new([EffectInstance::new(EffectId::new(module, 1), Box::new([]))]),
+        );
+        let complete = Type::Forall(
+            Box::new([(
+                variable,
+                Kind::Arrow(Box::new(Kind::EffectRow), Box::new(Kind::Type)),
+            )]),
+            Box::new(Type::EffectfulFunction(
+                Box::new(Type::ResourceApply(
+                    owner,
+                    Box::new([
+                        KindedArgument::RowArg(row),
+                        KindedArgument::TypeArg(Type::String),
+                    ]),
+                )),
+                Box::new(ComputationType::new(Type::Int, EffectRow::empty())),
+            )),
+        );
+        let mut admission = TypeWorkBudget::unbounded();
+        charge_type_cells(&complete, &mut admission).unwrap();
+        let mut raw = DefaultHasher::new();
+        complete.hash(&mut raw);
+        for prefix in [0, 9] {
+            let mut exact = TypeWorkBudget::with_limit(prefix + admission.used());
+            exact.charge(prefix).unwrap();
+            let mut hashed = DefaultHasher::new();
+            hash_type_with_budget(&complete, &mut hashed, &mut exact).unwrap();
+            assert_eq!(exact.used(), prefix + admission.used());
+            assert_eq!(hashed.finish(), raw.finish());
+            let mut short = TypeWorkBudget::with_limit(prefix + admission.used() - 1);
+            short.charge(prefix).unwrap();
+            assert_eq!(
+                hash_type_with_budget(&complete, &mut DefaultHasher::new(), &mut short,),
+                Err(())
+            );
+        }
+        let pure = Type::function(Type::Unit, Type::Int);
+        let empty_effectful = Type::EffectfulFunction(
+            Box::new(Type::Unit),
+            Box::new(ComputationType::new(Type::Int, EffectRow::empty())),
+        );
+        assert!(
+            same_type_with_budget(&pure, &empty_effectful, &mut TypeWorkBudget::unbounded(),)
+                .unwrap()
+        );
+        let mut left = DefaultHasher::new();
+        let mut right = DefaultHasher::new();
+        hash_type_with_budget(&pure, &mut left, &mut TypeWorkBudget::unbounded()).unwrap();
+        hash_type_with_budget(
+            &empty_effectful,
+            &mut right,
+            &mut TypeWorkBudget::unbounded(),
+        )
+        .unwrap();
+        assert_eq!(left.finish(), right.finish());
+        discard_type_iteratively(complete);
+    }
+
+    #[test]
     fn deep_application_operations_remain_bounded_on_a_small_stack() {
         const DEPTH: usize = 32_768;
         const CELLS: usize = 2 * DEPTH + 1;
@@ -4379,6 +5588,145 @@ mod tests {
     }
 
     #[test]
+    fn borrowed_replacement_transport_keeps_shadowing_rows_and_owned_results() {
+        let shadowed = TypeVariableId::new(81);
+        let actual = TypeVariableId::new(82);
+        let nested = TypeVariableId::new(83);
+        let row_variable = TypeVariableId::new(84);
+        let effect = EffectId::new(ModuleId::new(81), 0);
+        let excluded = EffectId::new(ModuleId::new(81), 1);
+        // Deliberately noncanonical empty-effect Function input. The old
+        // transport clones it before substitution; the borrowed route must
+        // produce exactly the same final canonical result without that clone.
+        let replacement = Type::EffectfulFunction(
+            Box::new(Type::Variable(nested)),
+            Box::new(ComputationType::new(
+                Type::Variable(shadowed),
+                EffectRow::empty(),
+            )),
+        );
+        let originals = HashMap::from([
+            (shadowed, Type::Bool),
+            (actual, replacement),
+            (nested, Type::Int),
+        ]);
+        let borrowed: HashMap<_, _> = originals.iter().map(|(id, ty)| (*id, ty)).collect();
+        let mut owned = HashMap::new();
+        let mut setup = TypeWorkBudget::unbounded();
+        for (id, ty) in &originals {
+            owned.insert(*id, clone_type_with_budget(ty, &mut setup).unwrap());
+        }
+        let row = effect_row_from_owned_parts_with_budget(
+            vec![EffectInstance::new(
+                effect,
+                Box::new([Type::Variable(actual)]),
+            )],
+            Some((
+                EffectRowVariable::rigid(row_variable),
+                vec![EffectInstance::new(
+                    excluded,
+                    Box::new([Type::Variable(actual)]),
+                )],
+            )),
+            &mut setup,
+        )
+        .unwrap();
+        let source = Type::Forall(
+            Box::new([(shadowed, Kind::Type)]),
+            Box::new(Type::Tuple(Box::new([
+                Type::Variable(shadowed),
+                Type::Variable(actual),
+                Type::function_computation(
+                    Type::Unit,
+                    ComputationType::new(Type::Variable(actual), row.clone()),
+                ),
+            ]))),
+        );
+        let rows = HashMap::new();
+        let expected = substitute_type_and_row_variables_with(
+            &source,
+            &owned,
+            &rows,
+            |units| setup.charge(units),
+            || (),
+        )
+        .unwrap()
+        .unwrap();
+        let mut measured = TypeWorkBudget::unbounded();
+        let result = substitute_type_and_row_variables_borrowed_with(
+            &source,
+            &borrowed,
+            &rows,
+            |units| measured.charge(units),
+            || (),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(result, expected);
+        let Type::Forall(_, body) = &result else {
+            panic!("forall retained")
+        };
+        let Type::Tuple(items) = body.as_ref() else {
+            panic!("tuple retained")
+        };
+        assert_eq!(items[0], Type::Variable(shadowed));
+        assert_eq!(
+            items[1],
+            Type::Function(
+                Box::new(Type::Variable(nested)),
+                Box::new(Type::Variable(shadowed)),
+            )
+        );
+        let expected_row = row
+            .substitute_type_variables_with_budget(&owned, &mut setup)
+            .unwrap();
+        let actual_row = row
+            .substitute_type_variables_borrowed_with_budget(&borrowed, &mut setup)
+            .unwrap();
+        assert_eq!(actual_row, expected_row);
+        let argument = KindedArgument::RowArg(row);
+        let expected_argument =
+            substitute_kinded_argument_with(&argument, &owned, &rows, |units| setup.charge(units))
+                .unwrap()
+                .unwrap();
+        let actual_argument =
+            substitute_kinded_argument_borrowed_with(&argument, &borrowed, &rows, |units| {
+                setup.charge(units)
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(actual_argument, expected_argument);
+        let required = measured.used();
+        for available in 0..required {
+            let mut short = TypeWorkBudget::with_limit(available);
+            assert!(
+                substitute_type_and_row_variables_borrowed_with(
+                    &source,
+                    &borrowed,
+                    &rows,
+                    |units| short.charge(units),
+                    || (),
+                )
+                .is_err()
+            );
+            let mut retry = TypeWorkBudget::with_limit(required);
+            assert_eq!(
+                substitute_type_and_row_variables_borrowed_with(
+                    &source,
+                    &borrowed,
+                    &rows,
+                    |units| retry.charge(units),
+                    || (),
+                )
+                .unwrap()
+                .unwrap(),
+                expected
+            );
+            assert_eq!(retry.used(), required);
+        }
+    }
+
+    #[test]
     fn application_substitution_rebuilds_function_and_argument_children() {
         let function = TypeVariableId::new(0);
         let argument = TypeVariableId::new(1);
@@ -4389,9 +5737,9 @@ mod tests {
         );
         let replacements =
             HashMap::from([(function, Type::Nominal(owner)), (argument, Type::Bool)]);
-        // One application plus two expanded scalar replacements.
-        let mut exact = 3usize;
-        let mut short = 2usize;
+        // One initial work slot, an application and two expanded scalars.
+        let mut exact = 4usize;
+        let mut short = 3usize;
 
         let rebuilt = substitute_type_variables_with(
             &application,
@@ -4457,18 +5805,20 @@ mod tests {
         );
 
         assert_eq!(result, Err(()));
-        assert_eq!(remaining, 0);
+        // The final retained tuple reservation charges all 16 slots atomically.
+        assert_eq!(remaining, 10);
     }
 
     #[test]
     fn nested_forall_substitution_uses_linear_active_shadow_counts() {
         const DEPTH: usize = 2_048;
         const WIDTH: usize = 2_048;
-        // One overlapping replacement-key shadow-map record; D retained forall nodes,
+        // One initial work slot and one overlapping replacement-key shadow-map record; D retained forall nodes,
         // binder records, and Kind nodes; enter and exit transitions for the
         // shadowed key at every depth; one tuple, one directly shadowed
         // variable, and W non-recursive replacement variables.
-        const EXACT_WORK: usize = 1 + (3 * DEPTH) + (2 * DEPTH) + 1 + 1 + WIDTH;
+        // The tuple retains WIDTH + 1 element slots in addition to its nodes.
+        const EXACT_WORK: usize = 2 + (3 * DEPTH) + (2 * DEPTH) + 1 + 1 + WIDTH + WIDTH + 1;
 
         std::thread::Builder::new()
             .name("nested-forall-substitution-shadow-counts".to_owned())
@@ -4485,6 +5835,7 @@ mod tests {
                 for _ in 0..DEPTH {
                     body = Type::Forall(Box::new([(shadowed, Kind::Type)]), Box::new(body));
                 }
+                let body = IterativeTypeOwner::new(body);
                 let replacements = HashMap::from([
                     (shadowed, Type::Unit),
                     (substituted, Type::Variable(shadowed)),
@@ -4520,8 +5871,9 @@ mod tests {
                     .unwrap_or_else(|()| {
                         panic!("linear nested-forall attempt {attempt} should fit")
                     });
+                    let rebuilt = IterativeTypeOwner::new(rebuilt);
                     assert_eq!(exact, 0);
-                    let mut current = &rebuilt;
+                    let mut current = &*rebuilt;
                     for depth in 0..DEPTH {
                         let Type::Forall(parameters, inner) = current else {
                             panic!("forall layer {depth} is missing");
@@ -4536,9 +5888,9 @@ mod tests {
                     assert!(elements.iter().all(
                         |element| matches!(element, Type::Variable(found) if *found == shadowed)
                     ));
-                    discard_type_iteratively(rebuilt);
+                    drop(rebuilt);
                 }
-                discard_type_iteratively(body);
+                drop(body);
             })
             .expect("the nested-forall substitution thread should start")
             .join()
@@ -4550,7 +5902,7 @@ mod tests {
         const WIDTH: usize = 2_048;
         // One forall node, W binder records and W Kind nodes, and one scalar
         // replacement visit. Unrelated binders retain no shadow state.
-        const EXACT_WORK: usize = 1 + (2 * WIDTH) + 1;
+        const EXACT_WORK: usize = 1 + 1 + (2 * WIDTH) + 1;
 
         let substituted = TypeVariableId::new(0);
         let source = Type::Forall(
@@ -4614,9 +5966,10 @@ mod tests {
         const WIDTH: usize = 32_768;
         // Replacing the sole source variable retains every node of a left-deep
         // unary application: one nominal, D applications, and D arguments.
-        const DEEP_RESULT_CELLS: usize = 2 * DEPTH + 1;
-        // The tuple plus one scalar replacement per source element.
-        const WIDE_RESULT_CELLS: usize = 1 + WIDTH;
+        // Include the initial work slot in both boundaries.
+        const DEEP_RESULT_CELLS: usize = 2 * DEPTH + 2;
+        // The tuple, one scalar per element and the retained element slots.
+        const WIDE_RESULT_CELLS: usize = 2 + 2 * WIDTH;
 
         fn assert_deep_application(ty: &Type, depth: usize, owner: NominalTypeId) {
             let mut current = ty;
@@ -4640,17 +5993,25 @@ mod tests {
             .name("deep-wide-substitution-budget".to_owned())
             .stack_size(256 * 1024)
             .spawn(|| {
+                struct Replacements(HashMap<TypeVariableId, Type>);
+                impl Drop for Replacements {
+                    fn drop(&mut self) {
+                        for (_, ty) in self.0.drain() {
+                            discard_type_iteratively(ty);
+                        }
+                    }
+                }
                 let parameter = TypeVariableId::new(0);
                 let owner = NominalTypeId::new(ModuleId::new(0), 0);
                 let source = Type::Variable(parameter);
-                let mut replacements = HashMap::from([(
+                let mut replacements = Replacements(HashMap::from([(
                     parameter,
                     Type::apply_arguments(Type::Nominal(owner), vec![Type::Unit; DEPTH]),
-                )]);
+                )]));
 
                 let mut deep_short = DEEP_RESULT_CELLS - 1;
                 assert_eq!(
-                    substitute_type_variables_with(&source, &replacements, |cells| {
+                    substitute_type_variables_with(&source, &replacements.0, |cells| {
                         deep_short = deep_short.checked_sub(cells).ok_or(())?;
                         Ok::<(), ()>(())
                     }, || ()),
@@ -4659,6 +6020,7 @@ mod tests {
                 assert_eq!(deep_short, 0);
                 assert_deep_application(
                     replacements
+                        .0
                         .get(&parameter)
                         .expect("one-short substitution must retain its borrowed replacement"),
                     DEPTH,
@@ -4668,7 +6030,7 @@ mod tests {
                 let mut deep_exact = DEEP_RESULT_CELLS;
                 let rebuilt = substitute_type_variables_with(
                     &source,
-                    &replacements,
+                    &replacements.0,
                     |cells| {
                         deep_exact = deep_exact.checked_sub(cells).ok_or(())?;
                         Ok::<(), ()>(())
@@ -4676,11 +6038,13 @@ mod tests {
                     || (),
                 )
                 .expect("the exact deep expanded-result budget should fit");
+                let rebuilt = IterativeTypeOwner::new(rebuilt);
                 assert_eq!(deep_exact, 0);
                 assert_deep_application(&rebuilt, DEPTH, owner);
-                discard_type_iteratively(rebuilt);
+                drop(rebuilt);
                 discard_type_iteratively(
                     replacements
+                        .0
                         .remove(&parameter)
                         .expect("the reusable deep replacement should remain immutable"),
                 );
@@ -4697,7 +6061,7 @@ mod tests {
                     }, || ()),
                     Err(()),
                 );
-                assert_eq!(wide_short, 0);
+                assert_eq!(wide_short, WIDTH - 1);
                 assert!(matches!(
                     &wide_source,
                     Type::Tuple(elements)
@@ -4916,7 +6280,7 @@ mod tests {
         );
         assert!(matches!(
             substituted.known()[0].arguments(),
-            [Type::Variable(_)]
+            [KindedArgument::TypeArg(Type::Variable(_))]
         ));
         let mut substitution_exact = TypeWorkBudget::with_limit(substitution_work);
         assert_eq!(
@@ -5074,7 +6438,7 @@ mod tests {
             };
             let source =
                 Type::function_computation(Type::Unit, ComputationType::new(Type::Unit, row));
-            let mut work = TypeWorkBudget::with_limit(if lacks { 5 } else { 4 });
+            let mut work = TypeWorkBudget::with_limit(if lacks { 8 } else { 7 });
             let mut charges = Vec::new();
             assert_eq!(
                 substitute_type_and_row_variables_with(
@@ -5092,9 +6456,9 @@ mod tests {
             assert_eq!(
                 charges,
                 if lacks {
-                    vec![3, 0, 1, 1, width]
+                    vec![1, 2, 1, 1, 1, 0, 1, 1, width]
                 } else {
-                    vec![3, 1, width]
+                    vec![1, 2, 1, 1, 1, 1, width]
                 },
                 "the complete argument queue must be admitted before any argument traversal",
             );
@@ -5162,11 +6526,14 @@ mod tests {
                     };
                     assert_eq!(
                         computation.effects.known[0].arguments[1],
-                        Type::Variable(second),
+                        KindedArgument::TypeArg(Type::Variable(second)),
                         "replacement values must not be substituted a second time",
                     );
                     let tail = computation.effects.tail.as_ref().unwrap();
-                    assert_eq!(tail.lacks[1].arguments[0], Type::Bool);
+                    assert_eq!(
+                        tail.lacks[1].arguments[0],
+                        KindedArgument::TypeArg(Type::Bool)
+                    );
                 }
             })
             .expect("the row-queue thread should start")
@@ -5397,5 +6764,404 @@ mod tests {
             .expect("the failed row-rebuild thread should start")
             .join()
             .expect("a partial row rebuild should dismantle staged arguments iteratively");
+    }
+
+    #[test]
+    fn mixed_owner_structural_budget_and_partial_storage_refusal_use_small_stack() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let module = ModuleId::new(0);
+                let resource = ResourceDefinitionId::new(module, 0);
+                let effect = EffectId::new(module, 0);
+                // Raw graph ownership evidence, not a well-kinded resource application.
+                let mut ty = Type::Unit;
+                for _ in 0..4_096 {
+                    ty = Type::ResourceApply(
+                        resource,
+                        Box::new([KindedArgument::RowArg(EffectRow::singleton(
+                            EffectInstance::new_kinded(
+                                effect,
+                                Box::new([KindedArgument::TypeArg(ty)]),
+                            ),
+                        ))]),
+                    );
+                }
+                let source = IterativeTypeOwner::new(ty);
+                let mut measured = TypeWorkBudget::unbounded();
+                assert_eq!(
+                    same_type_with_budget(&source, &source, &mut measured),
+                    Ok(true)
+                );
+                assert_eq!(
+                    same_type_with_budget(
+                        &source,
+                        &source,
+                        &mut TypeWorkBudget::with_limit(measured.used() - 1)
+                    ),
+                    Err(())
+                );
+                assert_eq!(
+                    same_type_with_budget(
+                        &source,
+                        &source,
+                        &mut TypeWorkBudget::with_limit(measured.used())
+                    ),
+                    Ok(true)
+                );
+                {
+                    let _fault =
+                        row_reservation_fault::fail(RowReservationSite::ComparisonWork, 32);
+                    assert_eq!(
+                        same_type_with_budget(&source, &source, &mut TypeWorkBudget::unbounded()),
+                        Err(())
+                    );
+                    assert_eq!(row_reservation_fault::hits(), 33);
+                }
+                {
+                    // Fail after complete inner alternating fragments were staged.
+                    let _fault =
+                        row_reservation_fault::fail(RowReservationSite::CloneArguments, 1_024);
+                    assert_eq!(
+                        clone_type_with_budget(&source, &mut TypeWorkBudget::unbounded()),
+                        Err(())
+                    );
+                    assert_eq!(row_reservation_fault::hits(), 1_025);
+                }
+                let mut copied_work = TypeWorkBudget::unbounded();
+                let copied = IterativeTypeOwner::new(
+                    clone_type_with_budget(&source, &mut copied_work).unwrap(),
+                );
+                assert_eq!(&*source, &*copied);
+                assert_eq!(
+                    clone_type_with_budget(
+                        &source,
+                        &mut TypeWorkBudget::with_limit(copied_work.used() - 1)
+                    ),
+                    Err(())
+                );
+                let _exact = IterativeTypeOwner::new(
+                    clone_type_with_budget(
+                        &source,
+                        &mut TypeWorkBudget::with_limit(copied_work.used()),
+                    )
+                    .unwrap(),
+                );
+            })
+            .expect("the mixed structural refusal thread starts")
+            .join()
+            .expect("staged mixed owners drain within the predecessor stack bound");
+    }
+}
+
+/// Checks existing rigid-tail absence authority without strengthening any row.
+/// Both source checking and final original reconstruction supply independently
+/// derived outer environments. Nested forall ownership was already shielded by
+/// the ordinary complete-type collector. This comparison does not strengthen a
+/// rigid binder or change its identity.
+pub(crate) fn rigid_row_requirements_entailed_with_budget(
+    required: &HashMap<TypeVariableId, EffectRow>,
+    contexts: &[HashMap<TypeVariableId, EffectRow>],
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, ()> {
+    for (binder, row) in required {
+        budget.charge(1)?;
+        let Some(tail) = row.tail() else {
+            return Ok(false);
+        };
+        if !row.known().is_empty() || tail.variable() != EffectRowVariable::rigid(*binder) {
+            return Ok(false);
+        }
+        for instance in tail.lacks() {
+            budget.charge(1)?;
+            let mut found = false;
+            for context in contexts {
+                budget.charge(1)?;
+                let Some(existing) = context.get(binder) else {
+                    continue;
+                };
+                let Some(existing_tail) = existing.tail() else {
+                    return Ok(false);
+                };
+                if !existing.known().is_empty()
+                    || existing_tail.variable() != EffectRowVariable::rigid(*binder)
+                {
+                    return Ok(false);
+                }
+                for established in existing_tail.lacks() {
+                    if compare_effect_instances_with_budget(instance, established, budget)?
+                        == std::cmp::Ordering::Equal
+                    {
+                        found = true;
+                        break;
+                    }
+                }
+                if found {
+                    break;
+                }
+            }
+            if !found {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
+/// Collects the row exclusions required by an effectful Core scheme.
+/// Nested schemes own their variables; callers qualify one scheme body.
+pub(crate) fn qualify_scheme_row_replacements_with_budget(
+    ty: &Type,
+    replacements: &std::collections::HashMap<TypeVariableId, Type>,
+    row_replacements: &mut std::collections::HashMap<TypeVariableId, EffectRow>,
+    include_free: bool,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), ()> {
+    // The common first-order pure arrow has no row contract to collect.
+    // This fixed-size shape check avoids a second work queue for it.
+    let atomic = |ty: &Type| {
+        matches!(
+            ty,
+            Type::Bytes
+                | Type::String
+                | Type::Int
+                | Type::Bool
+                | Type::Unit
+                | Type::Nominal(_)
+                | Type::Variable(_)
+                | Type::Inference(_)
+        )
+    };
+    if atomic(ty)
+        || matches!(ty, Type::Function(domain, codomain) if atomic(domain) && atomic(codomain))
+    {
+        return Ok(());
+    }
+    enum Task<'a> {
+        Type(&'a Type),
+        Argument(&'a KindedArgument),
+        Row(&'a EffectRow),
+    }
+    fn push<'a>(
+        pending: &mut Vec<Task<'a>>,
+        budget: &mut TypeWorkBudget,
+        task: Task<'a>,
+    ) -> Result<(), ()> {
+        budget.charge(1)?;
+        pending.try_reserve(1).map_err(|_| ())?;
+        pending.push(task);
+        Ok(())
+    }
+    let mut exclusions: std::collections::HashMap<_, Vec<_>> = std::collections::HashMap::new();
+    let mut pending = Vec::new();
+    budget.charge(1)?;
+    pending.try_reserve(1).map_err(|_| ())?;
+    pending.push(Task::Type(ty));
+    while let Some(task) = pending.pop() {
+        match task {
+            Task::Type(Type::Tuple(elements)) => {
+                for element in elements {
+                    push(&mut pending, budget, Task::Type(element))?;
+                }
+            }
+            Task::Type(Type::Application(left, right) | Type::Function(left, right)) => {
+                push(&mut pending, budget, Task::Type(left))?;
+                push(&mut pending, budget, Task::Type(right))?;
+            }
+            Task::Type(Type::ResourceApply(_, arguments)) => {
+                for argument in arguments {
+                    push(&mut pending, budget, Task::Argument(argument))?;
+                }
+            }
+            Task::Type(Type::EffectfulFunction(domain, codomain)) => {
+                push(&mut pending, budget, Task::Type(domain))?;
+                push(&mut pending, budget, Task::Type(&codomain.value))?;
+                push(&mut pending, budget, Task::Row(&codomain.effects))?;
+            }
+            Task::Argument(KindedArgument::TypeArg(ty)) => {
+                push(&mut pending, budget, Task::Type(ty))?
+            }
+            Task::Argument(KindedArgument::RowArg(row)) => {
+                push(&mut pending, budget, Task::Row(row))?
+            }
+            Task::Row(row) => {
+                let count = row
+                    .known()
+                    .len()
+                    .checked_add(row.tail().map_or(0, |tail| tail.lacks().len()))
+                    .ok_or(())?;
+                budget.charge(count)?;
+                for instance in row
+                    .known()
+                    .iter()
+                    .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
+                {
+                    for argument in instance.arguments() {
+                        push(&mut pending, budget, Task::Argument(argument))?;
+                    }
+                }
+                if let Some(tail) = row.tail()
+                    && !tail.lacks().is_empty()
+                    && let EffectRowVariable::Rigid(binder) = tail.variable()
+                    && (include_free || row_replacements.contains_key(&binder))
+                {
+                    budget.charge(tail.lacks().len().checked_add(1).ok_or(())?)?;
+                    exclusions.try_reserve(1).map_err(|_| ())?;
+                    let retained = exclusions.entry(binder).or_default();
+                    retained.try_reserve(tail.lacks().len()).map_err(|_| ())?;
+                    retained.extend(tail.lacks());
+                }
+            }
+            // Nested schemes bind their own variables.
+            Task::Type(
+                Type::Forall(_, _)
+                | Type::Bytes
+                | Type::String
+                | Type::Int
+                | Type::Bool
+                | Type::Unit
+                | Type::Nominal(_)
+                | Type::Variable(_)
+                | Type::Inference(_),
+            ) => {}
+        }
+    }
+    let mut qualified = Vec::new();
+    budget.charge(exclusions.len())?;
+    qualified.try_reserve(exclusions.len()).map_err(|_| ())?;
+    for (binder, lacks) in exclusions {
+        let variable = row_replacements
+            .get(&binder)
+            .and_then(EffectRow::tail)
+            .map_or(EffectRowVariable::rigid(binder), |tail| tail.variable());
+        let row = rebuild_effect_row_with_budget(
+            std::iter::empty(),
+            Some(variable),
+            lacks,
+            |argument, budget| {
+                substitute_type_and_row_variables_with(
+                    argument,
+                    replacements,
+                    row_replacements,
+                    |cells| budget.charge(cells),
+                    || (),
+                )?
+                .map_err(|_| ())
+            },
+            budget,
+        )?;
+        qualified.push((binder, row));
+    }
+    for (binder, row) in qualified {
+        budget.charge(1)?;
+        row_replacements.try_reserve(1).map_err(|_| ())?;
+        row_replacements.insert(binder, row);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod lexical_row_context_tests {
+    use super::*;
+
+    #[test]
+    fn enclosing_row_facts_reach_nested_owner_payloads_without_crossing_forall() {
+        let file = crate::source::SourceFile::new("lexical-row-context.ash", "owner").unwrap();
+        let module = ModuleId::from(file.id());
+        let delta = TypeVariableId::resolved(module, 0);
+        let epsilon = TypeVariableId::resolved(module, 1);
+        let h = EffectInstance::new(EffectId::new(module, 0), Box::new([]));
+        let g = EffectInstance::new(EffectId::new(module, 1), Box::new([]));
+        let plain = |binder| EffectRow::open(EffectRowVariable::Rigid(binder), Box::new([]));
+        let qualified = |binder, effect: EffectInstance| {
+            EffectRow::open(EffectRowVariable::Rigid(binder), Box::new([effect]))
+        };
+        let function =
+            |row| Type::function_computation(Type::Unit, ComputationType::new(Type::Unit, row));
+        let argument = KindedArgument::TypeArg(Type::Tuple(Box::new([
+            function(plain(delta)),
+            Type::Forall(
+                Box::new([(delta, Kind::EffectRow)]),
+                Box::new(function(plain(delta))),
+            ),
+            function(EffectRow::singleton(EffectInstance::new_kinded(
+                EffectId::new(module, 2),
+                Box::new([KindedArgument::RowArg(plain(epsilon))]),
+            ))),
+        ])));
+        let expected = KindedArgument::TypeArg(Type::Tuple(Box::new([
+            function(qualified(delta, h.clone())),
+            Type::Forall(
+                Box::new([(delta, Kind::EffectRow)]),
+                Box::new(function(plain(delta))),
+            ),
+            function(EffectRow::singleton(EffectInstance::new_kinded(
+                EffectId::new(module, 2),
+                Box::new([KindedArgument::RowArg(qualified(epsilon, g.clone()))]),
+            ))),
+        ])));
+        let contexts = [
+            HashMap::from([(delta, qualified(delta, h))]),
+            HashMap::from([(epsilon, qualified(epsilon, g))]),
+        ];
+        let mut measured = TypeWorkBudget::default();
+        assert_eq!(
+            qualify_kinded_argument_with_row_contexts_with_budget(
+                &argument,
+                contexts.iter(),
+                &mut measured
+            )
+            .unwrap()
+            .unwrap()
+            .unwrap(),
+            expected
+        );
+        let exact = measured.used();
+        for prefix in [0, 7] {
+            for limit in [exact - 1, exact, exact] {
+                let mut work = TypeWorkBudget::with_limit(prefix + limit);
+                work.charge(prefix).unwrap();
+                let result = qualify_kinded_argument_with_row_contexts_with_budget(
+                    &argument,
+                    contexts.iter(),
+                    &mut work,
+                );
+                if limit < exact {
+                    assert!(result.is_err());
+                } else {
+                    assert_eq!(result.unwrap().unwrap().unwrap(), expected);
+                    assert_eq!(work.used(), prefix + exact);
+                }
+            }
+        }
+        // Zero-argument known/lacks labels still contribute actual visits.
+        let label_only = KindedArgument::TypeArg(function(EffectRow::singleton(
+            EffectInstance::new(EffectId::new(module, 3), Box::new([])),
+        )));
+        for (root, has_rigid) in [(&argument, true), (&label_only, false)] {
+            let mut measured = TypeWorkBudget::default();
+            assert_eq!(
+                kinded_arguments_have_rigid_rows_with_budget(std::iter::once(root), &mut measured)
+                    .unwrap(),
+                has_rigid
+            );
+            let exact = measured.used();
+            for prefix in [0, 7] {
+                for limit in [exact - 1, exact, exact] {
+                    let mut work = TypeWorkBudget::with_limit(prefix + limit);
+                    work.charge(prefix).unwrap();
+                    let result = kinded_arguments_have_rigid_rows_with_budget(
+                        std::iter::once(root),
+                        &mut work,
+                    );
+                    if limit < exact {
+                        assert!(result.is_err());
+                    } else {
+                        assert_eq!(result.unwrap(), has_rigid);
+                        assert_eq!(work.used(), prefix + exact);
+                    }
+                }
+            }
+        }
     }
 }

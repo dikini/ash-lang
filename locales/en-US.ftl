@@ -40,6 +40,7 @@ parse-found =
     { $found ->
         [identifier] An identifier occurs here.
         [uppercase-identifier] An uppercase identifier occurs here.
+        [string-literal] A string literal occurs here.
         [integer] An integer literal occurs here.
         [line-end] A logical line ends here.
         [end-of-file] The input ends here.
@@ -1078,6 +1079,7 @@ runtime-missing-binding = The runtime could not find a variable's lexical bindin
 runtime-unexpected-recursive-binding = A recursive binding does not have its validated initializer form.
 runtime-environment-capacity = The runtime cannot retain another lexical binding.
 runtime-invalid-control-state = The runtime reached an inconsistent control state.
+runtime-foreign-binding = An executable foreign binding or conversion contract failed.
 runtime-heap-capacity = The runtime heap cannot hold another cell.
 runtime-captured-control-capacity = The runtime cannot retain another captured control frame.
 runtime-resource-capacity = The runtime cannot represent another live resource or fresh activation.
@@ -1088,6 +1090,10 @@ runtime-impossible-match = A match validated as exhaustive did not select an arm
 runtime-capacity-exhausted = A configured or representational resource limit cannot admit the request.
 runtime-allocator-refused = The host allocator refused a storage reservation.
 runtime-storage-reservation-failed = A host storage reservation failed; its underlying cause is undetermined.
+runtime-resource-admission-refused = Resource admission was refused; its underlying cause is undetermined.
+runtime-resource-packed-bytes = packed bytes
+runtime-resource-foreign-admission = foreign admission
+runtime-resource-foreign-codec-storage = foreign codec storage
 runtime-work-budget-exhausted = The runtime work budget cannot admit the requested work.
 runtime-phase-acquisition = resource acquisition
 runtime-phase-capture = continuation capture or restoration
@@ -1265,3 +1271,11 @@ resolve-work-state = The compiler's name-resolution state { $problem ->
     [right-operand] a right operand
     [left-operand] a left operand
     }.
+
+module-unknown-foreign = This import names no registered foreign module.
+
+foreign-privilege-unavailable = Controlled foreign calls require provider-phase admission.
+
+lex-invalid-string-escape = This escape is not supported in a string literal.
+lex-unterminated-string = This string literal has no closing double quote.
+lex-invalid-string-character = This string literal contains a physical newline or unescaped ASCII control character.

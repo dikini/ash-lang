@@ -141,6 +141,9 @@ fn prepared_runtime_text_covers_existing_resource_units_and_secondary_failure() 
         let messages =
             render::PreparedRuntimeMessages::new(&Catalogue::new(locale).unwrap()).unwrap();
         for resource in [
+            RuntimeResource::PackedBytes,
+            RuntimeResource::ForeignAdmission,
+            RuntimeResource::ForeignCodecStorage,
             RuntimeResource::TypeDisposal,
             RuntimeResource::KindDisposal,
             RuntimeResource::EnvironmentDisposal,
@@ -197,6 +200,76 @@ fn prepared_runtime_text_covers_existing_resource_units_and_secondary_failure() 
 }
 
 #[test]
+fn packed_and_foreign_resource_failures_render_from_prepared_localized_text() {
+    use ash::message::{Catalogue, Locale};
+    for (locale, packed, foreign, foreign_admission, admission) in [
+        (
+            Locale::English,
+            "packed bytes",
+            "foreign codec storage",
+            "foreign admission",
+            "Resource admission was refused",
+        ),
+        (
+            Locale::Bulgarian,
+            "пакетирани байтове",
+            "памет за външно кодиране и декодиране",
+            "приемане на външна операция",
+            "Заявката за ресурс е отказана",
+        ),
+    ] {
+        let messages =
+            render::PreparedRuntimeMessages::new(&Catalogue::new(locale).unwrap()).unwrap();
+        for (resource, label) in [
+            (RuntimeResource::PackedBytes, packed),
+            (RuntimeResource::ForeignCodecStorage, foreign),
+            (RuntimeResource::ForeignAdmission, foreign_admission),
+        ] {
+            for cause in [
+                ResourceFailureCause::StorageReservationFailed,
+                ResourceFailureCause::ResourceAdmissionRefused,
+            ] {
+                let failure = RuntimeFailure::resource(ResourceFailure::new(
+                    cause,
+                    RuntimePhase::Access,
+                    resource,
+                    None,
+                    None,
+                ));
+                for format in [Format::Human(&messages), Format::Short(&messages)] {
+                    let mut output = [0; 4096];
+                    let mut remaining = output.as_mut_slice();
+                    format.write(&mut remaining, failure).unwrap();
+                    let used = 4096 - remaining.len();
+                    let text = std::str::from_utf8(&output[..used]).unwrap();
+                    assert!(text.contains(label), "{text}");
+                    assert!(text.contains(cause.reason_code()), "{text}");
+                    if cause == ResourceFailureCause::ResourceAdmissionRefused {
+                        assert!(text.contains(admission), "{text}");
+                    }
+                }
+                let mut output = [0; 4096];
+                let mut remaining = output.as_mut_slice();
+                render::write_runtime_json(&mut remaining, failure).unwrap();
+                let used = 4096 - remaining.len();
+                let json: serde_json::Value = serde_json::from_slice(&output[..used]).unwrap();
+                let facts = json["facts"].as_array().unwrap();
+                let fact =
+                    |name| facts.iter().find(|fact| fact["name"] == name).unwrap()["value"].clone();
+                assert_eq!(fact("underlying_cause"), "undetermined");
+                assert_eq!(fact("resource"), resource.label());
+                assert!(
+                    !facts.iter().any(|fact| matches!(
+                        fact["name"].as_str(),
+                        Some("requested" | "available")
+                    ))
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn runtime_json_preserves_primary_teardown_and_cleanup_facts() {
     let mut output = [0; 4096];
     let mut remaining = output.as_mut_slice();
@@ -238,6 +311,7 @@ fn runtime_json_covers_existing_base_reasons_without_inventing_resource_details(
         RuntimeFailure::UnexpectedRecursiveBinding,
         RuntimeFailure::EnvironmentCapacity,
         RuntimeFailure::InvalidControlState,
+        RuntimeFailure::ForeignBinding,
         RuntimeFailure::HeapCapacity,
         RuntimeFailure::CapturedControlCapacity,
         RuntimeFailure::ResourceCapacity,
@@ -273,6 +347,7 @@ fn runtime_json_retains_all_resource_causes_phases_and_cleanup_states() {
         ResourceFailureCause::ConfiguredCapacity,
         ResourceFailureCause::AllocatorRefused,
         ResourceFailureCause::StorageReservationFailed,
+        ResourceFailureCause::ResourceAdmissionRefused,
         ResourceFailureCause::WorkBudgetExhausted,
     ] {
         for phase in [
@@ -324,7 +399,11 @@ fn runtime_json_retains_all_resource_causes_phases_and_cleanup_states() {
                 assert!(!facts.iter().any(|fact| fact["name"] == "teardown_cause"));
                 assert_eq!(
                     facts.iter().any(|fact| fact["name"] == "underlying_cause"),
-                    cause == ResourceFailureCause::StorageReservationFailed
+                    matches!(
+                        cause,
+                        ResourceFailureCause::StorageReservationFailed
+                            | ResourceFailureCause::ResourceAdmissionRefused
+                    )
                 );
             }
         }

@@ -1,0 +1,25 @@
+value: Completed(Completed(Ok(CopiedRow(TextValue("héllo 世界"), BlobBytes([0, 255]))), Closed), Closed)
+type: Scope<OpenError, CloseError, Scope<PrepareError, FinalizeError, Result<CopiedRow>>>
+compiler work: SourceChecking used=203215 budget=1245184 hard_limit=1369702 completed=true assessment=WithinBudget optimization_target=false
+compiler work: FinalElaboration used=103738 budget=393216 hard_limit=432537 completed=true assessment=WithinBudget optimization_target=false
+compiler work: IndependentCore used=289063 budget=1638400 hard_limit=1802240 completed=true assessment=WithinBudget optimization_target=false
+observation: Call { operation: "initialize", code: 0 }
+observation: Call { operation: "open", code: 0 }
+observation: Call { operation: "prepare", code: 0 }
+observation: Call { operation: "step", code: 100 }
+observation: Query { operation: "column_count" }
+observation: Query { operation: "column_type" }
+observation: Query { operation: "column_text" }
+observation: Query { operation: "column_bytes" }
+observation: OutputCopied(13)
+observation: Query { operation: "column_count" }
+observation: Query { operation: "column_type" }
+observation: Query { operation: "column_blob" }
+observation: Query { operation: "column_bytes" }
+observation: OutputCopied(2)
+observation: Call { operation: "step", code: 101 }
+observation: FinishDispatched { operation: "finalize" }
+observation: Call { operation: "finalize", code: 0 }
+observation: FinishDispatched { operation: "close" }
+observation: Call { operation: "close", code: 0 }
+retained owners: 0

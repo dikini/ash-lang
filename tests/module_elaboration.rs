@@ -101,40 +101,57 @@ fn checked_module<'a>(
 }
 
 fn contains_inference(root: &Type) -> bool {
-    let mut pending = vec![root];
-    while let Some(ty) = pending.pop() {
-        match ty {
-            Type::Inference(_) => return true,
-            Type::Tuple(elements) => pending.extend(elements.iter()),
-            Type::Application(function, argument) => {
-                pending.push(argument);
-                pending.push(function);
-            }
-            Type::Function(domain, codomain) => {
-                pending.push(codomain);
-                pending.push(domain);
-            }
-            Type::EffectfulFunction(domain, codomain) => {
+    enum Task<'a> {
+        Type(&'a Type),
+        Argument(&'a ash::types::KindedArgument),
+        Row(&'a ash::types::EffectRow),
+    }
+    let mut pending = vec![Task::Type(root)];
+    while let Some(task) = pending.pop() {
+        match task {
+            Task::Argument(ash::types::KindedArgument::TypeArg(ty)) => pending.push(Task::Type(ty)),
+            Task::Argument(ash::types::KindedArgument::RowArg(row)) => pending.push(Task::Row(row)),
+            Task::Row(row) => {
                 if matches!(
-                    codomain.effects().tail().map(|tail| tail.variable()),
+                    row.tail().map(|tail| tail.variable()),
                     Some(ash::types::EffectRowVariable::Inference(_))
                 ) {
                     return true;
                 }
-                for member in codomain.effects().known().iter().chain(
-                    codomain
-                        .effects()
-                        .tail()
-                        .into_iter()
-                        .flat_map(|tail| tail.lacks().iter()),
-                ) {
-                    pending.extend(member.arguments());
+                for member in row
+                    .known()
+                    .iter()
+                    .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
+                {
+                    pending.extend(member.arguments().iter().map(Task::Argument));
                 }
-                pending.push(codomain.value());
-                pending.push(domain);
             }
-            Type::Forall(_, body) => pending.push(body),
-            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Variable(_) => {}
+            Task::Type(Type::Inference(_)) => return true,
+            Task::Type(Type::Tuple(elements)) => pending.extend(elements.iter().map(Task::Type)),
+            Task::Type(
+                Type::Application(function, argument) | Type::Function(function, argument),
+            ) => {
+                pending.push(Task::Type(argument));
+                pending.push(Task::Type(function));
+            }
+            Task::Type(Type::ResourceApply(_, arguments)) => {
+                pending.extend(arguments.iter().map(Task::Argument))
+            }
+            Task::Type(Type::EffectfulFunction(domain, codomain)) => {
+                pending.push(Task::Row(codomain.effects()));
+                pending.push(Task::Type(codomain.value()));
+                pending.push(Task::Type(domain));
+            }
+            Task::Type(Type::Forall(_, body)) => pending.push(Task::Type(body)),
+            Task::Type(
+                Type::Bytes
+                | Type::String
+                | Type::Int
+                | Type::Bool
+                | Type::Unit
+                | Type::Nominal(_)
+                | Type::Variable(_),
+            ) => {}
         }
     }
     false

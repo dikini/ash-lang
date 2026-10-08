@@ -1,0 +1,32 @@
+{
+  "status": "PASS library1674 and allocation7; no warnings/failures/ignored; source immutable, not yet integration-complete",
+  "prior": "round-four-repair-receipt.json",
+  "source_pins": "round-compile-repair-pins.json",
+  "source_pins_sha256": "833bcb70c551b5e746579d08ffee53931c6ac4f5a20f862e02e4a29718ccf976",
+  "changes": [
+    "src/core/capture.rs",
+    "src/core/provider/external.rs"
+  ],
+  "repairs": [
+    "DeclaredLayoutMethods::authenticates limited to crate::core visibility",
+    "last cfgtest provider.then_some constructor now includes sixth None"
+  ],
+  "review": "Root/Common exact diagnostics; all alias constructors and serving consumers audited including map/then_some forms; no behavior/limit/authority change",
+  "docs": "nine frozen draft bytes identical",
+  "command": "CARGO_BUILD_JOBS=1 RUSTC_WRAPPER= cargo test --locked -p ash --lib --test provider_arena_allocation --no-fail-fast -- --test-threads=1",
+  "exit_code": 0,
+  "library": {
+    "passed": 1674,
+    "failed": 0,
+    "ignored": 0,
+    "seconds": 127.54
+  },
+  "allocation": {
+    "passed": 7,
+    "failed": 0,
+    "ignored": 0,
+    "seconds": 4.34
+  },
+  "recovery": "1824bb70b28c72da2dbc6308887c4577b5adb681",
+  "build": "2m16s"
+}

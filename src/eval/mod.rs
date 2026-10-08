@@ -12,7 +12,7 @@ pub use failure::{
 
 pub use machine::{
     Control, EffectTraceEvent, Environment, Evaluation, RuntimeFailure, TraceEvent, evaluate,
-    evaluate_effect,
+    evaluate_effect, evaluate_effect_with_foreign_runtime,
 };
 #[cfg(test)]
 pub(crate) use machine::{native_buffer_counters_for_test, reset_native_buffer_counters_for_test};

@@ -95,6 +95,7 @@ fn parse_primary(parser: &mut Parser<'_>, forms: &[PrimaryForm]) -> CompletedExp
         }
         Some(
             PrimaryForm::Integer
+            | PrimaryForm::String
             | PrimaryForm::Boolean
             | PrimaryForm::Discard
             | PrimaryForm::Identifier
@@ -200,6 +201,7 @@ fn primary_form(parser: &Parser<'_>, forms: &[PrimaryForm]) -> Option<PrimaryFor
         .copied()
         .find(|form| match (form, parser.current()) {
             (PrimaryForm::Integer, Some(TokenKind::Integer(_)))
+            | (PrimaryForm::String, Some(TokenKind::StringLiteral(_)))
             | (PrimaryForm::Boolean, Some(TokenKind::True | TokenKind::False))
             | (PrimaryForm::Identifier, Some(TokenKind::Identifier(_)))
             | (PrimaryForm::UpperIdentifier, Some(TokenKind::UpperIdentifier(_)))

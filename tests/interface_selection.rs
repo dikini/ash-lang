@@ -238,7 +238,8 @@ fn occurrences_in_expressions(
                     occurrences.push(occurrence);
                 }
             }
-            ResolvedExprKind::Integer(_)
+            ResolvedExprKind::String(_)
+            | ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)
             | ResolvedExprKind::Unit
             | ResolvedExprKind::Constructor(_) => {}
@@ -270,6 +271,10 @@ fn occurrences_in_expressions(
                 expressions.extend(matched.arms.iter().map(|arm| &arm.body));
             }
             ResolvedExprKind::Perform(request) => expressions.push(&request.operand),
+            ResolvedExprKind::ProviderResource(resource) => {
+                expressions.push(&resource.initializer);
+                expressions.push(&resource.body);
+            }
             ResolvedExprKind::Resource(resource) => {
                 expressions.push(&resource.initializer);
                 expressions.push(&resource.body);
@@ -318,7 +323,7 @@ fn assert_abstract_selection(
     occurrence: &ResolvedOccurrence,
     requirement: RequirementId,
     methods: &[MethodId],
-    argument: &Type,
+    argument: &ash::types::KindedArgument,
 ) {
     let selection = selection_for_occurrence(occurrence);
     assert_eq!(selection.interface(), methods[0].interface());
@@ -363,7 +368,12 @@ fn constrained_method_selects_its_exact_abstract_requirement_before_a_matching_i
         !checked.available_implementations().is_empty(),
         "the matching implementation must be available so abstract selection proves precedence"
     );
-    assert_abstract_selection(occurrence, requirement.id, &[method], &Type::Int);
+    assert_abstract_selection(
+        occurrence,
+        requirement.id,
+        &[method],
+        &ash::types::KindedArgument::TypeArg(Type::Int),
+    );
 }
 
 #[test]
@@ -634,7 +644,9 @@ fn higher_kinded_concrete_candidate_retains_ordered_substitution_and_evidence() 
         panic!("the generic implementation should retain F then A substitutions");
     };
     assert_eq!(function_substitution.parameter(), function_parameter.id);
-    let [implementation_argument] = checked.implementation_facts()[0].arguments() else {
+    let [ash::types::KindedArgument::TypeArg(implementation_argument)] =
+        checked.implementation_facts()[0].arguments()
+    else {
         panic!("the unary implementation should retain one head argument");
     };
     assert_eq!(
@@ -720,7 +732,10 @@ fn polymorphic_implementation_method_selects_exact_current_impl_and_retains_orde
         panic!("the recursive method occurrence should select its current implementation");
     };
     assert_eq!(actual_implementation, implementation);
-    assert_eq!(selection.arguments(), &[Type::Int]);
+    assert_eq!(
+        selection.arguments(),
+        &[ash::types::KindedArgument::TypeArg(Type::Int)]
+    );
     assert_eq!(
         occurrence.evidence[0].method_arguments(),
         &[Type::Variable(method_parameter.id)]
@@ -891,7 +906,13 @@ fn known_key_improves_the_complete_goal_before_selection() {
     };
     let selection = selection_for_occurrence(occurrence);
 
-    assert_eq!(selection.arguments(), &[Type::Int, Type::Bool]);
+    assert_eq!(
+        selection.arguments(),
+        &[
+            ash::types::KindedArgument::TypeArg(Type::Int),
+            ash::types::KindedArgument::TypeArg(Type::Bool)
+        ]
+    );
     assert!(matches!(
         selection.node(selection.root()),
         Some(EvidenceNode::Implementation {
@@ -986,7 +1007,11 @@ fn complete_composite_key_improves_only_its_dependent_tuple() {
 
     assert_eq!(
         selection_for_occurrence(occurrence).arguments(),
-        &[Type::Int, Type::Bool, Type::Unit]
+        &[
+            ash::types::KindedArgument::TypeArg(Type::Int),
+            ash::types::KindedArgument::TypeArg(Type::Bool),
+            ash::types::KindedArgument::TypeArg(Type::Unit)
+        ]
     );
 }
 
@@ -1018,7 +1043,10 @@ fn generic_first_order_key_match_supplies_the_instantiated_dependent() {
     let selection = selection_for_occurrence(occurrence);
 
     assert_eq!(selection.arguments().len(), 2);
-    assert_eq!(selection.arguments()[1], Type::Int);
+    assert_eq!(
+        selection.arguments()[1],
+        ash::types::KindedArgument::TypeArg(Type::Int)
+    );
     assert!(matches!(
         selection.node(selection.root()),
         Some(EvidenceNode::Implementation { .. })
@@ -1049,7 +1077,10 @@ fn expected_dependent_agrees_with_mandatory_improvement() {
     };
     assert_eq!(
         selection_for_occurrence(occurrence).arguments(),
-        &[Type::Int, Type::Bool]
+        &[
+            ash::types::KindedArgument::TypeArg(Type::Int),
+            ash::types::KindedArgument::TypeArg(Type::Bool)
+        ]
     );
 }
 
@@ -1145,7 +1176,13 @@ fn abstract_key_source_precedes_a_conflicting_visible_concrete_source() {
     };
     let selection = selection_for_occurrence(occurrence);
 
-    assert_eq!(selection.arguments(), &[Type::Int, Type::Bool]);
+    assert_eq!(
+        selection.arguments(),
+        &[
+            ash::types::KindedArgument::TypeArg(Type::Int),
+            ash::types::KindedArgument::TypeArg(Type::Bool)
+        ]
+    );
     assert!(matches!(
         selection.node(selection.root()),
         Some(EvidenceNode::Abstract {
@@ -1177,7 +1214,13 @@ fn exact_current_key_improves_recursive_determined_dispatch() {
     };
     let selection = selection_for_occurrence(occurrence);
 
-    assert_eq!(selection.arguments(), &[Type::Int, Type::Bool]);
+    assert_eq!(
+        selection.arguments(),
+        &[
+            ash::types::KindedArgument::TypeArg(Type::Int),
+            ash::types::KindedArgument::TypeArg(Type::Bool)
+        ]
+    );
     assert!(matches!(
         selection.node(selection.root()),
         Some(EvidenceNode::Implementation { implementation, .. })
@@ -1214,7 +1257,10 @@ fn method_local_argument_never_participates_in_determined_key_matching() {
     assert_eq!(slot.method_arguments(), &[Type::Bool]);
     assert_eq!(
         selection_for_occurrence(occurrence).arguments(),
-        &[Type::Int, Type::Bool]
+        &[
+            ash::types::KindedArgument::TypeArg(Type::Int),
+            ash::types::KindedArgument::TypeArg(Type::Bool)
+        ]
     );
 }
 
@@ -1353,7 +1399,12 @@ fn identity_equal_abstract_prerequisite_dispatch_instantiates_method_locals_norm
         slot.method_arguments(),
         &[Type::Variable(method_parameter.id)]
     );
-    assert_abstract_selection(occurrence, requirement.id, &[use_method], &Type::Int);
+    assert_abstract_selection(
+        occurrence,
+        requirement.id,
+        &[use_method],
+        &ash::types::KindedArgument::TypeArg(Type::Int),
+    );
 }
 
 #[test]
@@ -1601,8 +1652,18 @@ fn recursive_constrained_global_reuses_its_declared_abstract_evidence() {
     let [recursive_occurrence] = recursive_occurrences.as_slice() else {
         panic!("the recursive body should retain one loop occurrence");
     };
-    assert_abstract_selection(method_occurrence, requirement.id, &[method], &Type::Int);
-    assert_abstract_selection(recursive_occurrence, requirement.id, &[method], &Type::Int);
+    assert_abstract_selection(
+        method_occurrence,
+        requirement.id,
+        &[method],
+        &ash::types::KindedArgument::TypeArg(Type::Int),
+    );
+    assert_abstract_selection(
+        recursive_occurrence,
+        requirement.id,
+        &[method],
+        &ash::types::KindedArgument::TypeArg(Type::Int),
+    );
 }
 
 #[test]

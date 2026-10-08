@@ -160,6 +160,7 @@ messages! {
     runtime_unexpected_recursive_binding => "runtime-unexpected-recursive-binding" {},
     runtime_environment_capacity => "runtime-environment-capacity" {},
     runtime_invalid_control_state => "runtime-invalid-control-state" {},
+    runtime_foreign_binding => "runtime-foreign-binding" {},
     runtime_heap_capacity => "runtime-heap-capacity" {},
     runtime_captured_control_capacity => "runtime-captured-control-capacity" {},
     runtime_resource_capacity => "runtime-resource-capacity" {},
@@ -170,6 +171,7 @@ messages! {
     runtime_capacity_exhausted => "runtime-capacity-exhausted" {},
     runtime_allocator_refused => "runtime-allocator-refused" {},
     runtime_storage_reservation_failed => "runtime-storage-reservation-failed" {},
+    runtime_resource_admission_refused => "runtime-resource-admission-refused" {},
     runtime_work_budget_exhausted => "runtime-work-budget-exhausted" {},
     runtime_phase_acquisition => "runtime-phase-acquisition" {},
     runtime_phase_capture => "runtime-phase-capture" {},
@@ -179,6 +181,9 @@ messages! {
     runtime_phase_teardown => "runtime-phase-teardown" {},
     runtime_phase_diagnostic_preparation => "runtime-phase-diagnostic-preparation" {},
     runtime_resource_type_disposal => "runtime-resource-type-disposal" {},
+    runtime_resource_packed_bytes => "runtime-resource-packed-bytes" {},
+    runtime_resource_foreign_admission => "runtime-resource-foreign-admission" {},
+    runtime_resource_foreign_codec_storage => "runtime-resource-foreign-codec-storage" {},
     runtime_resource_kind_disposal => "runtime-resource-kind-disposal" {},
     runtime_resource_environment_disposal => "runtime-resource-environment-disposal" {},
     runtime_resource_captured_disposal => "runtime-resource-captured-disposal" {},
@@ -1035,6 +1040,7 @@ messages! {
     compiler_constraint_resources => "compiler-constraint-resources" {},
     /// The compiler tried to lower effect syntax through its pure Core path.
     effect_core_unavailable => "effect-core-unavailable" {},
+    foreign_privilege_unavailable => "foreign-privilege-unavailable" {},
     /// Pattern coverage analysis reached the compiler's state limit.
     coverage_state_limit => "coverage-state-limit" {},
     /// The compiler could not complete pattern coverage analysis within its work resources.
@@ -1525,6 +1531,7 @@ messages! {
     module_unknown_root => "module-unknown-root" { root: &'a str = "std" },
     /// No compiler-owned module matches the selected builtin path.
     module_unknown_builtin => "module-unknown-builtin" {},
+    module_unknown_foreign => "module-unknown-foreign" {},
     /// Canonicalization reported that the imported file does not exist.
     module_not_found => "module-not-found" { path: &'a Path = Path::new("missing.ash") },
     /// An import reaches a module active in the current traversal.
@@ -1583,6 +1590,12 @@ messages! {
     lex_invalid_integer_literal => "lex-invalid-integer-literal" {},
     /// An invalid identifier spelling.
     lex_invalid_identifier => "lex-invalid-identifier" {},
+    /// An unsupported string escape.
+    lex_invalid_string_escape => "lex-invalid-string-escape" {},
+    /// A string without its closing double quote.
+    lex_unterminated_string => "lex-unterminated-string" {},
+    /// A physical newline or unescaped ASCII control inside a string.
+    lex_invalid_string_character => "lex-invalid-string-character" {},
     /// A character with no token interpretation.
     lex_unknown_character => "lex-unknown-character" {},
 }

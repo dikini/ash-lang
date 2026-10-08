@@ -1,0 +1,23 @@
+verification command: ["cargo", "fmt", "--all", "--", "--check"]
+verification command: ["cargo", "test", "--locked", "-p", "ash", "--lib", "evidence_validation::tests::concrete_adapter_source_catalog_has_an_exact_retry_boundary", "--", "--exact", "--test-threads=1"]
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running unittests src/lib.rs (target/debug/deps/ash-94445b49e5489316)
+
+running 1 test
+test evidence_validation::tests::concrete_adapter_source_catalog_has_an_exact_retry_boundary ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1674 filtered out; finished in 0.15s
+
+verification command: ["cargo", "test", "--locked", "-p", "ash", "--test", "method_parameter_resources", "--", "--test-threads=1"]
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/common-resource-support)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.17s
+     Running tests/method_parameter_resources.rs (target/debug/deps/method_parameter_resources-680d0f44ef46e7b8)
+
+running 4 tests
+test adapter_heavy_core_and_rejected_occurrences_dispose_on_a_256_kib_stack ... ok
+test deep_and_wide_method_carriers_accept_and_reject_on_a_256_kib_stack ... ok
+test exact_unit_formulas_remain_attached_to_their_owning_probes ... ok
+test syntax_method_binders_have_an_exact_additive_token_and_event_formula ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+

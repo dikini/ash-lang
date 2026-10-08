@@ -1,0 +1,94 @@
+[
+  {
+    "name": "format",
+    "command": [
+      "rustfmt",
+      "--edition",
+      "2024",
+      "--check",
+      "foreign-adapter/examples/sqlite_session.rs",
+      "tests/provider_sqlite_copying.rs"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 0.07878279900069174
+  },
+  {
+    "name": "host-build",
+    "command": [
+      "cargo",
+      "build",
+      "--locked",
+      "-p",
+      "ash-foreign-adapter",
+      "--example",
+      "sqlite_session"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 2.043027572999563
+  },
+  {
+    "name": "packaged-examples",
+    "command": [
+      "python3",
+      "/home/dikini/.codex/ash-provider-evidence/sqlite-2026-10-05/handoff/calibrated-host-report-preparation/run_packaged_examples.py"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 5.1842158419985935
+  },
+  {
+    "name": "forwarding",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "ash",
+      "--test",
+      "provider_sqlite_copying",
+      "qualified_forwarding_chain_preserves_integer_and_source_completion",
+      "--",
+      "--exact",
+      "--test-threads=1",
+      "--nocapture"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 3.9861664999989443
+  },
+  {
+    "name": "adapter-clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--locked",
+      "-p",
+      "ash-foreign-adapter",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 31.75608238300083
+  },
+  {
+    "name": "copying-clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--locked",
+      "-p",
+      "ash",
+      "--test",
+      "provider_sqlite_copying",
+      "--test",
+      "provider_sqlite_control",
+      "--test",
+      "provider_sqlite_sessions",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 0.6672322539998277
+  }
+]

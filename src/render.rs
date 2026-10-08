@@ -108,7 +108,11 @@ fn runtime_json_resource(
         runtime_json_string(writer, value)?;
         fragment(writer, b"}")?;
     }
-    if failure.cause == crate::eval::ResourceFailureCause::StorageReservationFailed {
+    if matches!(
+        failure.cause,
+        crate::eval::ResourceFailureCause::StorageReservationFailed
+            | crate::eval::ResourceFailureCause::ResourceAdmissionRefused
+    ) {
         runtime_json_fact_start(writer, prefix, "underlying_cause", "resource-cause")?;
         runtime_json_string(writer, "undetermined")?;
         fragment(writer, b"}")?;
@@ -195,7 +199,11 @@ fn resource_details(
     fragment(writer, b"resource: ")?;
     fragment(writer, failure.resource.label().as_bytes())?;
     fragment(writer, b"\n")?;
-    if failure.cause == crate::eval::ResourceFailureCause::StorageReservationFailed {
+    if matches!(
+        failure.cause,
+        crate::eval::ResourceFailureCause::StorageReservationFailed
+            | crate::eval::ResourceFailureCause::ResourceAdmissionRefused
+    ) {
         fragment(writer, b"underlying cause: undetermined\n")?;
     }
     for (label, amount) in [
@@ -383,6 +391,7 @@ fn module_failure(failure: &ModuleFailure) -> String {
 const fn module_primary_message(reason: ModuleReason) -> &'static str {
     match reason {
         ModuleReason::UnknownBuiltin => "this import names no compiler-owned module",
+        ModuleReason::UnknownForeign => "this import names no registered foreign module",
         ModuleReason::ReservedRoot => "the builtin module root is reserved",
         ModuleReason::UnknownRoot => "this import names an unknown module root",
         ModuleReason::NotFound => "this import target does not exist",

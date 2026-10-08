@@ -3,14 +3,12 @@
 use std::{collections::HashMap, error::Error, fmt, io, path::PathBuf, sync::Arc};
 
 use crate::{
-    core::{
-        UnvalidatedProgram, ValidatedProgram, ValidationError, validate_effect_modules,
-        validate_modules,
-    },
+    core::{UnvalidatedProgram, ValidatedProgram, ValidationError},
     diagnostic::{Diagnostic, SourceLabel, compare_source_spans},
     elaborate::{
-        EffectElaborator, Elaborator, TypeError, check_module_with_budget,
-        checked_program_contains_effect_syntax, link_modules_with_budget,
+        EffectElaborator, Elaborator, ProviderCodeAvailability, TypeError,
+        check_module_with_budget_and_provider_codes, checked_program_contains_effect_syntax,
+        link_modules_with_budget,
     },
     eval::{Evaluation, ObservedHeap, RuntimeFailure, Value, evaluate, evaluate_effect},
     evidence_validation::{
@@ -148,6 +146,7 @@ pub struct Observation {
     ty: Type,
     type_display: Option<String>,
     _heap: Arc<ObservedHeap>,
+    compilation_work: crate::compiler_work::CompilationWork,
 }
 
 /// An evaluated value that retains the heap needed by captured locations.
@@ -288,6 +287,13 @@ impl Drop for ObservationParts {
 }
 
 impl Observation {
+    /// Borrows completed work assessments, including accepted optimization targets.
+    /// These experimental ledgers do not measure CPU, RSS or builder-owned work.
+    #[must_use]
+    pub const fn compilation_work(&self) -> &crate::compiler_work::CompilationWork {
+        &self.compilation_work
+    }
+
     /// Borrows the evaluated Ash value while retaining its observation heap.
     #[must_use]
     pub const fn value(&self) -> &Value {
@@ -467,7 +473,8 @@ impl Error for PipelineFailure {}
 /// attaches sources, by moving them after a compile-time failure.
 #[derive(Debug)]
 pub struct PipelineDiagnostic {
-    failure: PipelineFailure,
+    compilation_work: crate::compiler_work::CompilationWork,
+    failure: Box<PipelineFailure>,
     sources: Box<[SourceFile]>,
 }
 
@@ -481,7 +488,7 @@ impl PipelineDiagnostic {
     /// Consumes context when a caller needs only the semantic phase failure.
     #[must_use]
     pub fn into_failure(self) -> PipelineFailure {
-        self.failure
+        *self.failure
     }
 }
 
@@ -511,13 +518,60 @@ pub enum FileFailure {
 impl From<PipelineFailure> for FileFailure {
     fn from(failure: PipelineFailure) -> Self {
         Self::Pipeline(PipelineDiagnostic {
-            failure,
+            compilation_work: Default::default(),
+            failure: Box::new(failure),
             sources: Box::default(),
         })
     }
 }
 
 impl FileFailure {
+    /// Returns observed work, retaining completed phases and partial failure costs.
+    /// Missing fields were not observed; input failures carry no compiler report.
+    #[must_use]
+    pub fn compilation_work(&self) -> Option<&crate::compiler_work::CompilationWork> {
+        match self {
+            Self::Pipeline(context) => Some(&context.compilation_work),
+            _ => None,
+        }
+    }
+
+    fn with_phase_work(mut self, cost: crate::compiler_work::PhaseCost) -> Self {
+        if let Self::Pipeline(context) = &mut self {
+            use crate::compiler_work::CompilationPhase;
+            match cost.phase {
+                CompilationPhase::SourceChecking => {
+                    context.compilation_work.source_checking = Some(cost)
+                }
+                CompilationPhase::FinalElaboration => {
+                    context.compilation_work.final_elaboration = Some(cost)
+                }
+                CompilationPhase::IndependentCore => {
+                    context.compilation_work.independent_core = Some(cost)
+                }
+            }
+        }
+        self
+    }
+
+    fn with_compilation_work(mut self, costs: crate::compiler_work::CompilationWork) -> Self {
+        if let Self::Pipeline(context) = &mut self {
+            context.compilation_work.source_checking = context
+                .compilation_work
+                .source_checking
+                .or(costs.source_checking);
+            context.compilation_work.final_elaboration = context
+                .compilation_work
+                .final_elaboration
+                .or(costs.final_elaboration);
+            context.compilation_work.independent_core = context
+                .compilation_work
+                .independent_core
+                .or(costs.independent_core);
+        }
+        self
+    }
+
     /// Borrows the original graph-loading failure without its source context.
     #[must_use]
     pub fn graph_failure(&self) -> Option<&LoadGraphError> {
@@ -627,9 +681,34 @@ pub fn run_path(configuration: RunConfiguration) -> Result<Observation, FileFail
         configuration,
         &mut InterfaceConstraintBudget::default(),
         validate_interface_evidence_with_budget,
-        validate_modules,
+        validate_modular_core,
         evaluate,
         true,
+        None,
+    )
+}
+
+/// Executes a modular Ash graph with authenticated executable foreign bindings.
+///
+/// The configuration retains its source registrations. The runtime must bind
+/// those original entries; equal names do not authorize native dispatch. It is
+/// borrowed so retained native owners remain quarantined until host teardown.
+///
+/// # Errors
+/// Returns the same input, compiler and runtime failures as [`run_path`], plus
+/// foreign binding or conversion failures before the associated native use.
+pub fn run_path_with_foreign_runtime(
+    configuration: RunConfiguration,
+    runtime: &mut crate::foreign::runtime::ForeignRuntime,
+) -> Result<Observation, FileFailure> {
+    run_path_with_consumers_internal(
+        configuration,
+        &mut InterfaceConstraintBudget::default(),
+        validate_interface_evidence_with_budget,
+        validate_modular_core,
+        evaluate,
+        true,
+        Some(runtime),
     )
 }
 
@@ -657,9 +736,14 @@ where
         configuration,
         &mut InterfaceConstraintBudget::default(),
         interface_validator,
-        validator,
+        |program, sources, modules| {
+            validator(program, sources, modules)
+                .map(|program| (program, None))
+                .map_err(|failure| (failure, None))
+        },
         evaluator,
         false,
+        None,
     )
 }
 
@@ -688,9 +772,14 @@ where
         configuration,
         constraint_work,
         interface_validator,
-        validator,
+        |program, sources, modules| {
+            validator(program, sources, modules)
+                .map(|program| (program, None))
+                .map_err(|failure| (failure, None))
+        },
         evaluator,
         false,
+        None,
     )
 }
 
@@ -701,6 +790,7 @@ fn run_path_with_consumers_internal<I, V, E>(
     validator: V,
     evaluator: E,
     select_effect_core: bool,
+    runtime: Option<&mut crate::foreign::runtime::ForeignRuntime>,
 ) -> Result<Observation, FileFailure>
 where
     I: FnOnce(
@@ -708,15 +798,20 @@ where
         &mut InterfaceConstraintBudget,
         &mut TypeWorkBudget,
     ) -> Result<ValidatedInterfaceProgram, EvidenceValidationFailure>,
-    V: FnOnce(
-        UnvalidatedProgram,
-        &[&SourceFile],
-        &[(ModuleId, SourceId)],
-    ) -> Result<ValidatedProgram, ValidationError>,
+    V: FnOnce(UnvalidatedProgram, &[&SourceFile], &[(ModuleId, SourceId)]) -> ModularCoreResult,
     E: FnOnce(&ValidatedProgram) -> Result<Evaluation, RuntimeFailure>,
 {
+    let pipeline_phase = crate::calibration::Phase::start("pipeline");
+    let loading_phase = crate::calibration::Phase::start("loading");
     let graph = load_module_graph(&configuration.entry, &configuration.roots)
         .map_err(FileFailure::Graph)?;
+    loading_phase.finish(None, 0, 0);
+    #[cfg(feature = "resource-calibration")]
+    if crate::calibration::observing() {
+        let metrics = crate::calibration::Phase::start("input-metrics");
+        crate::calibration_features::observe_input(&graph);
+        metrics.finish(None, 0, 0);
+    }
     let result = run_graph_with_consumers(
         &graph,
         constraint_work,
@@ -724,10 +819,14 @@ where
         validator,
         evaluator,
         select_effect_core,
+        runtime,
     );
+    if result.is_ok() {
+        pipeline_phase.finish(None, 0, 0);
+    }
     match result {
         Err(FileFailure::Pipeline(mut context))
-            if !matches!(context.failure, PipelineFailure::Runtime(_)) =>
+            if !matches!(context.failure.as_ref(), PipelineFailure::Runtime(_)) =>
         {
             context.sources = graph.into_sources();
             Err(FileFailure::Pipeline(context))
@@ -743,6 +842,7 @@ fn run_graph_with_consumers<I, V, E>(
     validator: V,
     evaluator: E,
     select_effect_core: bool,
+    runtime: Option<&mut crate::foreign::runtime::ForeignRuntime>,
 ) -> Result<Observation, FileFailure>
 where
     I: FnOnce(
@@ -750,11 +850,44 @@ where
         &mut InterfaceConstraintBudget,
         &mut TypeWorkBudget,
     ) -> Result<ValidatedInterfaceProgram, EvidenceValidationFailure>,
-    V: FnOnce(
-        UnvalidatedProgram,
-        &[&SourceFile],
-        &[(ModuleId, SourceId)],
-    ) -> Result<ValidatedProgram, ValidationError>,
+    V: FnOnce(UnvalidatedProgram, &[&SourceFile], &[(ModuleId, SourceId)]) -> ModularCoreResult,
+    E: FnOnce(&ValidatedProgram) -> Result<Evaluation, RuntimeFailure>,
+{
+    let mut compilation_work = crate::compiler_work::CompilationWork::default();
+    run_graph_with_report(
+        graph,
+        constraint_work,
+        interface_validator,
+        validator,
+        evaluator,
+        select_effect_core,
+        runtime,
+        &mut compilation_work,
+    )
+    .map_err(|failure| failure.with_compilation_work(compilation_work))
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one report accumulates across existing source, Core and runtime consumers"
+)]
+fn run_graph_with_report<I, V, E>(
+    graph: &ModuleGraph,
+    constraint_work: &mut InterfaceConstraintBudget,
+    interface_validator: I,
+    validator: V,
+    evaluator: E,
+    select_effect_core: bool,
+    runtime: Option<&mut crate::foreign::runtime::ForeignRuntime>,
+    compilation_work: &mut crate::compiler_work::CompilationWork,
+) -> Result<Observation, FileFailure>
+where
+    I: FnOnce(
+        ResolvedModuleProgram,
+        &mut InterfaceConstraintBudget,
+        &mut TypeWorkBudget,
+    ) -> Result<ValidatedInterfaceProgram, EvidenceValidationFailure>,
+    V: FnOnce(UnvalidatedProgram, &[&SourceFile], &[(ModuleId, SourceId)]) -> ModularCoreResult,
     E: FnOnce(&ValidatedProgram) -> Result<Evaluation, RuntimeFailure>,
 {
     let mut checked: Vec<crate::resolved::CheckedModule> =
@@ -762,7 +895,9 @@ where
     let mut checked_by_module: HashMap<ModuleId, usize> =
         HashMap::with_capacity(graph.modules().len());
     let mut resolution_type_work = TypeWorkBudget::default();
-    let mut checking_type_work = TypeWorkBudget::default();
+    let mut checking_type_work =
+        modular_phase_work(crate::compiler_work::CompilationPhase::SourceChecking);
+    let mut provider_codes = ProviderCodeAvailability::default();
     let mut coverage_work = UsefulnessBudget::default();
     for module in graph.modules() {
         let dependencies = module
@@ -783,6 +918,7 @@ where
             })
             .collect::<Result<Vec<_>, _>>()
             .map_err(FileFailure::from)?;
+        let resolution_phase = crate::calibration::Phase::start("resolution");
         let resolved = resolve_module_with_budget(
             module,
             &dependencies,
@@ -794,17 +930,50 @@ where
             ResolveModuleError::Kind(error) => PipelineFailure::Kind(error),
         })
         .map_err(FileFailure::from)?;
+        resolution_phase.finish(
+            Some(resolution_type_work.used()),
+            crate::types::TYPE_WORK_LIMIT,
+            resolution_type_work.limit(),
+        );
         drop(dependencies);
-        let checked_module = check_module_with_budget(
+        let source_phase = crate::calibration::Phase::start("source-checking");
+        let checked_module = check_module_with_budget_and_provider_codes(
             resolved,
+            &provider_codes,
             &mut checking_type_work,
             &mut coverage_work,
             constraint_work,
         )
-        .map_err(PipelineFailure::Typing)
-        .map_err(FileFailure::from)?;
+        .map_err(|failure| {
+            FileFailure::from(PipelineFailure::Typing(failure)).with_phase_work(
+                crate::compiler_work::CompilationPhase::SourceChecking
+                    .assess(checking_type_work.used())
+                    .incomplete(),
+            )
+        })?;
+        if let Some(code) = checked_module.provider_code() {
+            provider_codes
+                .retain(module.id(), code, &mut checking_type_work)
+                .map_err(|failure| {
+                    FileFailure::from(PipelineFailure::Typing(failure)).with_phase_work(
+                        crate::compiler_work::CompilationPhase::SourceChecking
+                            .assess(checking_type_work.used())
+                            .incomplete(),
+                    )
+                })?;
+        }
         checked_by_module.insert(module.id(), checked.len());
         checked.push(checked_module);
+        source_phase.finish(
+            Some(checking_type_work.used()),
+            crate::compiler_work::CompilationPhase::SourceChecking.hard_limit(),
+            checking_type_work.limit(),
+        );
+        compilation_work.source_checking = Some(
+            crate::compiler_work::CompilationPhase::SourceChecking
+                .assess(checking_type_work.used())
+                .incomplete(),
+        );
     }
 
     let entry = checked
@@ -837,10 +1006,13 @@ where
         }
         Type::Function(_, _)
         | Type::EffectfulFunction(_, _)
+        | Type::Bytes
+        | Type::String
         | Type::Int
         | Type::Bool
         | Type::Unit
         | Type::Tuple(_)
+        | Type::ResourceApply(_, _)
         | Type::Nominal(_)
         | Type::Application(_, _)
         | Type::Variable(_)
@@ -851,15 +1023,50 @@ where
     if main_has_effects {
         return Err(entry_failure(EntryReason::MainEffects, main_span));
     }
-    if !closed_entry_result(result_type) {
+    let closed_result =
+        closed_entry_result(result_type, &mut checking_type_work).map_err(|()| {
+            FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+                crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+            )))
+            .with_phase_work(
+                crate::compiler_work::CompilationPhase::SourceChecking
+                    .assess(checking_type_work.used())
+                    .incomplete(),
+            )
+        })?;
+    compilation_work.source_checking = Some(
+        crate::compiler_work::CompilationPhase::SourceChecking
+            .assess(checking_type_work.used())
+            .incomplete(),
+    );
+    if !closed_result {
         return Err(entry_failure(EntryReason::MainOpenResult, main_span));
     }
     if !main.scheme.requirements.is_empty() {
         return Err(entry_failure(EntryReason::MainConstrained, main_span));
     }
+    compilation_work.source_checking = Some(
+        crate::compiler_work::CompilationPhase::SourceChecking.assess(checking_type_work.used()),
+    );
+    crate::calibration::work(
+        "resolution",
+        resolution_type_work.used(),
+        crate::types::TYPE_WORK_LIMIT,
+        resolution_type_work.limit(),
+        true,
+    );
+    crate::calibration::work(
+        "source-checking",
+        checking_type_work.used(),
+        crate::compiler_work::CompilationPhase::SourceChecking.hard_limit(),
+        checking_type_work.limit(),
+        true,
+    );
+    let linking_phase = crate::calibration::Phase::start("module-linking");
     let linked = link_modules_with_budget(checked, graph.entry(), constraint_work)
         .map_err(PipelineFailure::Typing)
         .map_err(FileFailure::from)?;
+    linking_phase.finish(None, 0, 0);
     let sources = graph
         .modules()
         .iter()
@@ -871,7 +1078,8 @@ where
         .map(|module| (module.id(), module.source().id()))
         .collect::<Vec<_>>();
     let mut linked_type_work = TypeWorkBudget::default();
-    let (ty, type_display, unchecked): (IterativeTypeOwner, String, UnvalidatedProgram) = {
+    let (ty, type_display, unchecked, final_work) = {
+        let interface_phase = crate::calibration::Phase::start("linked-interface");
         let validated_interfaces =
             interface_validator(linked, constraint_work, &mut linked_type_work)
                 .map_err(PipelineFailure::EvidenceValidation)
@@ -882,29 +1090,94 @@ where
                 .map_err(PipelineFailure::Typing)
                 .map_err(FileFailure::from)?
         {
-            return finish_effect_observation(&validated_interfaces, &sources, &module_sources);
+            interface_phase.finish(
+                Some(linked_type_work.used()),
+                crate::types::TYPE_WORK_LIMIT,
+                linked_type_work.limit(),
+            );
+            crate::calibration::work(
+                "linked-interface",
+                linked_type_work.used(),
+                crate::types::TYPE_WORK_LIMIT,
+                linked_type_work.limit(),
+                true,
+            );
+            return finish_effect_observation(
+                &validated_interfaces,
+                &sources,
+                &module_sources,
+                runtime,
+                compilation_work,
+            );
         }
-        let mut elaborator = Elaborator::for_module_program(&validated_interfaces)
-            .map_err(TypeError::Internal)
-            .map_err(PipelineFailure::Typing)
-            .map_err(FileFailure::from)?;
+        interface_phase.finish(
+            Some(linked_type_work.used()),
+            crate::types::TYPE_WORK_LIMIT,
+            linked_type_work.limit(),
+        );
+        crate::calibration::work(
+            "linked-interface",
+            linked_type_work.used(),
+            crate::types::TYPE_WORK_LIMIT,
+            linked_type_work.limit(),
+            true,
+        );
+        let elaboration_phase = crate::calibration::Phase::start("final-elaboration");
+        let final_budget =
+            modular_phase_work(crate::compiler_work::CompilationPhase::FinalElaboration);
+        let final_limit = final_budget.limit();
+        let mut elaborator =
+            Elaborator::for_module_program_with_budget(&validated_interfaces, final_budget)
+                .map_err(|(failure, used)| {
+                    FileFailure::from(PipelineFailure::Typing(TypeError::Internal(failure)))
+                        .with_phase_work(
+                            crate::compiler_work::CompilationPhase::FinalElaboration
+                                .assess(used)
+                                .incomplete(),
+                        )
+                })?;
         let typed = if select_effect_core {
             elaborator.synthesize_module_program_after_effect_scan(&validated_interfaces)
         } else {
             elaborator.synthesize_module_program(&validated_interfaces)
         }
-        .map_err(PipelineFailure::Typing)
-        .map_err(FileFailure::from)?;
+        .map_err(|failure| {
+            FileFailure::from(PipelineFailure::Typing(failure)).with_phase_work(
+                crate::compiler_work::CompilationPhase::FinalElaboration
+                    .assess(elaborator.measured_type_work())
+                    .incomplete(),
+            )
+        })?;
         let ty = IterativeTypeOwner::new(typed.ty);
         let type_display = registry.display_type(&ty);
-        let unchecked = elaborator
-            .finish(typed.node)
-            .map_err(TypeError::Internal)
-            .map_err(PipelineFailure::Typing)
-            .map_err(FileFailure::from)?;
+        let (unchecked, final_work) =
+            elaborator
+                .finish_with_work(typed.node)
+                .map_err(|(failure, used)| {
+                    FileFailure::from(PipelineFailure::Typing(TypeError::Internal(failure)))
+                        .with_phase_work(
+                            crate::compiler_work::CompilationPhase::FinalElaboration
+                                .assess(used)
+                                .incomplete(),
+                        )
+                })?;
+        crate::calibration::work(
+            "final-elaboration",
+            final_work,
+            crate::compiler_work::CompilationPhase::FinalElaboration.hard_limit(),
+            final_limit,
+            true,
+        );
         ::std::mem::drop(validated_interfaces);
-        (ty, type_display, unchecked)
+        elaboration_phase.finish(
+            Some(final_work),
+            crate::compiler_work::CompilationPhase::FinalElaboration.hard_limit(),
+            final_limit,
+        );
+        (ty, type_display, unchecked, final_work)
     };
+    compilation_work.final_elaboration =
+        Some(crate::compiler_work::CompilationPhase::FinalElaboration.assess(final_work));
     finish_observation(
         ty,
         type_display,
@@ -913,7 +1186,51 @@ where
         &module_sources,
         validator,
         evaluator,
+        compilation_work,
     )
+}
+
+// Select experimental overrides only for complete public phase owners. Exact
+// caller-provided and remaining sub-budgets retain their supplied capacities.
+fn modular_phase_work(phase: crate::compiler_work::CompilationPhase) -> TypeWorkBudget {
+    use crate::{calibration::DiagnosticOwner, compiler_work::CompilationPhase};
+    let owner = match phase {
+        CompilationPhase::SourceChecking | CompilationPhase::FinalElaboration => {
+            DiagnosticOwner::Structural
+        }
+        CompilationPhase::IndependentCore => DiagnosticOwner::Core,
+    };
+    TypeWorkBudget::with_limit(crate::calibration::limit(phase.hard_limit(), owner))
+}
+
+type ModularCoreResult = Result<
+    (ValidatedProgram, Option<crate::compiler_work::PhaseCost>),
+    (ValidationError, Option<crate::compiler_work::PhaseCost>),
+>;
+
+fn validate_modular_core(
+    program: UnvalidatedProgram,
+    sources: &[&SourceFile],
+    modules: &[(ModuleId, SourceId)],
+) -> ModularCoreResult {
+    let phase = crate::compiler_work::CompilationPhase::IndependentCore;
+    let validation_phase = crate::calibration::Phase::start("independent-effect-core");
+    let mut work = modular_phase_work(phase);
+    let result =
+        crate::core::validate::validate_modules_with_work(program, sources, modules, &mut work);
+    crate::calibration::work(
+        "independent-effect-core",
+        work.used(),
+        phase.hard_limit(),
+        work.limit(),
+        result.is_ok(),
+    );
+    if result.is_ok() {
+        validation_phase.finish(Some(work.used()), phase.hard_limit(), work.limit());
+    }
+    result
+        .map(|program| (program, Some(phase.assess(work.used()))))
+        .map_err(|failure| (failure, Some(phase.assess(work.used()).incomplete())))
 }
 
 // Keep later Effect-phase temporaries out of the source-checking caller's frame.
@@ -921,37 +1238,111 @@ fn finish_effect_observation(
     validated_interfaces: &ValidatedInterfaceProgram,
     sources: &[&SourceFile],
     module_sources: &[(ModuleId, SourceId)],
+    runtime: Option<&mut crate::foreign::runtime::ForeignRuntime>,
+    compilation_work: &mut crate::compiler_work::CompilationWork,
 ) -> Result<Observation, FileFailure> {
-    let mut elaborator = EffectElaborator::for_module_program(validated_interfaces)
-        .map_err(TypeError::Internal)
-        .map_err(PipelineFailure::Typing)
-        .map_err(FileFailure::from)?;
+    let elaboration_phase = crate::calibration::Phase::start("final-elaboration");
+    let final_budget = modular_phase_work(crate::compiler_work::CompilationPhase::FinalElaboration);
+    let final_limit = final_budget.limit();
+    let mut elaborator =
+        EffectElaborator::for_module_program_with_budget(validated_interfaces, final_budget)
+            .map_err(|(failure, used)| {
+                FileFailure::from(PipelineFailure::Typing(TypeError::Internal(failure)))
+                    .with_phase_work(
+                        crate::compiler_work::CompilationPhase::FinalElaboration
+                            .assess(used)
+                            .incomplete(),
+                    )
+            })?;
     let typed = elaborator
         .synthesize_effect_module_program(validated_interfaces)
-        .map_err(PipelineFailure::Typing)
-        .map_err(FileFailure::from)?;
+        .map_err(|failure| {
+            FileFailure::from(PipelineFailure::Typing(failure)).with_phase_work(
+                crate::compiler_work::CompilationPhase::FinalElaboration
+                    .assess(elaborator.measured_type_work())
+                    .incomplete(),
+            )
+        })?;
     let ty = IterativeTypeOwner::new(typed.ty);
     let type_display = validated_interfaces.registry().display_type(&ty);
-    let unchecked = elaborator
-        .finish(typed.node)
-        .map_err(TypeError::Internal)
-        .map_err(PipelineFailure::Typing)
-        .map_err(FileFailure::from)?;
-    let validated = validate_effect_modules(unchecked, sources, module_sources)
-        .map_err(PipelineFailure::Validation)
-        .map_err(FileFailure::from)?;
-    let evaluation = evaluate_effect(&validated)
-        .map_err(PipelineFailure::Runtime)
-        .map_err(FileFailure::from)?;
+    let (unchecked, final_work) =
+        elaborator
+            .finish_with_work(typed.node)
+            .map_err(|(failure, used)| {
+                FileFailure::from(PipelineFailure::Typing(TypeError::Internal(failure)))
+                    .with_phase_work(
+                        crate::compiler_work::CompilationPhase::FinalElaboration
+                            .assess(used)
+                            .incomplete(),
+                    )
+            })?;
+    compilation_work.final_elaboration =
+        Some(crate::compiler_work::CompilationPhase::FinalElaboration.assess(final_work));
+    crate::calibration::work(
+        "final-elaboration",
+        final_work,
+        crate::compiler_work::CompilationPhase::FinalElaboration.hard_limit(),
+        final_limit,
+        true,
+    );
+    elaboration_phase.finish(
+        Some(final_work),
+        crate::compiler_work::CompilationPhase::FinalElaboration.hard_limit(),
+        final_limit,
+    );
+    let validation_phase = crate::calibration::Phase::start("independent-effect-core");
+    let mut core_work = modular_phase_work(crate::compiler_work::CompilationPhase::IndependentCore);
+    let core_result = crate::core::validate::validate_effect_modules_with_work(
+        unchecked,
+        sources,
+        module_sources,
+        &mut core_work,
+    );
+    crate::calibration::work(
+        "independent-effect-core",
+        core_work.used(),
+        crate::compiler_work::CompilationPhase::IndependentCore.hard_limit(),
+        core_work.limit(),
+        core_result.is_ok(),
+    );
+    let validated = core_result.map_err(|failure| {
+        FileFailure::from(PipelineFailure::Validation(failure)).with_phase_work(
+            crate::compiler_work::CompilationPhase::IndependentCore
+                .assess(core_work.used())
+                .incomplete(),
+        )
+    })?;
+    compilation_work.independent_core =
+        Some(crate::compiler_work::CompilationPhase::IndependentCore.assess(core_work.used()));
+    validation_phase.finish(
+        Some(core_work.used()),
+        crate::compiler_work::CompilationPhase::IndependentCore.hard_limit(),
+        core_work.limit(),
+    );
+    let evaluation_phase = crate::calibration::Phase::start("evaluation");
+    let evaluation = match runtime {
+        Some(runtime) => crate::eval::evaluate_effect_with_foreign_runtime(&validated, runtime),
+        None => evaluate_effect(&validated),
+    }
+    .map_err(|failure| {
+        FileFailure::from(PipelineFailure::Runtime(failure))
+            .with_compilation_work(*compilation_work)
+    })?;
+    evaluation_phase.finish(None, 0, 0);
     let (value, heap) = evaluation.into_observation_parts();
     Ok(Observation {
         value,
         ty: ty.into_inner(),
         type_display: Some(type_display),
         _heap: heap,
+        compilation_work: *compilation_work,
     })
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "completed phase costs accompany the existing validation and evaluation handoff"
+)]
 fn finish_observation<V, E>(
     ty: IterativeTypeOwner,
     type_display: String,
@@ -960,27 +1351,35 @@ fn finish_observation<V, E>(
     module_sources: &[(ModuleId, SourceId)],
     validator: V,
     evaluator: E,
+    compilation_work: &mut crate::compiler_work::CompilationWork,
 ) -> Result<Observation, FileFailure>
 where
-    V: FnOnce(
-        UnvalidatedProgram,
-        &[&SourceFile],
-        &[(ModuleId, SourceId)],
-    ) -> Result<ValidatedProgram, ValidationError>,
+    V: FnOnce(UnvalidatedProgram, &[&SourceFile], &[(ModuleId, SourceId)]) -> ModularCoreResult,
     E: FnOnce(&ValidatedProgram) -> Result<Evaluation, RuntimeFailure>,
 {
-    let validated = validator(unchecked, sources, module_sources)
-        .map_err(PipelineFailure::Validation)
-        .map_err(FileFailure::from)?;
-    let evaluation = evaluator(&validated)
-        .map_err(PipelineFailure::Runtime)
-        .map_err(FileFailure::from)?;
+    let (validated, core_work) =
+        validator(unchecked, sources, module_sources).map_err(|(failure, cost)| {
+            let failure = FileFailure::from(PipelineFailure::Validation(failure))
+                .with_compilation_work(*compilation_work);
+            match cost {
+                Some(cost) => failure.with_phase_work(cost),
+                None => failure,
+            }
+        })?;
+    compilation_work.independent_core = core_work;
+    let evaluation_phase = crate::calibration::Phase::start("evaluation");
+    let evaluation = evaluator(&validated).map_err(|failure| {
+        FileFailure::from(PipelineFailure::Runtime(failure))
+            .with_compilation_work(*compilation_work)
+    })?;
+    evaluation_phase.finish(None, 0, 0);
     let (value, heap) = evaluation.into_observation_parts();
     Ok(Observation {
         value,
         ty: ty.into_inner(),
         type_display: Some(type_display),
         _heap: heap,
+        compilation_work: *compilation_work,
     })
 }
 
@@ -994,34 +1393,16 @@ fn internal_file_failure() -> FileFailure {
     )))
 }
 
-fn closed_entry_result(root: &Type) -> bool {
-    let mut work = vec![root];
-    while let Some(ty) = work.pop() {
-        match ty {
-            Type::Variable(_) | Type::Inference(_) | Type::Forall(_, _) => return false,
-            Type::Tuple(elements) => work.extend(elements),
-            Type::Application(function, argument) => {
-                work.push(argument);
-                work.push(function);
-            }
-            Type::Function(domain, codomain) => {
-                work.push(codomain);
-                work.push(domain);
-            }
-            Type::EffectfulFunction(domain, codomain) => {
-                if codomain.effects().tail().is_some() {
-                    return false;
-                }
-                for instance in codomain.effects().known() {
-                    work.extend(instance.arguments());
-                }
-                work.push(codomain.value());
-                work.push(domain);
-            }
-            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {}
-        }
-    }
-    true
+fn closed_entry_result(root: &Type, work: &mut TypeWorkBudget) -> Result<bool, ()> {
+    crate::types::visit_type_structure_with_budget(root, work, |node, _| {
+        Ok(matches!(
+            node,
+            crate::types::TypeStructureNode::Type(
+                Type::Variable(_) | Type::Inference(_) | Type::Forall(_, _)
+            ) | crate::types::TypeStructureNode::Tail(_)
+        ))
+    })
+    .map(|open| !open)
 }
 
 const fn projection_reason(error: ProjectionError) -> &'static str {
@@ -1039,6 +1420,8 @@ const fn projection_reason(error: ProjectionError) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use crate::core::validate_modules;
+    use crate::elaborate::check_module_with_budget;
     use std::{
         cell::{Cell, RefCell},
         fs,
@@ -1206,9 +1589,18 @@ mod tests {
             Box::new(Type::Inference(InferenceVariableId::new(0))),
         );
 
-        assert!(closed_entry_result(&closed));
-        assert!(!closed_entry_result(&rigid));
-        assert!(!closed_entry_result(&inference));
+        assert_eq!(
+            closed_entry_result(&closed, &mut TypeWorkBudget::unbounded()),
+            Ok(true)
+        );
+        assert_eq!(
+            closed_entry_result(&rigid, &mut TypeWorkBudget::unbounded()),
+            Ok(false)
+        );
+        assert_eq!(
+            closed_entry_result(&inference, &mut TypeWorkBudget::unbounded()),
+            Ok(false)
+        );
     }
 
     #[test]
@@ -1227,6 +1619,13 @@ mod tests {
                 RuntimeFailure::InvalidControlState
             ))
         ));
+        let work = failure.compilation_work().unwrap();
+        assert!(work.source_checking.unwrap().completed);
+        assert!(work.final_elaboration.unwrap().completed);
+        assert!(
+            work.independent_core.is_none(),
+            "injected validators do not manufacture measured work"
+        );
         assert!(failure.sources().is_empty());
         assert!(!failure.is_source_rejection());
     }
@@ -1280,6 +1679,71 @@ mod tests {
         };
         assert_eq!(error.reason(), crate::core::ValidationReason::Provenance);
         assert!(!evaluation_called.get());
+        let work = failure.compilation_work().unwrap();
+        assert!(work.source_checking.unwrap().completed);
+        assert!(work.final_elaboration.unwrap().completed);
+        assert!(work.independent_core.is_none());
+    }
+
+    #[test]
+    fn measured_core_rejection_retains_completed_prior_work_without_evaluating() {
+        let source = TestSource::write("main : Unit -> Int\nmain () = 42\n");
+        let failure = run_path_with_consumers_internal(
+            source.configuration(),
+            &mut InterfaceConstraintBudget::default(),
+            validate_interface_evidence_with_budget,
+            |unchecked, _, _| validate_modular_core(unchecked, &[], &[]),
+            |_| panic!("evaluation must not run after independent Core rejection"),
+            false,
+            None,
+        )
+        .expect_err("missing canonical sources fail validation");
+        assert!(matches!(
+            failure.pipeline_failure(),
+            Some(PipelineFailure::Validation(_))
+        ));
+        let work = failure.compilation_work().unwrap();
+        assert!(work.source_checking.unwrap().completed);
+        assert!(work.final_elaboration.unwrap().completed);
+        assert!(!work.independent_core.unwrap().completed);
+    }
+
+    #[test]
+    fn modular_core_debits_the_callers_prefix_with_exact_bounded_retry() {
+        let source = SourceFile::new("unit.ash", "()").unwrap();
+        let modules = [(ModuleId::new(0), source.id())];
+        let mut measured = TypeWorkBudget::with_limit(100_000);
+        crate::core::validate::validate_modules_with_work(
+            unit_program(&source),
+            &[&source],
+            &modules,
+            &mut measured,
+        )
+        .unwrap();
+        let exact = measured.used();
+        assert!(exact > 0);
+        let mut short = TypeWorkBudget::with_limit(7 + exact - 1);
+        short.charge(7).unwrap();
+        let failure = crate::core::validate::validate_modules_with_work(
+            unit_program(&source),
+            &[&source],
+            &modules,
+            &mut short,
+        )
+        .unwrap_err();
+        assert_eq!(failure.reason(), crate::core::ValidationReason::Resource);
+        assert!(short.used() >= 7 && short.used() < 7 + exact);
+        let mut retry = TypeWorkBudget::with_limit(7 + exact);
+        retry.charge(7).unwrap();
+        crate::core::validate::validate_modules_with_work(
+            unit_program(&source),
+            &[&source],
+            &modules,
+            &mut retry,
+        )
+        .unwrap();
+        assert_eq!(retry.used(), 7 + exact);
+        assert_eq!(retry.charge(1), Err(()));
     }
 
     fn deep_observation_type(depth: usize) -> Type {
@@ -1319,8 +1783,13 @@ mod tests {
                     program,
                     &[&source],
                     &[],
-                    |unchecked, _, _| validate_modules(unchecked, &[], &[]),
+                    |unchecked, _, _| {
+                        validate_modules(unchecked, &[], &[])
+                            .map(|p| (p, None))
+                            .map_err(|e| (e, None))
+                    },
                     |_| panic!("evaluation must not run after validation failure"),
+                    &mut Default::default(),
                 )
                 .expect_err("omitting the source rejects Core provenance");
                 assert!(matches!(
@@ -1349,8 +1818,13 @@ mod tests {
                     program,
                     &[&source],
                     &[],
-                    |unchecked, sources, _| crate::core::validate(unchecked, sources),
+                    |unchecked, sources, _| {
+                        crate::core::validate(unchecked, sources)
+                            .map(|p| (p, None))
+                            .map_err(|e| (e, None))
+                    },
                     |_| Err(RuntimeFailure::InvalidControlState),
+                    &mut Default::default(),
                 )
                 .expect_err("the injected evaluator failure is preserved");
                 assert!(matches!(
@@ -1413,6 +1887,10 @@ mod tests {
         );
         assert!(!core_validation_called.get());
         assert!(!evaluation_called.get());
+        let work = failure.compilation_work().unwrap();
+        assert!(work.source_checking.unwrap().completed);
+        assert!(work.final_elaboration.is_none());
+        assert!(work.independent_core.is_none());
     }
 
     #[test]
@@ -1530,19 +2008,17 @@ mod tests {
         // publication. The fixed graph order is base, short facade, first long
         // facade, second long facade, then entry; linking and linked evidence
         // validation contribute the final two additive boundaries.
-        // Producer authentication adds 329, 317, 317, 318, and 3 cells to
-        // checking. Shared capture visits remove 72, 72, 74, and 73 repeated
-        // nominal-retention cells from the four importers. Linking still
-        // contributes 149 cells; linked-evidence validation contributes 1660.
-        // Shared type-clone preflights remove 24 checking cells in the base
-        // and 12 in each importer, without changing retained type work.
-        // Omitting constructor control calls removes five capture-metadata
-        // admission cells from each of the four importers.
+        // Complete tagged argument traversal and inherited-owner roles are
+        // charged at each consuming boundary. Linking contributes 149 cells;
+        // independent linked-evidence validation contributes 1,769 cells.
+        // Immutable imported facts retain one original authority; each of the
+        // four import routes removes three duplicate retention cells.
+        // Final method admission removes four duplicate binder-map slots and
+        // one repeated Function-result kind queue; full child checks remain.
         const EXPECTED_BOUNDARIES: [usize; 13] = [
-            0, 1, 1_134, 1_692, 2_281, 2_839, 3_428, 3_978, 4_572, 5_552, 5_968, 6_117, 7_777,
+            0, 1, 1_138, 1_721, 2_335, 2_918, 3_532, 4_107, 4_726, 5_756, 6_208, 6_357, 8_126,
         ];
-        const EXACT_CONSTRAINT_WORK: usize =
-            6_876 + (329 + 317 + 317 + 318 + 3) - (72 + 72 + 74 + 73) - (24 + 4 * 12) - 4 * 5;
+        const EXACT_CONSTRAINT_WORK: usize = 8_126;
         let source = relational_interface_graph_source();
         let directory = source
             .0
@@ -1719,30 +2195,31 @@ mod tests {
     fn wide_interface_graph_records_the_exact_validation_prefix() {
         // Keep linking just below the unchanged graph limit so the witness
         // continues to isolate validation as the first over-budget phase.
-        const WIDTH: usize = (crate::interface::INTERFACE_CONSTRAINT_WORK_LIMIT - 29) / 65;
-        // Dependency checking is declaration 8W + checked facts 6W +
+        const WIDTH: usize = (crate::interface::INTERFACE_CONSTRAINT_WORK_LIMIT - 29) / 63;
+        // Dependency checking is declaration 6W + checked facts 6W +
         // selector admission 7W + summary freeze 10W + producer
         // authentication 7W. Both clone preflights charge their three type
         // cells to both ledgers. A monomorphic method
         // has no private binder payload and therefore adds no authority work.
-        const DEPENDENCY_CHECKED: usize = 38 * WIDTH;
+        const DEPENDENCY_CHECKED: usize = 36 * WIDTH;
         // Entry resolution adds complete-vector summary authentication 7W, first-route
         // interface retention 9W, and one dependency-route cell.
-        const ENTRY_RESOLVED: usize = 54 * WIDTH + 1;
+        const ENTRY_RESOLVED: usize = 52 * WIDTH + 1;
         // Entry checking additionally authenticates the W imported interface
         // arities and visits its one global declaration before interface and
         // method admission. Producer authentication adds three cells for
         // the entry's withheld main name.
-        const ENTRY_CHECKED: usize = 62 * WIDTH + 16;
+        const ENTRY_CHECKED: usize = 60 * WIDTH + 16;
         // Linking adds its W+7 graph/carrier prefix, W+5 structural
         // authentication, and the W-cell canonical-owner uniqueness index.
         // It does not repeat the 3W complete interface mirror owned by the
         // consuming evidence validator.
-        const LINKED: usize = 65 * WIDTH + 28;
-        // Validation owns a 49W+55 complete-application authentication suffix
+        const LINKED: usize = 63 * WIDTH + 28;
+        // Validation owns a 46W+55 complete-application authentication suffix
         // and publishes one private method-evidence capability only after the
-        // complete graph succeeds.
-        const VALIDATED: usize = 114 * WIDTH + 83;
+        // complete graph succeeds. Borrowed singleton binder coverage removes
+        // two map slots; the proved Function kind removes one repeated queue.
+        const VALIDATED: usize = 109 * WIDTH + 83;
         let source = TestSource::write(concat!(
             "import dependency as Dependency\n",
             "main : Unit -> Int\n",
@@ -1832,7 +2309,7 @@ mod tests {
         );
         const {
             assert!(LINKED < crate::interface::INTERFACE_CONSTRAINT_WORK_LIMIT);
-            assert!(LINKED + 65 >= crate::interface::INTERFACE_CONSTRAINT_WORK_LIMIT);
+            assert!(LINKED + 63 >= crate::interface::INTERFACE_CONSTRAINT_WORK_LIMIT);
             assert!(VALIDATED > crate::interface::INTERFACE_CONSTRAINT_WORK_LIMIT);
         }
     }
@@ -1965,6 +2442,7 @@ mod tests {
                     ty = Type::Application(Box::new(ty), Box::new(Type::Unit));
                 }
                 let observation = Observation {
+                    compilation_work: Default::default(),
                     value: Value::Unit,
                     ty,
                     type_display: Some("Wide<Unit>".to_owned()),
@@ -2003,6 +2481,7 @@ mod tests {
                 };
 
                 let value = Observation {
+                    compilation_work: Default::default(),
                     value: Value::Boolean(true),
                     ty: deep_type(),
                     type_display: Some("Wide<Unit>".to_owned()),
@@ -2012,6 +2491,7 @@ mod tests {
                 assert!(matches!(value.value(), Value::Boolean(true)));
 
                 let value = Observation {
+                    compilation_work: Default::default(),
                     value: Value::Boolean(true),
                     ty: deep_type(),
                     type_display: Some("Wide<Unit>".to_owned()),
@@ -2022,6 +2502,7 @@ mod tests {
                 assert!(matches!(value.value(), Value::Boolean(true)));
 
                 let ty = Observation {
+                    compilation_work: Default::default(),
                     value: Value::Unit,
                     ty: Type::Int,
                     type_display: Some("Int".to_owned()),
@@ -2031,6 +2512,7 @@ mod tests {
                 assert_eq!(ty, Type::Int);
 
                 let parts = Observation {
+                    compilation_work: Default::default(),
                     value: Value::Boolean(false),
                     ty: deep_type(),
                     type_display: Some("Wide<Unit>".to_owned()),

@@ -9,17 +9,25 @@ use std::{
 use crate::{
     kind::{
         CanonicalEnvironmentFailure, KindEnvironments, KindFailure, KindWorkLedger,
-        canonical_body_free_environments, canonical_type_variable_kind,
+        canonical_body_free_argument_environments, canonical_body_free_environments,
+        canonical_type_variable_kind,
     },
     module::ModuleId,
     resolved::{BinderId, ResolvedRegistry},
     source::{Origin, Span, discard_origin_iteratively},
     types::{
-        Kind, NominalTypeId, Type, TypeVariableId, TypeWorkBudget, charge_kind_with_charge,
-        clone_kinded_type_parameters_with_budget, clone_type_with_budget, discard_type_iteratively,
-        same_kinded_type_parameters_with_charge, same_type,
+        Kind, KindedArgument, NominalTypeId, Type, TypeVariableId, TypeWorkBudget,
+        charge_kind_with_charge, clone_kinded_argument_with_budget,
+        clone_kinded_type_parameters_with_budget, clone_type_with_budget,
+        discard_kinded_argument_iteratively, discard_type_iteratively,
+        extend_owner_type_children_with_charge, extend_owner_type_pairs_with_charge,
+        same_kinded_type_parameters_with_charge, same_type, visit_owner_type_children_with_charge,
+        visit_owner_type_pairs_with_charge,
     },
 };
+
+#[cfg(test)]
+use crate::types::type_arguments_to_kinded_with_budget;
 
 impl KindWorkLedger for InterfaceConstraintBudget {
     fn charge(&mut self, work: usize) -> Result<(), ()> {
@@ -41,18 +49,19 @@ impl Default for InterfaceConstraintBudget {
     fn default() -> Self {
         Self {
             used: 0,
-            limit: INTERFACE_CONSTRAINT_WORK_LIMIT,
+            limit: crate::calibration::limit(
+                INTERFACE_CONSTRAINT_WORK_LIMIT,
+                crate::calibration::DiagnosticOwner::Structural,
+            ),
         }
     }
 }
 
 impl InterfaceConstraintBudget {
-    #[cfg(test)]
     pub(crate) const fn with_limit(limit: usize) -> Self {
         Self { used: 0, limit }
     }
 
-    #[cfg(test)]
     pub(crate) const fn used(&self) -> usize {
         self.used
     }
@@ -70,85 +79,121 @@ impl InterfaceConstraintBudget {
         enum Task<'a> {
             Type(&'a Type),
             Sequence(std::slice::Iter<'a, Type>),
+            Argument(&'a KindedArgument),
         }
-
+        fn row_children<'a>(
+            row: &'a crate::types::EffectRow,
+            pending: &mut Vec<Task<'a>>,
+            budget: &mut InterfaceConstraintBudget,
+            extra: usize,
+        ) -> Result<(), ()> {
+            let members = row
+                .known()
+                .iter()
+                .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()));
+            let labels = row
+                .known()
+                .len()
+                .checked_add(row.tail().map_or(0, |tail| tail.lacks().len()))
+                .ok_or(())?;
+            budget.charge(
+                labels
+                    .checked_add(usize::from(row.tail().is_some()))
+                    .ok_or(())?,
+            )?;
+            let count = members.clone().try_fold(extra, |count, member| {
+                count.checked_add(member.arguments().len()).ok_or(())
+            })?;
+            budget.charge(count)?;
+            pending.try_reserve(count).map_err(|_| ())?;
+            for member in members {
+                pending.extend(member.arguments().iter().map(Task::Argument));
+            }
+            Ok(())
+        }
         self.charge(1)?;
         let mut pending = Vec::new();
         pending.try_reserve(1).map_err(|_| ())?;
         pending.push(Task::Type(root));
         while let Some(task) = pending.pop() {
-            let Task::Type(ty) = task else {
-                let Task::Sequence(mut remaining) = task else {
-                    unreachable!()
-                };
-                if let Some(next) = remaining.next() {
-                    self.charge(2)?;
-                    pending.try_reserve(2).map_err(|_| ())?;
-                    pending.push(Task::Sequence(remaining));
-                    pending.push(Task::Type(next));
+            match task {
+                Task::Sequence(mut remaining) => {
+                    if let Some(next) = remaining.next() {
+                        self.charge(2)?;
+                        pending.try_reserve(2).map_err(|_| ())?;
+                        pending.push(Task::Sequence(remaining));
+                        pending.push(Task::Type(next));
+                    }
                 }
-                continue;
-            };
-            self.charge(1)?;
-            match ty {
-                Type::Tuple(elements) => {
+                Task::Argument(KindedArgument::TypeArg(ty)) => pending.push(Task::Type(ty)),
+                Task::Argument(KindedArgument::RowArg(row)) => {
                     self.charge(1)?;
-                    pending.try_reserve(1).map_err(|_| ())?;
-                    pending.push(Task::Sequence(elements.iter()));
+                    row_children(row, &mut pending, self, 0)?;
                 }
-                Type::Application(function, argument) => {
-                    self.charge(2)?;
-                    pending.try_reserve(2).map_err(|_| ())?;
-                    pending.push(Task::Type(argument));
-                    pending.push(Task::Type(function));
-                }
-                Type::Function(domain, codomain) => {
-                    self.charge(2)?;
-                    pending.try_reserve(2).map_err(|_| ())?;
-                    pending.push(Task::Type(codomain));
-                    pending.push(Task::Type(domain));
-                }
-                Type::EffectfulFunction(domain, codomain) => {
-                    let rows = codomain.effects();
-                    self.charge(
-                        rows.known().len().saturating_add(
-                            rows.tail()
-                                .map_or(0, |tail| tail.lacks().len().saturating_add(1)),
-                        ),
-                    )?;
-                    let arguments = rows
-                        .known()
-                        .iter()
-                        .chain(rows.tail().into_iter().flat_map(|tail| tail.lacks()))
-                        .try_fold(0usize, |count, member| {
-                            count.checked_add(member.arguments().len()).ok_or(())
-                        })?;
-                    let children = arguments.checked_add(2).ok_or(())?;
-                    self.charge(children)?;
-                    pending.try_reserve(children).map_err(|_| ())?;
-                    for argument in codomain.effect_arguments() {
-                        pending.push(Task::Type(argument));
+                Task::Type(ty) => {
+                    self.charge(1)?;
+                    match ty {
+                        Type::Tuple(elements) => {
+                            self.charge(1)?;
+                            pending.try_reserve(1).map_err(|_| ())?;
+                            pending.push(Task::Sequence(elements.iter()));
+                        }
+                        Type::Application(left, right) | Type::Function(left, right) => {
+                            self.charge(2)?;
+                            pending.try_reserve(2).map_err(|_| ())?;
+                            pending.push(Task::Type(right));
+                            pending.push(Task::Type(left));
+                        }
+                        Type::ResourceApply(_, arguments) => {
+                            self.charge(arguments.len())?;
+                            pending.try_reserve(arguments.len()).map_err(|_| ())?;
+                            pending.extend(arguments.iter().map(Task::Argument));
+                        }
+                        Type::EffectfulFunction(domain, codomain) => {
+                            row_children(codomain.effects(), &mut pending, self, 2)?;
+                            pending.push(Task::Type(&codomain.value));
+                            pending.push(Task::Type(domain));
+                        }
+                        Type::Forall(parameters, body) => {
+                            self.charge(parameters.len().checked_add(1).ok_or(())?)?;
+                            for (_, kind) in parameters {
+                                charge_kind_with_charge(kind, || self.charge(1))?;
+                            }
+                            pending.try_reserve(1).map_err(|_| ())?;
+                            pending.push(Task::Type(body));
+                        }
+                        Type::Bytes
+                        | Type::String
+                        | Type::Int
+                        | Type::Bool
+                        | Type::Unit
+                        | Type::Nominal(_)
+                        | Type::Variable(_)
+                        | Type::Inference(_) => {}
                     }
-                    pending.push(Task::Type(&codomain.value));
-                    pending.push(Task::Type(domain));
                 }
-                Type::Forall(parameters, body) => {
-                    self.charge(parameters.len().saturating_add(1))?;
-                    for (_, kind) in parameters {
-                        charge_kind_with_charge(kind, || self.charge(1))?;
-                    }
-                    pending.try_reserve(1).map_err(|_| ())?;
-                    pending.push(Task::Type(body));
-                }
-                Type::Int
-                | Type::Bool
-                | Type::Unit
-                | Type::Nominal(_)
-                | Type::Variable(_)
-                | Type::Inference(_) => {}
             }
         }
         Ok(())
+    }
+
+    pub(crate) fn charge_argument(&mut self, root: &KindedArgument) -> Result<(), ()> {
+        match root {
+            KindedArgument::TypeArg(ty) => self.charge_type(ty),
+            KindedArgument::RowArg(row) => {
+                let mut pending = Vec::new();
+                crate::types::extend_owner_type_children_with_charge(
+                    std::iter::once(root),
+                    &mut pending,
+                    &mut |cells| self.charge(cells),
+                )?;
+                self.charge(1 + usize::from(row.tail().is_some()))?;
+                for ty in pending {
+                    self.charge_type(ty)?;
+                }
+                Ok(())
+            }
+        }
     }
 
     /// Authenticates Kind equality with one fallible paired worklist. Each
@@ -161,7 +206,7 @@ impl InterfaceConstraintBudget {
         pending.push((left, right));
         while let Some((left, right)) = pending.pop() {
             match (left, right) {
-                (Kind::Type, Kind::Type) => {}
+                (Kind::Type, Kind::Type) | (Kind::EffectRow, Kind::EffectRow) => {}
                 (
                     Kind::Arrow(left_domain, left_codomain),
                     Kind::Arrow(right_domain, right_codomain),
@@ -184,7 +229,69 @@ impl InterfaceConstraintBudget {
     pub(crate) fn charge_equal_types(&mut self, left: &Type, right: &Type) -> Result<bool, ()> {
         enum Task<'a> {
             Compare(&'a Type, &'a Type),
+            Arguments(&'a KindedArgument, &'a KindedArgument),
             Sequence(std::iter::Zip<std::slice::Iter<'a, Type>, std::slice::Iter<'a, Type>>),
+        }
+
+        fn row_pairs<'a>(
+            left: &'a crate::types::EffectRow,
+            right: &'a crate::types::EffectRow,
+            pending: &mut Vec<Task<'a>>,
+            budget: &mut InterfaceConstraintBudget,
+            extra: usize,
+        ) -> Result<bool, ()> {
+            let labels = left
+                .known()
+                .len()
+                .checked_add(left.tail().map_or(0, |tail| tail.lacks().len()))
+                .ok_or(())?;
+            budget.charge(
+                labels
+                    .checked_add(usize::from(left.tail().is_some()))
+                    .ok_or(())?,
+            )?;
+            if left.known().len() != right.known().len()
+                || match (left.tail(), right.tail()) {
+                    (None, None) => false,
+                    (Some(left), Some(right)) => {
+                        left.variable() != right.variable()
+                            || left.lacks().len() != right.lacks().len()
+                    }
+                    _ => true,
+                }
+            {
+                return Ok(false);
+            }
+            let members = left
+                .known()
+                .iter()
+                .chain(left.tail().into_iter().flat_map(|tail| tail.lacks()))
+                .zip(
+                    right
+                        .known()
+                        .iter()
+                        .chain(right.tail().into_iter().flat_map(|tail| tail.lacks())),
+                );
+            let mut count = extra;
+            for (left, right) in members.clone() {
+                if left.effect() != right.effect()
+                    || left.arguments().len() != right.arguments().len()
+                {
+                    return Ok(false);
+                }
+                count = count.checked_add(left.arguments().len()).ok_or(())?;
+            }
+            budget.charge(count)?;
+            pending.try_reserve(count).map_err(|_| ())?;
+            for (left, right) in members {
+                pending.extend(
+                    left.arguments()
+                        .iter()
+                        .zip(right.arguments())
+                        .map(|(left, right)| Task::Arguments(left, right)),
+                );
+            }
+            Ok(true)
         }
 
         self.charge(1)?;
@@ -193,23 +300,52 @@ impl InterfaceConstraintBudget {
         pending.push(Task::Compare(left, right));
         while let Some(task) = pending.pop() {
             let Task::Compare(left, right) = task else {
-                let Task::Sequence(mut remaining) = task else {
-                    unreachable!()
-                };
-                if let Some((left, right)) = remaining.next() {
-                    self.charge(2)?;
-                    pending.try_reserve(2).map_err(|_| ())?;
-                    pending.push(Task::Sequence(remaining));
-                    pending.push(Task::Compare(left, right));
+                match task {
+                    Task::Sequence(mut remaining) => {
+                        if let Some((left, right)) = remaining.next() {
+                            self.charge(2)?;
+                            pending.try_reserve(2).map_err(|_| ())?;
+                            pending.push(Task::Sequence(remaining));
+                            pending.push(Task::Compare(left, right));
+                        }
+                    }
+                    Task::Arguments(left, right) => match (left, right) {
+                        (KindedArgument::TypeArg(left), KindedArgument::TypeArg(right)) => {
+                            pending.push(Task::Compare(left, right))
+                        }
+                        (KindedArgument::RowArg(left), KindedArgument::RowArg(right)) => {
+                            self.charge(1)?;
+                            if !row_pairs(left, right, &mut pending, self, 0)? {
+                                return Ok(false);
+                            }
+                        }
+                        _ => return Ok(false),
+                    },
+                    Task::Compare(_, _) => unreachable!(),
                 }
                 continue;
             };
             self.charge(1)?;
             match (left, right) {
-                (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
+                (Type::Bytes, Type::Bytes)
+                | (Type::String, Type::String)
+                | (Type::Int, Type::Int)
+                | (Type::Bool, Type::Bool)
+                | (Type::Unit, Type::Unit) => {}
                 (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
                 (Type::Variable(left), Type::Variable(right)) if left == right => {}
                 (Type::Inference(left), Type::Inference(right)) if left == right => {}
+                (Type::ResourceApply(left_id, left), Type::ResourceApply(right_id, right))
+                    if left_id == right_id && left.len() == right.len() =>
+                {
+                    self.charge(left.len())?;
+                    pending.try_reserve(left.len()).map_err(|_| ())?;
+                    pending.extend(
+                        left.iter()
+                            .zip(right)
+                            .map(|(left, right)| Task::Arguments(left, right)),
+                    );
+                }
                 (
                     Type::Application(left_function, left_argument),
                     Type::Application(right_function, right_argument),
@@ -232,49 +368,8 @@ impl InterfaceConstraintBudget {
                     Type::EffectfulFunction(left_domain, left),
                     Type::EffectfulFunction(right_domain, right),
                 ) => {
-                    let left_rows = left.effects();
-                    let right_rows = right.effects();
-                    self.charge(
-                        left_rows.known().len().saturating_add(
-                            left_rows
-                                .tail()
-                                .map_or(0, |tail| tail.lacks().len().saturating_add(1)),
-                        ),
-                    )?;
-                    if left_rows.known().len() != right_rows.known().len()
-                        || match (left_rows.tail(), right_rows.tail()) {
-                            (None, None) => false,
-                            (Some(left), Some(right)) => {
-                                left.variable() != right.variable()
-                                    || left.lacks().len() != right.lacks().len()
-                            }
-                            _ => true,
-                        }
-                    {
+                    if !row_pairs(left.effects(), right.effects(), &mut pending, self, 2)? {
                         return Ok(false);
-                    }
-                    let left_members = left_rows
-                        .known()
-                        .iter()
-                        .chain(left_rows.tail().into_iter().flat_map(|tail| tail.lacks()));
-                    let right_members = right_rows
-                        .known()
-                        .iter()
-                        .chain(right_rows.tail().into_iter().flat_map(|tail| tail.lacks()));
-                    let mut arguments = 0usize;
-                    for (left, right) in left_members.zip(right_members) {
-                        if left.effect() != right.effect()
-                            || left.arguments().len() != right.arguments().len()
-                        {
-                            return Ok(false);
-                        }
-                        arguments = arguments.checked_add(left.arguments().len()).ok_or(())?;
-                    }
-                    let children = arguments.checked_add(2).ok_or(())?;
-                    self.charge(children)?;
-                    pending.try_reserve(children).map_err(|_| ())?;
-                    for (left, right) in left.effect_arguments().zip(right.effect_arguments()) {
-                        pending.push(Task::Compare(left, right));
                     }
                     pending.push(Task::Compare(&left.value, &right.value));
                     pending.push(Task::Compare(left_domain, right_domain));
@@ -329,14 +424,14 @@ pub(crate) fn implementation_prerequisite_terminates(
 /// Checks a generic prerequisite against canonical selection-key tuples while
 /// retaining full-application groundness as the earlier exemption.
 pub(crate) fn implementation_prerequisite_selection_key_terminates(
-    complete_prerequisite: &[&Type],
-    prerequisite_key: &[&Type],
-    head_key: &[&Type],
+    complete_prerequisite: &[&KindedArgument],
+    prerequisite_key: &[&KindedArgument],
+    head_key: &[&KindedArgument],
     budget: &mut InterfaceConstraintBudget,
 ) -> Result<bool, ()> {
     let mut ground = true;
     for argument in complete_prerequisite {
-        if type_contains_any_variable(argument, budget)? {
+        if argument_contains_any_variable(argument, budget)? {
             ground = false;
         }
     }
@@ -350,10 +445,15 @@ pub(crate) fn implementation_prerequisite_selection_key_terminates(
     let mut any_strict = false;
     for (prerequisite, head) in prerequisite_key.iter().zip(head_key) {
         budget.charge(1)?;
-        if same_type_with_constraint_budget(prerequisite, head, budget)? {
+        if same_kinded_argument_with_constraint_budget(prerequisite, head, budget)? {
             continue;
         }
         let mut pending = Vec::new();
+        let (KindedArgument::TypeArg(prerequisite), KindedArgument::TypeArg(head)) =
+            (*prerequisite, *head)
+        else {
+            return Ok(false);
+        };
         schedule_type_children(head, &mut pending, budget)?;
         let mut strict = false;
         while let Some(candidate) = pending.pop() {
@@ -369,6 +469,36 @@ pub(crate) fn implementation_prerequisite_selection_key_terminates(
         any_strict = true;
     }
     Ok(any_strict)
+}
+
+fn argument_contains_any_variable(
+    root: &KindedArgument,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<bool, ()> {
+    let mut types = Vec::new();
+    let mut has_tail = false;
+    crate::types::visit_owner_components_with_charge(
+        std::iter::once(root),
+        &mut |cells| budget.charge(cells),
+        |ty, _| {
+            types.try_reserve(1).map_err(|_| ())?;
+            types.push(ty);
+            Ok(())
+        },
+        |_, _| {
+            has_tail = true;
+            Ok(())
+        },
+    )?;
+    if has_tail {
+        return Ok(true);
+    }
+    for ty in types {
+        if type_contains_any_variable(ty, budget)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn type_contains_any_variable(
@@ -388,6 +518,13 @@ fn type_contains_any_variable(
                 pending.try_reserve(elements.len()).map_err(|_| ())?;
                 pending.extend(elements.iter().rev());
             }
+            Type::ResourceApply(_, arguments) => {
+                if extend_owner_type_children_with_charge(arguments, &mut pending, &mut |cells| {
+                    budget.charge(cells)
+                })? {
+                    return Ok(true);
+                }
+            }
             Type::Application(function, argument) => {
                 budget.charge(2)?;
                 pending.try_reserve(2).map_err(|_| ())?;
@@ -404,10 +541,15 @@ fn type_contains_any_variable(
                 if codomain.tail_variable().is_some() {
                     return Ok(true);
                 }
-                let children = codomain.effect_argument_count().saturating_add(2);
-                budget.charge(children)?;
-                pending.try_reserve(children).map_err(|_| ())?;
-                codomain.extend_effect_arguments(&mut pending);
+                budget.charge(2)?;
+                pending.try_reserve(2).map_err(|_| ())?;
+                if extend_owner_type_children_with_charge(
+                    codomain.effect_arguments(),
+                    &mut pending,
+                    &mut |cells| budget.charge(cells),
+                )? {
+                    return Ok(true);
+                }
                 pending.push(&codomain.value);
                 pending.push(domain);
             }
@@ -419,7 +561,13 @@ fn type_contains_any_variable(
                 pending.try_reserve(1).map_err(|_| ())?;
                 pending.push(body);
             }
-            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Inference(_) => {}
+            Type::Bytes
+            | Type::String
+            | Type::Int
+            | Type::Bool
+            | Type::Unit
+            | Type::Nominal(_)
+            | Type::Inference(_) => {}
         }
     }
     Ok(false)
@@ -436,6 +584,11 @@ fn schedule_type_children<'a>(
             pending.try_reserve(elements.len()).map_err(|_| ())?;
             pending.extend(elements.iter().rev());
         }
+        Type::ResourceApply(_, arguments) => {
+            extend_owner_type_children_with_charge(arguments, pending, &mut |cells| {
+                budget.charge(cells)
+            })?;
+        }
         Type::Application(function, argument) => {
             budget.charge(2)?;
             pending.try_reserve(2).map_err(|_| ())?;
@@ -449,10 +602,13 @@ fn schedule_type_children<'a>(
             pending.push(domain);
         }
         Type::EffectfulFunction(domain, codomain) => {
-            let children = codomain.effect_argument_count().saturating_add(2);
-            budget.charge(children)?;
-            pending.try_reserve(children).map_err(|_| ())?;
-            codomain.extend_effect_arguments(pending);
+            budget.charge(2)?;
+            pending.try_reserve(2).map_err(|_| ())?;
+            extend_owner_type_children_with_charge(
+                codomain.effect_arguments(),
+                pending,
+                &mut |cells| budget.charge(cells),
+            )?;
             pending.push(&codomain.value);
             pending.push(domain);
         }
@@ -464,7 +620,9 @@ fn schedule_type_children<'a>(
             pending.try_reserve(1).map_err(|_| ())?;
             pending.push(body);
         }
-        Type::Int
+        Type::Bytes
+        | Type::String
+        | Type::Int
         | Type::Bool
         | Type::Unit
         | Type::Nominal(_)
@@ -479,7 +637,11 @@ pub(crate) fn same_type_with_constraint_budget(
     right: &Type,
     budget: &mut InterfaceConstraintBudget,
 ) -> Result<bool, ()> {
-    same_type_with_constraint_budget_inner(left, right, budget, None)
+    same_type_with_constraint_budget_inner(
+        ConstraintComparisonRoot::Types(left, right),
+        budget,
+        None,
+    )
 }
 
 #[derive(Debug, Default)]
@@ -522,6 +684,11 @@ pub(crate) fn collect_type_nominal_identities_with_constraint_budget(
     while let Some(ty) = pending.pop() {
         match ty {
             Type::Nominal(id) => nominal_identities.observe(*id, budget)?,
+            Type::ResourceApply(_, arguments) => {
+                extend_owner_type_children_with_charge(arguments, &mut pending, &mut |cells| {
+                    budget.charge(cells)
+                })?;
+            }
             Type::Application(function, argument) | Type::Function(function, argument) => {
                 budget.charge(2)?;
                 pending.try_reserve(2).map_err(|_| ())?;
@@ -529,10 +696,13 @@ pub(crate) fn collect_type_nominal_identities_with_constraint_budget(
                 pending.push(function);
             }
             Type::EffectfulFunction(domain, codomain) => {
-                let children = codomain.effect_argument_count().saturating_add(2);
-                budget.charge(children)?;
-                pending.try_reserve(children).map_err(|_| ())?;
-                codomain.extend_effect_arguments(&mut pending);
+                budget.charge(2)?;
+                pending.try_reserve(2).map_err(|_| ())?;
+                extend_owner_type_children_with_charge(
+                    codomain.effect_arguments(),
+                    &mut pending,
+                    &mut |cells| budget.charge(cells),
+                )?;
                 pending.push(&codomain.value);
                 pending.push(domain);
             }
@@ -546,7 +716,13 @@ pub(crate) fn collect_type_nominal_identities_with_constraint_budget(
                 pending.try_reserve(1).map_err(|_| ())?;
                 pending.push(body);
             }
-            Type::Int | Type::Bool | Type::Unit | Type::Variable(_) | Type::Inference(_) => {}
+            Type::Bytes
+            | Type::String
+            | Type::Int
+            | Type::Bool
+            | Type::Unit
+            | Type::Variable(_)
+            | Type::Inference(_) => {}
         }
     }
     Ok(())
@@ -558,20 +734,131 @@ pub(crate) fn same_type_with_constraint_budget_observing_nominals(
     budget: &mut InterfaceConstraintBudget,
     nominal_identities: &mut MatchedNominalIdentities,
 ) -> Result<bool, ()> {
-    same_type_with_constraint_budget_inner(left, right, budget, Some(nominal_identities))
+    same_type_with_constraint_budget_inner(
+        ConstraintComparisonRoot::Types(left, right),
+        budget,
+        Some(nominal_identities),
+    )
+}
+
+enum ConstraintComparisonRoot<'a> {
+    Types(&'a Type, &'a Type),
+    Arguments(&'a KindedArgument, &'a KindedArgument),
+}
+
+pub(crate) fn same_kinded_argument_with_constraint_budget(
+    left: &KindedArgument,
+    right: &KindedArgument,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<bool, ()> {
+    same_type_with_constraint_budget_inner(
+        ConstraintComparisonRoot::Arguments(left, right),
+        budget,
+        None,
+    )
+}
+
+pub(crate) fn same_kinded_argument_with_constraint_budget_observing_nominals(
+    left: &KindedArgument,
+    right: &KindedArgument,
+    budget: &mut InterfaceConstraintBudget,
+    nominals: &mut MatchedNominalIdentities,
+) -> Result<bool, ()> {
+    same_type_with_constraint_budget_inner(
+        ConstraintComparisonRoot::Arguments(left, right),
+        budget,
+        Some(nominals),
+    )
+}
+
+pub(crate) fn collect_argument_nominal_identities_with_constraint_budget(
+    root: &KindedArgument,
+    budget: &mut InterfaceConstraintBudget,
+    nominals: &mut MatchedNominalIdentities,
+) -> Result<(), ()> {
+    let mut pending = Vec::new();
+    extend_owner_type_children_with_charge(std::iter::once(root), &mut pending, &mut |cells| {
+        budget.charge(cells)
+    })?;
+    for ty in pending {
+        collect_type_nominal_identities_with_constraint_budget(ty, budget, nominals)?;
+    }
+    Ok(())
 }
 
 fn same_type_with_constraint_budget_inner(
-    left: &Type,
-    right: &Type,
+    root: ConstraintComparisonRoot<'_>,
     budget: &mut InterfaceConstraintBudget,
     mut nominal_identities: Option<&mut MatchedNominalIdentities>,
 ) -> Result<bool, ()> {
+    enum Task<'a> {
+        Types(&'a Type, &'a Type),
+        Arguments(&'a KindedArgument, &'a KindedArgument),
+    }
     budget.charge(1)?;
     let mut pending = Vec::new();
     pending.try_reserve(1).map_err(|_| ())?;
-    pending.push((left, right));
-    while let Some((left, right)) = pending.pop() {
+    pending.push(match root {
+        ConstraintComparisonRoot::Types(left, right) => Task::Types(left, right),
+        ConstraintComparisonRoot::Arguments(left, right) => Task::Arguments(left, right),
+    });
+    while let Some(task) = pending.pop() {
+        let Task::Types(left, right) = task else {
+            let Task::Arguments(left, right) = task else {
+                unreachable!()
+            };
+            match (left, right) {
+                (KindedArgument::TypeArg(left), KindedArgument::TypeArg(right)) => {
+                    pending.push(Task::Types(left, right))
+                }
+                (KindedArgument::RowArg(left), KindedArgument::RowArg(right)) => {
+                    budget.charge(1)?;
+                    if left.known().len() != right.known().len()
+                        || match (left.tail(), right.tail()) {
+                            (None, None) => false,
+                            (Some(left), Some(right)) => {
+                                left.variable() != right.variable()
+                                    || left.lacks().len() != right.lacks().len()
+                            }
+                            _ => true,
+                        }
+                    {
+                        return Ok(false);
+                    }
+                    let pairs = left
+                        .known()
+                        .iter()
+                        .chain(left.tail().into_iter().flat_map(|tail| tail.lacks()))
+                        .zip(
+                            right
+                                .known()
+                                .iter()
+                                .chain(right.tail().into_iter().flat_map(|tail| tail.lacks())),
+                        );
+                    for (left, right) in pairs {
+                        budget.charge(1)?;
+                        if left.effect() != right.effect()
+                            || left.arguments().len() != right.arguments().len()
+                        {
+                            return Ok(false);
+                        }
+                        budget.charge(left.arguments().len())?;
+                        pending
+                            .try_reserve(left.arguments().len())
+                            .map_err(|_| ())?;
+                        pending.extend(
+                            left.arguments()
+                                .iter()
+                                .zip(right.arguments())
+                                .rev()
+                                .map(|(left, right)| Task::Arguments(left, right)),
+                        );
+                    }
+                }
+                _ => return Ok(false),
+            }
+            continue;
+        };
         budget.charge(1)?;
         if let (Some(left_function), Some(right_function)) =
             (left.function_view(), right.function_view())
@@ -641,16 +928,21 @@ fn same_type_with_constraint_budget_inner(
                             .arguments()
                             .iter()
                             .zip(right_member.arguments())
-                            .rev(),
+                            .rev()
+                            .map(|(left, right)| Task::Arguments(left, right)),
                     );
                 }
             }
-            pending.push((left_function.value(), right_function.value()));
-            pending.push((left_function.domain(), right_function.domain()));
+            pending.push(Task::Types(left_function.value(), right_function.value()));
+            pending.push(Task::Types(left_function.domain(), right_function.domain()));
             continue;
         }
         match (left, right) {
-            (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
+            (Type::Bytes, Type::Bytes)
+            | (Type::String, Type::String)
+            | (Type::Int, Type::Int)
+            | (Type::Bool, Type::Bool)
+            | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {
                 if let Some(nominal_identities) = nominal_identities.as_deref_mut() {
                     nominal_identities.observe(*left, budget)?;
@@ -658,14 +950,26 @@ fn same_type_with_constraint_budget_inner(
             }
             (Type::Variable(left), Type::Variable(right)) if left == right => {}
             (Type::Inference(left), Type::Inference(right)) if left == right => {}
+            (Type::ResourceApply(left_id, left), Type::ResourceApply(right_id, right))
+                if left_id == right_id && left.len() == right.len() =>
+            {
+                budget.charge(left.len())?;
+                pending.try_reserve(left.len()).map_err(|_| ())?;
+                pending.extend(
+                    left.iter()
+                        .zip(right)
+                        .rev()
+                        .map(|(left, right)| Task::Arguments(left, right)),
+                );
+            }
             (
                 Type::Application(left_function, left_argument),
                 Type::Application(right_function, right_argument),
             ) => {
                 budget.charge(2)?;
                 pending.try_reserve(2).map_err(|_| ())?;
-                pending.push((left_argument, right_argument));
-                pending.push((left_function, right_function));
+                pending.push(Task::Types(left_argument, right_argument));
+                pending.push(Task::Types(left_function, right_function));
             }
             (Type::Forall(left_parameters, left), Type::Forall(right_parameters, right)) => {
                 if !same_kinded_type_parameters_with_charge(
@@ -677,12 +981,17 @@ fn same_type_with_constraint_budget_inner(
                 }
                 budget.charge(1)?;
                 pending.try_reserve(1).map_err(|_| ())?;
-                pending.push((left, right));
+                pending.push(Task::Types(left, right));
             }
             (Type::Tuple(left), Type::Tuple(right)) if left.len() == right.len() => {
                 budget.charge(left.len())?;
                 pending.try_reserve(left.len()).map_err(|_| ())?;
-                pending.extend(left.iter().zip(right).rev());
+                pending.extend(
+                    left.iter()
+                        .zip(right)
+                        .rev()
+                        .map(|(left, right)| Task::Types(left, right)),
+                );
             }
             (
                 Type::Function(left_domain, left_codomain),
@@ -690,8 +999,8 @@ fn same_type_with_constraint_budget_inner(
             ) => {
                 budget.charge(2)?;
                 pending.try_reserve(2).map_err(|_| ())?;
-                pending.push((left_codomain, right_codomain));
-                pending.push((left_domain, right_domain));
+                pending.push(Task::Types(left_codomain, right_codomain));
+                pending.push(Task::Types(left_domain, right_domain));
             }
             _ => return Ok(false),
         }
@@ -791,13 +1100,16 @@ pub(crate) fn match_implementation_head_in_environment(
     candidate: &Type,
     goal: &Type,
 ) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure> {
-    match_implementation_application_head_in_environment(
+    match_type_application_head_with_goal_validation(
         registry,
         operation,
         goal_environments,
         candidate_parameters,
         &[candidate],
         &[goal],
+        HeadMatchPolicy::Implementation {
+            validate_goal: true,
+        },
     )
 }
 
@@ -806,8 +1118,8 @@ pub(crate) fn match_implementation_application_head_in_environment(
     operation: InterfaceOperationWork<'_>,
     goal_environments: &KindEnvironments<'_>,
     candidate_parameters: &[TypeVariableId],
-    candidate: &[&Type],
-    goal: &[&Type],
+    candidate: &[&KindedArgument],
+    goal: &[&KindedArgument],
 ) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure> {
     match_implementation_application_head_with_goal_validation(
         registry,
@@ -816,15 +1128,46 @@ pub(crate) fn match_implementation_application_head_in_environment(
         candidate_parameters,
         candidate,
         goal,
-        true,
+        HeadMatchPolicy::Implementation {
+            validate_goal: true,
+        },
     )
+}
+
+/// Matches a scoped family while keeping every variable except its payload rigid.
+/// The original family header and complete owner actuals are already authenticated.
+pub(crate) fn match_provider_family_application_head_in_environment(
+    registry: &ResolvedRegistry,
+    operation: InterfaceOperationWork<'_>,
+    goal_environments: &KindEnvironments<'_>,
+    payload: TypeVariableId,
+    candidate: &[&KindedArgument],
+    goal: &[&KindedArgument],
+) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure> {
+    match_implementation_application_head_with_goal_validation(
+        registry,
+        operation,
+        goal_environments,
+        &[payload],
+        candidate,
+        goal,
+        HeadMatchPolicy::ScopedFamily {
+            validate_goal: true,
+        },
+    )
+}
+
+#[derive(Clone, Copy)]
+enum HeadMatchPolicy {
+    Implementation { validate_goal: bool },
+    ScopedFamily { validate_goal: bool },
 }
 
 /// Capability for one exact goal vector whose complete roots have already
 /// been authenticated against its canonical kind environments.
 pub(crate) struct CanonicalImplementationGoal<'registry, 'goal> {
     environments: KindEnvironments<'registry>,
-    roots: &'goal [&'goal Type],
+    roots: &'goal [&'goal KindedArgument],
 }
 
 /// Authenticates one exact goal vector and binds the roots to the resulting
@@ -833,14 +1176,14 @@ pub(crate) struct CanonicalImplementationGoal<'registry, 'goal> {
 pub(crate) fn authenticate_implementation_application_goal<'registry, 'goal>(
     registry: &'registry ResolvedRegistry,
     operation: InterfaceOperationWork<'_>,
-    roots: &'goal [&'goal Type],
+    roots: &'goal [&'goal KindedArgument],
 ) -> Result<CanonicalImplementationGoal<'registry, 'goal>, HeadMatchFailure> {
     let InterfaceOperationWork {
         span,
         constraint_budget,
         type_budget,
     } = operation;
-    let environments = canonical_body_free_environments(
+    let environments = canonical_body_free_argument_environments(
         registry,
         &[],
         roots,
@@ -861,7 +1204,7 @@ pub(crate) fn match_implementation_application_head_against_canonical_goal(
     registry: &ResolvedRegistry,
     operation: InterfaceOperationWork<'_>,
     candidate_parameters: &[TypeVariableId],
-    candidate: &[&Type],
+    candidate: &[&KindedArgument],
     goal: &CanonicalImplementationGoal<'_, '_>,
 ) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure> {
     match_implementation_application_head_with_goal_validation(
@@ -871,18 +1214,84 @@ pub(crate) fn match_implementation_application_head_against_canonical_goal(
         candidate_parameters,
         candidate,
         goal.roots,
-        false,
+        HeadMatchPolicy::Implementation {
+            validate_goal: false,
+        },
+    )
+}
+
+/// Reuses an authenticated complete goal for exact scoped-family matching.
+pub(crate) fn match_provider_family_application_head_against_canonical_goal(
+    registry: &ResolvedRegistry,
+    operation: InterfaceOperationWork<'_>,
+    payload: TypeVariableId,
+    candidate: &[&KindedArgument],
+    goal: &CanonicalImplementationGoal<'_, '_>,
+) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure> {
+    match_implementation_application_head_with_goal_validation(
+        registry,
+        operation,
+        &goal.environments,
+        &[payload],
+        candidate,
+        goal.roots,
+        HeadMatchPolicy::ScopedFamily {
+            validate_goal: false,
+        },
     )
 }
 
 fn match_implementation_application_head_with_goal_validation(
     registry: &ResolvedRegistry,
     operation: InterfaceOperationWork<'_>,
+    environments: &KindEnvironments<'_>,
+    candidate_parameters: &[TypeVariableId],
+    candidate: &[&KindedArgument],
+    goal: &[&KindedArgument],
+    policy: HeadMatchPolicy,
+) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure> {
+    if candidate.len() != goal.len() {
+        return Err(HeadMatchFailure::InvalidState);
+    }
+    let mut left = Vec::new();
+    let mut right = Vec::new();
+    for (candidate, goal) in candidate.iter().zip(goal) {
+        let equal = visit_owner_type_pairs_with_charge(
+            std::slice::from_ref(*candidate),
+            std::slice::from_ref(*goal),
+            &mut |units| operation.constraint_budget.charge(units),
+            |candidate, goal, _| {
+                left.try_reserve(1).map_err(|_| ())?;
+                right.try_reserve(1).map_err(|_| ())?;
+                left.push(candidate);
+                right.push(goal);
+                Ok(())
+            },
+        )
+        .map_err(|()| HeadMatchFailure::ConstraintResource)?;
+        if !equal {
+            return Ok(None);
+        }
+    }
+    match_type_application_head_with_goal_validation(
+        registry,
+        operation,
+        environments,
+        candidate_parameters,
+        &left,
+        &right,
+        policy,
+    )
+}
+
+fn match_type_application_head_with_goal_validation(
+    registry: &ResolvedRegistry,
+    operation: InterfaceOperationWork<'_>,
     goal_environments: &KindEnvironments<'_>,
     candidate_parameters: &[TypeVariableId],
     candidate: &[&Type],
     goal: &[&Type],
-    validate_goal: bool,
+    policy: HeadMatchPolicy,
 ) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure> {
     if candidate.len() != goal.len() {
         return Err(HeadMatchFailure::InvalidState);
@@ -898,7 +1307,7 @@ fn match_implementation_application_head_with_goal_validation(
         goal,
         constraint_budget,
         type_budget,
-        validate_goal,
+        policy,
         |parameter, binding, constraint_budget, _type_budget| {
             let expected =
                 canonical_type_variable_kind(registry, parameter, span, constraint_budget)
@@ -945,7 +1354,9 @@ where
         &[goal],
         constraint_budget,
         type_budget,
-        true,
+        HeadMatchPolicy::Implementation {
+            validate_goal: true,
+        },
         |_, _, _, _| Ok(()),
     )
 }
@@ -956,7 +1367,7 @@ fn match_implementation_head_with<I, F>(
     goal: &[&Type],
     constraint_budget: &mut InterfaceConstraintBudget,
     type_budget: &mut TypeWorkBudget,
-    validate_goal: bool,
+    policy: HeadMatchPolicy,
     mut authenticate_binding: F,
 ) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure>
 where
@@ -994,9 +1405,20 @@ where
     }
 
     for candidate in candidate {
-        validate_match_type(candidate, Some(&positions), constraint_budget)?;
+        let parameters = match policy {
+            HeadMatchPolicy::Implementation { .. } => Some(&positions),
+            HeadMatchPolicy::ScopedFamily { .. } => None,
+        };
+        validate_match_type(candidate, parameters, constraint_budget)?;
     }
-    if validate_goal {
+    if matches!(
+        policy,
+        HeadMatchPolicy::Implementation {
+            validate_goal: true
+        } | HeadMatchPolicy::ScopedFamily {
+            validate_goal: true
+        }
+    ) {
         for goal in goal {
             validate_match_type(goal, None, constraint_budget)?;
         }
@@ -1023,10 +1445,17 @@ where
             .charge(1)
             .map_err(|()| HeadMatchFailure::ConstraintResource)?;
         if let Type::Variable(variable) = candidate {
-            let position = positions
-                .get(variable)
-                .copied()
-                .ok_or(HeadMatchFailure::InvalidState)?;
+            let Some(position) = positions.get(variable).copied() else {
+                if !matches!(policy, HeadMatchPolicy::ScopedFamily { .. }) {
+                    return Err(HeadMatchFailure::InvalidState);
+                }
+                if !matches!(goal, Type::Variable(_))
+                    || !match_types_equal(candidate, goal, constraint_budget)?
+                {
+                    return Ok(None);
+                }
+                continue;
+            };
             if let Some(previous) = bindings[position] {
                 if !match_types_equal(previous, goal, constraint_budget)? {
                     return Ok(None);
@@ -1040,7 +1469,7 @@ where
         if let (Some(candidate_function), Some(goal_function)) =
             (candidate.function_view(), goal.function_view())
         {
-            let effect_pairs = match (candidate_function.effects(), goal_function.effects()) {
+            let _effect_pairs = match (candidate_function.effects(), goal_function.effects()) {
                 (None, None) => 0,
                 (Some(candidate), Some(goal))
                     if candidate.tail().is_none()
@@ -1063,16 +1492,25 @@ where
                 _ => return Ok(None),
             };
             constraint_budget
-                .charge(effect_pairs.saturating_add(2))
+                .charge(2)
                 .map_err(|()| HeadMatchFailure::ConstraintResource)?;
             pending
-                .try_reserve(effect_pairs.saturating_add(2))
+                .try_reserve(2)
                 .map_err(|_| HeadMatchFailure::ConstraintResource)?;
             if let (Some(candidate), Some(goal)) =
                 (candidate_function.effects(), goal_function.effects())
             {
                 for (candidate, goal) in candidate.known().iter().zip(goal.known()).rev() {
-                    pending.extend(candidate.arguments().iter().zip(goal.arguments()).rev());
+                    if !extend_owner_type_pairs_with_charge(
+                        candidate.arguments(),
+                        goal.arguments(),
+                        &mut pending,
+                        &mut |cells| constraint_budget.charge(cells),
+                    )
+                    .map_err(|()| HeadMatchFailure::ConstraintResource)?
+                    {
+                        return Ok(None);
+                    }
                 }
             }
             pending.push((candidate_function.value(), goal_function.value()));
@@ -1080,8 +1518,26 @@ where
             continue;
         }
         match (candidate, goal) {
-            (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
+            (Type::Bytes, Type::Bytes)
+            | (Type::String, Type::String)
+            | (Type::Int, Type::Int)
+            | (Type::Bool, Type::Bool)
+            | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(candidate), Type::Nominal(goal)) if candidate == goal => {}
+            (Type::ResourceApply(candidate_id, candidate), Type::ResourceApply(goal_id, goal))
+                if candidate_id == goal_id =>
+            {
+                if !extend_owner_type_pairs_with_charge(
+                    candidate,
+                    goal,
+                    &mut pending,
+                    &mut |cells| constraint_budget.charge(cells),
+                )
+                .map_err(|()| HeadMatchFailure::ConstraintResource)?
+                {
+                    return Ok(None);
+                }
+            }
             (
                 Type::Application(candidate_function, candidate_argument),
                 Type::Application(goal_function, goal_argument),
@@ -1150,23 +1606,23 @@ fn validate_match_type(
             if effects.is_some_and(|effects| effects.tail().is_some()) {
                 return Err(HeadMatchFailure::InvalidState);
             }
-            let effect_arguments = effects.map_or(0, |effects| {
-                effects
-                    .known()
-                    .iter()
-                    .map(|member| member.arguments().len())
-                    .sum()
-            });
-            let retained = effect_arguments.saturating_add(2);
             budget
-                .charge(retained)
+                .charge(2)
                 .map_err(|()| HeadMatchFailure::ConstraintResource)?;
             pending
-                .try_reserve(retained)
+                .try_reserve(2)
                 .map_err(|_| HeadMatchFailure::ConstraintResource)?;
             if let Some(effects) = effects {
                 for member in effects.known().iter().rev() {
-                    pending.extend(member.arguments().iter().rev());
+                    if extend_owner_type_children_with_charge(
+                        member.arguments(),
+                        &mut pending,
+                        &mut |cells| budget.charge(cells),
+                    )
+                    .map_err(|()| HeadMatchFailure::ConstraintResource)?
+                    {
+                        return Err(HeadMatchFailure::InvalidState);
+                    }
                 }
             }
             pending.push(function.value());
@@ -1174,6 +1630,15 @@ fn validate_match_type(
             continue;
         }
         match ty {
+            Type::ResourceApply(_, arguments) => {
+                if extend_owner_type_children_with_charge(arguments, &mut pending, &mut |cells| {
+                    budget.charge(cells)
+                })
+                .map_err(|()| HeadMatchFailure::ConstraintResource)?
+                {
+                    return Err(HeadMatchFailure::InvalidState);
+                }
+            }
             Type::Tuple(elements) => {
                 budget
                     .charge(elements.len())
@@ -1202,7 +1667,8 @@ fn validate_match_type(
             Type::Forall(_, _) | Type::Inference(_) => {
                 return Err(HeadMatchFailure::InvalidState);
             }
-            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {}
+            Type::Bytes | Type::String | Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {
+            }
         }
     }
     Ok(())
@@ -1244,7 +1710,7 @@ fn match_types_equal(
         if let (Some(left_function), Some(right_function)) =
             (left.function_view(), right.function_view())
         {
-            let effect_pairs = match (left_function.effects(), right_function.effects()) {
+            let _effect_pairs = match (left_function.effects(), right_function.effects()) {
                 (None, None) => 0,
                 (Some(left_effects), Some(right_effects))
                     if left_effects.tail().is_none()
@@ -1269,10 +1735,10 @@ fn match_types_equal(
                 _ => return Ok(false),
             };
             budget
-                .charge(effect_pairs.saturating_add(2))
+                .charge(2)
                 .map_err(|()| HeadMatchFailure::ConstraintResource)?;
             pending
-                .try_reserve(effect_pairs.saturating_add(2))
+                .try_reserve(2)
                 .map_err(|_| HeadMatchFailure::ConstraintResource)?;
             if let (Some(left_effects), Some(right_effects)) =
                 (left_function.effects(), right_function.effects())
@@ -1280,13 +1746,16 @@ fn match_types_equal(
                 for (left_member, right_member) in
                     left_effects.known().iter().zip(right_effects.known()).rev()
                 {
-                    pending.extend(
-                        left_member
-                            .arguments()
-                            .iter()
-                            .zip(right_member.arguments())
-                            .rev(),
-                    );
+                    if !extend_owner_type_pairs_with_charge(
+                        left_member.arguments(),
+                        right_member.arguments(),
+                        &mut pending,
+                        &mut |cells| budget.charge(cells),
+                    )
+                    .map_err(|()| HeadMatchFailure::ConstraintResource)?
+                    {
+                        return Ok(false);
+                    }
                 }
             }
             pending.push((left_function.value(), right_function.value()));
@@ -1294,8 +1763,23 @@ fn match_types_equal(
             continue;
         }
         match (left, right) {
-            (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
+            (Type::Bytes, Type::Bytes)
+            | (Type::String, Type::String)
+            | (Type::Int, Type::Int)
+            | (Type::Bool, Type::Bool)
+            | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
+            (Type::ResourceApply(left_id, left), Type::ResourceApply(right_id, right))
+                if left_id == right_id =>
+            {
+                if !extend_owner_type_pairs_with_charge(left, right, &mut pending, &mut |cells| {
+                    budget.charge(cells)
+                })
+                .map_err(|()| HeadMatchFailure::ConstraintResource)?
+                {
+                    return Ok(false);
+                }
+            }
             (Type::Variable(left), Type::Variable(right)) if left == right => {}
             (
                 Type::Application(left_function, left_argument),
@@ -1359,7 +1843,7 @@ pub(crate) fn implementation_heads_overlap(
     right_parameters: &[TypeVariableId],
     right: &Type,
 ) -> Result<bool, OverlapFailure> {
-    implementation_application_heads_overlap(
+    type_implementation_application_heads_overlap(
         registry,
         operation,
         left_parameters,
@@ -1372,6 +1856,47 @@ pub(crate) fn implementation_heads_overlap(
 /// Determines first-order overlap between two complete ordered interface
 /// applications while sharing one freshening substitution across positions.
 pub(crate) fn implementation_application_heads_overlap(
+    registry: &ResolvedRegistry,
+    operation: InterfaceOperationWork<'_>,
+    left_parameters: &[TypeVariableId],
+    left: &[&KindedArgument],
+    right_parameters: &[TypeVariableId],
+    right: &[&KindedArgument],
+) -> Result<bool, OverlapFailure> {
+    if left.len() != right.len() {
+        return Err(OverlapFailure::InvalidState);
+    }
+    let mut left_types = Vec::new();
+    let mut right_types = Vec::new();
+    for (left, right) in left.iter().zip(right) {
+        if !visit_owner_type_pairs_with_charge(
+            std::slice::from_ref(*left),
+            std::slice::from_ref(*right),
+            &mut |cells| operation.constraint_budget.charge(cells),
+            |left, right, _| {
+                left_types.try_reserve(1).map_err(|_| ())?;
+                right_types.try_reserve(1).map_err(|_| ())?;
+                left_types.push(left);
+                right_types.push(right);
+                Ok(())
+            },
+        )
+        .map_err(|()| OverlapFailure::Resource)?
+        {
+            return Ok(false);
+        }
+    }
+    type_implementation_application_heads_overlap(
+        registry,
+        operation,
+        left_parameters,
+        &left_types,
+        right_parameters,
+        &right_types,
+    )
+}
+
+pub(crate) fn type_implementation_application_heads_overlap(
     registry: &ResolvedRegistry,
     operation: InterfaceOperationWork<'_>,
     left_parameters: &[TypeVariableId],
@@ -1479,6 +2004,46 @@ where
 
 pub(crate) fn implementation_application_heads_overlap_structurally<L, R>(
     left_parameters: L,
+    left: &[&KindedArgument],
+    right_parameters: R,
+    right: &[&KindedArgument],
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<bool, OverlapFailure>
+where
+    L: ExactSizeIterator<Item = TypeVariableId>,
+    R: ExactSizeIterator<Item = TypeVariableId>,
+{
+    let mut left_types = Vec::new();
+    let mut right_types = Vec::new();
+    for (left, right) in left.iter().zip(right) {
+        if !visit_owner_type_pairs_with_charge(
+            std::slice::from_ref(*left),
+            std::slice::from_ref(*right),
+            &mut |cells| budget.charge(cells),
+            |left, right, _| {
+                left_types.try_reserve(1).map_err(|_| ())?;
+                right_types.try_reserve(1).map_err(|_| ())?;
+                left_types.push(left);
+                right_types.push(right);
+                Ok(())
+            },
+        )
+        .map_err(|()| OverlapFailure::Resource)?
+        {
+            return Ok(false);
+        }
+    }
+    type_implementation_application_heads_overlap_structurally(
+        left_parameters,
+        &left_types,
+        right_parameters,
+        &right_types,
+        budget,
+    )
+}
+
+pub(crate) fn type_implementation_application_heads_overlap_structurally<L, R>(
+    left_parameters: L,
     left: &[&Type],
     right_parameters: R,
     right: &[&Type],
@@ -1581,7 +2146,7 @@ where
         if let (Some(left_function), Some(right_function)) =
             (left.ty.function_view(), right.ty.function_view())
         {
-            let effect_pairs = match (left_function.effects(), right_function.effects()) {
+            let _effect_pairs = match (left_function.effects(), right_function.effects()) {
                 (None, None) => 0,
                 (Some(left_effects), Some(right_effects))
                     if left_effects.tail().is_none()
@@ -1605,11 +2170,9 @@ where
                 }
                 _ => return Ok(false),
             };
-            budget
-                .charge(effect_pairs.saturating_add(2))
-                .map_err(|()| OverlapFailure::Resource)?;
+            budget.charge(2).map_err(|()| OverlapFailure::Resource)?;
             pending
-                .try_reserve(effect_pairs.saturating_add(2))
+                .try_reserve(2)
                 .map_err(|_| OverlapFailure::Resource)?;
             if let (Some(left_effects), Some(right_effects)) =
                 (left_function.effects(), right_function.effects())
@@ -1617,25 +2180,16 @@ where
                 for (left_member, right_member) in
                     left_effects.known().iter().zip(right_effects.known()).rev()
                 {
-                    pending.extend(
-                        left_member
-                            .arguments()
-                            .iter()
-                            .zip(right_member.arguments())
-                            .rev()
-                            .map(|(left_argument, right_argument)| {
-                                (
-                                    OverlapHead {
-                                        side: left.side,
-                                        ty: left_argument,
-                                    },
-                                    OverlapHead {
-                                        side: right.side,
-                                        ty: right_argument,
-                                    },
-                                )
-                            }),
-                    );
+                    if !schedule_overlap_owner_pairs(
+                        left_member.arguments(),
+                        left.side,
+                        right_member.arguments(),
+                        right.side,
+                        &mut pending,
+                        budget,
+                    )? {
+                        return Ok(false);
+                    }
                 }
             }
             pending.push((
@@ -1661,8 +2215,27 @@ where
             continue;
         }
         match (left.ty, right.ty) {
-            (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
+            (Type::Bytes, Type::Bytes)
+            | (Type::String, Type::String)
+            | (Type::Int, Type::Int)
+            | (Type::Bool, Type::Bool)
+            | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
+            (
+                Type::ResourceApply(left_id, left_arguments),
+                Type::ResourceApply(right_id, right_arguments),
+            ) if left_id == right_id => {
+                if !schedule_overlap_owner_pairs(
+                    left_arguments,
+                    left.side,
+                    right_arguments,
+                    right.side,
+                    &mut pending,
+                    budget,
+                )? {
+                    return Ok(false);
+                }
+            }
             (
                 Type::Application(left_function, left_argument),
                 Type::Application(right_function, right_argument),
@@ -1760,6 +2333,36 @@ fn overlap_variable(
     }))
 }
 
+fn schedule_overlap_owner_pairs<'a>(
+    left: &'a [KindedArgument],
+    left_side: OverlapSide,
+    right: &'a [KindedArgument],
+    right_side: OverlapSide,
+    pending: &mut Vec<(OverlapHead<'a>, OverlapHead<'a>)>,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<bool, OverlapFailure> {
+    visit_owner_type_pairs_with_charge(
+        left,
+        right,
+        &mut |cells| budget.charge(cells),
+        |left, right, _| {
+            pending.try_reserve(1).map_err(|_| ())?;
+            pending.push((
+                OverlapHead {
+                    side: left_side,
+                    ty: left,
+                },
+                OverlapHead {
+                    side: right_side,
+                    ty: right,
+                },
+            ));
+            Ok(())
+        },
+    )
+    .map_err(|()| OverlapFailure::Resource)
+}
+
 fn schedule_overlap_pairs<'a>(
     left: &'a [Type],
     left_side: OverlapSide,
@@ -1808,6 +2411,20 @@ fn follow_overlap_solution<'a>(
     }
 }
 
+fn schedule_overlap_owner_children<'a>(
+    arguments: &'a [KindedArgument],
+    side: OverlapSide,
+    pending: &mut Vec<OverlapHead<'a>>,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<bool, OverlapFailure> {
+    visit_owner_type_children_with_charge(arguments, &mut |cells| budget.charge(cells), |ty, _| {
+        pending.try_reserve(1).map_err(|_| ())?;
+        pending.push(OverlapHead { side, ty });
+        Ok(())
+    })
+    .map_err(|()| OverlapFailure::Resource)
+}
+
 fn overlap_occurs<'a>(
     needle: FreshOverlapVariable,
     root: OverlapHead<'a>,
@@ -1837,26 +2454,20 @@ fn overlap_occurs<'a>(
             if effects.is_some_and(|effects| effects.tail().is_some()) {
                 return Err(OverlapFailure::InvalidState);
             }
-            let effect_arguments = effects.map_or(0, |effects| {
-                effects
-                    .known()
-                    .iter()
-                    .map(|member| member.arguments().len())
-                    .sum()
-            });
-            let retained = effect_arguments.saturating_add(2);
-            budget
-                .charge(retained)
-                .map_err(|()| OverlapFailure::Resource)?;
+            budget.charge(2).map_err(|()| OverlapFailure::Resource)?;
             pending
-                .try_reserve(retained)
+                .try_reserve(2)
                 .map_err(|_| OverlapFailure::Resource)?;
             if let Some(effects) = effects {
                 for member in effects.known().iter().rev() {
-                    pending.extend(member.arguments().iter().rev().map(|argument| OverlapHead {
-                        side: head.side,
-                        ty: argument,
-                    }));
+                    if schedule_overlap_owner_children(
+                        member.arguments(),
+                        head.side,
+                        &mut pending,
+                        budget,
+                    )? {
+                        return Err(OverlapFailure::InvalidState);
+                    }
                 }
             }
             pending.push(OverlapHead {
@@ -1870,6 +2481,11 @@ fn overlap_occurs<'a>(
             continue;
         }
         match head.ty {
+            Type::ResourceApply(_, arguments) => {
+                if schedule_overlap_owner_children(arguments, head.side, &mut pending, budget)? {
+                    return Err(OverlapFailure::InvalidState);
+                }
+            }
             Type::Tuple(elements) => {
                 budget
                     .charge(elements.len())
@@ -1899,7 +2515,8 @@ fn overlap_occurs<'a>(
             Type::Function(_, _) | Type::EffectfulFunction(_, _) => unreachable!(),
             Type::Variable(_) => return Err(OverlapFailure::InvalidState),
             Type::Forall(_, _) | Type::Inference(_) => return Err(OverlapFailure::InvalidState),
-            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {}
+            Type::Bytes | Type::String | Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {
+            }
         }
     }
     Ok(false)
@@ -2776,6 +3393,8 @@ pub enum RequirementOwner {
     Global(BinderId),
     /// A prerequisite declared by an implementation.
     Impl(ImplId),
+    /// A requirement checked under one resource family's rigid payload binder.
+    ResourceFamily(crate::resolved::ResourceDefinitionId),
 }
 
 /// Stable identity of one ordered interface requirement.
@@ -2822,20 +3441,20 @@ impl EvidenceNodeId {
 
 /// One complete checked interface application in declaration argument order.
 ///
-/// This compiler-private carrier is shared by checked requirements,
+/// This compiler-constructed, read-only carrier is shared by checked requirements,
 /// implementation heads, selected evidence, and independent authentication.
 /// Its argument vector is never encoded as an Ash tuple type.
 #[derive(Debug, Eq, PartialEq)]
 #[cfg_attr(test, derive(Clone))]
-pub(crate) struct InterfaceApplication {
+pub struct InterfaceApplication {
     interface: InterfaceId,
-    arguments: Box<[Type]>,
+    arguments: Box<[crate::types::KindedArgument]>,
 }
 
-struct InterfaceArgumentBuffer(Vec<Type>);
+struct InterfaceArgumentBuffer(Vec<crate::types::KindedArgument>);
 
 impl InterfaceArgumentBuffer {
-    fn into_boxed_slice(mut self) -> Box<[Type]> {
+    fn into_boxed_slice(mut self) -> Box<[crate::types::KindedArgument]> {
         std::mem::take(&mut self.0).into_boxed_slice()
     }
 }
@@ -2843,33 +3462,66 @@ impl InterfaceArgumentBuffer {
 impl Drop for InterfaceArgumentBuffer {
     fn drop(&mut self) {
         while let Some(argument) = self.0.pop() {
-            discard_type_iteratively(argument);
+            discard_kinded_argument_iteratively(argument);
         }
     }
 }
 
 impl InterfaceApplication {
-    pub(crate) const fn new(interface: InterfaceId, arguments: Box<[Type]>) -> Self {
+    #[cfg(test)]
+    pub(crate) fn from_type_arguments_with_budget<B: crate::types::TypeWorkMeter>(
+        interface: InterfaceId,
+        arguments: Box<[Type]>,
+        budget: &mut B,
+    ) -> Result<Self, B::Error> {
+        Ok(Self::new_kinded(
+            interface,
+            type_arguments_to_kinded_with_budget(arguments, budget)?,
+        ))
+    }
+
+    pub(crate) const fn new_kinded(
+        interface: InterfaceId,
+        arguments: Box<[crate::types::KindedArgument]>,
+    ) -> Self {
         Self {
             interface,
             arguments,
         }
     }
 
-    pub(crate) const fn interface(&self) -> InterfaceId {
+    #[cfg(test)]
+    pub(crate) fn new(interface: InterfaceId, arguments: Box<[Type]>) -> Self {
+        Self::new_kinded(
+            interface,
+            arguments
+                .into_vec()
+                .into_iter()
+                .map(crate::types::KindedArgument::TypeArg)
+                .collect(),
+        )
+    }
+
+    /// Returns the original interface identity.
+    #[must_use]
+    pub const fn interface(&self) -> InterfaceId {
         self.interface
     }
 
-    pub(crate) const fn arguments(&self) -> &[Type] {
+    /// Borrows complete type and row arguments in declaration order.
+    #[must_use]
+    pub const fn arguments(&self) -> &[crate::types::KindedArgument] {
         &self.arguments
     }
 
-    pub(crate) fn into_parts(mut self) -> (InterfaceId, Box<[Type]>) {
+    pub(crate) fn into_parts(mut self) -> (InterfaceId, Box<[crate::types::KindedArgument]>) {
         (self.interface, std::mem::take(&mut self.arguments))
     }
 
     #[cfg(test)]
-    pub(crate) fn arguments_mut_for_summary_test(&mut self) -> &mut Box<[Type]> {
+    pub(crate) fn arguments_mut_for_summary_test(
+        &mut self,
+    ) -> &mut Box<[crate::types::KindedArgument]> {
         &mut self.arguments
     }
 
@@ -2881,16 +3533,21 @@ impl InterfaceApplication {
             .try_reserve(self.arguments.len())
             .map_err(|_| ())?;
         for argument in &self.arguments {
-            arguments.0.push(clone_type_with_budget(argument, budget)?);
+            arguments
+                .0
+                .push(clone_kinded_argument_with_budget(argument, budget)?);
         }
-        Ok(Self::new(self.interface, arguments.into_boxed_slice()))
+        Ok(Self::new_kinded(
+            self.interface,
+            arguments.into_boxed_slice(),
+        ))
     }
 }
 
 impl Drop for InterfaceApplication {
     fn drop(&mut self) {
         for argument in std::mem::take(&mut self.arguments).into_vec() {
-            discard_type_iteratively(argument);
+            discard_kinded_argument_iteratively(argument);
         }
     }
 }
@@ -2931,6 +3588,17 @@ impl Drop for EvidenceSubstitution {
 
 #[derive(Debug)]
 enum EvidenceNodeData {
+    ProviderFamily {
+        source: LexicalEvidenceId,
+        definition: crate::resolved::ResourceDefinitionId,
+        parameter: TypeVariableId,
+        application: InterfaceApplication,
+        prerequisites: Box<[EvidenceNodeId]>,
+        methods: Box<[MethodId]>,
+    },
+    NativeLayout {
+        producer: crate::foreign::ForeignLayoutProducer,
+    },
     Lexical {
         source: LexicalEvidenceId,
         methods: Box<[MethodId]>,
@@ -2956,6 +3624,27 @@ struct EvidencePlan {
 /// Read-only view of one structural evidence node.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EvidenceNode<'a> {
+    /// Provisional exact source family selection. Independent admission checks
+    /// the original family certificate and complete goal before executable use.
+    ProviderFamily {
+        /// Resolver-reserved lexical family candidate, not a member capability.
+        source: LexicalEvidenceId,
+        /// Original resource declaration owning this family.
+        definition: crate::resolved::ResourceDefinitionId,
+        /// Canonical rigid payload parameter in that original declaration.
+        parameter: TypeVariableId,
+        /// Complete selected goal, including ordered type and row arguments.
+        application: &'a InterfaceApplication,
+        /// Selected prerequisite nodes in original declaration order.
+        prerequisites: &'a [EvidenceNodeId],
+        /// Interface methods in original declaration order.
+        methods: &'a [MethodId],
+    },
+    /// One exact dictionary from the original sealed foreign Layout policy.
+    NativeLayout {
+        /// Qualified producer header; independent validation checks its dictionary.
+        producer: crate::foreign::ForeignLayoutProducer,
+    },
     /// One exact lexical source and its interface method order.
     Lexical {
         /// Canonical source selected at the occurrence's lexical scope.
@@ -2983,14 +3672,194 @@ pub enum EvidenceNode<'a> {
     },
 }
 
+impl<'a> EvidenceNode<'a> {
+    /// Returns dictionaries passed as runtime arguments to this producer.
+    /// Family prerequisites authenticate its scope-bound dictionaries; lowering
+    /// the family method reads that scope's forwarding binder instead.
+    pub(crate) const fn executable_prerequisites(self) -> Option<&'a [EvidenceNodeId]> {
+        match self {
+            Self::Implementation { prerequisites, .. } => Some(prerequisites),
+            Self::ProviderFamily { .. }
+            | Self::NativeLayout { .. }
+            | Self::Lexical { .. }
+            | Self::Abstract { .. } => None,
+        }
+    }
+}
+
 /// One rooted selection backed by an immutable flat evidence plan.
 #[derive(Clone, Debug)]
 pub struct EvidenceSelection {
     plan: Arc<EvidencePlan>,
     root: EvidenceNodeId,
+    original: Option<OriginalEvidenceOwner>,
+}
+
+/// A fixed-level pin to the original selected plan. It never retains another
+/// specialized selection or grants authority to its reconstructed payloads.
+#[derive(Clone, Debug)]
+struct OriginalEvidenceOwner {
+    plan: Arc<EvidencePlan>,
+    root: EvidenceNodeId,
 }
 
 impl EvidenceSelection {
+    fn canonical_original(&self) -> (&Arc<EvidencePlan>, EvidenceNodeId) {
+        self.original
+            .as_ref()
+            .map_or((&self.plan, self.root), |original| {
+                (&original.plan, original.root)
+            })
+    }
+
+    /// Preserves the exact independently checked immutable selection owner.
+    /// Specialized payload equality is checked separately by final admission.
+    pub(crate) fn same_original_owner(&self, other: &Self) -> bool {
+        let (left, left_root) = self.canonical_original();
+        let (right, right_root) = other.canonical_original();
+        left_root == right_root && Arc::ptr_eq(left, right)
+    }
+
+    /// Reconstructs a complete view of the canonical original selection using
+    /// the caller's simultaneous template substitution and local relocation.
+    /// This projection never checks source or selects an implementation. Final
+    /// Core must compare every original node and rewritten payload independently.
+    #[allow(clippy::too_many_arguments)] // Independent source, actual and work authorities stay explicit.
+    pub(crate) fn specialize_with<E>(
+        &self,
+        types: &mut TypeWorkBudget,
+        constraints: &mut InterfaceConstraintBudget,
+        mut rewrite_type: impl FnMut(&Type, &mut TypeWorkBudget) -> Result<Type, E>,
+        mut rewrite_argument: impl FnMut(
+            &KindedArgument,
+            &mut TypeWorkBudget,
+        ) -> Result<KindedArgument, E>,
+        mut rewrite_lexical: impl FnMut(
+            LexicalEvidenceId,
+            &mut TypeWorkBudget,
+        ) -> Result<LexicalEvidenceId, E>,
+        mut type_resource: impl FnMut() -> E,
+        mut constraint_resource: impl FnMut() -> E,
+        mut invalid: impl FnMut() -> E,
+    ) -> Result<Self, E> {
+        let (original, root) = self.canonical_original();
+        // The additional immutable original owner is a retained Arc cell.
+        types.charge(1).map_err(|()| type_resource())?;
+        if root.index() >= original.nodes.len() {
+            return Err(invalid());
+        }
+        types
+            .charge(original.application.arguments().len())
+            .map_err(|()| type_resource())?;
+        let mut arguments = InterfaceArgumentBuffer(Vec::new());
+        arguments
+            .0
+            .try_reserve_exact(original.application.arguments().len())
+            .map_err(|_| type_resource())?;
+        for argument in original.application.arguments() {
+            arguments.0.push(rewrite_argument(argument, types)?);
+        }
+        let application = InterfaceApplication::new_kinded(
+            original.application.interface(),
+            arguments.into_boxed_slice(),
+        );
+        let mut builder = EvidenceSelectionBuilder::new();
+        for node in &original.nodes {
+            match node {
+                EvidenceNodeData::ProviderFamily {
+                    source,
+                    definition,
+                    parameter,
+                    application,
+                    prerequisites,
+                    methods,
+                } => {
+                    types
+                        .charge(application.arguments().len())
+                        .map_err(|()| type_resource())?;
+                    let mut actuals = InterfaceArgumentBuffer(Vec::new());
+                    actuals
+                        .0
+                        .try_reserve_exact(application.arguments().len())
+                        .map_err(|_| type_resource())?;
+                    for argument in application.arguments() {
+                        actuals.0.push(rewrite_argument(argument, types)?);
+                    }
+                    let application = InterfaceApplication::new_kinded(
+                        application.interface(),
+                        actuals.into_boxed_slice(),
+                    );
+                    let source = rewrite_lexical(*source, types)?;
+                    builder
+                        .push_provider_family(
+                            source,
+                            *definition,
+                            *parameter,
+                            application,
+                            prerequisites,
+                            methods,
+                            constraints,
+                        )
+                        .map_err(|()| constraint_resource())?;
+                }
+                EvidenceNodeData::NativeLayout { producer } => {
+                    builder
+                        .push_native_layout(*producer, constraints)
+                        .map_err(|()| constraint_resource())?;
+                }
+                EvidenceNodeData::Lexical { source, methods } => {
+                    let source = rewrite_lexical(*source, types)?;
+                    builder
+                        .push_lexical(source, methods, constraints)
+                        .map_err(|()| constraint_resource())?;
+                }
+                EvidenceNodeData::Abstract {
+                    requirement,
+                    methods,
+                } => {
+                    builder
+                        .push_abstract(*requirement, methods, constraints)
+                        .map_err(|()| constraint_resource())?;
+                }
+                EvidenceNodeData::Implementation {
+                    implementation,
+                    substitution,
+                    prerequisites,
+                    methods,
+                } => {
+                    types
+                        .charge(substitution.len())
+                        .map_err(|()| type_resource())?;
+                    let mut replacements = Vec::new();
+                    replacements
+                        .try_reserve_exact(substitution.len())
+                        .map_err(|_| type_resource())?;
+                    for replacement in substitution {
+                        replacements.push(EvidenceSubstitution::new(
+                            replacement.parameter,
+                            rewrite_type(&replacement.argument, types)?,
+                        ));
+                    }
+                    builder
+                        .push_implementation(
+                            *implementation,
+                            replacements.into_boxed_slice(),
+                            prerequisites,
+                            methods,
+                            constraints,
+                        )
+                        .map_err(|()| constraint_resource())?;
+                }
+            }
+        }
+        let mut specialized = builder.finish(root, application).map_err(|()| invalid())?;
+        specialized.original = Some(OriginalEvidenceOwner {
+            plan: Arc::clone(original),
+            root,
+        });
+        Ok(specialized)
+    }
+
     /// Returns the checked interface obligation authenticated by this selection.
     #[must_use]
     pub fn interface(&self) -> InterfaceId {
@@ -2999,7 +3868,7 @@ impl EvidenceSelection {
 
     /// Returns the zonked checked obligation arguments in declaration order.
     #[must_use]
-    pub fn arguments(&self) -> &[Type] {
+    pub fn arguments(&self) -> &[KindedArgument] {
         self.plan.application.arguments()
     }
 
@@ -3018,36 +3887,58 @@ impl EvidenceSelection {
     /// Inspects one node from this selection's plan.
     #[must_use]
     pub fn node(&self, id: EvidenceNodeId) -> Option<EvidenceNode<'_>> {
-        match self.plan.nodes.get(id.0)? {
-            EvidenceNodeData::Lexical { source, methods } => Some(EvidenceNode::Lexical {
-                source: *source,
-                methods,
-            }),
-            EvidenceNodeData::Abstract {
-                requirement,
-                methods,
-            } => Some(EvidenceNode::Abstract {
-                requirement: *requirement,
-                methods,
-            }),
-            EvidenceNodeData::Implementation {
-                implementation,
-                substitution,
-                prerequisites,
-                methods,
-            } => Some(EvidenceNode::Implementation {
-                implementation: *implementation,
-                substitution,
-                prerequisites,
-                methods,
-            }),
-        }
+        evidence_node(&self.plan, id)
     }
 
     /// Reports whether two selections share the same immutable flat plan.
     #[must_use]
     pub fn shares_plan_with(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.plan, &other.plan)
+    }
+}
+
+fn evidence_node(plan: &EvidencePlan, id: EvidenceNodeId) -> Option<EvidenceNode<'_>> {
+    match plan.nodes.get(id.0)? {
+        EvidenceNodeData::ProviderFamily {
+            source,
+            definition,
+            parameter,
+            application,
+            prerequisites,
+            methods,
+        } => Some(EvidenceNode::ProviderFamily {
+            source: *source,
+            definition: *definition,
+            parameter: *parameter,
+            application,
+            prerequisites,
+            methods,
+        }),
+        EvidenceNodeData::NativeLayout { producer } => Some(EvidenceNode::NativeLayout {
+            producer: *producer,
+        }),
+        EvidenceNodeData::Lexical { source, methods } => Some(EvidenceNode::Lexical {
+            source: *source,
+            methods,
+        }),
+        EvidenceNodeData::Abstract {
+            requirement,
+            methods,
+        } => Some(EvidenceNode::Abstract {
+            requirement: *requirement,
+            methods,
+        }),
+        EvidenceNodeData::Implementation {
+            implementation,
+            substitution,
+            prerequisites,
+            methods,
+        } => Some(EvidenceNode::Implementation {
+            implementation: *implementation,
+            substitution,
+            prerequisites,
+            methods,
+        }),
     }
 }
 
@@ -3068,6 +3959,58 @@ pub(crate) struct EvidenceSelectionBuilder {
 impl EvidenceSelectionBuilder {
     pub(crate) const fn new() -> Self {
         Self { nodes: Vec::new() }
+    }
+
+    #[allow(clippy::too_many_arguments)] // Complete source identity, goal, and prerequisite order are independent claims.
+    pub(crate) fn push_provider_family(
+        &mut self,
+        source: LexicalEvidenceId,
+        definition: crate::resolved::ResourceDefinitionId,
+        parameter: TypeVariableId,
+        application: InterfaceApplication,
+        prerequisites: &[EvidenceNodeId],
+        methods: &[MethodId],
+        budget: &mut InterfaceConstraintBudget,
+    ) -> Result<EvidenceNodeId, ()> {
+        let retained = 1usize
+            .checked_add(prerequisites.len())
+            .and_then(|n| n.checked_add(methods.len()))
+            .ok_or(())?;
+        budget.charge(retained)?;
+        for argument in application.arguments() {
+            budget.charge_argument(argument)?;
+        }
+        if prerequisites
+            .iter()
+            .any(|child| child.0 >= self.nodes.len())
+        {
+            return Err(());
+        }
+        let prerequisites = try_copy_slice(prerequisites)?;
+        let methods = try_copy_slice(methods)?;
+        self.nodes.try_reserve(1).map_err(|_| ())?;
+        let id = EvidenceNodeId(self.nodes.len());
+        self.nodes.push(EvidenceNodeData::ProviderFamily {
+            source,
+            definition,
+            parameter,
+            application,
+            prerequisites,
+            methods,
+        });
+        Ok(id)
+    }
+
+    pub(crate) fn push_native_layout(
+        &mut self,
+        producer: crate::foreign::ForeignLayoutProducer,
+        budget: &mut InterfaceConstraintBudget,
+    ) -> Result<EvidenceNodeId, ()> {
+        budget.charge(6)?;
+        self.nodes.try_reserve(1).map_err(|_| ())?;
+        let id = EvidenceNodeId(self.nodes.len());
+        self.nodes.push(EvidenceNodeData::NativeLayout { producer });
+        Ok(id)
     }
 
     pub(crate) fn push_lexical(
@@ -3151,6 +4094,7 @@ impl EvidenceSelectionBuilder {
                 nodes: self.nodes.into_boxed_slice(),
             }),
             root,
+            original: None,
         })
     }
 
@@ -3184,6 +4128,42 @@ impl Drop for FilledEvidenceSlot {
         if let Some(ty) = self.checked_value_type.take() {
             discard_type_iteratively(ty);
         }
+    }
+}
+
+/// Readonly allocation identity for one copied final evidence occurrence.
+///
+/// This owner carries no selection, fill capability, or provider authority.
+/// Catalogs retain it so its key cannot be recycled while still referenced.
+#[derive(Debug)]
+#[cfg_attr(test, derive(Clone))]
+pub(crate) struct FinalOccurrenceOwner {
+    allocation: Arc<FinalOccurrenceAllocation>,
+}
+
+#[derive(Debug)]
+struct FinalOccurrenceAllocation {
+    // A non-zero-sized allocation gives every live owner a distinct address.
+    _identity: u8,
+}
+
+impl FinalOccurrenceOwner {
+    pub(crate) fn new_with_budget(work: &mut TypeWorkBudget) -> Result<Self, ()> {
+        work.charge(1)?;
+        Ok(Self {
+            allocation: Arc::new(FinalOccurrenceAllocation { _identity: 0 }),
+        })
+    }
+
+    pub(crate) fn clone_with_budget(&self, work: &mut TypeWorkBudget) -> Result<Self, ()> {
+        work.charge(1)?;
+        Ok(Self {
+            allocation: Arc::clone(&self.allocation),
+        })
+    }
+
+    pub(crate) fn storage_id(&self) -> usize {
+        Arc::as_ptr(&self.allocation) as usize
     }
 }
 
@@ -3247,6 +4227,13 @@ impl EvidenceSlot {
 
     pub(crate) fn storage_id(&self) -> usize {
         Arc::as_ptr(&self.filled) as usize
+    }
+
+    /// Retains the exact unpublished slot for a private compiler transaction.
+    pub(crate) fn retain_unpublished(&self) -> Option<Self> {
+        self.filled.get().is_none().then(|| Self {
+            filled: Arc::clone(&self.filled),
+        })
     }
 
     /// Returns a transient capability that fills this exact structural slot.
@@ -3443,7 +4430,7 @@ impl CheckedRequirement {
 
     /// Borrows the complete requirement arguments in declaration order.
     #[must_use]
-    pub const fn arguments(&self) -> &[Type] {
+    pub const fn arguments(&self) -> &[KindedArgument] {
         self.application.arguments()
     }
 
@@ -3588,7 +4575,7 @@ impl CheckedImplementation {
 
     /// Returns the complete ordered implementation-head arguments.
     #[must_use]
-    pub fn arguments(&self) -> &[Type] {
+    pub fn arguments(&self) -> &[KindedArgument] {
         self.application.arguments()
     }
 
@@ -3925,8 +4912,7 @@ mod tests {
         );
         assert_eq!(
             same_type_with_constraint_budget_inner(
-                &open,
-                &open,
+                ConstraintComparisonRoot::Types(&open, &open),
                 &mut InterfaceConstraintBudget::default(),
                 None,
             ),
@@ -4095,7 +5081,7 @@ mod tests {
         assert_eq!(slot.selection(), Some(&selection));
         assert_eq!(handle.selection(), Some(&selection));
         assert!(
-            matches!(slot.filled(), Some((application, _)) if application.arguments() == [Type::Int])
+            matches!(slot.filled(), Some((application, _)) if application.arguments() == [KindedArgument::TypeArg(Type::Int)])
         );
         assert!(clone.selection().is_none());
         assert!(
@@ -4113,8 +5099,34 @@ mod tests {
                 .is_err()
         );
         assert!(
-            matches!(slot.filled(), Some((application, _)) if application.arguments() == [Type::Int])
+            matches!(slot.filled(), Some((application, _)) if application.arguments() == [KindedArgument::TypeArg(Type::Int)])
         );
+    }
+
+    #[test]
+    fn unpublished_evidence_retention_preserves_only_the_exact_empty_slot() {
+        let slot = EvidenceSlot::empty();
+        let ordinary_clone = slot.clone();
+        let retained = slot.retain_unpublished().unwrap();
+        assert_ne!(slot.storage_id(), ordinary_clone.storage_id());
+        assert_eq!(slot.storage_id(), retained.storage_id());
+        assert!(retained.selection().is_none());
+        let selection = abstract_selection(RequirementId::new(
+            RequirementOwner::Global(BinderId::resolved(ModuleId::new(43), 0)),
+            0,
+        ));
+        slot.handle()
+            .fill(
+                None,
+                InterfaceApplication::new(selection.interface(), Box::new([Type::Int])),
+                Box::new([]),
+                None,
+                selection,
+            )
+            .unwrap();
+        assert!(slot.retain_unpublished().is_none());
+        assert!(retained.retain_unpublished().is_none());
+        assert!(ordinary_clone.retain_unpublished().is_some());
     }
 
     #[test]
@@ -4139,10 +5151,10 @@ mod tests {
         let cloned = clone.selection().expect("the clone should be selected");
 
         assert!(
-            matches!(slot.filled(), Some((application, _)) if application.arguments() == [Type::Int])
+            matches!(slot.filled(), Some((application, _)) if application.arguments() == [KindedArgument::TypeArg(Type::Int)])
         );
         assert!(
-            matches!(clone.filled(), Some((application, _)) if application.arguments() == [Type::Int])
+            matches!(clone.filled(), Some((application, _)) if application.arguments() == [KindedArgument::TypeArg(Type::Int)])
         );
         assert_eq!(original.root(), cloned.root());
         assert!(original.shares_plan_with(cloned));
@@ -4181,7 +5193,7 @@ mod tests {
         assert_eq!(exact_budget.used(), 3);
         assert_eq!(exact_budget.charge(1), Err(()));
         assert_eq!(selection.interface(), interface);
-        assert_eq!(selection.arguments(), &[Type::Int]);
+        assert_eq!(selection.arguments(), &[KindedArgument::TypeArg(Type::Int)]);
         assert_eq!(selection.node_count(), 1);
         assert_eq!(
             selection.node(root),
@@ -4286,6 +5298,10 @@ mod tests {
         assert_eq!(substitution[0].parameter(), parameter);
         assert_eq!(substitution[0].argument(), &Type::Int);
         assert_eq!(prerequisites, &[prerequisite]);
+        assert_eq!(
+            selection.node(root).unwrap().executable_prerequisites(),
+            Some(prerequisites)
+        );
         assert_eq!(methods, &[implementation_method]);
         assert_eq!(exact.used(), 4);
 
@@ -4936,7 +5952,9 @@ mod tests {
             }]);
         let candidate = Type::Variable(parameter);
         let goal = Type::Int;
-        let goal_roots = [&goal];
+        let goal_argument = KindedArgument::TypeArg(goal.clone());
+        let candidate_argument = KindedArgument::TypeArg(candidate.clone());
+        let goal_roots = [&goal_argument];
         let mut capability_constraints = InterfaceConstraintBudget::default();
         let mut capability_types = TypeWorkBudget::default();
         let canonical_goal = authenticate_implementation_application_goal(
@@ -4949,7 +5967,7 @@ mod tests {
             &registry,
             InterfaceOperationWork::new(span, &mut capability_constraints, &mut capability_types),
             &[parameter],
-            &[&candidate],
+            &[&candidate_argument],
             &canonical_goal,
         );
         let full_result = match_implementation_head(
@@ -4968,7 +5986,8 @@ mod tests {
             Type::Forall(Box::new([]), Box::new(Type::Int)),
         ] {
             let malformed = Type::Tuple(Box::new([Type::Bool, invalid]));
-            let malformed_roots = [&malformed];
+            let malformed_argument = KindedArgument::TypeArg(malformed);
+            let malformed_roots = [&malformed_argument];
             assert!(matches!(
                 authenticate_implementation_application_goal(
                     &registry,
@@ -4995,6 +6014,165 @@ mod tests {
             ),
             Ok(None),
             "the ordinary full-validation entry point remains available",
+        );
+    }
+
+    #[test]
+    fn scoped_family_matching_substitutes_only_payload_and_keeps_owner_actuals_rigid() {
+        let module = ModuleId::new(71);
+        let owner = TypeVariableId::resolved(module, 0);
+        let other_owner = TypeVariableId::resolved(module, 1);
+        let payload = TypeVariableId::resolved(module, 2);
+        let source = SourceFile::new("scoped-family-match.ash", "family")
+            .expect("the family matcher source should fit");
+        let span = source
+            .span(ByteRange::new(0, 6).expect("the family matcher range is ordered"))
+            .expect("the family matcher span should fit");
+        let registry = ResolvedRegistry::new(Vec::new(), Vec::new())
+            .with_additional_type_variables(
+                [
+                    (owner, "Owner"),
+                    (other_owner, "OtherOwner"),
+                    (payload, "Payload"),
+                ]
+                .map(|(id, spelling)| ResolvedTypeVariable {
+                    id,
+                    spelling: spelling.into(),
+                    kind: Kind::Type,
+                    origin: Origin::Source(span),
+                }),
+            );
+        let owner_pattern = KindedArgument::TypeArg(Type::Variable(owner));
+        let payload_pattern = KindedArgument::TypeArg(Type::Variable(payload));
+        let candidate = [&owner_pattern, &payload_pattern];
+        let accepted_owner = KindedArgument::TypeArg(Type::Variable(owner));
+        let accepted_payload = KindedArgument::TypeArg(Type::Int);
+        let accepted = [&accepted_owner, &accepted_payload];
+        let rejected_owner = KindedArgument::TypeArg(Type::Variable(other_owner));
+        let function_owner =
+            KindedArgument::TypeArg(Type::Function(Box::new(Type::Int), Box::new(Type::Bool)));
+
+        // Both consumers authenticate genuine canonical goal roots. The
+        // selector checks those roots again; materialization reuses the seal.
+        let run = |goal: &[&KindedArgument],
+                   reuse_goal: bool,
+                   constraints: &mut InterfaceConstraintBudget,
+                   types: &mut TypeWorkBudget| {
+            let canonical = authenticate_implementation_application_goal(
+                &registry,
+                InterfaceOperationWork::new(span, constraints, types),
+                goal,
+            )?;
+            if reuse_goal {
+                match_provider_family_application_head_against_canonical_goal(
+                    &registry,
+                    InterfaceOperationWork::new(span, constraints, types),
+                    payload,
+                    &candidate,
+                    &canonical,
+                )
+            } else {
+                match_provider_family_application_head_in_environment(
+                    &registry,
+                    InterfaceOperationWork::new(span, constraints, types),
+                    &canonical.environments,
+                    payload,
+                    &candidate,
+                    goal,
+                )
+            }
+        };
+        for reuse_goal in [false, true] {
+            let mut measured_constraints = InterfaceConstraintBudget::default();
+            let mut measured_types = TypeWorkBudget::default();
+            let substitutions = run(
+                &accepted,
+                reuse_goal,
+                &mut measured_constraints,
+                &mut measured_types,
+            )
+            .expect("the family match should authenticate")
+            .expect("the identical owner permits the scalar payload");
+            assert_eq!(substitutions.len(), 1);
+            assert_eq!(substitutions[0].parameter(), payload);
+            assert_eq!(substitutions[0].argument(), &Type::Int);
+            for rejected in [
+                [&rejected_owner, &accepted_payload],
+                [&function_owner, &accepted_payload],
+            ] {
+                assert_eq!(
+                    run(
+                        &rejected,
+                        reuse_goal,
+                        &mut InterfaceConstraintBudget::default(),
+                        &mut TypeWorkBudget::default()
+                    ),
+                    Ok(None),
+                    "a rigid owner mismatch must refuse without substitution or panic",
+                );
+            }
+
+            let constraint_cost = measured_constraints.used();
+            let type_cost = measured_types.used();
+            assert!(constraint_cost > 0 && type_cost > 0);
+            for prefix in [0, 17] {
+                let replay = |constraint_limit, type_limit| {
+                    let mut constraints = InterfaceConstraintBudget::with_limit(constraint_limit);
+                    let mut types = TypeWorkBudget::with_limit(type_limit);
+                    constraints
+                        .charge(prefix)
+                        .expect("the constraint prefix fits");
+                    types.charge(prefix).expect("the type prefix fits");
+                    let result = run(&accepted, reuse_goal, &mut constraints, &mut types);
+                    (result, constraints.used(), types.used())
+                };
+                let (result, constraints_used, types_used) =
+                    replay(prefix + constraint_cost, prefix + type_cost);
+                assert_eq!(
+                    result
+                        .expect("the exact ledgers should fit")
+                        .expect("the exact replay should match"),
+                    substitutions
+                );
+                assert_eq!(constraints_used, prefix + constraint_cost);
+                assert_eq!(types_used, prefix + type_cost);
+                assert_eq!(
+                    replay(prefix + constraint_cost - 1, prefix + type_cost).0,
+                    Err(HeadMatchFailure::ConstraintResource),
+                    "constraint exhaustion must not become a mismatch or partial match",
+                );
+                assert_eq!(
+                    replay(prefix + constraint_cost, prefix + type_cost - 1).0,
+                    Err(HeadMatchFailure::TypeResource),
+                    "type exhaustion must not become a mismatch or partial match",
+                );
+            }
+        }
+
+        let canonical = authenticate_implementation_application_goal(
+            &registry,
+            InterfaceOperationWork::new(
+                span,
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            ),
+            &accepted,
+        )
+        .expect("the ordinary comparison goal should authenticate");
+        assert_eq!(
+            match_implementation_application_head_against_canonical_goal(
+                &registry,
+                InterfaceOperationWork::new(
+                    span,
+                    &mut InterfaceConstraintBudget::default(),
+                    &mut TypeWorkBudget::default()
+                ),
+                &[payload],
+                &candidate,
+                &canonical,
+            ),
+            Err(HeadMatchFailure::InvalidState),
+            "ordinary implementation heads still reject undeclared pattern variables",
         );
     }
 
@@ -5109,7 +6287,7 @@ mod tests {
                     .expect("the root should exist");
                 let clone = selection.clone();
                 assert!(selection.shares_plan_with(&clone));
-                let [selected_argument] = selection.arguments() else {
+                let [KindedArgument::TypeArg(selected_argument)] = selection.arguments() else {
                     panic!("the unary fixture should retain one argument");
                 };
                 let checked_argument =

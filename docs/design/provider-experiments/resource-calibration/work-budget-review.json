@@ -1,0 +1,60 @@
+{
+  "proposals": [
+    {
+      "ceiling_relative_to_observed_maximum": 0.17918013172184213,
+      "headroom_from_rounding": 87293,
+      "margin_denominator": "rounded nominal budget, not observed work",
+      "observed_completed_maximum": 1212707,
+      "owner_class": "structural-type",
+      "proposed_hard_ceiling": 1430000,
+      "proposed_nominal_budget": 1300000,
+      "rounding_quantum": 100000,
+      "separate_maximum_deficit_fraction": 0.1,
+      "status": "read-only recommendation; Common owns production adoption",
+      "units": "charged units including reservations"
+    },
+    {
+      "ceiling_relative_to_observed_maximum": 0.16214971595693706,
+      "headroom_from_rounding": 90913,
+      "margin_denominator": "rounded nominal budget, not observed work",
+      "observed_completed_maximum": 1609087,
+      "owner_class": "independent-core",
+      "proposed_hard_ceiling": 1870000,
+      "proposed_nominal_budget": 1700000,
+      "rounding_quantum": 100000,
+      "separate_maximum_deficit_fraction": 0.1,
+      "status": "read-only recommendation; Common owns production adoption",
+      "units": "charged units including reservations"
+    }
+  ],
+  "qualifications": [
+    "These maxima cover measured primary phase owners; they do not measure every TypeWorkBudget owner.",
+    "CoreBuilder construction and rewrite budgets are separate and absent from the six endpoints; final-elaboration emits before builder.finish.",
+    "Independent Core currently derives three times TYPE_WORK_LIMIT. A separate budget requires coherent decoupling of the validator, calibration override and driver labels.",
+    "The strict ten-percent hard margin applies to each rounded nominal budget. Rounding headroom is separate and makes the ceiling more than ten percent above measured maxima.",
+    "For a generic integer budget use budget + budget/10, without rounding the fractional margin upward. Sum no cumulative module endpoints.",
+    "Constraint, usefulness, runtime and unreported owners remain separate; ordinary-limit e2e completion is required to establish delivery.",
+    "No CPU-to-work-unit or memory-to-work-unit conversion is made."
+  ],
+  "recorded_phase_maxima": {
+    "final-elaboration": 376641,
+    "independent-effect-core": 1609087,
+    "linked-interface": 48578,
+    "module-linking": 4136,
+    "resolution": 44240,
+    "source-checking": 1212707
+  },
+  "schema_version": 1,
+  "source_artifact": "decision-budget-inputs.json",
+  "source_artifact_sha256": "384286a4d92f826232582660775546e3c462b67fd156aa1a4bbc5abbc3e11427",
+  "source_locations": {
+    "builder_initialization": "src/core/dialect.rs:2399",
+    "builder_owners": "src/core/dialect.rs:2329",
+    "core_multiplier": "src/core/validate.rs:49",
+    "diagnostic_override": "src/calibration.rs:22",
+    "final_elaboration_endpoint": "src/elaborate.rs:5333",
+    "normative_ownership": "spec/static-semantics.md#failure-ownership-and-constraint-resources",
+    "type_budget": "src/types.rs:26"
+  },
+  "status": "Scope-qualified independent charged-unit budget review; no production policy or source change"
+}

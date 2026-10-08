@@ -1,0 +1,8 @@
+{
+  "base": "caa0fcf825a2ec382e221f73891f8621451dcc0c",
+  "file": "tests/method_parameter_resources.rs",
+  "sha256": "4bc1405e4220634da719aface787b046b4fca377aae0dbb4819eeb43e9cd7896",
+  "diff_sha256": "429144fa33d612f0a6de43fb14bbb69bc0494939d3e7d7409437ffa0a61422d1",
+  "review": "Root inspected full patch and concrete_adapter_source_catalog_has_an_exact_retry_boundary; sole stale subtotal165 becomes168 by preserving existing prior_expectation_search3; production and limits unchanged. All43 owner-scoped rows and18 arithmetic assertions statically reviewed by Sol author; dynamic evidence recorded separately.",
+  "counterevidence": "V2 dadac:2657 passes,1 stale inventory failure,60 outer targets; full gate not successful."
+}

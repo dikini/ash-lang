@@ -17,6 +17,8 @@ pub struct SurfaceModule {
     pub effects: Vec<SurfaceEffectDeclaration>,
     /// Implementation declarations in source order.
     pub implementations: Vec<SurfaceImplementation>,
+    /// Experimental source resource assemblies in source order.
+    pub resources: Vec<SurfaceResourceDefinition>,
     /// Global definitions in source order.
     pub definitions: Vec<SurfaceDefinition>,
     /// The complete accepted source span.
@@ -26,6 +28,8 @@ pub struct SurfaceModule {
 /// One source declaration's category and category-local position.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SurfaceDeclarationIndex {
+    /// An experimental source resource assembly.
+    Resource(usize),
     /// A nominal type declaration.
     Type(usize),
     /// An interface declaration.
@@ -353,6 +357,8 @@ pub struct SurfaceExpr {
 pub enum SurfaceExprKind {
     /// An arbitrary-precision integer literal.
     Integer(Integer),
+    /// An experimental decoded UTF-8 string literal.
+    String(String),
     /// A Boolean literal.
     Boolean(bool),
     /// The unit value.
@@ -383,6 +389,8 @@ pub enum SurfaceExprKind {
     Resume(Box<SurfaceExpr>),
     /// A parsed acquisition, pending resource identity and lifetime checking.
     Resource(Box<SurfaceResourceExpr>),
+    /// An instance of an experimental source resource assembly.
+    ProviderResource(Box<SurfaceProviderResourceExpr>),
     /// An empty-chain scope, pending hook API and effect checking.
     Hook(Box<SurfaceHookExpr>),
     /// A scoped transformer, pending hook API and lifetime checking.
@@ -761,8 +769,14 @@ pub struct SurfaceType {
 /// The closed Ash type family.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfaceTypeKind {
+    /// A tagged complete row argument, admitted only in an owner application.
+    RowArgument(SurfaceEffectRow),
     /// Arbitrary-precision integers.
     Int,
+    /// Experimental immutable byte sequences.
+    Bytes,
+    /// Experimental immutable UTF-8 strings.
+    String,
     /// Boolean values.
     Bool,
     /// The unit value.
@@ -813,4 +827,83 @@ pub struct SurfaceEffectInstance {
     pub arguments: Vec<SurfaceType>,
     /// The complete instance span.
     pub span: Span,
+}
+
+/// An experimental source resource assembly; checking supplies lifecycle authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceResourceDefinition {
+    /// Module export visibility.
+    pub public: bool,
+    /// Opaque access-family name.
+    pub name: SurfaceName,
+    /// Ordered parameters; the first denotes fresh instance identity.
+    pub parameters: Vec<SurfaceTypeParameter>,
+    /// Initializer type template.
+    pub input: SurfaceType,
+    /// Controlled provider state type template.
+    pub state: SurfaceType,
+    /// Scope result type template.
+    pub result: SurfaceType,
+    /// Sole answer parameter scoped over the result template.
+    pub answer: SurfaceTypeParameter,
+    /// Sealed forwarding interface application.
+    pub provider: SurfaceRequirement,
+    /// Effect implemented by the handler templates.
+    pub provided: SurfaceEffectInstance,
+    /// Registered effect interpreted only inside provider templates.
+    pub interpreted: SurfaceEffectInstance,
+    /// Optional A-0 family template; resolution and checking supply authority.
+    pub family: Option<SurfaceResourceFamily>,
+    /// Acquire input binder.
+    pub acquire_binder: SurfaceName,
+    /// Acquisition expression template.
+    pub acquire: SurfaceExpr,
+    /// Finish state binder.
+    pub finish_binder: SurfaceName,
+    /// Completion expression template.
+    pub finish: SurfaceExpr,
+    /// State binder shared by handler clauses.
+    pub handlers_binder: SurfaceName,
+    /// Source handler clause templates.
+    pub handlers: Vec<SurfaceHandlerClause>,
+    /// Complete declaration span.
+    pub span: Span,
+}
+
+/// One experimental resource family template, without checked evidence authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceResourceFamily {
+    /// Payload parameter scoped over this template, separate from the answer.
+    pub parameter: SurfaceTypeParameter,
+    /// Written requirements; checking authenticates the sealed layout relation.
+    pub requirements: Vec<SurfaceRequirement>,
+    /// Forwarding interface application template.
+    pub provider: SurfaceRequirement,
+    /// Effect implemented by the family handler clauses.
+    pub provided: SurfaceEffectInstance,
+    /// Registered effect interpreted inside those clauses.
+    pub interpreted: SurfaceEffectInstance,
+    /// Provider state binder shared by this family's clauses.
+    pub handlers_binder: SurfaceName,
+    /// Source handler templates, retaining their original spans.
+    pub handlers: Vec<SurfaceHandlerClause>,
+    /// Complete family block span.
+    pub span: Span,
+}
+
+/// An experimental source resource instance with later parameters inferred from input.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceProviderResourceExpr {
+    /// Defining opaque resource family reference.
+    pub family: SurfaceReference,
+    /// Fresh body-local identity binder.
+    pub identity: SurfaceName,
+    /// Complete explicit remaining owner arguments, or deferred row-free inference.
+    pub arguments: Option<Vec<SurfaceType>>,
+    /// Body-local access binder.
+    pub handle: SurfaceName,
+    /// Initializer in the preceding scope.
+    pub initializer: SurfaceExpr,
+    /// Instance body.
+    pub body: SurfaceBlock,
 }

@@ -14,18 +14,99 @@ use crate::{
         ResolvedExpr, ResolvedExprKind, ResolvedImplementation, ResolvedInterfaceApplication,
         ResolvedInterfaceDeclaration, ResolvedLocalDeclaration, ResolvedModuleParts,
         ResolvedNominalDeclarationKind, ResolvedRecursiveMember, ResolvedRegistry, ResolvedType,
-        ResolvedTypeProvenance, ResolvedTypeProvenanceNode,
+        ResolvedTypeProvenance, ResolvedTypeProvenanceNode, SummaryBinderOwner,
     },
     source::Span,
     types::{
-        EffectRow, InferenceVariableId, Kind, NominalTypeId, Type, TypeVariableId, TypeWorkBudget,
-        charge_kind_descendants, charge_kind_with_charge, clone_arrows_with_budget,
+        EffectRow, InferenceVariableId, Kind, KindedArgument, NominalTypeId, Type, TypeVariableId,
+        TypeWorkBudget, charge_kind_descendants, charge_kind_with_charge, clone_arrows_with_budget,
         clone_kind_with_budget, render_kind_with_budget, same_effect_rows_with_charge,
-        same_kind_with_budget, same_kind_with_charge,
+        same_kind_with_budget, same_kind_with_charge, visit_owner_components_with_charge,
     },
 };
 
 static TYPE_KIND: Kind = Kind::Type;
+
+// A synthesis observer retains only admitted scalar identities. Separate
+// domains preserve callers that need unrestricted or borrowed owner coverage;
+// interface methods combine permission and coverage in one reserved map.
+enum KindVariableObserver<'scope> {
+    Separate {
+        allowed: Option<&'scope HashSet<TypeVariableId>>,
+        visited: Option<&'scope mut HashSet<TypeVariableId>>,
+    },
+    Combined(&'scope mut HashMap<TypeVariableId, bool>),
+    Borrowed {
+        interface_parameters: &'scope [TypeVariableId],
+        method_parameters: &'scope [TypeVariableId],
+        visited: u8,
+    },
+}
+
+impl<'scope> KindVariableObserver<'scope> {
+    fn separate(
+        allowed: Option<&'scope HashSet<TypeVariableId>>,
+        visited: Option<&'scope mut HashSet<TypeVariableId>>,
+    ) -> Self {
+        Self::Separate { allowed, visited }
+    }
+
+    fn observe(&mut self, identity: TypeVariableId) -> bool {
+        match self {
+            Self::Separate { allowed, visited } => {
+                if allowed.is_some_and(|allowed| !allowed.contains(&identity)) {
+                    return false;
+                }
+                if let Some(visited) = visited {
+                    visited.insert(identity);
+                }
+                true
+            }
+            Self::Combined(observed) => match observed.get_mut(&identity) {
+                Some(visited) => {
+                    *visited = true;
+                    true
+                }
+                None => false,
+            },
+            Self::Borrowed {
+                interface_parameters,
+                method_parameters,
+                visited,
+            } => {
+                match interface_parameters
+                    .iter()
+                    .chain(method_parameters.iter())
+                    .position(|parameter| *parameter == identity)
+                {
+                    Some(slot) => {
+                        *visited |= 1 << slot;
+                        true
+                    }
+                    None => false,
+                }
+            }
+        }
+    }
+
+    fn has_observed(&self, identity: TypeVariableId) -> bool {
+        match self {
+            Self::Separate { visited, .. } => visited
+                .as_ref()
+                .is_some_and(|visited| visited.contains(&identity)),
+            Self::Combined(observed) => observed.get(&identity).copied().unwrap_or(false),
+            Self::Borrowed {
+                interface_parameters,
+                method_parameters,
+                visited,
+            } => interface_parameters
+                .iter()
+                .chain(method_parameters.iter())
+                .position(|parameter| *parameter == identity)
+                .is_some_and(|slot| *visited & (1 << slot) != 0),
+        }
+    }
+}
 
 pub(crate) fn binder_kind_is_admitted(kind: &Kind, allow_effect_row: bool) -> bool {
     match kind {
@@ -1133,6 +1214,12 @@ impl KindFailure {
         matches!(self, Self::Source(_))
     }
 
+    /// Reports exhaustion of bounded kind-checking work.
+    #[must_use]
+    pub const fn is_resource_exhaustion(&self) -> bool {
+        matches!(self, Self::Resource(_))
+    }
+
     /// Returns the stage-stable reason code.
     #[must_use]
     pub fn reason_code(&self) -> String {
@@ -1179,6 +1266,14 @@ struct KindFact<'a> {
     occurrence: Span,
 }
 
+/// Summary ownership belongs to declared binders. Synthesis and inference
+/// facts carry only the kind evidence used by the common judgment.
+#[derive(Clone, Copy)]
+struct DeclaredKindFact<'a> {
+    fact: KindFact<'a>,
+    summary_owner: Option<SummaryBinderOwner>,
+}
+
 #[derive(Clone, Copy)]
 enum RetainedKindMirrors<'a> {
     Two(&'a Kind, &'a Kind),
@@ -1186,6 +1281,13 @@ enum RetainedKindMirrors<'a> {
 
 struct NominalKindFact {
     kind: Kind,
+    origin: Span,
+}
+
+#[derive(Clone, Copy)]
+struct ResourceKindFact<'a> {
+    family: NominalTypeId,
+    parameters: &'a [crate::resolved::ResolvedTypeVariable],
     origin: Span,
 }
 
@@ -1207,9 +1309,15 @@ enum InterfaceKindDetermination<'a> {
 /// inference entries to the same engine before inference variables enter a
 /// type.
 pub(crate) struct KindEnvironments<'a> {
-    delta: HashMap<TypeVariableId, KindFact<'a>>,
+    delta: HashMap<TypeVariableId, DeclaredKindFact<'a>>,
     omega: HashMap<InferenceVariableId, KindFact<'a>>,
     xi: HashMap<NominalTypeId, NominalKindFact>,
+    row_resource_families: HashMap<NominalTypeId, (crate::types::ResourceDefinitionId, Span)>,
+    row_resource_owners: HashMap<crate::types::ResourceDefinitionId, ResourceKindFact<'a>>,
+    owner_registry: Option<&'a ResolvedRegistry>,
+    // Source modules retain local canonical records separately from imports.
+    // The borrowed body-free inventory supplies original imported owner formals.
+    imported_resource_owners: Option<&'a crate::resolved::ImportedFacts>,
     iota: HashMap<InterfaceId, InterfaceKindFact<'a>>,
     effects: Option<HashMap<crate::types::EffectId, &'a [crate::resolved::ResolvedTypeVariable]>>,
 }
@@ -1220,8 +1328,19 @@ impl<'a> KindEnvironments<'a> {
             delta: HashMap::new(),
             omega: HashMap::new(),
             xi: HashMap::new(),
+            row_resource_families: HashMap::new(),
+            row_resource_owners: HashMap::new(),
+            owner_registry: None,
+            imported_resource_owners: None,
             iota: HashMap::new(),
             effects: None,
+        }
+    }
+
+    pub(crate) fn new_with_registry(registry: &'a ResolvedRegistry) -> Self {
+        Self {
+            owner_registry: Some(registry),
+            ..Self::new()
         }
     }
 
@@ -1281,6 +1400,40 @@ impl<'a> KindEnvironments<'a> {
         Ok(())
     }
 
+    /// Borrows complete defining effect formals from a body-free summary.
+    /// Its caller independently authenticates declaration IDs, ordinal tables,
+    /// parameter ownership and kinds; no use-site argument determines a slot.
+    pub(crate) fn install_retained_effects(
+        &mut self,
+        declarations: &'a [crate::resolved::ResolvedEffectDeclaration],
+        budget: &mut TypeWorkBudget,
+        span: Span,
+    ) -> Result<(), KindFailure> {
+        let mut effects = HashMap::new();
+        for effect in declarations {
+            budget.charge(1).map_err(|()| {
+                KindFailure::resource(
+                    span,
+                    "retained effect authority exceeded its type-work budget",
+                )
+            })?;
+            effects.try_reserve(1).map_err(|_| {
+                KindFailure::resource(span, "retained effect authority could not reserve storage")
+            })?;
+            if effects
+                .insert(effect.id, effect.parameters.as_ref())
+                .is_some()
+            {
+                return Err(KindFailure::internal_cause(
+                    span,
+                    KindInternalCause::DuplicateEffect,
+                ));
+            }
+        }
+        self.effects = (!effects.is_empty()).then_some(effects);
+        Ok(())
+    }
+
     pub(crate) fn contains_declared(&self, identity: TypeVariableId) -> bool {
         self.delta.contains_key(&identity)
     }
@@ -1290,13 +1443,43 @@ impl<'a> KindEnvironments<'a> {
     }
 
     pub(crate) fn contains_nominal(&self, identity: NominalTypeId) -> bool {
-        self.xi.contains_key(&identity)
+        self.xi.contains_key(&identity) || self.row_resource_families.contains_key(&identity)
     }
 
     pub(crate) fn insert_declared(
         &mut self,
         identity: TypeVariableId,
         kind: &'a Kind,
+        origin: Span,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), KindFailure> {
+        self.insert_declared_with_owner(identity, kind, None, origin, budget)
+    }
+
+    pub(crate) fn summary_declared(
+        &self,
+        identity: TypeVariableId,
+    ) -> Option<(&'a Kind, Span, Option<SummaryBinderOwner>)> {
+        let fact = self.delta.get(&identity)?;
+        Some((fact.fact.kind, fact.fact.origin?, fact.summary_owner))
+    }
+
+    pub(crate) fn insert_summary_declared(
+        &mut self,
+        identity: TypeVariableId,
+        kind: &'a Kind,
+        origin: Span,
+        owner: SummaryBinderOwner,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), KindFailure> {
+        self.insert_declared_with_owner(identity, kind, Some(owner), origin, budget)
+    }
+
+    fn insert_declared_with_owner(
+        &mut self,
+        identity: TypeVariableId,
+        kind: &'a Kind,
+        summary_owner: Option<SummaryBinderOwner>,
         origin: Span,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), KindFailure> {
@@ -1326,11 +1509,14 @@ impl<'a> KindEnvironments<'a> {
         })?;
         self.delta.insert(
             identity,
-            KindFact {
-                kind,
-                retained_mirrors: None,
-                origin: Some(origin),
-                occurrence: origin,
+            DeclaredKindFact {
+                fact: KindFact {
+                    kind,
+                    retained_mirrors: None,
+                    origin: Some(origin),
+                    occurrence: origin,
+                },
+                summary_owner,
             },
         );
         Ok(())
@@ -1348,6 +1534,28 @@ impl<'a> KindEnvironments<'a> {
         self.clear_declared();
         for parameter in parameters {
             if !binder_kind_is_admitted(&parameter.kind, false) {
+                return Err(KindFailure::internal_cause(
+                    parameter.origin.primary_span(),
+                    KindInternalCause::OwnerEffectRow,
+                ));
+            }
+            self.insert_declared(
+                parameter.id,
+                &parameter.kind,
+                parameter.origin.primary_span(),
+                budget,
+            )?;
+        }
+        Ok(())
+    }
+    fn install_complete_owner_parameters(
+        &mut self,
+        parameters: &'a [crate::resolved::ResolvedTypeVariable],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), KindFailure> {
+        self.clear_declared();
+        for parameter in parameters {
+            if !binder_kind_is_admitted(&parameter.kind, true) {
                 return Err(KindFailure::internal_cause(
                     parameter.origin.primary_span(),
                     KindInternalCause::OwnerEffectRow,
@@ -1536,11 +1744,17 @@ impl<'a> KindEnvironments<'a> {
             })?;
             self.delta.insert(
                 parameter.id,
-                KindFact {
-                    kind: &canonical.kind,
-                    retained_mirrors: Some(RetainedKindMirrors::Two(&parameter.kind, &source.kind)),
-                    origin: Some(canonical.origin.primary_span()),
-                    occurrence: span,
+                DeclaredKindFact {
+                    fact: KindFact {
+                        kind: &canonical.kind,
+                        retained_mirrors: Some(RetainedKindMirrors::Two(
+                            &parameter.kind,
+                            &source.kind,
+                        )),
+                        origin: Some(canonical.origin.primary_span()),
+                        occurrence: span,
+                    },
+                    summary_owner: None,
                 },
             );
         }
@@ -1601,11 +1815,17 @@ impl<'a> KindEnvironments<'a> {
             })?;
             self.delta.insert(
                 *identity,
-                KindFact {
-                    kind: &parameter.kind,
-                    retained_mirrors: Some(RetainedKindMirrors::Two(retained_kind, &source.kind)),
-                    origin: Some(parameter.origin.primary_span()),
-                    occurrence: span,
+                DeclaredKindFact {
+                    fact: KindFact {
+                        kind: &parameter.kind,
+                        retained_mirrors: Some(RetainedKindMirrors::Two(
+                            retained_kind,
+                            &source.kind,
+                        )),
+                        origin: Some(parameter.origin.primary_span()),
+                        occurrence: span,
+                    },
+                    summary_owner: None,
                 },
             );
         }
@@ -1685,8 +1905,15 @@ impl<'a> KindEnvironments<'a> {
         budget: &mut impl KindWorkLedger,
     ) -> Result<(), KindFailure> {
         let mut ledger = SynthesisLedger::BodyFree(budget);
-        let found =
-            self.synthesize_with_ledger(ty, None, None, None, None, None, span, &mut ledger)?;
+        let found = self.synthesize_with_ledger(
+            ty,
+            None,
+            None,
+            None,
+            &mut KindVariableObserver::separate(None, None),
+            span,
+            &mut ledger,
+        )?;
         let equal =
             same_kind_with_charge(expected, found.kind, || ledger.charge(1)).map_err(|()| {
                 KindFailure::resource(
@@ -1713,8 +1940,15 @@ impl<'a> KindEnvironments<'a> {
         budget: &mut impl KindWorkLedger,
     ) -> Result<(), KindFailure> {
         let mut ledger = SynthesisLedger::BodyFree(budget);
-        let found =
-            self.synthesize_with_ledger(ty, None, None, None, None, None, span, &mut ledger)?;
+        let found = self.synthesize_with_ledger(
+            ty,
+            None,
+            None,
+            None,
+            &mut KindVariableObserver::separate(None, None),
+            span,
+            &mut ledger,
+        )?;
         let equal =
             same_kind_with_charge(&TYPE_KIND, found.kind, || ledger.charge(1)).map_err(|()| {
                 KindFailure::resource(
@@ -1775,8 +2009,7 @@ impl<'a> KindEnvironments<'a> {
             None,
             None,
             root_domain_mirror,
-            Some(&allowed_variables),
-            None,
+            &mut KindVariableObserver::separate(Some(&allowed_variables), None),
             span,
             &mut ledger,
         )?;
@@ -1831,41 +2064,64 @@ impl<'a> KindEnvironments<'a> {
                     "body-free interface-method variable count exceeded its owning work budget",
                 )
             })?;
-        let retained_work = parameter_count.checked_mul(2).ok_or_else(|| {
-            KindFailure::resource(
-                span,
-                "body-free interface-method variable work exceeded its owning budget",
-            )
-        })?;
-        budget.charge(retained_work).map_err(|()| {
-            KindFailure::resource(
-                span,
-                "body-free interface-method variable storage exceeded its owning work budget",
-            )
-        })?;
-        let mut allowed = HashSet::new();
-        allowed.try_reserve(parameter_count).map_err(|_| {
-            KindFailure::resource(
-                span,
-                "body-free interface-method variable storage could not reserve capacity",
-            )
-        })?;
-        for parameter in interface_parameters {
-            if !allowed.insert(*parameter) {
-                return Err(KindFailure::internal_cause(
-                    span,
-                    KindInternalCause::BodyFreeInterfaceDuplicateParameter,
-                ));
-            }
-        }
-        for method_parameter in method_parameters {
-            if !allowed.insert(*method_parameter) {
-                return Err(KindFailure::internal_cause(
-                    span,
-                    KindInternalCause::BodyFreeMethodDuplicateParameter,
-                ));
-            }
-        }
+        let mut observed = HashMap::new();
+        let mut variables =
+            if parameter_count <= 2 {
+                // The original immutable slices already retain these IDs. A tiny
+                // domain needs only two bounded comparisons and stack coverage
+                // bits, with no owned identity storage or allocation.
+                for (slot, parameter) in interface_parameters.iter().enumerate() {
+                    if interface_parameters[..slot].contains(parameter) {
+                        return Err(KindFailure::internal_cause(
+                            span,
+                            KindInternalCause::BodyFreeInterfaceDuplicateParameter,
+                        ));
+                    }
+                }
+                for (slot, parameter) in method_parameters.iter().enumerate() {
+                    if interface_parameters.contains(parameter)
+                        || method_parameters[..slot].contains(parameter)
+                    {
+                        return Err(KindFailure::internal_cause(
+                            span,
+                            KindInternalCause::BodyFreeMethodDuplicateParameter,
+                        ));
+                    }
+                }
+                KindVariableObserver::Borrowed {
+                    interface_parameters,
+                    method_parameters,
+                    visited: 0,
+                }
+            } else {
+                budget.charge(parameter_count).map_err(|()| {
+                KindFailure::resource(span,
+                    "body-free interface-method variable storage exceeded its owning work budget")
+            })?;
+                observed.try_reserve(parameter_count).map_err(|_| {
+                    KindFailure::resource(
+                        span,
+                        "body-free interface-method variable storage could not reserve capacity",
+                    )
+                })?;
+                for parameter in interface_parameters {
+                    if observed.insert(*parameter, false).is_some() {
+                        return Err(KindFailure::internal_cause(
+                            span,
+                            KindInternalCause::BodyFreeInterfaceDuplicateParameter,
+                        ));
+                    }
+                }
+                for parameter in method_parameters {
+                    if observed.insert(*parameter, false).is_some() {
+                        return Err(KindFailure::internal_cause(
+                            span,
+                            KindInternalCause::BodyFreeMethodDuplicateParameter,
+                        ));
+                    }
+                }
+                KindVariableObserver::Combined(&mut observed)
+            };
         if let BodyFreeInterfaceMethodSeed::Determined(required) = seed {
             if required.is_empty() || required.len() >= interface_parameters.len() {
                 return Err(KindFailure::internal_cause(
@@ -1897,28 +2153,13 @@ impl<'a> KindEnvironments<'a> {
                 }
             }
         }
-        let mut visited = HashSet::new();
-        visited.try_reserve(parameter_count).map_err(|_| {
-            KindFailure::resource(
-                span,
-                "body-free interface-method coverage could not reserve capacity",
-            )
-        })?;
         let mut ledger = SynthesisLedger::BodyFree(budget);
-        let found = self.synthesize_with_ledger(
-            ty,
-            None,
-            None,
-            None,
-            Some(&allowed),
-            Some(&mut visited),
-            span,
-            &mut ledger,
-        )?;
+        let found =
+            self.synthesize_with_ledger(ty, None, None, None, &mut variables, span, &mut ledger)?;
         let missing_interface_parameter = match seed {
             BodyFreeInterfaceMethodSeed::AllInterfaceParameters => interface_parameters
                 .iter()
-                .any(|parameter| !visited.contains(parameter)),
+                .any(|parameter| !variables.has_observed(*parameter)),
             BodyFreeInterfaceMethodSeed::Determined(required) => {
                 let mut missing = false;
                 for parameter in required {
@@ -1928,7 +2169,7 @@ impl<'a> KindEnvironments<'a> {
                             "body-free interface determinant coverage exceeded its owning work budget",
                         )
                     })?;
-                    if !visited.contains(parameter) {
+                    if !variables.has_observed(*parameter) {
                         missing = true;
                         break;
                     }
@@ -1939,21 +2180,17 @@ impl<'a> KindEnvironments<'a> {
         if missing_interface_parameter
             || method_parameters
                 .iter()
-                .any(|method_parameter| !visited.contains(method_parameter))
+                .any(|method_parameter| !variables.has_observed(*method_parameter))
         {
             return Err(KindFailure::internal_cause(
                 span,
                 KindInternalCause::BodyFreeMissingParameter,
             ));
         }
-        let equal =
-            same_kind_with_charge(&TYPE_KIND, found.kind, || ledger.charge(1)).map_err(|()| {
-                KindFailure::resource(
-                    span,
-                    "body-free interface-method kind checking exceeded its owning work budget",
-                )
-            })?;
-        if equal {
+        // Function synthesis has authenticated both value positions and all
+        // latent effects before producing its intrinsic Type result. Inspect
+        // that scalar result directly rather than retaining another pair walk.
+        if matches!(found.kind, Kind::Type) {
             Ok(())
         } else {
             Err(KindFailure::internal_cause(
@@ -1993,8 +2230,7 @@ impl<'a> KindEnvironments<'a> {
             None,
             Some(source),
             None,
-            None,
-            Some(&mut visited),
+            &mut KindVariableObserver::separate(None, Some(&mut visited)),
             span,
             &mut ledger,
         )?;
@@ -2051,8 +2287,7 @@ impl<'a> KindEnvironments<'a> {
             None,
             Some(source),
             None,
-            None,
-            Some(&mut visited),
+            &mut KindVariableObserver::separate(None, Some(&mut visited)),
             span,
             &mut ledger,
         )?;
@@ -2101,8 +2336,7 @@ impl<'a> KindEnvironments<'a> {
             None,
             None,
             None,
-            None,
-            Some(&mut visited),
+            &mut KindVariableObserver::separate(None, Some(&mut visited)),
             span,
             &mut ledger,
         )?;
@@ -2157,8 +2391,7 @@ impl<'a> KindEnvironments<'a> {
             None,
             None,
             None,
-            None,
-            Some(&mut visited),
+            &mut KindVariableObserver::separate(None, Some(&mut visited)),
             span,
             &mut ledger,
         )?;
@@ -2234,7 +2467,7 @@ impl<'a> KindEnvironments<'a> {
         origin: Span,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), KindFailure> {
-        if self.xi.contains_key(&identity) {
+        if self.contains_nominal(identity) {
             charge_lookup_attempt(origin, budget)?;
             return Err(KindFailure::internal_cause(
                 origin,
@@ -2266,6 +2499,52 @@ impl<'a> KindEnvironments<'a> {
         Ok(())
     }
 
+    pub(crate) fn insert_row_resource_family(
+        &mut self,
+        family: NominalTypeId,
+        resource: crate::types::ResourceDefinitionId,
+        parameters: &'a [crate::resolved::ResolvedTypeVariable],
+        origin: Span,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), KindFailure> {
+        if self.contains_nominal(family) || self.row_resource_owners.contains_key(&resource) {
+            charge_lookup_attempt(origin, budget)?;
+            return Err(KindFailure::internal_cause(
+                origin,
+                KindInternalCause::DuplicateNominalKind,
+            ));
+        }
+        budget.charge(1).map_err(|()| {
+            KindFailure::resource(
+                origin,
+                "nominal environment-record retention exceeded its type-work budget",
+            )
+        })?;
+        self.row_resource_families.try_reserve(1).map_err(|_| {
+            KindFailure::resource(origin, "nominal kind environment could not reserve storage")
+        })?;
+        budget.charge(1).map_err(|()| {
+            KindFailure::resource(
+                origin,
+                "resource kind authority retention exceeded its type-work budget",
+            )
+        })?;
+        self.row_resource_owners.try_reserve(1).map_err(|_| {
+            KindFailure::resource(origin, "resource kind authority could not reserve storage")
+        })?;
+        self.row_resource_owners.insert(
+            resource,
+            ResourceKindFact {
+                family,
+                parameters,
+                origin,
+            },
+        );
+        self.row_resource_families
+            .insert(family, (resource, origin));
+        Ok(())
+    }
+
     pub(crate) fn insert_frozen_nominal(
         &mut self,
         identity: NominalTypeId,
@@ -2273,7 +2552,7 @@ impl<'a> KindEnvironments<'a> {
         origin: Span,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), KindFailure> {
-        if self.xi.contains_key(&identity) {
+        if self.contains_nominal(identity) {
             charge_lookup_attempt(origin, budget)?;
             return Err(KindFailure::internal_cause(
                 origin,
@@ -2432,17 +2711,104 @@ impl<'a> KindEnvironments<'a> {
 
     pub(crate) fn expect_interface_argument(
         &self,
-        argument: &ResolvedType,
+        argument: &crate::resolved::ResolvedOwnerArgument,
         expected: &'a Kind,
         expected_origin: Span,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), KindFailure> {
-        let found = self.synthesize(
-            &argument.ty,
-            Some(&argument.provenance),
-            argument.span,
-            budget,
-        )?;
+        let found = match &argument.ty {
+            KindedArgument::TypeArg(ty) => {
+                if *expected == Kind::EffectRow {
+                    return Err(KindFailure::Source(Box::new(structured_error(
+                        KindReason::Argument,
+                        argument.span,
+                        "this row slot requires a written effect-row argument",
+                        expected,
+                        &Kind::Type,
+                        Some((
+                            expected_origin,
+                            "the interface parameter kind is declared here",
+                        )),
+                        budget,
+                    )?)));
+                }
+                self.synthesize(ty, Some(&argument.provenance), argument.span, budget)?
+            }
+            KindedArgument::RowArg(row) => {
+                if *expected != Kind::EffectRow {
+                    return Err(KindFailure::Source(Box::new(structured_error(
+                        KindReason::Argument,
+                        argument.span,
+                        "this interface argument has the wrong kind",
+                        expected,
+                        &Kind::EffectRow,
+                        Some((
+                            expected_origin,
+                            "the interface parameter kind is declared here",
+                        )),
+                        budget,
+                    )?)));
+                }
+                let mut ledger = SynthesisLedger::Resolved(budget);
+                let mut pending = Vec::new();
+                self.owner_argument_source_roots(
+                    std::iter::once(&argument.ty),
+                    Some(&[argument.provenance.root()]),
+                    Some(&argument.provenance),
+                    argument.span,
+                    &mut ledger,
+                    &mut pending,
+                )?;
+                self.authenticate_source_effect_row_tail(row, argument.span, &mut ledger)?;
+                let mut initial = Vec::new();
+                initial.try_reserve_exact(1).map_err(|_| {
+                    KindFailure::resource(
+                        argument.span,
+                        "row argument checking could not reserve storage",
+                    )
+                })?;
+                initial.push((&argument.ty, expected));
+                for (ty, expected) in self.owner_type_inputs(
+                    initial,
+                    &mut KindVariableObserver::separate(None, None),
+                    argument.span,
+                    &mut ledger,
+                )? {
+                    let found = self.synthesize_with_ledger(
+                        ty,
+                        None,
+                        None,
+                        None,
+                        &mut KindVariableObserver::separate(None, None),
+                        argument.span,
+                        &mut ledger,
+                    )?;
+                    if !same_kind_with_charge(expected, found.kind, || ledger.charge(1)).map_err(
+                        |()| {
+                            KindFailure::resource(
+                                argument.span,
+                                "row argument checking exceeded its budget",
+                            )
+                        },
+                    )? {
+                        return Err(KindFailure::internal_cause(
+                            argument.span,
+                            KindInternalCause::EffectArgumentKind,
+                        ));
+                    }
+                }
+                if let Some(effects) = &self.effects {
+                    self.authenticate_effect_type_queue(
+                        effects,
+                        Some(&argument.provenance),
+                        argument.span,
+                        &mut ledger,
+                        pending,
+                    )?;
+                }
+                return Ok(());
+            }
+        };
         let equal = same_kind_with_budget(expected, found.kind, budget).map_err(|()| {
             KindFailure::resource(
                 argument.span,
@@ -2491,7 +2857,7 @@ impl<'a> KindEnvironments<'a> {
     pub(crate) fn expect_body_free_interface_argument_with_ledger(
         &self,
         interface: InterfaceId,
-        arguments: &[Type],
+        arguments: &[KindedArgument],
         span: Span,
         budget: &mut impl KindWorkLedger,
     ) -> Result<(), KindFailure> {
@@ -2514,25 +2880,46 @@ impl<'a> KindEnvironments<'a> {
             ));
         }
         let mut ledger = SynthesisLedger::BodyFree(budget);
-        for (argument, parameter) in arguments.iter().zip(expected.parameters) {
+        let mut initial = Vec::new();
+        ledger.charge(arguments.len()).map_err(|()| {
+            KindFailure::resource(
+                span,
+                "interface argument checking exceeded its owning work budget",
+            )
+        })?;
+        initial.try_reserve_exact(arguments.len()).map_err(|_| {
+            KindFailure::resource(
+                span,
+                "interface argument checking could not reserve storage",
+            )
+        })?;
+        initial.extend(
+            arguments
+                .iter()
+                .zip(expected.parameters)
+                .map(|(argument, parameter)| (argument, &parameter.kind)),
+        );
+        for (argument, expected) in self.owner_type_inputs(
+            initial,
+            &mut KindVariableObserver::separate(None, None),
+            span,
+            &mut ledger,
+        )? {
             let found = self.synthesize_with_ledger(
                 argument,
                 None,
                 None,
                 None,
-                None,
-                None,
+                &mut KindVariableObserver::separate(None, None),
                 span,
                 &mut ledger,
             )?;
-            let equal = same_kind_with_charge(&parameter.kind, found.kind, || ledger.charge(1))
-                .map_err(|()| {
-                    KindFailure::resource(
-                        span,
-                        "body-free interface kind authentication exceeded its owning work budget",
-                    )
-                })?;
-            if !equal {
+            if !same_kind_with_charge(expected, found.kind, || ledger.charge(1)).map_err(|()| {
+                KindFailure::resource(
+                    span,
+                    "interface kind authentication exceeded its owning work budget",
+                )
+            })? {
                 return Err(KindFailure::internal_cause(
                     span,
                     KindInternalCause::BodyFreeInterfaceArgument,
@@ -2547,7 +2934,7 @@ impl<'a> KindEnvironments<'a> {
     pub(crate) fn expect_body_free_exact_owner_interface_argument_with_ledger(
         &self,
         interface: InterfaceId,
-        arguments: &[Type],
+        arguments: &[KindedArgument],
         span: Span,
         budget: &mut impl KindWorkLedger,
     ) -> Result<(), KindFailure> {
@@ -2583,25 +2970,46 @@ impl<'a> KindEnvironments<'a> {
             )
         })?;
         let mut ledger = SynthesisLedger::BodyFree(budget);
-        for (argument, parameter) in arguments.iter().zip(expected.parameters) {
+        let mut initial = Vec::new();
+        ledger.charge(arguments.len()).map_err(|()| {
+            KindFailure::resource(
+                span,
+                "interface argument checking exceeded its owning work budget",
+            )
+        })?;
+        initial.try_reserve_exact(arguments.len()).map_err(|_| {
+            KindFailure::resource(
+                span,
+                "interface argument checking could not reserve storage",
+            )
+        })?;
+        initial.extend(
+            arguments
+                .iter()
+                .zip(expected.parameters)
+                .map(|(argument, parameter)| (argument, &parameter.kind)),
+        );
+        for (argument, expected) in self.owner_type_inputs(
+            initial,
+            &mut KindVariableObserver::separate(None, Some(&mut visited)),
+            span,
+            &mut ledger,
+        )? {
             let found = self.synthesize_with_ledger(
                 argument,
                 None,
                 None,
                 None,
-                None,
-                Some(&mut visited),
+                &mut KindVariableObserver::separate(None, Some(&mut visited)),
                 span,
                 &mut ledger,
             )?;
-            let equal = same_kind_with_charge(&parameter.kind, found.kind, || ledger.charge(1))
-                .map_err(|()| {
-                    KindFailure::resource(
-                        span,
-                        "body-free interface kind authentication exceeded its owning work budget",
-                    )
-                })?;
-            if !equal {
+            if !same_kind_with_charge(expected, found.kind, || ledger.charge(1)).map_err(|()| {
+                KindFailure::resource(
+                    span,
+                    "interface kind authentication exceeded its owning work budget",
+                )
+            })? {
                 return Err(KindFailure::internal_cause(
                     span,
                     KindInternalCause::BodyFreeInterfaceArgument,
@@ -2620,7 +3028,7 @@ impl<'a> KindEnvironments<'a> {
     fn expect_body_free_interface_argument(
         &self,
         interface: InterfaceId,
-        arguments: &[Type],
+        arguments: &[KindedArgument],
         span: Span,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), KindFailure> {
@@ -2643,8 +3051,7 @@ impl<'a> KindEnvironments<'a> {
             provenance,
             None,
             None,
-            None,
-            None,
+            &mut KindVariableObserver::separate(None, None),
             fallback_span,
             &mut ledger,
         )
@@ -2657,8 +3064,7 @@ impl<'a> KindEnvironments<'a> {
         provenance: Option<&ResolvedTypeProvenance>,
         type_mirror: Option<&Type>,
         root_function_domain_mirror: Option<&Type>,
-        allowed_variables: Option<&HashSet<TypeVariableId>>,
-        visited_variables: Option<&mut HashSet<TypeVariableId>>,
+        variables: &mut KindVariableObserver<'_>,
         fallback_span: Span,
         budget: &mut SynthesisLedger<'_>,
     ) -> Result<KindFact<'environment>, KindFailure>
@@ -2672,8 +3078,7 @@ impl<'a> KindEnvironments<'a> {
             provenance.map(ResolvedTypeProvenance::root),
             type_mirror,
             root_function_domain_mirror,
-            allowed_variables,
-            visited_variables,
+            variables,
             fallback_span,
             budget,
         )
@@ -2729,12 +3134,26 @@ impl<'a> KindEnvironments<'a> {
             }
             return Ok(());
         }
-        self.authenticate_effect_row_tail(row, None, None, span, budget)?;
+        self.authenticate_source_effect_row_tail(row, span, budget)?;
         let Some(effects) = &self.effects else {
             return Ok(());
         };
+        budget.charge(argument_provenance.len()).map_err(|()| {
+            KindFailure::resource(span, "effect provenance coverage exceeded its work budget")
+        })?;
+        let mut covered = Vec::new();
+        covered
+            .try_reserve_exact(argument_provenance.len())
+            .map_err(|_| {
+                KindFailure::resource(span, "effect provenance coverage could not reserve storage")
+            })?;
+        covered.resize(argument_provenance.len(), false);
         let mut roots = argument_roots.iter();
-        for instance in row.known() {
+        for instance in row
+            .known()
+            .iter()
+            .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
+        {
             budget.charge(1).map_err(|()| {
                 KindFailure::resource(
                     span,
@@ -2753,20 +3172,49 @@ impl<'a> KindEnvironments<'a> {
             for (argument, parameter) in instance.arguments().iter().zip(parameters.iter()) {
                 let provenance = roots
                     .next()
-                    .and_then(|root| argument_provenance.get(*root))
+                    .and_then(|root| {
+                        *covered.get_mut(*root)? = true;
+                        argument_provenance.get(*root)
+                    })
                     .ok_or_else(|| {
                         KindFailure::internal_cause(
                             span,
                             KindInternalCause::ComputationMissingArguments,
                         )
                     })?;
+                if let KindedArgument::RowArg(_) = argument {
+                    self.authenticate_source_row_argument(
+                        argument,
+                        provenance,
+                        &parameter.kind,
+                        span,
+                        budget,
+                    )?;
+                    continue;
+                }
+                let KindedArgument::TypeArg(argument) = argument else {
+                    unreachable!()
+                };
+                if parameter.kind == Kind::EffectRow {
+                    return Err(KindFailure::Source(Box::new(structured_error(
+                        KindReason::Argument,
+                        span,
+                        "this row slot requires a written effect-row argument",
+                        &parameter.kind,
+                        &Kind::Type,
+                        Some((
+                            parameter.origin.primary_span(),
+                            "the effect parameter kind is declared here",
+                        )),
+                        budget.resolved_budget(span)?,
+                    )?)));
+                }
                 let found = self.synthesize_with_ledger(
                     argument,
                     Some(provenance),
                     None,
                     None,
-                    None,
-                    None,
+                    &mut KindVariableObserver::separate(None, None),
                     span,
                     budget,
                 )?;
@@ -2794,11 +3242,201 @@ impl<'a> KindEnvironments<'a> {
                 }
             }
         }
-        if roots.next().is_some() || argument_provenance.len() != argument_roots.len() {
+        if roots.next().is_some() || covered.iter().any(|covered| !covered) {
             return Err(KindFailure::internal_cause(
                 span,
                 KindInternalCause::ComputationSurplusArguments,
             ));
+        }
+        Ok(())
+    }
+
+    fn authenticate_source_row_argument(
+        &self,
+        argument: &KindedArgument,
+        provenance: &ResolvedTypeProvenance,
+        expected: &Kind,
+        span: Span,
+        budget: &mut SynthesisLedger<'_>,
+    ) -> Result<(), KindFailure> {
+        if *expected != Kind::EffectRow {
+            return Err(KindFailure::Source(Box::new(structured_error(
+                KindReason::Argument,
+                span,
+                "this effect argument has the wrong kind",
+                expected,
+                &Kind::EffectRow,
+                None,
+                budget.resolved_budget(span)?,
+            )?)));
+        }
+        let mut pending = Vec::new();
+        self.owner_argument_source_roots(
+            std::iter::once(argument),
+            Some(&[provenance.root()]),
+            Some(provenance),
+            span,
+            budget,
+            &mut pending,
+        )?;
+        let mut initial = Vec::new();
+        budget.charge(1).map_err(|()| {
+            KindFailure::resource(span, "row argument checking exceeded its work budget")
+        })?;
+        initial.try_reserve_exact(1).map_err(|_| {
+            KindFailure::resource(span, "row argument checking could not reserve storage")
+        })?;
+        initial.push((argument, expected));
+        for (ty, expected) in self.owner_type_inputs(
+            initial,
+            &mut KindVariableObserver::separate(None, None),
+            span,
+            budget,
+        )? {
+            let found = self.synthesize_with_ledger(
+                ty,
+                None,
+                None,
+                None,
+                &mut KindVariableObserver::separate(None, None),
+                span,
+                budget,
+            )?;
+            if !same_kind_with_charge(expected, found.kind, || budget.charge(1)).map_err(|()| {
+                KindFailure::resource(span, "row argument checking exceeded its work budget")
+            })? {
+                return Err(KindFailure::internal_cause(
+                    span,
+                    KindInternalCause::EffectArgumentKind,
+                ));
+            }
+        }
+        if let Some(effects) = &self.effects {
+            self.authenticate_effect_type_queue(effects, Some(provenance), span, budget, pending)?;
+        }
+        Ok(())
+    }
+
+    fn owner_argument_source_roots<'input>(
+        &self,
+        arguments: impl DoubleEndedIterator<Item = &'input KindedArgument>,
+        roots: Option<&[usize]>,
+        provenance: Option<&ResolvedTypeProvenance>,
+        span: Span,
+        budget: &mut SynthesisLedger<'_>,
+        pending: &mut Vec<(&'input Type, Option<usize>)>,
+    ) -> Result<(), KindFailure> {
+        let mut work = Vec::new();
+        let mut roots = roots.map(|roots| roots.iter());
+        for argument in arguments {
+            budget.charge(1).map_err(|()| {
+                KindFailure::resource(span, "argument provenance exceeded its work budget")
+            })?;
+            work.try_reserve(1).map_err(|_| {
+                KindFailure::resource(span, "argument provenance could not reserve storage")
+            })?;
+            let root = roots
+                .as_mut()
+                .map(|roots| {
+                    roots.next().copied().ok_or_else(|| {
+                        KindFailure::internal_cause(span, KindInternalCause::RowMissingArguments)
+                    })
+                })
+                .transpose()?;
+            work.push((argument, root));
+        }
+        if roots.as_mut().is_some_and(|roots| roots.next().is_some()) {
+            return Err(KindFailure::internal_cause(
+                span,
+                KindInternalCause::RowSurplusArguments,
+            ));
+        }
+        while let Some((argument, root)) = work.pop() {
+            match argument {
+                KindedArgument::TypeArg(ty) => {
+                    budget.charge(1).map_err(|()| {
+                        KindFailure::resource(span, "argument provenance exceeded its work budget")
+                    })?;
+                    pending.try_reserve(1).map_err(|_| {
+                        KindFailure::resource(span, "argument provenance could not reserve storage")
+                    })?;
+                    pending.push((ty, root));
+                }
+                KindedArgument::RowArg(row) => {
+                    let nested_roots = match (provenance, root) {
+                        (Some(provenance), Some(root)) => match provenance.nodes().get(root) {
+                            Some(ResolvedTypeProvenanceNode::Row { argument_roots, .. }) => {
+                                Some(argument_roots.iter())
+                            }
+                            _ => {
+                                return Err(KindFailure::internal_cause(
+                                    span,
+                                    KindInternalCause::EffectTypeProvenanceShape,
+                                ));
+                            }
+                        },
+                        (None, None) => None,
+                        _ => {
+                            return Err(KindFailure::internal_cause(
+                                span,
+                                KindInternalCause::EffectTypeProvenanceShape,
+                            ));
+                        }
+                    };
+                    if provenance.is_some() {
+                        self.authenticate_source_effect_row_tail(row, span, budget)?;
+                    } else {
+                        self.authenticate_effect_row_tail(
+                            row,
+                            &mut KindVariableObserver::separate(None, None),
+                            span,
+                            budget,
+                        )?;
+                    }
+                    let mut nested_roots = nested_roots;
+                    for member in row
+                        .known()
+                        .iter()
+                        .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
+                    {
+                        budget.charge(1 + member.arguments().len()).map_err(|()| {
+                            KindFailure::resource(
+                                span,
+                                "argument provenance exceeded its work budget",
+                            )
+                        })?;
+                        work.try_reserve(member.arguments().len()).map_err(|_| {
+                            KindFailure::resource(
+                                span,
+                                "argument provenance could not reserve storage",
+                            )
+                        })?;
+                        for argument in member.arguments() {
+                            let root = nested_roots
+                                .as_mut()
+                                .map(|roots| {
+                                    roots.next().copied().ok_or_else(|| {
+                                        KindFailure::internal_cause(
+                                            span,
+                                            KindInternalCause::RowMissingArguments,
+                                        )
+                                    })
+                                })
+                                .transpose()?;
+                            work.push((argument, root));
+                        }
+                    }
+                    if nested_roots
+                        .as_mut()
+                        .is_some_and(|roots| roots.next().is_some())
+                    {
+                        return Err(KindFailure::internal_cause(
+                            span,
+                            KindInternalCause::RowSurplusArguments,
+                        ));
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -2832,6 +3470,32 @@ impl<'a> KindEnvironments<'a> {
                 }
             };
             match ty {
+                Type::ResourceApply(resource, arguments) => {
+                    let roots = match node {
+                        Some(ResolvedTypeProvenanceNode::Resource {
+                            resource: source,
+                            arguments: roots,
+                            ..
+                        }) if source == resource && roots.len() == arguments.len() => {
+                            Some(roots.as_ref())
+                        }
+                        None => None,
+                        _ => {
+                            return Err(KindFailure::internal_cause(
+                                span,
+                                KindInternalCause::EffectTypeProvenanceShape,
+                            ));
+                        }
+                    };
+                    self.owner_argument_source_roots(
+                        arguments.iter(),
+                        roots,
+                        provenance,
+                        span,
+                        budget,
+                        &mut pending,
+                    )?;
+                }
                 Type::Tuple(elements) => {
                     let roots = match node {
                         Some(ResolvedTypeProvenanceNode::Tuple {
@@ -2965,7 +3629,9 @@ impl<'a> KindEnvironments<'a> {
                     })?;
                     pending.push((body, None));
                 }
-                Type::Int
+                Type::Bytes
+                | Type::String
+                | Type::Int
                 | Type::Bool
                 | Type::Unit
                 | Type::Variable(_)
@@ -3018,14 +3684,76 @@ impl<'a> KindEnvironments<'a> {
                     })?),
                     None => None,
                 };
+                let argument = match argument {
+                    KindedArgument::TypeArg(argument) => argument,
+                    KindedArgument::RowArg(_) => {
+                        self.owner_argument_source_roots(
+                            std::iter::once(argument),
+                            argument_root.as_ref().map(std::slice::from_ref),
+                            provenance,
+                            span,
+                            budget,
+                            pending,
+                        )?;
+                        budget.charge(1).map_err(|()| {
+                            KindFailure::resource(
+                                span,
+                                "effect-row authentication exceeded its owning work budget",
+                            )
+                        })?;
+                        let mut owner_arguments = Vec::new();
+                        owner_arguments.try_reserve_exact(1).map_err(|_| {
+                            KindFailure::resource(
+                                span,
+                                "effect-row authentication could not reserve traversal storage",
+                            )
+                        })?;
+                        owner_arguments.push((argument, &parameter.kind));
+                        let inputs = self.owner_type_inputs(
+                            owner_arguments,
+                            &mut KindVariableObserver::separate(None, None),
+                            span,
+                            budget,
+                        )?;
+                        for (input, expected) in inputs {
+                            let found = self.synthesize_core_with_ledger(
+                                input,
+                                None,
+                                None,
+                                None,
+                                None,
+                                &mut KindVariableObserver::separate(None, None),
+                                span,
+                                budget,
+                            )?;
+                            if !same_kind_with_charge(expected, found.kind, || budget.charge(1))
+                                .map_err(|()| KindFailure::resource(span,
+                                    "effect-argument kind checking exceeded its owning work budget"))?
+                            { return Err(KindFailure::internal_cause(span, KindInternalCause::EffectArgumentKind)); }
+                            budget.charge(1).map_err(|()| {
+                                KindFailure::resource(
+                                    span,
+                                    "effect-row authentication exceeded its owning work budget",
+                                )
+                            })?;
+                            pending.try_reserve(1).map_err(|_| {
+                                KindFailure::resource(
+                                    span,
+                                    "effect-row authentication could not reserve traversal storage",
+                                )
+                            })?;
+                            pending.push((input, None));
+                        }
+                        continue;
+                    }
+                };
                 let found = self.synthesize_core_with_ledger(
                     argument,
                     provenance,
                     argument_root,
                     None,
                     None,
-                    None,
-                    None,
+                    &mut KindVariableObserver::separate(None, None),
                     span,
                     budget,
                 )?;
@@ -3081,11 +3809,52 @@ impl<'a> KindEnvironments<'a> {
         Ok(())
     }
 
+    fn authenticate_source_effect_row_tail(
+        &self,
+        row: &EffectRow,
+        span: Span,
+        budget: &mut SynthesisLedger<'_>,
+    ) -> Result<(), KindFailure> {
+        match self.authenticate_effect_row_tail(
+            row,
+            &mut KindVariableObserver::separate(None, None),
+            span,
+            budget,
+        ) {
+            Err(KindFailure::Internal(failure))
+                if failure.cause == Some(KindInternalCause::RowTailKind) =>
+            {
+                let tail = row.tail().ok_or_else(|| {
+                    KindFailure::internal_cause(span, KindInternalCause::RowTailKind)
+                })?;
+                let fact = match tail.variable() {
+                    crate::types::EffectRowVariable::Rigid(identity) => {
+                        self.delta.get(&identity).map(|declared| &declared.fact)
+                    }
+                    crate::types::EffectRowVariable::Inference(identity) => {
+                        self.omega.get(&identity)
+                    }
+                }
+                .ok_or_else(|| KindFailure::internal_cause(span, KindInternalCause::RowTailKind))?;
+                Err(KindFailure::Source(Box::new(structured_error(
+                    KindReason::Argument,
+                    span,
+                    "an effect-row tail must name a binder of kind EffectRow",
+                    &Kind::EffectRow,
+                    fact.kind,
+                    fact.origin
+                        .map(|origin| (origin, "the tail binder kind is declared here")),
+                    budget.resolved_budget(span)?,
+                )?)))
+            }
+            result => result,
+        }
+    }
+
     fn authenticate_effect_row_tail<'environment>(
         &'environment self,
         row: &EffectRow,
-        allowed_variables: Option<&HashSet<TypeVariableId>>,
-        visited_variables: Option<&mut HashSet<TypeVariableId>>,
+        variables: &mut KindVariableObserver<'_>,
         span: Span,
         budget: &mut SynthesisLedger<'_>,
     ) -> Result<(), KindFailure>
@@ -3097,18 +3866,19 @@ impl<'a> KindEnvironments<'a> {
         };
         let fact = match tail.variable() {
             crate::types::EffectRowVariable::Rigid(identity) => {
-                if allowed_variables.is_some_and(|allowed| !allowed.contains(&identity)) {
+                if !variables.observe(identity) {
                     return Err(KindFailure::internal_cause(
                         span,
                         KindInternalCause::NonOwnerRowTail,
                     ));
                 }
-                if let Some(visited) = visited_variables {
-                    visited.insert(identity);
-                }
-                self.delta.get(&identity).ok_or_else(|| {
-                    KindFailure::internal_cause(span, KindInternalCause::MissingRowBinderKind)
-                })?
+                &self
+                    .delta
+                    .get(&identity)
+                    .ok_or_else(|| {
+                        KindFailure::internal_cause(span, KindInternalCause::MissingRowBinderKind)
+                    })?
+                    .fact
             }
             crate::types::EffectRowVariable::Inference(identity) => {
                 self.omega.get(&identity).ok_or_else(|| {
@@ -3133,6 +3903,338 @@ impl<'a> KindEnvironments<'a> {
         }
     }
 
+    fn owner_type_inputs<'environment, 'input>(
+        &'environment self,
+        mut pending: Vec<(&'input KindedArgument, &'environment Kind)>,
+        variables: &mut KindVariableObserver<'_>,
+        span: Span,
+        budget: &mut SynthesisLedger<'_>,
+    ) -> Result<Vec<(&'input Type, &'environment Kind)>, KindFailure>
+    where
+        'a: 'environment,
+    {
+        let mut inputs = Vec::new();
+        while let Some((argument, expected)) = pending.pop() {
+            match argument {
+                KindedArgument::TypeArg(ty) => {
+                    if *expected == Kind::EffectRow {
+                        return Err(KindFailure::internal_cause(
+                            span,
+                            KindInternalCause::LinkedValueType,
+                        ));
+                    }
+                    budget.charge(1).map_err(|()| {
+                        KindFailure::resource(
+                            span,
+                            "effect-row authentication exceeded its owning work budget",
+                        )
+                    })?;
+                    inputs.try_reserve(1).map_err(|_| {
+                        KindFailure::resource(
+                            span,
+                            "effect-row authentication could not reserve traversal storage",
+                        )
+                    })?;
+                    inputs.push((ty, expected));
+                }
+                KindedArgument::RowArg(row) => {
+                    if *expected != Kind::EffectRow {
+                        return Err(KindFailure::internal_cause(
+                            span,
+                            KindInternalCause::LinkedValueType,
+                        ));
+                    }
+                    self.authenticate_effect_row_tail(row, variables, span, budget)?;
+                    for instance in row
+                        .known()
+                        .iter()
+                        .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
+                    {
+                        budget.charge(1).map_err(|()| {
+                            KindFailure::resource(
+                                span,
+                                "effect-row identity lookup exceeded its owning work budget",
+                            )
+                        })?;
+                        let registry = self.owner_registry;
+                        let parameters = self
+                            .effects
+                            .as_ref()
+                            .and_then(|effects| effects.get(&instance.effect()).copied())
+                            .or_else(|| {
+                                registry.and_then(|registry| {
+                                    registry
+                                        .effect(instance.effect())
+                                        .map(|effect| effect.parameters.as_ref())
+                                })
+                            })
+                            .ok_or_else(|| {
+                                KindFailure::internal_cause(
+                                    span,
+                                    KindInternalCause::MissingRowEffect,
+                                )
+                            })?;
+                        let signature = registry.and_then(|registry| {
+                            registry.owner_signature(crate::resolved::OwnerId::Effect(
+                                instance.effect(),
+                            ))
+                        });
+                        if signature.is_none()
+                            && !self
+                                .effects
+                                .as_ref()
+                                .is_some_and(|effects| effects.contains_key(&instance.effect()))
+                        {
+                            return Err(KindFailure::internal_cause(
+                                span,
+                                KindInternalCause::MissingRowEffect,
+                            ));
+                        }
+                        if signature
+                            .is_some_and(|signature| signature.parameters.len() != parameters.len())
+                            || parameters.len() != instance.arguments().len()
+                        {
+                            return Err(KindFailure::internal_cause(
+                                span,
+                                KindInternalCause::EffectArgumentCount,
+                            ));
+                        }
+                        budget.charge(instance.arguments().len()).map_err(|()| {
+                            KindFailure::resource(
+                                span,
+                                "effect-row authentication exceeded its owning work budget",
+                            )
+                        })?;
+                        pending
+                            .try_reserve(instance.arguments().len())
+                            .map_err(|_| {
+                                KindFailure::resource(
+                                    span,
+                                    "effect-row authentication could not reserve traversal storage",
+                                )
+                            })?;
+                        for (slot, (argument, parameter)) in instance
+                            .arguments()
+                            .iter()
+                            .zip(parameters.iter())
+                            .enumerate()
+                        {
+                            if let Some(signature) = signature {
+                                if signature.parameters.get(slot) != Some(&parameter.id) {
+                                    return Err(KindFailure::internal_cause(
+                                        span,
+                                        KindInternalCause::LinkedValueType,
+                                    ));
+                                }
+                                let canonical = registry
+                                    .and_then(|registry| registry.type_variable(parameter.id))
+                                    .ok_or_else(|| {
+                                        KindFailure::internal_cause(
+                                            span,
+                                            KindInternalCause::MissingCanonicalBinder,
+                                        )
+                                    })?;
+                                if !same_kind_with_charge(&parameter.kind, &canonical.kind, || budget.charge(1))
+                                    .map_err(|()| KindFailure::resource(span, "effect-argument kind checking exceeded its owning work budget"))? {
+                                    return Err(KindFailure::internal_cause(span, KindInternalCause::LinkedValueType));
+                                }
+                            }
+                            pending.push((argument, &parameter.kind));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(inputs)
+    }
+
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::type_complexity)] // Type and kind borrows belong to different source environments.
+    fn resource_argument_inputs<'environment, 'ty>(
+        &'environment self,
+        ty: &'ty Type,
+        node: Option<&ResolvedTypeProvenanceNode>,
+        provenance: Option<&ResolvedTypeProvenance>,
+        type_mirror: Option<&Type>,
+        variables: &mut KindVariableObserver<'_>,
+        span: Span,
+        budget: &mut SynthesisLedger<'_>,
+    ) -> Result<Vec<(&'ty Type, &'environment Kind, Option<usize>)>, KindFailure>
+    where
+        'a: 'environment,
+    {
+        let Type::ResourceApply(resource, arguments) = ty else {
+            unreachable!("resource argument synthesis requires the resource application arm");
+        };
+        charge_synthesis_cell(span, budget)?;
+        let source_roots = match node {
+            Some(ResolvedTypeProvenanceNode::Resource {
+                resource: source,
+                arguments: roots,
+                ..
+            }) if source == resource && roots.len() == arguments.len() => Some(roots.as_ref()),
+            None => None,
+            _ => {
+                return Err(KindFailure::internal_cause(
+                    span,
+                    KindInternalCause::LinkedValueType,
+                ));
+            }
+        };
+        if let Some(mirror) = type_mirror {
+            let equal = crate::types::compare_types_with_charge(
+                ty,
+                mirror,
+                &mut |cells| budget.charge(cells),
+                &mut |_| (),
+            )
+            .map_err(|()| {
+                KindFailure::resource(
+                    span,
+                    "computation-row authentication exceeded its owning work budget",
+                )
+            })?;
+            if equal != std::cmp::Ordering::Equal {
+                return Err(KindFailure::internal_cause(
+                    span,
+                    KindInternalCause::LinkedValueType,
+                ));
+            }
+        }
+        let definition = self
+            .row_resource_owners
+            .get(resource)
+            .ok_or_else(|| KindFailure::internal_cause(span, KindInternalCause::LinkedValueType))?;
+        if self.row_resource_families.get(&definition.family)
+            != Some(&(*resource, definition.origin))
+        {
+            return Err(KindFailure::internal_cause(
+                span,
+                KindInternalCause::LinkedValueType,
+            ));
+        }
+        if definition.parameters.len() != arguments.len() {
+            if provenance.is_some() {
+                return Err(source_owner_shape_error(
+                    span,
+                    "this resource application must supply every declared owner argument exactly once",
+                    budget.resolved_budget(span)?,
+                )?);
+            }
+            return Err(KindFailure::internal_cause(
+                span,
+                KindInternalCause::LinkedValueType,
+            ));
+        }
+        if !definition
+            .parameters
+            .first()
+            .is_some_and(|identity| identity.kind == Kind::Type)
+        {
+            return Err(KindFailure::internal_cause(
+                span,
+                KindInternalCause::LinkedValueType,
+            ));
+        }
+        let mut initial = Vec::new();
+        budget.charge(arguments.len()).map_err(|()| {
+            KindFailure::resource(
+                span,
+                "effect-row authentication exceeded its owning work budget",
+            )
+        })?;
+        initial.try_reserve_exact(arguments.len()).map_err(|_| {
+            KindFailure::resource(
+                span,
+                "effect-row authentication could not reserve traversal storage",
+            )
+        })?;
+        let mut has_row = false;
+        for (slot, (argument, parameter)) in arguments
+            .iter()
+            .zip(definition.parameters.iter())
+            .enumerate()
+        {
+            if matches!(argument, KindedArgument::RowArg(_)) != (parameter.kind == Kind::EffectRow)
+            {
+                if provenance.is_some() {
+                    let argument_span = source_roots
+                        .and_then(|roots| roots.get(slot))
+                        .and_then(|root| {
+                            provenance.and_then(|provenance| provenance.nodes().get(*root))
+                        })
+                        .map_or(span, provenance_node_span);
+                    let found = if matches!(argument, KindedArgument::RowArg(_)) {
+                        &Kind::EffectRow
+                    } else {
+                        &TYPE_KIND
+                    };
+                    return Err(KindFailure::Source(Box::new(structured_error(
+                        KindReason::Argument,
+                        argument_span,
+                        "this resource owner argument has the wrong tag for its declared kind",
+                        &parameter.kind,
+                        found,
+                        Some((
+                            parameter.origin.primary_span(),
+                            "the resource parameter kind is declared here",
+                        )),
+                        budget.resolved_budget(argument_span)?,
+                    )?)));
+                }
+                return Err(KindFailure::internal_cause(
+                    span,
+                    KindInternalCause::LinkedValueType,
+                ));
+            }
+            has_row |= parameter.kind == Kind::EffectRow;
+            initial.push((argument, &parameter.kind));
+        }
+        if !has_row {
+            return Err(KindFailure::internal_cause(
+                span,
+                KindInternalCause::LinkedValueType,
+            ));
+        }
+        let inputs = self.owner_type_inputs(initial, variables, span, budget)?;
+        let mut source_inputs = Vec::new();
+        self.owner_argument_source_roots(
+            arguments.iter(),
+            source_roots,
+            provenance,
+            span,
+            budget,
+            &mut source_inputs,
+        )?;
+        let mut tagged_inputs = Vec::new();
+        for (argument, expected) in inputs {
+            budget
+                .charge(source_inputs.len().saturating_add(1))
+                .map_err(|()| {
+                    KindFailure::resource(
+                        span,
+                        "resource argument provenance exceeded its work budget",
+                    )
+                })?;
+            tagged_inputs.try_reserve(1).map_err(|_| {
+                KindFailure::resource(
+                    span,
+                    "resource argument provenance could not reserve storage",
+                )
+            })?;
+            let root = source_inputs
+                .iter()
+                .find(|(ty, _)| std::ptr::eq(*ty, argument))
+                .map(|(_, root)| *root)
+                .ok_or_else(|| {
+                    KindFailure::internal_cause(span, KindInternalCause::LinkedValueType)
+                })?;
+            tagged_inputs.push((argument, expected, root));
+        }
+        Ok(tagged_inputs)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn synthesize_core_with_ledger<'environment>(
         &'environment self,
@@ -3141,8 +4243,7 @@ impl<'a> KindEnvironments<'a> {
         provenance_root: Option<usize>,
         type_mirror: Option<&Type>,
         root_function_domain_mirror: Option<&Type>,
-        allowed_variables: Option<&HashSet<TypeVariableId>>,
-        mut visited_variables: Option<&mut HashSet<TypeVariableId>>,
+        variables: &mut KindVariableObserver<'_>,
         fallback_span: Span,
         budget: &mut SynthesisLedger<'_>,
     ) -> Result<KindFact<'environment>, KindFailure>
@@ -3155,6 +4256,11 @@ impl<'a> KindEnvironments<'a> {
         }
 
         enum Continuation<'t, 'kind> {
+            OwnerArgument {
+                expected: &'kind Kind,
+                remaining: Vec<(&'t Type, &'kind Kind, Option<usize>)>,
+                span: Span,
+            },
             ApplicationFunction {
                 argument: &'t Type,
                 argument_mirror: Option<&'t Type>,
@@ -3243,11 +4349,13 @@ impl<'a> KindEnvironments<'a> {
                     };
                     let span = node.map_or(fallback_span, provenance_node_span);
                     match ty {
-                        Type::Int | Type::Bool | Type::Unit => {
+                        Type::Bytes | Type::String | Type::Int | Type::Bool | Type::Unit => {
                             charge_synthesis_cell(span, budget)?;
                             let mirror_matches = matches!(
                                 (ty, type_mirror),
-                                (Type::Int, None | Some(Type::Int))
+                                (Type::Bytes, None | Some(Type::Bytes))
+                                    | (Type::String, None | Some(Type::String))
+                                    | (Type::Int, None | Some(Type::Int))
                                     | (Type::Bool, None | Some(Type::Bool))
                                     | (Type::Unit, None | Some(Type::Unit))
                             );
@@ -3274,22 +4382,22 @@ impl<'a> KindEnvironments<'a> {
                             }
                             require_fact_node(node, span, budget)?;
                             charge_lookup_attempt(span, budget)?;
-                            if allowed_variables.is_some_and(|allowed| !allowed.contains(identity))
-                            {
+                            if !variables.observe(*identity) {
                                 return Err(KindFailure::internal_cause(
                                     span,
                                     KindInternalCause::BodyFreeConstructorOwner,
                                 ));
                             }
-                            if let Some(visited) = visited_variables.as_deref_mut() {
-                                visited.insert(*identity);
-                            }
-                            let mut fact = *self.delta.get(identity).ok_or_else(|| {
-                                KindFailure::internal_cause(
-                                    span,
-                                    KindInternalCause::MissingVariableKind,
-                                )
-                            })?;
+                            let mut fact = self
+                                .delta
+                                .get(identity)
+                                .ok_or_else(|| {
+                                    KindFailure::internal_cause(
+                                        span,
+                                        KindInternalCause::MissingVariableKind,
+                                    )
+                                })?
+                                .fact;
                             authenticate_kind_descendants_with_ledger(
                                 fact.kind,
                                 fact.retained_mirrors,
@@ -3343,6 +4451,15 @@ impl<'a> KindEnvironments<'a> {
                             }
                             require_fact_node(node, span, budget)?;
                             charge_lookup_attempt(span, budget)?;
+                            if provenance.is_some()
+                                && self.row_resource_families.contains_key(identity)
+                            {
+                                return Err(source_owner_shape_error(
+                                    span,
+                                    "a resource with row parameters requires one complete saturated owner application",
+                                    budget.resolved_budget(span)?,
+                                )?);
+                            }
                             let fact = self.xi.get(identity).ok_or_else(|| {
                                 KindFailure::internal_cause(
                                     span,
@@ -3363,6 +4480,37 @@ impl<'a> KindEnvironments<'a> {
                                 origin: Some(fact.origin),
                                 occurrence: span,
                             })
+                        }
+                        Type::ResourceApply(_, _) => {
+                            let tagged_inputs = self.resource_argument_inputs(
+                                ty,
+                                node,
+                                provenance,
+                                type_mirror,
+                                variables,
+                                span,
+                                budget,
+                            )?;
+                            let mut inputs = tagged_inputs;
+                            if let Some((argument, expected, root)) = inputs.pop() {
+                                push_continuation!(
+                                    work,
+                                    Continuation::OwnerArgument {
+                                        expected,
+                                        remaining: inputs,
+                                        span
+                                    },
+                                    span
+                                );
+                                State::Visit(argument, None, root)
+                            } else {
+                                State::Complete(KindFact {
+                                    kind: &TYPE_KIND,
+                                    retained_mirrors: None,
+                                    origin: None,
+                                    occurrence: span,
+                                })
+                            }
                         }
                         Type::Tuple(elements) => {
                             charge_synthesis_cell(span, budget)?;
@@ -3524,8 +4672,7 @@ impl<'a> KindEnvironments<'a> {
                                 }
                                 self.authenticate_effect_row_tail(
                                     computation.effects(),
-                                    allowed_variables,
-                                    visited_variables.as_deref_mut(),
+                                    variables,
                                     span,
                                     budget,
                                 )?;
@@ -3598,6 +4745,44 @@ impl<'a> KindEnvironments<'a> {
                         return Ok(found);
                     };
                     match continuation {
+                        Continuation::OwnerArgument {
+                            expected,
+                            mut remaining,
+                            span,
+                        } => {
+                            if !same_kind_with_charge(expected, found.kind, || budget.charge(1))
+                                .map_err(|()| KindFailure::resource(span, "effect-argument kind checking exceeded its owning work budget"))?
+                            {
+                                if provenance.is_some() {
+                                    return Err(KindFailure::Source(Box::new(structured_error(
+                                        KindReason::Argument, found.occurrence,
+                                        "this resource owner argument has the wrong kind",
+                                        expected, found.kind, found.origin.map(|origin| (origin, "the found kind is fixed by this declaration")),
+                                        budget.resolved_budget(found.occurrence)?,
+                                    )?)));
+                                }
+                                return Err(KindFailure::internal_cause(span, KindInternalCause::LinkedValueType));
+                            }
+                            if let Some((argument, expected, root)) = remaining.pop() {
+                                push_continuation!(
+                                    work,
+                                    Continuation::OwnerArgument {
+                                        expected,
+                                        remaining,
+                                        span
+                                    },
+                                    span
+                                );
+                                State::Visit(argument, None, root)
+                            } else {
+                                State::Complete(KindFact {
+                                    kind: &TYPE_KIND,
+                                    retained_mirrors: None,
+                                    origin: None,
+                                    occurrence: span,
+                                })
+                            }
+                        }
                         Continuation::Tuple {
                             mut remaining,
                             mut remaining_mirrors,
@@ -3831,6 +5016,122 @@ pub(crate) enum CanonicalEnvironmentFailure {
     Kind(KindFailureContext),
 }
 
+fn discover_owner_argument_types<'a, 'input>(
+    registry: &'a ResolvedRegistry,
+    arguments: impl DoubleEndedIterator<Item = &'input KindedArgument>,
+    pending: &mut Vec<&'input Type>,
+    environments: &mut KindEnvironments<'a>,
+    discovery_budget: &mut impl KindWorkLedger,
+    retention_budget: &mut TypeWorkBudget,
+) -> Result<(), CanonicalEnvironmentFailure> {
+    let mut meter = |units| {
+        discovery_budget
+            .charge(units)
+            .map_err(|()| CanonicalEnvironmentFailure::ConstraintResource)
+    };
+    visit_owner_components_with_charge(
+        arguments,
+        &mut meter,
+        |ty, _| {
+            pending
+                .try_reserve(1)
+                .map_err(|_| CanonicalEnvironmentFailure::ConstraintResource)?;
+            pending.push(ty);
+            Ok(())
+        },
+        |tail, meter| {
+            let crate::types::EffectRowVariable::Rigid(identity) = tail.variable() else {
+                return Err(CanonicalEnvironmentFailure::InvalidState);
+            };
+            if !environments.contains_declared(identity) {
+                crate::types::TypeWorkMeter::charge(meter, 1)?;
+                let parameter = registry
+                    .type_variable(identity)
+                    .ok_or(CanonicalEnvironmentFailure::InvalidState)?;
+                environments
+                    .insert_declared(
+                        identity,
+                        &parameter.kind,
+                        parameter.origin.primary_span(),
+                        retention_budget,
+                    )
+                    .map_err(map_canonical_environment_retention_failure)?;
+            }
+            Ok(())
+        },
+    )
+}
+
+pub(crate) fn canonical_body_free_argument_environments<'a>(
+    registry: &'a ResolvedRegistry,
+    owner_parameters: &[TypeVariableId],
+    roots: &[&KindedArgument],
+    span: Span,
+    discovery_budget: &mut impl KindWorkLedger,
+    retention_budget: &mut TypeWorkBudget,
+) -> Result<KindEnvironments<'a>, CanonicalEnvironmentFailure> {
+    let mut pending = Vec::new();
+    let mut tails = Vec::new();
+    {
+        let mut meter = |units| {
+            discovery_budget
+                .charge(units)
+                .map_err(|()| CanonicalEnvironmentFailure::ConstraintResource)
+        };
+        visit_owner_components_with_charge(
+            roots.iter().copied(),
+            &mut meter,
+            |ty, _| {
+                pending
+                    .try_reserve(1)
+                    .map_err(|_| CanonicalEnvironmentFailure::ConstraintResource)?;
+                pending.push(ty);
+                Ok(())
+            },
+            |tail, _| {
+                tails
+                    .try_reserve(1)
+                    .map_err(|_| CanonicalEnvironmentFailure::ConstraintResource)?;
+                tails.push(tail);
+                Ok(())
+            },
+        )?;
+    }
+    let mut environments = canonical_body_free_environments(
+        registry,
+        owner_parameters,
+        &pending,
+        span,
+        discovery_budget,
+        retention_budget,
+    )?;
+    for tail in tails {
+        let crate::types::EffectRowVariable::Rigid(identity) = tail.variable() else {
+            return Err(CanonicalEnvironmentFailure::InvalidState);
+        };
+        discovery_budget
+            .charge(1)
+            .map_err(|()| CanonicalEnvironmentFailure::ConstraintResource)?;
+        if !environments.contains_declared(identity) {
+            let parameter = registry
+                .type_variable(identity)
+                .ok_or(CanonicalEnvironmentFailure::InvalidState)?;
+            if parameter.kind != Kind::EffectRow {
+                return Err(CanonicalEnvironmentFailure::InvalidState);
+            }
+            environments
+                .insert_declared(
+                    identity,
+                    &parameter.kind,
+                    parameter.origin.primary_span(),
+                    retention_budget,
+                )
+                .map_err(map_canonical_environment_retention_failure)?;
+        }
+    }
+    Ok(environments)
+}
+
 pub(crate) fn canonical_body_free_environments<'a>(
     registry: &'a ResolvedRegistry,
     owner_parameters: &[TypeVariableId],
@@ -3839,7 +5140,7 @@ pub(crate) fn canonical_body_free_environments<'a>(
     discovery_budget: &mut impl KindWorkLedger,
     retention_budget: &mut TypeWorkBudget,
 ) -> Result<KindEnvironments<'a>, CanonicalEnvironmentFailure> {
-    let mut environments = KindEnvironments::new();
+    let mut environments = KindEnvironments::new_with_registry(registry);
     for identity in owner_parameters {
         discovery_budget
             .charge(1)
@@ -3871,7 +5172,7 @@ pub(crate) fn canonical_body_free_environments<'a>(
             .charge(1)
             .map_err(|()| CanonicalEnvironmentFailure::ConstraintResource)?;
         match ty {
-            Type::Int | Type::Bool | Type::Unit => {}
+            Type::Bytes | Type::String | Type::Int | Type::Bool | Type::Unit => {}
             Type::Variable(identity) => {
                 discovery_budget
                     .charge(1)
@@ -3908,6 +5209,28 @@ pub(crate) fn canonical_body_free_environments<'a>(
                     .nominal_kind(*identity)
                     .ok_or(CanonicalEnvironmentFailure::InvalidState)?
                 {
+                    CanonicalNominalKind::RowBearingResource { resource, origin } => {
+                        let parameters = registry
+                            .defining_owner_parameters(crate::resolved::OwnerId::Resource(resource))
+                            .ok_or(CanonicalEnvironmentFailure::InvalidState)?;
+                        registry
+                            .authenticate_owner_signature(
+                                crate::resolved::OwnerId::Resource(resource),
+                                Some(*identity),
+                                parameters,
+                                retention_budget,
+                            )
+                            .map_err(map_canonical_owner_failure)?;
+                        environments
+                            .insert_row_resource_family(
+                                *identity,
+                                resource,
+                                parameters,
+                                origin,
+                                retention_budget,
+                            )
+                            .map_err(map_canonical_environment_retention_failure)?;
+                    }
                     CanonicalNominalKind::Parameters { parameters, origin } => environments
                         .insert_nominal(*identity, parameters, origin, retention_budget)
                         .map_err(map_canonical_environment_retention_failure)?,
@@ -3915,6 +5238,54 @@ pub(crate) fn canonical_body_free_environments<'a>(
                         .insert_frozen_nominal(*identity, kind, origin, retention_budget)
                         .map_err(map_canonical_environment_retention_failure)?,
                 }
+            }
+            Type::ResourceApply(resource, arguments) => {
+                discovery_budget
+                    .charge(1)
+                    .map_err(|()| CanonicalEnvironmentFailure::ConstraintResource)?;
+                let family = registry
+                    .resource_signature_family(*resource)
+                    .ok_or(CanonicalEnvironmentFailure::InvalidState)?;
+                let Some(CanonicalNominalKind::RowBearingResource {
+                    resource: canonical,
+                    origin,
+                }) = registry.nominal_kind(family)
+                else {
+                    return Err(CanonicalEnvironmentFailure::InvalidState);
+                };
+                if canonical != *resource {
+                    return Err(CanonicalEnvironmentFailure::InvalidState);
+                }
+                if !environments.contains_nominal(family) {
+                    let parameters = registry
+                        .defining_owner_parameters(crate::resolved::OwnerId::Resource(*resource))
+                        .ok_or(CanonicalEnvironmentFailure::InvalidState)?;
+                    registry
+                        .authenticate_owner_signature(
+                            crate::resolved::OwnerId::Resource(*resource),
+                            Some(family),
+                            parameters,
+                            retention_budget,
+                        )
+                        .map_err(map_canonical_owner_failure)?;
+                    environments
+                        .insert_row_resource_family(
+                            family,
+                            *resource,
+                            parameters,
+                            origin,
+                            retention_budget,
+                        )
+                        .map_err(map_canonical_environment_retention_failure)?;
+                }
+                discover_owner_argument_types(
+                    registry,
+                    arguments.iter(),
+                    &mut pending,
+                    &mut environments,
+                    discovery_budget,
+                    retention_budget,
+                )?;
             }
             Type::Tuple(elements) => {
                 discovery_budget
@@ -3957,16 +5328,22 @@ pub(crate) fn canonical_body_free_environments<'a>(
                             .map_err(map_canonical_environment_retention_failure)?;
                     }
                 }
-                let children = codomain.effect_argument_count().saturating_add(2);
                 discovery_budget
-                    .charge(children)
+                    .charge(2)
                     .map_err(|()| CanonicalEnvironmentFailure::ConstraintResource)?;
                 pending
-                    .try_reserve(children)
+                    .try_reserve(2)
                     .map_err(|_| CanonicalEnvironmentFailure::ConstraintResource)?;
-                codomain.extend_effect_arguments(&mut pending);
                 pending.push(codomain.value());
                 pending.push(domain);
+                discover_owner_argument_types(
+                    registry,
+                    codomain.effect_arguments(),
+                    &mut pending,
+                    &mut environments,
+                    discovery_budget,
+                    retention_budget,
+                )?;
             }
             Type::Inference(_) | Type::Forall(_, _) => {
                 return Err(CanonicalEnvironmentFailure::InvalidState);
@@ -3974,6 +5351,20 @@ pub(crate) fn canonical_body_free_environments<'a>(
         }
     }
     Ok(environments)
+}
+
+fn map_canonical_owner_failure(
+    failure: crate::resolved::ResolvedBuildFailure,
+) -> CanonicalEnvironmentFailure {
+    match failure {
+        crate::resolved::ResolvedBuildFailure::TypeResource => {
+            CanonicalEnvironmentFailure::TypeResource
+        }
+        crate::resolved::ResolvedBuildFailure::ConstraintResource => {
+            CanonicalEnvironmentFailure::ConstraintResource
+        }
+        _ => CanonicalEnvironmentFailure::InvalidState,
+    }
 }
 
 fn map_canonical_environment_retention_failure(
@@ -4006,6 +5397,21 @@ pub(crate) fn canonical_type_variable_kind<'a>(
         .ok_or_else(|| KindFailure::internal_cause(span, KindInternalCause::MissingCanonicalBinder))
 }
 
+fn authenticate_resource_family_parameter(
+    registry: &ResolvedRegistry,
+    parameter: &crate::resolved::ResolvedTypeVariable,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), KindFailure> {
+    authenticate_owner_parameters(registry, std::slice::from_ref(parameter), budget)?;
+    if parameter.kind != Kind::Type {
+        return Err(KindFailure::internal_cause(
+            parameter.origin.primary_span(),
+            KindInternalCause::OwnerEffectRow,
+        ));
+    }
+    Ok(())
+}
+
 /// Checks every resolved type boundary before a resolved module is published.
 pub(crate) fn check_resolved_module_with_budget<'a>(
     module: &'a ResolvedModuleParts,
@@ -4013,7 +5419,8 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
     budget: &mut TypeWorkBudget,
 ) -> Result<(), KindFailure> {
     authenticate_declaration_order(module, constructor_payload_provenance, budget)?;
-    let mut environments = KindEnvironments::new();
+    let mut environments = KindEnvironments::new_with_registry(&module.registry);
+    environments.imported_resource_owners = Some(&module.imported);
     environments.install_effects(
         &module.registry,
         &module.effects,
@@ -4040,6 +5447,32 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
             nominal.origin.primary_span(),
             budget,
         )?;
+    }
+    for resource in &module.resources {
+        authenticate_owner_parameters(&module.registry, &resource.parameters, budget)?;
+        if let Some(family) = &resource.family_template {
+            authenticate_resource_family_parameter(&module.registry, &family.parameter, budget)?;
+        }
+        if resource
+            .parameters
+            .iter()
+            .any(|parameter| parameter.kind == Kind::EffectRow)
+        {
+            environments.insert_row_resource_family(
+                resource.family,
+                resource.id,
+                &resource.parameters,
+                resource.span,
+                budget,
+            )?;
+        } else {
+            environments.insert_nominal(
+                resource.family,
+                &resource.parameters,
+                resource.span,
+                budget,
+            )?;
+        }
     }
     let mut has_invalid_determination = false;
     for interface in &module.interfaces {
@@ -4080,6 +5513,61 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
 
     for declaration in &module.declaration_order {
         let outcome = match *declaration {
+            crate::resolved::ResolvedDeclarationIndex::Resource(index) => {
+                let resource = &module.resources[index];
+                environments.install_complete_owner_parameters(&resource.parameters, budget)?;
+                environments.expect_value_type(&resource.input, budget)?;
+                environments.expect_value_type(&resource.state, budget)?;
+                environments
+                    .extend_owner_parameters(std::slice::from_ref(&resource.answer), budget)?;
+                environments.expect_value_type(&resource.result, budget)?;
+                environments
+                    .remove_owner_parameter_extension(std::slice::from_ref(&resource.answer));
+                for effect in [&resource.provided, &resource.interpreted] {
+                    check_hook_target_kind(effect, &environments, budget)?;
+                }
+                check_expression_annotations(
+                    &resource.acquire,
+                    &module.registry,
+                    &mut environments,
+                    budget,
+                )?;
+                check_expression_annotations(
+                    &resource.finish,
+                    &module.registry,
+                    &mut environments,
+                    budget,
+                )?;
+                for clause in &resource.handlers {
+                    check_expression_annotations(
+                        &clause.body,
+                        &module.registry,
+                        &mut environments,
+                        budget,
+                    )?;
+                }
+                if let Some(family) = &resource.family_template {
+                    let parameters = std::slice::from_ref(&family.parameter);
+                    environments.extend_owner_parameters(parameters, budget)?;
+                    let outcome: Result<(), KindFailure> = (|| {
+                        for effect in [&family.provided, &family.interpreted] {
+                            check_hook_target_kind(effect, &environments, budget)?;
+                        }
+                        for clause in &family.handlers {
+                            check_expression_annotations(
+                                &clause.body,
+                                &module.registry,
+                                &mut environments,
+                                budget,
+                            )?;
+                        }
+                        Ok(())
+                    })();
+                    environments.remove_owner_parameter_extension(parameters);
+                    outcome?;
+                }
+                DeclarationKindOutcome::Checked
+            }
             crate::resolved::ResolvedDeclarationIndex::Type(index) => {
                 let nominal = required_lookup(
                     module.registry.nominals().get(index),
@@ -4093,6 +5581,19 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
                     KindInternalCause::LookupNominalParameters,
                     budget,
                 )?;
+                for parameter in parameters {
+                    if parameter.kind == Kind::EffectRow {
+                        return Err(KindFailure::Source(Box::new(structured_error(
+                            KindReason::ExpectedType,
+                            parameter.origin.primary_span(),
+                            "an ordinary nominal parameter cannot bind EffectRow",
+                            &TYPE_KIND,
+                            &Kind::EffectRow,
+                            None,
+                            budget,
+                        )?)));
+                    }
+                }
                 environments.install_owner_parameters(parameters, budget)?;
                 let payload_provenance = required_lookup(
                     constructor_payload_provenance.get(index),
@@ -4209,7 +5710,12 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
                     KindInternalCause::LookupInterfaceIndex,
                     budget,
                 )?;
-                check_interface(interface, &module.registry, &mut environments, budget)?
+                check_interface_after_header(
+                    interface,
+                    &module.registry,
+                    &mut environments,
+                    budget,
+                )?
             }
             crate::resolved::ResolvedDeclarationIndex::Effect(index) => {
                 let effect = required_lookup(
@@ -4326,6 +5832,33 @@ fn authenticate_declaration_order(
     constructor_payload_provenance: &[Vec<crate::resolve::ConstructorPayloadProvenance>],
     budget: &mut TypeWorkBudget,
 ) -> Result<(), KindFailure> {
+    let owner_count = module
+        .effects
+        .len()
+        .checked_add(module.interfaces.len())
+        .and_then(|count| count.checked_add(module.resources.len()))
+        .ok_or_else(|| {
+            KindFailure::resource(module.span, "owner coverage storage is not representable")
+        })?;
+    let words =
+        owner_count / u64::BITS as usize + usize::from(owner_count % u64::BITS as usize != 0);
+    budget.charge(words).map_err(|()| {
+        KindFailure::resource(
+            module.span,
+            "owner coverage storage exceeded its type-work budget",
+        )
+    })?;
+    let mut visited = Vec::<u64>::new();
+    visited.try_reserve_exact(words).map_err(|_| {
+        KindFailure::resource(module.span, "owner coverage storage could not be reserved")
+    })?;
+    visited.resize(words, 0);
+    let mut owner_coverage = module.registry.owner_signature_shape_matches(
+        module.effects.len(),
+        module.interfaces.len(),
+        module.resources.len(),
+    );
+    let mut next_resource = 0;
     let mut next_type = 0;
     let mut next_interface = 0;
     let mut next_effect = 0;
@@ -4339,6 +5872,11 @@ fn authenticate_declaration_order(
             )
         })?;
         let ordered = match *declaration {
+            crate::resolved::ResolvedDeclarationIndex::Resource(index) => {
+                let ordered = index == next_resource && index < module.resources.len();
+                next_resource = next_resource.saturating_add(1);
+                ordered
+            }
             crate::resolved::ResolvedDeclarationIndex::Type(index) => {
                 let ordered = index == next_type && index < module.registry.nominals().len();
                 next_type = next_type.saturating_add(1);
@@ -4371,6 +5909,31 @@ fn authenticate_declaration_order(
                 KindInternalCause::DeclarationOrder,
             ));
         }
+        let owner = match *declaration {
+            crate::resolved::ResolvedDeclarationIndex::Resource(index) => Some(
+                crate::resolved::OwnerId::Resource(module.resources[index].id),
+            ),
+            crate::resolved::ResolvedDeclarationIndex::Effect(index) => {
+                Some(crate::resolved::OwnerId::Effect(module.effects[index].id))
+            }
+            crate::resolved::ResolvedDeclarationIndex::Interface(index) => Some(
+                crate::resolved::OwnerId::Interface(module.interfaces[index].id),
+            ),
+            _ => None,
+        };
+        if let Some(owner) = owner {
+            let position = module.registry.owner_signature_storage_position(owner);
+            if let Some(position) = position.filter(|position| *position < owner_count) {
+                let word = position / u64::BITS as usize;
+                let bit = 1_u64 << (position % u64::BITS as usize);
+                if visited[word] & bit != 0 {
+                    owner_coverage = false;
+                }
+                visited[word] |= bit;
+            } else {
+                owner_coverage = false;
+            }
+        }
     }
 
     budget.charge(1).map_err(|()| {
@@ -4379,7 +5942,8 @@ fn authenticate_declaration_order(
             "declaration-order coverage authentication exceeded its type-work budget",
         )
     })?;
-    if next_type != module.registry.nominals().len()
+    if next_resource != module.resources.len()
+        || next_type != module.registry.nominals().len()
         || next_interface != module.interfaces.len()
         || next_effect != module.effects.len()
         || next_global != module.definitions.len()
@@ -4403,6 +5967,12 @@ fn authenticate_declaration_order(
             KindInternalCause::PayloadCardinality,
         ));
     }
+    if !owner_coverage {
+        return Err(KindFailure::internal_cause(
+            module.span,
+            KindInternalCause::LinkedValueType,
+        ));
+    }
     Ok(())
 }
 
@@ -4412,6 +5982,33 @@ fn authenticate_imported_environments<'a>(
     budget: &mut TypeWorkBudget,
 ) -> Result<(), KindFailure> {
     let imported = &module.imported;
+    for (_, resource) in imported.resource_facts() {
+        authenticate_unique_parameter_ids(
+            &resource.parameters,
+            resource.origin.primary_span(),
+            budget,
+        )?;
+        if resource
+            .parameters
+            .iter()
+            .any(|parameter| parameter.kind == Kind::EffectRow)
+        {
+            environments.insert_row_resource_family(
+                resource.family,
+                resource.id,
+                &resource.parameters,
+                resource.origin.primary_span(),
+                budget,
+            )?;
+        } else {
+            environments.insert_nominal(
+                resource.family,
+                &resource.parameters,
+                resource.origin.primary_span(),
+                budget,
+            )?;
+        }
+    }
     for nominal in imported.nominals() {
         if nominal.parameter_count != nominal.parameters.len() {
             return Err(KindFailure::internal_cause(
@@ -4444,6 +6041,56 @@ fn authenticate_imported_environments<'a>(
         )?;
     }
 
+    // The prior per-resource environment debit bounds this immutable scan.
+    // Family checks pay their added work; this order requires all imported
+    // resource and interface kinds to be installed before checking references.
+    for (_, resource) in imported.resource_facts() {
+        if let Some(family) = &resource.family_template {
+            crate::resolved::authenticate_resource_family_scope(
+                &family.parameter,
+                &resource.parameters,
+                &resource.answer,
+                budget,
+            )
+            .map_err(|failure| match failure {
+                crate::resolved::ResolvedBuildFailure::TypeResource => KindFailure::resource(
+                    family.parameter.origin.primary_span(),
+                    "imported resource family scope authentication exceeded its type-work budget",
+                ),
+                _ => KindFailure::internal_cause(
+                    family.parameter.origin.primary_span(),
+                    KindInternalCause::ConflictingDeclarationBinder,
+                ),
+            })?;
+            environments.install_complete_owner_parameters(&resource.parameters, budget)?;
+            let parameters = std::slice::from_ref(&family.parameter);
+            environments.extend_owner_parameters(parameters, budget)?;
+            let outcome: Result<(), KindFailure> = (|| {
+                for application in family
+                    .requirements
+                    .iter()
+                    .chain(std::iter::once(&family.provider))
+                {
+                    let checked =
+                        authenticate_interface_application(application, environments, budget)?
+                            .ok_or_else(|| {
+                                KindFailure::internal_cause(
+                                    application.span,
+                                    KindInternalCause::PreflightArityChanged,
+                                )
+                            })?;
+                    check_interface_application_kinds(checked, environments, budget)?;
+                }
+                for effect in [&family.provided, &family.interpreted] {
+                    check_hook_target_kind(effect, environments, budget)?;
+                }
+                Ok(())
+            })();
+            environments.remove_owner_parameter_extension(parameters);
+            outcome?;
+        }
+    }
+
     for imported_interface in imported.interface_imports() {
         let interface = &imported_interface.fact;
         for method in &interface.methods {
@@ -4452,7 +6099,7 @@ fn authenticate_imported_environments<'a>(
                 method.origin.primary_span(),
                 budget,
             )?;
-            environments.install_owner_parameters(&interface.parameters, budget)?;
+            environments.install_complete_owner_parameters(&interface.parameters, budget)?;
             for parameter in method.type_parameters() {
                 if !binder_kind_is_admitted(&parameter.kind, false) {
                     return Err(KindFailure::internal_cause(
@@ -4575,6 +6222,7 @@ fn check_constructor_payload(
     }
 }
 
+#[cfg(test)]
 fn check_interface<'a>(
     interface: &'a ResolvedInterfaceDeclaration,
     registry: &crate::resolved::ResolvedRegistry,
@@ -4596,6 +6244,18 @@ fn check_interface<'a>(
     if !interface_determination_is_total(interface, budget)? {
         return Ok(DeclarationKindOutcome::Deferred);
     }
+    check_interface_after_header(interface, registry, environments, budget)
+}
+
+// The module preflight has already admitted this exact immutable declaration
+// header before declaration-order checking begins. Standalone callers above
+// retain the complete header check.
+fn check_interface_after_header<'a>(
+    interface: &'a ResolvedInterfaceDeclaration,
+    registry: &crate::resolved::ResolvedRegistry,
+    environments: &mut KindEnvironments<'a>,
+    budget: &mut TypeWorkBudget,
+) -> Result<DeclarationKindOutcome, KindFailure> {
     let mut interface_only = false;
     for method in &interface.methods {
         if method.has_explicit_type_parameters && method.type_parameters.is_empty() {
@@ -4607,7 +6267,7 @@ fn check_interface<'a>(
         }
         authenticate_owner_parameters(registry, &method.type_parameters, budget)?;
         if method.has_explicit_type_parameters {
-            environments.install_owner_parameters(&interface.parameters, budget)?;
+            environments.install_complete_owner_parameters(&interface.parameters, budget)?;
             for parameter in &method.type_parameters {
                 if !binder_kind_is_admitted(&parameter.kind, false) {
                     return Err(KindFailure::internal_cause(
@@ -4625,7 +6285,7 @@ fn check_interface<'a>(
             interface_only = false;
         } else {
             if !interface_only {
-                environments.install_owner_parameters(&interface.parameters, budget)?;
+                environments.install_complete_owner_parameters(&interface.parameters, budget)?;
                 interface_only = true;
             }
             if !method.type_parameters.is_empty() {
@@ -4644,7 +6304,7 @@ fn check_effect<'a>(
     budget: &mut TypeWorkBudget,
 ) -> Result<DeclarationKindOutcome, KindFailure> {
     authenticate_owner_parameters(registry, &effect.parameters, budget)?;
-    environments.install_owner_parameters(&effect.parameters, budget)?;
+    environments.install_complete_owner_parameters(&effect.parameters, budget)?;
     for operation in &effect.operations {
         environments.expect_value_type(&operation.annotation, budget)?;
     }
@@ -4671,7 +6331,7 @@ fn interface_determination_is_total(
 
 #[derive(Clone, Copy)]
 struct CompleteInterfaceApplication<'application, 'kind> {
-    arguments: &'application [ResolvedType],
+    arguments: &'application [crate::resolved::ResolvedOwnerArgument],
     parameters: &'kind [crate::resolved::ResolvedTypeVariable],
     determination: Option<InterfaceKindDetermination<'kind>>,
 }
@@ -4735,6 +6395,12 @@ fn preflight_interface_application_kinds<'a>(
     environments: &mut KindEnvironments<'a>,
     budget: &mut TypeWorkBudget,
 ) -> Result<bool, KindFailure> {
+    if module.resources.is_empty()
+        && module.definitions.is_empty()
+        && module.implementations.is_empty()
+    {
+        return Ok(true);
+    }
     let mut saw_application = false;
     let all_arity_complete =
         visit_interface_applications(module, budget, |application, budget| {
@@ -4779,6 +6445,23 @@ fn check_interface_application_kinds_in_owner_environments<'a>(
             )
         })?;
         match *declaration {
+            crate::resolved::ResolvedDeclarationIndex::Resource(index) => {
+                let resource = &module.resources[index];
+                environments.install_complete_owner_parameters(&resource.parameters, budget)?;
+                check(&resource.provider, environments, budget)?;
+                if let Some(family) = &resource.family_template {
+                    let parameters = std::slice::from_ref(&family.parameter);
+                    environments.extend_owner_parameters(parameters, budget)?;
+                    let outcome: Result<(), KindFailure> = (|| {
+                        for requirement in &family.requirements {
+                            check(requirement, environments, budget)?;
+                        }
+                        check(&family.provider, environments, budget)
+                    })();
+                    environments.remove_owner_parameter_extension(parameters);
+                    outcome?;
+                }
+            }
             crate::resolved::ResolvedDeclarationIndex::Type(_)
             | crate::resolved::ResolvedDeclarationIndex::Interface(_)
             | crate::resolved::ResolvedDeclarationIndex::Effect(_) => {}
@@ -4859,6 +6542,21 @@ fn visit_interface_applications(
             )
         })?;
         match *declaration {
+            crate::resolved::ResolvedDeclarationIndex::Resource(index) => {
+                if !visit(&module.resources[index].provider, budget)? {
+                    return Ok(false);
+                }
+                if let Some(family) = &module.resources[index].family_template {
+                    for requirement in &family.requirements {
+                        if !visit(requirement, budget)? {
+                            return Ok(false);
+                        }
+                    }
+                    if !visit(&family.provider, budget)? {
+                        return Ok(false);
+                    }
+                }
+            }
             crate::resolved::ResolvedDeclarationIndex::Type(_)
             | crate::resolved::ResolvedDeclarationIndex::Interface(_)
             | crate::resolved::ResolvedDeclarationIndex::Effect(_) => {}
@@ -5024,6 +6722,15 @@ fn collect_type_variables(
                     output.push(*identity);
                 }
             }
+            Type::ResourceApply(_, arguments) => {
+                push_determination_owner_arguments(
+                    arguments.iter(),
+                    &mut work,
+                    output,
+                    span,
+                    budget,
+                )?;
+            }
             Type::Tuple(elements) => {
                 for element in elements.iter().rev() {
                     push_determination_work(&mut work, element, span, budget)?;
@@ -5057,9 +6764,13 @@ fn collect_type_variables(
                         output.push(identity);
                     }
                 }
-                for argument in codomain.effect_arguments() {
-                    push_determination_work(&mut work, argument, span, budget)?;
-                }
+                push_determination_owner_arguments(
+                    codomain.effect_arguments(),
+                    &mut work,
+                    output,
+                    span,
+                    budget,
+                )?;
                 push_determination_work(&mut work, codomain.value(), span, budget)?;
                 push_determination_work(&mut work, domain, span, budget)?;
             }
@@ -5069,10 +6780,78 @@ fn collect_type_variables(
                     KindInternalCause::SchemeInDetermination,
                 ));
             }
-            Type::Int | Type::Bool | Type::Unit | Type::Inference(_) | Type::Nominal(_) => {}
+            Type::Bytes
+            | Type::String
+            | Type::Int
+            | Type::Bool
+            | Type::Unit
+            | Type::Inference(_)
+            | Type::Nominal(_) => {}
         }
     }
     Ok(())
+}
+
+fn push_determination_owner_arguments<'a>(
+    arguments: impl DoubleEndedIterator<Item = &'a KindedArgument>,
+    work: &mut Vec<&'a Type>,
+    output: &mut Vec<TypeVariableId>,
+    span: Span,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), KindFailure> {
+    struct Work<'a> {
+        budget: &'a mut TypeWorkBudget,
+        span: Span,
+    }
+    impl crate::types::TypeWorkMeter for Work<'_> {
+        type Error = KindFailure;
+        fn charge(&mut self, cells: usize) -> Result<(), KindFailure> {
+            self.budget.charge(cells).map_err(|()| {
+                KindFailure::resource(
+                    self.span,
+                    "global determination work scheduling exceeded its type-work budget",
+                )
+            })
+        }
+    }
+    visit_owner_components_with_charge(
+        arguments,
+        &mut Work { budget, span },
+        |ty, meter| {
+            work.try_reserve(1).map_err(|_| {
+                KindFailure::resource(
+                    meter.span,
+                    "global determination work scheduling could not reserve storage",
+                )
+            })?;
+            work.push(ty);
+            Ok(())
+        },
+        |tail, meter| {
+            let crate::types::EffectRowVariable::Rigid(identity) = tail.variable() else {
+                return Err(KindFailure::internal_cause(
+                    meter.span,
+                    KindInternalCause::RowInferenceDetermination,
+                ));
+            };
+            if !contains_type_variable_with_budget(output, identity, meter.span, meter.budget)? {
+                meter.budget.charge(1).map_err(|()| {
+                    KindFailure::resource(
+                        meter.span,
+                        "global row-tail determination retention exceeded its type-work budget",
+                    )
+                })?;
+                output.try_reserve(1).map_err(|_| {
+                    KindFailure::resource(
+                        meter.span,
+                        "global row-tail determination could not reserve storage",
+                    )
+                })?;
+                output.push(identity);
+            }
+            Ok(())
+        },
+    )
 }
 
 fn push_determination_work<'a>(
@@ -5183,7 +6962,7 @@ fn requirement_has_undetermined_variable(
 }
 
 fn requirement_argument_has_undetermined_variable(
-    arguments: &[ResolvedType],
+    arguments: &[crate::resolved::ResolvedOwnerArgument],
     position: usize,
     span: Span,
     determined: &[TypeVariableId],
@@ -5193,7 +6972,46 @@ fn requirement_argument_has_undetermined_variable(
         .get(position)
         .ok_or_else(|| KindFailure::internal_cause(span, KindInternalCause::DeterminantPosition))?;
     let mut variables = Vec::new();
-    collect_type_variables(&argument.ty, argument.span, &mut variables, budget)?;
+    let mut types = Vec::new();
+    let mut tails = Vec::new();
+    crate::types::visit_owner_components_with_charge(
+        std::iter::once(&argument.ty),
+        &mut |cells| budget.charge(cells),
+        |ty, _| {
+            types.try_reserve(1).map_err(|_| ())?;
+            types.push(ty);
+            Ok(())
+        },
+        |tail, _| {
+            tails.try_reserve(1).map_err(|_| ())?;
+            tails.push(tail);
+            Ok(())
+        },
+    )
+    .map_err(|()| {
+        KindFailure::resource(
+            argument.span,
+            "argument determination exceeded its work budget",
+        )
+    })?;
+    for ty in types {
+        collect_type_variables(ty, argument.span, &mut variables, budget)?;
+    }
+    for tail in tails {
+        let crate::types::EffectRowVariable::Rigid(identity) = tail.variable() else {
+            return Err(KindFailure::internal_cause(
+                argument.span,
+                KindInternalCause::RowInferenceDetermination,
+            ));
+        };
+        variables.try_reserve(1).map_err(|_| {
+            KindFailure::resource(
+                argument.span,
+                "argument determination could not reserve storage",
+            )
+        })?;
+        variables.push(identity);
+    }
     for identity in variables {
         if !contains_type_variable_with_budget(determined, identity, argument.span, budget)? {
             return Ok(true);
@@ -5359,10 +7177,95 @@ fn check_expression_annotations<'a>(
     check_expression_work(work, registry, environments, budget)
 }
 
+/// Instance actuals are checked before its fresh identity enters delta. This
+/// borrows the defining owner record and reuses the tagged argument judgment.
+#[inline(never)]
+fn authenticate_provider_instance_arguments<'a>(
+    resource: &'a crate::resolved::ResolvedProviderResourceExpr,
+    registry: &'a ResolvedRegistry,
+    environments: &KindEnvironments<'a>,
+    span: Span,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), KindFailure> {
+    let owner = crate::resolved::OwnerId::Resource(resource.definition);
+    // Defining signatures in this registry are local. Imported family kinds
+    // were independently admitted from the original body-free fact inventory
+    // before source bodies; use those same immutable formals, not actuals.
+    let parameters = if let Some(family) = registry.resource_signature_family(resource.definition) {
+        if family != resource.family {
+            return Err(KindFailure::internal_cause(
+                span,
+                KindInternalCause::MissingOwnerBinder,
+            ));
+        }
+        let parameters = registry.defining_owner_parameters(owner).ok_or_else(|| {
+            KindFailure::internal_cause(span, KindInternalCause::MissingOwnerBinder)
+        })?;
+        registry
+            .authenticate_owner_signature(owner, Some(resource.family), parameters, budget)
+            .map_err(|failure| {
+                if failure.is_resource_exhaustion() {
+                    KindFailure::resource(
+                        span,
+                        "resource owner authentication exceeded its type-work budget",
+                    )
+                } else {
+                    KindFailure::internal_cause(span, KindInternalCause::MissingOwnerBinder)
+                }
+            })?;
+        parameters
+    } else {
+        let original = environments
+            .imported_resource_owners
+            .and_then(|imported| imported.resource_fact(resource.family))
+            .filter(|original| {
+                original.id == resource.definition && original.family == resource.family
+            })
+            .ok_or_else(|| {
+                KindFailure::internal_cause(span, KindInternalCause::MissingOwnerBinder)
+            })?;
+        original.parameters.as_ref()
+    };
+    let Some(arguments) = resource.arguments.as_ref() else {
+        if environments
+            .row_resource_families
+            .contains_key(&resource.family)
+        {
+            return Err(KindFailure::Internal(KindStageFailure {
+                span,
+                message: "a row-bearing resource instance omitted its complete owner arguments"
+                    .to_owned(),
+                cause: None,
+            }));
+        }
+        // Row-free omitted arguments are inferred later from the once-checked
+        // initializer. The family and original defining slots are retained.
+        return Ok(());
+    };
+    if parameters.len().checked_sub(1) != Some(arguments.len()) {
+        return Err(KindFailure::Internal(KindStageFailure {
+            span,
+            message: "explicit resource instance arguments do not saturate the defining owner"
+                .to_owned(),
+            cause: None,
+        }));
+    }
+    for (argument, parameter) in arguments.iter().zip(parameters.iter().skip(1)) {
+        environments.expect_interface_argument(
+            argument,
+            &parameter.kind,
+            parameter.origin.primary_span(),
+            budget,
+        )?;
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 enum BodyWork<'a> {
     Expression(&'a ResolvedExpr),
     ResourceBody(&'a crate::resolved::ResolvedResourceExpr),
+    ProviderResourceBody(&'a crate::resolved::ResolvedProviderResourceExpr),
     ResourceExit(&'a crate::resolved::ResolvedTypeVariable),
     Declaration(&'a ResolvedLocalDeclaration),
     LexicalNewtype(&'a crate::resolved::ResolvedNominalType),
@@ -5450,6 +7353,36 @@ fn check_expression_work<'a>(
                     budget,
                 )?;
             }
+            BodyWork::ProviderResourceBody(resource) => {
+                authenticate_provider_instance_arguments(
+                    resource,
+                    registry,
+                    environments,
+                    span,
+                    budget,
+                )?;
+                let parameters = std::slice::from_ref(&resource.identity);
+                authenticate_owner_parameters(registry, parameters, budget)?;
+                if resource.identity.kind != Kind::Type {
+                    return Err(KindFailure::internal_cause(
+                        span,
+                        KindInternalCause::ResourceIdentityKind,
+                    ));
+                }
+                environments.extend_owner_parameters(parameters, budget)?;
+                push_body_work(
+                    &mut work,
+                    BodyWork::ResourceExit(&resource.identity),
+                    span,
+                    budget,
+                )?;
+                push_body_work(
+                    &mut work,
+                    BodyWork::Expression(&resource.body),
+                    span,
+                    budget,
+                )?;
+            }
             BodyWork::ResourceBody(resource) => {
                 let parameters = std::slice::from_ref(&resource.identity);
                 authenticate_owner_parameters(registry, parameters, budget)?;
@@ -5488,6 +7421,20 @@ fn check_expression_work<'a>(
                         &mut work,
                         BodyWork::Expression(&cleanup.body),
                         cleanup.body.span,
+                        budget,
+                    )?;
+                }
+                ResolvedExprKind::ProviderResource(resource) => {
+                    push_body_work(
+                        &mut work,
+                        BodyWork::ProviderResourceBody(resource),
+                        expression.span,
+                        budget,
+                    )?;
+                    push_body_work(
+                        &mut work,
+                        BodyWork::Expression(&resource.initializer),
+                        resource.initializer.span,
                         budget,
                     )?;
                 }
@@ -5598,7 +7545,8 @@ fn check_expression_work<'a>(
                     resume.value.span,
                     budget,
                 )?,
-                ResolvedExprKind::Integer(_)
+                ResolvedExprKind::String(_)
+                | ResolvedExprKind::Integer(_)
                 | ResolvedExprKind::Boolean(_)
                 | ResolvedExprKind::Unit
                 | ResolvedExprKind::Occurrence(_)
@@ -5648,7 +7596,28 @@ fn check_hook_target_kind(
         let span = provenance.span().ok_or_else(|| {
             KindFailure::internal_cause(target.span, KindInternalCause::HookArgumentSource)
         })?;
-        let found = environments.synthesize(argument, Some(provenance), span, budget)?;
+        let found = match argument {
+            KindedArgument::TypeArg(argument) => {
+                environments.synthesize(argument, Some(provenance), span, budget)?
+            }
+            KindedArgument::RowArg(_) => {
+                if parameter.kind != Kind::EffectRow {
+                    return Err(KindFailure::internal_cause(
+                        span,
+                        KindInternalCause::HookArgumentProvenance,
+                    ));
+                }
+                let mut ledger = SynthesisLedger::Resolved(budget);
+                environments.authenticate_source_row_argument(
+                    argument,
+                    provenance,
+                    &parameter.kind,
+                    span,
+                    &mut ledger,
+                )?;
+                continue;
+            }
+        };
         if !same_kind_with_budget(&parameter.kind, found.kind, budget).map_err(|()| {
             KindFailure::resource(
                 span,
@@ -5738,12 +7707,33 @@ fn local_declaration_span(declaration: &ResolvedLocalDeclaration) -> Span {
 fn body_work_span(item: BodyWork<'_>) -> Span {
     match item {
         BodyWork::Expression(expression) => expression.span,
+        BodyWork::ProviderResourceBody(resource) => resource.body.span,
         BodyWork::ResourceBody(resource) => resource.acquisition.span,
         BodyWork::ResourceExit(identity) => identity.origin.primary_span(),
         BodyWork::Declaration(declaration) => local_declaration_span(declaration),
         BodyWork::LexicalNewtype(nominal) => nominal.origin.primary_span(),
         BodyWork::RecursiveMember(member) => member.span,
     }
+}
+
+fn source_owner_shape_error(
+    span: Span,
+    message: &'static str,
+    budget: &mut TypeWorkBudget,
+) -> Result<KindFailure, KindFailure> {
+    let expected = clone_kind_with_budget(&TYPE_KIND, budget).map_err(|()| {
+        KindFailure::resource(
+            span,
+            "kind diagnostic retention exceeded its type-work budget",
+        )
+    })?;
+    let mut diagnostic = Diagnostic::new(KindReason::ExpectedType, SourceLabel::new(span, message));
+    diagnostic.expected = Some("Type".to_owned());
+    Ok(KindFailure::Source(Box::new(KindError {
+        diagnostic,
+        expectation: KindExpectation::Exact(expected),
+        found: None,
+    })))
 }
 
 fn structured_error(
@@ -5998,7 +7988,9 @@ fn provenance_node_span(node: &ResolvedTypeProvenanceNode) -> Span {
         ResolvedTypeProvenanceNode::Fact(span)
         | ResolvedTypeProvenanceNode::Tuple { span, .. }
         | ResolvedTypeProvenanceNode::Function { span, .. }
-        | ResolvedTypeProvenanceNode::Application { span, .. } => *span,
+        | ResolvedTypeProvenanceNode::Application { span, .. }
+        | ResolvedTypeProvenanceNode::Resource { span, .. }
+        | ResolvedTypeProvenanceNode::Row { span, .. } => *span,
     }
 }
 
@@ -6020,6 +8012,36 @@ fn require_fact_node(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn packed_builtin_kinds_authenticate_exact_mirrors() {
+        let source = crate::source::SourceFile::new("packed-kind.ash", "String").unwrap();
+        let span = source
+            .span(crate::source::ByteRange::new(0, 6).unwrap())
+            .unwrap();
+        let environments = KindEnvironments::new();
+        for ty in [Type::Bytes, Type::String] {
+            assert_eq!(
+                environments
+                    .synthesize_body_free_kind(&ty, span, &mut TypeWorkBudget::unbounded())
+                    .unwrap(),
+                &Kind::Type
+            );
+            for mirror in [Type::Bytes, Type::String, Type::Int] {
+                let mut budget = TypeWorkBudget::unbounded();
+                let result = environments.synthesize_with_ledger(
+                    &ty,
+                    None,
+                    Some(&mirror),
+                    None,
+                    &mut KindVariableObserver::separate(None, None),
+                    span,
+                    &mut SynthesisLedger::Resolved(&mut budget),
+                );
+                assert_eq!(result.is_ok(), ty == mirror);
+            }
+        }
+    }
+
     #[test]
     fn canonical_retention_preserves_kind_cause() {
         let source = crate::source::SourceFile::new("cause.ash", "binder").unwrap();
@@ -6316,7 +8338,7 @@ mod tests {
                 origin: Origin::Source(span),
             },
             arguments: (0..argument_count)
-                .map(|_| fact_type(Type::Int, span))
+                .map(|_| fact_type(Type::Int, span).into())
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
             span,
@@ -6387,7 +8409,7 @@ mod tests {
                         id: MethodId::new(interface_id, index as u32),
                         spelling: format!("method_{index}"),
                         annotation: fact_type(ty, span),
-                        type_parameters,
+                        type_parameters: type_parameters.into(),
                         has_explicit_type_parameters,
                         origin: Origin::Source(span),
                         span,
@@ -6402,7 +8424,7 @@ mod tests {
                 id: interface_id,
                 public: false,
                 spelling: "Fixture".into(),
-                parameters: vec![parameter].into_boxed_slice(),
+                parameters: vec![parameter].into_boxed_slice().into(),
                 determination: None,
                 methods,
                 origin: Origin::Source(span),
@@ -6458,29 +8480,34 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let mut parts = empty_module_parts(span);
-        parts.registry = Arc::new(
-            ResolvedRegistry::new(Vec::new(), Vec::new())
-                .with_additional_type_variables(parameters.clone()),
-        );
+        let registry = ResolvedRegistry::new(Vec::new(), Vec::new())
+            .with_additional_type_variables(parameters.clone());
         parts.interfaces = vec![ResolvedInterfaceDeclaration {
             id: interface_id,
             public: false,
             spelling: "Relation".into(),
-            parameters: parameters.into_boxed_slice(),
+            parameters: parameters.into_boxed_slice().into(),
             determination: None,
             methods: Box::new([]),
             origin: Origin::Source(span),
             span,
         }];
+        parts.registry = Arc::new(
+            registry
+                .with_interface_owner_signatures(
+                    &parts.interfaces,
+                    &mut TypeWorkBudget::unbounded(),
+                )
+                .expect("the positive fixture must retain its defining owner signature"),
+        );
         parts.declaration_order = vec![ResolvedDeclarationIndex::Interface(0)];
 
-        // Declaration order costs three cells. Environment admission then
-        // owns one shape cell, two unique-binder cells, two canonical Kind
-        // comparisons, and one IOTA insertion. The global arity preflight
-        // visits the interface declaration once; with no applications, it
-        // skips the positional-kind pass. Ordinary declaration consumption
-        // then visits the interface once more.
-        const EXACT_WORK: usize = 3 + (1 + 2 + 2 + 1) + 1 + 1;
+        // The fused source partition admits one bitmap word, one declaration,
+        // one partition fact and one provenance cardinality. Environment
+        // admission owns one shape cell, two unique IDs, two complete Kind
+        // comparisons and one IOTA record. With no applications or methods,
+        // the admitted immutable header needs no repeated consumer pass.
+        const EXACT_WORK: usize = (1 + 1 + 1 + 1) + (1 + 2 + 2 + 1);
         let mut one_short = TypeWorkBudget::with_limit(EXACT_WORK - 1);
         assert!(matches!(
             check_resolved_module_with_budget(&parts, &[], &mut one_short),
@@ -6787,7 +8814,8 @@ mod tests {
         // The source-key path scans both canonical parameters (2), schedules
         // and visits the selected variable (2), retains its discovered
         // identity (1), and checks value-type membership (1).
-        const EXACT_WORK: usize = 6;
+        // The complete argument also owns one canonical tag traversal slot.
+        const EXACT_WORK: usize = 6 + 1;
         let span = span();
         let module = ModuleId::new(9_811);
         let key = TypeVariableId::resolved(module, 0);
@@ -6823,8 +8851,11 @@ mod tests {
             span,
         };
         let arguments = [
-            fact_type(Type::Variable(key), span),
-            fact_type(Type::Variable(dependent), span),
+            crate::resolved::ResolvedOwnerArgument::from(fact_type(Type::Variable(key), span)),
+            crate::resolved::ResolvedOwnerArgument::from(fact_type(
+                Type::Variable(dependent),
+                span,
+            )),
         ];
         let application = |determination| CompleteInterfaceApplication {
             arguments: &arguments,
@@ -7275,6 +9306,7 @@ mod tests {
 
     fn empty_module_parts(span: Span) -> ResolvedModuleParts {
         ResolvedModuleParts {
+            resources: Vec::new(),
             module: ModuleId::new(0),
             registry: Arc::new(ResolvedRegistry::new(Vec::new(), Vec::new())),
             imported: ImportedFacts::default(),
@@ -7417,7 +9449,7 @@ mod tests {
         assert!(matches!(
             empty.expect_body_free_interface_argument(
                 InterfaceId::new(ModuleId::new(0), 9),
-                &[Type::Int],
+                &[KindedArgument::TypeArg(Type::Int)],
                 span,
                 &mut iota_budget,
             ),
@@ -7636,7 +9668,8 @@ mod tests {
         )
         .expect("the no-edge predecessor should require and accept every interface parameter");
         let no_edge_work = no_edge_measured.used();
-        assert_eq!(no_edge_work, 21);
+        // Three admitted scalar IDs plus the complete shared synthesis walk.
+        assert_eq!(no_edge_work, 17);
         let mut no_edge_short = TypeWorkBudget::with_limit(no_edge_work - 1);
         assert!(matches!(
             check(
@@ -8273,13 +10306,11 @@ mod tests {
             ResolvedDeclarationIndex::Type(0),
             ResolvedDeclarationIndex::Type(1),
         ];
-        // Declaration-order authentication visits two retained entries, one
-        // final partition fact, and one provenance-cardinality fact. XI then
-        // retains one environment record and one Type root per nominal. The
-        // unconditional application-arity stage visits both declarations and,
-        // after seeing no applications, skips positional kinding:
-        // 2 + 1 + 1 + 2 * (1 + 1) + 2 = 10.
-        const EXACT_WORK: usize = 10;
+        // Declaration order owns two entries, one final partition fact and
+        // one provenance cardinality. XI retains one environment record and
+        // one Type root per nominal. The source contains no possible interface
+        // applications, so its arity preflight needs no declaration scan.
+        const EXACT_WORK: usize = 2 + 1 + 1 + 2 * (1 + 1);
         let mut short = TypeWorkBudget::with_limit(EXACT_WORK - 1);
         assert!(matches!(
             check_resolved_module_with_budget(&valid, &provenance, &mut short),

@@ -1,0 +1,9 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/sqlite-provider)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.51s
+     Running tests/provider_sqlite_copying.rs (target/debug/deps/provider_sqlite_copying-b82a66bcca474e24)
+
+running 1 test
+test qualified_forwarding_chain_preserves_integer_and_source_completion ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.41s
+

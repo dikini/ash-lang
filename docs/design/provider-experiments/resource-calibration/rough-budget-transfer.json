@@ -1,0 +1,536 @@
+{
+  "excluded_case_ids": [],
+  "input_sha256": "6700fc3edbcf6e21efa0d2d94d6a5dfe7d33f6373f2cae1f0099cbb00cf94758",
+  "interpretation": "Descriptive comparison with existing examined evidence; no refitting and no claim of blind validation.",
+  "model_sha256": "b00bc284c4b51c2742473c79a90c7f59abb0a8153dd867ba1dae8d284b0f4fe8",
+  "responses": {
+    "cpu_seconds": {
+      "actual_to_predicted_ratios": {
+        "max": 8.95617749603547,
+        "median": 3.77392790664818,
+        "min": 1.4823682549000383,
+        "n": 8
+      },
+      "cases": [
+        {
+          "actual": 0.009734000000000003,
+          "case": "basic-higher-order",
+          "outside_observed_ranges": {},
+          "predicted": 0.0010868475981308814
+        },
+        {
+          "actual": 0.006795000000000002,
+          "case": "basic-global-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 0.0015899955298275018
+        },
+        {
+          "actual": 0.007416999999999979,
+          "case": "basic-local-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 0.001784562085305589
+        },
+        {
+          "actual": 0.013595999999999983,
+          "case": "basic-combined-effects",
+          "outside_observed_ranges": {},
+          "predicted": 0.004008663503750988
+        },
+        {
+          "actual": 0.0070310000000000095,
+          "case": "basic-newtype-facade",
+          "outside_observed_ranges": {},
+          "predicted": 0.0011785536948694573
+        },
+        {
+          "actual": 0.007901999999999992,
+          "case": "basic-higher-kinded-linked",
+          "outside_observed_ranges": {},
+          "predicted": 0.002618600117222614
+        },
+        {
+          "actual": 0.010221999999999981,
+          "case": "basic-polymorphic-methods",
+          "outside_observed_ranges": {},
+          "predicted": 0.006550029459684765
+        },
+        {
+          "actual": 0.015936000000000006,
+          "case": "basic-relational-bundle",
+          "outside_observed_ranges": {},
+          "predicted": 0.010750365131823893
+        }
+      ],
+      "residuals": {
+        "max": 0.009587336496248995,
+        "median": 0.005457918898735884,
+        "min": 0.0036719705403152163,
+        "n": 8
+      },
+      "rmse": 0.0064035762748406505,
+      "zero_prediction_cases": []
+    },
+    "final-elaboration": {
+      "actual_to_predicted_ratios": {
+        "max": 1.5666894204033026,
+        "median": 0.46559777200185914,
+        "min": 0.21487118207942446,
+        "n": 8
+      },
+      "cases": [
+        {
+          "actual": 200,
+          "case": "basic-higher-order",
+          "outside_observed_ranges": {},
+          "predicted": 488.6931640579849
+        },
+        {
+          "actual": 262,
+          "case": "basic-global-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 767.873665365413
+        },
+        {
+          "actual": 180,
+          "case": "basic-local-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 837.7112196155986
+        },
+        {
+          "actual": 3936,
+          "case": "basic-combined-effects",
+          "outside_observed_ranges": {},
+          "predicted": 2512.3039376794804
+        },
+        {
+          "actual": 197,
+          "case": "basic-newtype-facade",
+          "outside_observed_ranges": {},
+          "predicted": 488.74973595575636
+        },
+        {
+          "actual": 765,
+          "case": "basic-higher-kinded-linked",
+          "outside_observed_ranges": {},
+          "predicted": 1465.6834888895544
+        },
+        {
+          "actual": 3206,
+          "case": "basic-polymorphic-methods",
+          "outside_observed_ranges": {},
+          "predicted": 5023.702724994617
+        },
+        {
+          "actual": 4101,
+          "case": "basic-relational-bundle",
+          "outside_observed_ranges": {},
+          "predicted": 7396.689842859612
+        }
+      ],
+      "residuals": {
+        "max": 1423.6960623205196,
+        "median": -581.7924424905058,
+        "min": -3295.6898428596123,
+        "n": 8
+      },
+      "rmse": 1480.7277109318918,
+      "zero_prediction_cases": []
+    },
+    "independent-effect-core": {
+      "actual_to_predicted_ratios": {
+        "max": 0.19042335115224282,
+        "median": 0.11423594584715635,
+        "min": 0.08116209719106261,
+        "n": 8
+      },
+      "cases": [
+        {
+          "actual": 326,
+          "case": "basic-higher-order",
+          "outside_observed_ranges": {},
+          "predicted": 2864.822157159734
+        },
+        {
+          "actual": 377,
+          "case": "basic-global-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 4306.012753992469
+        },
+        {
+          "actual": 388,
+          "case": "basic-local-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 4780.556607434803
+        },
+        {
+          "actual": 1993,
+          "case": "basic-combined-effects",
+          "outside_observed_ranges": {},
+          "predicted": 12107.52182839215
+        },
+        {
+          "actual": 346,
+          "case": "basic-newtype-facade",
+          "outside_observed_ranges": {},
+          "predicted": 3017.1504294719334
+        },
+        {
+          "actual": 783,
+          "case": "basic-higher-kinded-linked",
+          "outside_observed_ranges": {},
+          "predicted": 7528.168565293807
+        },
+        {
+          "actual": 4147,
+          "case": "basic-polymorphic-methods",
+          "outside_observed_ranges": {},
+          "predicted": 21777.791299789107
+        },
+        {
+          "actual": 5032,
+          "case": "basic-relational-bundle",
+          "outside_observed_ranges": {},
+          "predicted": 33900.97114594052
+        }
+      ],
+      "residuals": {
+        "max": -2538.822157159734,
+        "median": -5568.862586364305,
+        "min": -28868.971145940523,
+        "n": 8
+      },
+      "rmse": 12943.992356525008,
+      "zero_prediction_cases": []
+    },
+    "linked-interface": {
+      "actual_to_predicted_ratios": {
+        "max": 0.37240881572286977,
+        "median": 0.33949164854239633,
+        "min": 0.025671436386693548,
+        "n": 8
+      },
+      "cases": [
+        {
+          "actual": 18,
+          "case": "basic-higher-order",
+          "outside_observed_ranges": {},
+          "predicted": 53.02045006786707
+        },
+        {
+          "actual": 21,
+          "case": "basic-global-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 83.31785010664825
+        },
+        {
+          "actual": 18,
+          "case": "basic-local-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 90.89220011634355
+        },
+        {
+          "actual": 7,
+          "case": "basic-combined-effects",
+          "outside_observed_ranges": {},
+          "predicted": 272.67660034903065
+        },
+        {
+          "actual": 18,
+          "case": "basic-newtype-facade",
+          "outside_observed_ranges": {},
+          "predicted": 53.02045006786707
+        },
+        {
+          "actual": 56,
+          "case": "basic-higher-kinded-linked",
+          "outside_observed_ranges": {},
+          "predicted": 159.0613502036012
+        },
+        {
+          "actual": 190,
+          "case": "basic-polymorphic-methods",
+          "outside_observed_ranges": {},
+          "predicted": 545.3532006980613
+        },
+        {
+          "actual": 299,
+          "case": "basic-relational-bundle",
+          "outside_observed_ranges": {},
+          "predicted": 802.8811010277013
+        }
+      ],
+      "residuals": {
+        "max": -35.02045006786707,
+        "median": -87.97677515997236,
+        "min": -503.88110102770133,
+        "n": 8
+      },
+      "rmse": 243.16337363583375,
+      "zero_prediction_cases": []
+    },
+    "module-linking": {
+      "actual_to_predicted_ratios": {
+        "max": 0.7007672000124622,
+        "median": 0.315481333066988,
+        "min": 0.039336556673702644,
+        "n": 8
+      },
+      "cases": [
+        {
+          "actual": 2,
+          "case": "basic-higher-order",
+          "outside_observed_ranges": {},
+          "predicted": 30.482526752623553
+        },
+        {
+          "actual": 2,
+          "case": "basic-global-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 45.782409827490646
+        },
+        {
+          "actual": 2,
+          "case": "basic-local-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 50.843291053409466
+        },
+        {
+          "actual": 47,
+          "case": "basic-combined-effects",
+          "outside_observed_ranges": {},
+          "predicted": 128.3609575527217
+        },
+        {
+          "actual": 14,
+          "case": "basic-newtype-facade",
+          "outside_observed_ranges": {},
+          "predicted": 32.13040736222628
+        },
+        {
+          "actual": 56,
+          "case": "basic-higher-kinded-linked",
+          "outside_observed_ranges": {},
+          "predicted": 79.91241599065155
+        },
+        {
+          "actual": 61,
+          "case": "basic-polymorphic-methods",
+          "outside_observed_ranges": {},
+          "predicted": 230.3558253517997
+        },
+        {
+          "actual": 161,
+          "case": "basic-relational-bundle",
+          "outside_observed_ranges": {},
+          "predicted": 359.03159764683437
+        }
+      ],
+      "residuals": {
+        "max": -18.13040736222628,
+        "median": -46.312850440450056,
+        "min": -198.03159764683437,
+        "n": 8
+      },
+      "rmse": 100.33185610270881,
+      "zero_prediction_cases": []
+    },
+    "peak_rss_kib": {
+      "actual_to_predicted_ratios": {
+        "max": 1.163966261664013,
+        "median": 1.0525226039634172,
+        "min": 0.9775437167176929,
+        "n": 8
+      },
+      "cases": [
+        {
+          "actual": 12572,
+          "case": "basic-higher-order",
+          "outside_observed_ranges": {},
+          "predicted": 12572.82295271557
+        },
+        {
+          "actual": 12604,
+          "case": "basic-global-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 12631.35590853027
+        },
+        {
+          "actual": 12368,
+          "case": "basic-local-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 12652.119581442497
+        },
+        {
+          "actual": 14564,
+          "case": "basic-combined-effects",
+          "outside_observed_ranges": {},
+          "predicted": 12932.47674614298
+        },
+        {
+          "actual": 12588,
+          "case": "basic-newtype-facade",
+          "outside_observed_ranges": {},
+          "predicted": 12580.996864660307
+        },
+        {
+          "actual": 14600,
+          "case": "basic-higher-kinded-linked",
+          "outside_observed_ranges": {},
+          "predicted": 12757.253518205178
+        },
+        {
+          "actual": 15460,
+          "case": "basic-polymorphic-methods",
+          "outside_observed_ranges": {},
+          "predicted": 13282.171923005993
+        },
+        {
+          "actual": 15212,
+          "case": "basic-relational-bundle",
+          "outside_observed_ranges": {},
+          "predicted": 13772.890454143659
+        }
+      ],
+      "residuals": {
+        "max": 2177.8280769940066,
+        "median": 723.0563405980174,
+        "min": -284.1195814424973,
+        "n": 8
+      },
+      "rmse": 1272.4521673430393,
+      "zero_prediction_cases": []
+    },
+    "resolution": {
+      "actual_to_predicted_ratios": {
+        "max": 2.2810935974883004,
+        "median": 0.45874203309305717,
+        "min": 0.22482832229484354,
+        "n": 8
+      },
+      "cases": [
+        {
+          "actual": 79,
+          "case": "basic-higher-order",
+          "outside_observed_ranges": {},
+          "predicted": 264.761277280101
+        },
+        {
+          "actual": 108,
+          "case": "basic-global-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 389.07093789438136
+        },
+        {
+          "actual": 98,
+          "case": "basic-local-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 435.8881434496549
+        },
+        {
+          "actual": 361,
+          "case": "basic-combined-effects",
+          "outside_observed_ranges": {},
+          "predicted": 999.8640847156537
+        },
+        {
+          "actual": 159,
+          "case": "basic-newtype-facade",
+          "outside_observed_ranges": {},
+          "predicted": 285.7476644823722
+        },
+        {
+          "actual": 550,
+          "case": "basic-higher-kinded-linked",
+          "outside_observed_ranges": {},
+          "predicted": 647.3791214244044
+        },
+        {
+          "actual": 1385,
+          "case": "basic-polymorphic-methods",
+          "outside_observed_ranges": {},
+          "predicted": 1663.9459741949681
+        },
+        {
+          "actual": 6166,
+          "case": "basic-relational-bundle",
+          "outside_observed_ranges": {},
+          "predicted": 2703.089433414459
+        }
+      ],
+      "residuals": {
+        "max": 3462.910566585541,
+        "median": -232.35362573753457,
+        "min": -638.8640847156537,
+        "n": 8
+      },
+      "rmse": 1261.4937550836055,
+      "zero_prediction_cases": []
+    },
+    "source-checking": {
+      "actual_to_predicted_ratios": {
+        "max": 0.23234691334983004,
+        "median": 0.06667822157005424,
+        "min": 0.016003432135336854,
+        "n": 8
+      },
+      "cases": [
+        {
+          "actual": 180,
+          "case": "basic-higher-order",
+          "outside_observed_ranges": {},
+          "predicted": 6354.687355460592
+        },
+        {
+          "actual": 238,
+          "case": "basic-global-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 9204.475072590587
+        },
+        {
+          "actual": 166,
+          "case": "basic-local-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 10372.774952034119
+        },
+        {
+          "actual": 5159,
+          "case": "basic-combined-effects",
+          "outside_observed_ranges": {},
+          "predicted": 22203.867164064366
+        },
+        {
+          "actual": 275,
+          "case": "basic-newtype-facade",
+          "outside_observed_ranges": {},
+          "predicted": 6962.491289008636
+        },
+        {
+          "actual": 1390,
+          "case": "basic-higher-kinded-linked",
+          "outside_observed_ranges": {},
+          "predicted": 14809.434531545463
+        },
+        {
+          "actual": 5486,
+          "case": "basic-polymorphic-methods",
+          "outside_observed_ranges": {},
+          "predicted": 34682.87139136002
+        },
+        {
+          "actual": 9244,
+          "case": "basic-relational-bundle",
+          "outside_observed_ranges": {},
+          "predicted": 58399.563709008275
+        }
+      ],
+      "residuals": {
+        "max": -6174.687355460592,
+        "median": -11813.10474178979,
+        "min": -49155.563709008275,
+        "n": 8
+      },
+      "rmse": 22379.56851742269,
+      "zero_prediction_cases": []
+    }
+  }
+}

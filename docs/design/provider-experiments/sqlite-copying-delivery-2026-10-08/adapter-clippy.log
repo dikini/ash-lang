@@ -1,0 +1,4 @@
+    Checking ash-native-buffer v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/sqlite-provider/native-buffer)
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/sqlite-provider/foreign-adapter)
+    Checking ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/sqlite-provider)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 31.65s

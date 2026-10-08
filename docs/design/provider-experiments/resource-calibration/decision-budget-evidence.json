@@ -1,0 +1,167 @@
+{
+  "artifacts": {
+    "decision-budget-evaluation.json": {
+      "bytes": 159830,
+      "sha256": "c217928e0db9594040728bf00887c6a387077f5090e88d402870b49609368288"
+    },
+    "decision-budget-inputs.json": {
+      "bytes": 80817,
+      "sha256": "384286a4d92f826232582660775546e3c462b67fd156aa1a4bbc5abbc3e11427"
+    },
+    "decision-budget-model.json": {
+      "bytes": 63861,
+      "sha256": "a80c6f488176423945917f7b718c49fa1b7d9e47f2ef428e312a3ddf597c4f25"
+    },
+    "decision-budget-reference-evaluation.json": {
+      "bytes": 55413,
+      "sha256": "809c81d201ee0daeaf2565eb9f33d63d8a8c5a2ec95ba029e4049ab8d82bd3df"
+    },
+    "decision-budget-reference-inputs.json": {
+      "bytes": 20590,
+      "sha256": "8a649829872180a12e146d00e602df185b34f1f2bbc880a0396819e9f0343d0a"
+    },
+    "decision-budget-startup.json": {
+      "bytes": 12404,
+      "sha256": "4edcca11cc1f3299afb2f51bb514ae6ea7b296096f4f1a0dfacd36ba5215e11a"
+    },
+    "decision-budget-verification.json": {
+      "bytes": 4793,
+      "sha256": "199b374a163d5286a633e46ae964fc62b549edc42e5f698afe91f02c0922696c"
+    },
+    "decision-budgets.md": {
+      "bytes": 9526,
+      "sha256": "ba906c43d8d173f9bd03fe319df9a9da8f37434f9e0bc97eb2aba2042c28395b"
+    }
+  },
+  "baseline_checkpoint": "d469699e61e0de5e3fb6b8f1faead59ef1114f29",
+  "compiler_processes": 0,
+  "created_utc": "2026-10-08T06:54:23.797297+00:00",
+  "estimator": {
+    "bytes": 21208,
+    "path": "../../../../tools/resource_budget_estimates.py",
+    "sha256": "3344295a728acd5fbc23a0d228c0be3ca61aec5196462d83dd2641c738ce0036"
+  },
+  "interpretation": [
+    "Current observed costs are acceptable for feature development on the measured baseline and host.",
+    "Budgets predict typical cost; physical observations, charged units, review tolerances, engineering targets and compiler stopping policy remain distinct.",
+    "Original fitted coefficients, charged-unit predictions and previous evidence are unchanged.",
+    "The retrospective tolerance coverage is not blind validation or a universal complexity bound."
+  ],
+  "overlapping_case_ids": [
+    "flat-width128",
+    "flat-width16",
+    "flat-width64",
+    "nested_type-depth1",
+    "nested_type-depth16",
+    "nested_type-depth4",
+    "prerequisite-depth1",
+    "prerequisite-depth16",
+    "prerequisite-depth4"
+  ],
+  "preserved_previous_evidence": {
+    "analysis.json": {
+      "bytes": 24063,
+      "sha256": "f729da003f1019aba2a462baec9bb3d278aa9b14929a206d762658090c6e81a8"
+    },
+    "baseline.json": {
+      "bytes": 36971,
+      "sha256": "54aeaa60f93b23aa50faaaba13c6554ecce1a6dc5ed5945a33500aa7f99396a2"
+    },
+    "build-and-source.tar.gz": {
+      "bytes": 2617276,
+      "sha256": "dd0f3b20af53a933b10ca4726ddbf81d98966ba8f87f5ebbfd77ad282cc86de5"
+    },
+    "cpu-precision-measurements.tar.gz": {
+      "bytes": 898970,
+      "sha256": "4832a5c6ec094f6fb58b606ad12b4d9a4c38f27a7b7dc3fd0463b134a0225ec5"
+    },
+    "generated-inputs.tar.gz": {
+      "bytes": 17851,
+      "sha256": "0db3149a4aea9a23cd1774cfc6c3b976aceff9d5fedc8c470e728a69162b2bd5"
+    },
+    "initial-measurements.tar.gz": {
+      "bytes": 832665,
+      "sha256": "d885bf54e088c7c1c7a20da9b22d60017a059ba7f0d0b141066109256dabd579"
+    },
+    "manifest.json": {
+      "bytes": 649904,
+      "sha256": "c8078ad90813d55e18ec08c8027be99836224466f2e89eca0112afdbe763be2a"
+    },
+    "reference-basics-measurements.tar.gz": {
+      "bytes": 236102,
+      "sha256": "69ca37488e735891fb992ec1fb38cf13bdba6dbaf5907a251a09291e4a67f055"
+    },
+    "reference-evidence.json": {
+      "bytes": 387232,
+      "sha256": "49aadf7812597499c1c94da13dd13614af3728d2fa84d4b792a7ca4d9046389f"
+    },
+    "reference-inputs-and-tools.tar.gz": {
+      "bytes": 70579,
+      "sha256": "08aa75d326918ac60394e236f3517405ef67932da207d616a84bdf3c2b901e5a"
+    },
+    "reference-measurements.tar.gz": {
+      "bytes": 133886,
+      "sha256": "efe1d29632963e7f37c88953f15940ba3359c961dd9d8cdc0c8e7a6584d01836"
+    },
+    "reference-protocol.json": {
+      "bytes": 2777,
+      "sha256": "0f5d62e274844ef34e3379202ab7ebba8d737a4744e985695e5ef195a70e9072"
+    },
+    "rough-budget-model.json": {
+      "bytes": 61685,
+      "sha256": "b00bc284c4b51c2742473c79a90c7f59abb0a8153dd867ba1dae8d284b0f4fe8"
+    },
+    "rough-budget-transfer.json": {
+      "bytes": 15164,
+      "sha256": "46c27484bcd3c97e1e642a79fa292e10519b8865a697f8bdd945ce2f6435d96f"
+    },
+    "smoke-measurements.tar.gz": {
+      "bytes": 74605,
+      "sha256": "97406cd64a0cf59c91c31a182904e8014fb47ba5085d91a329b07b6b62566362"
+    },
+    "sqlite-rust-evidence.json": {
+      "bytes": 60017,
+      "sha256": "f6ca3446b5eb6c4366fc30a26b248e5280df2d4af69b90b6f18b486cb0a00a5a"
+    },
+    "sqlite-rust-measurements.tar.gz": {
+      "bytes": 260116,
+      "sha256": "74064248a6a2f4e27f50ea00f58cf14611228f409419da8dee378f23d9db8d55"
+    },
+    "sqlite-rust-protocol.json": {
+      "bytes": 8902,
+      "sha256": "3fd9006e9f5c366032a6b59627afade63f97a2c69a864244785fceb62c20825b"
+    },
+    "sqlite-rust-summary.json": {
+      "bytes": 38166,
+      "sha256": "14adcdee6f253a00f53a1f865d4e7c389cb31a6ad4b8c49da4a6c39737d9154a"
+    },
+    "sqlite-rust.md": {
+      "bytes": 9351,
+      "sha256": "01c44424567586bdbfe2229f7e6cf2c853da0fec1a83c5f8c700a0e169feb70e"
+    }
+  },
+  "primary_cases": 52,
+  "schema_version": 1,
+  "source_summaries": [
+    {
+      "archive": "cpu-precision-measurements.tar.gz",
+      "case_count": 44,
+      "member": "cpu-precision/summary.json",
+      "summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b"
+    },
+    {
+      "archive": "reference-basics-measurements.tar.gz",
+      "case_count": 8,
+      "member": "measurements/basics-corrected/summary.json",
+      "summary_sha256": "6700fc3edbcf6e21efa0d2d94d6a5dfe7d33f6373f2cae1f0099cbb00cf94758"
+    },
+    {
+      "archive": "reference-measurements.tar.gz",
+      "case_count": 14,
+      "member": "measurements/reference/summary.json",
+      "summary_sha256": "68b467bf1c18978a46744d2d109f10a87794d5a9962ba8055d51dba1844c85cf"
+    }
+  ],
+  "status": "Provisional retrospective decision support; current measured costs accepted, no optimization required by this evidence; stopping policy unchanged",
+  "structural_reference_cases": 14
+}

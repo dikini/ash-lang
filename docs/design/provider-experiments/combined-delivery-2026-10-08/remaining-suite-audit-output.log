@@ -1,0 +1,550 @@
+verification command: ["cargo", "test", "--locked", "-p", "ash", "--all-features", "--no-fail-fast", "--test", "resource_provider_resolution", "--test", "resource_provider_syntax", "--test", "resource_scope_core", "--test", "resource_scope_modules", "--test", "resource_scope_runtime", "--test", "resource_scope_syntax", "--test", "resource_scope_typing", "--test", "runtime_diagnostics", "--test", "scoped_evidence", "--test", "scoped_evidence_interactions", "--test", "scoped_evidence_syntax", "--test", "semantics", "--test", "source_diagnostics", "--test", "spec_examples", "--test", "string_literals", "--", "--test-threads=1"]
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/resource_provider_resolution.rs (target/debug/deps/resource_provider_resolution-d1eaa7ec8c8f01a9)
+
+running 13 tests
+test acquire_and_finish_binders_do_not_leak_into_other_templates ... ok
+test declarations_preserve_templates_and_instances_reference_the_defining_family ... ok
+test family_effect_actuals_preserve_existing_argument_kind_rejection ... ok
+test family_effect_arity_actuals_are_retained_until_the_checker_boundary ... ok
+test family_failure_paths_drop_retained_bodies_and_current_patterns_on_a_small_stack ... ok
+test family_payload_and_state_binders_do_not_leak_across_template_boundaries ... ok
+test family_templates_retain_distinct_scope_ordered_arguments_and_canonical_operations ... FAILED
+test fresh_handle_and_identity_are_unavailable_in_initializer_and_after_body ... ok
+test frontend_resource_templates_cannot_publish_checked_modules_before_lifecycle_support ... ok
+test nested_provider_instances_resolve_and_drop_on_a_small_stack ... ok
+test resource_answer_parameter_is_distinct_from_resource_identity ... ok
+test second_resource_parameter_remains_a_template_while_instances_bind_only_fresh_identity ... ok
+test unknown_family_requirements_associations_and_operations_reject_resolution ... ok
+
+failures:
+
+---- family_templates_retain_distinct_scope_ordered_arguments_and_canonical_operations stdout ----
+
+thread 'family_templates_retain_distinct_scope_ordered_arguments_and_canonical_operations' (36) panicked at tests/resource_provider_resolution.rs:399:5:
+assertion `left == right` failed
+  left: "resource state must be an authenticated opaque native state"
+ right: "resource family templates are not executable in this experimental checkpoint"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    family_templates_retain_distinct_scope_ordered_arguments_and_canonical_operations
+
+test result: FAILED. 12 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+error: test failed, to rerun pass `-p ash --test resource_provider_resolution`
+     Running tests/resource_provider_syntax.rs (target/debug/deps/resource_provider_syntax-f5e1d74a7565b6ae)
+
+running 9 tests
+test declaration_requires_one_answer_parameter_and_nonempty_handlers ... ok
+test family_handlers_and_resource_declaration_accept_adjacent_closing_braces ... ok
+test final_handler_and_declaration_braces_can_share_a_line ... ok
+test missing_and_duplicate_provider_fields_are_rejected ... ok
+test provider_declaration_reuses_type_effect_and_handler_syntax ... ok
+test provider_instances_require_a_fresh_identity_before_retained_arguments ... ok
+test resource_family_templates_require_a_requirement_one_payload_and_complete_group ... ok
+test resource_type_instance_can_appear_in_nested_expression_positions ... ok
+test selected_typed_arena_module_parses_resource_family_templates ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/resource_scope_core.rs (target/debug/deps/resource_scope_core-ea400b9403a1461a)
+
+running 1 test
+test resource_programs_execute_after_independent_ownership_validation ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/resource_scope_modules.rs (target/debug/deps/resource_scope_modules-75263539d68f63b8)
+
+running 12 tests
+test acquisition_resolution_requires_a_direct_builtin_dependency ... ok
+test builtin_cell_import_supports_qualified_generic_forwarding ... ok
+test builtin_names_can_be_targeted_renamed_and_forwarded_through_facades ... ok
+test builtin_root_conflict_precedes_filesystem_inspection ... ok
+test cli_preserves_builtin_failure_categories_and_resource_execution ... ok
+test direct_and_facade_paths_share_one_builtin_identity ... ok
+test direct_targeted_import_satisfies_acquisition_availability_but_a_facade_does_not ... ok
+test ordinary_cell_shaped_api_has_no_privileged_origin ... ok
+test repeated_imported_hook_pipeline_forgets_completed_discard_histories ... ok
+test source_cannot_introduce_the_builtin_provider ... ok
+test source_has_no_builtin_handle_constructor_or_pattern ... ok
+test unknown_builtin_paths_reject ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.68s
+
+     Running tests/resource_scope_runtime.rs (target/debug/deps/resource_scope_runtime-72cfc9e3e84896a8)
+
+running 14 tests
+test capture_resume_retains_the_cell ... ok
+test capturing_accessor_can_be_called_repeatedly ... ok
+test copied_closure_runs_after_payload_release ... ok
+test copied_result_survives_nested_scope_completion ... ok
+test discard_inside_live_scope_preserves_completion ... ok
+test imported_accessor_factory_preserves_provider_and_outer_identity ... ok
+test initializer_runs_once_before_acquisition ... ok
+test nearest_exact_user_handler_intercepts_cell_operations ... ok
+test nested_independent_cells_accept_aliases_and_constructor_transport ... ok
+test nested_source_execution_and_release_fit_a_fresh_small_stack ... 
+running 1 test
+test nested_source_execution_and_release_fit_a_fresh_small_stack ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.19s
+
+ok
+test same_site_closure_uses_its_outer_activation ... ok
+test same_site_metadata_only_closure_uses_its_lexical_activation ... ok
+test sequential_scopes_release_before_next_acquisition ... ok
+test write_then_read_observes_42 ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.86s
+
+     Running tests/resource_scope_syntax.rs (target/debug/deps/resource_scope_syntax-2b725a8d69da4122)
+
+running 4 tests
+test acquisition_is_an_expression_with_a_primary_initializer_and_block_body ... ok
+test deeply_nested_acquisitions_have_a_syntax_owned_limit_and_retry ... ok
+test malformed_acquisitions_reject_and_cell_remains_contextual ... ok
+test projection_keeps_initializer_outside_the_owned_body ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/resource_scope_typing.rs (target/debug/deps/resource_scope_typing-5ed61382a05c4515)
+
+running 63 tests
+test acquisition_checks_direct_read_write_and_generic_forwarding ... ok
+test acquisition_checks_with_only_handle_or_read_selected ... ok
+test acquisition_does_not_supply_an_unrelated_provider ... ok
+test acquisition_rejects_exposed_result_and_latent_row_escape ... ok
+test acquisition_supplies_a_generic_helper_through_a_facade ... ok
+test builtin_import_and_ordinary_effect_registry_execute_without_acquisition ... ok
+test capture_control_selects_the_requested_operation_not_every_effect_clause ... ok
+test completed_factory_value_survives_recursive_resumed_argument ... ok
+test constructor_application_does_not_skip_a_later_resource_payload_request ... ok
+test consumed_clause_owner_does_not_keep_a_completed_resource_live ... ok
+test copied_integer_and_constant_closure_have_no_stored_resource_dependency ... ok
+test delayed_resume_values_wake_calls_and_payload_obligations ... ok
+test discard_cannot_skip_resume_of_a_resource_owned_outside_its_capture ... ok
+test discard_closes_its_owned_acquired_resource_scope ... ok
+test discard_inside_an_acquired_scope_preserves_its_completion ... ok
+test discarded_strict_inputs_do_not_publish_unexecuted_resource_results ... ok
+test disjoint_evidence_selections_do_not_share_the_method_name_capture ... ok
+test distinct_acquisition_handles_do_not_unify ... ok
+test generic_constructor_payload_projection_preserves_resource_dependencies ... ok
+test helper_and_factory_results_preserve_stored_resource_dependencies ... ok
+test identity_free_closure_cannot_escape_its_resource_owner ... ok
+test immediate_outward_row_escape_labels_the_user_computation_not_its_final_value ... ok
+test imported_constrained_helper_retains_selected_evidence_dependencies ... ok
+test imported_generic_projections_preserve_only_the_selected_field ... ok
+test imported_implementation_method_preserves_selected_prerequisite_capture ... ok
+test imported_opaque_wrapper_allows_copied_closure_escape ... ok
+test imported_opaque_wrapper_preserves_live_cell_access ... ok
+test imported_opaque_wrapper_rejects_hidden_resource_closure_escape ... ok
+test initializer_has_int_type_and_preceding_scope ... ok
+test initializer_preserves_outer_effect_instances ... ok
+test invoking_a_known_callback_preserves_its_result_dependencies ... ok
+test mixed_kind_row_forwarding_preserves_metadata_captures ... ok
+test nested_acquisition_checking_uses_a_bounded_stack ... 
+running 1 test
+test nested_acquisition_checking_uses_a_bounded_stack ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 62 filtered out; finished in 0.08s
+
+ok
+test nested_generic_handler_callback_normalizes_solved_effect_arguments ... ok
+test nested_implementation_adapters_preserve_method_local_arguments_and_pure_execution ... ok
+test opaque_request_payload_allows_copied_evidence_after_release ... ok
+test opaque_request_payload_rejects_resource_dependent_evidence ... ok
+test operation_metadata_alone_retains_the_resource_identity ... ok
+test outer_handler_cannot_receive_a_hidden_resource_dependent_payload ... ok
+test outward_copied_payload_and_still_live_outer_dependency_remain_admitted ... ok
+test outward_unhandled_request_cannot_export_a_resource_dependent_payload ... ok
+test prefocus_resume_preserves_nested_handler_callback_dependencies ... ok
+test projecting_a_resource_free_field_does_not_retain_other_fields ... ok
+test pure_imported_data_summaries_preserve_erased_execution ... ok
+test recursive_constructor_results_under_resource_handler ... ok
+test recursive_resource_occurrences_preserve_inside_scope_discard ... ok
+test repeated_resource_site_distinguishes_inherited_and_local_payload_owners ... ok
+test request_payload_projection_preserves_only_the_selected_dependency ... ok
+test resource_owners_publish_checked_summaries_through_real_imports ... ok
+test resource_rows_are_recomputed_inside_an_enclosing_handler_clause ... ok
+test restored_recursive_resource_preserves_inherited_payload_owner ... ok
+test resumed_payload_flows_back_to_the_suspended_request_result ... ok
+test returned_generic_callable_closes_owned_resource_free_captures ... ok
+test row_polymorphic_relay_preserves_imported_and_local_accessor_identity ... ok
+test row_relay_preserves_payload_and_scope_completion_obligations ... ok
+test row_relays_keep_distinct_rows_and_locally_handled_prefixes ... ok
+test same_typed_implementation_methods_keep_their_own_capture_summaries ... ok
+test selected_lexical_method_retains_its_actual_body_dependencies ... ok
+test suspended_same_site_resource_preserves_outer_operation_and_metadata_captures ... ok
+test tuple_pattern_can_project_an_effectful_callback_and_execute ... ok
+test two_outer_wrapper_calls_keep_the_inner_factory_arguments_separate ... ok
+test two_recursive_calls_under_resource_handler ... ok
+test unused_imported_evidence_prerequisite_does_not_capture_its_method ... ok
+
+test result: ok. 63 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.06s
+
+     Running tests/runtime_diagnostics.rs (target/debug/deps/runtime_diagnostics-b2583a2a0481d843)
+
+running 10 tests
+test packed_and_foreign_resource_failures_render_from_prepared_localized_text ... ok
+test prepared_runtime_text_covers_existing_resource_units_and_secondary_failure ... ok
+test prepared_runtime_text_localizes_both_formats_without_a_live_catalogue ... ok
+test runtime_dispatch_preserves_json_when_preexecution_preparation_failed ... ok
+test runtime_formats_return_flush_failure_without_retry ... ok
+test runtime_formats_stop_at_every_failed_write_without_retry_or_flush ... ok
+test runtime_human_leads_with_an_explanation ... ok
+test runtime_json_covers_existing_base_reasons_without_inventing_resource_details ... ok
+test runtime_json_preserves_primary_teardown_and_cleanup_facts ... ok
+test runtime_json_retains_all_resource_causes_phases_and_cleanup_states ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+     Running tests/scoped_evidence.rs (target/debug/deps/scoped_evidence-d27bd37d620eec00)
+
+running 2 tests
+test pure_lexical_method_executes ... ok
+test pure_lexical_method_forwards_through_a_constraint ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+     Running tests/scoped_evidence_interactions.rs (target/debug/deps/scoped_evidence_interactions-f62e6b70201b32b4)
+
+running 53 tests
+test active_lexical_keys_cannot_disagree_on_dependents ... ok
+test concrete_recursive_prerequisite_consumes_exact_lexical_evidence ... ok
+test delayed_inference_retains_the_occurrence_scope_after_inner_block_exit ... ok
+test disjoint_evidence_scopes_may_supply_different_methods_for_one_nominal ... ok
+test duplicate_active_lexical_key_is_rejected ... ok
+test duplicate_key_precedes_missing_method_inventory ... ok
+test evidence_diagnostics_label_the_new_and_related_declarations ... ok
+test exported_factory_transfers_a_closure_without_interface_evidence ... ok
+test exported_generic_factory_keeps_nested_lexical_nominals_through_public_routes ... ok
+test extra_lexical_method_is_owned_by_evidence_admission ... ok
+test identity_free_closure_retains_lexical_method_after_nominal_scope_returns ... ok
+test imported_implementation_factory_keeps_its_lexical_capture_types ... ok
+test key_admission_precedes_missing_method_inventory ... ok
+test lexical_application_retains_an_enclosing_implementation_parameter ... ok
+test lexical_application_retains_an_enclosing_rigid_parameter ... ok
+test lexical_factory_wrapper_does_not_hide_a_resource_dependency ... ok
+test lexical_improvement_checks_an_already_known_dependent ... ok
+test lexical_improvement_does_not_unlock_an_initially_ineligible_root ... ok
+test lexical_method_keeps_enclosing_abstract_and_exact_current_contexts ... ok
+test lexical_method_precedes_matching_generic_concrete_implementation ... ok
+test lexical_method_scheme_instantiates_independently_at_each_occurrence ... ok
+test lexical_method_supports_a_nominal_representation_with_enclosing_parameter ... ok
+test lexical_source_accepts_higher_kinded_interface_arguments ... ok
+test local_identity_only_in_dependent_does_not_authorize_a_global_key ... ok
+test method_parameter_spelling_does_not_shadow_an_enclosing_type_name ... ok
+test missing_lexical_method_is_owned_by_evidence_admission ... ok
+test nested_polymorphic_groups_preserve_source_order_and_declared_method_slots ... ok
+test nested_polymorphic_supplied_method_preserves_its_own_parameter ... ok
+test nested_supplied_methods_have_independent_rigid_parameters ... ok
+test pending_root_cannot_skip_lexical_improvement_for_a_concrete_dependent ... ok
+test polymorphic_lexical_method_forwards_through_a_constrained_global ... ok
+test polymorphic_method_effect_instances_coalesce_after_substitution ... ok
+test polymorphic_supplied_method_can_use_preceding_lexical_evidence ... ok
+test recursive_complete_goal_skips_same_key_lexical_source_with_other_dependent ... ok
+test repeated_execution_keeps_distinct_method_captures_for_one_static_source ... ok
+test representation_does_not_receive_nominal_evidence ... ok
+test returned_method_does_not_export_lexical_evidence_to_later_occurrences ... ok
+test same_spelled_nested_nominals_have_distinct_lexical_evidence ... ok
+test same_spelled_nominal_does_not_inherit_outer_evidence ... ok
+test selected_method_leaves_evidence_scope_while_outer_nominal_remains ... ok
+test separated_duplicate_lexical_method_group_is_rejected ... ok
+test supplied_effectful_method_preserves_its_declared_effect_row ... ok
+test supplied_equation_groups_follow_interface_slots_not_source_order ... ok
+test supplied_method_cannot_capture_an_enclosing_handler_resume ... ok
+test supplied_method_equations_keep_coverage_checking ... ok
+test supplied_method_error_inside_handler_keeps_its_source_diagnostic ... ok
+test supplied_method_may_capture_a_preceding_recursive_function ... ok
+test supplied_method_may_use_its_own_nested_handler_resume ... ok
+test supplied_method_without_a_handler_keeps_resume_diagnostic_owner ... ok
+test supplied_methods_cannot_select_their_own_source ... ok
+test supplied_methods_do_not_implicitly_select_siblings ... ok
+test unused_lexical_header_retains_an_enclosing_implementation_dependent ... ok
+test unused_supplied_method_still_checks_its_declared_result_type ... ok
+
+test result: ok. 53 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.84s
+
+     Running tests/scoped_evidence_syntax.rs (target/debug/deps/scoped_evidence_syntax-c90e4e0a7d9adb59)
+
+running 6 tests
+test evidence_cannot_occupy_a_recursive_group_member ... ok
+test evidence_has_no_head_parameter_list ... ok
+test evidence_has_no_prerequisite_clause ... ok
+test evidence_has_no_visibility_modifier ... ok
+test evidence_is_not_a_module_declaration ... ok
+test sequential_evidence_projects_between_preceding_and_following_bindings ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/semantics.rs (target/debug/deps/semantics-7088af71b555f69a)
+
+running 13 tests
+test arbitrary_precision_observations_and_traces_exceed_unsigned_machine_width ... ok
+test generated_provenance_reasons_have_stable_plain_names ... ok
+test identity_traversal_preserves_every_core_feature_and_trace_relation ... ok
+test identity_traversal_preserves_exact_types_origins_and_primitive_structure ... ok
+test identity_traversal_preserves_recursive_groups ... ok
+test identity_traversal_preserves_shared_core_edges ... ok
+test literal_addition_folds_with_exact_type_and_causal_generated_origin ... ok
+test literal_multiplication_folds_but_integer_equality_remains_a_primitive ... ok
+test module_newtypes_execute_as_their_representations_with_nominal_observation_types ... ok
+test recursive_group_survives_literal_folding_and_independent_validation ... ok
+test recursive_machine_evaluates_a_self_reference ... ok
+test recursive_machine_evaluates_mutual_function_templates ... ok
+test ten_thousand_nested_additions_grow_explicit_frames_on_a_small_host_stack ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s
+
+     Running tests/source_diagnostics.rs (target/debug/deps/source_diagnostics-8862bc5c56540207)
+
+running 10 tests
+test a_source_rejects_a_span_admitted_by_another_source ... ok
+test checked_ranges_reject_reversed_and_out_of_source_offsets ... ok
+test diagnostic_reason_remains_typed_independently_from_rendering ... ok
+test empty_source_eof_has_a_zero_length_first_position ... ok
+test generated_origins_retain_their_cause_and_related_spans ... ok
+test kind_reasons_remain_typed_independently_from_plain_rendering ... ok
+test line_and_column_are_views_over_unchanged_utf8_byte_ranges ... ok
+test line_break_spans_keep_their_exact_byte_widths ... ok
+test separately_admitted_sources_cannot_share_an_identity ... ok
+test span_admission_rejects_every_boundary_inside_a_utf8_scalar ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/spec_examples.rs (target/debug/deps/spec_examples-e9e9de8e97a61e95)
+
+running 78 tests
+test dynamic_application_derivation_example_v002_is_executable ... ok
+test dynamic_binding_derivation_example_v003_is_executable ... ok
+test dynamic_capture_derivation_example_v004_is_executable ... ok
+test dynamic_cyclic_data_observation_is_finite ... ok
+test dynamic_nested_application_derivation_example_v008_is_executable ... ok
+test dynamic_primitive_derivation_example_v001_is_executable ... ok
+test dynamic_recursive_group_example_is_executable ... ok
+test effect_examples_have_exact_observations_and_reasons ... ok
+test elaboration_distinguishes_structural_application_from_simultaneous_instantiation ... ok
+test elaboration_payload_constructor_is_higher_order ... ok
+test elaboration_tree_presentations_are_equivalent ... ok
+test explicit_kind_normative_rule_manifest_is_complete ... ok
+test lexical_comment_rejection_example_has_its_documented_reason ... ok
+test local_newtype_escape_example_has_owned_diagnostic ... ok
+test local_newtype_normative_rule_manifest_is_complete ... ok
+test method_parameter_normative_rule_manifest_is_complete ... ok
+test module_newtype_normative_rule_manifest_is_complete ... ok
+test native_buffer_documentation_example_has_exact_cli_output ... ok
+test normative_document_manifest_is_complete ... ok
+test overview_hidden_carrier_example_is_executable ... ok
+test overview_implementation_only_selector_beside_qualified_import_is_executable ... ok
+test overview_linked_higher_kinded_example_is_executable ... ok
+test overview_linked_polymorphic_method_evidence_is_executable ... ok
+test overview_local_interface_evidence_example_is_executable ... ok
+test overview_local_newtype_closure_example_is_executable ... ok
+test overview_main_application_example_is_executable ... ok
+test overview_module_newtype_example_is_executable ... ok
+test overview_name_only_import_has_structured_unsatisfied_constraint ... ok
+test overview_opaque_smart_constructor_example_is_executable ... ok
+test overview_scoped_evidence_example_is_executable ... ok
+test overview_sibling_import_example_is_executable ... ok
+test overview_targeted_import_example_is_executable ... ok
+test overview_three_module_implementation_facade_is_executable ... ok
+test overview_transparent_matching_example_is_executable ... ok
+test relational_interface_normative_rule_manifest_is_complete ... ok
+test relational_interface_overview_example_is_executable ... ok
+test reliable_cleanup_documentation_example_has_exact_cli_output ... ok
+test resolution_binder_policies_are_executable_and_ordered ... ok
+test resolution_global_recursive_scope_example_is_executable ... ok
+test resolution_hidden_carrier_interface_example_uses_public_operations ... ok
+test resolution_interleaved_explicit_implementation_and_implicit_global_reach_core ... ok
+test resolution_opaque_carrier_interface_example_uses_public_operations ... ok
+test resolution_targeted_public_name_reexport_is_executable ... ok
+test resolution_unknown_name_example_has_its_documented_reason ... ok
+test resource_cell_documentation_example_has_exact_cli_output ... ok
+test scoped_evidence_missing_key_example_has_owned_diagnostic ... ok
+test scoped_evidence_normative_rule_manifest_is_complete ... ok
+test static_semantics_contextual_block_example_is_executable ... ok
+test static_semantics_contextual_match_checks_function_arms ... ok
+test static_semantics_determined_generic_prerequisite_uses_recursive_complete_selection ... ok
+test static_semantics_generic_prerequisite_evidence_example_is_executable ... ok
+test static_semantics_higher_order_operational_example_is_executable ... ok
+test static_semantics_irrefutable_tuple_binding_is_executable ... ok
+test static_semantics_kind_failures_are_structured_and_phase_scoped ... ok
+test static_semantics_kind_synthesis_and_interface_argument_are_executable ... ok
+test static_semantics_operand_example_has_its_documented_reason ... ok
+test static_semantics_operational_tuple_pattern_is_executable ... ok
+test static_semantics_rank_one_polymorphism_is_executable ... ok
+test static_semantics_rejects_unsafe_recursive_initialization ... ok
+test synchronous_hooks_documentation_example_has_exact_cli_output ... ok
+test syntax_constrained_global_presentations_are_executable ... ok
+test syntax_contextual_type_nominal_is_executable ... ok
+test syntax_curried_equational_example_is_executable ... ok
+test syntax_equational_global_example_v002_is_executable ... ok
+test syntax_inline_operational_global_example_v002_is_executable ... ok
+test syntax_local_recursive_group_example_is_executable ... ok
+test tool_cyclic_data_uses_structural_rendering ... ok
+test tool_example_temp_source_requires_exclusive_directory_ownership ... ok
+test tool_function_result_uses_opaque_rendering ... ok
+test tool_higher_kinded_example_has_exact_cli_observation ... ok
+test tool_method_parameter_example_has_exact_cli_observation ... ok
+test tool_method_parameter_migration_is_executable_and_documented ... ok
+test tool_module_newtype_observation_has_exact_cli_output ... ok
+test tool_named_root_example_has_exact_cli_observation ... ok
+test tool_rank_one_example_has_exact_cli_observation ... ok
+test tool_recursive_example_has_exact_cli_observation ... ok
+test tool_source_rejection_uses_status_one_and_stderr ... ok
+test tool_success_example_has_exact_cli_observation ... ok
+
+test result: ok. 78 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s
+
+     Running tests/string_literals.rs (target/debug/deps/string_literals-32219a0805d311ae)
+
+running 7 tests
+test byte_prefix_is_an_ordinary_identifier_followed_by_a_string ... ok
+test malformed_strings_have_structured_reasons_and_render_in_both_locales ... ok
+test malformed_strings_reject_without_surface_projection ... ok
+test string_expression_and_builtin_types_project_through_the_cst ... ok
+test strings_decode_utf8_and_each_supported_escape_with_exact_spans ... ok
+test strings_remain_expression_only_and_builtin_types_have_no_arguments ... ok
+test unicode_identifiers_remain_excluded ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+error: 1 target failed:
+    `-p ash --test resource_provider_resolution`
+verification command: ["cargo", "test", "--locked", "--workspace", "--exclude", "ash", "--all-targets", "--all-features", "--no-fail-fast", "--", "--test-threads=1"]
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/provider-experiments/foreign-adapter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.33s
+     Running unittests src/lib.rs (target/debug/deps/ash_foreign_adapter-3eeadc7529a6a6d2)
+
+running 49 tests
+test arena::tests::checked_alignment_and_end_arithmetic_refuse_overflow_without_a_backing_request ... ok
+test arena::tests::owner_identity_exhaustion_never_wraps_or_reuses_a_published_id ... ok
+test arena::tests::private_corrupt_record_fault_rejects_before_exposing_any_payload_slice ... ok
+test arena::tests::private_fault_injected_payload_failure_has_no_partial_owner_or_table ... ok
+test arena::tests::private_fault_injected_table_allocation_failure_drops_partial_payload ... ok
+test arena::tests::private_identity_exhaustion_fault_releases_both_real_backing_allocations ... ok
+test arena::tests::publications_never_allocate_more_backing_and_drop_releases_requested_layouts ... ok
+test arena_bindings::codec::tests::aggregate_corruption_cycles_and_expanded_sharing_refuse_without_publication ... ok
+test arena_bindings::codec::tests::malformed_dynamic_headers_remain_binding_failures_before_work_charges ... ok
+test arena_bindings::codec::tests::malformed_native_contents_are_rejected_without_a_copied_result ... ok
+test arena_bindings::codec::tests::nested_tuples_and_nominal_payloads_roundtrip_through_native_storage ... ok
+test arena_bindings::codec::tests::primitive_values_roundtrip_through_native_storage_and_survive_owner_completion ... ok
+test arena_bindings::codec::tests::refused_preparation_and_publication_preserve_an_earlier_native_object ... ok
+test arena_bindings::tests::observation_capacity_refusal_preserves_storage_reason ... ok
+test arena_bindings::tests::typed_load_reply_rejection_abandons_real_native_observation ... ok
+test arena_bindings::tests::typed_store_reply_rejection_abandons_real_native_preparation ... ok
+test tests::actual_busy_close_retains_connection_until_statement_finishes ... ok
+test tests::actual_failed_open_disposes_partial_connection_without_publication ... ok
+test tests::bounded_close_diagnostic_refusal_retains_live_connection ... ok
+test tests::bounded_diagnostic_copy_admits_empty_and_exact_unicode ... ok
+test tests::bounded_diagnostic_refusal_reports_only_its_proven_prefix ... ok
+test tests::bounded_failed_open_diagnostic_refusal_disposes_partial_owner ... ok
+test tests::bounded_finalize_diagnostic_refusal_still_consumes_statement_once ... ok
+test tests::bounded_native_diagnostic_preserves_status_without_truncation ... ok
+test tests::constraint_body_failure_and_consuming_finalize_report_are_preserved ... ok
+test tests::copied_blob_survives_input_and_native_owner_completion ... ok
+test tests::diagnostic_copy_rejects_invalid_utf8_without_replacement ... ok
+test tests::diagnostic_copy_survives_later_native_calls_and_close ... ok
+test tests::diagnostic_rejects_closed_owner_before_any_native_query ... ok
+test tests::diagnostic_reports_actual_prepare_failure ... ok
+test tests::diagnostic_reports_success_without_consuming_native_owners ... ok
+test tests::drop_order_is_safe_even_if_rust_connection_owner_drops_first ... ok
+test tests::empty_blob_and_sql_null_remain_distinct ... ok
+test tests::empty_blob_checks_suspect_results_before_another_native_interface ... ok
+test tests::file_persistence_is_observed_after_close_and_reopen ... ok
+test tests::independent_connections_and_repeat_activations_keep_distinct_bindings ... ok
+test tests::injected_blob_oom_is_classified_without_claiming_native_exhaustion ... ok
+test tests::injected_bytes_oom_is_classified_without_claiming_native_exhaustion ... ok
+test tests::injected_open_publication_failure_is_distinct_and_disposes_native_owner ... ok
+test tests::injected_statement_publication_failure_finalizes_before_close ... ok
+test tests::injected_text_oom_is_classified_without_claiming_native_exhaustion ... ok
+test tests::invalid_abi_inputs_and_storage_kind_are_checked ... ok
+test tests::malformed_sql_is_error_and_empty_sql_has_no_statement ... ok
+test tests::opens_real_memory_database ... ok
+test tests::protocol_checks_prevent_native_column_and_automatic_reset_access ... ok
+test tests::records_runtime_version_and_configuration ... ok
+test tests::reset_preserves_bindings_and_clear_replaces_them_with_null ... ok
+test tests::select_parameter_copies_42_and_finalizes_before_close ... ok
+test tests::unused_sql_is_rejected_and_unpublished_statement_is_finalized ... ok
+
+test result: ok. 49 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.80s
+
+     Running tests/arena.rs (target/debug/deps/arena-cbdb2dc3b44f16bc)
+
+running 10 tests
+test alignment_padding_counts_and_exact_payload_capacity_refuses_before_initialization ... ok
+test all_admitted_alignments_are_real_and_invalid_alignments_leave_usage_unchanged ... ok
+test candidates_are_non_owning_and_owner_object_and_layout_checks_are_independent ... ok
+test earlier_payloads_and_keys_remain_stable_after_more_publications_and_owner_moves ... ok
+test initializer_panic_drops_partial_temporary_state_and_preserves_published_objects ... ok
+test partial_initializer_failure_rolls_back_and_retry_does_not_reveal_failed_bytes ... ok
+test pointer_and_metadata_products_reject_before_any_payload_initializer ... ok
+test real_bounded_backing_publishes_encoded_bytes_and_reports_physical_metadata ... ok
+test result_admission_precedes_native_publication_and_stale_candidates_never_initialize ... ok
+test zero_payload_publishes_distinct_zero_sized_objects_up_to_the_exact_record_limit ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/sqlite_text.rs (target/debug/deps/sqlite_text-c4a372ee37b0f525)
+
+running 11 tests
+test bounded_column_copy_refuses_before_independent_storage_is_published ... ok
+test copied_utf8_text_survives_input_reset_and_owner_completion ... ok
+test empty_text_empty_blob_and_null_remain_distinct ... ok
+test native_guard_drop_does_not_report_binding_finish_dispatch ... ok
+test native_text_preserves_embedded_nul_and_rejects_invalid_utf8 ... ok
+test text_nul_and_protocol_errors_prevent_native_bind ... ok
+test typed_column_nullable_kinds_and_integer_kind_remain_distinct ... ok
+test typed_column_rejects_invalid_utf8_text_before_conversion_or_copy ... ok
+test typed_input_and_protocol_failures_preserve_the_rejection_cause ... ok
+test utf8_path_sql_and_text_persist_after_close_and_reopen ... ok
+test zero_copy_limit_admits_empty_values_and_null ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/arena.rs (target/debug/examples/arena-a944abca3a7c64e3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/arena_typed.rs (target/debug/examples/arena_typed-710075465c87a286)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/sqlite_session.rs (target/debug/examples/sqlite_session-804c91d4a3c5ac3a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/ash_native_buffer-0450a62ff4506ddd)
+
+running 6 tests
+test tests::injected_null_allocation_returns_failure_without_release ... ok
+test tests::invalid_lengths_are_rejected ... ok
+test tests::moving_an_owner_still_releases_exactly_once ... ok
+test tests::out_of_bounds_access_is_rejected_without_mutation ... ok
+test tests::positive_allocation_has_requested_length_and_zeroed_bytes ... ok
+test tests::write_updates_the_selected_byte ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/xtask-50553933df8beb6f)
+
+running 1 test
+test tests::verification_includes_every_required_check ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+verification command: ["cargo", "doc", "--workspace", "--no-deps", "--locked"]
+    Checking ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/provider-experiments)
+ Documenting ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/provider-experiments/foreign-adapter)
+ Documenting ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/provider-experiments)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 37.00s
+   Generated /home/dikini/Projects/ash-lang/.worktree/provider-experiments/target/doc/ash/index.html and 3 other files

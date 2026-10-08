@@ -16,134 +16,482 @@ use crate::{
     types::{IterativeTypeOwner, Type, discard_type_iteratively},
 };
 
+trait RebuildExpression<F: CoreOperationFamily> {
+    fn ty(&self) -> &Type;
+    fn effects(&self) -> &crate::types::EffectRow;
+    fn origin(&self) -> Result<&Origin, TransformError>;
+    fn kind(&self) -> &F::Kind;
+    fn realized_effects(&self) -> Option<&crate::types::EffectRow> {
+        None
+    }
+}
+impl<F: CoreOperationFamily> RebuildExpression<F> for CoreTypedExpr<F> {
+    fn ty(&self) -> &Type {
+        &self.ty
+    }
+    fn effects(&self) -> &crate::types::EffectRow {
+        self.effects()
+    }
+    fn origin(&self) -> Result<&Origin, TransformError> {
+        Ok(&self.origin)
+    }
+    fn kind(&self) -> &F::Kind {
+        &self.kind
+    }
+}
+impl<F: CoreOperationFamily> RebuildExpression<F> for super::dialect::StoredNode<F> {
+    fn ty(&self) -> &Type {
+        &self.ty
+    }
+    fn effects(&self) -> &crate::types::EffectRow {
+        F::effect_row(&self.effects)
+    }
+    fn origin(&self) -> Result<&Origin, TransformError> {
+        self.origin
+            .as_ref()
+            .ok_or(TransformError::InvalidValidatedInput)
+    }
+    fn kind(&self) -> &F::Kind {
+        &self.kind
+    }
+}
+
+/// Borrowed equation realization for a single original node. No substituted
+/// Type, callable metadata or source origin is replaced by this row claim.
+struct ProviderRealizedExpression<'a> {
+    original: &'a super::dialect::StoredNode<EffectOperationFamily>,
+    row: Option<&'a crate::types::EffectRow>,
+}
+impl RebuildExpression<EffectOperationFamily> for ProviderRealizedExpression<'_> {
+    fn ty(&self) -> &Type {
+        self.original.ty()
+    }
+    fn effects(&self) -> &crate::types::EffectRow {
+        self.original.effects()
+    }
+    fn origin(&self) -> Result<&Origin, TransformError> {
+        self.original.origin()
+    }
+    fn kind(&self) -> &EffectExprKind {
+        self.original.kind()
+    }
+    fn realized_effects(&self) -> Option<&crate::types::EffectRow> {
+        self.row
+    }
+}
+
 trait TransformFamily: CoreOperationFamily {
-    fn collect_operation_binders(kind: &Self::Kind, binders: &mut Vec<crate::resolved::BinderId>);
+    #[cfg(test)]
     fn rebuild_operation(
         builder: &mut CoreBuilder<Self>,
         remapped: &[Option<NodeId>],
-        expression: &CoreTypedExpr<Self>,
+        expression: &impl RebuildExpression<Self>,
+    ) -> Result<NodeId, TransformError> {
+        Self::rebuild_operation_with_context(builder, remapped, expression, None)
+    }
+    fn collect_operation_binders(
+        kind: &Self::Kind,
+        binders: &mut Vec<crate::resolved::BinderId>,
+        builder: &mut CoreBuilder<Self>,
+    ) -> Result<(), TransformError>;
+    fn rebuild_operation_with_context(
+        builder: &mut CoreBuilder<Self>,
+        remapped: &[Option<NodeId>],
+        expression: &impl RebuildExpression<Self>,
+        context: Option<&super::provider::ProviderCopyContext<'_>>,
     ) -> Result<NodeId, TransformError>;
 }
 
 impl TransformFamily for PureOperationFamily {
-    fn collect_operation_binders(_: &Self::Kind, _: &mut Vec<crate::resolved::BinderId>) {}
-    fn rebuild_operation(
+    fn collect_operation_binders(
+        _: &Self::Kind,
+        _: &mut Vec<crate::resolved::BinderId>,
+        _: &mut CoreBuilder<Self>,
+    ) -> Result<(), TransformError> {
+        Ok(())
+    }
+    fn rebuild_operation_with_context(
         _: &mut CoreBuilder<Self>,
         _: &[Option<NodeId>],
-        _: &CoreTypedExpr<Self>,
+        _: &impl RebuildExpression<Self>,
+        _: Option<&super::provider::ProviderCopyContext<'_>>,
     ) -> Result<NodeId, TransformError> {
         Err(TransformError::InvalidValidatedInput)
     }
 }
 
 impl TransformFamily for EffectOperationFamily {
-    fn collect_operation_binders(kind: &Self::Kind, binders: &mut Vec<crate::resolved::BinderId>) {
+    fn collect_operation_binders(
+        kind: &Self::Kind,
+        binders: &mut Vec<crate::resolved::BinderId>,
+        builder: &mut CoreBuilder<Self>,
+    ) -> Result<(), TransformError> {
         if let EffectExprKind::Operation(EffectOperation::Resource(resource)) = kind {
             binders.push(resource.handle.id());
         }
-        if let EffectExprKind::Operation(EffectOperation::Handler(handler)) = kind {
-            for clause in handler.clauses() {
-                binders.extend(clause.pattern().binder_iter().map(|binder| binder.id()));
+        let handler = match kind {
+            EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
+                builder.charge_effect_metadata(4)?;
+                binders
+                    .try_reserve(4)
+                    .map_err(|_| BuildError::TypeWorkExceeded)?;
+                binders.extend([
+                    scope.acquire.parameter.id(),
+                    scope.finish.parameter.id(),
+                    scope.handler_state.id(),
+                    scope.handle.id(),
+                ]);
+                for clause in scope.handler.clauses() {
+                    retain_provider_pattern_binders(
+                        clause.pattern(),
+                        binders,
+                        &mut builder.type_work,
+                    )?;
+                }
+                if !scope.attached.is_empty() {
+                    builder.charge_effect_metadata(scope.attached.len())?;
+                    binders
+                        .try_reserve(scope.attached.len())
+                        .map_err(|_| BuildError::TypeWorkExceeded)?;
+                    for attached in &scope.attached {
+                        binders.push(attached.state.id());
+                        for clause in attached.handler.clauses() {
+                            retain_provider_pattern_binders(
+                                clause.pattern(),
+                                binders,
+                                &mut builder.type_work,
+                            )?;
+                        }
+                    }
+                }
+                return Ok(());
             }
+            EffectExprKind::Operation(EffectOperation::Handler(handler)) => handler,
+            _ => return Ok(()),
+        };
+        for clause in handler.clauses() {
+            binders.extend(clause.pattern().binder_iter().map(|binder| binder.id()));
         }
+        Ok(())
     }
 
-    fn rebuild_operation(
+    fn rebuild_operation_with_context(
         builder: &mut CoreBuilder<Self>,
         remapped: &[Option<NodeId>],
-        expression: &CoreTypedExpr<Self>,
+        expression: &impl RebuildExpression<Self>,
+        context: Option<&super::provider::ProviderCopyContext<'_>>,
     ) -> Result<NodeId, TransformError> {
-        let EffectExprKind::Operation(operation) = &expression.kind else {
+        let EffectExprKind::Operation(operation) = expression.kind() else {
             return Err(TransformError::InvalidValidatedInput);
         };
-        let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
-        let effects = builder.clone_effect_row_for_rebuild(expression.effects())?;
+        let ty = IterativeTypeOwner::new(copy_type(builder, expression.ty(), context)?);
+        let effects = copy_expression_row(builder, expression, context)?;
+        let origin = copy_origin(builder, expression.origin()?, context)?;
         match operation {
-            EffectOperation::Cleanup(scope) => builder.cleanup_scope(
-                super::effect::CleanupScopeNode {
-                    body: remap(remapped, scope.body)?,
-                    action: remap(remapped, scope.action)?,
-                    ..*scope
-                },
-                ty.into_inner(),
-                effects,
-                expression.origin.clone(),
-            ),
-            EffectOperation::Registration(scope) => builder.registration_scope(
-                super::effect::RegistrationScopeNode {
-                    body: remap(remapped, scope.body)?,
-                    ..*scope
-                },
-                ty.into_inner(),
-                effects,
-                expression.origin.clone(),
-            ),
+            EffectOperation::ProviderStateAccess(access) => {
+                builder.charge_effect_metadata(access.arguments().len())?;
+                let mut arguments = IterativeArgumentBuffer(Vec::new());
+                arguments
+                    .try_reserve(access.arguments().len())
+                    .map_err(|_| TransformError::Build(BuildError::TypeWorkExceeded))?;
+                for argument in access.arguments() {
+                    arguments.push(copy_argument(builder, argument, context)?);
+                }
+                // Resolve the single child before moving the guarded clones.
+                let operand = remap(remapped, access.operand())?;
+                builder.provider_state_access(
+                    super::effect::ProviderStateAccessNode::new_kinded(
+                        access.method(),
+                        access.definition(),
+                        arguments.into_vec().into_boxed_slice(),
+                        operand,
+                    ),
+                    ty.into_inner(),
+                    effects,
+                    origin,
+                )
+            }
+            EffectOperation::Cleanup(scope) => {
+                let callback = copy_binder_id(builder, scope.callback, context)?;
+                builder.cleanup_scope(
+                    super::effect::CleanupScopeNode {
+                        callback,
+                        body: remap(remapped, scope.body)?,
+                        action: remap(remapped, scope.action)?,
+                        ..*scope
+                    },
+                    ty.into_inner(),
+                    effects,
+                    origin,
+                )
+            }
+            EffectOperation::Registration(scope) => {
+                let callback = copy_binder_id(builder, scope.callback, context)?;
+                let handler = copy_handler_id(builder, scope.handler, context)?;
+                builder.registration_scope(
+                    super::effect::RegistrationScopeNode {
+                        callback,
+                        handler,
+                        body: remap(remapped, scope.body)?,
+                        ..*scope
+                    },
+                    ty.into_inner(),
+                    effects,
+                    origin,
+                )
+            }
             EffectOperation::Resource(resource) => {
-                let handle_type = builder.clone_type_for_rebuild(resource.handle.ty())?;
-                let handle = builder.resolved_binder(
-                    resource.handle.id(),
-                    handle_type,
-                    resource.handle.origin().clone(),
-                )?;
+                let handle_type =
+                    IterativeTypeOwner::new(copy_type(builder, resource.handle.ty(), context)?);
+                let handle_id = copy_binder_id(builder, resource.handle.id(), context)?;
+                let handle_origin = copy_origin(builder, resource.handle.origin(), context)?;
+                let handle =
+                    builder.resolved_binder(handle_id, handle_type.into_inner(), handle_origin)?;
+                let mut acquisition = resource.acquisition;
+                acquisition.identity = copy_variable_id(builder, acquisition.identity, context)?;
+                acquisition.handle = copy_binder_id(builder, acquisition.handle, context)?;
+                acquisition.provider = copy_lexical_id(builder, acquisition.provider, context)?;
                 builder.resource_scope(
                     Box::new(super::effect::ResourceScopeNode {
-                        acquisition: resource.acquisition,
+                        acquisition,
                         handle,
                         initializer: remap(remapped, resource.initializer)?,
                         body: remap(remapped, resource.body)?,
                     }),
                     ty.into_inner(),
                     effects,
-                    expression.origin.clone(),
+                    origin,
+                )
+            }
+            EffectOperation::ProviderScope(scope) => {
+                if context.is_some() {
+                    return Err(TransformError::InvalidValidatedInput);
+                }
+                let clone_binder = |builder: &mut CoreBuilder<Self>,
+                                    binder: &super::TypedBinder|
+                 -> Result<super::TypedBinder, TransformError> {
+                    let ty = IterativeTypeOwner::new(copy_type(builder, binder.ty(), context)?);
+                    let id = copy_binder_id(builder, binder.id(), context)?;
+                    let origin = copy_origin(builder, binder.origin(), context)?;
+                    Ok(builder.resolved_binder(id, ty.into_inner(), origin)?)
+                };
+                let acquire = super::provider::ProviderLifecycleEntry {
+                    parameter: clone_binder(builder, &scope.acquire.parameter)?,
+                    body: remap(remapped, scope.acquire.body)?,
+                };
+                let finish = super::provider::ProviderLifecycleEntry {
+                    parameter: clone_binder(builder, &scope.finish.parameter)?,
+                    body: remap(remapped, scope.finish.body)?,
+                };
+                let handler_state = clone_binder(builder, &scope.handler_state)?;
+                let handle = clone_binder(builder, &scope.handle)?;
+                let output_value = IterativeTypeOwner::new(copy_type(
+                    builder,
+                    scope.handler_output.value(),
+                    context,
+                )?);
+                let output_effects = copy_row(builder, scope.handler_output.effects(), context)?;
+                let effect = copy_effect_instance(builder, scope.handler.effect(), context)?;
+                builder.charge_effect_metadata(
+                    scope
+                        .handler
+                        .clauses()
+                        .len()
+                        .checked_add(scope.forwardings.len())
+                        .ok_or(BuildError::TypeWorkExceeded)?,
+                )?;
+                let mut clauses = Vec::new();
+                clauses
+                    .try_reserve_exact(scope.handler.clauses().len())
+                    .map_err(|_| BuildError::TypeWorkExceeded)?;
+                for clause in scope.handler.clauses() {
+                    let body = remap(remapped, clause.body())?;
+                    clauses.push(EffectClause::new(
+                        clause.operation(),
+                        clause.resume(),
+                        CoreMatchArm::new(
+                            rebuild_pattern_with_origin_work(
+                                builder,
+                                clause.pattern(),
+                                context.is_some(),
+                                context,
+                            )?,
+                            body,
+                            clause.origin().clone(),
+                        ),
+                    ));
+                }
+                let mut forwardings = Vec::new();
+                forwardings
+                    .try_reserve_exact(scope.forwardings.len())
+                    .map_err(|_| BuildError::TypeWorkExceeded)?;
+                forwardings.extend_from_slice(&scope.forwardings);
+                let mut attached = Vec::new();
+                let mut family_clause_index = Vec::new();
+                if !scope.attached.is_empty() {
+                    builder.charge_effect_metadata(
+                        scope
+                            .attached
+                            .len()
+                            .checked_add(scope.family_clause_index.len())
+                            .ok_or(BuildError::TypeWorkExceeded)?,
+                    )?;
+                    attached
+                        .try_reserve_exact(scope.attached.len())
+                        .map_err(|_| BuildError::TypeWorkExceeded)?;
+                    family_clause_index
+                        .try_reserve_exact(scope.family_clause_index.len())
+                        .map_err(|_| BuildError::TypeWorkExceeded)?;
+                    family_clause_index.extend_from_slice(&scope.family_clause_index);
+                    for member in &scope.attached {
+                        builder.charge_effect_metadata(
+                            member
+                                .handler
+                                .clauses()
+                                .len()
+                                .checked_add(member.forwardings.len())
+                                .ok_or(BuildError::TypeWorkExceeded)?,
+                        )?;
+                        let mut member_clauses = Vec::new();
+                        member_clauses
+                            .try_reserve_exact(member.handler.clauses().len())
+                            .map_err(|_| BuildError::TypeWorkExceeded)?;
+                        for clause in member.handler.clauses() {
+                            member_clauses.push(EffectClause::new(
+                                clause.operation(),
+                                clause.resume(),
+                                CoreMatchArm::new(
+                                    rebuild_pattern_with_origin_work(
+                                        builder,
+                                        clause.pattern(),
+                                        false,
+                                        context,
+                                    )?,
+                                    remap(remapped, clause.body())?,
+                                    clause.origin().clone(),
+                                ),
+                            ));
+                        }
+                        let mut member_forwardings = Vec::new();
+                        member_forwardings
+                            .try_reserve_exact(member.forwardings.len())
+                            .map_err(|_| BuildError::TypeWorkExceeded)?;
+                        member_forwardings.extend_from_slice(&member.forwardings);
+                        attached.push(super::provider::ProviderAttachedHandler {
+                            handler: super::effect::HandlerNode::new(
+                                member.handler.id(),
+                                remap(remapped, member.handler.body())?,
+                                copy_effect_instance(builder, member.handler.effect(), context)?,
+                                member_clauses,
+                            ),
+                            state: clone_binder(builder, &member.state)?,
+                            lexical: member.lexical,
+                            forwardings: member_forwardings.into_boxed_slice(),
+                        });
+                    }
+                }
+                let descriptor = scope
+                    .descriptor
+                    .relocate(remapped, &mut builder.type_work)?;
+                let initializer = remap(remapped, scope.initializer)?;
+                let body = remap(remapped, scope.handler.body())?;
+                builder.provider_scope(
+                    Box::new(super::provider::ProviderScopeNode {
+                        initializer,
+                        acquire,
+                        finish,
+                        handler_state,
+                        handle,
+                        handler: super::effect::HandlerNode::new(
+                            scope.handler.id(),
+                            body,
+                            effect,
+                            clauses,
+                        ),
+                        handler_output: crate::types::ComputationType::new(
+                            output_value.into_inner(),
+                            output_effects,
+                        ),
+                        descriptor,
+                        lexical: scope.lexical,
+                        forwardings: forwardings.into_boxed_slice(),
+                        attached: attached.into_boxed_slice(),
+                        family_clause_index: family_clause_index.into_boxed_slice(),
+                    }),
+                    ty.into_inner(),
+                    effects,
+                    origin,
                 )
             }
             EffectOperation::Request(node) => {
-                let effect = clone_effect_instance(builder, node.effect())?;
+                let effect = copy_effect_instance(builder, node.effect(), context)?;
                 builder.request(
                     effect,
                     node.operation(),
                     remap(remapped, node.operand())?,
                     ty.into_inner(),
                     effects,
-                    expression.origin.clone(),
+                    origin,
                 )
             }
-            EffectOperation::Resume(node) => builder.resume(
-                node.handler(),
-                node.owner(),
-                node.use_state(),
-                remap(remapped, node.value())?,
-                ty.into_inner(),
-                effects,
-                expression.origin.clone(),
-            ),
-            EffectOperation::Discard(node) => builder.discard(
-                node.handler(),
-                node.owner(),
-                node.use_state(),
-                ty.into_inner(),
-                effects,
-                expression.origin.clone(),
-            ),
+            EffectOperation::Resume(node) => {
+                let handler = copy_handler_id(builder, node.handler(), context)?;
+                let owner = copy_resume_id(builder, node.owner(), context)?;
+                builder.resume(
+                    handler,
+                    owner,
+                    node.use_state(),
+                    remap(remapped, node.value())?,
+                    ty.into_inner(),
+                    effects,
+                    origin,
+                )
+            }
+            EffectOperation::Discard(node) => {
+                let handler = copy_handler_id(builder, node.handler(), context)?;
+                let owner = copy_resume_id(builder, node.owner(), context)?;
+                builder.discard(
+                    handler,
+                    owner,
+                    node.use_state(),
+                    ty.into_inner(),
+                    effects,
+                    origin,
+                )
+            }
             EffectOperation::Handler(node) => {
-                let registration =
-                    node.hook_registration
-                        .as_ref()
-                        .map(|registration| {
-                            builder.charge_effect_metadata(1)?;
-                            Ok::<_, TransformError>(Box::new(registration.with_target(
-                                clone_effect_instance(builder, &registration.target)?,
-                            )))
-                        })
-                        .transpose()?;
-                let effect = clone_effect_instance(builder, node.effect())?;
+                let registration = node
+                    .hook_registration
+                    .as_ref()
+                    .map(|registration| {
+                        builder.charge_effect_metadata(1)?;
+                        let mut copied = registration.with_target(copy_effect_instance(
+                            builder,
+                            &registration.target,
+                            context,
+                        )?);
+                        if context.is_some() {
+                            copied.callback = copy_binder_id(builder, copied.callback, context)?;
+                            copied.input = copy_binder_id(builder, copied.input, context)?;
+                            copied.previous = copy_binder_id(builder, copied.previous, context)?;
+                            copied.next = copy_binder_id(builder, copied.next, context)?;
+                            copied.resume = copy_resume_id(builder, copied.resume, context)?;
+                        }
+                        Ok::<_, TransformError>(Box::new(copied))
+                    })
+                    .transpose()?;
+                let effect = copy_effect_instance(builder, node.effect(), context)?;
                 let root = node
                     .hook_root()
                     .map(|root| {
                         builder.charge_effect_metadata(1)?;
-                        Ok::<_, TransformError>(
-                            root.with_target(clone_effect_instance(builder, &root.target)?),
-                        )
+                        let mut copied =
+                            root.with_target(copy_effect_instance(builder, &root.target, context)?);
+                        if context.is_some() {
+                            copied.input = copy_binder_id(builder, copied.input, context)?;
+                            copied.resume = copy_resume_id(builder, copied.resume, context)?;
+                        }
+                        Ok::<_, TransformError>(copied)
                     })
                     .transpose()?;
                 let body = remap(remapped, node.body())?;
@@ -154,24 +502,32 @@ impl TransformFamily for EffectOperationFamily {
                     .map_err(|_| TransformError::Build(BuildError::TypeWorkExceeded))?;
                 for clause in node.clauses() {
                     let clause_body = remap(remapped, clause.body())?;
+                    let resume = copy_resume_id(builder, clause.resume(), context)?;
+                    let clause_origin = copy_origin(builder, clause.origin(), context)?;
                     clauses.push(EffectClause::new(
                         clause.operation(),
-                        clause.resume(),
+                        resume,
                         CoreMatchArm::new(
-                            rebuild_pattern(builder, clause.pattern())?,
+                            rebuild_pattern_with_origin_work(
+                                builder,
+                                clause.pattern(),
+                                context.is_some(),
+                                context,
+                            )?,
                             clause_body,
-                            clause.origin().clone(),
+                            clause_origin,
                         ),
                     ));
                 }
+                let handler_id = copy_handler_id(builder, node.id(), context)?;
                 builder.handler_with_contracts(
-                    node.id(),
+                    handler_id,
                     body,
                     effect,
                     clauses,
                     ty.into_inner(),
                     effects,
-                    expression.origin.clone(),
+                    origin,
                     root,
                     registration,
                 )
@@ -185,18 +541,125 @@ fn clone_effect_instance<F: CoreOperationFamily>(
     builder: &mut CoreBuilder<F>,
     instance: &crate::types::EffectInstance,
 ) -> Result<crate::types::EffectInstance, TransformError> {
-    builder.charge_effect_metadata(instance.arguments().len())?;
-    let mut arguments = IterativeTypeBuffer(Vec::new());
+    super::effect::clone_effect_instance_with_budget(instance, &mut builder.type_work)
+        .map_err(TransformError::from)
+}
+
+fn copy_type<F: CoreOperationFamily>(
+    builder: &mut CoreBuilder<F>,
+    ty: &Type,
+    context: Option<&super::provider::ProviderCopyContext<'_>>,
+) -> Result<Type, BuildError> {
+    match context {
+        Some(context) => context.ty(ty, &mut builder.type_work),
+        None => builder.clone_type_for_rebuild(ty),
+    }
+}
+fn copy_row<F: CoreOperationFamily>(
+    builder: &mut CoreBuilder<F>,
+    row: &crate::types::EffectRow,
+    context: Option<&super::provider::ProviderCopyContext<'_>>,
+) -> Result<crate::types::EffectRow, BuildError> {
+    match context {
+        Some(context) => context.row(row, &mut builder.type_work),
+        None => builder.clone_effect_row_for_rebuild(row),
+    }
+}
+fn copy_expression_row<F: CoreOperationFamily>(
+    builder: &mut CoreBuilder<F>,
+    expression: &impl RebuildExpression<F>,
+    context: Option<&super::provider::ProviderCopyContext<'_>>,
+) -> Result<crate::types::EffectRow, BuildError> {
+    match (expression.realized_effects(), context) {
+        (Some(row), Some(context)) => context.realized_row(row, &mut builder.type_work),
+        (Some(_), None) => Err(BuildError::InvalidPayload),
+        (None, _) => copy_row(builder, expression.effects(), context),
+    }
+}
+fn copy_argument<F: CoreOperationFamily>(
+    builder: &mut CoreBuilder<F>,
+    argument: &crate::types::KindedArgument,
+    context: Option<&super::provider::ProviderCopyContext<'_>>,
+) -> Result<crate::types::KindedArgument, BuildError> {
+    match context {
+        Some(context) => context.argument(argument, &mut builder.type_work),
+        None => builder.clone_owner_argument_for_rebuild(argument),
+    }
+}
+fn copy_effect_instance<F: CoreOperationFamily>(
+    builder: &mut CoreBuilder<F>,
+    instance: &crate::types::EffectInstance,
+    context: Option<&super::provider::ProviderCopyContext<'_>>,
+) -> Result<crate::types::EffectInstance, TransformError> {
+    let Some(context) = context else {
+        return clone_effect_instance(builder, instance);
+    };
+    builder.charge_rebuild_work(instance.arguments().len())?;
+    let mut arguments = IterativeArgumentBuffer(Vec::new());
     arguments
         .try_reserve(instance.arguments().len())
-        .map_err(|_| TransformError::Build(BuildError::TypeWorkExceeded))?;
+        .map_err(|_| BuildError::TypeWorkExceeded)?;
     for argument in instance.arguments() {
-        arguments.push(builder.clone_type_for_rebuild(argument)?);
+        arguments.push(context.argument(argument, &mut builder.type_work)?);
     }
-    Ok(crate::types::EffectInstance::new(
+    Ok(crate::types::EffectInstance::new_kinded(
         instance.effect(),
         arguments.into_vec().into_boxed_slice(),
     ))
+}
+fn copy_origin<F: CoreOperationFamily>(
+    builder: &mut CoreBuilder<F>,
+    origin: &Origin,
+    context: Option<&super::provider::ProviderCopyContext<'_>>,
+) -> Result<Origin, TransformError> {
+    if context.is_some() {
+        clone_provider_origin_for_rebuild(builder, origin)
+    } else {
+        Ok(origin.clone())
+    }
+}
+macro_rules! copy_identity {
+    ($function:ident,$method:ident,$identity:ty) => {
+        fn $function<F: CoreOperationFamily>(
+            builder: &mut CoreBuilder<F>,
+            identity: $identity,
+            context: Option<&super::provider::ProviderCopyContext<'_>>,
+        ) -> Result<$identity, BuildError> {
+            match context {
+                Some(context) => context.$method(identity, &mut builder.type_work),
+                None => Ok(identity),
+            }
+        }
+    };
+}
+copy_identity!(copy_binder_id, binder, crate::resolved::BinderId);
+copy_identity!(copy_variable_id, variable, crate::types::TypeVariableId);
+copy_identity!(copy_handler_id, handler, super::HandlerId);
+copy_identity!(copy_resume_id, resume, crate::resolved::ResumeId);
+copy_identity!(copy_nominal_id, nominal, crate::types::NominalTypeId);
+copy_identity!(
+    copy_constructor_id,
+    constructor,
+    crate::types::ConstructorId
+);
+copy_identity!(
+    copy_lexical_id,
+    lexical,
+    crate::interface::LexicalEvidenceId
+);
+
+struct ProviderKindParameters(Vec<(crate::types::TypeVariableId, crate::types::Kind)>);
+impl ProviderKindParameters {
+    fn into_vec(mut self) -> Vec<(crate::types::TypeVariableId, crate::types::Kind)> {
+        std::mem::take(&mut self.0)
+    }
+}
+impl Drop for ProviderKindParameters {
+    fn drop(&mut self) {
+        for (_, kind) in self.0.drain(..) {
+            drop(kind);
+        }
+    }
 }
 
 struct IterativeTypeBuffer(Vec<Type>);
@@ -262,8 +725,14 @@ impl CorePatternBuffer {
         self.0.is_empty()
     }
 
-    fn split_off(&mut self, at: usize) -> Self {
-        Self(self.0.split_off(at))
+    fn append_suffix_to(&mut self, start: usize, destination: &mut Self) {
+        let destination_start = destination.len();
+        while self.len() > start {
+            if let Some(pattern) = self.pop() {
+                destination.push(pattern.into_inner());
+            }
+        }
+        destination.0[destination_start..].reverse();
     }
 
     fn into_boxed_slice(mut self) -> Box<[CorePattern]> {
@@ -406,6 +875,8 @@ fn rebuild_with_initial_type_work<F: TransformFamily>(
             Some(
                 PureExprKind::Value(
                     PureValue::Integer(_)
+                    | PureValue::String(_)
+                    | PureValue::Intrinsic(_)
                     | PureValue::Boolean(_)
                     | PureValue::Unit(_)
                     | PureValue::Constructor(_),
@@ -421,7 +892,7 @@ fn rebuild_with_initial_type_work<F: TransformFamily>(
                     | PureComputation::TypeApplication(_),
                 ),
             ) => {}
-            None => F::collect_operation_binders(&expression.kind, &mut binders),
+            None => F::collect_operation_binders(&expression.kind, &mut binders, &mut builder)?,
         }
     }
     builder.reserve_resolved_binders(binders)?;
@@ -514,65 +985,98 @@ fn rebuild_node<F: TransformFamily>(
             .map_err(TransformError::from);
     }
 
-    let Some(kind) = F::pure(&expression.kind) else {
-        return F::rebuild_operation(builder, remapped, expression);
+    rebuild_nonfold_node(builder, remapped, expression)
+}
+
+fn rebuild_nonfold_node<F: TransformFamily>(
+    builder: &mut CoreBuilder<F>,
+    remapped: &[Option<NodeId>],
+    expression: &impl RebuildExpression<F>,
+) -> Result<NodeId, TransformError> {
+    rebuild_nonfold_node_with_context(builder, remapped, expression, None)
+}
+
+fn rebuild_nonfold_node_with_context<F: TransformFamily>(
+    builder: &mut CoreBuilder<F>,
+    remapped: &[Option<NodeId>],
+    expression: &impl RebuildExpression<F>,
+    context: Option<&super::provider::ProviderCopyContext<'_>>,
+) -> Result<NodeId, TransformError> {
+    let Some(kind) = F::pure(expression.kind()) else {
+        return F::rebuild_operation_with_context(builder, remapped, expression, context);
     };
+    let origin = copy_origin(builder, expression.origin()?, context)?;
     match kind {
-        PureExprKind::Value(PureValue::Integer(node)) => {
-            let ty = builder.clone_type_for_rebuild(&expression.ty)?;
+        PureExprKind::Value(PureValue::String(node)) => {
+            let ty = copy_type(builder, expression.ty(), context)?;
             builder
-                .integer(node.value().clone(), ty, expression.origin.clone())
+                .string(Arc::clone(node.bytes()), ty, origin)
+                .map_err(TransformError::from)
+        }
+        PureExprKind::Value(PureValue::Intrinsic(node)) => {
+            let ty = copy_type(builder, expression.ty(), context)?;
+            builder
+                .intrinsic(node.operation(), node.module(), ty, origin)
+                .map_err(TransformError::from)
+        }
+        PureExprKind::Value(PureValue::Integer(node)) => {
+            let ty = copy_type(builder, expression.ty(), context)?;
+            builder
+                .integer(node.value().clone(), ty, origin)
                 .map_err(TransformError::from)
         }
         PureExprKind::Value(PureValue::Boolean(node)) => {
-            let ty = builder.clone_type_for_rebuild(&expression.ty)?;
+            let ty = copy_type(builder, expression.ty(), context)?;
             builder
-                .boolean(node.value(), ty, expression.origin.clone())
+                .boolean(node.value(), ty, origin)
                 .map_err(TransformError::from)
         }
         PureExprKind::Value(PureValue::Unit(_)) => {
-            let ty = builder.clone_type_for_rebuild(&expression.ty)?;
-            builder
-                .unit(ty, expression.origin.clone())
-                .map_err(TransformError::from)
+            let ty = copy_type(builder, expression.ty(), context)?;
+            builder.unit(ty, origin).map_err(TransformError::from)
         }
         PureExprKind::Value(PureValue::Constructor(node)) => {
-            let ty = builder.clone_type_for_rebuild(&expression.ty)?;
+            let ty = IterativeTypeOwner::new(copy_type(builder, expression.ty(), context)?);
+            let constructor = copy_constructor_id(builder, node.constructor(), context)?;
             builder
-                .constructor(node.constructor(), ty, expression.origin.clone())
+                .constructor(constructor, ty.into_inner(), origin)
                 .map_err(TransformError::from)
         }
         PureExprKind::Value(PureValue::Function(node)) => {
-            let parameter_type = builder.clone_type_for_rebuild(node.parameter().ty())?;
+            let parameter_type =
+                IterativeTypeOwner::new(copy_type(builder, node.parameter().ty(), context)?);
+            let parameter_id = copy_binder_id(builder, node.parameter().id(), context)?;
+            let parameter_origin = copy_origin(builder, node.parameter().origin(), context)?;
             let parameter = builder.resolved_binder(
-                node.parameter().id(),
-                parameter_type,
-                node.parameter().origin().clone(),
+                parameter_id,
+                parameter_type.into_inner(),
+                parameter_origin,
             )?;
-            let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
+            let ty = IterativeTypeOwner::new(copy_type(builder, expression.ty(), context)?);
             let body = remap(remapped, node.body())?;
-            let origin = expression.origin.clone();
+
             builder
                 .function(parameter, body, ty.into_inner(), origin)
                 .map_err(TransformError::from)
         }
         PureExprKind::Variable(node) => {
-            let ty = builder.clone_type_for_rebuild(&expression.ty)?;
+            let ty = IterativeTypeOwner::new(copy_type(builder, expression.ty(), context)?);
+            let binder = copy_binder_id(builder, node.binder(), context)?;
             builder
-                .variable(node.binder(), ty, expression.origin.clone())
+                .variable(binder, ty.into_inner(), origin)
                 .map_err(TransformError::from)
         }
         PureExprKind::Computation(PureComputation::Bind(node)) => {
-            let binder_type = builder.clone_type_for_rebuild(node.binder().ty())?;
-            let binder = builder.resolved_binder(
-                node.binder().id(),
-                binder_type,
-                node.binder().origin().clone(),
-            )?;
-            let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
+            let binder_type =
+                IterativeTypeOwner::new(copy_type(builder, node.binder().ty(), context)?);
+            let binder_id = copy_binder_id(builder, node.binder().id(), context)?;
+            let binder_origin = copy_origin(builder, node.binder().origin(), context)?;
+            let binder =
+                builder.resolved_binder(binder_id, binder_type.into_inner(), binder_origin)?;
+            let ty = IterativeTypeOwner::new(copy_type(builder, expression.ty(), context)?);
             let initializer = remap(remapped, node.initializer())?;
             let body = remap(remapped, node.body())?;
-            let origin = expression.origin.clone();
+
             builder
                 .binding(binder, initializer, body, ty.into_inner(), origin)
                 .map_err(TransformError::from)
@@ -583,28 +1087,28 @@ fn rebuild_node<F: TransformFamily>(
                 .try_reserve(node.members().len())
                 .map_err(|_| TransformError::Build(BuildError::TypeWorkExceeded))?;
             for member in node.members() {
-                let binder_type = builder.clone_type_for_rebuild(member.binder().ty())?;
-                let binder = builder.resolved_binder(
-                    member.binder().id(),
-                    binder_type,
-                    member.binder().origin().clone(),
-                )?;
+                let binder_type =
+                    IterativeTypeOwner::new(copy_type(builder, member.binder().ty(), context)?);
+                let binder_id = copy_binder_id(builder, member.binder().id(), context)?;
+                let member_origin = copy_origin(builder, member.binder().origin(), context)?;
+                let binder =
+                    builder.resolved_binder(binder_id, binder_type.into_inner(), member_origin)?;
                 members.push((binder, remap(remapped, member.initializer())?));
             }
-            let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
+            let ty = IterativeTypeOwner::new(copy_type(builder, expression.ty(), context)?);
             let body = remap(remapped, node.body())?;
-            let origin = expression.origin.clone();
+
             builder
                 .recursive_binding(members, body, ty.into_inner(), origin)
                 .map_err(TransformError::from)
         }
         PureExprKind::Computation(PureComputation::Apply(node)) => {
-            let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
+            let ty = IterativeTypeOwner::new(copy_type(builder, expression.ty(), context)?);
             let function = remap(remapped, node.function())?;
             let argument = remap(remapped, node.argument())?;
-            let origin = expression.origin.clone();
+
             if !F::REQUIRES_EMPTY_ROWS {
-                let effects = builder.clone_effect_row_for_rebuild(expression.effects())?;
+                let effects = copy_expression_row(builder, expression, context)?;
                 return builder
                     .application_with_effects(
                         super::function::ApplicationNode::new(function, argument),
@@ -619,77 +1123,96 @@ fn rebuild_node<F: TransformFamily>(
                 .map_err(TransformError::from)
         }
         PureExprKind::Computation(PureComputation::Primitive(node)) => {
-            let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
+            let ty = IterativeTypeOwner::new(copy_type(builder, expression.ty(), context)?);
             let left = remap(remapped, node.left())?;
             let right = remap(remapped, node.right())?;
-            let origin = expression.origin.clone();
+
             builder
                 .primitive(node.primitive(), left, right, ty.into_inner(), origin)
                 .map_err(TransformError::from)
         }
         PureExprKind::Computation(PureComputation::Tuple(node)) => {
-            let elements = node
-                .elements()
-                .iter()
-                .map(|element| remap(remapped, *element))
-                .collect::<Result<Vec<_>, _>>()?;
-            let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
-            let origin = expression.origin.clone();
+            builder.charge_rebuild_work(node.elements().len())?;
+            let mut elements = Vec::new();
+            elements
+                .try_reserve_exact(node.elements().len())
+                .map_err(|_| BuildError::TypeWorkExceeded)?;
+            for element in node.elements() {
+                elements.push(remap(remapped, *element)?);
+            }
+            let ty = IterativeTypeOwner::new(copy_type(builder, expression.ty(), context)?);
+
             builder
                 .tuple(elements, ty.into_inner(), origin)
                 .map_err(TransformError::from)
         }
         PureExprKind::Computation(PureComputation::Match(node)) => {
-            let arms = node
-                .arms()
-                .iter()
-                .map(|arm| {
-                    let pattern = CorePatternOwner::new(rebuild_pattern(builder, arm.pattern())?);
-                    let body = remap(remapped, arm.body())?;
-                    let origin = arm.origin().clone();
-                    Ok(CoreMatchArm::new(pattern.into_inner(), body, origin))
-                })
-                .collect::<Result<Vec<_>, TransformError>>()?;
-            let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
+            builder.charge_rebuild_work(node.arms().len())?;
+            let mut arms = Vec::new();
+            arms.try_reserve_exact(node.arms().len())
+                .map_err(|_| BuildError::TypeWorkExceeded)?;
+            for arm in node.arms() {
+                let pattern = CorePatternOwner::new(rebuild_pattern_with_origin_work(
+                    builder,
+                    arm.pattern(),
+                    context.is_some(),
+                    context,
+                )?);
+                let body = remap(remapped, arm.body())?;
+                let origin = copy_origin(builder, arm.origin(), context)?;
+                arms.push(CoreMatchArm::new(pattern.into_inner(), body, origin));
+            }
+            let ty = IterativeTypeOwner::new(copy_type(builder, expression.ty(), context)?);
             let scrutinee = remap(remapped, node.scrutinee())?;
-            let origin = expression.origin.clone();
+
             builder
                 .match_expression(scrutinee, arms, ty.into_inner(), origin)
                 .map_err(TransformError::from)
         }
         PureExprKind::Computation(PureComputation::NewtypeConversion(node)) => {
-            let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
+            let ty = IterativeTypeOwner::new(copy_type(builder, expression.ty(), context)?);
             let child = remap(remapped, node.child())?;
-            let origin = expression.origin.clone();
+
+            let owner = copy_nominal_id(builder, node.owner(), context)?;
             builder
-                .newtype_conversion(
-                    node.owner(),
-                    node.direction(),
-                    child,
-                    ty.into_inner(),
-                    origin,
-                )
+                .newtype_conversion(owner, node.direction(), child, ty.into_inner(), origin)
                 .map_err(TransformError::from)
         }
         PureExprKind::Computation(PureComputation::LocalNominalScope(node)) => {
-            let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
+            let ty = IterativeTypeOwner::new(copy_type(builder, expression.ty(), context)?);
             let body = remap(remapped, node.body())?;
+            let owner = copy_nominal_id(builder, node.owner(), context)?;
             builder
-                .local_nominal_scope(
-                    node.owner(),
-                    body,
-                    ty.into_inner(),
-                    expression.origin.clone(),
-                )
+                .local_nominal_scope(owner, body, ty.into_inner(), origin)
                 .map_err(TransformError::from)
         }
         PureExprKind::Computation(PureComputation::TypeAbstraction(node)) => {
-            let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
+            let ty = IterativeTypeOwner::new(copy_type(builder, expression.ty(), context)?);
             let body = remap(remapped, node.body())?;
-            let origin = expression.origin.clone();
-            builder
-                .type_abstraction_from_borrowed(node.parameters(), body, ty.into_inner(), origin)
-                .map_err(TransformError::from)
+
+            if let Some(context) = context {
+                let parameters = crate::types::clone_kinded_type_parameters_with_budget(
+                    node.parameters(),
+                    &mut builder.type_work,
+                )
+                .map_err(|()| BuildError::TypeWorkExceeded)?;
+                let mut parameters = ProviderKindParameters(parameters);
+                for (id, _) in &mut parameters.0 {
+                    *id = context.variable(*id, &mut builder.type_work)?;
+                }
+                builder
+                    .type_abstraction(parameters.into_vec(), body, ty.into_inner(), origin)
+                    .map_err(TransformError::from)
+            } else {
+                builder
+                    .type_abstraction_from_borrowed(
+                        node.parameters(),
+                        body,
+                        ty.into_inner(),
+                        origin,
+                    )
+                    .map_err(TransformError::from)
+            }
         }
         PureExprKind::Computation(PureComputation::TypeApplication(node)) => {
             let mut arguments = IterativeTypeBuffer(Vec::new());
@@ -697,7 +1220,7 @@ fn rebuild_node<F: TransformFamily>(
                 .try_reserve(node.arguments().len())
                 .map_err(|_| TransformError::Build(BuildError::TypeWorkExceeded))?;
             for argument in node.arguments() {
-                arguments.push(builder.clone_type_for_rebuild(argument)?);
+                arguments.push(copy_type(builder, argument, context)?);
             }
             builder.charge_effect_metadata(node.row_arguments().len())?;
             let mut row_arguments = Vec::new();
@@ -705,11 +1228,11 @@ fn rebuild_node<F: TransformFamily>(
                 .try_reserve_exact(node.row_arguments().len())
                 .map_err(|_| TransformError::Build(BuildError::TypeWorkExceeded))?;
             for row in node.row_arguments() {
-                row_arguments.push(builder.clone_effect_row_for_rebuild(row)?);
+                row_arguments.push(copy_row(builder, row, context)?);
             }
-            let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
+            let ty = IterativeTypeOwner::new(copy_type(builder, expression.ty(), context)?);
             let function = remap(remapped, node.function())?;
-            let origin = expression.origin.clone();
+
             builder
                 .type_application_with_row_arguments(
                     function,
@@ -723,60 +1246,675 @@ fn rebuild_node<F: TransformFamily>(
     }
 }
 
+/// Walk an unpublished draft without assigning it validated-program authority.
+/// Replacement roots are atomic: their obsolete source ABI children are omitted.
+#[cfg(test)]
+pub(crate) fn provider_draft_order(
+    program: &super::UnvalidatedEffectProgram,
+    replacements: &std::collections::HashSet<NodeId>,
+    budget: &mut crate::types::TypeWorkBudget,
+) -> Result<Vec<NodeId>, TransformError> {
+    provider_fragment_order(program, &[program.root], replacements, budget)
+}
+
+/// Traverse the real entry forest without inventing a Core parent node.
+/// This proves graph shape only; the caller separately authenticates roots.
+pub(crate) fn provider_fragment_order(
+    program: &super::UnvalidatedEffectProgram,
+    roots: &[NodeId],
+    replacements: &std::collections::HashSet<NodeId>,
+    budget: &mut crate::types::TypeWorkBudget,
+) -> Result<Vec<NodeId>, TransformError> {
+    provider_forest_order_inner(program, roots, replacements, budget, true)
+}
+
+/// A defining entry can retain authenticated parameter wrappers outside its
+/// executable body forest. Traverse exactly the supplied entry roots without
+/// treating unrelated wrapper nodes as executable children.
+pub(crate) fn provider_entry_forest_order(
+    program: &super::UnvalidatedEffectProgram,
+    roots: &[NodeId],
+    replacements: &std::collections::HashSet<NodeId>,
+    budget: &mut crate::types::TypeWorkBudget,
+) -> Result<Vec<NodeId>, TransformError> {
+    provider_forest_order_inner(program, roots, replacements, budget, false)
+}
+
+fn provider_forest_order_inner(
+    program: &super::UnvalidatedEffectProgram,
+    roots: &[NodeId],
+    replacements: &std::collections::HashSet<NodeId>,
+    budget: &mut crate::types::TypeWorkBudget,
+    require_complete: bool,
+) -> Result<Vec<NodeId>, TransformError> {
+    enum Task {
+        Enter(NodeId),
+        Exit(NodeId),
+    }
+    budget
+        .charge(
+            program
+                .nodes
+                .len()
+                .checked_mul(2)
+                .ok_or(BuildError::TypeWorkExceeded)?,
+        )
+        .map_err(|()| BuildError::TypeWorkExceeded)?;
+    let mut colors = Vec::new();
+    colors
+        .try_reserve_exact(program.nodes.len())
+        .map_err(|_| BuildError::TypeWorkExceeded)?;
+    colors.resize(program.nodes.len(), 0u8);
+    let mut pending = Vec::new();
+    budget
+        .charge(roots.len())
+        .map_err(|()| BuildError::TypeWorkExceeded)?;
+    pending
+        .try_reserve(roots.len())
+        .map_err(|_| BuildError::TypeWorkExceeded)?;
+    if roots.is_empty() {
+        return Err(TransformError::InvalidValidatedInput);
+    }
+    pending.extend(roots.iter().rev().copied().map(Task::Enter));
+    let mut order = Vec::new();
+    order
+        .try_reserve_exact(program.nodes.len())
+        .map_err(|_| BuildError::TypeWorkExceeded)?;
+    while let Some(task) = pending.pop() {
+        budget
+            .charge(1)
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        let id = match task {
+            Task::Enter(id) | Task::Exit(id) => id,
+        };
+        if id.arena() != program.arena {
+            return Err(TransformError::InvalidValidatedInput);
+        }
+        let ordinal = node_index(id)?;
+        let expression = program
+            .nodes
+            .get(ordinal)
+            .ok_or(TransformError::InvalidValidatedInput)?;
+        match task {
+            Task::Enter(_) => {
+                match colors[ordinal] {
+                    1 => return Err(TransformError::InvalidValidatedInput),
+                    2 => continue,
+                    _ => colors[ordinal] = 1,
+                }
+                if expression.origin.is_none() {
+                    return Err(TransformError::InvalidValidatedInput);
+                }
+                let children = if replacements.contains(&id) {
+                    0
+                } else {
+                    EffectOperationFamily::child_count(&expression.kind)
+                };
+                budget
+                    .charge(children + 1)
+                    .map_err(|()| BuildError::TypeWorkExceeded)?;
+                pending
+                    .try_reserve(children + 1)
+                    .map_err(|_| BuildError::TypeWorkExceeded)?;
+                pending.push(Task::Exit(id));
+                for child in (0..children).rev() {
+                    pending.push(Task::Enter(
+                        EffectOperationFamily::child_at(&expression.kind, child)
+                            .ok_or(TransformError::InvalidValidatedInput)?,
+                    ));
+                }
+            }
+            Task::Exit(_) => {
+                colors[ordinal] = 2;
+                order.push(id);
+            }
+        }
+    }
+    if require_complete && replacements.is_empty() && order.len() != program.nodes.len() {
+        return Err(TransformError::InvalidValidatedInput);
+    }
+    for replacement in replacements {
+        budget
+            .charge(1)
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        if replacement.arena() != program.arena
+            || colors.get(node_index(*replacement)?).copied() != Some(2)
+        {
+            return Err(TransformError::InvalidValidatedInput);
+        }
+    }
+    Ok(order)
+}
+
+fn retain_provider_pattern_binders(
+    root: &CorePattern,
+    binders: &mut Vec<crate::resolved::BinderId>,
+    budget: &mut crate::types::TypeWorkBudget,
+) -> Result<(), TransformError> {
+    budget
+        .charge(1)
+        .map_err(|()| BuildError::TypeWorkExceeded)?;
+    let mut pending = Vec::new();
+    pending
+        .try_reserve(1)
+        .map_err(|_| BuildError::TypeWorkExceeded)?;
+    pending.push(root);
+    while let Some(pattern) = pending.pop() {
+        budget
+            .charge(1)
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        match &pattern.kind {
+            CorePatternKind::Binder(binder) => {
+                budget
+                    .charge(1)
+                    .map_err(|()| BuildError::TypeWorkExceeded)?;
+                binders
+                    .try_reserve(1)
+                    .map_err(|_| BuildError::TypeWorkExceeded)?;
+                binders.push(binder.id());
+            }
+            CorePatternKind::Tuple(elements) => {
+                budget
+                    .charge(elements.len())
+                    .map_err(|()| BuildError::TypeWorkExceeded)?;
+                pending
+                    .try_reserve(elements.len())
+                    .map_err(|_| BuildError::TypeWorkExceeded)?;
+                pending.extend(elements.iter());
+            }
+            CorePatternKind::Constructor {
+                payload: Some(payload),
+                ..
+            } => {
+                budget
+                    .charge(1)
+                    .map_err(|()| BuildError::TypeWorkExceeded)?;
+                pending
+                    .try_reserve(1)
+                    .map_err(|_| BuildError::TypeWorkExceeded)?;
+                pending.push(payload);
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn prepare_provider_draft_builder(
+    program: &super::UnvalidatedEffectProgram,
+    order: &[NodeId],
+    budget: &mut crate::types::TypeWorkBudget,
+) -> Result<CoreBuilder<EffectOperationFamily>, TransformError> {
+    prepare_provider_draft_builder_with_catalog(
+        program,
+        order,
+        Arc::new(super::dialect::MethodEvidenceCatalog::default()),
+        budget,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn prepare_provider_draft_builder_with_catalog(
+    program: &super::UnvalidatedEffectProgram,
+    order: &[NodeId],
+    catalog: Arc<super::dialect::MethodEvidenceCatalog>,
+    budget: &mut crate::types::TypeWorkBudget,
+) -> Result<CoreBuilder<EffectOperationFamily>, TransformError> {
+    prepare_provider_fragment_builder_with_catalog(program, order, catalog, &[], &[], budget)
+}
+
+pub(crate) fn prepare_provider_fragment_builder_with_catalog(
+    program: &super::UnvalidatedEffectProgram,
+    order: &[NodeId],
+    catalog: Arc<super::dialect::MethodEvidenceCatalog>,
+    state: &[&super::TypedBinder],
+    patterns: &[&CorePattern],
+    budget: &mut crate::types::TypeWorkBudget,
+) -> Result<CoreBuilder<EffectOperationFamily>, TransformError> {
+    let mut builder = CoreBuilder::<EffectOperationFamily>::with_registry_and_method_evidence(
+        Arc::clone(&program.registry),
+        catalog,
+    )?;
+    // Catalog admission is part of this new rebuild, before its per-node ledger resets.
+    budget
+        .charge(builder.type_work.used())
+        .map_err(|()| BuildError::TypeWorkExceeded)?;
+    let mut binders = Vec::new();
+    budget
+        .charge(state.len())
+        .map_err(|()| BuildError::TypeWorkExceeded)?;
+    binders
+        .try_reserve(state.len())
+        .map_err(|_| BuildError::TypeWorkExceeded)?;
+    binders.extend(state.iter().map(|binder| binder.id()));
+    for pattern in patterns {
+        retain_provider_pattern_binders(pattern, &mut binders, budget)?;
+    }
+    for id in order {
+        let expression = program
+            .nodes
+            .get(node_index(*id)?)
+            .ok_or(TransformError::InvalidValidatedInput)?;
+        let count = EffectOperationFamily::operation_extra_edge_count(&expression.kind);
+        budget
+            .charge(count + 1)
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        binders
+            .try_reserve(count + 1)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        match EffectOperationFamily::pure(&expression.kind) {
+            Some(PureExprKind::Value(PureValue::Function(function))) => {
+                binders.push(function.parameter().id())
+            }
+            Some(PureExprKind::Computation(PureComputation::Bind(binding))) => {
+                binders.push(binding.binder().id())
+            }
+            Some(PureExprKind::Computation(PureComputation::RecursiveBind(group))) => {
+                budget
+                    .charge(group.members().len())
+                    .map_err(|()| BuildError::TypeWorkExceeded)?;
+                binders
+                    .try_reserve(group.members().len())
+                    .map_err(|_| BuildError::TypeWorkExceeded)?;
+                binders.extend(group.members().iter().map(|member| member.binder().id()));
+            }
+            Some(PureExprKind::Computation(PureComputation::Match(matching))) => {
+                for arm in matching.arms() {
+                    retain_provider_pattern_binders(arm.pattern(), &mut binders, budget)?;
+                }
+            }
+            _ => {
+                if let EffectExprKind::Operation(operation) = &expression.kind {
+                    match operation {
+                        EffectOperation::Resource(resource) => binders.push(resource.handle.id()),
+                        EffectOperation::ProviderScope(scope) => {
+                            budget
+                                .charge(4)
+                                .map_err(|()| BuildError::TypeWorkExceeded)?;
+                            binders
+                                .try_reserve(4)
+                                .map_err(|_| BuildError::TypeWorkExceeded)?;
+                            binders.extend([
+                                scope.acquire.parameter.id(),
+                                scope.finish.parameter.id(),
+                                scope.handler_state.id(),
+                                scope.handle.id(),
+                            ]);
+                            for clause in scope.handler.clauses() {
+                                retain_provider_pattern_binders(
+                                    clause.pattern(),
+                                    &mut binders,
+                                    budget,
+                                )?;
+                            }
+                            if !scope.attached.is_empty() {
+                                budget
+                                    .charge(scope.attached.len())
+                                    .map_err(|()| BuildError::TypeWorkExceeded)?;
+                                binders
+                                    .try_reserve(scope.attached.len())
+                                    .map_err(|_| BuildError::TypeWorkExceeded)?;
+                                for attached in &scope.attached {
+                                    binders.push(attached.state.id());
+                                    for clause in attached.handler.clauses() {
+                                        retain_provider_pattern_binders(
+                                            clause.pattern(),
+                                            &mut binders,
+                                            budget,
+                                        )?;
+                                    }
+                                }
+                            }
+                        }
+                        EffectOperation::Handler(handler) => {
+                            for clause in handler.clauses() {
+                                retain_provider_pattern_binders(
+                                    clause.pattern(),
+                                    &mut binders,
+                                    budget,
+                                )?;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    builder.reserve_provider_draft_binders(&binders, budget)?;
+    Ok(builder)
+}
+
+pub(crate) fn rebuild_provider_fragment_binder(
+    builder: &mut CoreBuilder<EffectOperationFamily>,
+    binder: &super::TypedBinder,
+) -> Result<super::TypedBinder, TransformError> {
+    let origin = clone_origin_for_rebuild(builder, binder.origin())?;
+    let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(binder.ty())?);
+    Ok(builder.resolved_binder(binder.id(), ty.into_inner(), origin)?)
+}
+
+pub(crate) fn rebuild_provider_fragment_pattern(
+    builder: &mut CoreBuilder<EffectOperationFamily>,
+    pattern: &CorePattern,
+) -> Result<CorePattern, TransformError> {
+    rebuild_pattern_with_origin_work(builder, pattern, true, None)
+}
+
+fn clone_origin_for_rebuild<F: CoreOperationFamily>(
+    builder: &mut CoreBuilder<F>,
+    origin: &Origin,
+) -> Result<Origin, TransformError> {
+    let mut current = origin;
+    for _ in 0..=super::dialect::CORE_PAYLOAD_DEPTH_LIMIT {
+        builder.charge_rebuild_work(1)?;
+        match current {
+            Origin::Source(_) => return Ok(origin.clone()),
+            Origin::Generated { cause, .. } => current = cause,
+            Origin::Related { primary, related } => {
+                builder.charge_rebuild_work(related.len())?;
+                current = primary;
+            }
+        }
+    }
+    Err(BuildError::InvalidPayload.into())
+}
+
+/// Fallible provenance copying for a new checked-template occurrence. Original
+/// spans and generated reasons are retained without granting new authority.
+fn clone_provider_origin_for_rebuild<F: CoreOperationFamily>(
+    builder: &mut CoreBuilder<F>,
+    original: &Origin,
+) -> Result<Origin, TransformError> {
+    enum Frame<'a> {
+        Generated(GeneratedReason),
+        Related(&'a [crate::source::Span]),
+    }
+    struct Guard(Option<Origin>);
+    impl Guard {
+        fn take(&mut self) -> Result<Origin, BuildError> {
+            self.0.take().ok_or(BuildError::InvalidPayload)
+        }
+
+        fn replace(&mut self, origin: Origin) {
+            if let Some(displaced) = self.0.replace(origin) {
+                crate::source::discard_origin_iteratively(displaced);
+            }
+        }
+
+        fn into_root(mut self) -> Result<Origin, BuildError> {
+            self.take()
+        }
+    }
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            if let Some(origin) = self.0.take() {
+                crate::source::discard_origin_iteratively(origin);
+            }
+        }
+    }
+    let mut frames = Vec::new();
+    let mut current = original;
+    let span = loop {
+        builder.charge_rebuild_work(1)?;
+        if frames.len() > super::dialect::CORE_PAYLOAD_DEPTH_LIMIT {
+            return Err(BuildError::InvalidPayload.into());
+        }
+        match current {
+            Origin::Source(span) => break *span,
+            Origin::Generated { cause, reason } => {
+                frames
+                    .try_reserve(1)
+                    .map_err(|_| BuildError::TypeWorkExceeded)?;
+                frames.push(Frame::Generated(*reason));
+                current = cause;
+            }
+            Origin::Related { primary, related } => {
+                frames
+                    .try_reserve(1)
+                    .map_err(|_| BuildError::TypeWorkExceeded)?;
+                frames.push(Frame::Related(related));
+                current = primary;
+            }
+        }
+    };
+    let mut copied = Guard(Some(Origin::Source(span)));
+    while let Some(frame) = frames.pop() {
+        let next = match frame {
+            Frame::Generated(reason) => Origin::Generated {
+                cause: Box::new(copied.take()?),
+                reason,
+            },
+            Frame::Related(related) => {
+                builder.charge_rebuild_work(related.len())?;
+                let mut spans = Vec::new();
+                spans
+                    .try_reserve_exact(related.len())
+                    .map_err(|_| BuildError::TypeWorkExceeded)?;
+                spans.extend_from_slice(related);
+                Origin::Related {
+                    primary: Box::new(copied.take()?),
+                    related: spans,
+                }
+            }
+        };
+        copied.replace(next);
+    }
+    copied.into_root().map_err(TransformError::from)
+}
+
+pub(crate) fn begin_provider_draft_work(
+    builder: &mut CoreBuilder<EffectOperationFamily>,
+    remaining: usize,
+) {
+    builder.type_work = crate::types::TypeWorkBudget::with_limit(remaining);
+}
+
+pub(crate) fn discharge_provider_draft_work(
+    builder: &CoreBuilder<EffectOperationFamily>,
+    budget: &mut crate::types::TypeWorkBudget,
+) -> Result<(), BuildError> {
+    budget
+        .charge(builder.type_work.used())
+        .map_err(|()| BuildError::TypeWorkExceeded)
+}
+
+pub(crate) fn rebuild_provider_draft_node(
+    builder: &mut CoreBuilder<EffectOperationFamily>,
+    program: &super::UnvalidatedEffectProgram,
+    remapped: &[Option<NodeId>],
+    id: NodeId,
+) -> Result<NodeId, TransformError> {
+    if id.arena() != program.arena {
+        return Err(TransformError::InvalidValidatedInput);
+    }
+    let expression = program
+        .nodes
+        .get(node_index(id)?)
+        .ok_or(TransformError::InvalidValidatedInput)?;
+    rebuild_nonfold_node(builder, remapped, expression)
+}
+
+/// Copies one stored node through the ordinary shared opcode rebuild engine.
+/// Complete sigma/freshening remain compiler claims until final admission.
+pub(crate) fn rebuild_provider_draft_node_with_context(
+    builder: &mut CoreBuilder<EffectOperationFamily>,
+    program: &super::UnvalidatedEffectProgram,
+    remapped: &[Option<NodeId>],
+    id: NodeId,
+    context: &super::provider::ProviderCopyContext<'_>,
+) -> Result<NodeId, TransformError> {
+    if id.arena() != program.arena {
+        return Err(TransformError::InvalidValidatedInput);
+    }
+    let expression = program
+        .nodes
+        .get(node_index(id)?)
+        .ok_or(TransformError::InvalidValidatedInput)?;
+    let row = if context.node_rows.is_empty() {
+        None
+    } else {
+        builder.charge_rebuild_work(1)?;
+        context.node_rows.get(&id)
+    };
+    let realized = ProviderRealizedExpression {
+        original: expression,
+        row,
+    };
+    let copied = rebuild_nonfold_node_with_context(builder, remapped, &realized, Some(context))?;
+    // Operation and Apply rebuilds already admit their explicit realized row.
+    // Other pure constructors derive rows from children; preserve the equation
+    // claim at their top row without replacing latent Type metadata.
+    if let Some(row) = row
+        && let Some(kind) = EffectOperationFamily::pure(&expression.kind)
+        && !matches!(kind, PureExprKind::Computation(PureComputation::Apply(_)))
+    {
+        let effects = context.realized_row(row, &mut builder.type_work)?;
+        builder.set_provider_copy_node_row(copied, effects)?;
+    }
+    Ok(copied)
+}
+
+pub(crate) fn rebuild_provider_fragment_origin(
+    builder: &mut CoreBuilder<EffectOperationFamily>,
+    origin: &Origin,
+) -> Result<Origin, TransformError> {
+    clone_provider_origin_for_rebuild(builder, origin)
+}
+
+pub(crate) fn rebuild_provider_fragment_binder_with_context(
+    builder: &mut CoreBuilder<EffectOperationFamily>,
+    binder: &super::TypedBinder,
+    context: &super::provider::ProviderCopyContext<'_>,
+) -> Result<super::TypedBinder, TransformError> {
+    let origin = clone_provider_origin_for_rebuild(builder, binder.origin())?;
+    let ty = IterativeTypeOwner::new(context.ty(binder.ty(), &mut builder.type_work)?);
+    let id = context.binder(binder.id(), &mut builder.type_work)?;
+    Ok(builder.resolved_binder(id, ty.into_inner(), origin)?)
+}
+
+pub(crate) fn rebuild_provider_fragment_pattern_with_context(
+    builder: &mut CoreBuilder<EffectOperationFamily>,
+    pattern: &CorePattern,
+    context: &super::provider::ProviderCopyContext<'_>,
+) -> Result<CorePattern, TransformError> {
+    rebuild_pattern_with_origin_work(builder, pattern, true, Some(context))
+}
+
+pub(crate) fn provider_draft_span(
+    program: &super::UnvalidatedEffectProgram,
+    id: NodeId,
+) -> Result<crate::source::Span, TransformError> {
+    if id.arena() != program.arena {
+        return Err(TransformError::InvalidValidatedInput);
+    }
+    Ok(program
+        .nodes
+        .get(node_index(id)?)
+        .and_then(|n| n.origin.as_ref())
+        .ok_or(TransformError::InvalidValidatedInput)?
+        .primary_span())
+}
+
+pub(crate) fn provider_draft_type(
+    program: &super::UnvalidatedEffectProgram,
+    id: NodeId,
+) -> Result<&Type, TransformError> {
+    if id.arena() != program.arena {
+        return Err(TransformError::InvalidValidatedInput);
+    }
+    Ok(&program
+        .nodes
+        .get(node_index(id)?)
+        .ok_or(TransformError::InvalidValidatedInput)?
+        .ty)
+}
+
+#[cfg(test)]
 fn rebuild_pattern<F: CoreOperationFamily>(
     builder: &mut CoreBuilder<F>,
     pattern: &CorePattern,
 ) -> Result<CorePattern, TransformError> {
+    rebuild_pattern_with_origin_work(builder, pattern, false, None)
+}
+
+fn rebuild_pattern_with_origin_work<F: CoreOperationFamily>(
+    builder: &mut CoreBuilder<F>,
+    pattern: &CorePattern,
+    provider_origins: bool,
+    context: Option<&super::provider::ProviderCopyContext<'_>>,
+) -> Result<CorePattern, TransformError> {
+    let clone_origin = |builder: &mut CoreBuilder<F>, origin: &Origin| {
+        if context.is_some() {
+            clone_provider_origin_for_rebuild(builder, origin)
+        } else if provider_origins {
+            clone_origin_for_rebuild(builder, origin)
+        } else {
+            Ok(origin.clone())
+        }
+    };
     enum Task<'a> {
         Visit(&'a CorePattern),
         FinishTuple(&'a CorePattern, usize),
         FinishConstructor(&'a CorePattern, crate::types::ConstructorId, bool),
     }
 
-    let mut work = vec![Task::Visit(pattern)];
+    builder.charge_rebuild_work(1)?;
+    let mut work = Vec::new();
+    work.try_reserve(1)
+        .map_err(|_| BuildError::TypeWorkExceeded)?;
+    work.push(Task::Visit(pattern));
     let mut rebuilt = CorePatternBuffer(Vec::new());
     while let Some(task) = work.pop() {
+        builder.charge_rebuild_work(1)?;
+        rebuilt
+            .0
+            .try_reserve(1)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
         match task {
             Task::Visit(pattern) => match &pattern.kind {
                 CorePatternKind::Binder(binder) => {
-                    let binder_type = builder.clone_type_for_rebuild(binder.ty())?;
+                    let origin = clone_origin(builder, &pattern.origin)?;
+                    let binder_origin = clone_origin(builder, binder.origin())?;
+                    let binder_type =
+                        IterativeTypeOwner::new(copy_type(builder, binder.ty(), context)?);
+                    let binder_id = copy_binder_id(builder, binder.id(), context)?;
                     let binder = builder.resolved_binder(
-                        binder.id(),
-                        binder_type,
-                        binder.origin().clone(),
+                        binder_id,
+                        binder_type.into_inner(),
+                        binder_origin,
                     )?;
-                    let ty = builder.clone_type_for_rebuild(&pattern.ty)?;
+                    let ty = copy_type(builder, &pattern.ty, context)?;
                     rebuilt.push(CorePattern::new(
                         ty,
-                        pattern.origin.clone(),
+                        origin,
                         CorePatternKind::Binder(binder),
                     ));
                 }
                 CorePatternKind::Wildcard => {
-                    let ty = builder.clone_type_for_rebuild(&pattern.ty)?;
-                    rebuilt.push(CorePattern::new(
-                        ty,
-                        pattern.origin.clone(),
-                        CorePatternKind::Wildcard,
-                    ));
+                    let origin = clone_origin(builder, &pattern.origin)?;
+                    let ty = copy_type(builder, &pattern.ty, context)?;
+                    rebuilt.push(CorePattern::new(ty, origin, CorePatternKind::Wildcard));
                 }
                 CorePatternKind::Boolean(value) => {
-                    let ty = builder.clone_type_for_rebuild(&pattern.ty)?;
+                    let origin = clone_origin(builder, &pattern.origin)?;
+                    let ty = copy_type(builder, &pattern.ty, context)?;
                     rebuilt.push(CorePattern::new(
                         ty,
-                        pattern.origin.clone(),
+                        origin,
                         CorePatternKind::Boolean(*value),
                     ));
                 }
                 CorePatternKind::Unit => {
-                    let ty = builder.clone_type_for_rebuild(&pattern.ty)?;
-                    rebuilt.push(CorePattern::new(
-                        ty,
-                        pattern.origin.clone(),
-                        CorePatternKind::Unit,
-                    ));
+                    let origin = clone_origin(builder, &pattern.origin)?;
+                    let ty = copy_type(builder, &pattern.ty, context)?;
+                    rebuilt.push(CorePattern::new(ty, origin, CorePatternKind::Unit));
                 }
                 CorePatternKind::Tuple(elements) => {
+                    builder.charge_rebuild_work(elements.len() + 1)?;
+                    work.try_reserve(elements.len() + 1)
+                        .map_err(|_| BuildError::TypeWorkExceeded)?;
                     work.push(Task::FinishTuple(pattern, elements.len()));
                     work.extend(elements.iter().rev().map(Task::Visit));
                 }
@@ -784,9 +1922,12 @@ fn rebuild_pattern<F: CoreOperationFamily>(
                     constructor,
                     payload,
                 } => {
+                    builder.charge_rebuild_work(2)?;
+                    work.try_reserve(2)
+                        .map_err(|_| BuildError::TypeWorkExceeded)?;
                     work.push(Task::FinishConstructor(
                         pattern,
-                        *constructor,
+                        copy_constructor_id(builder, *constructor, context)?,
                         payload.is_some(),
                     ));
                     if let Some(payload) = payload.as_deref() {
@@ -795,27 +1936,36 @@ fn rebuild_pattern<F: CoreOperationFamily>(
                 }
             },
             Task::FinishTuple(pattern, count) => {
+                let origin = clone_origin(builder, &pattern.origin)?;
                 if rebuilt.len() < count {
                     return Err(TransformError::InvalidValidatedInput);
                 }
-                let elements = rebuilt.split_off(rebuilt.len() - count);
-                let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&pattern.ty)?);
+                builder.charge_rebuild_work(count)?;
+                let mut elements = CorePatternBuffer(Vec::new());
+                elements
+                    .0
+                    .try_reserve_exact(count)
+                    .map_err(|_| BuildError::TypeWorkExceeded)?;
+                let start = rebuilt.len() - count;
+                rebuilt.append_suffix_to(start, &mut elements);
+                let ty = IterativeTypeOwner::new(copy_type(builder, &pattern.ty, context)?);
                 rebuilt.push(CorePattern::new(
                     ty.into_inner(),
-                    pattern.origin.clone(),
+                    origin,
                     CorePatternKind::Tuple(elements.into_boxed_slice()),
                 ));
             }
             Task::FinishConstructor(pattern, constructor, has_payload) => {
+                let origin = clone_origin(builder, &pattern.origin)?;
                 let payload = if has_payload {
                     Some(rebuilt.pop().ok_or(TransformError::InvalidValidatedInput)?)
                 } else {
                     None
                 };
-                let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&pattern.ty)?);
+                let ty = IterativeTypeOwner::new(copy_type(builder, &pattern.ty, context)?);
                 rebuilt.push(CorePattern::new(
                     ty.into_inner(),
-                    pattern.origin.clone(),
+                    origin,
                     CorePatternKind::Constructor {
                         constructor,
                         payload: payload.map(|payload| Box::new(payload.into_inner())),
@@ -961,6 +2111,144 @@ mod tests {
     };
 
     static LINKED_TRANSFORM_TEMP_IDS: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn provider_state_access_rebuild_preserves_metadata_and_remaps_only_operand() {
+        use crate::{
+            core::effect::ProviderStateAccessNode,
+            interface::{InterfaceId, MethodId},
+            module::ModuleId,
+            resolved::ResourceDefinitionId,
+            types::{EffectId, EffectInstance, EffectRow},
+        };
+        let source = SourceFile::new("state-access-transform", "()").unwrap();
+        let origin = Origin::Source(source.span(ByteRange::new(0, 2).unwrap()).unwrap());
+        let method = MethodId::new(InterfaceId::new(ModuleId::new(1), 2), 3);
+        let definition = ResourceDefinitionId::new(ModuleId::new(2), 4);
+        let arguments = [Type::Bool, Type::Tuple(Box::new([Type::Int, Type::Unit]))];
+        let original = NodeId::new(super::super::dialect::ArenaId::new(0), 0);
+        let expression = CoreTypedExpr {
+            ty: Type::Bool,
+            effects: EffectRow::singleton(EffectInstance::new(
+                EffectId::new(ModuleId::new(3), 5),
+                Box::new([Type::Int]),
+            )),
+            origin: origin.clone(),
+            kind: EffectExprKind::Operation(EffectOperation::ProviderStateAccess(
+                ProviderStateAccessNode::new(
+                    method,
+                    definition,
+                    Box::new(arguments.clone()),
+                    original,
+                ),
+            )),
+        };
+        let mut builder = CoreBuilder::<EffectOperationFamily>::with_effect_registry(Arc::new(
+            ResolvedRegistry::default(),
+        ));
+        builder.unit(Type::Unit, origin.clone()).unwrap();
+        let replacement = builder.unit(Type::Unit, origin).unwrap();
+        let root = EffectOperationFamily::rebuild_operation(
+            &mut builder,
+            &[Some(replacement)],
+            &expression,
+        )
+        .unwrap();
+        assert_eq!(builder.nodes.len(), 3);
+        let rebuilt = &builder.nodes[root.index().unwrap()];
+        assert_eq!(rebuilt.ty, expression.ty);
+        assert_eq!(rebuilt.effects, expression.effects);
+        assert_eq!(rebuilt.origin.as_ref(), Some(&expression.origin));
+        assert_eq!(rebuilt.kind.child_count(), 1);
+        let EffectExprKind::Operation(EffectOperation::ProviderStateAccess(access)) = &rebuilt.kind
+        else {
+            unreachable!()
+        };
+        assert_eq!(access.method(), method);
+        assert_eq!(access.definition(), definition);
+        assert_eq!(
+            access.arguments(),
+            arguments.clone().map(crate::types::KindedArgument::TypeArg)
+        );
+        assert_eq!(access.operand(), replacement);
+        assert_ne!(access.operand(), original);
+    }
+
+    #[test]
+    fn provider_state_access_rebuild_is_exact_bounded_and_disposes_partial_clones() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                use crate::{
+                    core::effect::ProviderStateAccessNode,
+                    interface::{InterfaceId, MethodId},
+                    module::ModuleId,
+                    resolved::ResourceDefinitionId,
+                    types::{EffectRow, TypeWorkBudget},
+                };
+                let source = SourceFile::new("state-access-transform-budget", "()").unwrap();
+                let origin = Origin::Source(source.span(ByteRange::new(0, 2).unwrap()).unwrap());
+                let prepare = |depth| {
+                    let mut builder = CoreBuilder::<EffectOperationFamily>::with_effect_registry(
+                        Arc::new(ResolvedRegistry::default()),
+                    );
+                    let operand = builder.unit(Type::Unit, origin.clone()).unwrap();
+                    let expression = CoreTypedExpr {
+                        ty: Type::Unit,
+                        effects: EffectRow::empty(),
+                        origin: origin.clone(),
+                        kind: EffectExprKind::Operation(EffectOperation::ProviderStateAccess(
+                            ProviderStateAccessNode::new(
+                                MethodId::new(InterfaceId::new(ModuleId::new(1), 0), 0),
+                                ResourceDefinitionId::new(ModuleId::new(2), 0),
+                                Box::new([application_type(depth), application_type(depth)]),
+                                operand,
+                            ),
+                        )),
+                    };
+                    (builder, [Some(operand)], expression)
+                };
+                let (mut measured, remapped, expression) = prepare(120);
+                let prefix = measured.type_work.used();
+                EffectOperationFamily::rebuild_operation(&mut measured, &remapped, &expression)
+                    .unwrap();
+                let cost = measured.type_work.used() - prefix;
+                let (mut short, remapped, expression) = prepare(120);
+                short.type_work = TypeWorkBudget::with_limit(prefix + cost - 1);
+                short.type_work.charge(prefix).unwrap();
+                assert_eq!(
+                    EffectOperationFamily::rebuild_operation(&mut short, &remapped, &expression),
+                    Err(TransformError::Build(BuildError::TypeWorkExceeded))
+                );
+                assert_eq!(short.nodes.len(), 1);
+                for _ in 0..2 {
+                    let (mut retry, remapped, expression) = prepare(120);
+                    retry.type_work = TypeWorkBudget::with_limit(prefix + cost);
+                    retry.type_work.charge(prefix).unwrap();
+                    EffectOperationFamily::rebuild_operation(&mut retry, &remapped, &expression)
+                        .unwrap();
+                    assert_eq!(retry.type_work.used(), prefix + cost);
+                }
+                let (mut late, remapped, expression) = prepare(32_000);
+                // The first deep argument clone fits; the second clone exhausts
+                // the ledger and must dismantle both partial and original types.
+                late.type_work = TypeWorkBudget::with_limit(64_010);
+                assert_eq!(
+                    EffectOperationFamily::rebuild_operation(&mut late, &remapped, &expression),
+                    Err(TransformError::Build(BuildError::TypeWorkExceeded))
+                );
+                assert_eq!(late.nodes.len(), 1);
+                let (mut missing, _, expression) = prepare(120);
+                assert_eq!(
+                    EffectOperationFamily::rebuild_operation(&mut missing, &[None], &expression),
+                    Err(TransformError::InvalidValidatedInput)
+                );
+                assert_eq!(missing.nodes.len(), 1);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
 
     struct LinkedTransformDirectory(PathBuf);
 
@@ -1163,8 +2451,23 @@ mod tests {
         // Constructor admission reserves both the E=4 consumed bitmap and
         // the E=4 anchor carrier, adding the second E term to prior totals.
         const CONSTRUCTOR_SECOND_CARRIER_WORK: usize = 4;
-        const IDENTITY_WORK: usize =
-            CORE_WORK + ANCHOR_REPLAY_WORK + PRODUCER_REMAP_WORK + CONSTRUCTOR_SECOND_CARRIER_WORK;
+        // Index construction adds two E-bounded tables plus one original
+        // expectation visit and retained position per row. Authentication
+        // replaces prior duplicate/whole-table scans with two key lookups,
+        // one retained key, and exact shortlisted original-position visits.
+        const CONSTRUCTOR_INDEX_WORK: usize = 4 * ANCHOR_REPLAY_WORK;
+        const PRIOR_ANCHOR_DUPLICATE_SCAN_WORK: usize = 1 + 2 + 3;
+        const PRIOR_EXPECTATION_SCAN_WORK: usize = 4 * ANCHOR_REPLAY_WORK;
+        const INDEXED_ANCHOR_KEY_WORK: usize = 3 * ANCHOR_REPLAY_WORK;
+        // Complete tags add four anchor-clone visits, four retained tag
+        // admissions, and two additional selected-application comparisons.
+        const COMPLETE_TAG_REPLAY_WORK: usize = 4 + 4 + 2;
+        const IDENTITY_WORK: usize = CORE_WORK
+            + COMPLETE_TAG_REPLAY_WORK
+            + ANCHOR_REPLAY_WORK
+            + PRODUCER_REMAP_WORK
+            + CONSTRUCTOR_SECOND_CARRIER_WORK
+            + 1; // exact selected producer matcher entry during anchor replay
         const FOLD_WORK: usize = IDENTITY_WORK;
         let fixture = linked_method_transform_fixture();
         assert_eq!(
@@ -1183,12 +2486,81 @@ mod tests {
                 .count(),
             PRODUCER_REMAP_WORK,
         );
+        let expectations = fixture.program.method_evidence().expectations();
+        assert_eq!(expectations.len(), ANCHOR_REPLAY_WORK);
+        // The validated original anchor records its admitted expectation.
+        // Replay keeps that immutable catalog and order. Every same-key
+        // position through the admitted one is visited, including consumed
+        // positions; unrelated keys and the untouched full predicate add no
+        // new scan debit. Derive this count from coordinates, not measured
+        // transform work or a larger allowance chosen after refusal.
+        let mut indexed_candidate_work = 0;
+        for anchor in fixture.program.method_evidence_anchors() {
+            let expected = &expectations[anchor.expectation];
+            assert_eq!(expected.occurrence, anchor.occurrence);
+            assert_eq!(expected.method, anchor.method);
+            indexed_candidate_work += expectations[..=anchor.expectation]
+                .iter()
+                .filter(|candidate| {
+                    candidate.occurrence == anchor.occurrence && candidate.method == anchor.method
+                })
+                .count();
+        }
+        // Fallible tuple/match carriers now charge each copied edge. Pattern
+        // rebuilding additionally charges its initial queue, every visited
+        // pattern/finish carrier, and tuple/constructor pending storage.
+        let mut payload_carrier_work = 0;
+        for index in 0..fixture.program.node_count() {
+            let kind = &fixture
+                .program
+                .node(NodeId::new(fixture.program.root().arena(), index as u32))
+                .unwrap()
+                .kind;
+            match kind {
+                PureExprKind::Computation(PureComputation::Tuple(tuple)) => {
+                    payload_carrier_work += tuple.elements().len()
+                }
+                PureExprKind::Computation(PureComputation::Match(matching)) => {
+                    payload_carrier_work += matching.arms().len();
+                    for arm in matching.arms() {
+                        let mut patterns = vec![arm.pattern()];
+                        let (mut nodes, mut tuples, mut constructors, mut tuple_edges) =
+                            (0, 0, 0, 0);
+                        while let Some(pattern) = patterns.pop() {
+                            nodes += 1;
+                            match &pattern.kind {
+                                CorePatternKind::Tuple(elements) => {
+                                    tuples += 1;
+                                    tuple_edges += elements.len();
+                                    patterns.extend(elements.iter());
+                                }
+                                CorePatternKind::Constructor { payload, .. } => {
+                                    constructors += 1;
+                                    patterns.extend(payload.as_deref());
+                                }
+                                _ => {}
+                            }
+                        }
+                        payload_carrier_work +=
+                            1 + nodes + 2 * tuples + 3 * constructors + 2 * tuple_edges;
+                    }
+                }
+                _ => {}
+            }
+        }
         let registry = Arc::clone(fixture.program.registry());
         let catalog = Arc::clone(fixture.program.method_evidence());
         let weak_registry = Arc::downgrade(&registry);
         let weak_catalog = Arc::downgrade(&catalog);
         let sources = fixture.sources();
         for (fold, exact_work) in [(false, IDENTITY_WORK), (true, FOLD_WORK)] {
+            let exact_work = exact_work
+                + payload_carrier_work
+                + CONSTRUCTOR_INDEX_WORK
+                + INDEXED_ANCHOR_KEY_WORK
+                + indexed_candidate_work
+                - PRIOR_ANCHOR_DUPLICATE_SCAN_WORK
+                - PRIOR_EXPECTATION_SCAN_WORK;
             assert_eq!(
                 rebuild_with_initial_type_work(
                     &fixture.program,
@@ -2333,5 +3705,207 @@ mod tests {
             .expect("the transform rebuild thread should start")
             .join()
             .expect("transform conversion rebuilding must fit a small stack");
+    }
+}
+
+#[cfg(test)]
+mod provider_draft_tests {
+    use super::*;
+    use crate::{
+        source::{ByteRange, Origin, SourceFile},
+        types::{Type, TypeWorkBudget},
+    };
+    fn draft() -> super::super::UnvalidatedEffectProgram {
+        let source = SourceFile::new("provider-draft.ash", "x").unwrap();
+        let origin = Origin::Source(source.span(ByteRange::new(0, 1).unwrap()).unwrap());
+        let mut builder = CoreBuilder::<EffectOperationFamily>::with_registry_for_family(Arc::new(
+            crate::resolved::ResolvedRegistry::default(),
+        ));
+        let parameter = builder.binder(Type::Unit, origin.clone()).unwrap();
+        let body = builder
+            .variable(parameter.id(), Type::Unit, origin.clone())
+            .unwrap();
+        let function = builder
+            .function(
+                parameter,
+                body,
+                Type::Function(Box::new(Type::Unit), Box::new(Type::Unit)),
+                origin.clone(),
+            )
+            .unwrap();
+        let argument = builder.unit(Type::Unit, origin.clone()).unwrap();
+        let root = builder
+            .application(function, argument, Type::Unit, origin)
+            .unwrap();
+        builder.finish(root).unwrap()
+    }
+    fn wide_pattern_draft(width: usize) -> super::super::UnvalidatedEffectProgram {
+        let source = SourceFile::new("provider-wide-draft.ash", "x").unwrap();
+        let origin = Origin::Source(source.span(ByteRange::new(0, 1).unwrap()).unwrap());
+        let mut builder = CoreBuilder::<EffectOperationFamily>::with_registry_for_family(Arc::new(
+            crate::resolved::ResolvedRegistry::default(),
+        ));
+        let unit = builder.unit(Type::Unit, origin.clone()).unwrap();
+        let tuple_type = Type::Tuple(vec![Type::Unit; width].into_boxed_slice());
+        let tuple = builder
+            .tuple(vec![unit; width], tuple_type.clone(), origin.clone())
+            .unwrap();
+        let pattern = CorePattern::new(
+            tuple_type,
+            origin.clone(),
+            CorePatternKind::Tuple(
+                (0..width)
+                    .map(|_| {
+                        CorePattern::new(Type::Unit, origin.clone(), CorePatternKind::Wildcard)
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            ),
+        );
+        let root = builder
+            .match_expression(
+                tuple,
+                vec![CoreMatchArm::new(pattern, unit, origin.clone())],
+                Type::Unit,
+                origin,
+            )
+            .unwrap();
+        builder.finish(root).unwrap()
+    }
+
+    #[test]
+    fn provider_draft_preparation_and_rebuild_charge_wide_payloads_cumulatively() {
+        let prepare_cost = |width| {
+            let program = wide_pattern_draft(width);
+            let order = provider_draft_order(
+                &program,
+                &std::collections::HashSet::new(),
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap();
+            let mut work = TypeWorkBudget::unbounded();
+            drop(prepare_provider_draft_builder(&program, &order, &mut work).unwrap());
+            work.used()
+        };
+        assert_eq!(prepare_cost(65) - prepare_cost(1), 128);
+        let mut costs = Vec::new();
+        for width in [1, 65] {
+            let program = wide_pattern_draft(width);
+            let order = provider_draft_order(
+                &program,
+                &std::collections::HashSet::new(),
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap();
+            let run = |work: &mut TypeWorkBudget| -> Result<(), TransformError> {
+                let mut builder = prepare_provider_draft_builder(&program, &order, work)?;
+                let mut remapped = vec![None; program.nodes.len()];
+                for original in &order {
+                    begin_provider_draft_work(&mut builder, work.remaining());
+                    let result =
+                        rebuild_provider_draft_node(&mut builder, &program, &remapped, *original);
+                    discharge_provider_draft_work(&builder, work)?;
+                    remapped[original.value() as usize] = Some(result?);
+                }
+                builder.finish(remapped[program.root.value() as usize].unwrap())?;
+                Ok(())
+            };
+            let mut measured = TypeWorkBudget::unbounded();
+            run(&mut measured).unwrap();
+            let cost = measured.used();
+            costs.push(cost);
+            assert!(cost > prepare_cost(width));
+            for prefix in [0, 17] {
+                let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+                short.charge(prefix).unwrap();
+                assert!(matches!(
+                    run(&mut short),
+                    Err(TransformError::Build(BuildError::TypeWorkExceeded))
+                ));
+                for _ in 0..2 {
+                    let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                    exact.charge(prefix).unwrap();
+                    run(&mut exact).unwrap();
+                    assert_eq!(exact.used(), prefix + cost);
+                }
+            }
+        }
+        assert!(costs[1] - costs[0] > 128);
+    }
+
+    #[test]
+    fn provider_draft_rebuild_rejects_foreign_bounds_cycles_and_unreachable_source() {
+        for mutation in 0..4 {
+            let mut program = draft();
+            match mutation {
+                0 => {
+                    let foreign = draft();
+                    program.root = foreign.root;
+                }
+                1 => program.root = NodeId::new(program.arena, u32::MAX),
+                2 => {
+                    program.nodes[program.root.value() as usize].kind =
+                        super::super::EffectExprKind::Pure(PureExprKind::Computation(
+                            PureComputation::Apply(super::super::function::ApplicationNode::new(
+                                program.root,
+                                program.root,
+                            )),
+                        ))
+                }
+                3 => program.root = NodeId::new(program.arena, 0),
+                _ => unreachable!(),
+            }
+            assert!(
+                provider_draft_order(
+                    &program,
+                    &std::collections::HashSet::new(),
+                    &mut TypeWorkBudget::unbounded()
+                )
+                .is_err()
+            );
+        }
+        let program = draft();
+        let mut measured = TypeWorkBudget::unbounded();
+        let order =
+            provider_draft_order(&program, &std::collections::HashSet::new(), &mut measured)
+                .unwrap();
+        assert_eq!(order.len(), program.nodes.len());
+        assert!(
+            provider_draft_order(
+                &program,
+                &std::collections::HashSet::new(),
+                &mut TypeWorkBudget::with_limit(measured.used() - 1)
+            )
+            .is_err()
+        );
+        assert_eq!(
+            provider_draft_order(
+                &program,
+                &std::collections::HashSet::new(),
+                &mut TypeWorkBudget::with_limit(measured.used())
+            )
+            .unwrap(),
+            order
+        );
+    }
+}
+
+struct IterativeArgumentBuffer(Vec<crate::types::KindedArgument>);
+impl IterativeArgumentBuffer {
+    fn try_reserve(&mut self, count: usize) -> Result<(), std::collections::TryReserveError> {
+        self.0.try_reserve(count)
+    }
+    fn push(&mut self, argument: crate::types::KindedArgument) {
+        self.0.push(argument);
+    }
+    fn into_vec(mut self) -> Vec<crate::types::KindedArgument> {
+        std::mem::take(&mut self.0)
+    }
+}
+impl Drop for IterativeArgumentBuffer {
+    fn drop(&mut self) {
+        for argument in self.0.drain(..) {
+            crate::types::discard_kinded_argument_iteratively(argument);
+        }
     }
 }

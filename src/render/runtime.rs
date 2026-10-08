@@ -15,9 +15,9 @@ use std::io::{self, Write};
 /// Preparation may allocate and format catalogues. Reporting only borrows these
 /// strings and existing fixed-size failure data; it performs no preparation.
 pub struct PreparedRuntimeMessages {
-    reasons: [(&'static str, String); 18],
+    reasons: [(&'static str, String); 20],
     phases: [(RuntimePhase, String); 7],
-    resources: [(RuntimeResource, String); 21],
+    resources: [(RuntimeResource, String); 24],
     cleanup: [(CleanupStatus, String); 3],
     cause: String,
     phase: String,
@@ -65,6 +65,10 @@ impl PreparedRuntimeMessages {
                     catalogue.format(&Message::runtime_invalid_control_state())?,
                 ),
                 (
+                    RuntimeFailure::ForeignBinding.reason_code(),
+                    catalogue.format(&Message::runtime_foreign_binding())?,
+                ),
+                (
                     RuntimeFailure::HeapCapacity.reason_code(),
                     catalogue.format(&Message::runtime_heap_capacity())?,
                 ),
@@ -105,6 +109,10 @@ impl PreparedRuntimeMessages {
                     catalogue.format(&Message::runtime_storage_reservation_failed())?,
                 ),
                 (
+                    ResourceFailureCause::ResourceAdmissionRefused.reason_code(),
+                    catalogue.format(&Message::runtime_resource_admission_refused())?,
+                ),
+                (
                     ResourceFailureCause::WorkBudgetExhausted.reason_code(),
                     catalogue.format(&Message::runtime_work_budget_exhausted())?,
                 ),
@@ -140,6 +148,18 @@ impl PreparedRuntimeMessages {
                 ),
             ],
             resources: [
+                (
+                    RuntimeResource::ForeignAdmission,
+                    catalogue.format(&Message::runtime_resource_foreign_admission())?,
+                ),
+                (
+                    RuntimeResource::PackedBytes,
+                    catalogue.format(&Message::runtime_resource_packed_bytes())?,
+                ),
+                (
+                    RuntimeResource::ForeignCodecStorage,
+                    catalogue.format(&Message::runtime_resource_foreign_codec_storage())?,
+                ),
                 (
                     RuntimeResource::TypeDisposal,
                     catalogue.format(&Message::runtime_resource_type_disposal())?,

@@ -1,0 +1,114 @@
+verification command: ["cargo", "test", "--locked", "-p", "ash", "--lib", "elaborate::provider::tests::resource_fact_late_actual_failure_drains_retained_canonical_actual_on_small_stack", "--", "--exact", "--test-threads=1"]
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/common-resource-support)
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/common-resource-support/foreign-adapter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3m 31s
+     Running unittests src/lib.rs (target/debug/deps/ash-94445b49e5489316)
+
+running 1 test
+test elaborate::provider::tests::resource_fact_late_actual_failure_drains_retained_canonical_actual_on_small_stack ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1674 filtered out; finished in 0.54s
+
+verification command: ["cargo", "test", "--no-fail-fast", "--locked", "-p", "ash", "--test", "architecture", "--test", "provider_arena_allocation", "--test", "provider_sqlite_copying", "--test", "provider_sqlite_sessions", "--test", "provider_sqlite_control", "--", "--test-threads=1"]
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/common-resource-support)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.91s
+     Running tests/architecture.rs (target/debug/deps/architecture-8c64aa6c64089a8c)
+
+running 45 tests
+test abstract_nominal_kind_publication_transfers_the_reserved_allocation ... ok
+test automatic_iterative_owners_expose_only_narrow_mutation_apis ... ok
+test canonical_nominal_kind_views_follow_ultimate_referents ... ok
+test canonical_type_carrier_inventory_has_a_source_closed_fixed_point ... ok
+test carrier_scanner_alias_seed_retention_preserves_nonowners_and_glob_refusal ... ok
+test carrier_scanner_alias_seed_retention_uses_canonical_targets ... ok
+test carrier_scanner_cfg_attr_external_modules_remain_production ... ok
+test carrier_scanner_cfg_attr_inline_modules_remain_production ... ok
+test carrier_scanner_derives_owned_borrowed_shared_and_mixed_retention ... ok
+test carrier_scanner_distinguishes_precise_captures_from_imports ... ok
+test carrier_scanner_follows_path_modules_reexports_and_inherited_imports ... ok
+test carrier_scanner_includes_aliases_and_does_not_conflate_ambiguous_names ... ok
+test carrier_scanner_module_value_reexports_preserve_generic_type_and_wrapper_paths ... ok
+test carrier_scanner_resolves_inherited_shared_wrappers_without_erasing_borrowed_paths ... ok
+test carrier_scanner_shared_wrapper_routes_preserve_lexical_type_shadowing_and_cycles ... ok
+test core_and_evaluator_keep_interface_evidence_outside_their_closed_inventories ... ok
+test current_source_exposes_only_one_source_pipeline ... ok
+test determination_snapshot_has_no_uncharged_pending_prescan ... ok
+test effect_dialect_adds_one_operation_family_without_changing_pure_families ... ok
+test effect_instance_admission_charges_before_owned_argument_extraction ... ok
+test effect_row_carriers_have_one_shared_owner_gate_and_no_core_side_table ... ok
+test every_production_type_field_is_manifested_bidirectionally ... ok
+test future_operation_crosses_one_boundary_without_changing_pure_features ... ok
+test goal_key_argument_markers_reserve_fallibly_before_every_push ... ok
+test implementation_prerequisite_containment_uses_the_canonical_owner_index ... ok
+test imported_catalog_authentication_has_an_exact_compile_time_inventory ... ok
+test interface_inventory_guard_reads_code_identifiers_but_not_prose ... ok
+test kind_inventory_is_closed ... ok
+test method_evidence_and_scope_carriers_are_bidirectionally_manifested ... ok
+test method_parameter_carrier_inventory_is_stage_complete_and_source_attached ... ok
+test narrow_owner_guard_accepts_immediate_displaced_value_disposal ... ok
+test narrow_owner_guard_accepts_proven_immediate_box_and_map_disposal ... ok
+test narrow_owner_guard_rejects_lexical_raw_member_bypasses ... ok
+test one_mock_pure_feature_changes_only_the_recorded_closed_sites ... ok
+test physical_constructor_schemes_end_at_the_body_free_summary_boundary ... ok
+test private_core_allowlist_excludes_scalar_interface_carriers ... ok
+test private_core_layout_and_family_authentication_is_path_confined ... ok
+test production_source_selection_follows_module_declarations_instead_of_filenames ... ok
+test production_token_scanner_excludes_only_explicit_test_items ... ok
+test pure_dialect_is_named_and_has_no_inhabited_operation_family ... ok
+test relational_vector_owners_charge_before_allocation ... ok
+test resolved_modules_have_one_production_kind_gate_before_construction ... ok
+test shared_kind_engine_sites_are_phase_neutral ... ok
+test synthesis_block_exit_releases_original_state_after_macro_shadow_drop ... ok
+test transient_kind_site_owners_are_source_anchored ... ok
+
+test result: ok. 45 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 48.91s
+
+     Running tests/provider_arena_allocation.rs (target/debug/deps/provider_arena_allocation-beb2c8b715a178cb)
+
+running 7 tests
+test ash_allocates_and_reads_native_storage_before_arena_completion ... ok
+test attached_family_preserves_handler_outward_storage_requests ... ok
+test grouped_scalar_storage_survives_resume_and_runs_cleanup_before_owned_discard_completion ... ok
+test ordinary_aggregate_and_closure_can_use_a_reference_but_cannot_carry_it_out ... ok
+test references_cannot_escape_or_change_owner_and_numeric_tuples_grant_no_authority ... ok
+test source_cannot_supply_sealed_layout_through_impl_or_lexical_evidence ... ok
+test typed_capacity_alignment_and_refusal_cases_preserve_actual_usage ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.25s
+
+     Running tests/provider_sqlite_control.rs (target/debug/deps/provider_sqlite_control-2fe3c8892667913b)
+
+running 2 tests
+test captured_statement_and_connection_resume_actual_copied_query_without_reacquisition ... ok
+test owned_discard_runs_source_cleanup_then_statement_finish_before_connection_close ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.70s
+
+     Running tests/provider_sqlite_copying.rs (target/debug/deps/provider_sqlite_copying-b82a66bcca474e24)
+
+running 8 tests
+test bound_text_nul_is_an_ordinary_failure_with_both_completion_reports ... ok
+test copied_unicode_blobs_nulls_and_empty_values_survive_both_scopes ... ok
+test imported_unicode_text_binding_returns_an_independent_copy_after_completion ... ok
+test integer_width_and_nonnegative_parameter_index_fail_before_native_binding ... ok
+test malformed_native_text_and_float_columns_preserve_copy_and_type_failures ... ok
+test qualified_forwarding_chain_preserves_integer_and_source_completion ... ok
+test reset_preserves_bound_text_and_clear_restores_null_after_copied_results ... ok
+test wrong_storage_kind_and_bad_column_are_distinct_from_protocol_errors ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.19s
+
+     Running tests/provider_sqlite_sessions.rs (target/debug/deps/provider_sqlite_sessions-ead443f8522b4451)
+
+running 8 tests
+test binding_and_clear_after_a_row_reject_without_native_mutation ... ok
+test column_before_row_and_step_after_done_are_protocol_alternatives ... ok
+test genuine_constraint_failure_preserves_body_error_and_consumed_finalize_report ... ok
+test malformed_sql_reports_the_real_native_code_and_copied_diagnostic ... ok
+test negative_parameter_index_from_an_independent_sqlite_integer_is_rejected ... ok
+test refused_empty_multiple_and_nul_sql_keep_acquisition_outcomes_and_guards ... ok
+test representable_parameter_outside_statement_preserves_sqlite_range_error ... ok
+test statement_reuse_transactions_generic_rows_and_reopen_preserve_every_report ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.42s
+

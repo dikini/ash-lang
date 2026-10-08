@@ -1,0 +1,48 @@
+--- a/src/core/capture/value/source_producer.rs
++++ b/src/core/capture/value/source_producer.rs
+@@ -459,6 +459,9 @@
+     analysis.slot(*function, 0, budget)?;
+     charge(budget, arguments.len())?;
+     for argument in arguments { analysis.slot(*argument, 0, budget)?; }
++    #[cfg(debug_assertions)]
++    let coverage_start = analysis.source_producers.first().ok_or(Failure::Invalid)?
++        .driver.registry.scopes.len();
+     let begun = analysis.source_producers.first_mut().ok_or(Failure::Invalid)?
+         .driver.begin(expression, context, budget)?;
+     if begun.is_err() { return Ok(false); }
+@@ -498,6 +501,9 @@
+     // backfill. No child runs while this visit owns the publication batch.
+     backfill_actual_evidence(analysis, budget)?;
+     let route = sealed.local.route;
++    #[cfg(debug_assertions)]
++    let coverage_root_reused = sealed.local.alternatives.iter()
++        .filter(|branch| branch.creation.0 < coverage_start).count();
+     for feed in feeds {
+         charge(budget, 2)?;
+         let Expr::Function { body, .. } = analysis.graph.expressions.get(feed.returned)
+@@ -513,6 +519,25 @@
+     let state = analysis.source_producers.first_mut().ok_or(Failure::Invalid)?;
+     state.driver.commit()?;
+     *state.decisions.get_mut(&slot).ok_or(Failure::Invalid)? = Decision::Installed(route);
++    #[cfg(debug_assertions)]
++    {
++        use super::producer::{ScopeKind, ScopeState};
++        let mut raw = 0;
++        let mut evidence = 0;
++        let mut new_raw = 0;
++        let mut new_evidence = 0;
++        for (index, scope) in state.driver.registry.scopes.iter().enumerate() {
++            if scope.state != ScopeState::Complete { continue; }
++            match scope.kind {
++                ScopeKind::Raw { .. } => { raw += 1; if index >= coverage_start { new_raw += 1; } }
++                ScopeKind::Evidence { .. } => {
++                    evidence += 1; if index >= coverage_start { new_evidence += 1; }
++                }
++                _ => {}
++            }
++        }
++        eprintln!("ash-fusion-connected-installed expression={expression} slot={slot} context={context} total_raw={raw} total_evidence={evidence} new_raw={new_raw} new_evidence={new_evidence} root_reused={coverage_root_reused}");
++    }
+     Ok(true)
+ }
+ 

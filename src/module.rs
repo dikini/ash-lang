@@ -45,6 +45,21 @@ const NATIVE_BUFFER_SOURCE: &str = concat!(
     "pub interface Provider<R> {\nlength : Handle<R> -> Int ! {Ops<R>}\nread : (Handle<R>, Int) -> Outcome<Int> ! {Ops<R>}\nwrite : (Handle<R>, Int, Int) -> Outcome<Unit> ! {Ops<R>}\n}\n",
 );
 
+const BYTES_SOURCE: &str = concat!(
+    "pub type AppendResult = BytesAppended(Bytes)\n| InvalidByte\n",
+    "pub empty : Unit -> Bytes\nempty value = empty value\n",
+    "pub append_byte : (Bytes, Int) -> AppendResult\nappend_byte value = append_byte value\n",
+    "pub length : Bytes -> Int\nlength value = length value\n",
+    "pub equal : (Bytes, Bytes) -> Bool\nequal value = equal value\n",
+);
+const STRING_SOURCE: &str = concat!(
+    "pub type DecodeResult = Decoded(String)\n| InvalidUtf8\n",
+    "pub to_utf8 : String -> Bytes\nto_utf8 value = to_utf8 value\n",
+    "pub from_utf8 : Bytes -> DecodeResult\nfrom_utf8 value = from_utf8 value\n",
+    "pub byte_length : String -> Int\nbyte_length value = byte_length value\n",
+    "pub equal : (String, String) -> Bool\nequal value = equal value\n",
+);
+
 /// A validated name for one configured module root.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct ModuleRootName(String);
@@ -86,6 +101,7 @@ impl Borrow<str> for ModuleRootName {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ModuleRoots {
     named: HashMap<ModuleRootName, PathBuf>,
+    foreign: crate::foreign::ForeignRegistrations,
 }
 
 impl ModuleRoots {
@@ -93,6 +109,16 @@ impl ModuleRoots {
     #[must_use]
     pub fn empty() -> Self {
         Self::default()
+    }
+
+    /// Attaches an immutable host-authored registration table.
+    #[must_use]
+    pub fn with_foreign_registrations(
+        mut self,
+        foreign: crate::foreign::ForeignRegistrations,
+    ) -> Self {
+        self.foreign = foreign;
+        self
     }
 
     /// Validates names, rejects duplicates, and canonicalizes configured paths.
@@ -113,7 +139,7 @@ impl ModuleRoots {
         let mut names = HashSet::new();
         for (name, path) in roots {
             let name = ModuleRootName::new(name)?;
-            if name.as_str() == "builtin" {
+            if matches!(name.as_str(), "builtin" | "foreign") {
                 return Err(ModuleFailure::invocation(
                     ModuleReason::ReservedRoot,
                     None,
@@ -155,7 +181,10 @@ impl ModuleRoots {
             }
             named.insert(name, canonical);
         }
-        Ok(Self { named })
+        Ok(Self {
+            named,
+            foreign: crate::foreign::ForeignRegistrations::default(),
+        })
     }
 }
 
@@ -172,6 +201,8 @@ enum ModuleIdNamespace {
     Admitted,
     BuiltinCell,
     BuiltinNativeBuffer,
+    BuiltinBytes,
+    BuiltinString,
     DirectCoreSource,
 }
 
@@ -213,6 +244,13 @@ impl ModuleId {
         matches!(self.namespace, ModuleIdNamespace::BuiltinNativeBuffer)
     }
 
+    pub(crate) const fn is_builtin_bytes(self) -> bool {
+        matches!(self.namespace, ModuleIdNamespace::BuiltinBytes)
+    }
+    pub(crate) const fn is_builtin_string(self) -> bool {
+        matches!(self.namespace, ModuleIdNamespace::BuiltinString)
+    }
+
     pub(crate) const fn is_builtin_resource(self) -> bool {
         self.is_builtin_cell() || self.is_builtin_native_buffer()
     }
@@ -237,6 +275,12 @@ impl From<SourceId> for ModuleId {
 impl fmt::Display for ModuleId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.namespace {
+            ModuleIdNamespace::BuiltinBytes => {
+                write!(formatter, "builtin.bytes:{}:{}", self.graph, self.value)
+            }
+            ModuleIdNamespace::BuiltinString => {
+                write!(formatter, "builtin.string:{}:{}", self.graph, self.value)
+            }
             ModuleIdNamespace::Admitted => write!(formatter, "{}:{}", self.graph, self.value),
             ModuleIdNamespace::BuiltinCell => {
                 write!(formatter, "builtin.cell:{}:{}", self.graph, self.value)
@@ -277,12 +321,23 @@ impl ModuleDependency {
 pub struct LoadedModule {
     id: ModuleId,
     canonical_path: PathBuf,
-    source: SourceFile,
+    source: std::sync::Arc<SourceFile>,
     surface: SurfaceModule,
     dependencies: Box<[ModuleDependency]>,
+    foreign: Option<crate::foreign::ForeignModuleSource>,
 }
 
 impl LoadedModule {
+    /// Returns authenticated foreign admission metadata, when host-registered.
+    #[must_use]
+    pub fn foreign_admission(&self) -> Option<&ForeignModuleAdmission> {
+        self.foreign.as_ref().map(|foreign| &foreign.admission)
+    }
+
+    pub(crate) fn foreign_source(&self) -> Option<&crate::foreign::ForeignModuleSource> {
+        self.foreign.as_ref()
+    }
+
     /// Returns this module's graph-local identity.
     #[must_use]
     pub const fn id(&self) -> ModuleId {
@@ -297,7 +352,11 @@ impl LoadedModule {
 
     /// Returns the admitted source model.
     #[must_use]
-    pub const fn source(&self) -> &SourceFile {
+    pub fn source(&self) -> &SourceFile {
+        &self.source
+    }
+
+    pub(crate) fn retained_source(&self) -> &std::sync::Arc<SourceFile> {
         &self.source
     }
 
@@ -327,7 +386,9 @@ impl ModuleGraph {
         self.modules
             .into_vec()
             .into_iter()
-            .map(|module| module.source)
+            .map(|module| {
+                std::sync::Arc::try_unwrap(module.source).unwrap_or_else(|source| (*source).clone())
+            })
             .collect::<Vec<_>>()
             .into_boxed_slice()
     }
@@ -358,6 +419,8 @@ pub enum ModuleReason {
     ReservedRoot,
     /// An absolute builtin import names no compiler-owned module.
     UnknownBuiltin,
+    /// An absolute foreign path has no host registration.
+    UnknownForeign,
     /// An absolute import names no configured root.
     UnknownRoot,
     /// An imported source path does not exist.
@@ -383,6 +446,7 @@ impl fmt::Display for ModuleReason {
         formatter.write_str(match self {
             Self::ReservedRoot => "invocation.reserved-root",
             Self::UnknownBuiltin => "module.unknown-builtin",
+            Self::UnknownForeign => "module.unknown-foreign",
             Self::UnknownRoot => "module.unknown-root",
             Self::NotFound => "module.not-found",
             Self::PathEscape => "module.path-escape",
@@ -510,6 +574,7 @@ impl ModuleFailure {
             | ModuleReason::InvalidRootName
             | ModuleReason::RootUnavailable => "invocation",
             ModuleReason::UnknownBuiltin
+            | ModuleReason::UnknownForeign
             | ModuleReason::UnknownRoot
             | ModuleReason::NotFound
             | ModuleReason::PathEscape
@@ -526,6 +591,7 @@ impl ModuleFailure {
             ModuleReason::InvalidRootName => Message::module_invalid_root_name(self.root()?),
             ModuleReason::UnknownRoot => Message::module_unknown_root(self.root()?),
             ModuleReason::UnknownBuiltin => Message::module_unknown_builtin(),
+            ModuleReason::UnknownForeign => Message::module_unknown_foreign(),
             ModuleReason::NotFound => Message::module_not_found(self.path()?),
             ModuleReason::ImportCycle => Message::module_import_cycle(self.path()?),
             ModuleReason::PathEscape => Message::module_path_escape(self.path()?),
@@ -700,9 +766,11 @@ mod presentation_tests {
                 dependencies: Vec::new(),
                 relative_edges: Vec::new(),
                 state: VisitState::Active,
+                foreign: None,
             };
             let roots = ModuleRoots {
                 named: HashMap::from([(ModuleRootName::new("std").unwrap(), PathBuf::from("."))]),
+                foreign: crate::foreign::ForeignRegistrations::default(),
             };
             let failure = resolve_import(&module, &module.surface.imports[0], &roots).unwrap_err();
             assert_eq!(failure.module_reason(), Some(ModuleReason::InvalidPath));
@@ -1151,6 +1219,7 @@ struct StagedModule {
     dependencies: Vec<ModuleDependency>,
     relative_edges: Vec<RelativeEdge>,
     state: VisitState,
+    foreign: Option<crate::foreign::ForeignModuleSource>,
 }
 
 impl StagedModule {
@@ -1158,9 +1227,10 @@ impl StagedModule {
         LoadedModule {
             id: self.id,
             canonical_path: self.canonical_path,
-            source: self.source,
+            source: std::sync::Arc::new(self.source),
             surface: self.surface,
             dependencies: self.dependencies.into_boxed_slice(),
+            foreign: self.foreign,
         }
     }
 }
@@ -1327,6 +1397,8 @@ pub fn load_module_graph(
         let mut dependency_order = Vec::new();
         let mut builtin_cell = None;
         let mut builtin_native_buffer = None;
+        let mut builtin_bytes = None;
+        let mut builtin_string = None;
 
         while let Some(frame) = frames.last() {
             let module = frame.module;
@@ -1352,10 +1424,87 @@ pub fn load_module_graph(
                 .next_import += 1;
 
             if let SurfaceModulePath::Absolute { root, segments } = &import.path
+                && root.text == "foreign"
+            {
+                let path = format!(
+                    "@foreign.{}",
+                    segments
+                        .iter()
+                        .map(|segment| segment.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join(".")
+                );
+                let registration = roots.foreign.get(&path).ok_or_else(|| {
+                    ModuleFailure::source(
+                        ModuleReason::UnknownForeign,
+                        import.span,
+                        Some(PathBuf::from(&path)),
+                    )
+                })?;
+                let target = if let Some(target) = by_path.get(Path::new(&path)).copied() {
+                    target
+                } else {
+                    budget.charge_sources()?;
+                    staged
+                        .try_reserve(1)
+                        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
+                    dependency_order
+                        .try_reserve(1)
+                        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
+                    let (source, surface) = parse_surface_module(
+                        Path::new(&path),
+                        registration.source().to_owned(),
+                        Some(import.span),
+                        &mut budget.syntax_work,
+                    )?;
+                    let id = ModuleId::admitted(
+                        graph_identity,
+                        u32::try_from(staged.len())
+                            .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?,
+                    );
+                    let admission = ForeignModuleAdmission {
+                        module_id: id,
+                        registration_id: registration.id(),
+                        manifest_digest: registration.digest(),
+                        origin: crate::source::Origin::Source(surface.span),
+                    };
+                    staged.push(StagedModule {
+                        id,
+                        canonical_path: PathBuf::from(&path),
+                        source,
+                        surface,
+                        owners: OwnerSet::from_paths(&[], &mut budget)?,
+                        dependencies: Vec::new(),
+                        relative_edges: Vec::new(),
+                        state: VisitState::Finished,
+                        foreign: Some(crate::foreign::ForeignModuleSource {
+                            admission,
+                            manifest: std::sync::Arc::clone(registration),
+                        }),
+                    });
+                    by_path.insert(PathBuf::from(&path), id);
+                    dependency_order.push(id);
+                    id
+                };
+                staged[module_index]
+                    .dependencies
+                    .try_reserve(1)
+                    .map_err(|_| ModuleFailure::resource(ModuleResource::Edges))?;
+                staged[module_index].dependencies.push(ModuleDependency {
+                    target,
+                    import_span: import.span,
+                });
+                continue;
+            }
+
+            if let SurfaceModulePath::Absolute { root, segments } = &import.path
                 && root.text == "builtin"
             {
                 if segments.len() != 1
-                    || !matches!(segments[0].text.as_str(), "cell" | "native_buffer")
+                    || !matches!(
+                        segments[0].text.as_str(),
+                        "cell" | "native_buffer" | "bytes" | "string"
+                    )
                 {
                     return Err(ModuleFailure::source(
                         ModuleReason::UnknownBuiltin,
@@ -1365,7 +1514,12 @@ pub fn load_module_graph(
                     .into());
                 }
                 let native_buffer = segments[0].text == "native_buffer";
-                let cached = if native_buffer {
+                let packed = matches!(segments[0].text.as_str(), "bytes" | "string");
+                let cached = if segments[0].text == "bytes" {
+                    &mut builtin_bytes
+                } else if segments[0].text == "string" {
+                    &mut builtin_string
+                } else if native_buffer {
                     &mut builtin_native_buffer
                 } else {
                     &mut builtin_cell
@@ -1373,14 +1527,25 @@ pub fn load_module_graph(
                 let target = if let Some(id) = *cached {
                     id
                 } else {
-                    let id = admit_builtin_resource(
-                        native_buffer,
-                        graph_identity,
-                        import.span,
-                        &mut budget,
-                        &mut staged,
-                        &mut dependency_order,
-                    )?;
+                    let id = if packed {
+                        admit_builtin_packed(
+                            segments[0].text == "bytes",
+                            graph_identity,
+                            import.span,
+                            &mut budget,
+                            &mut staged,
+                            &mut dependency_order,
+                        )?
+                    } else {
+                        admit_builtin_resource(
+                            native_buffer,
+                            graph_identity,
+                            import.span,
+                            &mut budget,
+                            &mut staged,
+                            &mut dependency_order,
+                        )?
+                    };
                     *cached = Some(id);
                     id
                 };
@@ -1469,6 +1634,58 @@ pub fn load_module_graph(
     })
 }
 
+fn admit_builtin_packed(
+    bytes: bool,
+    graph: u32,
+    import_span: Span,
+    budget: &mut GraphBudget,
+    staged: &mut Vec<StagedModule>,
+    dependency_order: &mut Vec<ModuleId>,
+) -> Result<ModuleId, LoadGraphError> {
+    budget.charge_sources()?;
+    staged
+        .try_reserve(1)
+        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
+    dependency_order
+        .try_reserve(1)
+        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
+    let path = PathBuf::from(if bytes {
+        "@builtin.bytes"
+    } else {
+        "@builtin.string"
+    });
+    let (source, surface) = parse_surface_module(
+        &path,
+        if bytes { BYTES_SOURCE } else { STRING_SOURCE }.to_owned(),
+        Some(import_span),
+        &mut budget.syntax_work,
+    )?;
+    let value = u32::try_from(staged.len())
+        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
+    let id = ModuleId {
+        namespace: if bytes {
+            ModuleIdNamespace::BuiltinBytes
+        } else {
+            ModuleIdNamespace::BuiltinString
+        },
+        graph,
+        value,
+    };
+    staged.push(StagedModule {
+        id,
+        canonical_path: path,
+        owners: OwnerSet::from_paths(&[], budget)?,
+        source,
+        surface,
+        dependencies: Vec::new(),
+        relative_edges: Vec::new(),
+        state: VisitState::Finished,
+        foreign: None,
+    });
+    dependency_order.push(id);
+    Ok(id)
+}
+
 fn admit_builtin_resource(
     native_buffer: bool,
     graph: u32,
@@ -1520,6 +1737,7 @@ fn admit_builtin_resource(
         dependencies: Vec::new(),
         relative_edges: Vec::new(),
         state: VisitState::Finished,
+        foreign: None,
     });
     dependency_order.push(id);
     Ok(id)
@@ -1550,6 +1768,7 @@ fn admit_module(
         dependencies: Vec::new(),
         relative_edges: Vec::new(),
         state: VisitState::Active,
+        foreign: None,
     });
     Ok(id)
 }
@@ -2032,7 +2251,7 @@ mod tests {
         LoadedModule {
             id,
             canonical_path: PathBuf::from(name),
-            source,
+            source: std::sync::Arc::new(source),
             surface: SurfaceModule {
                 imports: Vec::new(),
                 declaration_order: Vec::new(),
@@ -2041,9 +2260,54 @@ mod tests {
                 effects: Vec::new(),
                 implementations: Vec::new(),
                 definitions: Vec::new(),
+                resources: Vec::new(),
                 span,
             },
             dependencies: Box::new([]),
+            foreign: None,
         }
     }
+}
+
+/// Host-selected identity of one immutable foreign registration manifest.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ForeignRegistrationId(u64);
+
+impl ForeignRegistrationId {
+    /// Creates a host registration identity, independently of source spelling.
+    #[must_use]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+    /// Returns the host registration key.
+    #[must_use]
+    pub const fn value(self) -> u64 {
+        self.0
+    }
+}
+
+/// Immutable admission metadata for a registered module with an ordinary ModuleId.
+///
+/// Retained only for declarations loaded from the immutable host registration table.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ForeignModuleAdmission {
+    /// Ordinary admitted module identity, with no library-specific namespace.
+    pub module_id: ModuleId,
+    /// Immutable host registry entry.
+    pub registration_id: ForeignRegistrationId,
+    /// Digest of the admitted manifest.
+    pub manifest_digest: [u8; 32],
+    /// Manifest admission provenance.
+    pub origin: crate::source::Origin,
+}
+
+/// Controlled roles attached to authenticated foreign operation identities.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ForeignOperationRole {
+    /// Produces guarded unpublished state in an acquire template.
+    Acquire,
+    /// Uses live state without transferring native ownership.
+    Borrow,
+    /// Consumes or retains ownership under a finish capability.
+    Finish,
 }

@@ -23,6 +23,7 @@ pub(super) enum ExpressionPrefixForm {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum PrimaryForm {
     Integer,
+    String,
     Boolean,
     Identifier,
     Qualified,
@@ -38,6 +39,8 @@ pub(super) enum PrimaryForm {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum AtomicTypeForm {
     Int,
+    Bytes,
+    String,
     Bool,
     Unit,
     Nominal,
@@ -144,6 +147,7 @@ const CURRENT_ASH_DIALECT: ParserDialect = ParserDialect {
     expression: ExpressionDialect {
         primary_forms: &[
             PrimaryForm::Integer,
+            PrimaryForm::String,
             PrimaryForm::Boolean,
             PrimaryForm::Identifier,
             PrimaryForm::Qualified,
@@ -190,6 +194,8 @@ const CURRENT_ASH_DIALECT: ParserDialect = ParserDialect {
     ],
     atomic_types: &[
         AtomicTypeForm::Int,
+        AtomicTypeForm::Bytes,
+        AtomicTypeForm::String,
         AtomicTypeForm::Bool,
         AtomicTypeForm::Unit,
         AtomicTypeForm::Nominal,
@@ -387,6 +393,7 @@ fn expect_upper_identifier(parser: &mut Parser<'_>) {
 fn starts_module_declaration(parser: &Parser<'_>) -> bool {
     parser.at(&TokenKind::Type)
         || parser.at(&TokenKind::Newtype)
+        || parser.at(&TokenKind::Resource)
         || parser.at(&TokenKind::Effect)
         || parser.at(&TokenKind::Interface)
         || parser.at(&TokenKind::Impl)
@@ -395,7 +402,8 @@ fn starts_module_declaration(parser: &Parser<'_>) -> bool {
             && matches!(
                 parser.nth(1),
                 Some(
-                    TokenKind::Type
+                    TokenKind::Resource
+                        | TokenKind::Type
                         | TokenKind::Newtype
                         | TokenKind::Effect
                         | TokenKind::Opaque
@@ -408,7 +416,11 @@ fn starts_module_declaration(parser: &Parser<'_>) -> bool {
 }
 
 fn module_declaration(parser: &mut Parser<'_>) -> TypeParametersOutcome {
-    if starts_newtype_declaration(parser) {
+    if parser.at(&TokenKind::Resource)
+        || parser.at(&TokenKind::Pub) && parser.nth(1) == Some(&TokenKind::Resource)
+    {
+        resource_definition(parser)
+    } else if starts_newtype_declaration(parser) {
         newtype_declaration(parser)
     } else if parser.at(&TokenKind::Type)
         || parser.at(&TokenKind::Pub)
@@ -1096,8 +1108,8 @@ fn interface_application(parser: &mut Parser<'_>) -> bool {
             return false;
         }
         let _ = parser.bump();
-        let mut arguments_valid = if starts_type(parser) {
-            type_expression(parser);
+        let mut arguments_valid = if starts_type(parser) || parser.at(&TokenKind::LeftBrace) {
+            application_argument(parser);
             true
         } else {
             report_pending_expected(parser, ExpectedForm::InterfaceApplication);
@@ -1105,8 +1117,8 @@ fn interface_application(parser: &mut Parser<'_>) -> bool {
         };
         while parser.at(&TokenKind::Comma) {
             let _ = parser.bump();
-            if starts_type(parser) {
-                type_expression(parser);
+            if starts_type(parser) || parser.at(&TokenKind::LeftBrace) {
+                application_argument(parser);
             } else {
                 report_pending_expected(parser, ExpectedForm::InterfaceApplication);
                 arguments_valid = false;
@@ -1588,6 +1600,34 @@ fn resume_expression(parser: &mut Parser<'_>) {
 }
 
 fn resource_expression(parser: &mut Parser<'_>) {
+    if matches!(parser.nth(1), Some(TokenKind::UpperIdentifier(_))) {
+        parser.start(NodeKind::ProviderResourceExpression);
+        let _ = parser.bump();
+        parser.start(NodeKind::EffectInstance);
+        if parser.nth(1) == Some(&TokenKind::Dot) {
+            qualified_name(parser, true);
+        } else {
+            expect_upper_identifier(parser);
+        }
+        let _ = parser.expect(&TokenKind::Less, ExpectedForm::Type);
+        parser.start(NodeKind::Type);
+        parser.start(NodeKind::AtomicType);
+        expect_upper_identifier(parser);
+        parser.finish();
+        parser.finish();
+        while parser.at(&TokenKind::Comma) {
+            let _ = parser.bump();
+            application_argument(parser);
+        }
+        let _ = parser.expect(&TokenKind::Greater, ExpectedForm::Greater);
+        parser.finish();
+        binder(parser);
+        let _ = parser.expect(&TokenKind::Equal, ExpectedForm::Equal);
+        expression::primary_expression(parser);
+        block(parser);
+        parser.finish();
+        return;
+    }
     parser.start(NodeKind::ResourceExpression);
     let _ = parser.bump();
     if matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "cell" || name == "native_buffer")
@@ -2435,7 +2475,13 @@ fn atomic_type(parser: &mut Parser<'_>) {
         reject_lowercase_qualification(parser);
     } else {
         match atomic_type_form(parser) {
-            Some(AtomicTypeForm::Int | AtomicTypeForm::Bool | AtomicTypeForm::Unit) => {
+            Some(
+                AtomicTypeForm::Int
+                | AtomicTypeForm::Bytes
+                | AtomicTypeForm::String
+                | AtomicTypeForm::Bool
+                | AtomicTypeForm::Unit,
+            ) => {
                 let _ = parser.bump();
                 if parser.at(&TokenKind::Less) {
                     parser.error_at_current(ParseReason::UnexpectedToken);
@@ -2464,12 +2510,25 @@ fn atomic_type(parser: &mut Parser<'_>) {
 
 fn type_arguments(parser: &mut Parser<'_>) {
     let _ = parser.bump();
-    type_expression(parser);
+    application_argument(parser);
     while parser.at(&TokenKind::Comma) {
         let _ = parser.bump();
-        type_expression(parser);
+        application_argument(parser);
     }
     let _ = parser.expect(&TokenKind::Greater, ExpectedForm::Type);
+}
+
+fn application_argument(parser: &mut Parser<'_>) {
+    if parser.at(&TokenKind::LeftBrace) {
+        if parser.enter_structure() {
+            effect_row(parser);
+            parser.leave_structure();
+        } else {
+            parser.consume_rest();
+        }
+    } else {
+        type_expression(parser);
+    }
 }
 
 fn atomic_type_form(parser: &Parser<'_>) -> Option<AtomicTypeForm> {
@@ -2481,6 +2540,8 @@ fn atomic_type_form(parser: &Parser<'_>) -> Option<AtomicTypeForm> {
             matches!(
                 (form, parser.current()),
                 (AtomicTypeForm::Int, Some(TokenKind::IntType))
+                    | (AtomicTypeForm::Bytes, Some(TokenKind::BytesType))
+                    | (AtomicTypeForm::String, Some(TokenKind::StringType))
                     | (AtomicTypeForm::Bool, Some(TokenKind::BoolType))
                     | (AtomicTypeForm::Unit, Some(TokenKind::UnitType))
                     | (AtomicTypeForm::Nominal, Some(TokenKind::UpperIdentifier(_)))
@@ -2553,6 +2614,167 @@ fn parenthesized_type(parser: &mut Parser<'_>) {
 
 fn starts_expression(parser: &Parser<'_>) -> bool {
     expression_prefix_form(parser).is_some() || expression::starts_primary(parser)
+}
+
+fn resource_field_word(parser: &mut Parser<'_>, word: &str) {
+    if matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == word) {
+        let _ = parser.bump();
+    } else {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+    }
+}
+
+fn resource_handlers(parser: &mut Parser<'_>) {
+    binder(parser);
+    let _ = parser.expect(&TokenKind::LeftBrace, ExpectedForm::LeftBrace);
+    let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
+    if parser.at(&TokenKind::RightBrace) {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+    }
+    while !matches!(
+        parser.current(),
+        Some(TokenKind::RightBrace | TokenKind::EndOfFile)
+    ) {
+        parser.start(NodeKind::HandlerClause);
+        binder(parser);
+        pattern(parser);
+        let _ = parser.expect(&TokenKind::FatArrow, ExpectedForm::FatArrow);
+        expression(parser);
+        parser.finish();
+        if !parser.at(&TokenKind::LineEnd) {
+            break;
+        }
+        let _ = parser.bump();
+    }
+    let _ = parser.expect(&TokenKind::RightBrace, ExpectedForm::RightBrace);
+}
+
+fn resource_family(parser: &mut Parser<'_>) -> bool {
+    parser.start(NodeKind::ResourceFamily);
+    resource_field_word(parser, "family");
+    parser.start(NodeKind::TypeParameters);
+    let _ = parser.expect(&TokenKind::Less, ExpectedForm::Type);
+    let _ = type_parameter(parser, TypeParameterOwnerBoundary::Effect);
+    let _ = parser.expect(&TokenKind::Greater, ExpectedForm::Greater);
+    parser.finish();
+    if parser.at(&TokenKind::Where) {
+        where_clause(
+            parser,
+            HeaderRecoveryBoundary::OpeningBrace(
+                SynchronizationBoundary::InterfaceBodyOpeningBrace,
+            ),
+        );
+    } else {
+        parser.report(
+            ParseReason::ExpectedForm,
+            ExpectedForm::InterfaceApplication,
+        );
+    }
+    let _ = parser.expect(&TokenKind::LeftBrace, ExpectedForm::LeftBrace);
+    let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
+    for word in ["provider", "effect", "interpret", "handlers"] {
+        parser.start(NodeKind::ResourceField);
+        if word == "effect" {
+            let _ = parser.expect(&TokenKind::Effect, ExpectedForm::Identifier);
+        } else {
+            resource_field_word(parser, word);
+        }
+        match word {
+            "provider" => {
+                let _ = interface_application(parser);
+            }
+            "effect" | "interpret" => effect_instance(parser),
+            "handlers" => resource_handlers(parser),
+            _ => unreachable!(),
+        }
+        parser.finish();
+        if word == "handlers" && parser.at(&TokenKind::RightBrace) {
+            break;
+        }
+        if !parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd) {
+            break;
+        }
+    }
+    let _ = parser.expect(&TokenKind::RightBrace, ExpectedForm::RightBrace);
+    parser.finish();
+    parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd)
+}
+
+fn resource_definition(parser: &mut Parser<'_>) -> TypeParametersOutcome {
+    parser.start(NodeKind::ResourceDefinition);
+    if parser.at(&TokenKind::Pub) {
+        let _ = parser.bump();
+    }
+    let _ = parser.expect(&TokenKind::Resource, ExpectedForm::Identifier);
+    expect_upper_identifier(parser);
+    if !parser.at(&TokenKind::Less) {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Type);
+    } else {
+        let _ = type_parameters(parser, TypeParameterOwnerBoundary::Effect);
+    }
+    let _ = parser.expect(&TokenKind::LeftBrace, ExpectedForm::LeftBrace);
+    let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
+    for word in [
+        "input",
+        "state",
+        "result",
+        "provider",
+        "effect",
+        "interpret",
+        "acquire",
+        "finish",
+        "handlers",
+    ] {
+        if word == "acquire"
+            && matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "family")
+            && !resource_family(parser)
+        {
+            break;
+        }
+        parser.start(NodeKind::ResourceField);
+        if word == "effect" {
+            let _ = parser.expect(&TokenKind::Effect, ExpectedForm::Identifier);
+        } else {
+            resource_field_word(parser, word);
+        }
+        match word {
+            "input" | "state" => type_expression(parser),
+            "result" => {
+                type_expression(parser);
+                resource_field_word(parser, "for");
+                if parser.at(&TokenKind::Less) {
+                    parser.start(NodeKind::TypeParameters);
+                    let _ = parser.bump();
+                    let _ = type_parameter(parser, TypeParameterOwnerBoundary::Effect);
+                    let _ = parser.expect(&TokenKind::Greater, ExpectedForm::Greater);
+                    parser.finish();
+                } else {
+                    parser.report(ParseReason::ExpectedForm, ExpectedForm::Type);
+                }
+            }
+            "provider" => {
+                let _ = interface_application(parser);
+            }
+            "effect" | "interpret" => effect_instance(parser),
+            "acquire" | "finish" => {
+                binder(parser);
+                let _ = parser.expect(&TokenKind::FatArrow, ExpectedForm::FatArrow);
+                expression(parser);
+            }
+            "handlers" => resource_handlers(parser),
+            _ => unreachable!(),
+        }
+        parser.finish();
+        if word == "handlers" && parser.at(&TokenKind::RightBrace) {
+            break;
+        }
+        if !parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd) {
+            break;
+        }
+    }
+    let _ = parser.expect(&TokenKind::RightBrace, ExpectedForm::RightBrace);
+    parser.finish();
+    TypeParametersOutcome::Complete
 }
 
 #[cfg(test)]

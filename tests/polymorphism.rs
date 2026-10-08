@@ -108,6 +108,8 @@ fn runtime_class(program: &ValidatedProgram, event: &TraceEvent) -> &'static str
         .expect("an entered Core node should exist")
         .kind
     {
+        PureExprKind::Value(ash::core::PureValue::String(_)) => "string",
+        PureExprKind::Value(ash::core::PureValue::Intrinsic(_)) => "intrinsic",
         PureExprKind::Value(ash::core::PureValue::Integer(_)) => "integer",
         PureExprKind::Value(ash::core::PureValue::Boolean(_)) => "boolean",
         PureExprKind::Value(ash::core::PureValue::Unit(_)) => "unit",
@@ -138,6 +140,12 @@ fn runtime_class(program: &ValidatedProgram, event: &TraceEvent) -> &'static str
 fn runtime_value_class(value: &Value) -> &'static str {
     match value {
         Value::ResourceHandle(_) => "resource-handle",
+        Value::NativeStateView(_) => "native-state-view",
+        Value::LayoutWitness(_) => "layout-witness",
+        Value::Reference { .. } => "reference",
+        Value::Bytes(_) => "bytes",
+        Value::String(_) => "string",
+        Value::Intrinsic(_) => "intrinsic",
         Value::Integer(_) => "integer",
         Value::Boolean(_) => "boolean",
         Value::Unit => "unit",
@@ -159,6 +167,7 @@ const fn runtime_failure_class(failure: RuntimeFailure) -> &'static str {
         RuntimeFailure::UnexpectedRecursiveBinding => "runtime.unexpected-recursive-binding",
         RuntimeFailure::EnvironmentCapacity => "runtime.environment-capacity",
         RuntimeFailure::InvalidControlState => "runtime.invalid-control-state",
+        RuntimeFailure::ForeignBinding => "runtime.foreign-binding",
         RuntimeFailure::HeapCapacity => "runtime.heap-capacity",
         RuntimeFailure::CapturedControlCapacity => "runtime.captured-control-capacity",
         RuntimeFailure::ResourceCapacity => "runtime.resource-capacity",
@@ -682,6 +691,7 @@ fn polymorphic_method_evidence_uses_only_the_existing_runtime_inventory() {
         RuntimeFailure::UnexpectedRecursiveBinding,
         RuntimeFailure::EnvironmentCapacity,
         RuntimeFailure::InvalidControlState,
+        RuntimeFailure::ForeignBinding,
         RuntimeFailure::HeapCapacity,
         RuntimeFailure::CapturedControlCapacity,
         RuntimeFailure::InvalidLocation,
@@ -718,51 +728,74 @@ fn dependent_only_global_binder_lowers_complete_abstract_evidence() {
 #[test]
 fn eligible_local_relay_generalizes_higher_kinded_parameters() {
     fn assert_no_scheme_below_function(ty: &ash::types::Type) {
-        let mut work = vec![(ty, false)];
-        while let Some((ty, below_function)) = work.pop() {
-            match ty {
-                ash::types::Type::Forall(_, body) => {
-                    assert!(
-                        !below_function,
-                        "a generalized scheme must not occur below a term-function arrow"
-                    );
-                    work.push((body, below_function));
+        enum Payload<'a> {
+            Type(&'a ash::types::Type),
+            Argument(&'a ash::types::KindedArgument),
+            Row(&'a ash::types::EffectRow),
+        }
+        let mut work = vec![(Payload::Type(ty), false)];
+        while let Some((payload, below_function)) = work.pop() {
+            match payload {
+                Payload::Argument(ash::types::KindedArgument::TypeArg(ty)) => {
+                    work.push((Payload::Type(ty), below_function))
                 }
-                ash::types::Type::Function(domain, codomain) => {
-                    work.push((codomain, true));
-                    work.push((domain, true));
+                Payload::Argument(ash::types::KindedArgument::RowArg(row)) => {
+                    work.push((Payload::Row(row), below_function))
                 }
-                ash::types::Type::EffectfulFunction(domain, codomain) => {
-                    work.push((codomain.value(), true));
-                    work.push((domain, true));
-                    for member in codomain.effects().known().iter().chain(
-                        codomain
-                            .effects()
-                            .tail()
-                            .into_iter()
-                            .flat_map(|tail| tail.lacks().iter()),
-                    ) {
+                Payload::Row(row) => {
+                    for member in row
+                        .known()
+                        .iter()
+                        .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
+                    {
                         work.extend(
                             member
                                 .arguments()
                                 .iter()
-                                .map(|argument| (argument, below_function)),
+                                .map(|argument| (Payload::Argument(argument), below_function)),
                         );
                     }
                 }
-                ash::types::Type::Application(function, argument) => {
-                    work.push((argument, below_function));
-                    work.push((function, below_function));
+                Payload::Type(ash::types::Type::Forall(_, body)) => {
+                    assert!(
+                        !below_function,
+                        "a generalized scheme must not occur below a term-function arrow"
+                    );
+                    work.push((Payload::Type(body), below_function));
                 }
-                ash::types::Type::Tuple(elements) => {
-                    work.extend(elements.iter().map(|element| (element, below_function)));
+                Payload::Type(ash::types::Type::Function(domain, codomain)) => {
+                    work.push((Payload::Type(codomain), true));
+                    work.push((Payload::Type(domain), true));
                 }
-                ash::types::Type::Int
-                | ash::types::Type::Bool
-                | ash::types::Type::Unit
-                | ash::types::Type::Nominal(_)
-                | ash::types::Type::Variable(_)
-                | ash::types::Type::Inference(_) => {}
+                Payload::Type(ash::types::Type::EffectfulFunction(domain, codomain)) => {
+                    work.push((Payload::Type(codomain.value()), true));
+                    work.push((Payload::Type(domain), true));
+                    work.push((Payload::Row(codomain.effects()), below_function));
+                }
+                Payload::Type(ash::types::Type::ResourceApply(_, arguments)) => work.extend(
+                    arguments
+                        .iter()
+                        .map(|argument| (Payload::Argument(argument), below_function)),
+                ),
+                Payload::Type(ash::types::Type::Application(function, argument)) => {
+                    work.push((Payload::Type(argument), below_function));
+                    work.push((Payload::Type(function), below_function));
+                }
+                Payload::Type(ash::types::Type::Tuple(elements)) => work.extend(
+                    elements
+                        .iter()
+                        .map(|element| (Payload::Type(element), below_function)),
+                ),
+                Payload::Type(
+                    ash::types::Type::Bytes
+                    | ash::types::Type::String
+                    | ash::types::Type::Int
+                    | ash::types::Type::Bool
+                    | ash::types::Type::Unit
+                    | ash::types::Type::Nominal(_)
+                    | ash::types::Type::Variable(_)
+                    | ash::types::Type::Inference(_),
+                ) => {}
             }
         }
     }

@@ -11,11 +11,12 @@ use super::{
     validate::{ValidationError, validate_effect_family, validate_effect_modules_family},
 };
 use crate::{
-    resolved::{ResolvedRegistry, ResumeId},
+    interface::MethodId,
+    resolved::{ResolvedRegistry, ResourceDefinitionId, ResumeId},
     source::{Origin, discard_origin_iteratively},
     types::{
         EffectInstance, EffectRow, OperationId, Type, TypeWorkBudget, clone_effect_row_with_budget,
-        clone_type_with_budget, discard_type_iteratively,
+        discard_type_iteratively,
     },
 };
 
@@ -326,11 +327,117 @@ impl ResourceScopeNode {
     }
 }
 
+/// A controlled unary state borrow. Retained identities and arguments carry
+/// no admission or lineage authority; independent descriptor validation is
+/// required before execution.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderStateAccessNode {
+    method: MethodId,
+    definition: ResourceDefinitionId,
+    arguments: Box<[crate::types::KindedArgument]>,
+    operand: NodeId,
+}
+
+impl ProviderStateAccessNode {
+    /// Explicit adapter for Type-only test fixtures.
+    #[cfg(test)]
+    pub(crate) fn new(
+        method: MethodId,
+        definition: ResourceDefinitionId,
+        arguments: Box<[Type]>,
+        operand: NodeId,
+    ) -> Self {
+        Self::new_kinded(
+            method,
+            definition,
+            arguments
+                .into_vec()
+                .into_iter()
+                .map(crate::types::KindedArgument::TypeArg)
+                .collect(),
+            operand,
+        )
+    }
+
+    pub(crate) fn new_kinded(
+        method: MethodId,
+        definition: ResourceDefinitionId,
+        arguments: Box<[crate::types::KindedArgument]>,
+        operand: NodeId,
+    ) -> Self {
+        Self {
+            method,
+            definition,
+            arguments,
+            operand,
+        }
+    }
+
+    fn into_parts(
+        mut self,
+    ) -> (
+        MethodId,
+        ResourceDefinitionId,
+        Box<[crate::types::KindedArgument]>,
+        NodeId,
+    ) {
+        (
+            self.method,
+            self.definition,
+            std::mem::take(&mut self.arguments),
+            self.operand,
+        )
+    }
+
+    fn admit_arguments(
+        self,
+        builder: &mut CoreBuilder<EffectOperationFamily>,
+    ) -> Result<Self, super::BuildError> {
+        let (method, definition, arguments, operand) = self.into_parts();
+        let arguments = builder.admit_provider_state_access_arguments(arguments)?;
+        Ok(Self::new_kinded(method, definition, arguments, operand))
+    }
+
+    /// Returns the canonical sealed method identity.
+    #[must_use]
+    pub const fn method(&self) -> MethodId {
+        self.method
+    }
+
+    /// Returns the accessed resource definition.
+    #[must_use]
+    pub const fn definition(&self) -> ResourceDefinitionId {
+        self.definition
+    }
+
+    /// Returns resource arguments in defining parameter order.
+    #[must_use]
+    pub const fn arguments(&self) -> &[crate::types::KindedArgument] {
+        &self.arguments
+    }
+
+    /// Returns the client-access operand evaluated by this borrow.
+    #[must_use]
+    pub const fn operand(&self) -> NodeId {
+        self.operand
+    }
+}
+
+impl Drop for ProviderStateAccessNode {
+    fn drop(&mut self) {
+        for argument in std::mem::take(&mut self.arguments).into_vec() {
+            crate::types::discard_kinded_argument_iteratively(argument);
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EffectOperation {
     Cleanup(CleanupScopeNode),
     Registration(RegistrationScopeNode),
     Resource(Box<ResourceScopeNode>),
+    ProviderScope(Box<super::provider::ProviderScopeNode>),
+    ProviderStateAccess(ProviderStateAccessNode),
     Request(RequestNode),
     Handler(HandlerNode),
     Resume(ResumeNode),
@@ -391,12 +498,34 @@ impl CoreOperationFamily for EffectOperationFamily {
         if let EffectExprKind::Operation(EffectOperation::Resource(resource)) = kind {
             visit(&resource.handle);
         }
-        let EffectExprKind::Operation(EffectOperation::Handler(handler)) = kind else {
-            return;
+        let handler = match kind {
+            EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
+                for binder in [
+                    &scope.acquire.parameter,
+                    &scope.finish.parameter,
+                    &scope.handler_state,
+                    &scope.handle,
+                ] {
+                    visit(binder);
+                }
+                &scope.handler
+            }
+            EffectExprKind::Operation(EffectOperation::Handler(handler)) => handler,
+            _ => return,
         };
         for clause in &handler.clauses {
             for binder in clause.pattern().binder_iter() {
                 visit(binder);
+            }
+        }
+        if let EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) = kind {
+            for attached in &scope.attached {
+                visit(&attached.state);
+                for clause in &attached.handler.clauses {
+                    for binder in clause.pattern().binder_iter() {
+                        visit(binder);
+                    }
+                }
             }
         }
     }
@@ -409,6 +538,40 @@ impl CoreOperationFamily for EffectOperationFamily {
             return;
         };
         let instance = match operation {
+            EffectOperation::ProviderStateAccess(access) => {
+                for argument in access.arguments() {
+                    visit(super::dialect::OperationTypeMetadata::Argument(argument));
+                }
+                None
+            }
+            EffectOperation::ProviderScope(scope) => {
+                for argument in scope.descriptor.arguments() {
+                    visit(super::dialect::OperationTypeMetadata::Argument(argument));
+                }
+                for argument in scope.descriptor.native_effect().arguments() {
+                    visit(super::dialect::OperationTypeMetadata::Argument(argument));
+                }
+                for binder in [
+                    &scope.acquire.parameter,
+                    &scope.finish.parameter,
+                    &scope.handler_state,
+                    &scope.handle,
+                ] {
+                    visit(super::dialect::OperationTypeMetadata::Type(binder.ty()));
+                }
+                visit(super::dialect::OperationTypeMetadata::Type(
+                    scope.handler_output.value(),
+                ));
+                visit(super::dialect::OperationTypeMetadata::Row(
+                    scope.handler_output.effects(),
+                ));
+                for clause in &scope.handler.clauses {
+                    visit(super::dialect::OperationTypeMetadata::Pattern(
+                        clause.pattern(),
+                    ));
+                }
+                Some(&scope.handler.effect)
+            }
             EffectOperation::Resource(resource) => {
                 visit(super::dialect::OperationTypeMetadata::Type(
                     resource.handle.ty(),
@@ -419,12 +582,12 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectOperation::Handler(handler) => {
                 if let Some(registration) = &handler.hook_registration {
                     for argument in registration.target.arguments() {
-                        visit(super::dialect::OperationTypeMetadata::Type(argument));
+                        visit(super::dialect::OperationTypeMetadata::Argument(argument));
                     }
                 }
                 if let Some(root) = &handler.hook_root {
                     for argument in root.target.arguments() {
-                        visit(super::dialect::OperationTypeMetadata::Type(argument));
+                        visit(super::dialect::OperationTypeMetadata::Argument(argument));
                     }
                 }
                 for clause in &handler.clauses {
@@ -441,7 +604,22 @@ impl CoreOperationFamily for EffectOperationFamily {
         };
         if let Some(instance) = instance {
             for argument in instance.arguments() {
-                visit(super::dialect::OperationTypeMetadata::Type(argument));
+                visit(super::dialect::OperationTypeMetadata::Argument(argument));
+            }
+        }
+        if let EffectOperation::ProviderScope(scope) = operation {
+            for attached in &scope.attached {
+                visit(super::dialect::OperationTypeMetadata::Type(
+                    attached.state.ty(),
+                ));
+                for clause in &attached.handler.clauses {
+                    visit(super::dialect::OperationTypeMetadata::Pattern(
+                        clause.pattern(),
+                    ));
+                }
+                for argument in attached.handler.effect.arguments() {
+                    visit(super::dialect::OperationTypeMetadata::Argument(argument));
+                }
             }
         }
     }
@@ -456,6 +634,47 @@ impl CoreOperationFamily for EffectOperationFamily {
         charge: &mut dyn FnMut(usize) -> Result<(), super::BuildError>,
     ) -> Result<(), super::BuildError> {
         let instance = match kind {
+            EffectExprKind::Operation(EffectOperation::ProviderStateAccess(access)) => {
+                return rewrite_kinded_arguments(&mut access.arguments, rewrite, charge);
+            }
+            EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
+                charge(4)?;
+                for binder in [
+                    &mut scope.acquire.parameter,
+                    &mut scope.finish.parameter,
+                    &mut scope.handler_state,
+                    &mut scope.handle,
+                ] {
+                    binder.rewrite_type(&mut |ty| rewrite(ty))?;
+                }
+                let output = rewrite(scope.handler_output.value())?;
+                crate::types::replace_type_iteratively(&mut scope.handler_output.value, output);
+                rewrite_effect_row(&mut scope.handler_output.effects, rewrite, charge)?;
+                charge(scope.handler.clauses.len())?;
+                for clause in &mut scope.handler.clauses {
+                    clause
+                        .arm
+                        .pattern_mut()
+                        .rewrite_types(&mut |ty| rewrite(ty))?;
+                }
+                rewrite_effect_instance(&mut scope.handler.effect, rewrite, charge)?;
+                if !scope.attached.is_empty() {
+                    charge(scope.attached.len())?;
+                    for attached in &mut scope.attached {
+                        charge(1)?;
+                        attached.state.rewrite_type(&mut |ty| rewrite(ty))?;
+                        charge(attached.handler.clauses.len())?;
+                        for clause in &mut attached.handler.clauses {
+                            clause
+                                .arm
+                                .pattern_mut()
+                                .rewrite_types(&mut |ty| rewrite(ty))?;
+                        }
+                        rewrite_effect_instance(&mut attached.handler.effect, rewrite, charge)?;
+                    }
+                }
+                return Ok(());
+            }
             EffectExprKind::Operation(EffectOperation::Resource(resource)) => {
                 charge(1)?;
                 resource.handle.rewrite_type(&mut |ty| rewrite(ty))?;
@@ -496,20 +715,40 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(EffectOperation::Cleanup(_)) => 2,
             EffectExprKind::Operation(EffectOperation::Registration(_)) => 1,
             EffectExprKind::Operation(EffectOperation::Resource(_)) => 2,
+            EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => scope.child_count(),
             EffectExprKind::Operation(EffectOperation::Discard(_)) => 0,
-            EffectExprKind::Operation(EffectOperation::Request(_) | EffectOperation::Resume(_)) => {
-                1
-            }
+            EffectExprKind::Operation(
+                EffectOperation::Request(_)
+                | EffectOperation::Resume(_)
+                | EffectOperation::ProviderStateAccess(_),
+            ) => 1,
             EffectExprKind::Operation(EffectOperation::Handler(node)) => node.clauses.len() + 1,
         }
     }
     fn operation_extra_edge_count(kind: &Self::Kind) -> usize {
         match kind {
             EffectExprKind::Operation(EffectOperation::Handler(node)) => node.clauses.len(),
+            EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
+                if scope.attached.is_empty() {
+                    return scope.handler.clauses.len();
+                }
+                scope
+                    .handler
+                    .clauses
+                    .len()
+                    .checked_add(scope.attached.len())
+                    .and_then(|count| {
+                        scope.attached.iter().try_fold(count, |count, attached| {
+                            count.checked_add(attached.handler.clauses.len())
+                        })
+                    })
+                    .unwrap_or(usize::MAX)
+            }
             EffectExprKind::Pure(_)
             | EffectExprKind::Operation(EffectOperation::Cleanup(_))
             | EffectExprKind::Operation(EffectOperation::Registration(_))
             | EffectExprKind::Operation(EffectOperation::Resource(_))
+            | EffectExprKind::Operation(EffectOperation::ProviderStateAccess(_))
             | EffectExprKind::Operation(EffectOperation::Discard(_))
             | EffectExprKind::Operation(EffectOperation::Request(_) | EffectOperation::Resume(_)) => {
                 0
@@ -527,6 +766,9 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(EffectOperation::Registration(scope)) => {
                 (index == 0).then_some(scope.body)
             }
+            EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
+                scope.child_at(index)
+            }
             EffectExprKind::Operation(EffectOperation::Resource(resource)) => match index {
                 0 => Some(resource.initializer),
                 1 => Some(resource.body),
@@ -535,6 +777,9 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(EffectOperation::Discard(_)) => None,
             EffectExprKind::Operation(EffectOperation::Request(node)) => {
                 (index == 0).then_some(node.operand)
+            }
+            EffectExprKind::Operation(EffectOperation::ProviderStateAccess(access)) => {
+                (index == 0).then_some(access.operand())
             }
             EffectExprKind::Operation(EffectOperation::Resume(node)) => {
                 (index == 0).then_some(node.value)
@@ -555,11 +800,13 @@ impl CoreOperationFamily for EffectOperationFamily {
                 EffectOperation::Registration(_) | EffectOperation::Cleanup(_),
             ) => {}
             EffectExprKind::Operation(EffectOperation::Resource(resource)) => drop(resource),
+            EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => drop(scope),
+            EffectExprKind::Operation(EffectOperation::ProviderStateAccess(access)) => drop(access),
             EffectExprKind::Operation(EffectOperation::Request(mut node)) => {
                 let placeholder = EffectInstance::new(node.effect.effect(), Box::new([]));
                 let (_, arguments) = std::mem::replace(&mut node.effect, placeholder).into_parts();
                 for argument in arguments {
-                    discard_type_iteratively(argument);
+                    crate::types::discard_kinded_argument_iteratively(argument);
                 }
             }
             EffectExprKind::Operation(EffectOperation::Resume(_) | EffectOperation::Discard(_)) => {
@@ -568,7 +815,7 @@ impl CoreOperationFamily for EffectOperationFamily {
                 let placeholder = EffectInstance::new(node.effect.effect(), Box::new([]));
                 let (_, arguments) = std::mem::replace(&mut node.effect, placeholder).into_parts();
                 for argument in arguments {
-                    discard_type_iteratively(argument);
+                    crate::types::discard_kinded_argument_iteratively(argument);
                 }
                 drop(std::mem::take(&mut node.clauses));
             }
@@ -582,6 +829,115 @@ pub type UnvalidatedEffectProgram = UnvalidatedCoreProgram<EffectOperationFamily
 pub type ValidatedEffectProgram = ValidatedCoreProgram<EffectOperationFamily>;
 
 impl CoreBuilder<EffectOperationFamily> {
+    /// Replaces only a copied computation row with an equation realization claim.
+    /// Final provider admission independently reconstructs and authenticates it.
+    pub(crate) fn set_provider_copy_node_row(
+        &mut self,
+        node: NodeId,
+        effects: EffectRow,
+    ) -> Result<(), super::BuildError> {
+        self.type_work
+            .charge(1)
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+        // The ordinary provenance accessor checks both arena and index.
+        self.compiler_node_kind(node)?;
+        let index = node.index()?;
+        crate::types::charge_effect_row_cells(&effects, &mut self.type_work)
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+        // EffectRow's disposal walks nested Type/row payloads iteratively.
+        let displaced = std::mem::replace(&mut self.nodes[index].effects, effects);
+        drop(displaced);
+        Ok(())
+    }
+
+    /// Reads the actual copied entry row without granting scope authority.
+    pub(crate) fn provider_scope_entry_row(
+        &self,
+        entry: NodeId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<EffectRow, super::BuildError> {
+        work.charge(1)
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+        let (arena, nodes, _) = self.provider_projection_parts()?;
+        if entry.arena() != arena {
+            return Err(super::BuildError::InvalidNodeId);
+        }
+        let node = nodes
+            .get(entry.index()?)
+            .ok_or(super::BuildError::InvalidNodeId)?;
+        clone_effect_row_with_budget(&node.effects, work)
+            .map_err(|()| super::BuildError::TypeWorkExceeded)
+    }
+
+    pub(crate) fn provider_state_access(
+        &mut self,
+        access: ProviderStateAccessNode,
+        ty: Type,
+        effects: EffectRow,
+        origin: Origin,
+    ) -> Result<NodeId, super::BuildError> {
+        let access = match access.admit_arguments(self) {
+            Ok(access) => access,
+            Err(error) => {
+                discard_type_iteratively(ty);
+                drop(effects);
+                discard_origin_iteratively(origin);
+                return Err(error);
+            }
+        };
+        self.push_operation(
+            ty,
+            effects,
+            origin,
+            EffectOperation::ProviderStateAccess(access),
+        )
+    }
+
+    pub(crate) fn provider_scope(
+        &mut self,
+        mut scope: Box<super::provider::ProviderScopeNode>,
+        ty: Type,
+        effects: EffectRow,
+        origin: Origin,
+    ) -> Result<NodeId, super::BuildError> {
+        let ty = crate::types::IterativeTypeOwner::new(ty);
+        let result = (|| {
+            self.charge_effect_metadata(
+                scope
+                    .handler
+                    .clauses
+                    .len()
+                    .checked_add(scope.forwardings.len())
+                    .and_then(|n| n.checked_add(1))
+                    .ok_or(super::BuildError::TypeWorkExceeded)?,
+            )?;
+            let mut admitted = Vec::new();
+            admitted
+                .try_reserve_exact(scope.handler.clauses.len())
+                .map_err(|_| super::BuildError::TypeWorkExceeded)?;
+            for clause in std::mem::take(&mut scope.handler.clauses).into_vec() {
+                let (operation, resume, arm) = clause.into_parts();
+                admitted.push(EffectClause::new(
+                    operation,
+                    resume,
+                    self.admit_effect_clause_arm(arm)?,
+                ));
+            }
+            scope.handler.clauses = admitted.into_boxed_slice();
+            Ok(())
+        })();
+        if let Err(error) = result {
+            discard_origin_iteratively(origin);
+            return Err(error);
+        }
+        self.push_operation(
+            ty.into_inner(),
+            effects,
+            origin,
+            EffectOperation::ProviderScope(scope),
+        )
+    }
+
     pub(crate) fn resource_scope(
         &mut self,
         resource: Box<ResourceScopeNode>,
@@ -605,6 +961,162 @@ impl CoreBuilder<EffectOperationFamily> {
         self.replay_effect_rows_in_range(range, output, handler, owner, false)
     }
 
+    fn replay_provider_group_rows(
+        &mut self,
+        index: usize,
+    ) -> Result<(EffectRow, EffectRow), super::BuildError> {
+        let EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) =
+            &self.nodes[index].kind
+        else {
+            return Err(super::BuildError::InvalidPayload);
+        };
+        if scope.attached.is_empty() {
+            return Err(super::BuildError::InvalidPayload);
+        }
+        let mut row = clone_effect_row_with_budget(
+            &self
+                .nodes
+                .get(scope.handler.body().index()?)
+                .ok_or(super::BuildError::InvalidNodeId)?
+                .effects,
+            &mut self.type_work,
+        )
+        .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+        self.type_work
+            .charge(scope.member_count())
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+        // Provided instances cover the common body only. They do not cover
+        // an outward request made by one of the group's clauses.
+        for member in 0..scope.member_count() {
+            let handler = scope
+                .handler_member(member)
+                .ok_or(super::BuildError::InvalidPayload)?;
+            if handler.body() != scope.handler.body() {
+                return Err(super::BuildError::InvalidPayload);
+            }
+            row = match row
+                .remove_exact_with_budget(handler.effect(), &mut self.type_work)
+                .map_err(|()| super::BuildError::TypeWorkExceeded)?
+            {
+                Ok(row) => row,
+                Err(crate::types::EffectRowError::Missing) => {
+                    clone_effect_row_with_budget(&row, &mut self.type_work)
+                        .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                }
+                Err(_) => return Err(super::BuildError::InvalidPayload),
+            };
+        }
+        self.type_work
+            .charge(scope.member_count())
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+        for member in 0..scope.member_count() {
+            let handler = scope
+                .handler_member(member)
+                .ok_or(super::BuildError::InvalidPayload)?;
+            let native = scope
+                .descriptor
+                .native_effect_member(member)
+                .ok_or(super::BuildError::InvalidPayload)?;
+            self.type_work
+                .charge(handler.clauses().len())
+                .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+            for clause in handler.clauses() {
+                let outward = super::provider::interpret_native_phase_row(
+                    &self
+                        .nodes
+                        .get(clause.body().index()?)
+                        .ok_or(super::BuildError::InvalidNodeId)?
+                        .effects,
+                    native,
+                    &mut self.type_work,
+                )
+                .map_err(|error| {
+                    if error.reason() == super::ValidationReason::Resource {
+                        super::BuildError::TypeWorkExceeded
+                    } else {
+                        super::BuildError::InvalidPayload
+                    }
+                })?;
+                row = row
+                    .union_with_budget(&outward, &mut self.type_work)
+                    .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                    .map_err(|_| super::BuildError::InvalidPayload)?;
+            }
+        }
+        let output = clone_effect_row_with_budget(&row, &mut self.type_work)
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+        // Lifecycle execution retains only the primary native interpreter.
+        for root in [scope.acquire.body, scope.finish.body] {
+            let phase = super::provider::interpret_native_phase_row(
+                &self
+                    .nodes
+                    .get(root.index()?)
+                    .ok_or(super::BuildError::InvalidNodeId)?
+                    .effects,
+                scope.descriptor.native_effect(),
+                &mut self.type_work,
+            )
+            .map_err(|error| {
+                if error.reason() == super::ValidationReason::Resource {
+                    super::BuildError::TypeWorkExceeded
+                } else {
+                    super::BuildError::InvalidPayload
+                }
+            })?;
+            row = row
+                .union_with_budget(&phase, &mut self.type_work)
+                .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                .map_err(|_| super::BuildError::InvalidPayload)?;
+        }
+        let effects = self
+            .nodes
+            .get(scope.initializer.index()?)
+            .ok_or(super::BuildError::InvalidNodeId)?
+            .effects
+            .union_with_budget(&row, &mut self.type_work)
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?
+            .map_err(|_| super::BuildError::InvalidPayload)?;
+        Ok((effects, output))
+    }
+
+    fn retain_provider_group_resume_owners(
+        &mut self,
+        index: usize,
+        handlers: &mut std::collections::HashMap<(HandlerId, ResumeId), usize>,
+    ) -> Result<(), super::BuildError> {
+        let EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) =
+            &self.nodes[index].kind
+        else {
+            return Err(super::BuildError::InvalidPayload);
+        };
+        if scope.attached.is_empty() {
+            return Err(super::BuildError::InvalidPayload);
+        }
+        self.type_work
+            .charge(scope.member_count())
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+        for member in 0..scope.member_count() {
+            let handler = scope
+                .handler_member(member)
+                .ok_or(super::BuildError::InvalidPayload)?;
+            self.type_work
+                .charge(handler.clauses().len())
+                .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+            handlers
+                .try_reserve(handler.clauses().len())
+                .map_err(|_| super::BuildError::TypeWorkExceeded)?;
+            for clause in handler.clauses() {
+                if handlers
+                    .insert((handler.id(), clause.resume()), index)
+                    .is_some()
+                {
+                    return Err(super::BuildError::InvalidPayload);
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn replay_effect_rows_in_range(
         &mut self,
         range: std::ops::Range<usize>,
@@ -615,12 +1127,23 @@ impl CoreBuilder<EffectOperationFamily> {
     ) -> Result<(), super::BuildError> {
         enum Equation {
             Registration(NodeId),
+            StateAccess(NodeId),
             Cleanup(NodeId, NodeId),
             Pure,
             Replace,
             Request(NodeId, EffectInstance),
             Handler(EffectInstance, usize, bool),
             Resource(crate::resolved::ResourceAcquisition, NodeId, NodeId),
+            ProviderGroup,
+            ProviderScope(
+                NodeId,
+                NodeId,
+                NodeId,
+                NodeId,
+                EffectInstance,
+                EffectInstance,
+                usize,
+            ),
             Keep,
         }
 
@@ -635,6 +1158,9 @@ impl CoreBuilder<EffectOperationFamily> {
             for index in range {
                 self.charge_effect_metadata(1)?;
                 let equation = match &self.nodes[index].kind {
+                    EffectExprKind::Operation(EffectOperation::ProviderStateAccess(access)) => {
+                        Equation::StateAccess(access.operand())
+                    }
                     EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => {
                         Equation::Cleanup(scope.body, scope.action)
                     }
@@ -646,6 +1172,28 @@ impl CoreBuilder<EffectOperationFamily> {
                             resource.acquisition,
                             resource.initializer,
                             resource.body,
+                        )
+                    }
+                    EffectExprKind::Operation(EffectOperation::ProviderScope(scope))
+                        if !scope.attached.is_empty() =>
+                    {
+                        Equation::ProviderGroup
+                    }
+                    EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
+                        Equation::ProviderScope(
+                            scope.initializer,
+                            scope.acquire.body,
+                            scope.finish.body,
+                            scope.handler.body(),
+                            clone_effect_instance_with_budget(
+                                scope.descriptor.native_effect(),
+                                &mut self.type_work,
+                            )?,
+                            clone_effect_instance_with_budget(
+                                scope.handler.effect(),
+                                &mut self.type_work,
+                            )?,
+                            scope.handler.clauses.len(),
                         )
                     }
                     EffectExprKind::Pure(_) => Equation::Pure,
@@ -685,7 +1233,17 @@ impl CoreBuilder<EffectOperationFamily> {
                         )
                     }
                 };
+                let mut provider_output = None;
                 let effects = match equation {
+                    Equation::StateAccess(operand) => clone_effect_row_with_budget(
+                        &self
+                            .nodes
+                            .get(operand.index()?)
+                            .ok_or(super::BuildError::InvalidNodeId)?
+                            .effects,
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| super::BuildError::TypeWorkExceeded)?,
                     Equation::Cleanup(body, action) => {
                         let body = clone_effect_row_with_budget(
                             &self
@@ -737,6 +1295,101 @@ impl CoreBuilder<EffectOperationFamily> {
                             }
                             Err(_) => return Err(super::BuildError::InvalidPayload),
                         };
+                        self.nodes
+                            .get(initializer.index()?)
+                            .ok_or(super::BuildError::InvalidNodeId)?
+                            .effects
+                            .union_with_budget(&outward, &mut self.type_work)
+                            .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                            .map_err(|_| super::BuildError::InvalidPayload)?
+                    }
+                    Equation::ProviderGroup => {
+                        let (effects, output) = self.replay_provider_group_rows(index)?;
+                        provider_output = Some(output);
+                        effects
+                    }
+                    Equation::ProviderScope(
+                        initializer,
+                        acquire,
+                        finish,
+                        body,
+                        native,
+                        provided,
+                        clauses,
+                    ) => {
+                        let body = &self
+                            .nodes
+                            .get(body.index()?)
+                            .ok_or(super::BuildError::InvalidNodeId)?
+                            .effects;
+                        let mut handler = match body
+                            .remove_exact_with_budget(&provided, &mut self.type_work)
+                            .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                        {
+                            Ok(row) => row,
+                            Err(crate::types::EffectRowError::Missing) => {
+                                clone_effect_row_with_budget(body, &mut self.type_work)
+                                    .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                            }
+                            Err(_) => return Err(super::BuildError::InvalidPayload),
+                        };
+                        self.charge_effect_metadata(clauses)?;
+                        for ordinal in 0..clauses {
+                            let clause = EffectOperationFamily::child_at(
+                                &self.nodes[index].kind,
+                                ordinal + 4,
+                            )
+                            .ok_or(super::BuildError::InvalidPayload)?;
+                            handler = handler
+                                .union_with_budget(
+                                    &self
+                                        .nodes
+                                        .get(clause.index()?)
+                                        .ok_or(super::BuildError::InvalidNodeId)?
+                                        .effects,
+                                    &mut self.type_work,
+                                )
+                                .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                                .map_err(|_| super::BuildError::InvalidPayload)?;
+                        }
+                        provider_output = Some(
+                            clone_effect_row_with_budget(&handler, &mut self.type_work)
+                                .map_err(|()| super::BuildError::TypeWorkExceeded)?,
+                        );
+                        let mut outward = super::provider::interpret_native_phase_row(
+                            &handler,
+                            &native,
+                            &mut self.type_work,
+                        )
+                        .map_err(|error| {
+                            if error.reason() == super::ValidationReason::Resource {
+                                super::BuildError::TypeWorkExceeded
+                            } else {
+                                super::BuildError::InvalidPayload
+                            }
+                        })?;
+                        for root in [acquire, finish] {
+                            let phase = super::provider::interpret_native_phase_row(
+                                &self
+                                    .nodes
+                                    .get(root.index()?)
+                                    .ok_or(super::BuildError::InvalidNodeId)?
+                                    .effects,
+                                &native,
+                                &mut self.type_work,
+                            )
+                            .map_err(|error| {
+                                if error.reason() == super::ValidationReason::Resource {
+                                    super::BuildError::TypeWorkExceeded
+                                } else {
+                                    super::BuildError::InvalidPayload
+                                }
+                            })?;
+                            outward = outward
+                                .union_with_budget(&phase, &mut self.type_work)
+                                .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                                .map_err(|_| super::BuildError::InvalidPayload)?;
+                        }
                         self.nodes
                             .get(initializer.index()?)
                             .ok_or(super::BuildError::InvalidNodeId)?
@@ -805,13 +1458,29 @@ impl CoreBuilder<EffectOperationFamily> {
                     Equation::Keep => continue,
                 };
                 let previous = std::mem::replace(&mut self.nodes[index].effects, effects);
-                undo.push((index, previous));
+                let previous_output = if let Some(output) = provider_output {
+                    let EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) =
+                        &mut self.nodes[index].kind
+                    else {
+                        return Err(super::BuildError::InvalidPayload);
+                    };
+                    Some(std::mem::replace(&mut scope.handler_output.effects, output))
+                } else {
+                    None
+                };
+                undo.push((index, previous, previous_output));
             }
             Ok(())
         })();
         if let Err(error) = result {
-            while let Some((index, previous)) = undo.pop() {
+            while let Some((index, previous, output)) = undo.pop() {
                 drop(std::mem::replace(&mut self.nodes[index].effects, previous));
+                if let Some(output) = output
+                    && let EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) =
+                        &mut self.nodes[index].kind
+                {
+                    drop(std::mem::replace(&mut scope.handler_output.effects, output));
+                }
             }
             return Err(error);
         }
@@ -829,13 +1498,37 @@ impl CoreBuilder<EffectOperationFamily> {
         let mut handlers = std::collections::HashMap::new();
         for index in 0..count {
             self.charge_effect_metadata(1)?;
-            previous.push(
+            let output = match &self.nodes[index].kind {
+                EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => Some(
+                    clone_effect_row_with_budget(
+                        scope.handler_output.effects(),
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| super::BuildError::TypeWorkExceeded)?,
+                ),
+                _ => None,
+            };
+            previous.push((
                 clone_effect_row_with_budget(&self.nodes[index].effects, &mut self.type_work)
                     .map_err(|()| super::BuildError::TypeWorkExceeded)?,
-            );
-            if let EffectExprKind::Operation(EffectOperation::Handler(handler)) =
-                &self.nodes[index].kind
-            {
+                output,
+            ));
+            if matches!(
+                &self.nodes[index].kind,
+                EffectExprKind::Operation(EffectOperation::ProviderScope(scope))
+                    if !scope.attached.is_empty()
+            ) {
+                self.retain_provider_group_resume_owners(index, &mut handlers)?;
+                continue;
+            }
+            let handler = match &self.nodes[index].kind {
+                EffectExprKind::Operation(EffectOperation::Handler(handler)) => Some(handler),
+                EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
+                    Some(&scope.handler)
+                }
+                _ => None,
+            };
+            if let Some(handler) = handler {
                 self.type_work
                     .charge(handler.clauses.len())
                     .map_err(|()| super::BuildError::TypeWorkExceeded)?;
@@ -891,8 +1584,13 @@ impl CoreBuilder<EffectOperationFamily> {
                         .ok_or(super::BuildError::InvalidPayload)?;
                     // Operand work is intrinsic even while the owner output is
                     // bottom. At the fixed point it is included in that output.
-                    let output = self.nodes[owner]
-                        .effects
+                    let owner_output = match &self.nodes[owner].kind {
+                        EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
+                            scope.handler_output.effects()
+                        }
+                        _ => &self.nodes[owner].effects,
+                    };
+                    let output = owner_output
                         .union_with_budget(
                             &self.nodes[resume.value.index()?].effects,
                             &mut self.type_work,
@@ -921,8 +1619,14 @@ impl CoreBuilder<EffectOperationFamily> {
             }
         })();
         if result.is_err() {
-            for (node, row) in self.nodes.iter_mut().zip(previous) {
+            for (node, (row, output)) in self.nodes.iter_mut().zip(previous) {
                 node.effects = row;
+                if let Some(output) = output
+                    && let EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) =
+                        &mut node.kind
+                {
+                    scope.handler_output.effects = output;
+                }
             }
         }
         result
@@ -1148,8 +1852,15 @@ fn rewrite_effect_instance(
     staged
         .try_reserve(count)
         .map_err(|_| super::BuildError::TypeWorkExceeded)?;
+    let mut meter = |cells| charge(cells);
     for argument in instance.arguments() {
-        staged.push(crate::types::IterativeTypeOwner::new(rewrite(argument)?));
+        let argument = crate::types::map_kinded_argument_types_with_budget(
+            argument,
+            &mut |ty, _| rewrite(ty),
+            &mut meter,
+            &mut |_| super::BuildError::TypeWorkExceeded,
+        )?;
+        staged.push(crate::types::IterativeArgumentOwner::new(argument));
     }
     let mut arguments = Vec::new();
     arguments
@@ -1158,9 +1869,67 @@ fn rewrite_effect_instance(
     arguments.extend(
         staged
             .into_iter()
-            .map(crate::types::IterativeTypeOwner::into_inner),
+            .map(crate::types::IterativeArgumentOwner::into_inner),
     );
-    *instance = EffectInstance::new(instance.effect(), arguments.into_boxed_slice());
+    let replacement = EffectInstance::new_kinded(instance.effect(), arguments.into_boxed_slice());
+    drop(std::mem::replace(instance, replacement));
+    Ok(())
+}
+
+fn rewrite_effect_row(
+    row: &mut EffectRow,
+    rewrite: &mut dyn FnMut(&Type) -> Result<Type, super::BuildError>,
+    charge: &mut dyn FnMut(usize) -> Result<(), super::BuildError>,
+) -> Result<(), super::BuildError> {
+    let rewritten = crate::types::rebuild_effect_row_with_budget(
+        row.known(),
+        row.tail().map(|tail| tail.variable()),
+        row.tail().into_iter().flat_map(|tail| tail.lacks()),
+        |ty, _| rewrite(ty),
+        &mut |cells| charge(cells),
+    )?;
+    drop(std::mem::replace(row, rewritten));
+    Ok(())
+}
+
+fn rewrite_kinded_arguments(
+    arguments: &mut Box<[crate::types::KindedArgument]>,
+    rewrite: &mut dyn FnMut(&Type) -> Result<Type, super::BuildError>,
+    charge: &mut dyn FnMut(usize) -> Result<(), super::BuildError>,
+) -> Result<(), super::BuildError> {
+    let count = arguments.len();
+    charge(
+        count
+            .checked_mul(2)
+            .ok_or(super::BuildError::TypeWorkExceeded)?,
+    )?;
+    let mut staged = Vec::new();
+    staged
+        .try_reserve_exact(count)
+        .map_err(|_| super::BuildError::TypeWorkExceeded)?;
+    let mut meter = |cells| charge(cells);
+    for argument in arguments.iter() {
+        staged.push(crate::types::IterativeArgumentOwner::new(
+            crate::types::map_kinded_argument_types_with_budget(
+                argument,
+                &mut |ty, _| rewrite(ty),
+                &mut meter,
+                &mut |_| super::BuildError::TypeWorkExceeded,
+            )?,
+        ));
+    }
+    let mut retained = Vec::new();
+    retained
+        .try_reserve_exact(count)
+        .map_err(|_| super::BuildError::TypeWorkExceeded)?;
+    retained.extend(
+        staged
+            .into_iter()
+            .map(crate::types::IterativeArgumentOwner::into_inner),
+    );
+    for argument in std::mem::replace(arguments, retained.into_boxed_slice()).into_vec() {
+        crate::types::discard_kinded_argument_iteratively(argument);
+    }
     Ok(())
 }
 
@@ -1168,23 +1937,13 @@ pub(crate) fn clone_effect_instance_with_budget(
     instance: &EffectInstance,
     budget: &mut TypeWorkBudget,
 ) -> Result<EffectInstance, super::BuildError> {
+    // The shared clone charges the instance root; retain the existing
+    // per-argument envelope charge for nonempty Type-only instances.
     budget
-        .charge(instance.arguments().len())
+        .charge(instance.arguments().len().saturating_sub(1))
         .map_err(|()| super::BuildError::TypeWorkExceeded)?;
-    let mut arguments = Vec::new();
-    arguments
-        .try_reserve_exact(instance.arguments().len())
-        .map_err(|_| super::BuildError::TypeWorkExceeded)?;
-    for argument in instance.arguments() {
-        arguments.push(
-            clone_type_with_budget(argument, budget)
-                .map_err(|()| super::BuildError::TypeWorkExceeded)?,
-        );
-    }
-    Ok(EffectInstance::new(
-        instance.effect(),
-        arguments.into_boxed_slice(),
-    ))
+    crate::types::clone_effect_instance_with_budget(instance, budget)
+        .map_err(|()| super::BuildError::TypeWorkExceeded)
 }
 
 pub fn validate_effect(
@@ -1213,6 +1972,331 @@ mod tests {
         source::{ByteRange, SourceFile},
         types::{EffectId, TYPE_WORK_LIMIT},
     };
+
+    #[test]
+    fn provider_state_access_retains_one_operand_and_ordered_type_metadata() {
+        use crate::{
+            interface::{InterfaceId, MethodId},
+            resolved::ResourceDefinitionId,
+            types::TypeVariableId,
+        };
+        let method = MethodId::new(InterfaceId::new(ModuleId::new(7), 3), 2);
+        let definition = ResourceDefinitionId::new(ModuleId::new(9), 4);
+        let operand = NodeId::new(super::super::dialect::ArenaId::new(0), 5);
+        let parameter = TypeVariableId::new(1);
+        let arguments = [
+            Type::Variable(parameter),
+            Type::Tuple(Box::new([Type::Bool, Type::Variable(parameter)])),
+        ];
+        let mut kind = EffectExprKind::Operation(EffectOperation::ProviderStateAccess(
+            ProviderStateAccessNode::new(method, definition, Box::new(arguments.clone()), operand),
+        ));
+        assert_eq!(kind.child_count(), 1);
+        assert_eq!(kind.child_at(0), Some(operand));
+        assert_eq!(kind.child_at(1), None);
+        assert_eq!(kind.child_at(usize::MAX), None);
+        assert_eq!(EffectOperationFamily::operation_extra_edge_count(&kind), 0);
+        let mut metadata = Vec::new();
+        EffectOperationFamily::visit_operation_type_metadata(&kind, &mut |item| match item {
+            super::super::dialect::OperationTypeMetadata::Argument(argument) => {
+                metadata.push(argument.clone())
+            }
+            super::super::dialect::OperationTypeMetadata::Pattern(_)
+            | super::super::dialect::OperationTypeMetadata::Type(_)
+            | super::super::dialect::OperationTypeMetadata::Row(_) => {
+                panic!("state descriptor has ordinary Type payloads")
+            }
+        });
+        assert_eq!(
+            metadata,
+            arguments.clone().map(crate::types::KindedArgument::TypeArg)
+        );
+        let EffectExprKind::Operation(EffectOperation::ProviderStateAccess(access)) = &kind else {
+            unreachable!()
+        };
+        assert_eq!(access.method(), method);
+        assert_eq!(access.definition(), definition);
+        assert_eq!(
+            access.arguments(),
+            arguments.clone().map(crate::types::KindedArgument::TypeArg)
+        );
+        assert_eq!(access.operand(), operand);
+        let replacements = std::collections::HashMap::from([(parameter, Type::Int)]);
+        let work = std::cell::RefCell::new(TypeWorkBudget::unbounded());
+        EffectOperationFamily::rewrite_operation_type_metadata(
+            &mut kind,
+            &mut |ty| {
+                crate::types::substitute_type_variables_with(
+                    ty,
+                    &replacements,
+                    |cells| work.borrow_mut().charge(cells),
+                    || (),
+                )
+                .map_err(|()| super::super::BuildError::TypeWorkExceeded)
+            },
+            &mut |cells| {
+                work.borrow_mut()
+                    .charge(cells)
+                    .map_err(|()| super::super::BuildError::TypeWorkExceeded)
+            },
+        )
+        .unwrap();
+        let EffectExprKind::Operation(EffectOperation::ProviderStateAccess(access)) = &kind else {
+            unreachable!()
+        };
+        assert_eq!(
+            access.arguments(),
+            [Type::Int, Type::Tuple(Box::new([Type::Bool, Type::Int]))]
+                .map(crate::types::KindedArgument::TypeArg)
+        );
+        assert_eq!(access.method(), method);
+        assert_eq!(access.definition(), definition);
+        assert_eq!(access.operand(), operand);
+    }
+
+    #[test]
+    fn provider_state_access_argument_rewrite_is_atomic_bounded_and_drop_safe() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                use crate::{
+                    interface::{InterfaceId, MethodId},
+                    resolved::ResourceDefinitionId,
+                };
+                const DEPTH: usize = 32_000;
+                let deep = || {
+                    (0..DEPTH).fold(Type::Unit, |ty, _| {
+                        Type::Application(Box::new(ty), Box::new(Type::Unit))
+                    })
+                };
+                let method = MethodId::new(InterfaceId::new(ModuleId::new(1), 0), 0);
+                let definition = ResourceDefinitionId::new(ModuleId::new(2), 0);
+                let operand = NodeId::new(super::super::dialect::ArenaId::new(0), 0);
+                let mut kind = EffectExprKind::Operation(EffectOperation::ProviderStateAccess(
+                    ProviderStateAccessNode::new(
+                        method,
+                        definition,
+                        Box::new([deep(), Type::Bool]),
+                        operand,
+                    ),
+                ));
+                let rewrite = |kind: &mut EffectExprKind, limit| {
+                    let budget = std::cell::RefCell::new(TypeWorkBudget::with_limit(limit));
+                    let result = EffectOperationFamily::rewrite_operation_type_metadata(
+                        kind,
+                        &mut |ty| {
+                            crate::types::clone_type_with_budget(ty, &mut *budget.borrow_mut())
+                                .map_err(|()| super::super::BuildError::TypeWorkExceeded)
+                        },
+                        &mut |count| {
+                            budget
+                                .borrow_mut()
+                                .charge(count)
+                                .map_err(|()| super::super::BuildError::TypeWorkExceeded)
+                        },
+                    );
+                    (result, budget.into_inner().used())
+                };
+                let exact = 2 * DEPTH + 6;
+                assert_eq!(
+                    rewrite(&mut kind, exact - 1).0,
+                    Err(super::super::BuildError::TypeWorkExceeded)
+                );
+                let EffectExprKind::Operation(EffectOperation::ProviderStateAccess(access)) = &kind
+                else {
+                    unreachable!()
+                };
+                let original = crate::types::IterativeTypeOwner::new(deep());
+                assert!(matches!(&access.arguments()[0], crate::types::KindedArgument::TypeArg(ty) if ty == &*original));
+                assert_eq!(access.arguments()[1], crate::types::KindedArgument::TypeArg(Type::Bool));
+                for _ in 0..2 {
+                    assert_eq!(rewrite(&mut kind, exact), (Ok(()), exact));
+                }
+                let EffectExprKind::Operation(EffectOperation::ProviderStateAccess(access)) = &kind
+                else {
+                    unreachable!()
+                };
+                assert_eq!(access.method(), method);
+                assert_eq!(access.definition(), definition);
+                assert_eq!(access.operand(), operand);
+                EffectOperationFamily::discard_metadata(kind);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn provider_state_access_builder_tracks_argument_inference_and_operand_effects() {
+        use crate::{
+            interface::{InterfaceId, MethodId},
+            resolved::ResourceDefinitionId,
+            types::InferenceVariableId,
+        };
+        let source = SourceFile::new("state-access-substrate", "()").unwrap();
+        let origin = Origin::Source(source.span(ByteRange::new(0, 2).unwrap()).unwrap());
+        let mut builder =
+            EffectCoreBuilder::with_effect_registry(Arc::new(ResolvedRegistry::default()));
+        let value = builder.unit(Type::Unit, origin.clone()).unwrap();
+        let effect = EffectInstance::new(EffectId::new(ModuleId::new(0), 0), Box::new([]));
+        let row = EffectRow::singleton(effect.clone());
+        let operand = builder
+            .request(
+                effect.clone(),
+                OperationId::new(effect.effect(), 0),
+                value,
+                Type::Unit,
+                row.clone(),
+                origin.clone(),
+            )
+            .unwrap();
+        let root = builder
+            .provider_state_access(
+                ProviderStateAccessNode::new(
+                    MethodId::new(InterfaceId::new(ModuleId::new(1), 0), 0),
+                    ResourceDefinitionId::new(ModuleId::new(2), 0),
+                    Box::new([Type::Inference(InferenceVariableId::new(0)), Type::Bool]),
+                    operand,
+                ),
+                Type::Unit,
+                row.clone(),
+                origin,
+            )
+            .unwrap();
+        assert!(builder.requires_type_rewrite());
+        builder
+            .rewrite_types(|ty| {
+                Ok(if matches!(ty, Type::Inference(_)) {
+                    Type::Int
+                } else {
+                    ty.clone()
+                })
+            })
+            .unwrap();
+        assert!(!builder.requires_type_rewrite());
+        let start = root.index().unwrap();
+        builder
+            .recompute_effect_rows_in_range(
+                start..start + 1,
+                &EffectRow::empty(),
+                HandlerId::new(0),
+                ResumeId::new(0),
+            )
+            .unwrap();
+        let node = &builder.nodes[start];
+        assert_eq!(node.effects, row);
+        let EffectExprKind::Operation(EffectOperation::ProviderStateAccess(access)) = &node.kind
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            access.arguments(),
+            [Type::Int, Type::Bool].map(crate::types::KindedArgument::TypeArg)
+        );
+        assert_eq!(access.operand(), operand);
+    }
+
+    #[test]
+    fn provider_state_access_admission_has_exact_budget_and_disposes_rejected_payloads() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                use crate::{
+                    interface::{InterfaceId, MethodId},
+                    resolved::ResourceDefinitionId,
+                };
+                let source = SourceFile::new("state-access-admission", "()").unwrap();
+                let origin = Origin::Source(source.span(ByteRange::new(0, 2).unwrap()).unwrap());
+                let deep = |depth| {
+                    (0..depth).fold(Type::Unit, |ty, _| {
+                        Type::Application(Box::new(ty), Box::new(Type::Unit))
+                    })
+                };
+                let prepare = || {
+                    let mut builder = EffectCoreBuilder::with_effect_registry(Arc::new(
+                        ResolvedRegistry::default(),
+                    ));
+                    let operand = builder.unit(Type::Unit, origin.clone()).unwrap();
+                    (builder, operand)
+                };
+                let payload = |operand, second| {
+                    ProviderStateAccessNode::new(
+                        MethodId::new(InterfaceId::new(ModuleId::new(1), 0), 0),
+                        ResourceDefinitionId::new(ModuleId::new(2), 0),
+                        Box::new([deep(120), second]),
+                        operand,
+                    )
+                };
+                let (mut measured, operand) = prepare();
+                let prefix = measured.type_work.used();
+                measured
+                    .provider_state_access(
+                        payload(operand, Type::Bool),
+                        Type::Unit,
+                        EffectRow::empty(),
+                        origin.clone(),
+                    )
+                    .unwrap();
+                let cost = measured.type_work.used() - prefix;
+                let (mut short, operand) = prepare();
+                short.type_work = TypeWorkBudget::with_limit(prefix + cost - 1);
+                short.type_work.charge(prefix).unwrap();
+                assert_eq!(
+                    short.provider_state_access(
+                        payload(operand, Type::Bool),
+                        Type::Unit,
+                        EffectRow::empty(),
+                        origin.clone()
+                    ),
+                    Err(super::super::BuildError::TypeWorkExceeded)
+                );
+                assert_eq!(short.nodes.len(), 1);
+                for _ in 0..2 {
+                    let (mut retry, operand) = prepare();
+                    retry.type_work = TypeWorkBudget::with_limit(prefix + cost);
+                    retry.type_work.charge(prefix).unwrap();
+                    retry
+                        .provider_state_access(
+                            payload(operand, Type::Bool),
+                            Type::Unit,
+                            EffectRow::empty(),
+                            origin.clone(),
+                        )
+                        .unwrap();
+                    assert_eq!(retry.type_work.used(), prefix + cost);
+                }
+                let (mut rejected, operand) = prepare();
+                let too_deep = || {
+                    (0..32_000).fold(Type::Unit, |ty, _| {
+                        Type::Function(Box::new(Type::Unit), Box::new(ty))
+                    })
+                };
+                let rejected_payload = ProviderStateAccessNode::new(
+                    MethodId::new(InterfaceId::new(ModuleId::new(1), 0), 0),
+                    ResourceDefinitionId::new(ModuleId::new(2), 0),
+                    Box::new([
+                        Type::Inference(crate::types::InferenceVariableId::new(0)),
+                        deep(120),
+                        too_deep(),
+                    ]),
+                    operand,
+                );
+                assert_eq!(
+                    rejected.provider_state_access(
+                        rejected_payload,
+                        too_deep(),
+                        EffectRow::empty(),
+                        origin
+                    ),
+                    Err(super::super::BuildError::TypeDepthExceeded)
+                );
+                assert_eq!(rejected.nodes.len(), 1);
+                assert!(!rejected.requires_type_rewrite());
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
 
     #[test]
     fn discard_has_no_children_and_keeps_its_empty_row_during_recomputation() {
@@ -1463,9 +2547,12 @@ mod tests {
                     unreachable!()
                 };
                 let mut clone_work = TypeWorkBudget::unbounded();
-                drop(crate::types::IterativeTypeOwner::new(
-                    clone_type_with_budget(&handler.effect.arguments()[0], &mut clone_work)
-                        .unwrap(),
+                drop(crate::types::IterativeArgumentOwner::new(
+                    crate::types::clone_kinded_argument_with_budget(
+                        &handler.effect.arguments()[0],
+                        &mut clone_work,
+                    )
+                    .unwrap(),
                 ));
                 // One extra range slot, the hook node, two argument slots, and the
                 // complete first clone. The second argument has no work remaining.
@@ -1849,7 +2936,7 @@ mod rewrite_tests {
                     let result = EffectOperationFamily::rewrite_operation_type_metadata(
                         request,
                         &mut |ty| {
-                            clone_type_with_budget(ty, &mut *work.borrow_mut())
+                            crate::types::clone_type_with_budget(ty, &mut *work.borrow_mut())
                                 .map_err(|()| crate::core::BuildError::TypeWorkExceeded)
                         },
                         &mut |cells| {
@@ -1876,10 +2963,8 @@ mod rewrite_tests {
                 assert_eq!(request.operation(), OperationId::new(effect, 0));
                 assert_eq!(request.operand(), node);
                 let expected = IterativeTypeOwner::new(deep());
-                assert!(crate::types::same_type(
-                    &expected,
-                    &request.effect().arguments()[0]
-                ));
+                assert!(matches!(&request.effect().arguments()[0], crate::types::KindedArgument::TypeArg(actual)
+                    if crate::types::same_type(&expected, actual)));
                 drop(request);
             })
             .unwrap()

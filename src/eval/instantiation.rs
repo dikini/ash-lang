@@ -146,7 +146,18 @@ impl Instantiation {
 
     pub(super) fn activation(effect: &EffectInstance) -> Option<ActivationKey> {
         match effect.arguments() {
-            [Type::Inference(identity)] => Some(ActivationKey(identity.value())),
+            [crate::types::KindedArgument::TypeArg(Type::Inference(identity))] => {
+                Some(ActivationKey(identity.value()))
+            }
+            _ => None,
+        }
+    }
+
+    pub(super) fn activation_at(effect: &EffectInstance, position: usize) -> Option<ActivationKey> {
+        match effect.arguments().get(position) {
+            Some(crate::types::KindedArgument::TypeArg(Type::Inference(identity))) => {
+                Some(ActivationKey(identity.value()))
+            }
             _ => None,
         }
     }
@@ -259,6 +270,30 @@ impl Instantiation {
         Ok(Self(Some(Arc::new(bindings))))
     }
 
+    pub(super) fn argument(
+        &self,
+        argument: &crate::types::KindedArgument,
+        work: &mut TypeWorkBudget,
+    ) -> Result<crate::types::IterativeArgumentOwner, RuntimeFailure> {
+        work.charge(1).map_err(|()| {
+            metadata_failure(
+                Some(RuntimePhase::Access),
+                ResourceFailureCause::WorkBudgetExhausted,
+                Some(1),
+                Some(work.remaining()),
+            )
+        })?;
+        let argument = match argument {
+            crate::types::KindedArgument::TypeArg(ty) => {
+                crate::types::KindedArgument::TypeArg(self.ty(ty, work)?)
+            }
+            crate::types::KindedArgument::RowArg(row) => {
+                crate::types::KindedArgument::RowArg(self.row(row, work)?)
+            }
+        };
+        Ok(crate::types::IterativeArgumentOwner::new(argument))
+    }
+
     pub(super) fn ty(&self, ty: &Type, work: &mut TypeWorkBudget) -> Result<Type, RuntimeFailure> {
         self.ty_in_phase(ty, work, None)
     }
@@ -353,9 +388,15 @@ impl Instantiation {
                 )
             })?;
         for argument in effect.arguments() {
-            arguments.push(IterativeTypeOwner::new(
-                self.ty_in_phase(argument, work, phase)?,
-            ));
+            let substituted = match argument {
+                crate::types::KindedArgument::TypeArg(ty) => {
+                    crate::types::KindedArgument::TypeArg(self.ty_in_phase(ty, work, phase)?)
+                }
+                crate::types::KindedArgument::RowArg(row) => {
+                    crate::types::KindedArgument::RowArg(self.row(row, work)?)
+                }
+            };
+            arguments.push(crate::types::IterativeArgumentOwner::new(substituted));
         }
         // Admit the final owner before moving individually guarded types.
         let mut retained = Vec::new();
@@ -367,8 +408,12 @@ impl Instantiation {
                 None,
             )
         })?;
-        retained.extend(arguments.into_iter().map(IterativeTypeOwner::into_inner));
-        Ok(EffectInstance::new(
+        retained.extend(
+            arguments
+                .into_iter()
+                .map(crate::types::IterativeArgumentOwner::into_inner),
+        );
+        Ok(EffectInstance::new_kinded(
             effect.effect(),
             retained.into_boxed_slice(),
         ))
@@ -723,7 +768,12 @@ mod tests {
                     } else {
                         computation.effects().known()
                     };
-                    assert!(instances[0].arguments().iter().all(|ty| *ty == Type::Bool));
+                    assert!(
+                        instances[0]
+                            .arguments()
+                            .iter()
+                            .all(|ty| *ty == crate::types::KindedArgument::TypeArg(Type::Bool))
+                    );
                 }
             }
         }

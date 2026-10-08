@@ -100,6 +100,14 @@ pub enum NodeKind {
     ResumeExpression,
     /// One builtin cell acquisition with an identity binder and scoped body.
     ResourceExpression,
+    /// Experimental module-owned resource assembly.
+    ResourceDefinition,
+    /// Experimental assembly field or clause block.
+    ResourceField,
+    /// One optional declaration-level resource family template.
+    ResourceFamily,
+    /// Source-defined resource family instance.
+    ProviderResourceExpression,
     /// An empty-chain hook scope with an exact effect target and block body.
     HookExpression,
     /// A registration with an exact target, primary transformer, and block body.
@@ -391,7 +399,7 @@ impl ParseDiagnostic {
 }
 
 /// A token description that separates grammar categories from Ash spellings.
-/// No identifier or integer payload is copied into this diagnostic fact.
+/// No identifier or literal payload is copied into this diagnostic fact.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FoundToken {
     /// An ordinary identifier.
@@ -400,6 +408,8 @@ pub enum FoundToken {
     UpperIdentifier,
     /// An integer literal.
     Integer,
+    /// An experimental string literal; the payload remains in the token.
+    StringLiteral,
     /// Fixed punctuation, keyword or builtin type spelling.
     Spelling(&'static str),
     /// A logical line boundary.
@@ -415,6 +425,7 @@ impl FoundToken {
             Self::Identifier => "identifier",
             Self::UpperIdentifier => "uppercase-identifier",
             Self::Integer => "integer",
+            Self::StringLiteral => "string-literal",
             Self::Spelling(spelling) => spelling,
             Self::LineEnd => "line-end",
             Self::EndOfFile => "end-of-file",
@@ -886,6 +897,7 @@ fn retained_token(kind: &TokenKind) -> FoundToken {
         TokenKind::UpperIdentifier(_) => FoundToken::UpperIdentifier,
         TokenKind::Wildcard => FoundToken::Spelling("_"),
         TokenKind::Integer(_) => FoundToken::Integer,
+        TokenKind::StringLiteral(_) => FoundToken::StringLiteral,
         TokenKind::True => FoundToken::Spelling("true"),
         TokenKind::False => FoundToken::Spelling("false"),
         TokenKind::Fn => FoundToken::Spelling("fn"),
@@ -913,6 +925,8 @@ fn retained_token(kind: &TokenKind) -> FoundToken {
         TokenKind::Impl => FoundToken::Spelling("impl"),
         TokenKind::Where => FoundToken::Spelling("where"),
         TokenKind::IntType => FoundToken::Spelling("Int"),
+        TokenKind::BytesType => FoundToken::Spelling("Bytes"),
+        TokenKind::StringType => FoundToken::Spelling("String"),
         TokenKind::BoolType => FoundToken::Spelling("Bool"),
         TokenKind::UnitType => FoundToken::Spelling("Unit"),
         TokenKind::LeftParen => FoundToken::Spelling("("),
@@ -944,6 +958,7 @@ fn token_name(kind: &TokenKind) -> &'static str {
         FoundToken::Identifier => "identifier",
         FoundToken::UpperIdentifier => "uppercase identifier",
         FoundToken::Integer => "integer",
+        FoundToken::StringLiteral => "string literal",
         FoundToken::Spelling(spelling) => spelling,
         FoundToken::LineEnd => "line end",
         FoundToken::EndOfFile => "end of input",

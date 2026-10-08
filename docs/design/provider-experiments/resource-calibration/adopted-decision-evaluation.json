@@ -1,0 +1,4844 @@
+{
+  "decision_support": {
+    "accepted_deficit_fraction": 0.1,
+    "cases": [
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "flat-width1",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.0069049999999999945,
+            "observed_median": 0.0065049999999999995,
+            "predicted": 0.01,
+            "raw_predicted": 0.0009228497415656531,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 12700,
+            "observed_median": 12556,
+            "predicted": 12554.783917118255,
+            "raw_predicted": 12554.783917118255,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "flat-width2",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.00965499999999997,
+            "observed_median": 0.006484000000000156,
+            "predicted": 0.01,
+            "raw_predicted": 0.0014148433112613381,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 12648,
+            "observed_median": 12620,
+            "predicted": 12608.9010239102,
+            "raw_predicted": 12608.9010239102,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "flat-width4",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.007089999999999999,
+            "observed_median": 0.006997999999999997,
+            "predicted": 0.01,
+            "raw_predicted": 0.002398830450652708,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 12824,
+            "observed_median": 12680,
+            "predicted": 12717.135237494089,
+            "raw_predicted": 12717.135237494089,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "flat-width8",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.00869299999999984,
+            "observed_median": 0.0075150000000001604,
+            "predicted": 0.01,
+            "raw_predicted": 0.004366804729435449,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 12544,
+            "observed_median": 12496,
+            "predicted": 12933.603664661867,
+            "raw_predicted": 12933.603664661867,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "flat-width16",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.008527,
+            "observed_median": 0.007845000000000012,
+            "predicted": 0.01,
+            "raw_predicted": 0.00830275328700093,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 12700,
+            "observed_median": 12464,
+            "predicted": 13366.540518997423,
+            "raw_predicted": 13366.540518997423,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "flat-width32",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.013923999999999825,
+            "observed_median": 0.013509999999999911,
+            "predicted": 0.016174650402131893,
+            "raw_predicted": 0.016174650402131893,
+            "review_threshold": 0.05,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 12948,
+            "observed_median": 12888,
+            "predicted": 14232.414227668534,
+            "raw_predicted": 14232.414227668534,
+            "review_threshold": 24576,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "flat-width64",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.017777999999999988,
+            "observed_median": 0.013098000000000012,
+            "predicted": 0.031918444632393815,
+            "raw_predicted": 0.031918444632393815,
+            "review_threshold": 0.08,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 13416,
+            "observed_median": 13052,
+            "predicted": 15964.161645010758,
+            "raw_predicted": 15964.161645010758,
+            "review_threshold": 24576,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "flat-width128",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.02583000000000002,
+            "observed_median": 0.02503899999999981,
+            "predicted": 0.06340603309291766,
+            "raw_predicted": 0.06340603309291766,
+            "review_threshold": 0.14,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 14272,
+            "observed_median": 13888,
+            "predicted": 19427.656479695204,
+            "raw_predicted": 19427.656479695204,
+            "review_threshold": 32768,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "nested_type-depth1",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.008016999999999996,
+            "observed_median": 0.007070000000000021,
+            "predicted": 0.01,
+            "raw_predicted": 0.0024686510097482683,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 13348,
+            "observed_median": 12976,
+            "predicted": 12754.15324138397,
+            "raw_predicted": 12754.15324138397,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "nested_type-depth2",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.009009999999999962,
+            "observed_median": 0.00766800000000023,
+            "predicted": 0.01,
+            "raw_predicted": 0.0033196321778461236,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 13256,
+            "observed_median": 13092,
+            "predicted": 12884.748846676111,
+            "raw_predicted": 12884.748846676111,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "nested_type-depth4",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.008709999999999968,
+            "observed_median": 0.00850200000000001,
+            "predicted": 0.01,
+            "raw_predicted": 0.005522271245007362,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 13212,
+            "observed_median": 13044,
+            "predicted": 13231.625893312395,
+            "raw_predicted": 13231.625893312395,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "nested_type-depth8",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.009633000000000225,
+            "observed_median": 0.00948099999999985,
+            "predicted": 0.011930256303191953,
+            "raw_predicted": 0.011930256303191953,
+            "review_threshold": 0.04,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 13320,
+            "observed_median": 13244,
+            "predicted": 14268.123330792972,
+            "raw_predicted": 14268.123330792972,
+            "review_threshold": 24576,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "nested_type-depth12",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.010082000000000008,
+            "observed_median": 0.009078000000000003,
+            "predicted": 0.021008517259859357,
+            "raw_predicted": 0.021008517259859357,
+            "review_threshold": 0.06,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 13400,
+            "observed_median": 13300,
+            "predicted": 15761.611893884225,
+            "raw_predicted": 15761.611893884225,
+            "review_threshold": 24576,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "nested_type-depth16",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.011561000000000154,
+            "observed_median": 0.01009199999999999,
+            "predicted": 0.03275705411500958,
+            "raw_predicted": 0.03275705411500958,
+            "review_threshold": 0.08,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 13340,
+            "observed_median": 13228,
+            "predicted": 17712.091582586152,
+            "raw_predicted": 17712.091582586152,
+            "review_threshold": 28672,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "prerequisite-depth1",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.01150699999999999,
+            "observed_median": 0.008786000000000016,
+            "predicted": 0.01,
+            "raw_predicted": 0.002398830450652708,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 14908,
+            "observed_median": 14720,
+            "predicted": 12717.135237494089,
+            "raw_predicted": 12717.135237494089,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "prerequisite-depth2",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.007648999999999795,
+            "observed_median": 0.007426000000000155,
+            "predicted": 0.01,
+            "raw_predicted": 0.0029591973858989797,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 14752,
+            "observed_median": 14708,
+            "predicted": 12803.008893299238,
+            "raw_predicted": 12803.008893299238,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "prerequisite-depth4",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.011845999999999968,
+            "observed_median": 0.009224999999999983,
+            "predicted": 0.01,
+            "raw_predicted": 0.004330269621874286,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 14828,
+            "observed_median": 14532,
+            "predicted": 13017.599122935539,
+            "raw_predicted": 13017.599122935539,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "prerequisite-depth8",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.008175999999999739,
+            "observed_median": 0.008016000000000023,
+            "predicted": 0.01,
+            "raw_predicted": 0.008073767555755954,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 14604,
+            "observed_median": 14560,
+            "predicted": 13618.151254312143,
+            "raw_predicted": 13618.151254312143,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "prerequisite-depth12",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.0181349999999999,
+            "observed_median": 0.015915000000000012,
+            "predicted": 0.013152403438879034,
+            "raw_predicted": 0.013152403438879034,
+            "review_threshold": 0.04,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 15172,
+            "observed_median": 15168,
+            "predicted": 14447.198948494086,
+            "raw_predicted": 14447.198948494086,
+            "review_threshold": 24576,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "prerequisite-depth16",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.011304000000000203,
+            "observed_median": 0.01113799999999987,
+            "predicted": 0.019566177271243518,
+            "raw_predicted": 0.019566177271243518,
+            "review_threshold": 0.05,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 15120,
+            "observed_median": 14988,
+            "predicted": 15504.742205481367,
+            "raw_predicted": 15504.742205481367,
+            "review_threshold": 24576,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "reexport_width-width1-depth2",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.010594000000000048,
+            "observed_median": 0.008537000000000072,
+            "predicted": 0.01,
+            "raw_predicted": 0.0016065154796494775,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 14528,
+            "observed_median": 14176,
+            "predicted": 12619.141787069075,
+            "raw_predicted": 12619.141787069075,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "reexport_width-width2-depth2",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.00695800000000002,
+            "observed_median": 0.006569000000000047,
+            "predicted": 0.01,
+            "raw_predicted": 0.00250705649721326,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 14532,
+            "observed_median": 14460,
+            "predicted": 12713.09502797763,
+            "raw_predicted": 12713.09502797763,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "reexport_width-width4-depth2",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.012221999999999955,
+            "observed_median": 0.00877300000000003,
+            "predicted": 0.01,
+            "raw_predicted": 0.004308138532340824,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 14420,
+            "observed_median": 14300,
+            "predicted": 12901.00150979474,
+            "raw_predicted": 12901.00150979474,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "reexport_width-width8-depth2",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.008218999999999976,
+            "observed_median": 0.008073999999999915,
+            "predicted": 0.01,
+            "raw_predicted": 0.007910302602595953,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 13960,
+            "observed_median": 13932,
+            "predicted": 13276.814473428962,
+            "raw_predicted": 13276.814473428962,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "reexport_width-width16-depth2",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.013182000000000027,
+            "observed_median": 0.012381000000000031,
+            "predicted": 0.01511463074310621,
+            "raw_predicted": 0.01511463074310621,
+            "review_threshold": 0.05,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 14176,
+            "observed_median": 14128,
+            "predicted": 14028.440400697404,
+            "raw_predicted": 14028.440400697404,
+            "review_threshold": 24576,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "reexport_width-width32-depth2",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.01182900000000009,
+            "observed_median": 0.011301000000000228,
+            "predicted": 0.029523287024126727,
+            "raw_predicted": 0.029523287024126727,
+            "review_threshold": 0.07,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 14904,
+            "observed_median": 14688,
+            "predicted": 15531.692255234288,
+            "raw_predicted": 15531.692255234288,
+            "review_threshold": 24576,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "reexport_depth-width1-depth1",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.011073999999999917,
+            "observed_median": 0.007364000000000037,
+            "predicted": 0.01,
+            "raw_predicted": 0.0013925345872594674,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 14128,
+            "observed_median": 13944,
+            "predicted": 12600.06932586469,
+            "raw_predicted": 12600.06932586469,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "reexport_depth-width1-depth2",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.006558999999999537,
+            "observed_median": 0.006420000000000092,
+            "predicted": 0.01,
+            "raw_predicted": 0.0016065154796494775,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 14516,
+            "observed_median": 14076,
+            "predicted": 12619.141787069075,
+            "raw_predicted": 12619.141787069075,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "reexport_depth-width1-depth4",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.011079000000000061,
+            "observed_median": 0.009502999999999928,
+            "predicted": 0.01,
+            "raw_predicted": 0.002034477264429498,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 14336,
+            "observed_median": 13792,
+            "predicted": 12657.286709477843,
+            "raw_predicted": 12657.286709477843,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "reexport_depth-width1-depth8",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.00727800000000034,
+            "observed_median": 0.00711700000000004,
+            "predicted": 0.01,
+            "raw_predicted": 0.0028904008339895385,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 14548,
+            "observed_median": 14520,
+            "predicted": 12733.576554295378,
+            "raw_predicted": 12733.576554295378,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "reexport_depth-width1-depth12",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.013488000000000056,
+            "observed_median": 0.01100599999999996,
+            "predicted": 0.01,
+            "raw_predicted": 0.003746324403549579,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 14448,
+            "observed_median": 14336,
+            "predicted": 12809.866399112914,
+            "raw_predicted": 12809.866399112914,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "reexport_depth-width1-depth16",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.00829100000000027,
+            "observed_median": 0.008289999999999909,
+            "predicted": 0.01,
+            "raw_predicted": 0.004602247973109619,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 14492,
+            "observed_median": 13848,
+            "predicted": 12886.15624393045,
+            "raw_predicted": 12886.15624393045,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "string_payload-payload_bytes16",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.007806999999999897,
+            "observed_median": 0.007547000000000081,
+            "predicted": 0.01,
+            "raw_predicted": 0.0005225622686085437,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 12448,
+            "observed_median": 12272,
+            "predicted": 12508.840722271047,
+            "raw_predicted": 12508.840722271047,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "string_payload-payload_bytes1024",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.009194000000000035,
+            "observed_median": 0.00788600000000006,
+            "predicted": 0.01,
+            "raw_predicted": 0.0005225622686085437,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 12564,
+            "observed_median": 12552,
+            "predicted": 12508.840722271047,
+            "raw_predicted": 12508.840722271047,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "string_payload-payload_bytes65536",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.006604000000000054,
+            "observed_median": 0.0060869999999999536,
+            "predicted": 0.01,
+            "raw_predicted": 0.0005225622686085437,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 12840,
+            "observed_median": 12812,
+            "predicted": 12508.840722271047,
+            "raw_predicted": 12508.840722271047,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "sqlite-copying",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.21458399999999989,
+            "observed_median": 0.1837040000000001,
+            "predicted": 0.10486911280061295,
+            "raw_predicted": 0.10486911280061295,
+            "review_threshold": 0.22,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 34412,
+            "observed_median": 34380,
+            "predicted": 26367.850888330293,
+            "raw_predicted": 26367.850888330293,
+            "review_threshold": 40960,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "sqlite-persistence",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.25920400000000043,
+            "observed_median": 0.22946599999999995,
+            "predicted": 0.1753383270237498,
+            "raw_predicted": 0.1753383270237498,
+            "review_threshold": 0.37,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 43584,
+            "observed_median": 43400,
+            "predicted": 37393.84597671404,
+            "raw_predicted": 37393.84597671404,
+            "review_threshold": 57344,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "sqlite-resume",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.0657890000000001,
+            "observed_median": 0.06214300000000028,
+            "predicted": 0.08653928192948535,
+            "raw_predicted": 0.08653928192948535,
+            "review_threshold": 0.19,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 23092,
+            "observed_median": 23076,
+            "predicted": 24456.662307759834,
+            "raw_predicted": 24456.662307759834,
+            "review_threshold": 36864,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "sqlite-bound_nul",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.1843599999999994,
+            "observed_median": 0.1822440000000003,
+            "predicted": 0.10486911280061295,
+            "raw_predicted": 0.10486911280061295,
+            "review_threshold": 0.22,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 34432,
+            "observed_median": 34300,
+            "predicted": 26367.850888330293,
+            "raw_predicted": 26367.850888330293,
+            "review_threshold": 40960,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "sqlite-forwarding",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.06532799999999961,
+            "observed_median": 0.06355400000000033,
+            "predicted": 0.08457296392908031,
+            "raw_predicted": 0.08457296392908031,
+            "review_threshold": 0.18,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 23220,
+            "observed_median": 22680,
+            "predicted": 24264.51614133746,
+            "raw_predicted": 24264.51614133746,
+            "review_threshold": 36864,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "resource_width-width1",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.03576900000000005,
+            "observed_median": 0.03492700000000004,
+            "predicted": 0.06281302151907389,
+            "raw_predicted": 0.06281302151907389,
+            "review_threshold": 0.14,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 18736,
+            "observed_median": 18520,
+            "predicted": 20913.327201799955,
+            "raw_predicted": 20913.327201799955,
+            "review_threshold": 32768,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "resource_width-width2",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.028132999999999964,
+            "observed_median": 0.02683599999999986,
+            "predicted": 0.06952846334417785,
+            "raw_predicted": 0.06952846334417785,
+            "review_threshold": 0.15,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 19176,
+            "observed_median": 18752,
+            "predicted": 21918.611858926,
+            "raw_predicted": 21918.611858926,
+            "review_threshold": 36864,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "resource_width-width4",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.0471379999999999,
+            "observed_median": 0.0375580000000002,
+            "predicted": 0.08363088275671329,
+            "raw_predicted": 0.08363088275671329,
+            "review_threshold": 0.18,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 19396,
+            "observed_median": 19116,
+            "predicted": 24032.386417674046,
+            "raw_predicted": 24032.386417674046,
+            "review_threshold": 36864,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "resource_width-width8",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.03724800000000039,
+            "observed_median": 0.03708399999999967,
+            "predicted": 0.11452186463109419,
+            "raw_predicted": 0.11452186463109419,
+            "review_threshold": 0.24,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 19704,
+            "observed_median": 19552,
+            "predicted": 28672.75651315392,
+            "raw_predicted": 28672.75651315392,
+            "review_threshold": 45056,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "basic-higher-order",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.010517999999999996,
+            "observed_median": 0.009734000000000003,
+            "predicted": 0.01,
+            "raw_predicted": 0.0010868475981308814,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 12908,
+            "observed_median": 12572,
+            "predicted": 12572.82295271557,
+            "raw_predicted": 12572.82295271557,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "basic-global-recursion",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.007129000000000003,
+            "observed_median": 0.006795000000000002,
+            "predicted": 0.01,
+            "raw_predicted": 0.0015899955298275018,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 12684,
+            "observed_median": 12604,
+            "predicted": 12631.35590853027,
+            "raw_predicted": 12631.35590853027,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "basic-local-recursion",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.008619000000000002,
+            "observed_median": 0.007416999999999979,
+            "predicted": 0.01,
+            "raw_predicted": 0.001784562085305589,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 12652,
+            "observed_median": 12368,
+            "predicted": 12652.119581442497,
+            "raw_predicted": 12652.119581442497,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "basic-combined-effects",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.01378399999999999,
+            "observed_median": 0.013595999999999983,
+            "predicted": 0.01,
+            "raw_predicted": 0.004008663503750988,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 14584,
+            "observed_median": 14564,
+            "predicted": 12932.47674614298,
+            "raw_predicted": 12932.47674614298,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "basic-newtype-facade",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.007298999999999972,
+            "observed_median": 0.0070310000000000095,
+            "predicted": 0.01,
+            "raw_predicted": 0.0011785536948694573,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 12828,
+            "observed_median": 12588,
+            "predicted": 12580.996864660307,
+            "raw_predicted": 12580.996864660307,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "basic-higher-kinded-linked",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.008353999999999945,
+            "observed_median": 0.007901999999999992,
+            "predicted": 0.01,
+            "raw_predicted": 0.002618600117222614,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 14616,
+            "observed_median": 14600,
+            "predicted": 12757.253518205178,
+            "raw_predicted": 12757.253518205178,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "basic-polymorphic-methods",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.011526999999999982,
+            "observed_median": 0.010221999999999981,
+            "predicted": 0.01,
+            "raw_predicted": 0.006550029459684765,
+            "review_threshold": 0.03,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 15768,
+            "observed_median": 15460,
+            "predicted": 13282.171923005993,
+            "raw_predicted": 13282.171923005993,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      {
+        "accepted_deficit_fraction": 0.1,
+        "case": "basic-relational-bundle",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.016874000000000028,
+            "observed_median": 0.015936000000000006,
+            "predicted": 0.010750365131823893,
+            "raw_predicted": 0.010750365131823893,
+            "review_threshold": 0.04,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 15452,
+            "observed_median": 15212,
+            "predicted": 13772.890454143659,
+            "raw_predicted": 13772.890454143659,
+            "review_threshold": 24576,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      }
+    ],
+    "interpretation": "Current measured cases only; feature ranges do not validate unmeasured combinations. Review-needed requests investigation, not automatic optimization or compiler refusal.",
+    "status_counts": {
+      "acceptable-for-current-decision": 52,
+      "accepted-with-deficit": 0,
+      "outside-calibration": 0,
+      "review-needed": 0
+    }
+  },
+  "excluded_case_ids": [],
+  "input_sha256": "384286a4d92f826232582660775546e3c462b67fd156aa1a4bbc5abbc3e11427",
+  "interpretation": "Descriptive comparison with existing examined evidence; no refitting and no claim of blind validation.",
+  "model_sha256": "0cb6577673030d9958bb3a4ad645ea81cf9dfeb69f65eddf4cd7a3599d06b955",
+  "responses": {
+    "cpu_seconds": {
+      "actual_to_predicted_ratios": {
+        "max": 1.7517455339712416,
+        "median": 0.7531000000000121,
+        "min": 0.308086312174688,
+        "n": 52
+      },
+      "cases": [
+        {
+          "actual": 0.0065049999999999995,
+          "case": "flat-width1",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.006484000000000156,
+          "case": "flat-width2",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.006997999999999997,
+          "case": "flat-width4",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.0075150000000001604,
+          "case": "flat-width8",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.007845000000000012,
+          "case": "flat-width16",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.013509999999999911,
+          "case": "flat-width32",
+          "outside_observed_ranges": {},
+          "predicted": 0.016174650402131893
+        },
+        {
+          "actual": 0.013098000000000012,
+          "case": "flat-width64",
+          "outside_observed_ranges": {},
+          "predicted": 0.031918444632393815
+        },
+        {
+          "actual": 0.02503899999999981,
+          "case": "flat-width128",
+          "outside_observed_ranges": {},
+          "predicted": 0.06340603309291766
+        },
+        {
+          "actual": 0.007070000000000021,
+          "case": "nested_type-depth1",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.00766800000000023,
+          "case": "nested_type-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.00850200000000001,
+          "case": "nested_type-depth4",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.00948099999999985,
+          "case": "nested_type-depth8",
+          "outside_observed_ranges": {},
+          "predicted": 0.011930256303191953
+        },
+        {
+          "actual": 0.009078000000000003,
+          "case": "nested_type-depth12",
+          "outside_observed_ranges": {},
+          "predicted": 0.021008517259859357
+        },
+        {
+          "actual": 0.01009199999999999,
+          "case": "nested_type-depth16",
+          "outside_observed_ranges": {},
+          "predicted": 0.03275705411500958
+        },
+        {
+          "actual": 0.008786000000000016,
+          "case": "prerequisite-depth1",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.007426000000000155,
+          "case": "prerequisite-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.009224999999999983,
+          "case": "prerequisite-depth4",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.008016000000000023,
+          "case": "prerequisite-depth8",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.015915000000000012,
+          "case": "prerequisite-depth12",
+          "outside_observed_ranges": {},
+          "predicted": 0.013152403438879034
+        },
+        {
+          "actual": 0.01113799999999987,
+          "case": "prerequisite-depth16",
+          "outside_observed_ranges": {},
+          "predicted": 0.019566177271243518
+        },
+        {
+          "actual": 0.008537000000000072,
+          "case": "reexport_width-width1-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.006569000000000047,
+          "case": "reexport_width-width2-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.00877300000000003,
+          "case": "reexport_width-width4-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.008073999999999915,
+          "case": "reexport_width-width8-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.012381000000000031,
+          "case": "reexport_width-width16-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 0.01511463074310621
+        },
+        {
+          "actual": 0.011301000000000228,
+          "case": "reexport_width-width32-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 0.029523287024126727
+        },
+        {
+          "actual": 0.007364000000000037,
+          "case": "reexport_depth-width1-depth1",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.006420000000000092,
+          "case": "reexport_depth-width1-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.009502999999999928,
+          "case": "reexport_depth-width1-depth4",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.00711700000000004,
+          "case": "reexport_depth-width1-depth8",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.01100599999999996,
+          "case": "reexport_depth-width1-depth12",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.008289999999999909,
+          "case": "reexport_depth-width1-depth16",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.007547000000000081,
+          "case": "string_payload-payload_bytes16",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.00788600000000006,
+          "case": "string_payload-payload_bytes1024",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.0060869999999999536,
+          "case": "string_payload-payload_bytes65536",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.1837040000000001,
+          "case": "sqlite-copying",
+          "outside_observed_ranges": {},
+          "predicted": 0.10486911280061295
+        },
+        {
+          "actual": 0.22946599999999995,
+          "case": "sqlite-persistence",
+          "outside_observed_ranges": {},
+          "predicted": 0.1753383270237498
+        },
+        {
+          "actual": 0.06214300000000028,
+          "case": "sqlite-resume",
+          "outside_observed_ranges": {},
+          "predicted": 0.08653928192948535
+        },
+        {
+          "actual": 0.1822440000000003,
+          "case": "sqlite-bound_nul",
+          "outside_observed_ranges": {},
+          "predicted": 0.10486911280061295
+        },
+        {
+          "actual": 0.06355400000000033,
+          "case": "sqlite-forwarding",
+          "outside_observed_ranges": {},
+          "predicted": 0.08457296392908031
+        },
+        {
+          "actual": 0.03492700000000004,
+          "case": "resource_width-width1",
+          "outside_observed_ranges": {},
+          "predicted": 0.06281302151907389
+        },
+        {
+          "actual": 0.02683599999999986,
+          "case": "resource_width-width2",
+          "outside_observed_ranges": {},
+          "predicted": 0.06952846334417785
+        },
+        {
+          "actual": 0.0375580000000002,
+          "case": "resource_width-width4",
+          "outside_observed_ranges": {},
+          "predicted": 0.08363088275671329
+        },
+        {
+          "actual": 0.03708399999999967,
+          "case": "resource_width-width8",
+          "outside_observed_ranges": {},
+          "predicted": 0.11452186463109419
+        },
+        {
+          "actual": 0.009734000000000003,
+          "case": "basic-higher-order",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.006795000000000002,
+          "case": "basic-global-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.007416999999999979,
+          "case": "basic-local-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.013595999999999983,
+          "case": "basic-combined-effects",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.0070310000000000095,
+          "case": "basic-newtype-facade",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.007901999999999992,
+          "case": "basic-higher-kinded-linked",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.010221999999999981,
+          "case": "basic-polymorphic-methods",
+          "outside_observed_ranges": {},
+          "predicted": 0.01
+        },
+        {
+          "actual": 0.015936000000000006,
+          "case": "basic-relational-bundle",
+          "outside_observed_ranges": {},
+          "predicted": 0.010750365131823893
+        }
+      ],
+      "residuals": {
+        "max": 0.07883488719938714,
+        "median": -0.0025784999999999333,
+        "min": -0.07743786463109452,
+        "n": 52
+      },
+      "rmse": 0.02402817742101624,
+      "zero_prediction_cases": []
+    },
+    "final-elaboration": {
+      "actual_to_predicted_ratios": {
+        "max": 1.5666894204033026,
+        "median": 0.3943439596597808,
+        "min": 0.0963710001740885,
+        "n": 52
+      },
+      "cases": [
+        {
+          "actual": 159,
+          "case": "flat-width1",
+          "outside_observed_ranges": {},
+          "predicted": 418.87446710705643
+        },
+        {
+          "actual": 243,
+          "case": "flat-width2",
+          "outside_observed_ranges": {},
+          "predicted": 628.3305579598418
+        },
+        {
+          "actual": 411,
+          "case": "flat-width4",
+          "outside_observed_ranges": {},
+          "predicted": 1047.2427396654127
+        },
+        {
+          "actual": 747,
+          "case": "flat-width8",
+          "outside_observed_ranges": {},
+          "predicted": 1885.067103076554
+        },
+        {
+          "actual": 1419,
+          "case": "flat-width16",
+          "outside_observed_ranges": {},
+          "predicted": 3560.715829898837
+        },
+        {
+          "actual": 2763,
+          "case": "flat-width32",
+          "outside_observed_ranges": {},
+          "predicted": 6912.013283543403
+        },
+        {
+          "actual": 5451,
+          "case": "flat-width64",
+          "outside_observed_ranges": {},
+          "predicted": 13614.608190832536
+        },
+        {
+          "actual": 10827,
+          "case": "flat-width128",
+          "outside_observed_ranges": {},
+          "predicted": 27019.798005410797
+        },
+        {
+          "actual": 725,
+          "case": "nested_type-depth1",
+          "outside_observed_ranges": {},
+          "predicted": 1674.7435764579393
+        },
+        {
+          "actual": 1058,
+          "case": "nested_type-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 2790.7490043158796
+        },
+        {
+          "actual": 1814,
+          "case": "nested_type-depth4",
+          "outside_observed_ranges": {},
+          "predicted": 5859.679073078557
+        },
+        {
+          "actual": 3686,
+          "case": "nested_type-depth8",
+          "outside_observed_ranges": {},
+          "predicted": 15345.216062791105
+        },
+        {
+          "actual": 6038,
+          "case": "nested_type-depth12",
+          "outside_observed_ranges": {},
+          "predicted": 29294.322188753238
+        },
+        {
+          "actual": 8870,
+          "case": "nested_type-depth16",
+          "outside_observed_ranges": {},
+          "predicted": 47706.99745096496
+        },
+        {
+          "actual": 1335,
+          "case": "prerequisite-depth1",
+          "outside_observed_ranges": {},
+          "predicted": 1047.2427396654127
+        },
+        {
+          "actual": 1748,
+          "case": "prerequisite-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 1779.6224802783893
+        },
+        {
+          "actual": 2844,
+          "case": "prerequisite-depth4",
+          "outside_observed_ranges": {},
+          "predicted": 3662.8415680277417
+        },
+        {
+          "actual": 6116,
+          "case": "prerequisite-depth8",
+          "outside_observed_ranges": {},
+          "predicted": 9103.118169620042
+        },
+        {
+          "actual": 10828,
+          "case": "prerequisite-depth12",
+          "outside_observed_ranges": {},
+          "predicted": 16775.179339337134
+        },
+        {
+          "actual": 16980,
+          "case": "prerequisite-depth16",
+          "outside_observed_ranges": {},
+          "predicted": 26679.025077179023
+        },
+        {
+          "actual": 173,
+          "case": "reexport_width-width1-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 489.0137381453566
+        },
+        {
+          "actual": 242,
+          "case": "reexport_width-width2-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 768.4393843431278
+        },
+        {
+          "actual": 380,
+          "case": "reexport_width-width4-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 1327.2906767386703
+        },
+        {
+          "actual": 656,
+          "case": "reexport_width-width8-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 2444.993261529755
+        },
+        {
+          "actual": 1208,
+          "case": "reexport_width-width16-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 4680.398431111924
+        },
+        {
+          "actual": 2312,
+          "case": "reexport_width-width32-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 9151.208770276262
+        },
+        {
+          "actual": 173,
+          "case": "reexport_depth-width1-depth1",
+          "outside_observed_ranges": {},
+          "predicted": 488.8817370505565
+        },
+        {
+          "actual": 173,
+          "case": "reexport_depth-width1-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 489.0137381453566
+        },
+        {
+          "actual": 173,
+          "case": "reexport_depth-width1-depth4",
+          "outside_observed_ranges": {},
+          "predicted": 489.2777403349569
+        },
+        {
+          "actual": 173,
+          "case": "reexport_depth-width1-depth8",
+          "outside_observed_ranges": {},
+          "predicted": 489.80574471415747
+        },
+        {
+          "actual": 173,
+          "case": "reexport_depth-width1-depth12",
+          "outside_observed_ranges": {},
+          "predicted": 490.333749093358
+        },
+        {
+          "actual": 173,
+          "case": "reexport_depth-width1-depth16",
+          "outside_observed_ranges": {},
+          "predicted": 490.8617534725585
+        },
+        {
+          "actual": 83,
+          "case": "string_payload-payload_bytes16",
+          "outside_observed_ranges": {},
+          "predicted": 209.47494815204254
+        },
+        {
+          "actual": 83,
+          "case": "string_payload-payload_bytes1024",
+          "outside_observed_ranges": {},
+          "predicted": 209.47494815204254
+        },
+        {
+          "actual": 83,
+          "case": "string_payload-payload_bytes65536",
+          "outside_observed_ranges": {},
+          "predicted": 209.47494815204254
+        },
+        {
+          "actual": 165717,
+          "case": "sqlite-copying",
+          "outside_observed_ranges": {},
+          "predicted": 110812.45572728445
+        },
+        {
+          "actual": 376641,
+          "case": "sqlite-persistence",
+          "outside_observed_ranges": {},
+          "predicted": 247292.0095464239
+        },
+        {
+          "actual": 103738,
+          "case": "sqlite-resume",
+          "outside_observed_ranges": {},
+          "predicted": 99779.44400759682
+        },
+        {
+          "actual": 165717,
+          "case": "sqlite-bound_nul",
+          "outside_observed_ranges": {},
+          "predicted": 110812.45572728445
+        },
+        {
+          "actual": 107066,
+          "case": "sqlite-forwarding",
+          "outside_observed_ranges": {},
+          "predicted": 98801.8268394802
+        },
+        {
+          "actual": 6128,
+          "case": "resource_width-width1",
+          "outside_observed_ranges": {},
+          "predicted": 63587.593663344065
+        },
+        {
+          "actual": 9947,
+          "case": "resource_width-width2",
+          "outside_observed_ranges": {},
+          "predicted": 77313.71674270878
+        },
+        {
+          "actual": 17724,
+          "case": "resource_width-width4",
+          "outside_observed_ranges": {},
+          "predicted": 106293.9512208373
+        },
+        {
+          "actual": 33694,
+          "case": "resource_width-width8",
+          "outside_observed_ranges": {},
+          "predicted": 170366.37345469074
+        },
+        {
+          "actual": 200,
+          "case": "basic-higher-order",
+          "outside_observed_ranges": {},
+          "predicted": 488.6931640579849
+        },
+        {
+          "actual": 262,
+          "case": "basic-global-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 767.873665365413
+        },
+        {
+          "actual": 180,
+          "case": "basic-local-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 837.7112196155986
+        },
+        {
+          "actual": 3936,
+          "case": "basic-combined-effects",
+          "outside_observed_ranges": {},
+          "predicted": 2512.3039376794804
+        },
+        {
+          "actual": 197,
+          "case": "basic-newtype-facade",
+          "outside_observed_ranges": {},
+          "predicted": 488.74973595575636
+        },
+        {
+          "actual": 765,
+          "case": "basic-higher-kinded-linked",
+          "outside_observed_ranges": {},
+          "predicted": 1465.6834888895544
+        },
+        {
+          "actual": 3206,
+          "case": "basic-polymorphic-methods",
+          "outside_observed_ranges": {},
+          "predicted": 5023.702724994617
+        },
+        {
+          "actual": 4101,
+          "case": "basic-relational-bundle",
+          "outside_observed_ranges": {},
+          "predicted": 7396.689842859612
+        }
+      ],
+      "residuals": {
+        "max": 129348.99045357609,
+        "median": -679.1973542525765,
+        "min": -136672.37345469074,
+        "n": 52
+      },
+      "rmse": 33964.50653504494,
+      "zero_prediction_cases": []
+    },
+    "independent-effect-core": {
+      "actual_to_predicted_ratios": {
+        "max": 49.68536765193421,
+        "median": 0.08867849784292245,
+        "min": 0.025620190726322458,
+        "n": 52
+      },
+      "cases": [
+        {
+          "actual": 232,
+          "case": "flat-width1",
+          "outside_observed_ranges": {},
+          "predicted": 2441.054394488134
+        },
+        {
+          "actual": 337,
+          "case": "flat-width2",
+          "outside_observed_ranges": {},
+          "predicted": 3712.357682502934
+        },
+        {
+          "actual": 547,
+          "case": "flat-width4",
+          "outside_observed_ranges": {},
+          "predicted": 6254.964258532535
+        },
+        {
+          "actual": 967,
+          "case": "flat-width8",
+          "outside_observed_ranges": {},
+          "predicted": 11340.177410591736
+        },
+        {
+          "actual": 1807,
+          "case": "flat-width16",
+          "outside_observed_ranges": {},
+          "predicted": 21510.603714710138
+        },
+        {
+          "actual": 3487,
+          "case": "flat-width32",
+          "outside_observed_ranges": {},
+          "predicted": 41851.456322946935
+        },
+        {
+          "actual": 6847,
+          "case": "flat-width64",
+          "outside_observed_ranges": {},
+          "predicted": 82533.16153942054
+        },
+        {
+          "actual": 13567,
+          "case": "flat-width128",
+          "outside_observed_ranges": {},
+          "predicted": 163896.57197236776
+        },
+        {
+          "actual": 748,
+          "case": "nested_type-depth1",
+          "outside_observed_ranges": {},
+          "predicted": 7733.173947123212
+        },
+        {
+          "actual": 1101,
+          "case": "nested_type-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 11568.444885166291
+        },
+        {
+          "actual": 1975,
+          "case": "nested_type-depth4",
+          "outside_observed_ranges": {},
+          "predicted": 21886.947556316463
+        },
+        {
+          "actual": 4395,
+          "case": "nested_type-depth8",
+          "outside_observed_ranges": {},
+          "predicted": 53115.796078872845
+        },
+        {
+          "actual": 7711,
+          "case": "nested_type-depth12",
+          "outside_observed_ranges": {},
+          "predicted": 98467.10217510397
+        },
+        {
+          "actual": 11923,
+          "case": "nested_type-depth16",
+          "outside_observed_ranges": {},
+          "predicted": 157940.8658450098
+        },
+        {
+          "actual": 1266,
+          "case": "prerequisite-depth1",
+          "outside_observed_ranges": {},
+          "predicted": 6254.964258532535
+        },
+        {
+          "actual": 1813,
+          "case": "prerequisite-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 8775.034317296477
+        },
+        {
+          "actual": 3378,
+          "case": "prerequisite-depth4",
+          "outside_observed_ranges": {},
+          "predicted": 15139.154832356366
+        },
+        {
+          "actual": 8392,
+          "case": "prerequisite-depth8",
+          "outside_observed_ranges": {},
+          "predicted": 33163.31745260417
+        },
+        {
+          "actual": 15918,
+          "case": "prerequisite-depth12",
+          "outside_observed_ranges": {},
+          "predicted": 58248.70885968933
+        },
+        {
+          "actual": 25956,
+          "case": "prerequisite-depth16",
+          "outside_observed_ranges": {},
+          "predicted": 90395.32905361184
+        },
+        {
+          "actual": 223,
+          "case": "reexport_width-width1-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 3728.0157002621972
+        },
+        {
+          "actual": 273,
+          "case": "reexport_width-width2-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 5829.295477114462
+        },
+        {
+          "actual": 373,
+          "case": "reexport_width-width4-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 10031.855030818992
+        },
+        {
+          "actual": 573,
+          "case": "reexport_width-width8-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 18436.97413822805
+        },
+        {
+          "actual": 973,
+          "case": "reexport_width-width16-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 35247.212353046176
+        },
+        {
+          "actual": 1773,
+          "case": "reexport_width-width32-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 68867.68878268241
+        },
+        {
+          "actual": 223,
+          "case": "reexport_depth-width1-depth1",
+          "outside_observed_ranges": {},
+          "predicted": 3372.5830648670653
+        },
+        {
+          "actual": 223,
+          "case": "reexport_depth-width1-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 3728.0157002621972
+        },
+        {
+          "actual": 223,
+          "case": "reexport_depth-width1-depth4",
+          "outside_observed_ranges": {},
+          "predicted": 4438.880971052461
+        },
+        {
+          "actual": 223,
+          "case": "reexport_depth-width1-depth8",
+          "outside_observed_ranges": {},
+          "predicted": 5860.611512632989
+        },
+        {
+          "actual": 223,
+          "case": "reexport_depth-width1-depth12",
+          "outside_observed_ranges": {},
+          "predicted": 7282.342054213515
+        },
+        {
+          "actual": 223,
+          "case": "reexport_depth-width1-depth16",
+          "outside_observed_ranges": {},
+          "predicted": 8704.072595794043
+        },
+        {
+          "actual": 168,
+          "case": "string_payload-payload_bytes16",
+          "outside_observed_ranges": {},
+          "predicted": 1322.0793787855332
+        },
+        {
+          "actual": 1176,
+          "case": "string_payload-payload_bytes1024",
+          "outside_observed_ranges": {},
+          "predicted": 1322.0793787855332
+        },
+        {
+          "actual": 65688,
+          "case": "string_payload-payload_bytes65536",
+          "outside_observed_ranges": {},
+          "predicted": 1322.0793787855332
+        },
+        {
+          "actual": 903995,
+          "case": "sqlite-copying",
+          "outside_observed_ranges": {},
+          "predicted": 478435.89969863475
+        },
+        {
+          "actual": 1609087,
+          "case": "sqlite-persistence",
+          "outside_observed_ranges": {},
+          "predicted": 1035345.5138353505
+        },
+        {
+          "actual": 289063,
+          "case": "sqlite-resume",
+          "outside_observed_ranges": {},
+          "predicted": 404660.25609175704
+        },
+        {
+          "actual": 903990,
+          "case": "sqlite-bound_nul",
+          "outside_observed_ranges": {},
+          "predicted": 478435.89969863475
+        },
+        {
+          "actual": 315193,
+          "case": "sqlite-forwarding",
+          "outside_observed_ranges": {},
+          "predicted": 396989.36373193783
+        },
+        {
+          "actual": 11811,
+          "case": "resource_width-width1",
+          "outside_observed_ranges": {},
+          "predicted": 261163.87477105553
+        },
+        {
+          "actual": 19066,
+          "case": "resource_width-width2",
+          "outside_observed_ranges": {},
+          "predicted": 321746.9714905736
+        },
+        {
+          "actual": 33984,
+          "case": "resource_width-width4",
+          "outside_observed_ranges": {},
+          "predicted": 449673.08365560614
+        },
+        {
+          "actual": 65788,
+          "case": "resource_width-width8",
+          "outside_observed_ranges": {},
+          "predicted": 732564.9828896569
+        },
+        {
+          "actual": 326,
+          "case": "basic-higher-order",
+          "outside_observed_ranges": {},
+          "predicted": 2864.822157159734
+        },
+        {
+          "actual": 377,
+          "case": "basic-global-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 4306.012753992469
+        },
+        {
+          "actual": 388,
+          "case": "basic-local-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 4780.556607434803
+        },
+        {
+          "actual": 1993,
+          "case": "basic-combined-effects",
+          "outside_observed_ranges": {},
+          "predicted": 12107.52182839215
+        },
+        {
+          "actual": 346,
+          "case": "basic-newtype-facade",
+          "outside_observed_ranges": {},
+          "predicted": 3017.1504294719334
+        },
+        {
+          "actual": 783,
+          "case": "basic-higher-kinded-linked",
+          "outside_observed_ranges": {},
+          "predicted": 7528.168565293807
+        },
+        {
+          "actual": 4147,
+          "case": "basic-polymorphic-methods",
+          "outside_observed_ranges": {},
+          "predicted": 21777.791299789107
+        },
+        {
+          "actual": 5032,
+          "case": "basic-relational-bundle",
+          "outside_observed_ranges": {},
+          "predicted": 33900.97114594052
+        }
+      ],
+      "residuals": {
+        "max": 573741.4861646495,
+        "median": -9886.68842960557,
+        "min": -666776.9828896569,
+        "n": 52
+      },
+      "rmse": 173428.17560265333,
+      "zero_prediction_cases": []
+    },
+    "linked-interface": {
+      "actual_to_predicted_ratios": {
+        "max": 1.424903064390946,
+        "median": 0.3439448568951901,
+        "min": 0.025671436386693548,
+        "n": 52
+      },
+      "cases": [
+        {
+          "actual": 13,
+          "case": "flat-width1",
+          "outside_observed_ranges": {},
+          "predicted": 45.44610005817177
+        },
+        {
+          "actual": 20,
+          "case": "flat-width2",
+          "outside_observed_ranges": {},
+          "predicted": 68.16915008725766
+        },
+        {
+          "actual": 34,
+          "case": "flat-width4",
+          "outside_observed_ranges": {},
+          "predicted": 113.61525014542943
+        },
+        {
+          "actual": 62,
+          "case": "flat-width8",
+          "outside_observed_ranges": {},
+          "predicted": 204.50745026177296
+        },
+        {
+          "actual": 118,
+          "case": "flat-width16",
+          "outside_observed_ranges": {},
+          "predicted": 386.29185049446005
+        },
+        {
+          "actual": 230,
+          "case": "flat-width32",
+          "outside_observed_ranges": {},
+          "predicted": 749.8606509598342
+        },
+        {
+          "actual": 454,
+          "case": "flat-width64",
+          "outside_observed_ranges": {},
+          "predicted": 1476.9982518905827
+        },
+        {
+          "actual": 902,
+          "case": "flat-width128",
+          "outside_observed_ranges": {},
+          "predicted": 2931.273453752079
+        },
+        {
+          "actual": 43,
+          "case": "nested_type-depth1",
+          "outside_observed_ranges": {},
+          "predicted": 181.7844002326871
+        },
+        {
+          "actual": 53,
+          "case": "nested_type-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 302.9740003878118
+        },
+        {
+          "actual": 73,
+          "case": "nested_type-depth4",
+          "outside_observed_ranges": {},
+          "predicted": 636.2454008144048
+        },
+        {
+          "actual": 113,
+          "case": "nested_type-depth8",
+          "outside_observed_ranges": {},
+          "predicted": 1666.357002132965
+        },
+        {
+          "actual": 153,
+          "case": "nested_type-depth12",
+          "outside_observed_ranges": {},
+          "predicted": 3181.227004072024
+        },
+        {
+          "actual": 193,
+          "case": "nested_type-depth16",
+          "outside_observed_ranges": {},
+          "predicted": 5180.855406631582
+        },
+        {
+          "actual": 67,
+          "case": "prerequisite-depth1",
+          "outside_observed_ranges": {},
+          "predicted": 113.61525014542943
+        },
+        {
+          "actual": 73,
+          "case": "prerequisite-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 193.14592524723002
+        },
+        {
+          "actual": 85,
+          "case": "prerequisite-depth4",
+          "outside_observed_ranges": {},
+          "predicted": 397.653375509003
+        },
+        {
+          "actual": 109,
+          "case": "prerequisite-depth8",
+          "outside_observed_ranges": {},
+          "predicted": 988.452676265236
+        },
+        {
+          "actual": 133,
+          "case": "prerequisite-depth12",
+          "outside_observed_ranges": {},
+          "predicted": 1821.6311773317184
+        },
+        {
+          "actual": 157,
+          "case": "prerequisite-depth16",
+          "outside_observed_ranges": {},
+          "predicted": 2897.1888787084504
+        },
+        {
+          "actual": 27,
+          "case": "reexport_width-width1-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 53.02045006786707
+        },
+        {
+          "actual": 44,
+          "case": "reexport_width-width2-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 83.31785010664825
+        },
+        {
+          "actual": 78,
+          "case": "reexport_width-width4-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 143.9126501842106
+        },
+        {
+          "actual": 146,
+          "case": "reexport_width-width8-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 265.10225033933534
+        },
+        {
+          "actual": 282,
+          "case": "reexport_width-width16-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 507.48145064958476
+        },
+        {
+          "actual": 554,
+          "case": "reexport_width-width32-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 992.2398512700837
+        },
+        {
+          "actual": 26,
+          "case": "reexport_depth-width1-depth1",
+          "outside_observed_ranges": {},
+          "predicted": 53.02045006786707
+        },
+        {
+          "actual": 27,
+          "case": "reexport_depth-width1-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 53.02045006786707
+        },
+        {
+          "actual": 29,
+          "case": "reexport_depth-width1-depth4",
+          "outside_observed_ranges": {},
+          "predicted": 53.02045006786707
+        },
+        {
+          "actual": 33,
+          "case": "reexport_depth-width1-depth8",
+          "outside_observed_ranges": {},
+          "predicted": 53.02045006786707
+        },
+        {
+          "actual": 37,
+          "case": "reexport_depth-width1-depth12",
+          "outside_observed_ranges": {},
+          "predicted": 53.02045006786707
+        },
+        {
+          "actual": 41,
+          "case": "reexport_depth-width1-depth16",
+          "outside_observed_ranges": {},
+          "predicted": 53.02045006786707
+        },
+        {
+          "actual": 7,
+          "case": "string_payload-payload_bytes16",
+          "outside_observed_ranges": {},
+          "predicted": 22.723050029085886
+        },
+        {
+          "actual": 7,
+          "case": "string_payload-payload_bytes1024",
+          "outside_observed_ranges": {},
+          "predicted": 22.723050029085886
+        },
+        {
+          "actual": 7,
+          "case": "string_payload-payload_bytes65536",
+          "outside_observed_ranges": {},
+          "predicted": 22.723050029085886
+        },
+        {
+          "actual": 15742,
+          "case": "sqlite-copying",
+          "outside_observed_ranges": {},
+          "predicted": 14257.934552763436
+        },
+        {
+          "actual": 48578,
+          "case": "sqlite-persistence",
+          "outside_observed_ranges": {},
+          "predicted": 34092.14367909578
+        },
+        {
+          "actual": 15190,
+          "case": "sqlite-resume",
+          "outside_observed_ranges": {},
+          "predicted": 12383.699010140823
+        },
+        {
+          "actual": 15742,
+          "case": "sqlite-bound_nul",
+          "outside_observed_ranges": {},
+          "predicted": 14257.934552763436
+        },
+        {
+          "actual": 15098,
+          "case": "sqlite-forwarding",
+          "outside_observed_ranges": {},
+          "predicted": 12197.907130221121
+        },
+        {
+          "actual": 4368,
+          "case": "resource_width-width1",
+          "outside_observed_ranges": {},
+          "predicted": 7562.16316059149
+        },
+        {
+          "actual": 5110,
+          "case": "resource_width-width2",
+          "outside_observed_ranges": {},
+          "predicted": 9738.037898897383
+        },
+        {
+          "actual": 6594,
+          "case": "resource_width-width4",
+          "outside_observed_ranges": {},
+          "predicted": 14336.964229652385
+        },
+        {
+          "actual": 9562,
+          "case": "resource_width-width8",
+          "outside_observed_ranges": {},
+          "predicted": 24523.524307735264
+        },
+        {
+          "actual": 18,
+          "case": "basic-higher-order",
+          "outside_observed_ranges": {},
+          "predicted": 53.02045006786707
+        },
+        {
+          "actual": 21,
+          "case": "basic-global-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 83.31785010664825
+        },
+        {
+          "actual": 18,
+          "case": "basic-local-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 90.89220011634355
+        },
+        {
+          "actual": 7,
+          "case": "basic-combined-effects",
+          "outside_observed_ranges": {},
+          "predicted": 272.67660034903065
+        },
+        {
+          "actual": 18,
+          "case": "basic-newtype-facade",
+          "outside_observed_ranges": {},
+          "predicted": 53.02045006786707
+        },
+        {
+          "actual": 56,
+          "case": "basic-higher-kinded-linked",
+          "outside_observed_ranges": {},
+          "predicted": 159.0613502036012
+        },
+        {
+          "actual": 190,
+          "case": "basic-polymorphic-methods",
+          "outside_observed_ranges": {},
+          "predicted": 545.3532006980613
+        },
+        {
+          "actual": 299,
+          "case": "basic-relational-bundle",
+          "outside_observed_ranges": {},
+          "predicted": 802.8811010277013
+        }
+      ],
+      "residuals": {
+        "max": 14485.856320904219,
+        "median": -111.08180027146827,
+        "min": -14961.524307735264,
+        "n": 52
+      },
+      "rmse": 3397.789243379971,
+      "zero_prediction_cases": []
+    },
+    "module-linking": {
+      "actual_to_predicted_ratios": {
+        "max": 1.6911788492790367,
+        "median": 0.4009396365889216,
+        "min": 0.001146206785657963,
+        "n": 52
+      },
+      "cases": [
+        {
+          "actual": 2,
+          "case": "flat-width1",
+          "outside_observed_ranges": {},
+          "predicted": 25.970939063238976
+        },
+        {
+          "actual": 2,
+          "case": "flat-width2",
+          "outside_observed_ranges": {},
+          "predicted": 39.50570213139271
+        },
+        {
+          "actual": 2,
+          "case": "flat-width4",
+          "outside_observed_ranges": {},
+          "predicted": 66.57522826770017
+        },
+        {
+          "actual": 2,
+          "case": "flat-width8",
+          "outside_observed_ranges": {},
+          "predicted": 120.71428054031509
+        },
+        {
+          "actual": 2,
+          "case": "flat-width16",
+          "outside_observed_ranges": {},
+          "predicted": 228.99238508554492
+        },
+        {
+          "actual": 2,
+          "case": "flat-width32",
+          "outside_observed_ranges": {},
+          "predicted": 445.5485941760046
+        },
+        {
+          "actual": 2,
+          "case": "flat-width64",
+          "outside_observed_ranges": {},
+          "predicted": 878.6610123569241
+        },
+        {
+          "actual": 2,
+          "case": "flat-width128",
+          "outside_observed_ranges": {},
+          "predicted": 1744.8858487187629
+        },
+        {
+          "actual": 24,
+          "case": "nested_type-depth1",
+          "outside_observed_ranges": {},
+          "predicted": 81.91201479158617
+        },
+        {
+          "actual": 24,
+          "case": "nested_type-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 122.23839270275329
+        },
+        {
+          "actual": 24,
+          "case": "nested_type-depth4",
+          "outside_observed_ranges": {},
+          "predicted": 230.6641110440588
+        },
+        {
+          "actual": 24,
+          "case": "nested_type-depth8",
+          "outside_observed_ranges": {},
+          "predicted": 558.6073978025548
+        },
+        {
+          "actual": 24,
+          "case": "nested_type-depth12",
+          "outside_observed_ranges": {},
+          "predicted": 1034.6731513288976
+        },
+        {
+          "actual": 24,
+          "case": "nested_type-depth16",
+          "outside_observed_ranges": {},
+          "predicted": 1658.8613716230868
+        },
+        {
+          "actual": 43,
+          "case": "prerequisite-depth1",
+          "outside_observed_ranges": {},
+          "predicted": 66.57522826770017
+        },
+        {
+          "actual": 43,
+          "case": "prerequisite-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 93.073744617937
+        },
+        {
+          "actual": 43,
+          "case": "prerequisite-depth4",
+          "outside_observed_ranges": {},
+          "predicted": 159.95725857789625
+        },
+        {
+          "actual": 43,
+          "case": "prerequisite-depth8",
+          "outside_observed_ranges": {},
+          "predicted": 349.2702115357573
+        },
+        {
+          "actual": 43,
+          "case": "prerequisite-depth12",
+          "outside_observed_ranges": {},
+          "predicted": 612.6443978775417
+        },
+        {
+          "actual": 43,
+          "case": "prerequisite-depth16",
+          "outside_observed_ranges": {},
+          "predicted": 950.0798176032494
+        },
+        {
+          "actual": 30,
+          "case": "reexport_width-width1-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 39.820516873705685
+        },
+        {
+          "actual": 52,
+          "case": "reexport_width-width2-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 62.26121592351794
+        },
+        {
+          "actual": 96,
+          "case": "reexport_width-width4-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 107.14261402314244
+        },
+        {
+          "actual": 184,
+          "case": "reexport_width-width8-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 196.90541022239148
+        },
+        {
+          "actual": 360,
+          "case": "reexport_width-width16-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 376.43100262088944
+        },
+        {
+          "actual": 712,
+          "case": "reexport_width-width32-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 735.4821874178856
+        },
+        {
+          "actual": 28,
+          "case": "reexport_depth-width1-depth1",
+          "outside_observed_ranges": {},
+          "predicted": 35.97546211796599
+        },
+        {
+          "actual": 30,
+          "case": "reexport_depth-width1-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 39.820516873705685
+        },
+        {
+          "actual": 34,
+          "case": "reexport_depth-width1-depth4",
+          "outside_observed_ranges": {},
+          "predicted": 47.51062638518509
+        },
+        {
+          "actual": 42,
+          "case": "reexport_depth-width1-depth8",
+          "outside_observed_ranges": {},
+          "predicted": 62.8908454081439
+        },
+        {
+          "actual": 50,
+          "case": "reexport_depth-width1-depth12",
+          "outside_observed_ranges": {},
+          "predicted": 78.2710644311027
+        },
+        {
+          "actual": 58,
+          "case": "reexport_depth-width1-depth16",
+          "outside_observed_ranges": {},
+          "predicted": 93.65128345406151
+        },
+        {
+          "actual": 2,
+          "case": "string_payload-payload_bytes16",
+          "outside_observed_ranges": {},
+          "predicted": 14.084056604687973
+        },
+        {
+          "actual": 2,
+          "case": "string_payload-payload_bytes1024",
+          "outside_observed_ranges": {},
+          "predicted": 14.084056604687973
+        },
+        {
+          "actual": 2,
+          "case": "string_payload-payload_bytes65536",
+          "outside_observed_ranges": {},
+          "predicted": 14.084056604687973
+        },
+        {
+          "actual": 4030,
+          "case": "sqlite-copying",
+          "outside_observed_ranges": {},
+          "predicted": 3510.1067455684856
+        },
+        {
+          "actual": 4136,
+          "case": "sqlite-persistence",
+          "outside_observed_ranges": {},
+          "predicted": 5902.645477576292
+        },
+        {
+          "actual": 3950,
+          "case": "sqlite-resume",
+          "outside_observed_ranges": {},
+          "predicted": 3194.8100299605294
+        },
+        {
+          "actual": 4030,
+          "case": "sqlite-bound_nul",
+          "outside_observed_ranges": {},
+          "predicted": 3510.1067455684856
+        },
+        {
+          "actual": 3934,
+          "case": "sqlite-forwarding",
+          "outside_observed_ranges": {},
+          "predicted": 3168.3548161723784
+        },
+        {
+          "actual": 3891,
+          "case": "resource_width-width1",
+          "outside_observed_ranges": {},
+          "predicted": 2300.7619813000647
+        },
+        {
+          "actual": 3894,
+          "case": "resource_width-width2",
+          "outside_observed_ranges": {},
+          "predicted": 2464.765533804597
+        },
+        {
+          "actual": 3900,
+          "case": "resource_width-width4",
+          "outside_observed_ranges": {},
+          "predicted": 2807.7507695309155
+        },
+        {
+          "actual": 3912,
+          "case": "resource_width-width8",
+          "outside_observed_ranges": {},
+          "predicted": 3553.633763852567
+        },
+        {
+          "actual": 2,
+          "case": "basic-higher-order",
+          "outside_observed_ranges": {},
+          "predicted": 30.482526752623553
+        },
+        {
+          "actual": 2,
+          "case": "basic-global-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 45.782409827490646
+        },
+        {
+          "actual": 2,
+          "case": "basic-local-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 50.843291053409466
+        },
+        {
+          "actual": 47,
+          "case": "basic-combined-effects",
+          "outside_observed_ranges": {},
+          "predicted": 128.3609575527217
+        },
+        {
+          "actual": 14,
+          "case": "basic-newtype-facade",
+          "outside_observed_ranges": {},
+          "predicted": 32.13040736222628
+        },
+        {
+          "actual": 56,
+          "case": "basic-higher-kinded-linked",
+          "outside_observed_ranges": {},
+          "predicted": 79.91241599065155
+        },
+        {
+          "actual": 61,
+          "case": "basic-polymorphic-methods",
+          "outside_observed_ranges": {},
+          "predicted": 230.3558253517997
+        },
+        {
+          "actual": 161,
+          "case": "basic-relational-bundle",
+          "outside_observed_ranges": {},
+          "predicted": 359.03159764683437
+        }
+      ],
+      "residuals": {
+        "max": 1590.2380186999353,
+        "median": -28.37679559186313,
+        "min": -1766.6454775762923,
+        "n": 52
+      },
+      "rmse": 622.719673705342,
+      "zero_prediction_cases": []
+    },
+    "peak_rss_kib": {
+      "actual_to_predicted_ratios": {
+        "max": 1.3038605287022338,
+        "median": 1.0052736423494837,
+        "min": 0.6819016508242003,
+        "n": 52
+      },
+      "cases": [
+        {
+          "actual": 12556,
+          "case": "flat-width1",
+          "outside_observed_ranges": {},
+          "predicted": 12554.783917118255
+        },
+        {
+          "actual": 12620,
+          "case": "flat-width2",
+          "outside_observed_ranges": {},
+          "predicted": 12608.9010239102
+        },
+        {
+          "actual": 12680,
+          "case": "flat-width4",
+          "outside_observed_ranges": {},
+          "predicted": 12717.135237494089
+        },
+        {
+          "actual": 12496,
+          "case": "flat-width8",
+          "outside_observed_ranges": {},
+          "predicted": 12933.603664661867
+        },
+        {
+          "actual": 12464,
+          "case": "flat-width16",
+          "outside_observed_ranges": {},
+          "predicted": 13366.540518997423
+        },
+        {
+          "actual": 12888,
+          "case": "flat-width32",
+          "outside_observed_ranges": {},
+          "predicted": 14232.414227668534
+        },
+        {
+          "actual": 13052,
+          "case": "flat-width64",
+          "outside_observed_ranges": {},
+          "predicted": 15964.161645010758
+        },
+        {
+          "actual": 13888,
+          "case": "flat-width128",
+          "outside_observed_ranges": {},
+          "predicted": 19427.656479695204
+        },
+        {
+          "actual": 12976,
+          "case": "nested_type-depth1",
+          "outside_observed_ranges": {},
+          "predicted": 12754.15324138397
+        },
+        {
+          "actual": 13092,
+          "case": "nested_type-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 12884.748846676111
+        },
+        {
+          "actual": 13044,
+          "case": "nested_type-depth4",
+          "outside_observed_ranges": {},
+          "predicted": 13231.625893312395
+        },
+        {
+          "actual": 13244,
+          "case": "nested_type-depth8",
+          "outside_observed_ranges": {},
+          "predicted": 14268.123330792972
+        },
+        {
+          "actual": 13300,
+          "case": "nested_type-depth12",
+          "outside_observed_ranges": {},
+          "predicted": 15761.611893884225
+        },
+        {
+          "actual": 13228,
+          "case": "nested_type-depth16",
+          "outside_observed_ranges": {},
+          "predicted": 17712.091582586152
+        },
+        {
+          "actual": 14720,
+          "case": "prerequisite-depth1",
+          "outside_observed_ranges": {},
+          "predicted": 12717.135237494089
+        },
+        {
+          "actual": 14708,
+          "case": "prerequisite-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 12803.008893299238
+        },
+        {
+          "actual": 14532,
+          "case": "prerequisite-depth4",
+          "outside_observed_ranges": {},
+          "predicted": 13017.599122935539
+        },
+        {
+          "actual": 14560,
+          "case": "prerequisite-depth8",
+          "outside_observed_ranges": {},
+          "predicted": 13618.151254312143
+        },
+        {
+          "actual": 15168,
+          "case": "prerequisite-depth12",
+          "outside_observed_ranges": {},
+          "predicted": 14447.198948494086
+        },
+        {
+          "actual": 14988,
+          "case": "prerequisite-depth16",
+          "outside_observed_ranges": {},
+          "predicted": 15504.742205481367
+        },
+        {
+          "actual": 14176,
+          "case": "reexport_width-width1-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 12619.141787069075
+        },
+        {
+          "actual": 14460,
+          "case": "reexport_width-width2-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 12713.09502797763
+        },
+        {
+          "actual": 14300,
+          "case": "reexport_width-width4-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 12901.00150979474
+        },
+        {
+          "actual": 13932,
+          "case": "reexport_width-width8-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 13276.814473428962
+        },
+        {
+          "actual": 14128,
+          "case": "reexport_width-width16-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 14028.440400697404
+        },
+        {
+          "actual": 14688,
+          "case": "reexport_width-width32-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 15531.692255234288
+        },
+        {
+          "actual": 13944,
+          "case": "reexport_depth-width1-depth1",
+          "outside_observed_ranges": {},
+          "predicted": 12600.06932586469
+        },
+        {
+          "actual": 14076,
+          "case": "reexport_depth-width1-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 12619.141787069075
+        },
+        {
+          "actual": 13792,
+          "case": "reexport_depth-width1-depth4",
+          "outside_observed_ranges": {},
+          "predicted": 12657.286709477843
+        },
+        {
+          "actual": 14520,
+          "case": "reexport_depth-width1-depth8",
+          "outside_observed_ranges": {},
+          "predicted": 12733.576554295378
+        },
+        {
+          "actual": 14336,
+          "case": "reexport_depth-width1-depth12",
+          "outside_observed_ranges": {},
+          "predicted": 12809.866399112914
+        },
+        {
+          "actual": 13848,
+          "case": "reexport_depth-width1-depth16",
+          "outside_observed_ranges": {},
+          "predicted": 12886.15624393045
+        },
+        {
+          "actual": 12272,
+          "case": "string_payload-payload_bytes16",
+          "outside_observed_ranges": {},
+          "predicted": 12508.840722271047
+        },
+        {
+          "actual": 12552,
+          "case": "string_payload-payload_bytes1024",
+          "outside_observed_ranges": {},
+          "predicted": 12508.840722271047
+        },
+        {
+          "actual": 12812,
+          "case": "string_payload-payload_bytes65536",
+          "outside_observed_ranges": {},
+          "predicted": 12508.840722271047
+        },
+        {
+          "actual": 34380,
+          "case": "sqlite-copying",
+          "outside_observed_ranges": {},
+          "predicted": 26367.850888330293
+        },
+        {
+          "actual": 43400,
+          "case": "sqlite-persistence",
+          "outside_observed_ranges": {},
+          "predicted": 37393.84597671404
+        },
+        {
+          "actual": 23076,
+          "case": "sqlite-resume",
+          "outside_observed_ranges": {},
+          "predicted": 24456.662307759834
+        },
+        {
+          "actual": 34300,
+          "case": "sqlite-bound_nul",
+          "outside_observed_ranges": {},
+          "predicted": 26367.850888330293
+        },
+        {
+          "actual": 22680,
+          "case": "sqlite-forwarding",
+          "outside_observed_ranges": {},
+          "predicted": 24264.51614133746
+        },
+        {
+          "actual": 18520,
+          "case": "resource_width-width1",
+          "outside_observed_ranges": {},
+          "predicted": 20913.327201799955
+        },
+        {
+          "actual": 18752,
+          "case": "resource_width-width2",
+          "outside_observed_ranges": {},
+          "predicted": 21918.611858926
+        },
+        {
+          "actual": 19116,
+          "case": "resource_width-width4",
+          "outside_observed_ranges": {},
+          "predicted": 24032.386417674046
+        },
+        {
+          "actual": 19552,
+          "case": "resource_width-width8",
+          "outside_observed_ranges": {},
+          "predicted": 28672.75651315392
+        },
+        {
+          "actual": 12572,
+          "case": "basic-higher-order",
+          "outside_observed_ranges": {},
+          "predicted": 12572.82295271557
+        },
+        {
+          "actual": 12604,
+          "case": "basic-global-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 12631.35590853027
+        },
+        {
+          "actual": 12368,
+          "case": "basic-local-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 12652.119581442497
+        },
+        {
+          "actual": 14564,
+          "case": "basic-combined-effects",
+          "outside_observed_ranges": {},
+          "predicted": 12932.47674614298
+        },
+        {
+          "actual": 12588,
+          "case": "basic-newtype-facade",
+          "outside_observed_ranges": {},
+          "predicted": 12580.996864660307
+        },
+        {
+          "actual": 14600,
+          "case": "basic-higher-kinded-linked",
+          "outside_observed_ranges": {},
+          "predicted": 12757.253518205178
+        },
+        {
+          "actual": 15460,
+          "case": "basic-polymorphic-methods",
+          "outside_observed_ranges": {},
+          "predicted": 13282.171923005993
+        },
+        {
+          "actual": 15212,
+          "case": "basic-relational-bundle",
+          "outside_observed_ranges": {},
+          "predicted": 13772.890454143659
+        }
+      ],
+      "residuals": {
+        "max": 8012.149111669707,
+        "median": 71.35943851577485,
+        "min": -9120.75651315392,
+        "n": 52
+      },
+      "rmse": 2790.7849246093756,
+      "zero_prediction_cases": []
+    },
+    "resolution": {
+      "actual_to_predicted_ratios": {
+        "max": 2.826307980390508,
+        "median": 0.3936914603520314,
+        "min": 0.1037085630445816,
+        "n": 52
+      },
+      "cases": [
+        {
+          "actual": 68,
+          "case": "flat-width1",
+          "outside_observed_ranges": {},
+          "predicted": 224.93953412558454
+        },
+        {
+          "actual": 103,
+          "case": "flat-width2",
+          "outside_observed_ranges": {},
+          "predicted": 344.40476358913384
+        },
+        {
+          "actual": 173,
+          "case": "flat-width4",
+          "outside_observed_ranges": {},
+          "predicted": 583.3352225162325
+        },
+        {
+          "actual": 313,
+          "case": "flat-width8",
+          "outside_observed_ranges": {},
+          "predicted": 1061.19614037043
+        },
+        {
+          "actual": 593,
+          "case": "flat-width16",
+          "outside_observed_ranges": {},
+          "predicted": 2016.9179760788247
+        },
+        {
+          "actual": 1153,
+          "case": "flat-width32",
+          "outside_observed_ranges": {},
+          "predicted": 3928.3616474956134
+        },
+        {
+          "actual": 2273,
+          "case": "flat-width64",
+          "outside_observed_ranges": {},
+          "predicted": 7751.248990329192
+        },
+        {
+          "actual": 4513,
+          "case": "flat-width128",
+          "outside_observed_ranges": {},
+          "predicted": 15397.023675996348
+        },
+        {
+          "actual": 205,
+          "case": "nested_type-depth1",
+          "outside_observed_ranges": {},
+          "predicted": 619.9396404720553
+        },
+        {
+          "actual": 254,
+          "case": "nested_type-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 851.3507117004084
+        },
+        {
+          "actual": 352,
+          "case": "nested_type-depth4",
+          "outside_observed_ranges": {},
+          "predicted": 1456.2515767749726
+        },
+        {
+          "actual": 548,
+          "case": "nested_type-depth8",
+          "outside_observed_ranges": {},
+          "predicted": 3234.368197395533
+        },
+        {
+          "actual": 744,
+          "case": "nested_type-depth12",
+          "outside_observed_ranges": {},
+          "predicted": 5770.238005311337
+        },
+        {
+          "actual": 940,
+          "case": "nested_type-depth16",
+          "outside_observed_ranges": {},
+          "predicted": 9063.861000522382
+        },
+        {
+          "actual": 246,
+          "case": "prerequisite-depth1",
+          "outside_observed_ranges": {},
+          "predicted": 583.3352225162325
+        },
+        {
+          "actual": 269,
+          "case": "prerequisite-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 735.6359544098866
+        },
+        {
+          "actual": 315,
+          "case": "prerequisite-depth4",
+          "outside_observed_ranges": {},
+          "predicted": 1111.2767795061236
+        },
+        {
+          "actual": 407,
+          "case": "prerequisite-depth8",
+          "outside_observed_ranges": {},
+          "predicted": 2146.7158749343134
+        },
+        {
+          "actual": 499,
+          "case": "prerequisite-depth12",
+          "outside_observed_ranges": {},
+          "predicted": 3561.0315640101253
+        },
+        {
+          "actual": 591,
+          "case": "prerequisite-depth16",
+          "outside_observed_ranges": {},
+          "predicted": 5354.223846733558
+        },
+        {
+          "actual": 530,
+          "case": "reexport_width-width1-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 383.6841380929711
+        },
+        {
+          "actual": 961,
+          "case": "reexport_width-width2-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 598.9348099170935
+        },
+        {
+          "actual": 1823,
+          "case": "reexport_width-width4-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 1029.4361535653381
+        },
+        {
+          "actual": 3547,
+          "case": "reexport_width-width8-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 1890.4388408618274
+        },
+        {
+          "actual": 6995,
+          "case": "reexport_width-width16-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 3612.444215454806
+        },
+        {
+          "actual": 13891,
+          "case": "reexport_width-width32-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 7056.454964640763
+        },
+        {
+          "actual": 382,
+          "case": "reexport_depth-width1-depth1",
+          "outside_observed_ranges": {},
+          "predicted": 334.71590128767167
+        },
+        {
+          "actual": 530,
+          "case": "reexport_depth-width1-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 383.6841380929711
+        },
+        {
+          "actual": 838,
+          "case": "reexport_depth-width1-depth4",
+          "outside_observed_ranges": {},
+          "predicted": 481.6206117035701
+        },
+        {
+          "actual": 1502,
+          "case": "reexport_depth-width1-depth8",
+          "outside_observed_ranges": {},
+          "predicted": 677.4935589247681
+        },
+        {
+          "actual": 2230,
+          "case": "reexport_depth-width1-depth12",
+          "outside_observed_ranges": {},
+          "predicted": 873.366506145966
+        },
+        {
+          "actual": 3022,
+          "case": "reexport_depth-width1-depth16",
+          "outside_observed_ranges": {},
+          "predicted": 1069.239453367164
+        },
+        {
+          "actual": 37,
+          "case": "string_payload-payload_bytes16",
+          "outside_observed_ranges": {},
+          "predicted": 126.4606918643064
+        },
+        {
+          "actual": 37,
+          "case": "string_payload-payload_bytes1024",
+          "outside_observed_ranges": {},
+          "predicted": 126.4606918643064
+        },
+        {
+          "actual": 37,
+          "case": "string_payload-payload_bytes65536",
+          "outside_observed_ranges": {},
+          "predicted": 126.4606918643064
+        },
+        {
+          "actual": 27413,
+          "case": "sqlite-copying",
+          "outside_observed_ranges": {},
+          "predicted": 26877.628160052172
+        },
+        {
+          "actual": 44240,
+          "case": "sqlite-persistence",
+          "outside_observed_ranges": {},
+          "predicted": 45774.413633491386
+        },
+        {
+          "actual": 25542,
+          "case": "sqlite-resume",
+          "outside_observed_ranges": {},
+          "predicted": 22552.221768934014
+        },
+        {
+          "actual": 27413,
+          "case": "sqlite-bound_nul",
+          "outside_observed_ranges": {},
+          "predicted": 26877.628160052172
+        },
+        {
+          "actual": 25557,
+          "case": "sqlite-forwarding",
+          "outside_observed_ranges": {},
+          "predicted": 22097.419547223795
+        },
+        {
+          "actual": 24693,
+          "case": "resource_width-width1",
+          "outside_observed_ranges": {},
+          "predicted": 16238.272567388443
+        },
+        {
+          "actual": 24817,
+          "case": "resource_width-width2",
+          "outside_observed_ranges": {},
+          "predicted": 17991.731741265176
+        },
+        {
+          "actual": 25065,
+          "case": "resource_width-width4",
+          "outside_observed_ranges": {},
+          "predicted": 21674.753173353318
+        },
+        {
+          "actual": 25561,
+          "case": "resource_width-width8",
+          "outside_observed_ranges": {},
+          "predicted": 29745.208374868293
+        },
+        {
+          "actual": 79,
+          "case": "basic-higher-order",
+          "outside_observed_ranges": {},
+          "predicted": 264.761277280101
+        },
+        {
+          "actual": 108,
+          "case": "basic-global-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 389.07093789438136
+        },
+        {
+          "actual": 98,
+          "case": "basic-local-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 435.8881434496549
+        },
+        {
+          "actual": 361,
+          "case": "basic-combined-effects",
+          "outside_observed_ranges": {},
+          "predicted": 999.8640847156537
+        },
+        {
+          "actual": 159,
+          "case": "basic-newtype-facade",
+          "outside_observed_ranges": {},
+          "predicted": 285.7476644823722
+        },
+        {
+          "actual": 550,
+          "case": "basic-higher-kinded-linked",
+          "outside_observed_ranges": {},
+          "predicted": 647.3791214244044
+        },
+        {
+          "actual": 1385,
+          "case": "basic-polymorphic-methods",
+          "outside_observed_ranges": {},
+          "predicted": 1663.9459741949681
+        },
+        {
+          "actual": 6166,
+          "case": "basic-relational-bundle",
+          "outside_observed_ranges": {},
+          "predicted": 2703.089433414459
+        }
+      ],
+      "residuals": {
+        "max": 8454.727432611557,
+        "median": -171.35040570284278,
+        "min": -10884.023675996348,
+        "n": 52
+      },
+      "rmse": 3243.6849851126017,
+      "zero_prediction_cases": []
+    },
+    "source-checking": {
+      "actual_to_predicted_ratios": {
+        "max": 2.54350298717485,
+        "median": 0.07123241516119418,
+        "min": 0.016003432135336854,
+        "n": 52
+      },
+      "cases": [
+        {
+          "actual": 141,
+          "case": "flat-width1",
+          "outside_observed_ranges": {},
+          "predicted": 5388.988787199741
+        },
+        {
+          "actual": 221,
+          "case": "flat-width2",
+          "outside_observed_ranges": {},
+          "predicted": 8286.084491982292
+        },
+        {
+          "actual": 381,
+          "case": "flat-width4",
+          "outside_observed_ranges": {},
+          "predicted": 14080.275901547397
+        },
+        {
+          "actual": 701,
+          "case": "flat-width8",
+          "outside_observed_ranges": {},
+          "predicted": 25668.658720677606
+        },
+        {
+          "actual": 1341,
+          "case": "flat-width16",
+          "outside_observed_ranges": {},
+          "predicted": 48845.42435893802
+        },
+        {
+          "actual": 2621,
+          "case": "flat-width32",
+          "outside_observed_ranges": {},
+          "predicted": 95198.95563545884
+        },
+        {
+          "actual": 5181,
+          "case": "flat-width64",
+          "outside_observed_ranges": {},
+          "predicted": 187906.0181885005
+        },
+        {
+          "actual": 10301,
+          "case": "flat-width128",
+          "outside_observed_ranges": {},
+          "predicted": 373320.14329458383
+        },
+        {
+          "actual": 673,
+          "case": "nested_type-depth1",
+          "outside_observed_ranges": {},
+          "predicted": 13451.902701491705
+        },
+        {
+          "actual": 990,
+          "case": "nested_type-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 17152.203745069786
+        },
+        {
+          "actual": 1714,
+          "case": "nested_type-depth4",
+          "outside_observed_ranges": {},
+          "predicted": 26416.325714587445
+        },
+        {
+          "actual": 3522,
+          "case": "nested_type-depth8",
+          "outside_observed_ranges": {},
+          "predicted": 52398.649183068745
+        },
+        {
+          "actual": 5810,
+          "case": "nested_type-depth12",
+          "outside_observed_ranges": {},
+          "predicted": 88319.74535747802
+        },
+        {
+          "actual": 8578,
+          "case": "nested_type-depth16",
+          "outside_observed_ranges": {},
+          "predicted": 134179.61423781526
+        },
+        {
+          "actual": 2536,
+          "case": "prerequisite-depth1",
+          "outside_observed_ranges": {},
+          "predicted": 14080.275901547397
+        },
+        {
+          "actual": 2957,
+          "case": "prerequisite-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 16521.26104334443
+        },
+        {
+          "actual": 3949,
+          "case": "prerequisite-depth4",
+          "outside_observed_ranges": {},
+          "predicted": 22334.991268119247
+        },
+        {
+          "actual": 6533,
+          "case": "prerequisite-depth8",
+          "outside_observed_ranges": {},
+          "predicted": 37689.491482391866
+        },
+        {
+          "actual": 9917,
+          "case": "prerequisite-depth12",
+          "outside_observed_ranges": {},
+          "predicted": 58013.378049628474
+        },
+        {
+          "actual": 14101,
+          "case": "prerequisite-depth16",
+          "outside_observed_ranges": {},
+          "predicted": 83306.65096982908
+        },
+        {
+          "actual": 698,
+          "case": "reexport_width-width1-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 9798.909645566177
+        },
+        {
+          "actual": 1165,
+          "case": "reexport_width-width2-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 15282.51440807103
+        },
+        {
+          "actual": 2099,
+          "case": "reexport_width-width4-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 26249.72393308074
+        },
+        {
+          "actual": 3967,
+          "case": "reexport_width-width8-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 48184.14298310016
+        },
+        {
+          "actual": 7703,
+          "case": "reexport_width-width16-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 92052.981083139
+        },
+        {
+          "actual": 15175,
+          "case": "reexport_width-width32-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 179790.6572832167
+        },
+        {
+          "actual": 605,
+          "case": "reexport_depth-width1-depth1",
+          "outside_observed_ranges": {},
+          "predicted": 8380.700467287406
+        },
+        {
+          "actual": 698,
+          "case": "reexport_depth-width1-depth2",
+          "outside_observed_ranges": {},
+          "predicted": 9798.909645566177
+        },
+        {
+          "actual": 887,
+          "case": "reexport_depth-width1-depth4",
+          "outside_observed_ranges": {},
+          "predicted": 12635.328002123719
+        },
+        {
+          "actual": 1277,
+          "case": "reexport_depth-width1-depth8",
+          "outside_observed_ranges": {},
+          "predicted": 18308.164715238803
+        },
+        {
+          "actual": 1683,
+          "case": "reexport_depth-width1-depth12",
+          "outside_observed_ranges": {},
+          "predicted": 23981.001428353884
+        },
+        {
+          "actual": 2105,
+          "case": "reexport_depth-width1-depth16",
+          "outside_observed_ranges": {},
+          "predicted": 29653.838141468965
+        },
+        {
+          "actual": 69,
+          "case": "string_payload-payload_bytes16",
+          "outside_observed_ranges": {},
+          "predicted": 3099.6970159652337
+        },
+        {
+          "actual": 69,
+          "case": "string_payload-payload_bytes1024",
+          "outside_observed_ranges": {},
+          "predicted": 3099.6970159652337
+        },
+        {
+          "actual": 69,
+          "case": "string_payload-payload_bytes65536",
+          "outside_observed_ranges": {},
+          "predicted": 3099.6970159652337
+        },
+        {
+          "actual": 1212707,
+          "case": "sqlite-copying",
+          "outside_observed_ranges": {},
+          "predicted": 476786.15127045417
+        },
+        {
+          "actual": 597882,
+          "case": "sqlite-persistence",
+          "outside_observed_ranges": {},
+          "predicted": 648782.35592052
+        },
+        {
+          "actual": 203215,
+          "case": "sqlite-resume",
+          "outside_observed_ranges": {},
+          "predicted": 382273.02929815097
+        },
+        {
+          "actual": 1212707,
+          "case": "sqlite-bound_nul",
+          "outside_observed_ranges": {},
+          "predicted": 476786.15127045417
+        },
+        {
+          "actual": 216584,
+          "case": "sqlite-forwarding",
+          "outside_observed_ranges": {},
+          "predicted": 371858.07623543596
+        },
+        {
+          "actual": 111611,
+          "case": "resource_width-width1",
+          "outside_observed_ranges": {},
+          "predicted": 298210.13127902604
+        },
+        {
+          "actual": 117567,
+          "case": "resource_width-width2",
+          "outside_observed_ranges": {},
+          "predicted": 310955.0480204075
+        },
+        {
+          "actual": 129654,
+          "case": "resource_width-width4",
+          "outside_observed_ranges": {},
+          "predicted": 337302.54770716047
+        },
+        {
+          "actual": 154388,
+          "case": "resource_width-width8",
+          "outside_observed_ranges": {},
+          "predicted": 393428.211896627
+        },
+        {
+          "actual": 180,
+          "case": "basic-higher-order",
+          "outside_observed_ranges": {},
+          "predicted": 6354.687355460592
+        },
+        {
+          "actual": 238,
+          "case": "basic-global-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 9204.475072590587
+        },
+        {
+          "actual": 166,
+          "case": "basic-local-recursion",
+          "outside_observed_ranges": {},
+          "predicted": 10372.774952034119
+        },
+        {
+          "actual": 5159,
+          "case": "basic-combined-effects",
+          "outside_observed_ranges": {},
+          "predicted": 22203.867164064366
+        },
+        {
+          "actual": 275,
+          "case": "basic-newtype-facade",
+          "outside_observed_ranges": {},
+          "predicted": 6962.491289008636
+        },
+        {
+          "actual": 1390,
+          "case": "basic-higher-kinded-linked",
+          "outside_observed_ranges": {},
+          "predicted": 14809.434531545463
+        },
+        {
+          "actual": 5486,
+          "case": "basic-polymorphic-methods",
+          "outside_observed_ranges": {},
+          "predicted": 34682.87139136002
+        },
+        {
+          "actual": 9244,
+          "case": "basic-relational-bundle",
+          "outside_observed_ranges": {},
+          "predicted": 58399.563709008275
+        }
+      ],
+      "residuals": {
+        "max": 735920.8487295458,
+        "median": -23224.362680717313,
+        "min": -363019.14329458383,
+        "n": 52
+      },
+      "rmse": 173700.22151893773,
+      "zero_prediction_cases": []
+    }
+  }
+}

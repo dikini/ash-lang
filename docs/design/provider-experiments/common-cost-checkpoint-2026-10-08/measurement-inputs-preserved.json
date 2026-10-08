@@ -1,0 +1,186 @@
+{
+  "ref": "11de19c8e627d74d5e0e3c25dc4a8cfb4f5e0ce6",
+  "rows": [
+    {
+      "path": "docs/design/provider-experiments/semantics.md",
+      "checkpoint": "2251faab9a83ce27eaf27d449bb3ce98cf93774c14f1868dc5dd2eebf2dd7195",
+      "current": "9e7185328881860d5411c3f28242472fd745687c556e3de4dc44728c6d2fea8a",
+      "equal": false
+    },
+    {
+      "path": "foreign-adapter/README.md",
+      "checkpoint": "2ba637717233960da3e1fee6adea02bcc6ace51572ebb5f81b4d4e55ca26778b",
+      "current": "2ba637717233960da3e1fee6adea02bcc6ace51572ebb5f81b4d4e55ca26778b",
+      "equal": true
+    },
+    {
+      "path": "foreign-adapter/sqlite_bridge.c",
+      "checkpoint": "2baf1966655199e5f78175b3210e95620b80e1e7ccdca382bf90233bd308a19a",
+      "current": "2baf1966655199e5f78175b3210e95620b80e1e7ccdca382bf90233bd308a19a",
+      "equal": true
+    },
+    {
+      "path": "foreign-adapter/src/ash_bindings.rs",
+      "checkpoint": "0116f762387b33f8000f471238e770eafc4e8e0de052578fa355cb4f684da524",
+      "current": "0116f762387b33f8000f471238e770eafc4e8e0de052578fa355cb4f684da524",
+      "equal": true
+    },
+    {
+      "path": "foreign-adapter/src/lib.rs",
+      "checkpoint": "62d1c102918a1b80e036e16d31ddd0c6e4e7bd35994c499701351afe8c77e1e0",
+      "current": "62d1c102918a1b80e036e16d31ddd0c6e4e7bd35994c499701351afe8c77e1e0",
+      "equal": true
+    },
+    {
+      "path": "src/core/provider/external.rs",
+      "checkpoint": "6dc0c48b1214c91b2714404345508117a2bd446b49a1244caa12487f24c86e93",
+      "current": "6dc0c48b1214c91b2714404345508117a2bd446b49a1244caa12487f24c86e93",
+      "equal": true
+    },
+    {
+      "path": "src/elaborate/provider.rs",
+      "checkpoint": "fb088cd687e8e82b7ab12bffbbc799e03df3f2cf3d55fa34931bc68055c6b6df",
+      "current": "fb088cd687e8e82b7ab12bffbbc799e03df3f2cf3d55fa34931bc68055c6b6df",
+      "equal": true
+    },
+    {
+      "path": "src/elaborate/provider/tests/external.rs",
+      "checkpoint": "4a82c09de797544e68e1de8c9a1689ca6432903e67f4a51f1ceeb21c296a202c",
+      "current": "4a82c09de797544e68e1de8c9a1689ca6432903e67f4a51f1ceeb21c296a202c",
+      "equal": true
+    },
+    {
+      "path": "src/elaborate/provider/tests/handler.rs",
+      "checkpoint": "5d36eb522e87386661a92d2bd34cdebc31cc540d1077882430494c0587c448d3",
+      "current": "5d36eb522e87386661a92d2bd34cdebc31cc540d1077882430494c0587c448d3",
+      "equal": true
+    },
+    {
+      "path": "src/foreign.rs",
+      "checkpoint": "2487fcfa0abdb3e4a1dc979b462af7ec95a5744e0b769826cf3d762b999851ae",
+      "current": "2487fcfa0abdb3e4a1dc979b462af7ec95a5744e0b769826cf3d762b999851ae",
+      "equal": true
+    },
+    {
+      "path": "tests/fixtures/provider-experiments/control-source/local-order.ash",
+      "checkpoint": "33bc5a5aad520a862d712f4f9851934f78fd71337822b50ca4e442c3c492ea6f",
+      "current": "33bc5a5aad520a862d712f4f9851934f78fd71337822b50ca4e442c3c492ea6f",
+      "equal": true
+    },
+    {
+      "path": "tests/fixtures/provider-experiments/control-source/mixed-local-order.ash",
+      "checkpoint": "9137a804bf8e491aba4714137ec6a63db24b3478eb2158ebfd70af98d56ba1b8",
+      "current": "9137a804bf8e491aba4714137ec6a63db24b3478eb2158ebfd70af98d56ba1b8",
+      "equal": true
+    },
+    {
+      "path": "tests/fixtures/provider-experiments/control-source/sqlite.ash",
+      "checkpoint": "8bdf135a771792ca1962ee9378a8ac1369fa642aa8340587e21d4681ef5b119e",
+      "current": "8bdf135a771792ca1962ee9378a8ac1369fa642aa8340587e21d4681ef5b119e",
+      "equal": true
+    },
+    {
+      "path": "tests/fixtures/provider-experiments/sqlite-copying/local-entry.ash",
+      "checkpoint": "b73cffa15a26a63e5907f8a6dc9ee6c25edee4cd7700412382462fe0f50fc9db",
+      "current": "b73cffa15a26a63e5907f8a6dc9ee6c25edee4cd7700412382462fe0f50fc9db",
+      "equal": true
+    },
+    {
+      "path": "tests/fixtures/provider-experiments/sqlite-copying/refused-entry.ash",
+      "checkpoint": "51ccba4a1c38ffee390293b74d6f22c5805c3ca8ecbb09957a110d0d039b47d3",
+      "current": "51ccba4a1c38ffee390293b74d6f22c5805c3ca8ecbb09957a110d0d039b47d3",
+      "equal": true
+    },
+    {
+      "path": "tests/fixtures/provider-experiments/sqlite-copying/sqlite.ash",
+      "checkpoint": "9805a8fe171af91af688a262aeb3275ebc36bad39fde7eafdb579bc2ad1240f9",
+      "current": "9805a8fe171af91af688a262aeb3275ebc36bad39fde7eafdb579bc2ad1240f9",
+      "equal": true
+    },
+    {
+      "path": "tests/foreign_module_admission.rs",
+      "checkpoint": "756e04ecea2cfaa3aba215b27eabe023021644f58e330f06fa64d2c974cd03e8",
+      "current": "756e04ecea2cfaa3aba215b27eabe023021644f58e330f06fa64d2c974cd03e8",
+      "equal": true
+    },
+    {
+      "path": "tests/provider_sqlite_source.rs",
+      "checkpoint": "9489960363666f7d9547fb8ebb327d4e1581027ae36ef937ca7d620c19d622c9",
+      "current": "9489960363666f7d9547fb8ebb327d4e1581027ae36ef937ca7d620c19d622c9",
+      "equal": true
+    },
+    {
+      "path": "foreign-adapter/examples/sqlite_session.rs",
+      "checkpoint": "faa9bac640747a8e17e814a84dabb9959f23126871a229f3f0d777af4577261c",
+      "current": "faa9bac640747a8e17e814a84dabb9959f23126871a229f3f0d777af4577261c",
+      "equal": true
+    },
+    {
+      "path": "foreign-adapter/tests/sqlite_text.rs",
+      "checkpoint": "44acf18300cea3f768690478806cdc50c36f898d7159882da6f12df5bd8bc494",
+      "current": "44acf18300cea3f768690478806cdc50c36f898d7159882da6f12df5bd8bc494",
+      "equal": true
+    },
+    {
+      "path": "tests/fixtures/provider-experiments/sqlite-copying/control-discard.ash",
+      "checkpoint": "e546518b91b819cc73fb87b8087994078929a2bc0082bf28e3994b40c2a0baba",
+      "current": "e546518b91b819cc73fb87b8087994078929a2bc0082bf28e3994b40c2a0baba",
+      "equal": true
+    },
+    {
+      "path": "tests/fixtures/provider-experiments/sqlite-copying/control-resume.ash",
+      "checkpoint": "f76cd0a5c6cb9b6ec14193cc2d9b9d411b86faae8ef3067d2cff33b3e8fdff62",
+      "current": "f76cd0a5c6cb9b6ec14193cc2d9b9d411b86faae8ef3067d2cff33b3e8fdff62",
+      "equal": true
+    },
+    {
+      "path": "tests/fixtures/provider-experiments/sqlite-copying/copying-entry.ash",
+      "checkpoint": "4027fbff9846f2910e1d8745edd55bad2f5e859743998e0003a5b39feadb3929",
+      "current": "4027fbff9846f2910e1d8745edd55bad2f5e859743998e0003a5b39feadb3929",
+      "equal": true
+    },
+    {
+      "path": "tests/fixtures/provider-experiments/sqlite-copying/rows.ash",
+      "checkpoint": "a08e3c868ac46e4aee18724966c4bc91c0724e0b459b45489a5c74d62ba4a79c",
+      "current": "a08e3c868ac46e4aee18724966c4bc91c0724e0b459b45489a5c74d62ba4a79c",
+      "equal": true
+    },
+    {
+      "path": "tests/fixtures/provider-experiments/sqlite-copying/session-entry.ash",
+      "checkpoint": "9a61f637d2038561ad24e043813cc734cc7ed182e45363d09d5b3df7a66ad335",
+      "current": "9a61f637d2038561ad24e043813cc734cc7ed182e45363d09d5b3df7a66ad335",
+      "equal": true
+    },
+    {
+      "path": "tests/fixtures/provider-experiments/sqlite-copying/text-entry.ash",
+      "checkpoint": "ec5a12700597b7b5ac54ccc9ef5ae4cbb8d9563922db0c053d3db01a981df0bb",
+      "current": "ec5a12700597b7b5ac54ccc9ef5ae4cbb8d9563922db0c053d3db01a981df0bb",
+      "equal": true
+    },
+    {
+      "path": "tests/provider_sqlite_control.rs",
+      "checkpoint": "3942f934333fe1aff723a262f34b35618898cca991c9b7a6e9d97fa6cb840699",
+      "current": "3942f934333fe1aff723a262f34b35618898cca991c9b7a6e9d97fa6cb840699",
+      "equal": true
+    },
+    {
+      "path": "tests/provider_sqlite_copying.rs",
+      "checkpoint": "22aa0ca6387727fe668e6af630336ca85067c17cd31105f4338bed605e8b323f",
+      "current": "22aa0ca6387727fe668e6af630336ca85067c17cd31105f4338bed605e8b323f",
+      "equal": true
+    },
+    {
+      "path": "tests/provider_sqlite_sessions.rs",
+      "checkpoint": "0d651001d29661a928d553669c5eddbe70c29b1e388b0405e37dd3d426d9af79",
+      "current": "0d651001d29661a928d553669c5eddbe70c29b1e388b0405e37dd3d426d9af79",
+      "equal": true
+    },
+    {
+      "path": "tests/support/sqlite_copying.rs",
+      "checkpoint": "12b63f4c43d1227ff43918a059232c46409191791978f933b93c50aabcfa7506",
+      "current": "12b63f4c43d1227ff43918a059232c46409191791978f933b93c50aabcfa7506",
+      "equal": true
+    }
+  ],
+  "all_equal": false
+}

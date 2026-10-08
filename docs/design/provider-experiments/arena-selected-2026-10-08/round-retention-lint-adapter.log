@@ -1,0 +1,71 @@
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/arena-provider/foreign-adapter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.71s
+     Running unittests src/lib.rs (target/debug/deps/ash_foreign_adapter-3eeadc7529a6a6d2)
+
+running 41 tests
+test arena::tests::checked_alignment_and_end_arithmetic_refuse_overflow_without_a_backing_request ... ok
+test arena::tests::owner_identity_exhaustion_never_wraps_or_reuses_a_published_id ... ok
+test arena::tests::private_corrupt_record_fault_rejects_before_exposing_any_payload_slice ... ok
+test arena::tests::private_fault_injected_payload_failure_has_no_partial_owner_or_table ... ok
+test arena::tests::private_identity_exhaustion_fault_releases_both_real_backing_allocations ... ok
+test arena::tests::private_fault_injected_table_allocation_failure_drops_partial_payload ... ok
+test arena::tests::publications_never_allocate_more_backing_and_drop_releases_requested_layouts ... ok
+test arena_bindings::codec::tests::malformed_native_contents_are_rejected_without_a_copied_result ... ok
+test arena_bindings::codec::tests::malformed_dynamic_headers_remain_binding_failures_before_work_charges ... ok
+test arena_bindings::tests::observation_capacity_refusal_preserves_storage_reason ... ok
+test arena_bindings::codec::tests::nested_tuples_and_nominal_payloads_roundtrip_through_native_storage ... ok
+test arena_bindings::codec::tests::primitive_values_roundtrip_through_native_storage_and_survive_owner_completion ... ok
+test arena_bindings::codec::tests::refused_preparation_and_publication_preserve_an_earlier_native_object ... ok
+test tests::actual_failed_open_disposes_partial_connection_without_publication ... ok
+test tests::actual_busy_close_retains_connection_until_statement_finishes ... ok
+test tests::diagnostic_rejects_closed_owner_before_any_native_query ... ok
+test tests::diagnostic_reports_success_without_consuming_native_owners ... ok
+test tests::empty_blob_checks_suspect_results_before_another_native_interface ... ok
+test tests::empty_blob_and_sql_null_remain_distinct ... ok
+test tests::drop_order_is_safe_even_if_rust_connection_owner_drops_first ... ok
+test tests::injected_blob_oom_is_classified_without_claiming_native_exhaustion ... ok
+test tests::diagnostic_reports_actual_prepare_failure ... ok
+test tests::records_runtime_version_and_configuration ... ok
+test tests::invalid_abi_inputs_and_storage_kind_are_checked ... ok
+test tests::injected_statement_publication_failure_finalizes_before_close ... ok
+test tests::injected_open_publication_failure_is_distinct_and_disposes_native_owner ... ok
+test tests::opens_real_memory_database ... ok
+test tests::injected_bytes_oom_is_classified_without_claiming_native_exhaustion ... ok
+test tests::protocol_checks_prevent_native_column_and_automatic_reset_access ... ok
+test tests::diagnostic_copy_survives_later_native_calls_and_close ... ok
+test tests::malformed_sql_is_error_and_empty_sql_has_no_statement ... ok
+test tests::copied_blob_survives_input_and_native_owner_completion ... ok
+test tests::constraint_body_failure_and_consuming_finalize_report_are_preserved ... ok
+test tests::select_parameter_copies_42_and_finalizes_before_close ... ok
+test tests::independent_connections_and_repeat_activations_keep_distinct_bindings ... ok
+test tests::unused_sql_is_rejected_and_unpublished_statement_is_finalized ... ok
+test tests::reset_preserves_bindings_and_clear_replaces_them_with_null ... ok
+test tests::file_persistence_is_observed_after_close_and_reopen ... ok
+test arena_bindings::codec::tests::aggregate_corruption_cycles_and_expanded_sharing_refuse_without_publication ... ok
+test arena_bindings::tests::typed_load_reply_rejection_abandons_real_native_observation ... ok
+test arena_bindings::tests::typed_store_reply_rejection_abandons_real_native_preparation ... ok
+
+test result: ok. 41 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+     Running tests/arena.rs (target/debug/deps/arena-cbdb2dc3b44f16bc)
+
+running 10 tests
+test alignment_padding_counts_and_exact_payload_capacity_refuses_before_initialization ... ok
+test candidates_are_non_owning_and_owner_object_and_layout_checks_are_independent ... ok
+test initializer_panic_drops_partial_temporary_state_and_preserves_published_objects ... ok
+test all_admitted_alignments_are_real_and_invalid_alignments_leave_usage_unchanged ... ok
+test partial_initializer_failure_rolls_back_and_retry_does_not_reveal_failed_bytes ... ok
+test earlier_payloads_and_keys_remain_stable_after_more_publications_and_owner_moves ... ok
+test pointer_and_metadata_products_reject_before_any_payload_initializer ... ok
+test real_bounded_backing_publishes_encoded_bytes_and_reports_physical_metadata ... ok
+test result_admission_precedes_native_publication_and_stale_candidates_never_initialize ... ok
+test zero_payload_publishes_distinct_zero_sized_objects_up_to_the_exact_record_limit ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests ash_foreign_adapter
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
