@@ -145,6 +145,7 @@ pub(crate) fn prepare_final_provider_program(
         program.groups(),
         program.result(),
         basecatalog,
+        TypeWorkBudget::default(),
     )
     .map_err(TypeError::Internal)?;
     std::mem::swap(&mut compiler.type_work, typework);

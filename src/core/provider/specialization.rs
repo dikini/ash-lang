@@ -1421,7 +1421,7 @@ impl AdmittedNativeStorageRelation {
     pub(crate) fn owner(&self) -> crate::types::TypeVariableId { self.owner }
     pub(crate) fn family(&self) -> super::ProviderFamilyIdentity { self.family }
     pub(crate) fn member(&self) -> usize { self.member }
-    pub(crate) fn result(&self) -> super::HandlerNativeStorageResult { self.result }
+    pub(in crate::core) fn result(&self) -> super::HandlerNativeStorageResult { self.result }
 }
 struct SpecializedOccurrence {
     slot: usize,

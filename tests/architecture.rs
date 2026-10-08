@@ -1557,6 +1557,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/validate.rs::Validator.binders", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeCoreTree),
     kind_site!("src/core/validate.rs::Validator.program", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeCoreTree),
     kind_site!("src/core/variable.rs::TypedBinder.ty", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/driver.rs::ModularCoreResult.$alias", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree, Shared),
     kind_site!("src/driver.rs::FileFailure.Pipeline.0", FieldTransientCarrierRetentionPreservedCarrierPipelineObservationPipelineTypeObservation),
     kind_site!("src/driver.rs::Observation._heap", FieldTransientCarrierRetentionPreservedCarrierPipelineObservationPipelineTypeObservation, Shared),
     kind_site!("src/driver.rs::Observation.ty", FieldTransientValueTypeValuePipelineObservationPipelineTypeObservation),

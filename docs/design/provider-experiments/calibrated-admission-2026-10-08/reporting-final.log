@@ -1,0 +1,9 @@
+
+running 4 tests
+test constrained_entry_rejection_reports_source_work_after_its_closure_walk ... ok
+test entry_rejection_retains_observed_checking_without_fabricated_later_costs ... ok
+test ordinary_public_execution_reports_completed_costs_without_changing_the_value ... ok
+test source_rejection_preserves_its_reason_and_partial_phase_measurement ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

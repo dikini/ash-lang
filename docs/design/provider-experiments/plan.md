@@ -531,3 +531,23 @@ case, checking needs an unstated assumption, or native behavior contradicts the
 model. Report setup failure separately. Preserve the copying baseline when a
 borrowing candidate fails. Passing checks alone cannot make a failed design
 eligible for merge.
+
+
+## Calibrated public-driver admission, 2026-10-08
+
+The user accepted the completed practical costs and selected finite phase
+allowances with explicitly reported deficits up to 10%. This supersedes the
+earlier no-limit-change follow-on checkpoints above. Only the public modular
+pipeline selects the calibrated source, final-elaborator and independent-Core
+budgets; standalone and explicit caller budgets and all depth limits retain
+their existing behavior. The four original realistic SQLite cases now pass
+with their complete native assertions. See the
+[policy and evidence](calibrated-admission-2026-10-08/README.md).
+
+The separate offline assessment is committed on `codex/resource-calibration`
+at `ed3764a`; it retains all prior measurements and reports accepted physical
+cost deficits as optimization targets. Its library-input snapshot is not
+implicitly merged into Common. Common owns the shared driver/Core policy;
+SQLite owns the preserved library/native delivery and example-host visibility.
+Root retains the serial compiler/integration window until the verified shared
+delivery is merged and checked in the original worktree.

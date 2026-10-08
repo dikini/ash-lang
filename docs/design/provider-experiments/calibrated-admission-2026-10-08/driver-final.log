@@ -1,0 +1,23 @@
+
+running 18 tests
+test driver::tests::compile_failure_can_render_after_the_input_has_been_removed ... ok
+test driver::tests::consumed_closure_observation_value_retains_its_captured_structural_heap ... ok
+test driver::tests::deep_wide_public_routes_admit_and_reject_on_a_small_stack ... ok
+test driver::tests::downstream_evaluator_failure_discards_deep_result_type_iteratively ... ok
+test driver::tests::downstream_validation_failure_discards_deep_result_type_iteratively ... ok
+test driver::tests::entry_result_closure_walks_every_nested_type ... ok
+test driver::tests::exact_constraint_budget_persists_through_evidence_validation ... ok
+test driver::tests::independent_core_validation_starts_with_only_the_core_registry_owner ... ok
+test driver::tests::injected_evidence_failure_stops_before_core_synthesis_consumers ... ok
+test driver::tests::injected_validation_failure_stops_before_evaluation ... ok
+test driver::tests::measured_core_rejection_retains_completed_prior_work_without_evaluating ... ok
+test driver::tests::modular_core_debits_the_callers_prefix_with_exact_bounded_retry ... ok
+test driver::tests::observation_consuming_accessors_preserve_parts_and_discard_unconsumed_type ... ok
+test driver::tests::observation_discards_a_canonical_application_spine_on_a_small_stack ... ok
+test driver::tests::relational_interface_graph_has_an_exact_cross_stage_boundary ... ok
+test driver::tests::returned_closure_observation_retains_its_captured_structural_heap ... ok
+test driver::tests::runtime_failures_do_not_retain_compile_time_sources ... ok
+test driver::tests::wide_interface_graph_records_the_exact_validation_prefix ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 1631 filtered out; finished in 2.23s
+

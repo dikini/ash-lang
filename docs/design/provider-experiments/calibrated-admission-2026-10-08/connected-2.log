@@ -1,0 +1,126 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/common-resource-support)
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/common-resource-support/foreign-adapter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 23.13s
+     Running tests/compiler_work_reporting.rs (target/debug/deps/compiler_work_reporting-7b05e54d16601fce)
+
+running 4 tests
+test constrained_entry_rejection_reports_source_work_after_its_closure_walk ... ok
+test entry_rejection_retains_observed_checking_without_fabricated_later_costs ... ok
+test ordinary_public_execution_reports_completed_costs_without_changing_the_value ... ok
+test source_rejection_preserves_its_reason_and_partial_phase_measurement ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/provider_arena_source.rs (target/debug/deps/provider_arena_source-92dfb16534e1853c)
+
+running 4 tests
+test arena_acquires_queries_actual_usage_and_releases_through_public_driver ... ok
+test arena_native_configuration_refusal_executes_no_body_or_release ... ok
+test repeated_and_nested_arenas_have_unique_native_owners_and_one_release_each ... ok
+test resource_dependent_arena_access_cannot_escape ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s
+
+     Running tests/provider_control_source.rs (target/debug/deps/provider_control_source-0206648866d436f9)
+
+running 22 tests
+test a_bare_local_row_preserves_the_enclosing_declarations_exclusions ... ok
+test an_unrelated_function_binding_cannot_close_a_conditional_scope_before_tuple_context ... ok
+test captured_native_scopes_resume_without_reacquisition ... ok
+test checked_implementation_method_preserves_its_closed_inherited_owner_row ... ok
+test curried_global_uses_the_last_consumed_arrow_for_open_resource_actuals ... ok
+test enclosing_result_type_determines_a_no_capture_resource_body_method ... ok
+test enclosing_result_types_determine_conditional_capture_resource_body_methods ... ok
+test enclosing_tuple_result_determines_a_no_capture_resource_body_function ... ok
+test finite_same_provider_arguments_and_body_row_have_distinct_capture_demands ... ok
+test formal_open_delta_callback_executes_before_resume_under_surviving_handlers ... ok
+test genuine_step_failure_preserves_body_error_and_consumed_finalize_error ... ok
+test injected_consumed_completion_is_distinct_from_native_failure_and_retention ... ok
+test injected_retained_completion_quarantines_the_same_owner_until_host_teardown ... ok
+test local_annotations_require_the_enclosing_rigid_row_exclusion ... ok
+test local_originals_release_a_helper_before_the_next_original_component ... ok
+test local_template_preparation_excludes_an_unrelated_unclosed_helper ... ok
+test nested_lexical_method_resource_actuals_use_the_authenticated_open_owner_row ... ok
+test open_callback_union_does_not_invent_a_missing_lacks_condition ... ok
+test owned_discard_finishes_structurally_and_cleanup_can_use_the_outer_resource ... ok
+test removed_ordinary_provider_override_cannot_replace_the_exact_resource_interpreter ... ok
+test repeated_same_source_provider_discard_closes_each_actual_activation_once ... ok
+test resource_dependent_access_cannot_leave_its_lexical_scope ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.64s
+
+     Running tests/provider_owner_rows.rs (target/debug/deps/provider_owner_rows-c84f725719af2c69)
+
+running 9 tests
+test mixed_owner_declarations_and_imported_callbacks_check_through_public_driver ... ok
+test nested_owner_rows_obey_the_existing_depth_limit_on_a_small_stack ... ok
+test resource_instance_actuals_preserve_preceding_row_scope_and_order ... ok
+test resource_instance_actuals_reject_omission_wrong_tags_and_fresh_scope_dependencies ... ok
+test resource_instance_rows_use_the_existing_depth_limit ... ok
+test row_arguments_have_no_standalone_or_ordinary_nominal_type_denotation ... ok
+test row_free_resource_instances_preserve_explicit_and_deferred_retained_arguments ... ok
+test source_owner_arguments_reject_wrong_tags_kinds_and_saturation ... ok
+test targeted_reexport_retains_nested_row_effect_owner_metadata ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.82s
+
+     Running tests/provider_retention_source.rs (target/debug/deps/provider_retention_source-35b6fc385c61c2bd)
+
+running 3 tests
+test finish_conversion_failure_preserves_disposition_and_dependency_order_without_retry ... ok
+test retained_child_and_parent_keep_exact_native_owners_until_dependency_ordered_host_teardown ... ok
+test retained_dependency_revokes_parent_source_access_without_retrying_native_finish ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s
+
+     Running tests/provider_sqlite_control.rs (target/debug/deps/provider_sqlite_control-2fe3c8892667913b)
+
+running 2 tests
+test captured_statement_and_connection_resume_actual_copied_query_without_reacquisition ... ok
+test owned_discard_runs_source_cleanup_then_statement_finish_before_connection_close ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.75s
+
+     Running tests/provider_sqlite_copying.rs (target/debug/deps/provider_sqlite_copying-b82a66bcca474e24)
+
+running 7 tests
+test bound_text_nul_is_an_ordinary_failure_with_both_completion_reports ... ok
+test copied_unicode_blobs_nulls_and_empty_values_survive_both_scopes ... ok
+test imported_unicode_text_binding_returns_an_independent_copy_after_completion ... ok
+test integer_width_and_nonnegative_parameter_index_fail_before_native_binding ... ok
+test malformed_native_text_and_float_columns_preserve_copy_and_type_failures ... ok
+test reset_preserves_bound_text_and_clear_restores_null_after_copied_results ... ok
+test wrong_storage_kind_and_bad_column_are_distinct_from_protocol_errors ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.19s
+
+     Running tests/provider_sqlite_sessions.rs (target/debug/deps/provider_sqlite_sessions-ead443f8522b4451)
+
+running 8 tests
+test binding_and_clear_after_a_row_reject_without_native_mutation ... ok
+test column_before_row_and_step_after_done_are_protocol_alternatives ... ok
+test genuine_constraint_failure_preserves_body_error_and_consumed_finalize_report ... ok
+test malformed_sql_reports_the_real_native_code_and_copied_diagnostic ... ok
+test negative_parameter_index_from_an_independent_sqlite_integer_is_rejected ... ok
+test refused_empty_multiple_and_nul_sql_keep_acquisition_outcomes_and_guards ... ok
+test representable_parameter_outside_statement_preserves_sqlite_range_error ... ok
+test statement_reuse_transactions_generic_rows_and_reopen_preserve_every_report ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.96s
+
+     Running tests/provider_sqlite_source.rs (target/debug/deps/provider_sqlite_source-51cc827a60b0b13c)
+
+running 10 tests
+test copying_sqlite_session_executes_through_public_foreign_runtime ... ok
+test first_copying_sqlite_source_bundle_parses_with_the_ordinary_frontend ... ok
+test imported_resource_report_dependencies_do_not_require_a_client_type_annotation ... ok
+test local_resource_definitions_execute_through_public_foreign_runtime ... ok
+test original_four_match_client_exhausts_projection_depth_before_provider_checking ... ok
+test refused_statement_acquisition_executes_no_statement_body_or_finish ... ok
+test repeated_and_simultaneous_sqlite_scopes_resolve_their_actual_activations ... ok
+test resource_initializer_executes_once_in_the_preceding_scope ... ok
+test sqlite_library_declarations_check_against_registered_dependencies ... ok
+test static_foreign_registration_does_not_authorize_native_execution ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.61s
+

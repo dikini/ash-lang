@@ -1,0 +1,190 @@
+warning: associated items `original`, `construct`, `ready`, `publish_head`, and `target` are never used
+   --> src/core/capture/value/deferred_frame.rs:227:19
+    |
+175 | impl Arena {
+    | ---------- associated items in this implementation
+...
+227 |     pub(super) fn original(&mut self, port: OriginalPort, budget: &mut TypeWorkBudget) -> Result<RouteId, Failure> {
+    |                   ^^^^^^^^
+...
+479 |     pub(super) fn construct(
+    |                   ^^^^^^^^^
+...
+499 |     pub(super) fn ready(
+    |                   ^^^^^
+...
+540 |     pub(super) fn publish_head(
+    |                   ^^^^^^^^^^^^
+...
+742 |     pub(super) fn target(
+    |                   ^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: variant `Cyclic` is never constructed
+   --> src/core/capture/value/local_recipe.rs:105:5
+    |
+100 | pub(super) enum Decline {
+    |                 ------- variant in this enum
+...
+105 |     Cyclic,
+    |     ^^^^^^
+    |
+    = note: `Decline` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: field `0` is never read
+  --> src/core/capture/value/support_plan.rs:24:15
+   |
+24 |     TypedCall(usize),
+   |     --------- ^^^^^
+   |     |
+   |     field in this variant
+   |
+   = note: `SupportKind` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+   |
+24 -     TypedCall(usize),
+24 +     TypedCall(()),
+   |
+
+warning: field `0` is never read
+  --> src/core/capture/value/support_plan.rs:26:14
+   |
+26 |     Terminal(SlotRole),
+   |     -------- ^^^^^^^^
+   |     |
+   |     field in this variant
+   |
+   = note: `SupportKind` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+   |
+26 -     Terminal(SlotRole),
+26 +     Terminal(()),
+   |
+
+warning: field `function` is never read
+  --> src/core/capture/value/support_plan.rs:54:5
+   |
+52 | pub(super) struct CaptureSupportPlan<'g> {
+   |                   ------------------ field in this struct
+53 |     graph: &'g Graph,
+54 |     function: usize,
+   |     ^^^^^^^^
+
+warning: methods `function` and `typed_calls` are never used
+  --> src/core/capture/value/support_plan.rs:62:19
+   |
+60 | impl<'g> CaptureSupportPlan<'g> {
+   | ------------------------------- methods in this implementation
+61 |     pub(super) fn graph(&self) -> &'g Graph { self.graph }
+62 |     pub(super) fn function(&self) -> usize { self.function }
+   |                   ^^^^^^^^
+...
+65 |     pub(super) fn typed_calls(&self) -> &[TypedCallRelation] { &self.typed_calls }
+   |                   ^^^^^^^^^^^
+
+warning: fields `role` and `saved_capture_ordinal` are never read
+   --> src/core/capture/value/support_plan.rs:188:16
+    |
+186 | pub(super) struct SlotBaseline {
+    |                   ------------ fields in this struct
+187 |     pub(super) expression: usize,
+188 |     pub(super) role: SlotRole,
+    |                ^^^^
+189 |     pub(super) formal_ordinal: Option<usize>,
+190 |     pub(super) saved_capture_ordinal: Option<usize>,
+    |                ^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `SlotBaseline` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: field `factory` is never read
+  --> src/core/capture/value/producer.rs:80:16
+   |
+79 | pub(super) struct RootFeed {
+   |                   -------- field in this struct
+80 |     pub(super) factory: usize,
+   |                ^^^^^^^
+   |
+   = note: `RootFeed` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: fields `factory` and `returned` are never read
+  --> src/core/capture/value/producer_zero.rs:52:9
+   |
+51 |     TypedCall { expression: usize, function: usize, arguments: Vec<usize>,
+   |     --------- fields in this variant
+52 |         factory: usize, returned: usize },
+   |         ^^^^^^^         ^^^^^^^^
+
+warning: field `factory` is never read
+  --> src/core/capture/value/producer_zero.rs:53:51
+   |
+53 |     Evidence { expression: usize, payload: usize, factory: usize, returned: usize },
+   |     -------- field in this variant                ^^^^^^^
+
+warning: `ash` (lib) generated 10 warnings
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/common-resource-support)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.49s
+     Running tests/provider_sqlite_copying.rs (target/debug/deps/provider_sqlite_copying-b82a66bcca474e24)
+
+running 1 test
+test qualified_forwarding_chain_preserves_integer_and_source_completion ... ash-fusion-definition-source function=250 creation=0 captures=2
+ash-fusion-definition-source function=256 creation=0 captures=2
+ash-fusion-definition-source function=262 creation=0 captures=2
+ash-fusion-definition-source function=268 creation=0 captures=2
+ash-fusion-definition-source function=276 creation=0 captures=1
+ash-fusion-definition-source function=498 creation=0 captures=0
+ash-fusion-definition-source function=506 creation=0 captures=0
+ash-fusion-connected-installed expression=456 slot=158 context=0 total_raw=7 total_evidence=4 new_raw=7 new_evidence=4 root_reused=0
+ash-fusion-connected-installed expression=471 slot=189 context=0 total_raw=7 total_evidence=4 new_raw=0 new_evidence=0 root_reused=1
+ash-fusion-connected-installed expression=486 slot=220 context=0 total_raw=7 total_evidence=4 new_raw=0 new_evidence=0 root_reused=1
+ash-fusion-typed-leaf-source function=275 creation=33 application=486 factory=276 arguments_context=17 captures=3
+ash-fusion-typed-leaf-source function=275 creation=34 application=486 factory=276 arguments_context=18 captures=3
+ash-fusion-typed-leaf-source function=275 creation=48 application=486 factory=276 arguments_context=24 captures=3
+ash-fusion-typed-leaf-source function=275 creation=53 application=486 factory=276 arguments_context=31 captures=3
+ash-fusion-typed-leaf-source function=275 creation=54 application=486 factory=276 arguments_context=32 captures=3
+ash-fusion-typed-leaf-source function=275 creation=61 application=486 factory=276 arguments_context=41 captures=3
+ash-fusion-typed-leaf-source function=275 creation=62 application=486 factory=276 arguments_context=42 captures=3
+ash-fusion-typed-leaf-source function=275 creation=69 application=486 factory=276 arguments_context=40 captures=3
+ash-fusion-typed-leaf-source function=275 creation=75 application=486 factory=276 arguments_context=47 captures=3
+ash-fusion-typed-leaf-source function=275 creation=82 application=486 factory=276 arguments_context=57 captures=3
+ash-fusion-typed-leaf-source function=275 creation=84 application=486 factory=276 arguments_context=51 captures=3
+ash-fusion-typed-leaf-source function=275 creation=85 application=486 factory=276 arguments_context=52 captures=3
+ash-fusion-typed-leaf-source function=275 creation=92 application=486 factory=276 arguments_context=58 captures=3
+ash-fusion-typed-leaf-source function=275 creation=93 application=486 factory=276 arguments_context=66 captures=3
+ash-fusion-typed-leaf-source function=275 creation=94 application=486 factory=276 arguments_context=67 captures=3
+ash-fusion-typed-leaf-source function=275 creation=95 application=486 factory=276 arguments_context=59 captures=3
+ash-fusion-typed-leaf-source function=275 creation=101 application=486 factory=276 arguments_context=65 captures=3
+ash-fusion-typed-leaf-source function=275 creation=102 application=486 factory=276 arguments_context=76 captures=3
+ash-fusion-typed-leaf-source function=275 creation=105 application=486 factory=276 arguments_context=77 captures=3
+ash-fusion-typed-leaf-source function=275 creation=106 application=486 factory=276 arguments_context=68 captures=3
+ash-fusion-typed-leaf-source function=275 creation=111 application=486 factory=276 arguments_context=83 captures=3
+ash-fusion-typed-leaf-source function=275 creation=117 application=486 factory=276 arguments_context=80 captures=3
+ash-fusion-typed-leaf-source function=275 creation=119 application=486 factory=276 arguments_context=81 captures=3
+ash-fusion-typed-leaf-source function=275 creation=125 application=486 factory=276 arguments_context=96 captures=3
+ash-fusion-typed-leaf-source function=275 creation=126 application=486 factory=276 arguments_context=87 captures=3
+ash-fusion-typed-leaf-source function=275 creation=127 application=486 factory=276 arguments_context=88 captures=3
+ash-fusion-typed-leaf-source function=275 creation=128 application=486 factory=276 arguments_context=98 captures=3
+ash-fusion-typed-leaf-source function=275 creation=129 application=486 factory=276 arguments_context=89 captures=3
+ash-fusion-typed-leaf-source function=275 creation=130 application=486 factory=276 arguments_context=90 captures=3
+ash-fusion-typed-leaf-source function=275 creation=133 application=486 factory=276 arguments_context=107 captures=3
+ash-fusion-typed-leaf-source function=275 creation=134 application=486 factory=276 arguments_context=108 captures=3
+ash-fusion-typed-leaf-source function=275 creation=135 application=486 factory=276 arguments_context=97 captures=3
+ash-fusion-typed-leaf-source function=275 creation=137 application=486 factory=276 arguments_context=109 captures=3
+ash-fusion-typed-leaf-source function=275 creation=138 application=486 factory=276 arguments_context=110 captures=3
+ash-fusion-typed-leaf-source function=275 creation=139 application=486 factory=276 arguments_context=99 captures=3
+ash-fusion-typed-leaf-source function=275 creation=143 application=486 factory=276 arguments_context=118 captures=3
+ash-fusion-typed-leaf-source function=275 creation=147 application=486 factory=276 arguments_context=120 captures=3
+
+thread 'qualified_forwarding_chain_preserves_integer_and_source_completion' (1740994) panicked at tests/support/sqlite_copying.rs:65:35:
+forwarding-chain.ash: Pipeline(PipelineDiagnostic { failure: Typing(Internal(TypeResourceExhausted)), sources: [SourceFile { id: SourceId(2), display_path: "@foreign.provider", text: "pub interface StateAccess<Q, State> where Q -> State {\nstate_of : Q -> State\n}\n", line_starts: [0, 55, 77, 79] }, SourceFile { id: SourceId(1), display_path: "/tmp/ash-sqlite-copying-1740993-0/provider.ash", text: "pub import @foreign.provider (StateAccess, state_of)\n\npub type Completion<E> = Closed\n| ConsumedError(E)\n| RetainedError(E)\n\npub type Scope<I, E, T> = NotAcquired(I)\n| Completed(T, Completion<E>)\n", line_starts: [0, 53, 54, 86, 105, 124, 125, 166, 196] }, SourceFile { id: SourceId(4), display_path: "@foreign.sqlite", text: "pub opaque type ConnectionState<R> = HiddenNativeConnectionState\npub opaque type StatementState<S, C> = HiddenNativeStatementState\npub type OpenConfig = InMemory\n| File(String)\npub type InputFault = BadIndex\n| BadInteger\n| BadBytes\n| BadColumn\n| ColumnTypeMismatch\n| BadSql\n| MultipleStatements\n| BadPath\n| BadText\npub type ProtocolFault = NotPrepared\n| NotRow\n| AfterDone\n| ClosedOwner\npub type Error = NativeFailure(Int, String)\n| InputFailure(InputFault)\n| ProtocolFailure(ProtocolFault)\n| ConversionFailure\n| AllocationFailure\npub type OpenError = OpenFailure(Error)\npub type CloseError = CloseFailure(Error)\npub type PrepareError = PrepareFailure(Error)\n| EmptySql\npub type FinalizeError = FinalizeFailure(Error)\npub type Result<T> = Ok(T)\n| Err(Error)\npub type StepResult = Row\n| Done\n| StepError(Error)\npub type BytesOrNull = NullBytes\n| BlobBytes(Bytes)\npub type Acquire<State, E> = Acquired(State)\n| Refused(E)\npub type Finish<State, E> = Consumed\n| ConsumedFailure(E)\n| Retained(State, E)\npub type TextOrNull = NullText\n| TextValue(String)\npub effect Connection<R> {\nopen : OpenConfig -> Acquire<ConnectionState<R>, OpenError>\ndiagnostic : ConnectionState<R> -> Error\nclose : ConnectionState<R> -> Finish<ConnectionState<R>, CloseError>\n}\npub effect Statement<S, C> {\nprepare : (ConnectionState<C>, String) -> Acquire<StatementState<S, C>, PrepareError>\nbind_int : (StatementState<S, C>, Int, Int) -> Result<Unit>\nstep : StatementState<S, C> -> StepResult\ncolumn_int : (StatementState<S, C>, Int) -> Result<Int>\nfinalize : StatementState<S, C> -> Finish<StatementState<S, C>, FinalizeError>\nbind_bytes : (StatementState<S, C>, Int, BytesOrNull) -> Result<Unit>\ncolumn_bytes : (StatementState<S, C>, Int) -> Result<BytesOrNull>\nreset : StatementState<S, C> -> Result<Unit>\nclear_bindings : StatementState<S, C> -> Result<Unit>\nbind_text : (StatementState<S, C>, Int, TextOrNull) -> Result<Unit>\ncolumn_text : (StatementState<S, C>, Int) -> Result<TextOrNull>\n}\n", line_starts: [0, 65, 131, 162, 177, 208, 221, 232, 244, 265, 274, 295, 305, 315, 352, 361, 373, 387, 431, 458, 491, 511, 531, 571, 613, 659, 670, 718, 745, 758, 784, 791, 810, 843, 862, 907, 920, 957, 978, 999, 1030, 1050, 1077, 1137, 1178, 1247, 1249, 1278, 1364, 1424, 1466, 1522, 1601, 1671, 1737, 1782, 1836, 1904, 1968, 1970] }, SourceFile { id: SourceId(3), display_path: "/tmp/ash-sqlite-copying-1740993-0/sqlite.ash", text: "import @foreign.sqlite as Native\nimport provider as Provider\npub import @foreign.sqlite (BytesOrNull, NullBytes, BlobBytes, TextOrNull, NullText, TextValue, OpenConfig, InMemory, File, OpenError, OpenFailure, CloseError, CloseFailure, PrepareError, PrepareFailure, EmptySql, FinalizeError, FinalizeFailure)\n\npub newtype SqlText = SqlText(String)\n\npub type Error = ForeignError(Native.Error)\n| MissingRow\n| UnexpectedRow\npub type Result<T> = Ok(T)\n| Err(Error)\npub type StepResult = Row\n| Done\n| StepError(Error)\n\npub effect ConnectionOps<R> {\ndiagnostic : Connection<R> -> Error\n}\npub interface ConnectionProvider<R> {\ndiagnostic : Connection<R> -> Error ! {ConnectionOps<R>}\n}\n\npub effect StatementOps<S, C> {\nbind_int : (Statement<S, C>, Int, Int) -> Result<Unit>\nstep : Statement<S, C> -> StepResult\ncolumn_int : (Statement<S, C>, Int) -> Result<Int>\nbind_bytes : (Statement<S, C>, Int, BytesOrNull) -> Result<Unit>\ncolumn_bytes : (Statement<S, C>, Int) -> Result<BytesOrNull>\nbind_text : (Statement<S, C>, Int, TextOrNull) -> Result<Unit>\ncolumn_text : (Statement<S, C>, Int) -> Result<TextOrNull>\nreset : Statement<S, C> -> Result<Unit>\nclear_bindings : Statement<S, C> -> Result<Unit>\n}\npub interface StatementProvider<S, C> {\nbind_int : (Statement<S, C>, Int, Int) -> Result<Unit> ! {StatementOps<S, C>}\nstep : Statement<S, C> -> StepResult ! {StatementOps<S, C>}\ncolumn_int : (Statement<S, C>, Int) -> Result<Int> ! {StatementOps<S, C>}\nbind_bytes : (Statement<S, C>, Int, BytesOrNull) -> Result<Unit> ! {StatementOps<S, C>}\ncolumn_bytes : (Statement<S, C>, Int) -> Result<BytesOrNull> ! {StatementOps<S, C>}\nbind_text : (Statement<S, C>, Int, TextOrNull) -> Result<Unit> ! {StatementOps<S, C>}\ncolumn_text : (Statement<S, C>, Int) -> Result<TextOrNull> ! {StatementOps<S, C>}\nreset : Statement<S, C> -> Result<Unit> ! {StatementOps<S, C>}\nclear_bindings : Statement<S, C> -> Result<Unit> ! {StatementOps<S, C>}\n}\n\npub resource Connection<R> {\ninput OpenConfig\nstate Native.ConnectionState<R>\nresult Provider.Scope<OpenError, CloseError, T> for <T>\nprovider ConnectionProvider<R>\neffect ConnectionOps<R>\ninterpret Native.Connection<R>\nacquire config => perform Native.Connection<R>.open config\nfinish state => perform Native.Connection<R>.close state\nhandlers state {\ndiagnostic db => resume (ForeignError (perform Native.Connection<R>.diagnostic state))\n}\n}\n\npub resource Statement<S, C> {\ninput (Connection<C>, SqlText)\nstate Native.StatementState<S, C>\nresult Provider.Scope<PrepareError, FinalizeError, T> for <T>\nprovider StatementProvider<S, C>\neffect StatementOps<S, C>\ninterpret Native.Statement<S, C>\nacquire input => match input {\n(db, SqlText(sql)) => perform Native.Statement<S, C>.prepare (Provider.state_of db, sql)\n}\nfinish state => perform Native.Statement<S, C>.finalize state\nhandlers state {\nbind_int operand => match operand {\n(stmt, index, value) => match (perform Native.Statement<S, C>.bind_int (state, index, value)) {\nNative.Ok(()) => resume (Ok ())\nNative.Err(error) => resume (Err (ForeignError error))\n}\n}\nstep stmt => match (perform Native.Statement<S, C>.step state) {\nNative.Row => resume Row\nNative.Done => resume Done\nNative.StepError(error) => resume (StepError (ForeignError error))\n}\ncolumn_int operand => match operand {\n(stmt, index) => match (perform Native.Statement<S, C>.column_int (state, index)) {\nNative.Ok(value) => resume (Ok value)\nNative.Err(error) => resume (Err (ForeignError error))\n}\n}\nbind_bytes operand => match operand {\n(stmt, index, value) => match (perform Native.Statement<S, C>.bind_bytes (state, index, value)) {\nNative.Ok(value) => resume (Ok value)\nNative.Err(error) => resume (Err (ForeignError error))\n}\n}\ncolumn_bytes operand => match operand {\n(stmt, index) => match (perform Native.Statement<S, C>.column_bytes (state, index)) {\nNative.Ok(value) => resume (Ok value)\nNative.Err(error) => resume (Err (ForeignError error))\n}\n}\nbind_text operand => match operand {\n(stmt, index, value) => match (perform Native.Statement<S, C>.bind_text (state, index, value)) {\nNative.Ok(value) => resume (Ok value)\nNative.Err(error) => resume (Err (ForeignError error))\n}\n}\ncolumn_text operand => match operand {\n(stmt, index) => match (perform Native.Statement<S, C>.column_text (state, index)) {\nNative.Ok(value) => resume (Ok value)\nNative.Err(error) => resume (Err (ForeignError error))\n}\n}\nreset stmt => match (perform Native.Statement<S, C>.reset state) {\nNative.Ok(value) => resume (Ok value)\nNative.Err(error) => resume (Err (ForeignError error))\n}\nclear_bindings stmt => match (perform Native.Statement<S, C>.clear_bindings state) {\nNative.Ok(value) => resume (Ok value)\nNative.Err(error) => resume (Err (ForeignError error))\n}\n}\n}\n\npub memory : Unit -> OpenConfig\nmemory () = InMemory\n\npub select_parameter : Unit -> SqlText\nselect_parameter () = SqlText \"SELECT ?1\"\n", line_starts: [0, 33, 61, 307, 308, 346, 347, 391, 404, 420, 447, 460, 486, 493, 512, 513, 543, 579, 581, 619, 676, 678, 679, 711, 766, 803, 854, 919, 980, 1043, 1102, 1142, 1191, 1193, 1233, 1311, 1371, 1445, 1533, 1617, 1703, 1785, 1848, 1920, 1922, 1923, 1952, 1969, 2001, 2057, 2088, 2112, 2143, 2202, 2259, 2276, 2363, 2365, 2367, 2368, 2399, 2430, 2464, 2526, 2559, 2585, 2618, 2649, 2738, 2740, 2802, 2819, 2855, 2951, 2983, 3038, 3040, 3042, 3107, 3132, 3159, 3226, 3228, 3266, 3350, 3388, 3443, 3445, 3447, 3485, 3583, 3621, 3676, 3678, 3680, 3720, 3806, 3844, 3899, 3901, 3903, 3940, 4037, 4075, 4130, 4132, 4134, 4173, 4258, 4296, 4351, 4353, 4355, 4422, 4460, 4515, 4517, 4602, 4640, 4695, 4697, 4699, 4701, 4702, 4734, 4755, 4756, 4795, 4837] }, SourceFile { id: SourceId(0), display_path: "/tmp/ash-sqlite-copying-1740993-0/forwarding-chain.ash", text: "import provider as Provider\nimport sqlite as Sqlite\n\nmain : Unit -> Provider.Scope<Sqlite.OpenError, Sqlite.CloseError, Provider.Scope<Sqlite.PrepareError, Sqlite.FinalizeError, Sqlite.Result<Int>>>\nmain () = resource Sqlite.Connection<C> db = Sqlite.InMemory {\nresource Sqlite.Statement<S> stmt = (db, Sqlite.SqlText \"SELECT 42\") {\nmatch Sqlite.step stmt {\nSqlite.Row => read_first stmt\nSqlite.Done => Sqlite.Err Sqlite.MissingRow\nSqlite.StepError(error) => Sqlite.Err error\n}\n}\n}\n\nread_first<S, C> : Sqlite.Statement<S, C> -> Sqlite.Result<Int> ! {Sqlite.StatementOps<S, C>} where Sqlite.StatementProvider<S, C>\nread_first stmt = read_empty stmt\n\nread_empty<S, C> : Sqlite.Statement<S, C> -> Sqlite.Result<Int> ! {Sqlite.StatementOps<S, C>} where Sqlite.StatementProvider<S, C>\nread_empty stmt = read_null stmt\n\nread_null<S, C> : Sqlite.Statement<S, C> -> Sqlite.Result<Int> ! {Sqlite.StatementOps<S, C>} where Sqlite.StatementProvider<S, C>\nread_null stmt = finish_copy stmt\n\nfinish_copy<S, C> : Sqlite.Statement<S, C> -> Sqlite.Result<Int> ! {Sqlite.StatementOps<S, C>} where Sqlite.StatementProvider<S, C>\nfinish_copy stmt = Sqlite.column_int (stmt, 0)\n", line_starts: [0, 28, 52, 53, 199, 262, 333, 358, 388, 432, 476, 478, 480, 482, 483, 614, 648, 649, 780, 813, 814, 944, 978, 979, 1111, 1158] }] })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    qualified_forwarding_chain_preserves_integer_and_source_completion
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.20s
+
+error: test failed, to rerun pass `-p ash --test provider_sqlite_copying`

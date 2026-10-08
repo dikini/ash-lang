@@ -1,0 +1,13 @@
+
+running 8 tests
+test binding_and_clear_after_a_row_reject_without_native_mutation ... ok
+test column_before_row_and_step_after_done_are_protocol_alternatives ... ok
+test genuine_constraint_failure_preserves_body_error_and_consumed_finalize_report ... ok
+test malformed_sql_reports_the_real_native_code_and_copied_diagnostic ... ok
+test negative_parameter_index_from_an_independent_sqlite_integer_is_rejected ... ok
+test refused_empty_multiple_and_nul_sql_keep_acquisition_outcomes_and_guards ... ok
+test representable_parameter_outside_statement_preserves_sqlite_range_error ... ok
+test statement_reuse_transactions_generic_rows_and_reopen_preserve_every_report ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.02s
+
