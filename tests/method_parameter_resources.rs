@@ -379,7 +379,13 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "concrete source catalog",
             EVIDENCE_VALIDATION_SOURCE,
             "fn concrete_adapter_source_catalog_has_an_exact_retry_boundary()",
-            "let constraint_work = precheck_constraints + 122 + 8 + 1 + 1 + 2 + 1 + 1 + 5 * 4 + 2 + 7;",
+            "let constraint_work = precheck_constraints\n            + 122\n            + 8\n            + 1\n            + 1\n            + 2\n            + 1\n            + 1\n            + 5 * 4\n            + 2\n            + 7\n            + prior_expectation_search;",
+        ),
+        (
+            "concrete source prior-expectation search",
+            EVIDENCE_VALIDATION_SOURCE,
+            "fn concrete_adapter_source_catalog_has_an_exact_retry_boundary()",
+            "let prior_expectation_search = 3;",
         ),
         (
             "concrete source type ledger",
@@ -488,16 +494,25 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
         );
     }
 
+    let mut drift = Vec::new();
     for (stage, source, probe, formula) in probes {
-        assert!(
-            source.contains(probe),
-            "missing exact unit probe for {stage}: {probe}"
-        );
-        assert!(
-            source.contains(formula),
-            "the exact additive formula drifted for {stage}: {formula}",
-        );
+        let Some((_, body)) = source.split_once(probe) else {
+            drift.push(format!("missing exact unit probe for {stage}: {probe}"));
+            continue;
+        };
+        // A matching formula in another test must not satisfy this owner.
+        let probe_section = body.split("#[test]").next().unwrap_or(body);
+        if !probe_section.contains(formula) {
+            drift.push(format!(
+                "the exact additive formula drifted for {stage}: {formula}",
+            ));
+        }
     }
+    assert!(
+        drift.is_empty(),
+        "exact unit probe drift:\n{}",
+        drift.join("\n"),
+    );
 
     assert_eq!(10 + 5, 15);
     assert_eq!(5 * 1_024 + 7, 5_127);
@@ -511,7 +526,9 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
     assert_eq!(1 + 1 + 1 + 1 + 1 + 1 + 2 + 1 + 1 + 1 + 2, 13);
     assert_eq!(7 - 1, 6);
     assert_eq!(85 + 2 * 2, 89);
-    assert_eq!(122 + 8 + 1 + 1 + 2 + 1 + 1 + 5 * 4 + 2 + 7, 165);
+    // The Convert -> Base edge searches its three already-retained
+    // expectations before appending the AdapterEdge expectation.
+    assert_eq!(122 + 8 + 1 + 1 + 2 + 1 + 1 + 5 * 4 + 2 + 7 + 3, 168);
     assert_eq!(632 + 1 + 1 + 1 + 1 + 45 + 1 + 1 + 1 + (4 - 1) + 24, 711);
     assert_eq!(1_175 + (4 - 1) + 2 * 2 + (2 + 2) + 1 + 1 + 1 + 26, 1_215);
     assert_eq!(705 + (49 + 5 + 1) + 45 + 1 + 1 + 1 + 25, 833);
