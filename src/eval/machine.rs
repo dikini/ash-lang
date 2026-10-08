@@ -734,7 +734,19 @@ fn selected_handler_for_discard(
         Some(ExecutableNode::Effect(expression)) => match &expression.kind {
             EffectExprKind::Operation(EffectOperation::Handler(boundary)) => boundary.id(),
             EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
-                scope.handler().id()
+                charge_effect_work(
+                    work,
+                    scope.member_count().saturating_sub(1),
+                    RuntimePhase::Capture,
+                )?;
+                if !(0..scope.member_count()).any(|member| {
+                    scope
+                        .handler_member(member)
+                        .is_some_and(|candidate| candidate.id() == handler)
+                }) {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                handler
             }
             _ => return Err(RuntimeFailure::InvalidControlState),
         },
@@ -1337,12 +1349,43 @@ impl<'runtime> Machine<'runtime> {
             Frame::ApplyArgument {
                 function: Value::Intrinsic(intrinsic),
             } => {
-                let result = apply_intrinsic(
-                    intrinsic,
-                    value,
-                    &mut self.heap,
-                    &mut self.instantiation_work,
-                )?;
+                let result =
+                    if let crate::core::packed::Intrinsic::ForeignLayoutWitness { producer } =
+                        intrinsic.operation()
+                    {
+                        if !matches!(value, Value::Unit)
+                            || intrinsic.module() != producer.interface().module()
+                        {
+                            return Err(RuntimeFailure::InvalidControlState);
+                        }
+                        let dictionary = self
+                            .program
+                            .registry()
+                            .foreign_layout_dictionary(producer, &mut self.instantiation_work)
+                            .map_err(|failure| {
+                                if failure.is_resource_exhaustion() {
+                                    effect_work_failure(
+                                        &self.instantiation_work,
+                                        None,
+                                        RuntimePhase::Evaluation,
+                                    )
+                                } else {
+                                    RuntimeFailure::ForeignBinding
+                                }
+                            })?;
+                        Value::LayoutWitness(
+                            crate::foreign::runtime::ForeignLayoutWitness::from_dictionary(
+                                dictionary,
+                            ),
+                        )
+                    } else {
+                        apply_intrinsic(
+                            intrinsic,
+                            value,
+                            &mut self.heap,
+                            &mut self.instantiation_work,
+                        )?
+                    };
                 self.control = Some(Control::Return(result));
             }
             frame => {
@@ -1909,6 +1952,7 @@ impl<'runtime> Machine<'runtime> {
             Some(RuntimePhase::Access),
         )?;
         let mut selected = None;
+        let mut selected_member = 0;
         // Keep immutable program authority borrowed independently of the mutable
         // runtime work ledger; retaining the admitted arena copies no payloads.
         let handler_program = self.program.clone();
@@ -1939,26 +1983,47 @@ impl<'runtime> Machine<'runtime> {
             else {
                 continue;
             };
-            let handler = match handler_program.node(*node) {
+            let (ordinary, group) = match handler_program.node(*node) {
                 Some(ExecutableNode::Effect(expression)) => match &expression.kind {
-                    EffectExprKind::Operation(EffectOperation::Handler(handler)) => handler,
+                    EffectExprKind::Operation(EffectOperation::Handler(handler)) => {
+                        (Some(handler), None)
+                    }
                     EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
-                        scope.handler()
+                        (None, Some(scope))
                     }
                     _ => return Err(RuntimeFailure::InvalidControlState),
                 },
                 _ => return Err(RuntimeFailure::InvalidControlState),
             };
-            if handler.effect().effect() != effect.effect() {
-                continue;
-            }
-            let handled = environment.instantiation.effect(
-                handler.effect(),
+            let count = group.map_or(1, |scope| scope.member_count());
+            charge_effect_work(
                 &mut self.instantiation_work,
-                Some(RuntimePhase::Access),
+                count.saturating_sub(1),
+                RuntimePhase::Access,
             )?;
-            if same_effect_instance(&handled, &effect, &mut self.instantiation_work)? {
-                selected = Some(index);
+            for member in 0..count {
+                let handler = if let Some(scope) = group {
+                    scope
+                        .handler_member(member)
+                        .ok_or(RuntimeFailure::InvalidControlState)?
+                } else {
+                    ordinary.ok_or(RuntimeFailure::InvalidControlState)?
+                };
+                if handler.effect().effect() != effect.effect() {
+                    continue;
+                }
+                let handled = environment.instantiation.effect(
+                    handler.effect(),
+                    &mut self.instantiation_work,
+                    Some(RuntimePhase::Access),
+                )?;
+                if same_effect_instance(&handled, &effect, &mut self.instantiation_work)? {
+                    selected = Some(index);
+                    selected_member = member;
+                    break;
+                }
+            }
+            if selected.is_some() {
                 break;
             }
         }
@@ -2012,9 +2077,12 @@ impl<'runtime> Machine<'runtime> {
             else {
                 return Err(RuntimeFailure::InvalidControlState);
             };
-            let handler = self
-                .handler(*handler_node)
-                .ok_or(RuntimeFailure::InvalidControlState)?;
+            let handler = if let Some(scope) = self.provider_scope(*handler_node) {
+                scope.handler_member(selected_member)
+            } else {
+                self.handler(*handler_node)
+            }
+            .ok_or(RuntimeFailure::InvalidControlState)?;
             let clause = handler
                 .clauses()
                 .iter()
@@ -2026,7 +2094,24 @@ impl<'runtime> Machine<'runtime> {
             }
             (
                 handler.id(),
-                environment.clone(),
+                if let Some(scope) = self.provider_scope(*handler_node) {
+                    let state = scope
+                        .handler_state_member(selected_member)
+                        .ok_or(RuntimeFailure::InvalidControlState)?
+                        .id();
+                    let Frame::HandlerBoundary {
+                        provider: Some(key),
+                        ..
+                    } = &self.frames[selected]
+                    else {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    };
+                    environment
+                        .clone()
+                        .extend(state, Value::NativeStateView(*key))?
+                } else {
+                    environment.clone()
+                },
                 clause.resume(),
                 clause.body(),
                 bindings,
@@ -2386,14 +2471,19 @@ impl<'runtime> Machine<'runtime> {
             .take()
             .ok_or(RuntimeFailure::InvalidControlState)?;
         self.trace_effect(EffectTraceEvent::Resume(handler));
-        for frame in &continuation.frames {
+        for (index, frame) in continuation.frames.iter().enumerate() {
             if let Frame::HandlerBoundary { node, .. } = frame {
-                // Registration paths checked these handles before consuming
-                // control. Ordinary effects retain their existing check.
+                // The selected group cut restores its selected clause identity;
+                // its one boundary restores dispatch for every attached member.
                 let restored = self
                     .handler(*node)
                     .ok_or(RuntimeFailure::InvalidControlState)?;
-                self.trace_effect(EffectTraceEvent::HandlerRestored(restored.id()));
+                let restored_id = if index == 0 && self.provider_scope(*node).is_some() {
+                    handler
+                } else {
+                    restored.id()
+                };
+                self.trace_effect(EffectTraceEvent::HandlerRestored(restored_id));
             }
         }
         self.captured_cells = retained;

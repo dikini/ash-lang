@@ -276,6 +276,30 @@ pub(in crate::core) fn project(
     stored: &StoredNode<EffectOperationFamily>,
     work: &mut TypeWorkBudget,
 ) -> Result<NodeProjection, ValidationError> {
+    project_with::<EffectOperationFamily>(
+        node,
+        stored,
+        |kind| match kind {
+            EffectExprKind::Operation(operation) => Some(operation),
+            EffectExprKind::Pure(_) => None,
+        },
+        work,
+    )
+}
+
+enum ProjectionKind<'a> {
+    Pure(&'a PureExprKind),
+    Operation(&'a EffectOperation),
+}
+
+/// Borrows generic Core through its genuine pure/operation views. This shares
+/// the exact projection encoding with ordinary Effect Core admission.
+pub(in crate::core) fn project_with<F: crate::core::dialect::CoreOperationFamily>(
+    node: NodeId,
+    stored: &StoredNode<F>,
+    operation: for<'a> fn(&'a F::Kind) -> Option<&'a EffectOperation>,
+    work: &mut TypeWorkBudget,
+) -> Result<NodeProjection, ValidationError> {
     let mut result = NodeProjection {
         node,
         children: Vec::new(),
@@ -284,24 +308,29 @@ pub(in crate::core) fn project(
         origins: Vec::new(),
     };
     result.ty(&stored.ty, work)?;
-    result.row(&stored.effects, work)?;
+    result.row(F::effect_row(&stored.effects), work)?;
     result.origin(stored.origin.as_ref().ok_or_else(invalid)?, work)?;
-    charge(work, stored.kind.child_count())?;
+    charge(work, F::child_count(&stored.kind))?;
     result
         .children
-        .try_reserve_exact(stored.kind.child_count())
+        .try_reserve_exact(F::child_count(&stored.kind))
         .map_err(|_| resource())?;
-    for ordinal in 0..stored.kind.child_count() {
+    for ordinal in 0..F::child_count(&stored.kind) {
         result
             .children
-            .push(stored.kind.child_at(ordinal).ok_or_else(invalid)?);
+            .push(F::child_at(&stored.kind, ordinal).ok_or_else(invalid)?);
     }
-    match &stored.kind {
-        EffectExprKind::Pure(PureExprKind::Variable(variable)) => {
+    let kind = match (F::pure(&stored.kind), operation(&stored.kind)) {
+        (Some(pure), None) => ProjectionKind::Pure(pure),
+        (None, Some(operation)) => ProjectionKind::Operation(operation),
+        _ => return Err(invalid()),
+    };
+    match kind {
+        ProjectionKind::Pure(PureExprKind::Variable(variable)) => {
             result.atom(Atom::Tag(0), work)?;
             result.atom(Atom::Binder(variable.binder()), work)?;
         }
-        EffectExprKind::Pure(PureExprKind::Value(value)) => match value {
+        ProjectionKind::Pure(PureExprKind::Value(value)) => match value {
             PureValue::String(string) => {
                 result.atom(Atom::Tag(45), work)?;
                 work.charge(string.bytes().len()).map_err(|()| resource())?;
@@ -330,7 +359,7 @@ pub(in crate::core) fn project(
                 result.atom(Atom::Constructor(constructor.constructor()), work)?;
             }
         },
-        EffectExprKind::Pure(PureExprKind::Computation(computation)) => match computation {
+        ProjectionKind::Pure(PureExprKind::Computation(computation)) => match computation {
             PureComputation::Bind(binding) => {
                 result.atom(Atom::Tag(6), work)?;
                 result.binder(binding.binder(), work)?;
@@ -390,7 +419,7 @@ pub(in crate::core) fn project(
                 }
             }
         },
-        EffectExprKind::Operation(operation) => match operation {
+        ProjectionKind::Operation(operation) => match operation {
             EffectOperation::Request(request) => {
                 result.atom(Atom::Tag(16), work)?;
                 result.atom(Atom::Operation(request.operation()), work)?;

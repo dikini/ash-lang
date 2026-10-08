@@ -518,6 +518,16 @@ impl CoreOperationFamily for EffectOperationFamily {
                 visit(binder);
             }
         }
+        if let EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) = kind {
+            for attached in &scope.attached {
+                visit(&attached.state);
+                for clause in &attached.handler.clauses {
+                    for binder in clause.pattern().binder_iter() {
+                        visit(binder);
+                    }
+                }
+            }
+        }
     }
 
     fn visit_operation_type_metadata<'a>(
@@ -597,6 +607,21 @@ impl CoreOperationFamily for EffectOperationFamily {
                 visit(super::dialect::OperationTypeMetadata::Argument(argument));
             }
         }
+        if let EffectOperation::ProviderScope(scope) = operation {
+            for attached in &scope.attached {
+                visit(super::dialect::OperationTypeMetadata::Type(
+                    attached.state.ty(),
+                ));
+                for clause in &attached.handler.clauses {
+                    visit(super::dialect::OperationTypeMetadata::Pattern(
+                        clause.pattern(),
+                    ));
+                }
+                for argument in attached.handler.effect.arguments() {
+                    visit(super::dialect::OperationTypeMetadata::Argument(argument));
+                }
+            }
+        }
     }
 
     fn store_effects(effects: EffectRow) -> Self::Effects {
@@ -632,7 +657,23 @@ impl CoreOperationFamily for EffectOperationFamily {
                         .pattern_mut()
                         .rewrite_types(&mut |ty| rewrite(ty))?;
                 }
-                &mut scope.handler.effect
+                rewrite_effect_instance(&mut scope.handler.effect, rewrite, charge)?;
+                if !scope.attached.is_empty() {
+                    charge(scope.attached.len())?;
+                    for attached in &mut scope.attached {
+                        charge(1)?;
+                        attached.state.rewrite_type(&mut |ty| rewrite(ty))?;
+                        charge(attached.handler.clauses.len())?;
+                        for clause in &mut attached.handler.clauses {
+                            clause
+                                .arm
+                                .pattern_mut()
+                                .rewrite_types(&mut |ty| rewrite(ty))?;
+                        }
+                        rewrite_effect_instance(&mut attached.handler.effect, rewrite, charge)?;
+                    }
+                }
+                return Ok(());
             }
             EffectExprKind::Operation(EffectOperation::Resource(resource)) => {
                 charge(1)?;
@@ -688,7 +729,20 @@ impl CoreOperationFamily for EffectOperationFamily {
         match kind {
             EffectExprKind::Operation(EffectOperation::Handler(node)) => node.clauses.len(),
             EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
-                scope.handler.clauses.len()
+                if scope.attached.is_empty() {
+                    return scope.handler.clauses.len();
+                }
+                scope
+                    .handler
+                    .clauses
+                    .len()
+                    .checked_add(scope.attached.len())
+                    .and_then(|count| {
+                        scope.attached.iter().try_fold(count, |count, attached| {
+                            count.checked_add(attached.handler.clauses.len())
+                        })
+                    })
+                    .unwrap_or(usize::MAX)
             }
             EffectExprKind::Pure(_)
             | EffectExprKind::Operation(EffectOperation::Cleanup(_))
@@ -907,6 +961,162 @@ impl CoreBuilder<EffectOperationFamily> {
         self.replay_effect_rows_in_range(range, output, handler, owner, false)
     }
 
+    fn replay_provider_group_rows(
+        &mut self,
+        index: usize,
+    ) -> Result<(EffectRow, EffectRow), super::BuildError> {
+        let EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) =
+            &self.nodes[index].kind
+        else {
+            return Err(super::BuildError::InvalidPayload);
+        };
+        if scope.attached.is_empty() {
+            return Err(super::BuildError::InvalidPayload);
+        }
+        let mut row = clone_effect_row_with_budget(
+            &self
+                .nodes
+                .get(scope.handler.body().index()?)
+                .ok_or(super::BuildError::InvalidNodeId)?
+                .effects,
+            &mut self.type_work,
+        )
+        .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+        self.type_work
+            .charge(scope.member_count())
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+        // Provided instances cover the common body only. They do not cover
+        // an outward request made by one of the group's clauses.
+        for member in 0..scope.member_count() {
+            let handler = scope
+                .handler_member(member)
+                .ok_or(super::BuildError::InvalidPayload)?;
+            if handler.body() != scope.handler.body() {
+                return Err(super::BuildError::InvalidPayload);
+            }
+            row = match row
+                .remove_exact_with_budget(handler.effect(), &mut self.type_work)
+                .map_err(|()| super::BuildError::TypeWorkExceeded)?
+            {
+                Ok(row) => row,
+                Err(crate::types::EffectRowError::Missing) => {
+                    clone_effect_row_with_budget(&row, &mut self.type_work)
+                        .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                }
+                Err(_) => return Err(super::BuildError::InvalidPayload),
+            };
+        }
+        self.type_work
+            .charge(scope.member_count())
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+        for member in 0..scope.member_count() {
+            let handler = scope
+                .handler_member(member)
+                .ok_or(super::BuildError::InvalidPayload)?;
+            let native = scope
+                .descriptor
+                .native_effect_member(member)
+                .ok_or(super::BuildError::InvalidPayload)?;
+            self.type_work
+                .charge(handler.clauses().len())
+                .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+            for clause in handler.clauses() {
+                let outward = super::provider::interpret_native_phase_row(
+                    &self
+                        .nodes
+                        .get(clause.body().index()?)
+                        .ok_or(super::BuildError::InvalidNodeId)?
+                        .effects,
+                    native,
+                    &mut self.type_work,
+                )
+                .map_err(|error| {
+                    if error.reason() == super::ValidationReason::Resource {
+                        super::BuildError::TypeWorkExceeded
+                    } else {
+                        super::BuildError::InvalidPayload
+                    }
+                })?;
+                row = row
+                    .union_with_budget(&outward, &mut self.type_work)
+                    .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                    .map_err(|_| super::BuildError::InvalidPayload)?;
+            }
+        }
+        let output = clone_effect_row_with_budget(&row, &mut self.type_work)
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+        // Lifecycle execution retains only the primary native interpreter.
+        for root in [scope.acquire.body, scope.finish.body] {
+            let phase = super::provider::interpret_native_phase_row(
+                &self
+                    .nodes
+                    .get(root.index()?)
+                    .ok_or(super::BuildError::InvalidNodeId)?
+                    .effects,
+                scope.descriptor.native_effect(),
+                &mut self.type_work,
+            )
+            .map_err(|error| {
+                if error.reason() == super::ValidationReason::Resource {
+                    super::BuildError::TypeWorkExceeded
+                } else {
+                    super::BuildError::InvalidPayload
+                }
+            })?;
+            row = row
+                .union_with_budget(&phase, &mut self.type_work)
+                .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                .map_err(|_| super::BuildError::InvalidPayload)?;
+        }
+        let effects = self
+            .nodes
+            .get(scope.initializer.index()?)
+            .ok_or(super::BuildError::InvalidNodeId)?
+            .effects
+            .union_with_budget(&row, &mut self.type_work)
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?
+            .map_err(|_| super::BuildError::InvalidPayload)?;
+        Ok((effects, output))
+    }
+
+    fn retain_provider_group_resume_owners(
+        &mut self,
+        index: usize,
+        handlers: &mut std::collections::HashMap<(HandlerId, ResumeId), usize>,
+    ) -> Result<(), super::BuildError> {
+        let EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) =
+            &self.nodes[index].kind
+        else {
+            return Err(super::BuildError::InvalidPayload);
+        };
+        if scope.attached.is_empty() {
+            return Err(super::BuildError::InvalidPayload);
+        }
+        self.type_work
+            .charge(scope.member_count())
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+        for member in 0..scope.member_count() {
+            let handler = scope
+                .handler_member(member)
+                .ok_or(super::BuildError::InvalidPayload)?;
+            self.type_work
+                .charge(handler.clauses().len())
+                .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+            handlers
+                .try_reserve(handler.clauses().len())
+                .map_err(|_| super::BuildError::TypeWorkExceeded)?;
+            for clause in handler.clauses() {
+                if handlers
+                    .insert((handler.id(), clause.resume()), index)
+                    .is_some()
+                {
+                    return Err(super::BuildError::InvalidPayload);
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn replay_effect_rows_in_range(
         &mut self,
         range: std::ops::Range<usize>,
@@ -924,6 +1134,7 @@ impl CoreBuilder<EffectOperationFamily> {
             Request(NodeId, EffectInstance),
             Handler(EffectInstance, usize, bool),
             Resource(crate::resolved::ResourceAcquisition, NodeId, NodeId),
+            ProviderGroup,
             ProviderScope(
                 NodeId,
                 NodeId,
@@ -962,6 +1173,11 @@ impl CoreBuilder<EffectOperationFamily> {
                             resource.initializer,
                             resource.body,
                         )
+                    }
+                    EffectExprKind::Operation(EffectOperation::ProviderScope(scope))
+                        if !scope.attached.is_empty() =>
+                    {
+                        Equation::ProviderGroup
                     }
                     EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
                         Equation::ProviderScope(
@@ -1086,6 +1302,11 @@ impl CoreBuilder<EffectOperationFamily> {
                             .union_with_budget(&outward, &mut self.type_work)
                             .map_err(|()| super::BuildError::TypeWorkExceeded)?
                             .map_err(|_| super::BuildError::InvalidPayload)?
+                    }
+                    Equation::ProviderGroup => {
+                        let (effects, output) = self.replay_provider_group_rows(index)?;
+                        provider_output = Some(output);
+                        effects
                     }
                     Equation::ProviderScope(
                         initializer,
@@ -1292,6 +1513,14 @@ impl CoreBuilder<EffectOperationFamily> {
                     .map_err(|()| super::BuildError::TypeWorkExceeded)?,
                 output,
             ));
+            if matches!(
+                &self.nodes[index].kind,
+                EffectExprKind::Operation(EffectOperation::ProviderScope(scope))
+                    if !scope.attached.is_empty()
+            ) {
+                self.retain_provider_group_resume_owners(index, &mut handlers)?;
+                continue;
+            }
             let handler = match &self.nodes[index].kind {
                 EffectExprKind::Operation(EffectOperation::Handler(handler)) => Some(handler),
                 EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {

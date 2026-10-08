@@ -82,7 +82,11 @@ fn manifest() -> ForeignManifest {
         ForeignTypeDeclaration {
             name: name.into(),
             parameters: parameters.iter().map(|p| (*p).into()).collect(),
-            opaque_state,
+            category: if opaque_state {
+                ash::foreign::ForeignTypeCategory::State
+            } else {
+                ash::foreign::ForeignTypeCategory::Data
+            },
             constructors: cases
                 .iter()
                 .map(|(name, payload)| ForeignConstructorDeclaration {
@@ -96,6 +100,7 @@ fn manifest() -> ForeignManifest {
         "@foreign.codec_probe",
         ForeignRegistrationId::new(901),
         ForeignManifestSchema {
+            foundation: None,
             types: vec![
                 ty("Token", &["R"], true, &[]),
                 ty("Fault", &[], false, &[("Oops", Some("Int"))]),

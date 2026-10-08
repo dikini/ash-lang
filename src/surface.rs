@@ -852,6 +852,8 @@ pub struct SurfaceResourceDefinition {
     pub provided: SurfaceEffectInstance,
     /// Registered effect interpreted only inside provider templates.
     pub interpreted: SurfaceEffectInstance,
+    /// Optional A-0 family template; resolution and checking supply authority.
+    pub family: Option<SurfaceResourceFamily>,
     /// Acquire input binder.
     pub acquire_binder: SurfaceName,
     /// Acquisition expression template.
@@ -865,6 +867,27 @@ pub struct SurfaceResourceDefinition {
     /// Source handler clause templates.
     pub handlers: Vec<SurfaceHandlerClause>,
     /// Complete declaration span.
+    pub span: Span,
+}
+
+/// One experimental resource family template, without checked evidence authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceResourceFamily {
+    /// Payload parameter scoped over this template, separate from the answer.
+    pub parameter: SurfaceTypeParameter,
+    /// Written requirements; checking authenticates the sealed layout relation.
+    pub requirements: Vec<SurfaceRequirement>,
+    /// Forwarding interface application template.
+    pub provider: SurfaceRequirement,
+    /// Effect implemented by the family handler clauses.
+    pub provided: SurfaceEffectInstance,
+    /// Registered effect interpreted inside those clauses.
+    pub interpreted: SurfaceEffectInstance,
+    /// Provider state binder shared by this family's clauses.
+    pub handlers_binder: SurfaceName,
+    /// Source handler templates, retaining their original spans.
+    pub handlers: Vec<SurfaceHandlerClause>,
+    /// Complete family block span.
     pub span: Span,
 }
 

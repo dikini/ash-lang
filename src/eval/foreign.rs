@@ -163,6 +163,38 @@ pub(super) fn encode_input(
                     push_node(&mut nodes, ForeignDataNode::Boolean(*value), work, phase)?
                 }
                 Value::Unit => push_node(&mut nodes, ForeignDataNode::Unit, work, phase)?,
+                Value::LayoutWitness(witness) => push_node(
+                    &mut nodes,
+                    ForeignDataNode::LayoutWitness(witness.clone()),
+                    work,
+                    phase,
+                )?,
+                Value::Reference {
+                    activation,
+                    reference,
+                } => {
+                    // This provisional slot is remapped to the exact live view
+                    // order after the operation's state operands are admitted.
+                    charge_effect_work(work, states.len(), phase)?;
+                    let slot = match states.iter().position(|key| key == activation) {
+                        Some(slot) => slot,
+                        None => {
+                            states.try_reserve(1).map_err(|_| {
+                                foreign_failure(ForeignExecutionError::STORAGE_REFUSED, phase)
+                            })?;
+                            let slot = states.len();
+                            states.push(*activation);
+                            slot
+                        }
+                    };
+                    push_node(
+                        &mut nodes,
+                        ForeignDataNode::Reference(reference.with_owner_slot(slot)),
+                        work,
+                        phase,
+                    )?
+                }
+
                 Value::NativeStateView(key) => {
                     charge_effect_work(work, states.len(), phase)?;
                     let slot = match states.iter().position(|found| found == key) {
@@ -239,6 +271,16 @@ pub(super) fn decode_data(
     work: &mut TypeWorkBudget,
     phase: RuntimePhase,
 ) -> Result<Value, RuntimeFailure> {
+    decode_data_with_owners(data, heap, work, phase, &[])
+}
+
+fn decode_data_with_owners(
+    data: &ForeignData,
+    heap: &mut Vec<HeapCell>,
+    work: &mut TypeWorkBudget,
+    phase: RuntimePhase,
+    owners: &[ActivationKey],
+) -> Result<Value, RuntimeFailure> {
     charge_effect_work(work, data.nodes().len(), phase)?;
     let mut values: Vec<Value> = Vec::new();
     values
@@ -255,6 +297,13 @@ pub(super) fn decode_data(
             ForeignDataNode::String(value) => Value::String(Arc::clone(value)),
             ForeignDataNode::Boolean(value) => Value::Boolean(*value),
             ForeignDataNode::Unit => Value::Unit,
+            ForeignDataNode::LayoutWitness(witness) => Value::LayoutWitness(witness.clone()),
+            ForeignDataNode::Reference(reference) => Value::Reference {
+                activation: *owners
+                    .get(reference.owner_slot())
+                    .ok_or(RuntimeFailure::ForeignBinding)?,
+                reference: reference.clone(),
+            },
             ForeignDataNode::State(_) => return Err(RuntimeFailure::ForeignBinding),
             ForeignDataNode::Tuple(children) => {
                 charge_effect_work(work, children.len() + 1, phase)?;
@@ -359,6 +408,46 @@ pub(super) fn validate_codec(
                     pending.push((*child, ty));
                 }
             }
+            (ForeignDataNode::LayoutWitness(witness), _) => {
+                authenticate_codec_witness(witness, registry, work, phase)?;
+                let ty = crate::types::IterativeTypeOwner::new(
+                    witness.dictionary().producer().witness_type(),
+                );
+                if !crate::types::same_type_with_budget(&expected, &ty, work)
+                    .map_err(|_| super::effect_work_failure(work, None, phase))?
+                {
+                    return Err(RuntimeFailure::ForeignBinding);
+                }
+            }
+            (ForeignDataNode::Reference(reference), _) => {
+                authenticate_codec_witness(reference.witness(), registry, work, phase)?;
+                let Type::Application(head, second) = &*expected else {
+                    return Err(RuntimeFailure::ForeignBinding);
+                };
+                let Type::Application(head, first) = head.as_ref() else {
+                    return Err(RuntimeFailure::ForeignBinding);
+                };
+                let Type::Nominal(nominal) = head.as_ref() else {
+                    return Err(RuntimeFailure::ForeignBinding);
+                };
+                charge_effect_work(work, registry.foreign_modules().count(), phase)?;
+                let storage = registry
+                    .foreign_modules()
+                    .filter_map(|module| module.storage.as_ref())
+                    .find(|storage| storage.reference() == *nominal)
+                    .ok_or(RuntimeFailure::ForeignBinding)?;
+                let arguments = [first.as_ref(), second.as_ref()];
+                if storage.witness() != reference.witness().dictionary().producer().witness()
+                    || !crate::types::same_type_with_budget(
+                        arguments[storage.reference_payload_parameter()],
+                        reference.witness().dictionary().payload_type(),
+                        work,
+                    )
+                    .map_err(|_| super::effect_work_failure(work, None, phase))?
+                {
+                    return Err(RuntimeFailure::ForeignBinding);
+                }
+            }
             (ForeignDataNode::Constructor(_, _), _) | (ForeignDataNode::State(_), _) => {
                 let mut arguments = Vec::new();
                 let mut head = &*expected;
@@ -431,6 +520,28 @@ pub(super) fn validate_codec(
             }
             _ => return Err(RuntimeFailure::ForeignBinding),
         }
+    }
+    Ok(())
+}
+
+fn authenticate_codec_witness(
+    witness: &crate::foreign::runtime::ForeignLayoutWitness,
+    registry: &crate::resolved::ResolvedRegistry,
+    work: &mut TypeWorkBudget,
+    phase: RuntimePhase,
+) -> Result<(), RuntimeFailure> {
+    let canonical = registry
+        .foreign_layout_dictionary(witness.dictionary().producer(), work)
+        .map_err(|failure| {
+            if failure.is_resource_exhaustion() {
+                super::effect_work_failure(work, None, phase)
+            } else {
+                RuntimeFailure::ForeignBinding
+            }
+        })?;
+    charge_effect_work(work, 8, phase)?;
+    if canonical.as_ref() != witness.dictionary().as_ref() {
+        return Err(RuntimeFailure::ForeignBinding);
     }
     Ok(())
 }
@@ -1059,8 +1170,70 @@ impl<'runtime> Machine<'runtime> {
             ForeignOperationRole::Borrow => RuntimePhase::Access,
             ForeignOperationRole::Finish => RuntimePhase::Cleanup,
         };
+        let scope_program = self.program.clone();
+        let Some(super::ExecutableNode::Effect(expression)) = scope_program.node(scope_node) else {
+            return Err(RuntimeFailure::ForeignBinding);
+        };
+        let crate::core::EffectExprKind::Operation(crate::core::EffectOperation::ProviderScope(
+            scope,
+        )) = &expression.kind
+        else {
+            return Err(RuntimeFailure::ForeignBinding);
+        };
+        let member_count = scope.member_count();
+        let selected_member = if member_count == 1 || phase != ProviderPhase::Body {
+            0
+        } else {
+            // An active group boundary grants source dispatch only. Its captured
+            // clause grants precisely the selected member's native phase. Resume
+            // restores the boundary above that clause and removes this permission.
+            let mut selected = None;
+            for frame in self.frames.iter().rev() {
+                charge_effect_work(&mut self.instantiation_work, 1, codec_phase)?;
+                match frame {
+                    Frame::HandlerBoundary {
+                        node,
+                        provider: Some(found),
+                        ..
+                    } if *node == scope_node && *found == key => break,
+                    Frame::ClauseBoundary {
+                        handler,
+                        continuation: Some(continuation),
+                        ..
+                    } => {
+                        if !matches!(continuation.frames.first(),
+                            Some(Frame::HandlerBoundary { node, provider: Some(found), .. })
+                                if *node == scope_node && *found == key)
+                        {
+                            continue;
+                        }
+                        charge_effect_work(
+                            &mut self.instantiation_work,
+                            member_count,
+                            codec_phase,
+                        )?;
+                        for member in 0..member_count {
+                            if scope
+                                .handler_member(member)
+                                .is_some_and(|candidate| candidate.id() == *handler)
+                            {
+                                selected = Some(member);
+                                break;
+                            }
+                        }
+                        if selected.is_some() {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            selected.ok_or(RuntimeFailure::ForeignBinding)?
+        };
         let expected = environment.instantiation.effect(
-            descriptor.native_effect(),
+            descriptor
+                .native_effect_member(selected_member)
+                .ok_or(RuntimeFailure::ForeignBinding)?,
             &mut self.instantiation_work,
             Some(codec_phase),
         )?;
@@ -1070,14 +1243,74 @@ impl<'runtime> Machine<'runtime> {
             return Err(RuntimeFailure::ForeignBinding);
         }
         let mut state_keys = Vec::new();
-        let input = encode_input(
+        let mut input = encode_input(
             &value,
             &self.heap,
             &mut state_keys,
             &mut self.instantiation_work,
             codec_phase,
         )?;
-        let Type::Function(domain, codomain) = &operation.signature else {
+        let storage = native
+            .storage
+            .as_ref()
+            .filter(|storage| operation.id == storage.store() || operation.id == storage.load());
+        let instantiated_signature = if storage.is_some() {
+            let declaration = self
+                .program
+                .registry()
+                .effect(operation.id.owner())
+                .ok_or(RuntimeFailure::ForeignBinding)?;
+            if declaration.parameters.len() != effect.arguments().len() {
+                return Err(RuntimeFailure::ForeignBinding);
+            }
+            charge_effect_work(
+                &mut self.instantiation_work,
+                declaration.parameters.len(),
+                codec_phase,
+            )?;
+            struct StorageReplacements(
+                std::collections::HashMap<crate::types::TypeVariableId, Type>,
+            );
+            impl Drop for StorageReplacements {
+                fn drop(&mut self) {
+                    for (_, ty) in self.0.drain() {
+                        crate::types::discard_type_iteratively(ty);
+                    }
+                }
+            }
+            let mut replacements = StorageReplacements(std::collections::HashMap::new());
+            replacements
+                .0
+                .try_reserve(declaration.parameters.len())
+                .map_err(|_| {
+                    foreign_failure(ForeignExecutionError::STORAGE_REFUSED, codec_phase)
+                })?;
+            for (parameter, argument) in declaration.parameters.iter().zip(effect.arguments()) {
+                let crate::types::KindedArgument::TypeArg(argument) = argument else {
+                    return Err(RuntimeFailure::ForeignBinding);
+                };
+                replacements.0.insert(
+                    parameter.id,
+                    crate::types::clone_type_with_budget(argument, &mut self.instantiation_work)
+                        .map_err(|_| {
+                            super::effect_work_failure(&self.instantiation_work, None, codec_phase)
+                        })?,
+                );
+            }
+            let signature = crate::types::substitute_type_variables_with(
+                &operation.signature,
+                &replacements.0,
+                |units| charge_effect_work(&mut self.instantiation_work, units, codec_phase),
+                || foreign_failure(ForeignExecutionError::STORAGE_REFUSED, codec_phase),
+            )?;
+            Some(crate::types::IterativeTypeOwner::new(signature))
+        } else {
+            None
+        };
+        let signature = instantiated_signature
+            .as_deref()
+            .unwrap_or(&operation.signature);
+        let Type::Function(domain, codomain) = signature else {
             return Err(RuntimeFailure::ForeignBinding);
         };
         validate_codec(
@@ -1145,6 +1378,65 @@ impl<'runtime> Machine<'runtime> {
                 return Err(RuntimeFailure::ForeignBinding);
             }
             indices.push(index);
+        }
+        let mut reference_owners = Vec::new();
+        if storage.is_some() {
+            charge_effect_work(&mut self.instantiation_work, indices.len(), codec_phase)?;
+            reference_owners
+                .try_reserve_exact(indices.len())
+                .map_err(|_| {
+                    foreign_failure(ForeignExecutionError::STORAGE_REFUSED, codec_phase)
+                })?;
+            for operand in &operation.state_lineage {
+                let state = native
+                    .states
+                    .iter()
+                    .find(|state| state.id == operand.state)
+                    .ok_or(RuntimeFailure::ForeignBinding)?;
+                let coordinate = *operand
+                    .lineage
+                    .get(state.owned_identity_position)
+                    .ok_or(RuntimeFailure::ForeignBinding)?;
+                reference_owners.push(
+                    Instantiation::activation_at(effect, coordinate)
+                        .ok_or(RuntimeFailure::ForeignBinding)?,
+                );
+            }
+            charge_effect_work(
+                &mut self.instantiation_work,
+                input.nodes().len(),
+                codec_phase,
+            )?;
+            for node in input.nodes_mut() {
+                if let ForeignDataNode::Reference(reference) = node {
+                    let activation = state_keys
+                        .get(reference.owner_slot())
+                        .ok_or(RuntimeFailure::ForeignBinding)?;
+                    charge_effect_work(
+                        &mut self.instantiation_work,
+                        reference_owners.len(),
+                        codec_phase,
+                    )?;
+                    let slot = reference_owners
+                        .iter()
+                        .position(|key| key == activation)
+                        .ok_or(RuntimeFailure::ForeignBinding)?;
+                    *reference = reference.with_owner_slot(slot);
+                } else if let ForeignDataNode::State(slot) = node {
+                    let activation = state_keys
+                        .get(*slot)
+                        .ok_or(RuntimeFailure::ForeignBinding)?;
+                    charge_effect_work(
+                        &mut self.instantiation_work,
+                        reference_owners.len(),
+                        codec_phase,
+                    )?;
+                    *slot = reference_owners
+                        .iter()
+                        .position(|key| key == activation)
+                        .ok_or(RuntimeFailure::ForeignBinding)?;
+                }
+            }
         }
         self.trace_effect(EffectTraceEvent::Request(operation.id));
         match operation.role {
@@ -1371,11 +1663,12 @@ impl<'runtime> Machine<'runtime> {
                     &mut self.instantiation_work,
                     RuntimePhase::Access,
                 )?;
-                let value = decode_data(
+                let value = decode_data_with_owners(
                     &output,
                     &mut self.heap,
                     &mut self.instantiation_work,
                     RuntimePhase::Access,
+                    &reference_owners,
                 )?;
                 if let Some(commit) = pending {
                     // All evaluator admission and association work is paid.

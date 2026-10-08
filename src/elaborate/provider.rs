@@ -29,7 +29,7 @@ use crate::{
     foreign::ForeignResultFact,
     module::ForeignOperationRole,
     resolved::{ProviderTemplateId, ResolvedResourceDefinition},
-    types::{ComputationType, ConstructorId, NominalTypeId, OperationId},
+    types::{ComputationType, ConstructorId, EffectInstance, NominalTypeId, OperationId},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -339,6 +339,46 @@ struct ProviderHeader {
     completion_constructors: [ConstructorId; 3],
 }
 
+/// Borrows one original handler block while keeping lifecycle/state authority
+/// on its owning resource declaration.
+#[derive(Clone, Copy)]
+struct ProviderHandlerSource<'a> {
+    definition: &'a ResolvedResourceDefinition,
+    family: Option<&'a crate::resolved::ResolvedResourceFamilyTemplate>,
+}
+impl<'a> ProviderHandlerSource<'a> {
+    fn template(self) -> ProviderTemplateId {
+        ProviderTemplateId::new(
+            self.definition.id,
+            if self.family.is_some() { 3 } else { 2 },
+        )
+    }
+    fn provided(self) -> &'a crate::types::EffectInstance {
+        &self
+            .family
+            .map_or(&self.definition.provided, |family| &family.provided)
+            .instance
+    }
+    fn interpreted(self) -> &'a crate::types::EffectInstance {
+        &self
+            .family
+            .map_or(&self.definition.interpreted, |family| &family.interpreted)
+            .instance
+    }
+    fn binder(self) -> &'a crate::resolved::Binder {
+        self.family
+            .map_or(&self.definition.handlers_binder, |family| {
+                &family.handlers_binder
+            })
+    }
+    fn clauses(self) -> &'a [crate::resolved::ResolvedHandlerClause] {
+        self.family
+            .map_or(self.definition.handlers.as_ref(), |family| {
+                family.handlers.as_ref()
+            })
+    }
+}
+
 /// Actual checked source occurrence, retained before the source builder is consumed.
 pub(super) struct CheckedGlobalOccurrence {
     pub(super) node: Option<NodeId>,
@@ -466,6 +506,8 @@ struct PreparedHandlerSource {
     hidden_answer: TypeVariableId,
     hidden_row: EffectRowVariable,
     state_parameter: TypedBinder,
+    family_scope: Vec<super::ScopedEvidenceBinder>,
+    family_requirements: Box<[crate::interface::CheckedRequirement]>,
     direct_demands: EffectRow,
     clauses: Vec<CheckedEffectClause>,
 }
@@ -482,6 +524,97 @@ struct CompiledHandlerDraft {
 struct CheckedConditionalHandler {
     template: crate::core::validate::CheckedHandlerTemplate,
     staged_externals: StagedProviderExternals,
+}
+
+/// One rigid original family, checked once under its declared requirements.
+/// Concrete body demand specializes this authority; it never checks a new
+/// source body or acquires an additional native owner.
+struct CheckedProviderFamilyOriginal {
+    authority: Arc<ProviderFamilyOriginalAuthority>,
+    identity: crate::core::provider::ProviderFamilyIdentity,
+    requirements: Arc<[crate::interface::CheckedRequirement]>,
+    provider_application: Arc<crate::interface::InterfaceApplication>,
+    methods: Arc<[(MethodId, OperationId)]>,
+    handler: CheckedConditionalHandler,
+}
+
+/// Body-free authority minted only from an independently checked family original.
+/// It is available during local capture preparation before group publication.
+/// Demands and copied headers cannot construct or replace this token.
+pub(crate) struct ProviderFamilyOriginalAuthority {
+    fact: Arc<crate::resolved::ResourceTypeFact>,
+    identity: crate::core::provider::ProviderFamilyIdentity,
+    requirements: Arc<[crate::interface::CheckedRequirement]>,
+    application: Arc<crate::interface::InterfaceApplication>,
+    methods: Arc<[(MethodId, OperationId)]>,
+    handler: crate::core::validate::CheckedHandlerContractCertificate,
+}
+
+impl std::fmt::Debug for ProviderFamilyOriginalAuthority {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProviderFamilyOriginalAuthority")
+            .field("identity", &self.identity)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ProviderFamilyOriginalAuthority {
+    pub(crate) fn fact(&self) -> &Arc<crate::resolved::ResourceTypeFact> {
+        &self.fact
+    }
+    pub(crate) fn identity(&self) -> crate::core::provider::ProviderFamilyIdentity {
+        self.identity
+    }
+    pub(crate) fn requirements(&self) -> &[crate::interface::CheckedRequirement] {
+        &self.requirements
+    }
+    pub(crate) fn application(&self) -> &crate::interface::InterfaceApplication {
+        &self.application
+    }
+    pub(crate) fn methods(&self) -> &[(MethodId, OperationId)] {
+        &self.methods
+    }
+    pub(crate) fn handler_certificate(
+        &self,
+    ) -> &crate::core::validate::CheckedHandlerContractCertificate {
+        &self.handler
+    }
+    /// The caller supplies the genuine original publication phase. Pending
+    /// local originals and committed originals have different slot obligations.
+    pub(crate) fn authenticate(
+        &self,
+        committed: bool,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), crate::core::ValidationError> {
+        self.handler.authenticate(&self.fact, committed, work)
+    }
+    fn authenticates_original(
+        &self,
+        fact: &Arc<crate::resolved::ResourceTypeFact>,
+        original: &CheckedProviderFamilyOriginal,
+    ) -> bool {
+        Arc::ptr_eq(&self.fact, fact)
+            && self.identity == original.identity
+            && Arc::ptr_eq(&self.requirements, &original.requirements)
+            && Arc::ptr_eq(&self.application, &original.provider_application)
+            && Arc::ptr_eq(&self.methods, &original.methods)
+            && original
+                .handler
+                .template
+                .authenticates_certificate(&self.handler)
+    }
+}
+
+/// Borrowed defining inputs for a finite exact family specialization.
+#[derive(Clone, Copy)]
+pub(super) struct ProviderFamilyTemplateSource<'a> {
+    pub(super) authority: &'a Arc<ProviderFamilyOriginalAuthority>,
+    pub(super) identity: crate::core::provider::ProviderFamilyIdentity,
+    pub(super) requirements: &'a [crate::interface::CheckedRequirement],
+    pub(super) provider_application: &'a crate::interface::InterfaceApplication,
+    pub(super) methods: &'a [(MethodId, OperationId)],
+    pub(super) handler: &'a crate::core::validate::CheckedHandlerTemplate,
 }
 
 /// Unpublished code: ordinary Core validation and lifecycle entry validation
@@ -1108,6 +1241,7 @@ impl PreparedProviderCode {
 
 /// Borrowed immutable code inputs. These views confer no instance authority;
 /// copying and final Core admission must establish the specialization relation.
+#[derive(Clone, Copy)]
 pub(super) struct ProviderTemplateSource<'a> {
     pub(super) fact: &'a Arc<crate::resolved::ResourceTypeFact>,
     pub(super) acquire: LifecycleTemplateSource<'a>,
@@ -1115,8 +1249,10 @@ pub(super) struct ProviderTemplateSource<'a> {
     pub(super) handler: &'a crate::core::validate::CheckedHandlerTemplate,
     pub(super) handler_occurrences: &'a [CheckedGlobalOccurrence],
     pub(super) methods: &'a [(MethodId, OperationId)],
+    pub(super) family: Option<ProviderFamilyTemplateSource<'a>>,
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct LifecycleTemplateSource<'a> {
     pub(super) original: &'a crate::core::provider::LifecycleOriginal,
     pub(super) program: &'a crate::core::UnvalidatedEffectProgram,
@@ -1143,6 +1279,15 @@ struct ProviderDeclarationContract {
     fact: std::sync::Arc<crate::resolved::ResourceTypeFact>,
     acquire: LifecycleContractCertificate,
     finish: LifecycleContractCertificate,
+    handlers: crate::core::validate::CheckedHandlerContractCertificate,
+    family: Option<ProviderFamilyContract>,
+}
+struct ProviderFamilyContract {
+    authority: Arc<ProviderFamilyOriginalAuthority>,
+    methods: Arc<[(MethodId, OperationId)]>,
+    identity: crate::core::provider::ProviderFamilyIdentity,
+    requirements: Arc<[crate::interface::CheckedRequirement]>,
+    application: Arc<crate::interface::InterfaceApplication>,
     handlers: crate::core::validate::CheckedHandlerContractCertificate,
 }
 struct LifecycleContractCertificate {
@@ -1171,7 +1316,20 @@ impl std::fmt::Debug for CheckedProviderContracts {
             .finish_non_exhaustive()
     }
 }
+#[cfg(test)]
 fn authenticate_provider_application_witness(
+    fact: &crate::resolved::ResourceTypeFact,
+    checked_application: &crate::interface::InterfaceApplication,
+    work: &mut TypeWorkBudget,
+) -> Result<(), crate::resolved::ResolvedBuildFailure> {
+    use crate::resolved::ResolvedBuildFailure as Failure;
+    if fact.family_template.is_some() {
+        return Err(Failure::InvalidState);
+    }
+    authenticate_primary_provider_application(fact, checked_application, work)
+}
+
+fn authenticate_primary_provider_application(
     fact: &crate::resolved::ResourceTypeFact,
     checked_application: &crate::interface::InterfaceApplication,
     work: &mut TypeWorkBudget,
@@ -1208,6 +1366,83 @@ fn authenticate_provider_application_witness(
 }
 
 impl CheckedProviderContracts {
+    /// Original local carrier retained through publication. Callers charge
+    /// resource_count before lookup and compare the returned Arc by identity.
+    pub(super) fn family_original_authority(
+        &self,
+        definition: crate::resolved::ResourceDefinitionId,
+    ) -> Option<&Arc<ProviderFamilyOriginalAuthority>> {
+        let family = self
+            .declarations
+            .iter()
+            .find(|entry| entry.fact.id == definition)?
+            .family
+            .as_ref()?;
+        (family.identity.definition == definition).then_some(&family.authority)
+    }
+    /// Exact checked method vector; callers charge resource_count for lookup.
+    pub(crate) fn family_methods(
+        &self,
+        definition: crate::resolved::ResourceDefinitionId,
+    ) -> Option<&[(MethodId, OperationId)]> {
+        let family = self
+            .declarations
+            .iter()
+            .find(|entry| entry.fact.id == definition)?
+            .family
+            .as_ref()?;
+        (family.identity.definition == definition).then_some(family.methods.as_ref())
+    }
+    /// Original handler token; callers charge resource_count for lookup.
+    pub(crate) fn family_handler_certificate(
+        &self,
+        definition: crate::resolved::ResourceDefinitionId,
+    ) -> Option<&crate::core::validate::CheckedHandlerContractCertificate> {
+        let family = self
+            .declarations
+            .iter()
+            .find(|entry| entry.fact.id == definition)?
+            .family
+            .as_ref()?;
+        (family.identity.definition == definition).then_some(&family.handlers)
+    }
+
+    pub(crate) fn family_identity(
+        &self,
+        definition: crate::resolved::ResourceDefinitionId,
+    ) -> Option<crate::core::provider::ProviderFamilyIdentity> {
+        let family = self
+            .declarations
+            .iter()
+            .find(|entry| entry.fact.id == definition)?
+            .family
+            .as_ref()?;
+        (family.identity.definition == definition).then_some(family.identity)
+    }
+    pub(crate) fn family_requirements(
+        &self,
+        definition: crate::resolved::ResourceDefinitionId,
+    ) -> Option<&[crate::interface::CheckedRequirement]> {
+        let family = self
+            .declarations
+            .iter()
+            .find(|entry| entry.fact.id == definition)?
+            .family
+            .as_ref()?;
+        (family.identity.definition == definition).then_some(family.requirements.as_ref())
+    }
+    pub(crate) fn family_provider_application(
+        &self,
+        definition: crate::resolved::ResourceDefinitionId,
+    ) -> Option<&crate::interface::InterfaceApplication> {
+        let family = self
+            .declarations
+            .iter()
+            .find(|entry| entry.fact.id == definition)?
+            .family
+            .as_ref()?;
+        (family.identity.definition == definition).then_some(family.application.as_ref())
+    }
     pub(crate) fn resource_count(&self) -> usize {
         self.declarations.len()
     }
@@ -1292,7 +1527,94 @@ impl CheckedProviderContracts {
             if signature.parameters.len() != checked_application.arguments().len() {
                 return Err(Failure::InvalidState);
             }
-            authenticate_provider_application_witness(fact, checked_application, work)?;
+            authenticate_primary_provider_application(fact, checked_application, work)?;
+            match (&fact.family_template, &declaration.family) {
+                (None, None) => {}
+                (Some(written), Some(family)) => {
+                    if !Arc::ptr_eq(&family.authority.fact, fact)
+                        || family.authority.identity != family.identity
+                        || !Arc::ptr_eq(&family.authority.requirements, &family.requirements)
+                        || !Arc::ptr_eq(&family.authority.application, &family.application)
+                        || !Arc::ptr_eq(&family.authority.methods, &family.methods)
+                        || family.identity.definition != fact.id
+                        || family.identity.parameter != written.parameter.id
+                        || family.requirements.len() != written.requirements.len()
+                        || family.application.interface()
+                            != written.provider_application.interface()
+                        || family.application.arguments().len()
+                            != written.provider_application.arguments().len()
+                    {
+                        return Err(Failure::InvalidState);
+                    }
+                    work.charge(
+                        family
+                            .requirements
+                            .len()
+                            .checked_add(family.application.arguments().len())
+                            .ok_or(Failure::TypeResource)?,
+                    )
+                    .map_err(|()| Failure::TypeResource)?;
+                    for (actual, expected) in family
+                        .application
+                        .arguments()
+                        .iter()
+                        .zip(written.provider_application.arguments())
+                    {
+                        if !crate::types::same_kinded_argument_with_budget(actual, expected, work)
+                            .map_err(|()| Failure::TypeResource)?
+                        {
+                            return Err(Failure::InvalidState);
+                        }
+                    }
+                    for (ordinal, (actual, expected)) in family
+                        .requirements
+                        .iter()
+                        .zip(&written.requirements)
+                        .enumerate()
+                    {
+                        if actual.id.owner()
+                            != crate::interface::RequirementOwner::ResourceFamily(fact.id)
+                            || usize::try_from(actual.id.declaration()).ok() != Some(ordinal)
+                            || actual.interface() != expected.interface.id
+                            || actual.arguments().len() != expected.arguments.len()
+                            || actual.span != expected.span
+                        {
+                            return Err(Failure::InvalidState);
+                        }
+                        work.charge(actual.arguments().len())
+                            .map_err(|()| Failure::TypeResource)?;
+                        for (actual, expected) in actual.arguments().iter().zip(&expected.arguments)
+                        {
+                            if !crate::types::same_kinded_argument_with_budget(
+                                actual,
+                                &expected.ty,
+                                work,
+                            )
+                            .map_err(|()| Failure::TypeResource)?
+                            {
+                                return Err(Failure::InvalidState);
+                            }
+                        }
+                        authenticate_contract_origin(&actual.origin, &self.sources, work)?;
+                    }
+                    family
+                        .handlers
+                        .authenticate(fact, committed, work)
+                        .map_err(contract_validation_failure)?;
+                    for origin in family.handlers.defining_origins() {
+                        authenticate_contract_origin(origin, &self.sources, work)?;
+                    }
+                    authenticate_contract_native_registry(
+                        family.handlers.canonical_registry(),
+                        fact,
+                        &self.sources,
+                        authenticated_native_facts,
+                        &mut authenticated_native_origins,
+                        work,
+                    )?;
+                }
+                _ => return Err(Failure::InvalidState),
+            }
             if fact.id.module() != self.module || fact.family.module() != self.module {
                 return Err(Failure::InvalidState);
             }
@@ -1411,7 +1733,14 @@ impl CheckedProviderContracts {
                 &*declaration.acquire.canonical,
                 &*declaration.finish.canonical,
                 declaration.handlers.canonical_registry(),
-            ] {
+            ]
+            .into_iter()
+            .chain(
+                declaration
+                    .family
+                    .iter()
+                    .map(|family| family.handlers.canonical_registry()),
+            ) {
                 for native in canonical.foreign_modules() {
                     work.charge(1).map_err(|()| Failure::TypeResource)?;
                     let mut found = false;
@@ -1698,6 +2027,7 @@ struct CheckedProviderDeclaration {
     acquire: CheckedLifecycleTemplate,
     finish: CheckedLifecycleTemplate,
     handlers: CheckedConditionalHandler,
+    family: Option<CheckedProviderFamilyOriginal>,
 }
 
 // Equality identifies the one immutable independently admitted defining proof.
@@ -1832,6 +2162,13 @@ fn declaration_template_source<'a>(
                 .occurrences,
         })
     }
+    if declaration.family.as_ref().is_some_and(|family| {
+        !family
+            .authority
+            .authenticates_original(&declaration.fact, family)
+    }) {
+        return Err(invalid_state());
+    }
     Ok(ProviderTemplateSource {
         fact: &declaration.fact,
         acquire: lifecycle(&declaration.acquire, work)?,
@@ -1839,6 +2176,17 @@ fn declaration_template_source<'a>(
         handler: &declaration.handlers.template,
         handler_occurrences: &declaration.handlers.staged_externals.occurrences,
         methods: &declaration.methods,
+        family: declaration
+            .family
+            .as_ref()
+            .map(|family| ProviderFamilyTemplateSource {
+                authority: &family.authority,
+                identity: family.identity,
+                requirements: &family.requirements,
+                provider_application: &family.provider_application,
+                methods: &family.methods,
+                handler: &family.handler.template,
+            }),
     })
 }
 
@@ -1860,6 +2208,13 @@ fn prepared_declaration_template_source(
                 .occurrences,
         })
     }
+    if declaration.family.as_ref().is_some_and(|family| {
+        !family
+            .authority
+            .authenticates_original(&declaration.fact, family)
+    }) {
+        return Err(invalid_state());
+    }
     Ok(ProviderTemplateSource {
         fact: &declaration.fact,
         acquire: lifecycle(&declaration.acquire)?,
@@ -1867,6 +2222,17 @@ fn prepared_declaration_template_source(
         handler: &declaration.handlers.template,
         handler_occurrences: &declaration.handlers.staged_externals.occurrences,
         methods: &declaration.methods,
+        family: declaration
+            .family
+            .as_ref()
+            .map(|family| ProviderFamilyTemplateSource {
+                authority: &family.authority,
+                identity: family.identity,
+                requirements: &family.requirements,
+                provider_application: &family.provider_application,
+                methods: &family.methods,
+                handler: &family.handler.template,
+            }),
     })
 }
 
@@ -1882,6 +2248,45 @@ fn authenticate_original_relation(
         || code.public != contract.public
     {
         return Err(Failure::InvalidState);
+    }
+    match (&code.family, &contract.family) {
+        (None, None) => {}
+        (Some(code), Some(proof))
+            if code.identity == proof.identity
+                && Arc::ptr_eq(&code.authority, &proof.authority)
+                && code.authority.authenticates_original(&contract.fact, code)
+                && Arc::ptr_eq(&code.methods, &proof.methods)
+                && Arc::ptr_eq(&code.requirements, &proof.requirements)
+                && Arc::ptr_eq(&code.provider_application, &proof.application)
+                && code
+                    .handler
+                    .template
+                    .authenticates_certificate(&proof.handlers) =>
+        {
+            let occurrences = &code.handler.staged_externals.occurrences;
+            work.charge(occurrences.len())
+                .map_err(|()| Failure::TypeResource)?;
+            if occurrences
+                .iter()
+                .any(|occurrence| occurrence.node.is_none())
+            {
+                return Err(Failure::InvalidState);
+            }
+            code.handler
+                .template
+                .authenticate_contract(
+                    &contract.fact,
+                    occurrences.iter().map(|occurrence| {
+                        (
+                            occurrence.node.expect("checked above"),
+                            &occurrence.occurrence,
+                        )
+                    }),
+                    work,
+                )
+                .map_err(contract_validation_failure)?;
+        }
+        _ => return Err(Failure::InvalidState),
     }
     for (entry, proof) in [
         (&code.acquire, &contract.acquire),
@@ -2220,6 +2625,68 @@ pub(super) fn check_module_provider_original(
         crate::resolved::ResourceTypeFact::from_definition_with_budget(definition, type_work)
             .map_err(|()| type_resource())?,
     );
+
+    let mut family_original = if let Some(family) = &definition.family_template {
+        let (application, methods, requirements, draft) = with_module_provider_compiler(
+            module,
+            &preparation.registry,
+            defining,
+            type_work,
+            coverage_work,
+            constraint_work,
+            |compiler| {
+                let (application, methods) =
+                    compiler.check_provider_family_header(module, definition, family)?;
+                let requirements =
+                    compiler.checked_provider_family_requirements(definition.id, family)?;
+                let draft = compiler.compile_provider_handler_block(
+                    ProviderHandlerSource {
+                        definition,
+                        family: Some(family),
+                    },
+                    header,
+                    module.imported_facts(),
+                )?;
+                Ok((application, methods, requirements, draft))
+            },
+        )?;
+        let handler = draft
+            .admit_with_native_memo(
+                module,
+                &sources,
+                &module_sources,
+                Some(&preparation.native_authentication),
+                type_work,
+            )
+            .map_err(module_provider_failure)?;
+        type_work.charge(4).map_err(|()| type_resource())?;
+        let identity = crate::core::provider::ProviderFamilyIdentity {
+            definition: definition.id,
+            parameter: family.parameter.id,
+        };
+        let requirements: Arc<[crate::interface::CheckedRequirement]> = Arc::from(requirements);
+        let provider_application = Arc::new(application);
+        let methods: Arc<[(MethodId, OperationId)]> = Arc::from(methods.into_boxed_slice());
+        let authority = Arc::new(ProviderFamilyOriginalAuthority {
+            fact: Arc::clone(&fact),
+            identity,
+            requirements: Arc::clone(&requirements),
+            application: Arc::clone(&provider_application),
+            methods: Arc::clone(&methods),
+            handler: handler.template.contract_certificate(),
+        });
+        Some(CheckedProviderFamilyOriginal {
+            authority,
+            identity,
+            requirements,
+            provider_application,
+            methods,
+            handler,
+        })
+    } else {
+        None
+    };
+
     for staged in [
         acquire
             .draft
@@ -2235,6 +2702,14 @@ pub(super) fn check_module_provider_original(
     ] {
         publication
             .append(std::mem::take(&mut staged.publication), constraint_work)
+            .map_err(|failure| selection_failure(failure, None))?;
+    }
+    if let Some(family) = &mut family_original {
+        publication
+            .append(
+                std::mem::take(&mut family.handler.staged_externals.publication),
+                constraint_work,
+            )
             .map_err(|failure| selection_failure(failure, None))?;
     }
     type_work
@@ -2268,6 +2743,7 @@ pub(super) fn check_module_provider_original(
         acquire,
         finish,
         handlers,
+        family: family_original,
     });
     let acquire = declaration
         .acquire
@@ -2319,6 +2795,17 @@ pub(super) fn check_module_provider_original(
         acquire,
         finish,
         handlers: declaration.handlers.template.contract_certificate(),
+        family: declaration
+            .family
+            .as_ref()
+            .map(|family| ProviderFamilyContract {
+                authority: Arc::clone(&family.authority),
+                methods: Arc::clone(&family.methods),
+                identity: family.identity,
+                requirements: Arc::clone(&family.requirements),
+                application: Arc::clone(&family.provider_application),
+                handlers: family.handler.template.contract_certificate(),
+            }),
     });
     type_work.charge(1).map_err(|()| type_resource())?;
     let component = Arc::new(PreparedProviderOriginal {
@@ -2363,6 +2850,23 @@ pub(super) fn finish_module_provider_originals(
             || component.declaration.public != component.contract.public
         {
             return Err(invalid_state());
+        }
+        match (&component.declaration.family, &component.contract.family) {
+            (None, None) => {}
+            (Some(code), Some(proof))
+                if code.identity == proof.identity
+                    && Arc::ptr_eq(&code.authority, &proof.authority)
+                    && code
+                        .authority
+                        .authenticates_original(&component.contract.fact, code)
+                    && Arc::ptr_eq(&code.methods, &proof.methods)
+                    && Arc::ptr_eq(&code.requirements, &proof.requirements)
+                    && Arc::ptr_eq(&code.provider_application, &proof.application)
+                    && code
+                        .handler
+                        .template
+                        .authenticates_certificate(&proof.handlers) => {}
+            _ => return Err(invalid_state()),
         }
         declarations.push(Arc::clone(&component.declaration));
         contracts.push(Arc::clone(&component.contract));
@@ -2712,6 +3216,14 @@ impl CoreElaborator<EffectOperationFamily> {
         &mut self,
         definition: &ResolvedResourceDefinition,
     ) -> Result<Vec<HashMap<TypeVariableId, EffectRow>>, TypeError> {
+        self.provider_original_row_contexts_for(definition, &definition.provided.instance)
+    }
+
+    fn provider_original_row_contexts_for(
+        &mut self,
+        definition: &ResolvedResourceDefinition,
+        provided: &EffectInstance,
+    ) -> Result<Vec<HashMap<TypeVariableId, EffectRow>>, TypeError> {
         // The first parameter is the nominal identity. Preserve the closed
         // provider path without another metadata traversal or allocation.
         if definition.parameters.len() <= 1 {
@@ -2754,7 +3266,7 @@ impl CoreElaborator<EffectOperationFamily> {
         }
         let count = self
             .registry
-            .effect(definition.provided.instance.effect())
+            .effect(provided.effect())
             .ok_or_else(invalid_state)?
             .operations
             .len();
@@ -2762,7 +3274,7 @@ impl CoreElaborator<EffectOperationFamily> {
         for index in 0..count {
             let operation = self
                 .registry
-                .effect(definition.provided.instance.effect())
+                .effect(provided.effect())
                 .ok_or_else(invalid_state)?
                 .operations
                 .get(index)
@@ -2770,11 +3282,8 @@ impl CoreElaborator<EffectOperationFamily> {
                 .id;
             // The canonical operation signature authenticates the effect,
             // ordinal and complete owner substitution. Its outer arrow is pure.
-            let (domain, result) = self.operation_signature(
-                &definition.provided.instance,
-                operation,
-                definition.span,
-            )?;
+            let (domain, result) =
+                self.operation_signature(provided, operation, definition.span)?;
             let domain = IterativeTypeOwner::new(domain);
             let result = IterativeTypeOwner::new(result);
             self.retain_provider_original_row_context(
@@ -2833,19 +3342,90 @@ impl CoreElaborator<EffectOperationFamily> {
         Ok(())
     }
 
+    #[cfg(test)]
     fn prepare_provider_handler_source(
         &mut self,
         definition: &ResolvedResourceDefinition,
         header: &ProviderHeader,
         imported: &crate::resolved::ImportedFacts,
     ) -> Result<PreparedHandlerSource, TypeError> {
+        self.prepare_provider_handler_block(
+            ProviderHandlerSource {
+                definition,
+                family: None,
+            },
+            header,
+            imported,
+        )
+    }
+
+    fn checked_provider_family_requirements(
+        &mut self,
+        definition: crate::resolved::ResourceDefinitionId,
+        family: &crate::resolved::ResolvedResourceFamilyTemplate,
+    ) -> Result<Box<[crate::interface::CheckedRequirement]>, TypeError> {
+        self.constraint_work
+            .charge(family.requirements.len())
+            .map_err(|()| constraint_resource())?;
+        let mut requirements = Vec::new();
+        requirements
+            .try_reserve_exact(family.requirements.len())
+            .map_err(|_| constraint_resource())?;
+        for (ordinal, requirement) in family.requirements.iter().enumerate() {
+            let ordinal = u32::try_from(ordinal).map_err(|_| constraint_resource())?;
+            requirements.push(crate::interface::CheckedRequirement {
+                id: crate::interface::RequirementId::new(
+                    crate::interface::RequirementOwner::ResourceFamily(definition),
+                    ordinal,
+                ),
+                application: self.clone_resolved_interface_application(requirement)?,
+                origin: Origin::Source(requirement.span),
+                span: requirement.span,
+            });
+        }
+        Ok(requirements.into_boxed_slice())
+    }
+
+    fn prepare_provider_handler_block(
+        &mut self,
+        source: ProviderHandlerSource<'_>,
+        header: &ProviderHeader,
+        imported: &crate::resolved::ImportedFacts,
+    ) -> Result<PreparedHandlerSource, TypeError> {
+        let definition = source.definition;
         self.install_provider_imports(imported)?;
-        let id = ProviderTemplateId::new(definition.id, 2);
+        let family_requirements = if let Some(family) = source.family {
+            self.checked_provider_family_requirements(definition.id, family)?
+        } else {
+            Box::new([])
+        };
+        let family_scope = if let Some(family) = source.family {
+            let requirements = &family_requirements;
+            self.selection
+                .as_mut()
+                .ok_or_else(invalid_state)?
+                .enter_family_scope(
+                    definition.id,
+                    requirements,
+                    &mut self.constraint_work,
+                    &mut self.type_work,
+                )
+                .map_err(|failure| selection_failure(failure, Some(family.span)))?;
+            self.prepare_provider_family_evidence_lowering(imported)?;
+            self.enter_provider_family_evidence_scope(
+                definition.id,
+                requirements,
+                &Origin::Source(family.span),
+            )?
+        } else {
+            Vec::new()
+        };
+        let id = source.template();
         let hidden_answer = self.fresh_type_variable(&Kind::Type, definition.span)?;
         let hidden_row = self.fresh_type_variable(&Kind::EffectRow, definition.span)?;
         let declaration = self
             .registry
-            .effect(definition.interpreted.instance.effect())
+            .effect(source.interpreted().effect())
             .ok_or_else(invalid_state)?;
         self.type_work
             .charge(declaration.operations.len())
@@ -2863,11 +3443,8 @@ impl CoreElaborator<EffectOperationFamily> {
                 operations.push(operation.id);
             }
         }
-        let native = clone_effect_instance_with_budget(
-            &definition.interpreted.instance,
-            &mut self.type_work,
-        )
-        .map_err(|error| TypeError::Internal(error.into()))?;
+        let native = clone_effect_instance_with_budget(source.interpreted(), &mut self.type_work)
+            .map_err(|error| TypeError::Internal(error.into()))?;
         let mut associations = Vec::new();
         self.type_work.charge(1).map_err(|()| type_resource())?;
         associations
@@ -2888,7 +3465,7 @@ impl CoreElaborator<EffectOperationFamily> {
         let marker = self.evidence_marker()?;
         let mut context = self.base_context.clone();
         reserve_context_entry(&mut context, &mut self.type_work).map_err(|()| type_resource())?;
-        let state = &definition.handlers_binder;
+        let state = source.binder();
         let state_type = IterativeTypeOwner::new(self.clone_type(&definition.state.ty)?);
         let provenance = self.at_span_provenance(&state_type, state.origin.primary_span())?;
         if context.insert_with_provenance(state.id, state_type.into_inner(), provenance)? {
@@ -2899,7 +3476,8 @@ impl CoreElaborator<EffectOperationFamily> {
             self.builder
                 .resolved_binder(state.id, state_type, state.origin.clone())?;
         let checkpoint = self.builder.type_rewrite_checkpoint();
-        let original_rows = self.provider_original_row_contexts(definition)?;
+        let original_rows =
+            self.provider_original_row_contexts_for(definition, source.provided())?;
         let row_depth = self.expected_scheme_rows.len();
         self.type_work
             .charge(original_rows.len())
@@ -2909,8 +3487,8 @@ impl CoreElaborator<EffectOperationFamily> {
             .map_err(|_| type_resource())?;
         self.expected_scheme_rows.extend(original_rows);
         let checked = self.check_effect_clauses(
-            &definition.provided.instance,
-            &definition.handlers,
+            source.provided(),
+            source.clauses(),
             definition.span,
             &mut context,
             &Type::Variable(hidden_answer),
@@ -2928,6 +3506,8 @@ impl CoreElaborator<EffectOperationFamily> {
             hidden_answer,
             hidden_row: EffectRowVariable::rigid(hidden_row),
             state_parameter,
+            family_scope,
+            family_requirements,
             direct_demands,
             clauses,
         })
@@ -2939,7 +3519,23 @@ impl CoreElaborator<EffectOperationFamily> {
         header: &ProviderHeader,
         imported: &crate::resolved::ImportedFacts,
     ) -> Result<CompiledHandlerDraft, TypeError> {
-        let prepared = self.prepare_provider_handler_source(definition, header, imported)?;
+        self.compile_provider_handler_block(
+            ProviderHandlerSource {
+                definition,
+                family: None,
+            },
+            header,
+            imported,
+        )
+    }
+
+    fn compile_provider_handler_block(
+        &mut self,
+        source: ProviderHandlerSource<'_>,
+        header: &ProviderHeader,
+        imported: &crate::resolved::ImportedFacts,
+    ) -> Result<CompiledHandlerDraft, TypeError> {
+        let prepared = self.prepare_provider_handler_block(source, header, imported)?;
         let publication = self.prepare_evidence_publication()?;
         self.type_work
             .charge(
@@ -2965,14 +3561,45 @@ impl CoreElaborator<EffectOperationFamily> {
             roots[0],
             &mut self.type_work,
         )?;
-        let lowered = self.lower_provider_source_forest_with_pending(
+        let mut family_binders = Vec::new();
+        if source.family.is_some() {
+            self.type_work
+                .charge(
+                    prepared
+                        .family_scope
+                        .len()
+                        .checked_add(1)
+                        .ok_or_else(type_resource)?,
+                )
+                .map_err(|()| type_resource())?;
+            family_binders
+                .try_reserve_exact(prepared.family_scope.len() + 1)
+                .map_err(|_| type_resource())?;
+            family_binders.push(&prepared.state_parameter);
+            family_binders.extend(prepared.family_scope.iter().map(|scope| scope.binder()));
+        }
+        let state_binders: &[&TypedBinder] = if family_binders.is_empty() {
+            &[&prepared.state_parameter]
+        } else {
+            &family_binders
+        };
+        let family_scope =
+            source.family.map(
+                |_| crate::evidence_validation::ProviderFamilyEvidenceScope {
+                    definition: source.definition,
+                    requirements: &prepared.family_requirements,
+                    dictionary_parameters: &family_binders[1..],
+                },
+            );
+        let lowered = self.lower_provider_source_forest_with_pending_family(
             &roots,
             imported,
             publication,
             &OwnerReplacementBuffer::new(),
-            &[&prepared.state_parameter],
+            state_binders,
             &patterns,
             pending_rows,
+            family_scope,
         )?;
         let mut clauses = Vec::new();
         self.type_work
@@ -2991,10 +3618,23 @@ impl CoreElaborator<EffectOperationFamily> {
                 crate::core::CoreMatchArm::new(pattern, body, source.origin),
             ));
         }
+        drop(family_binders);
         let mut states = lowered.states;
-        let state = states.pop().ok_or_else(invalid_state)?;
-        if !states.is_empty() || !patterns.is_empty() {
+        if states.len()
+            != prepared
+                .family_scope
+                .len()
+                .checked_add(1)
+                .ok_or_else(type_resource)?
+            || !patterns.is_empty()
+        {
             return Err(invalid_state());
+        }
+        states.reverse();
+        let state = states.pop().ok_or_else(invalid_state)?;
+        states.reverse();
+        if source.family.is_some() {
+            self.clear_lowered_evidence_scope(prepared.family_scope)?;
         }
         Ok(CompiledHandlerDraft {
             #[cfg(test)]
@@ -3005,6 +3645,8 @@ impl CoreElaborator<EffectOperationFamily> {
                 template: prepared.id,
                 handler: prepared.handler,
                 state,
+                dictionary_parameters: states.into_boxed_slice(),
+                family_requirements: prepared.family_requirements,
                 hidden: [
                     (prepared.hidden_answer, Kind::Type),
                     (
@@ -3616,6 +4258,168 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             }
         }
         Ok(())
+    }
+
+    fn check_provider_family_header(
+        &mut self,
+        module: &ResolvedModule,
+        definition: &ResolvedResourceDefinition,
+        family: &crate::resolved::ResolvedResourceFamilyTemplate,
+    ) -> Result<
+        (
+            crate::interface::InterfaceApplication,
+            Vec<(MethodId, OperationId)>,
+        ),
+        TypeError,
+    > {
+        let registry = Arc::clone(&self.registry);
+        let storage = registry
+            .foreign_storage(family.interpreted.instance.effect())
+            .ok_or_else(|| {
+                contract_error(
+                    family.interpreted.span,
+                    "resource family interpretation requires authenticated native storage",
+                )
+            })?;
+        let owner = definition.parameters.first().ok_or_else(invalid_state)?;
+        let (state, _) = nominal_arguments(&definition.state.ty, &mut self.type_work)?;
+        if storage.state() != state
+            || family.parameter.kind != Kind::Type
+            || family
+                .interpreted
+                .instance
+                .arguments()
+                .get(storage.owner_parameter())
+                != Some(&crate::types::KindedArgument::TypeArg(Type::Variable(
+                    owner.id,
+                )))
+            || family
+                .interpreted
+                .instance
+                .arguments()
+                .get(storage.payload_parameter())
+                != Some(&crate::types::KindedArgument::TypeArg(Type::Variable(
+                    family.parameter.id,
+                )))
+        {
+            return Err(contract_error(
+                family.interpreted.span,
+                "resource family native storage must preserve its exact owner and rigid payload",
+            ));
+        }
+        let provided = registry
+            .effect(family.provided.instance.effect())
+            .ok_or_else(invalid_state)?;
+        if registry.foreign_effect(provided.id)
+            || family.handlers.len() != provided.operations.len()
+        {
+            return Err(contract_error(
+                family.provided.span,
+                "resource family provides a complete ordinary source effect",
+            ));
+        }
+        if first_invalid_handler_operation_with_budget(
+            provided.id,
+            provided.operations.len(),
+            family.handlers.iter().map(|clause| clause.operation),
+            &mut self.type_work,
+        )
+        .map_err(|()| type_resource())?
+        .is_some()
+        {
+            return Err(contract_error(
+                family.span,
+                "resource family clauses must cover each associated operation exactly once",
+            ));
+        }
+        let interface_id = family.provider.interface.id;
+        let local = module
+            .interfaces()
+            .iter()
+            .find(|interface| interface.id == interface_id);
+        let imported = module.imported_facts().interface(interface_id);
+        let (parameters, methods): (&[_], Vec<_>) = if let Some(interface) = local {
+            self.type_work
+                .charge(interface.methods.len())
+                .map_err(|()| type_resource())?;
+            (
+                interface.parameters.as_ref(),
+                interface
+                    .methods
+                    .iter()
+                    .map(|method| (method.id, method.spelling.as_str(), &method.annotation.ty))
+                    .collect(),
+            )
+        } else if let Some(interface) = imported {
+            self.type_work
+                .charge(interface.methods.len())
+                .map_err(|()| type_resource())?;
+            (
+                interface.parameters.as_ref(),
+                interface
+                    .methods
+                    .iter()
+                    .map(|method| (method.id, method.spelling.as_str(), &method.value_type))
+                    .collect(),
+            )
+        } else {
+            return Err(invalid_state());
+        };
+        if parameters.len() != family.provider.arguments.len()
+            || methods.len() != provided.operations.len()
+        {
+            return Err(contract_error(
+                family.provider.span,
+                "resource family provider methods must match the complete associated effect",
+            ));
+        }
+        let mut substitutions = OwnerReplacementBuffer::new();
+        for (parameter, argument) in parameters.iter().zip(&family.provider.arguments) {
+            substitutions.insert_cloned(parameter.id, &argument.ty, &mut self.type_work)?;
+        }
+        self.type_work
+            .charge(methods.len())
+            .map_err(|()| type_resource())?;
+        let mut associations = Vec::new();
+        associations
+            .try_reserve_exact(methods.len())
+            .map_err(|_| type_resource())?;
+        for (method, spelling, signature) in methods {
+            let operation = provided
+                .operations
+                .iter()
+                .find(|operation| operation.spelling == spelling)
+                .ok_or_else(|| {
+                    contract_error(
+                        family.provider.span,
+                        "resource family provider method has no associated operation",
+                    )
+                })?;
+            let (domain, result) =
+                self.operation_signature(&family.provided.instance, operation.id, family.span)?;
+            let effect =
+                clone_effect_instance_with_budget(&family.provided.instance, &mut self.type_work)
+                    .map_err(|error| TypeError::Internal(error.into()))?;
+            let expected = IterativeTypeOwner::new(Type::function_computation(
+                domain,
+                ComputationType::new(result, EffectRow::singleton(effect)),
+            ));
+            let actual =
+                IterativeTypeOwner::new(substitutions.substitute(signature, &mut self.type_work)?);
+            if !same_type_with_budget(&actual, &expected, &mut self.type_work)
+                .map_err(|()| type_resource())?
+            {
+                return Err(contract_error(
+                    family.provider.span,
+                    "resource family method type and row must equal its exact associated operation",
+                ));
+            }
+            associations.push((method, operation.id));
+        }
+        Ok((
+            self.clone_resolved_interface_application(&family.provider)?,
+            associations,
+        ))
     }
 
     fn check_provider_header(
@@ -4941,6 +5745,45 @@ mod tests {
     }
 
     #[test]
+    fn provider_application_witness_rejects_unconsumed_family_metadata() {
+        let fixture = Fixture::new(SOURCE);
+        let definition = &fixture.resolved.resources()[0];
+        let header = fixture
+            .elaborator()
+            .check_provider_header(&fixture.resolved, definition)
+            .unwrap();
+        let mut work = TypeWorkBudget::default();
+        let mut fact =
+            crate::resolved::ResourceTypeFact::from_definition_with_budget(definition, &mut work)
+                .unwrap();
+        authenticate_provider_application_witness(&fact, &header.provider_application, &mut work)
+            .unwrap();
+        // Adding an unconsumed family cannot inherit the ordinary group's
+        // original certificate, even when its original application is intact.
+        fact.family_template = Some(crate::resolved::ResourceFamilyTypeFact {
+            parameter: definition.answer.clone(),
+            requirements: Box::new([]),
+            provider: fact.provider.clone(),
+            provider_application: fact
+                .provider_application
+                .clone_with_budget(&mut work)
+                .unwrap(),
+            provided: fact.provided.clone(),
+            interpreted: fact.interpreted.clone(),
+            origin: fact.origin.clone(),
+            span: definition.span,
+        });
+        assert_eq!(
+            authenticate_provider_application_witness(
+                &fact,
+                &header.provider_application,
+                &mut work
+            ),
+            Err(crate::resolved::ResolvedBuildFailure::InvalidState)
+        );
+    }
+
+    #[test]
     fn normal_provider_link_requires_separate_code_and_canonical_closure() {
         for mutation in 0..7 {
             let fixture = Fixture::new(&format!("{SOURCE}\nmain : Unit -> Int\nmain () = 42\n"));
@@ -6010,10 +6853,11 @@ mod tests {
             "@foreign.wide",
             ForeignRegistrationId::new(990),
             ForeignManifestSchema {
+                foundation: None,
                 types: vec![ForeignTypeDeclaration {
                     name: "WideState".into(),
                     parameters: vec!["R".into()],
-                    opaque_state: true,
+                    category: crate::foreign::ForeignTypeCategory::State,
                     constructors: vec![],
                 }],
                 effects: vec![ForeignEffectDeclaration {

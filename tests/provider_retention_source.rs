@@ -104,7 +104,11 @@ fn ty(
     ForeignTypeDeclaration {
         name: name.into(),
         parameters: parameters.iter().map(|name| (*name).into()).collect(),
-        opaque_state,
+        category: if opaque_state {
+            ash::foreign::ForeignTypeCategory::State
+        } else {
+            ash::foreign::ForeignTypeCategory::Data
+        },
         constructors: constructors
             .iter()
             .map(|(name, payload)| ForeignConstructorDeclaration {
@@ -189,6 +193,7 @@ fn manifest() -> ForeignManifest {
         "@foreign.retention",
         ForeignRegistrationId::new(2),
         ForeignManifestSchema {
+            foundation: None,
             types: vec![
                 ty("ParentState", &["R"], true, &[]),
                 ty("ChildState", &["S", "R"], true, &[]),

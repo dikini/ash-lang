@@ -1070,6 +1070,8 @@ fn fragment(draft: HandlerSourceDraft) -> crate::core::provider::HandlerFragment
             ),
         ],
         clauses,
+        dictionary_parameters: Box::new([]),
+        family_requirements: Box::new([]),
         direct_demands: draft.direct_demands,
         pending_rows: draft.pending_rows,
     }
@@ -1294,10 +1296,11 @@ fn canonical_registered_effect_and_state_lookups_charge_empty_and_wide_inventori
                 path,
                 ForeignRegistrationId::new(1000 + index as u64),
                 ForeignManifestSchema {
+                    foundation: None,
                     types: vec![ForeignTypeDeclaration {
                         name: "State".into(),
                         parameters: vec!["R".into()],
-                        opaque_state: true,
+                        category: crate::foreign::ForeignTypeCategory::State,
                         constructors: vec![],
                     }],
                     effects: (0..EFFECTS)

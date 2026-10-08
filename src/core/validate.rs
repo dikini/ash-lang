@@ -56,6 +56,25 @@ fn core_validation_type_work_limit() -> usize {
     )
 }
 
+fn same_provider_family_application(
+    actual: &InterfaceApplication,
+    expected: &InterfaceApplication,
+    work: &mut TypeWorkBudget,
+) -> Result<bool, ()> {
+    work.charge(1)?;
+    if actual.interface() != expected.interface()
+        || actual.arguments().len() != expected.arguments().len()
+    {
+        return Ok(false);
+    }
+    for (actual, expected) in actual.arguments().iter().zip(expected.arguments()) {
+        if !crate::types::same_kinded_argument_with_budget(actual, expected, work)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// Membership in canonical foreign registrations requires visiting their
 /// module inventory and exact effect identities. Pay before each traversal.
 pub(crate) fn registered_foreign_effect_with_charge<E>(
@@ -3164,6 +3183,7 @@ struct ConditionalHandlerAdmission {
     canonical: std::sync::Arc<crate::resolved::ResolvedRegistry>,
     externals: std::sync::Arc<super::provider::RetainedHandlerExternals>,
     associations: Vec<super::provider::RetainedHandlerStateAssociation>,
+    native_storage: Box<[super::provider::HandlerNativeStorageRelation]>,
 }
 
 /// Body-free conditional proof projection; contains no typed Core program or
@@ -3194,6 +3214,20 @@ impl CheckedHandlerContractCertificate {
 }
 
 impl CheckedHandlerTemplate {
+    pub(crate) fn original_evidence_slots(
+        &self,
+    ) -> impl Iterator<Item = &crate::interface::EvidenceSlot> {
+        self.admission.externals.original_evidence_slots()
+    }
+    pub(in crate::core) fn original_native_storage_relations(
+        &self,
+    ) -> &[super::provider::HandlerNativeStorageRelation] {
+        &self.admission.native_storage
+    }
+    pub(crate) fn original_dictionary_parameters(&self) -> &[TypedBinder] {
+        &self.draft.dictionary_parameters
+    }
+
     /// Borrowed original code is compiler preparation input only. The checked
     /// token retains its independent authority; this view grants no execution.
     pub(crate) fn authenticate_source(
@@ -3451,7 +3485,12 @@ fn reconstruct_provider_handler_context(
             work,
         )?,
     };
-    super::provider::check_handler_native_flow(&entry, &associations, Some(&externals), work)?;
+    let native_storage = super::provider::check_handler_native_storage_relations(
+        &entry,
+        &associations,
+        Some(&externals),
+        work,
+    )?;
     let capture = externals.conditional_handler_capture(&entry, work)?;
     let contract = row_recipe.defining_contract(&entry, work)?;
     let canonical = std::sync::Arc::clone(&entry.canonical);
@@ -3465,6 +3504,7 @@ fn reconstruct_provider_handler_context(
         canonical,
         externals: std::sync::Arc::new(retained_externals),
         associations: retained_associations,
+        native_storage,
     })
 }
 
@@ -3696,6 +3736,44 @@ pub(crate) fn validate_modules_with_work(
     )))
 }
 
+/// Facts admitted by independent Core type validation for this exact immutable
+/// Effect arena. Source evidence and another arena cannot construct this token.
+pub(in crate::core) struct AuthenticatedCaptureLayouts<'a> {
+    nodes: &'a [StoredNode<super::effect::EffectOperationFamily>],
+    entries: &'a [(usize, crate::foreign::ForeignLayoutProducer)],
+}
+
+impl AuthenticatedCaptureLayouts<'_> {
+    pub(in crate::core) fn authenticates<F: CoreOperationFamily>(
+        &self,
+        nodes: &[StoredNode<F>],
+        ordinal: usize,
+        producer: crate::foreign::ForeignLayoutProducer,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ()> {
+        if self.entries.is_empty() {
+            return Ok(false);
+        }
+        work.charge(1)?;
+        if std::any::TypeId::of::<F>()
+            != std::any::TypeId::of::<super::effect::EffectOperationFamily>()
+            || nodes.len() != self.nodes.len()
+            || !std::ptr::eq(
+                nodes.as_ptr().cast::<()>(),
+                self.nodes.as_ptr().cast::<()>(),
+            )
+            || ordinal >= nodes.len()
+        {
+            return Ok(false);
+        }
+        work.charge(self.entries.len())?;
+        Ok(self
+            .entries
+            .iter()
+            .any(|(node, actual)| *node == ordinal && *actual == producer))
+    }
+}
+
 struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily> {
     program: &'program UnvalidatedCoreProgram<F>,
     sources: HashMap<SourceId, &'source SourceFile>,
@@ -3711,6 +3789,7 @@ struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily
     provider_handler_entry: Option<&'program super::provider::HandlerFragmentEntry<'program>>,
     provider_fragment_locals: Option<&'program [crate::types::NominalTypeId]>,
     type_work: Cell<usize>,
+    capture_layouts: std::cell::RefCell<Vec<(usize, crate::foreign::ForeignLayoutProducer)>>,
     type_work_limit: usize,
     #[cfg(test)]
     owner_parameter_index_work: Cell<usize>,
@@ -3742,6 +3821,29 @@ pub(super) trait ScopeFamily: CoreOperationFamily {
     fn provider_scope(_kind: &Self::Kind) -> Option<&super::provider::ProviderScopeNode> {
         None
     }
+    #[allow(clippy::too_many_arguments)]
+    fn authenticate_provider_family_use(
+        _program: &UnvalidatedCoreProgram<Self>,
+        _selection: &crate::interface::EvidenceSelection,
+        _selection_node: crate::interface::EvidenceNodeId,
+        _method: crate::interface::MethodId,
+        _member: usize,
+        _binder: BinderId,
+        _work: &mut TypeWorkBudget,
+    ) -> Result<bool, ValidationError> {
+        Ok(false)
+    }
+
+    fn provider_family_dictionary_binder(
+        _program: &UnvalidatedCoreProgram<Self>,
+        _occurrence_node: NodeId,
+        _definition: crate::resolved::ResourceDefinitionId,
+        _position: usize,
+        _work: &mut TypeWorkBudget,
+    ) -> Result<Option<BinderId>, ValidationError> {
+        Ok(None)
+    }
+
     fn resume_capability(
         _kind: &Self::Kind,
     ) -> Option<(super::effect::HandlerId, crate::resolved::ResumeId)> {
@@ -3766,6 +3868,47 @@ pub(super) trait ScopeFamily: CoreOperationFamily {
 impl ScopeFamily for PureOperationFamily {}
 
 impl ScopeFamily for super::effect::EffectOperationFamily {
+    fn provider_family_dictionary_binder(
+        program: &UnvalidatedCoreProgram<Self>,
+        occurrence_node: NodeId,
+        definition: crate::resolved::ResourceDefinitionId,
+        position: usize,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Option<BinderId>, ValidationError> {
+        work.charge(program.nodes.len()).map_err(|()| {
+            ValidationError::new(ValidationReason::Resource, Some(occurrence_node))
+        })?;
+        let mut found = None;
+        for (index, node) in program.nodes.iter().enumerate() {
+            let Some(scope) = Self::provider_scope(&node.kind) else {
+                continue;
+            };
+            if scope.descriptor.definition().id != definition {
+                continue;
+            }
+            let id = node_id(program.arena, index)?;
+            let proof = scope
+                .descriptor
+                .specialization()
+                .ok_or_else(|| ValidationError::new(ValidationReason::ResourceEscape, Some(id)))?;
+            if let Some(binder) = proof.family_dictionary_binder(
+                program,
+                id,
+                scope,
+                occurrence_node,
+                definition,
+                position,
+                work,
+            )? && found.replace(binder).is_some()
+            {
+                return Err(ValidationError::new(
+                    ValidationReason::ApplicationType,
+                    Some(occurrence_node),
+                ));
+            }
+        }
+        Ok(found)
+    }
     fn resource_scope(kind: &Self::Kind) -> Option<&super::effect::ResourceScopeNode> {
         match kind {
             super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Resource(
@@ -3782,6 +3925,95 @@ impl ScopeFamily for super::effect::EffectOperationFamily {
             _ => None,
         }
     }
+    fn authenticate_provider_family_use(
+        program: &UnvalidatedCoreProgram<Self>,
+        selection: &crate::interface::EvidenceSelection,
+        selection_node: crate::interface::EvidenceNodeId,
+        method: crate::interface::MethodId,
+        member: usize,
+        binder: BinderId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ValidationError> {
+        let Some(EvidenceNode::ProviderFamily {
+            source,
+            definition,
+            parameter,
+            application,
+            prerequisites,
+            methods,
+        }) = selection.node(selection_node)
+        else {
+            return Ok(false);
+        };
+        work.charge(
+            methods
+                .len()
+                .checked_add(program.nodes.len())
+                .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?,
+        )
+        .map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
+        if !methods.contains(&method) {
+            return Ok(false);
+        }
+        let mut found = false;
+        for (index, node) in program.nodes.iter().enumerate() {
+            let Some(scope) = Self::provider_scope(&node.kind) else {
+                continue;
+            };
+            let Some(family) = scope.descriptor.family_members().get(member) else {
+                continue;
+            };
+            if family.lexical != source || family.identity.definition != definition {
+                continue;
+            }
+            let id = node_id(program.arena, index)?;
+            if found || family.identity.parameter != parameter {
+                return Ok(false);
+            }
+            scope.authenticate_structure(program, id, work)?;
+            scope.authenticate_protocol(program, id, work)?;
+            scope
+                .descriptor
+                .specialization()
+                .ok_or_else(|| ValidationError::new(ValidationReason::ResourceEscape, Some(id)))?
+                .authenticate(program, id, scope, work)?;
+            if !same_provider_family_application(&family.application, application, work)
+                .map_err(|()| ValidationError::new(ValidationReason::Resource, Some(id)))?
+                || family.requirements.len() != prerequisites.len()
+            {
+                return Ok(false);
+            }
+            work.charge(family.selections.len())
+                .map_err(|()| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+            if !family.selections.iter().any(|(original, original_node)| {
+                *original_node == selection_node
+                    && original.shares_plan_with(selection)
+                    && original.root() == selection.root()
+            }) {
+                return Ok(false);
+            }
+            let Some(attached) = scope.attached.get(member) else {
+                return Ok(false);
+            };
+            if attached.lexical != source {
+                return Ok(false);
+            }
+            work.charge(attached.forwardings.len())
+                .map_err(|()| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+            let mut forwarding = None;
+            for candidate in &attached.forwardings {
+                if candidate.method == method && forwarding.replace(candidate).is_some() {
+                    return Ok(false);
+                }
+            }
+            if forwarding.is_none_or(|forwarding| forwarding.binder != binder) {
+                return Ok(false);
+            }
+            found = true;
+        }
+        Ok(found)
+    }
+
     fn resume_capability(
         kind: &Self::Kind,
     ) -> Option<(super::effect::HandlerId, crate::resolved::ResumeId)> {
@@ -3807,7 +4039,12 @@ impl ScopeFamily for super::effect::EffectOperationFamily {
             )) => (handler, 1),
             super::effect::EffectExprKind::Operation(
                 super::effect::EffectOperation::ProviderScope(scope),
-            ) => (&scope.handler, 4),
+            ) => {
+                return child
+                    .checked_sub(4)
+                    .and_then(|clause| scope.clause_member_at(clause))
+                    .map(|(_, handler, clause)| (handler.id(), clause.resume()));
+            }
             _ => return None,
         };
         child
@@ -3837,10 +4074,19 @@ impl ScopeFamily for super::effect::EffectOperationFamily {
                     1 => visit(scope.acquire.parameter.id()),
                     2 => visit(scope.finish.parameter.id()),
                     3 => visit(scope.handle.id()),
-                    4.. => visit(scope.handler_state.id()),
+                    4.. => {
+                        if let Some((member, _, clause)) = scope.clause_member_at(child - 4) {
+                            if let Some(state) = scope.handler_state_member(member) {
+                                visit(state.id());
+                            }
+                            for binder in clause.pattern().binder_iter() {
+                                visit(binder.id());
+                            }
+                        }
+                    }
                     _ => {}
                 }
-                (&scope.handler, 4)
+                return;
             }
             _ => return,
         };
@@ -3873,6 +4119,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             provider_handler_entry: None,
             provider_fragment_locals: None,
             type_work: Cell::new(0),
+            capture_layouts: std::cell::RefCell::new(Vec::new()),
             type_work_limit: core_validation_type_work_limit(),
             #[cfg(test)]
             owner_parameter_index_work: Cell::new(0),
@@ -4200,6 +4447,16 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         && method_evidence_producer_matches(catalog, producer, actual_producer)
                 }),
                 (
+                    MethodEvidenceExpectedRole::ProviderFamilyUse { source, member, selection_node, binder },
+                    MethodEvidenceAnchorRole::ProviderFamilyUse { source: actual, member: actual_member, selection_node: actual_node, binder: actual_binder },
+                ) => source == actual && member == actual_member && selection_node == actual_node && binder == actual_binder
+                    && self.validate_provider_family_use(anchor, source, member, selection_node, binder)?,
+                (
+                    MethodEvidenceExpectedRole::NativeLayoutUse { producer, selection_node },
+                    MethodEvidenceAnchorRole::NativeLayoutUse { producer: actual, selection_node: actual_node },
+                ) => producer == actual && selection_node == actual_node
+                    && self.validate_native_layout_use(anchor, producer, selection_node)?,
+                (
                     MethodEvidenceExpectedRole::Instantiation { .. },
                     MethodEvidenceAnchorRole::Instantiation { .. },
                 ) => true,
@@ -4266,7 +4523,16 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                                                         if variable.binder() == binder
                                                 ),
                                                 (
-                                                    MethodEvidenceProducer::Adapter { .. },
+                                                    MethodEvidenceProducer::ProviderFamily { binder: expected, .. },
+                                                    Some(binder),
+                                                ) => expected == binder && matches!(
+                                                    self.program.nodes.get(producer_node.index().unwrap_or(usize::MAX))
+                                                        .and_then(|node| F::pure(&node.kind)),
+                                                    Some(PureExprKind::Variable(variable)) if variable.binder() == binder
+                                                ),
+                                                (
+                                                    MethodEvidenceProducer::Adapter { .. }
+                                                    | MethodEvidenceProducer::NativeLayout { .. },
                                                     None,
                                                 ) => true,
                                                 _ => false,
@@ -4332,6 +4598,38 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     }
                     carriers.insert(anchor.node);
                 }
+                MethodEvidenceAnchorRole::ProviderFamilyUse {
+                    source,
+                    member,
+                    selection_node,
+                    binder,
+                } => {
+                    if !self.validate_provider_family_use(
+                        anchor,
+                        source,
+                        member,
+                        selection_node,
+                        binder,
+                    )? {
+                        return Err(ValidationError::new(
+                            ValidationReason::NodeType,
+                            Some(anchor.node),
+                        ));
+                    }
+                    carriers.insert(anchor.node);
+                }
+                MethodEvidenceAnchorRole::NativeLayoutUse {
+                    producer,
+                    selection_node,
+                } => {
+                    if !self.validate_native_layout_use(anchor, producer, selection_node)? {
+                        return Err(ValidationError::new(
+                            ValidationReason::NodeType,
+                            Some(anchor.node),
+                        ));
+                    }
+                    carriers.insert(anchor.node);
+                }
                 MethodEvidenceAnchorRole::ImplementationOwner { .. } => {}
                 MethodEvidenceAnchorRole::Domain { .. } => {
                     self.validate_method_evidence_domain(anchor, &anchors, &mut carriers)?;
@@ -4374,6 +4672,12 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             ValidationError::new(ValidationReason::NodeType, Some(anchor.node))
                         })?;
                     let expected_binder = match target.owner {
+                        MethodEvidenceOwner::ResourceFamily(_) => {
+                            return Err(ValidationError::new(
+                                ValidationReason::Registry,
+                                Some(anchor.node),
+                            ));
+                        }
                         MethodEvidenceOwner::Global(binder) => binder,
                         MethodEvidenceOwner::Implementation(implementation) => {
                             self.program
@@ -5197,6 +5501,12 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 continue;
             }
             let (expected_binder, initializer) = match domain.owner {
+                MethodEvidenceOwner::ResourceFamily(_) => {
+                    return Err(ValidationError::new(
+                        ValidationReason::Registry,
+                        Some(domain_anchor.node),
+                    ));
+                }
                 MethodEvidenceOwner::Global(binder) => {
                     let mut initializer = None;
                     for node in &self.program.nodes {
@@ -5292,6 +5602,12 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     ));
                 }
                 match domain.owner {
+                    MethodEvidenceOwner::ResourceFamily(_) => {
+                        return Err(ValidationError::new(
+                            ValidationReason::Registry,
+                            Some(initializer),
+                        ));
+                    }
                     MethodEvidenceOwner::Global(binder) => {
                         let row = self
                             .program
@@ -5979,6 +6295,12 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     )?,
                 )
             }
+            Some(MethodEvidenceOwner::ResourceFamily(_)) => {
+                return Err(ValidationError::new(
+                    ValidationReason::Registry,
+                    Some(anchor.node),
+                ));
+            }
             Some(MethodEvidenceOwner::Implementation(_))
             | Some(MethodEvidenceOwner::Global(_))
             | None => None,
@@ -6096,6 +6418,12 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                                 anchor.node,
                                 true,
                             )?
+                        }
+                        Some(MethodEvidenceOwner::ResourceFamily(_)) => {
+                            return Err(ValidationError::new(
+                                ValidationReason::Registry,
+                                Some(anchor.node),
+                            ));
                         }
                         Some(MethodEvidenceOwner::Implementation(_))
                         | Some(MethodEvidenceOwner::Global(_))
@@ -6319,6 +6647,12 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             {
                 self.implementation_replacements(implementation, anchors, anchor.node, false)?
             }
+            Some(MethodEvidenceOwner::ResourceFamily(_)) => {
+                return Err(ValidationError::new(
+                    ValidationReason::Registry,
+                    Some(anchor.node),
+                ));
+            }
             Some(MethodEvidenceOwner::Implementation(_))
             | Some(MethodEvidenceOwner::Global(_))
             | None => TypeReplacementMap::new(),
@@ -6397,6 +6731,135 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 Some(anchor.node),
             ))
         }
+    }
+
+    fn validate_provider_family_use(
+        &self,
+        anchor: &MethodEvidenceAnchor,
+        source: crate::interface::LexicalEvidenceId,
+        member: usize,
+        selection_node: crate::interface::EvidenceNodeId,
+        binder: BinderId,
+    ) -> Result<bool, ValidationError> {
+        if anchor.owner.is_some()
+            || anchor.requirement.is_some()
+            || !matches!(self.pure_kind(anchor.node)?, PureExprKind::Variable(variable) if variable.binder() == binder)
+        {
+            return Ok(false);
+        }
+        let Some(slot) = anchor.occurrence else {
+            return Ok(false);
+        };
+        self.charge_method_catalog_binary_lookup(self.program.method_evidence.occurrence_count())?;
+        let Some(occurrence) = self.program.method_evidence.occurrence(slot) else {
+            return Ok(false);
+        };
+        let Some(EvidenceNode::ProviderFamily {
+            source: selected,
+            application,
+            ..
+        }) = occurrence.selection.node(selection_node)
+        else {
+            return Ok(false);
+        };
+        let mut work =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let authenticated = (|| {
+            if selected != source
+                || !same_provider_family_application(application, &anchor.application, &mut work)
+                    .map_err(|()| {
+                        ValidationError::new(ValidationReason::Resource, Some(anchor.node))
+                    })?
+            {
+                return Ok(false);
+            }
+            F::authenticate_provider_family_use(
+                self.program,
+                &occurrence.selection,
+                selection_node,
+                anchor.method,
+                member,
+                binder,
+                &mut work,
+            )
+        })();
+        self.charge_type_work(work.used())?;
+        if !authenticated? {
+            return Ok(false);
+        }
+        let expected = self.expected_method_scheme(anchor)?;
+        if matches!(&*expected, Type::Forall(parameters, _) if parameters.is_empty()) {
+            let Type::Forall(_, body) = expected.into_inner() else {
+                unreachable!()
+            };
+            let body = IterativeTypeOwner::new(*body);
+            return self.same_type_charged(&self.node(anchor.node)?.ty, &body);
+        }
+        self.same_type_charged(&self.node(anchor.node)?.ty, &expected)
+    }
+
+    fn validate_native_layout_use(
+        &self,
+        anchor: &MethodEvidenceAnchor,
+        producer: crate::foreign::ForeignLayoutProducer,
+        selection_node: crate::interface::EvidenceNodeId,
+    ) -> Result<bool, ValidationError> {
+        let Some(occurrence_id) = anchor.occurrence else {
+            return Ok(false);
+        };
+        self.charge_method_catalog_binary_lookup(self.program.method_evidence.occurrence_count())?;
+        let Some(occurrence) = self.program.method_evidence.occurrence(occurrence_id) else {
+            return Ok(false);
+        };
+        if anchor.owner.is_some()
+            || anchor.requirement.is_some()
+            || anchor.method != producer.method()
+            || anchor.application.interface() != producer.interface()
+            || !matches!(occurrence.selection.node(selection_node),
+                Some(EvidenceNode::NativeLayout { producer: actual }) if actual == producer)
+        {
+            return Ok(false);
+        }
+        let [crate::types::KindedArgument::TypeArg(payload)] = anchor.application.arguments()
+        else {
+            return Ok(false);
+        };
+        if !self.same_type_charged(payload, &producer.payload_type())? {
+            return Ok(false);
+        }
+        self.validate_native_layout_node(anchor.node, producer)
+    }
+
+    fn validate_native_layout_node(
+        &self,
+        node: NodeId,
+        producer: crate::foreign::ForeignLayoutProducer,
+    ) -> Result<bool, ValidationError> {
+        let mut work =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let dictionary = self
+            .program
+            .registry
+            .foreign_layout_dictionary(producer, &mut work);
+        self.charge_type_work(work.used())?;
+        let dictionary = dictionary.map_err(|failure| {
+            ValidationError::new(
+                if failure.is_resource_exhaustion() {
+                    ValidationReason::Resource
+                } else {
+                    ValidationReason::Registry
+                },
+                Some(node),
+            )
+        })?;
+        let PureExprKind::Value(PureValue::Intrinsic(intrinsic)) = self.pure_kind(node)? else {
+            return Ok(false);
+        };
+        Ok(dictionary.producer() == producer
+            && intrinsic.module() == producer.interface().module()
+            && intrinsic.operation()
+                == (super::packed::Intrinsic::ForeignLayoutWitness { producer })
+            && self.same_type_charged(&self.node(node)?.ty, &producer.producer_type())?)
     }
 
     fn validate_method_application(
@@ -6588,6 +7051,32 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             }
                         }
                     }
+                    EvidenceNode::NativeLayout { producer } => {
+                        self.charge_type_work(1)?;
+                        let Some(retained) = retained_prerequisites.next() else {
+                            return Ok(false);
+                        };
+                        if retained.selection_node != *expected_selection_node
+                            || retained.method != producer.method()
+                            || retained.scope_position.is_some()
+                        {
+                            return Ok(false);
+                        }
+                    }
+                    EvidenceNode::ProviderFamily { methods, .. } => {
+                        self.charge_type_work(methods.len())?;
+                        for method in methods {
+                            let Some(retained) = retained_prerequisites.next() else {
+                                return Ok(false);
+                            };
+                            if retained.selection_node != *expected_selection_node
+                                || retained.method != *method
+                                || retained.scope_position.is_some()
+                            {
+                                return Ok(false);
+                            }
+                        }
+                    }
                     EvidenceNode::Implementation { methods, .. } => {
                         self.charge_type_work(methods.len())?;
                         for expected_method in methods {
@@ -6669,6 +7158,43 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             occurrence.selection.node(prerequisite.selection_node),
                             Some(EvidenceNode::Abstract { requirement: actual, .. }) if actual == requirement
                         ) {
+                            return Ok(false);
+                        }
+                    }
+                    EvidenceNode::NativeLayout { producer } => {
+                        if prerequisite.method != producer.method()
+                            || prerequisite.scope_position.is_some()
+                            || !self.validate_native_layout_node(argument, producer)?
+                        {
+                            return Ok(false);
+                        }
+                    }
+                    EvidenceNode::ProviderFamily { source, .. } => {
+                        let Some(candidate) = anchors.get(&argument) else {
+                            return Ok(false);
+                        };
+                        let MethodEvidenceAnchorRole::ProviderFamilyUse {
+                            source: actual_source,
+                            member,
+                            selection_node,
+                            binder,
+                        } = candidate.role
+                        else {
+                            return Ok(false);
+                        };
+                        if actual_source != source
+                            || selection_node != prerequisite.selection_node
+                            || candidate.method != prerequisite.method
+                            || candidate.occurrence != Some(occurrence_slot)
+                            || prerequisite.scope_position.is_some()
+                            || !self.validate_provider_family_use(
+                                candidate,
+                                source,
+                                member,
+                                selection_node,
+                                binder,
+                            )?
+                        {
                             return Ok(false);
                         }
                     }
@@ -7046,7 +7572,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     (MethodEvidenceProducer::Abstract { .. }, Some(producer_scope_position)) => {
                         Some(self.method_evidence_scope_binder(anchor, producer_scope_position)?)
                     }
-                    (MethodEvidenceProducer::Adapter { .. }, None) => None,
+                    (MethodEvidenceProducer::Adapter { .. }, None)
+                    | (MethodEvidenceProducer::NativeLayout { .. }, None) => None,
+                    (MethodEvidenceProducer::ProviderFamily { binder, .. }, None) => Some(binder),
                     _ => {
                         return Err(ValidationError::new(
                             ValidationReason::ApplicationType,
@@ -7055,6 +7583,55 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     }
                 };
                 let concrete_source_matches = match expected {
+                    MethodEvidenceProducer::ProviderFamily {
+                        source,
+                        member,
+                        binder,
+                    } => {
+                        let candidate = anchors.get(&application.argument()).ok_or_else(|| {
+                            ValidationError::new(
+                                ValidationReason::ApplicationType,
+                                Some(anchor.node),
+                            )
+                        })?;
+                        candidate.occurrence == anchor.occurrence
+                            && candidate.method == edge.method
+                            && matches!(candidate.role, MethodEvidenceAnchorRole::ProviderFamilyUse {
+                                source: actual_source, member: actual_member, selection_node: actual_node, binder: actual_binder,
+                            } if actual_source == source && actual_member == member && actual_node == selection_node && actual_binder == binder)
+                            && self.validate_provider_family_use(
+                                candidate,
+                                source,
+                                member,
+                                selection_node,
+                                binder,
+                            )?
+                    }
+                    MethodEvidenceProducer::NativeLayout { producer } => {
+                        let occurrence_id = anchor.occurrence.ok_or_else(|| {
+                            ValidationError::new(
+                                ValidationReason::ApplicationType,
+                                Some(anchor.node),
+                            )
+                        })?;
+                        self.charge_method_catalog_binary_lookup(
+                            self.program.method_evidence.occurrence_count(),
+                        )?;
+                        let occurrence = self
+                            .program
+                            .method_evidence
+                            .occurrence(occurrence_id)
+                            .ok_or_else(|| {
+                                ValidationError::new(
+                                    ValidationReason::ApplicationType,
+                                    Some(anchor.node),
+                                )
+                            })?;
+                        matches!(occurrence.selection.node(selection_node),
+                            Some(EvidenceNode::NativeLayout { producer: actual }) if actual == producer)
+                            && edge.method == producer.method()
+                            && self.validate_native_layout_node(application.argument(), producer)?
+                    }
                     MethodEvidenceProducer::Adapter { implementation } => self
                         .validate_concrete_adapter_source(
                             Some(anchor),
@@ -7091,7 +7668,18 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     F::pure(&argument.kind),
                     Some(PureExprKind::Variable(variable)) if variable.binder() == binder
                 ),
-                (MethodEvidenceProducer::Adapter { .. }, None) => false,
+                (
+                    MethodEvidenceProducer::ProviderFamily {
+                        binder: expected, ..
+                    },
+                    Some(binder),
+                ) => {
+                    expected != binder
+                        || !matches!(F::pure(&argument.kind),
+                        Some(PureExprKind::Variable(variable)) if variable.binder() == binder)
+                }
+                (MethodEvidenceProducer::Adapter { .. }, None)
+                | (MethodEvidenceProducer::NativeLayout { .. }, None) => false,
                 _ => true,
             }
             || ordinal != expected_ordinal
@@ -7119,6 +7707,47 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             .ok_or_else(|| {
                 ValidationError::new(ValidationReason::ApplicationType, Some(anchor.node))
             })?;
+        if let Some(MethodEvidenceOwner::ResourceFamily(definition)) = occurrence.scope {
+            if occurrence.scope_binder.is_some() {
+                return Err(ValidationError::new(
+                    ValidationReason::ApplicationType,
+                    Some(anchor.node),
+                ));
+            }
+            if let Some(entry) = self.provider_handler_entry {
+                if entry
+                    .family_definition()
+                    .is_none_or(|original| original.id != definition)
+                {
+                    return Err(ValidationError::new(
+                        ValidationReason::ApplicationType,
+                        Some(anchor.node),
+                    ));
+                }
+                self.charge_type_work(1)?;
+                return entry
+                    .dictionary_parameters()
+                    .get(position)
+                    .map(TypedBinder::id)
+                    .ok_or_else(|| {
+                        ValidationError::new(ValidationReason::ApplicationType, Some(anchor.node))
+                    });
+            }
+            let mut work = TypeWorkBudget::with_limit(
+                self.type_work_limit.saturating_sub(self.type_work.get()),
+            );
+            let result = F::provider_family_dictionary_binder(
+                self.program,
+                anchor.node,
+                definition,
+                position,
+                &mut work,
+            );
+            self.charge_type_work(work.used())?;
+            return result?.ok_or_else(|| {
+                ValidationError::new(ValidationReason::ApplicationType, Some(anchor.node))
+            });
+        }
         let scope_binder = occurrence.scope_binder.ok_or_else(|| {
             ValidationError::new(ValidationReason::ApplicationType, Some(anchor.node))
         })?;
@@ -10235,6 +10864,15 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 false,
                 false,
             )?;
+            for binder in entry.dictionary_parameters() {
+                self.collect_binder(
+                    self.program.root,
+                    binder,
+                    ValidationReason::NodeType,
+                    false,
+                    false,
+                )?;
+            }
             for clause in &entry.draft.clauses {
                 for binder in clause.pattern().binder_iter() {
                     self.collect_binder(
@@ -10724,10 +11362,50 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 Type::String
             }
             PureValue::Intrinsic(intrinsic) => {
-                if !intrinsic.authentic_module() {
-                    return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
-                }
                 use super::packed::Intrinsic;
+                match intrinsic.operation() {
+                    Intrinsic::ForeignLayoutWitness { producer } => {
+                        let mut work = TypeWorkBudget::with_limit(
+                            self.type_work_limit.saturating_sub(self.type_work.get()),
+                        );
+                        let dictionary = self
+                            .program
+                            .registry
+                            .foreign_layout_dictionary(producer, &mut work);
+                        self.charge_type_work(work.used())?;
+                        let dictionary = dictionary.map_err(|failure| {
+                            ValidationError::new(
+                                if failure.is_resource_exhaustion() {
+                                    ValidationReason::Resource
+                                } else {
+                                    ValidationReason::Registry
+                                },
+                                Some(id),
+                            )
+                        })?;
+                        if dictionary.producer() != producer
+                            || intrinsic.module() != producer.interface().module()
+                            || !self.same_type_charged(&node.ty, &producer.producer_type())?
+                        {
+                            return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                        }
+                        self.charge_type_work(1)?;
+                        let mut facts = self.capture_layouts.try_borrow_mut().map_err(|_| {
+                            ValidationError::new(ValidationReason::Resource, Some(id))
+                        })?;
+                        facts.try_reserve(1).map_err(|_| {
+                            ValidationError::new(ValidationReason::Resource, Some(id))
+                        })?;
+                        facts.push((
+                            id.index().map_err(|_| {
+                                ValidationError::new(ValidationReason::NodeType, Some(id))
+                            })?,
+                            producer,
+                        ));
+                    }
+                    _ if intrinsic.authentic_module() => {}
+                    _ => return Err(ValidationError::new(ValidationReason::Registry, Some(id))),
+                }
                 let result = match intrinsic.operation() {
                     Intrinsic::BytesAppendByte { appended, invalid } => {
                         Some((appended, invalid, Type::Bytes))
@@ -12785,6 +13463,12 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             free.remove(&ScopeRequirementKey::Binder(binder.id()));
                         }
                         free.remove(&ScopeRequirementKey::Binder(entry.draft.state.id()));
+                        if !entry.dictionary_parameters().is_empty() {
+                            self.charge_type_work(entry.dictionary_parameters().len())?;
+                            for binder in entry.dictionary_parameters() {
+                                free.remove(&ScopeRequirementKey::Binder(binder.id()));
+                            }
+                        }
                     }
                     self.collect_node_local_nominals(node, id, &mut free)?;
                     let index = self.index(id)?;
@@ -13152,9 +13836,18 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
 
 #[derive(Clone, Copy)]
 enum EffectClauseContract {
-    Ordinary { handler: NodeId, clause: usize },
-    Scoped { scope: NodeId, clause: usize },
-    Provider { clause: usize },
+    Ordinary {
+        handler: NodeId,
+        clause: usize,
+    },
+    Scoped {
+        scope: NodeId,
+        member: usize,
+        clause: usize,
+    },
+    Provider {
+        clause: usize,
+    },
 }
 
 struct BorrowedClauseContract<'a> {
@@ -13166,6 +13859,10 @@ struct BorrowedClauseContract<'a> {
 
 enum ClauseOutput<'a> {
     Ordinary(&'a EffectRow),
+    ProviderGroup {
+        output: &'a EffectRow,
+        native: &'a EffectInstance,
+    },
     /// H0 source checking suppresses only this owner's shared output.
     /// Realization must later solve and replay every handler output equation.
     ProvisionalOperand,
@@ -13648,16 +14345,32 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         }
         let mut capture_work =
             TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
-        let capture_result = super::capture::check_nodes(
-            &self.program.nodes,
-            &[],
-            &[],
-            |kind| match kind {
-                super::effect::EffectExprKind::Operation(operation) => Some(operation),
-                _ => None,
-            },
-            &mut capture_work,
-        );
+        let operation: for<'a> fn(
+            &'a super::effect::EffectExprKind,
+        ) -> Option<&'a super::effect::EffectOperation> = |kind| match kind {
+            super::effect::EffectExprKind::Operation(operation) => Some(operation),
+            _ => None,
+        };
+        let layouts = self
+            .capture_layouts
+            .try_borrow()
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+        let capture_result = if layouts.is_empty() {
+            super::capture::check_nodes(&self.program.nodes, &[], &[], operation, &mut capture_work)
+        } else {
+            let authenticated = AuthenticatedCaptureLayouts {
+                nodes: &self.program.nodes,
+                entries: &layouts,
+            };
+            super::capture::check_nodes_with_authentic_layouts(
+                &self.program.nodes,
+                &[],
+                &[],
+                operation,
+                &authenticated,
+                &mut capture_work,
+            )
+        };
         self.charge_type_work(capture_work.used())?;
         capture_result.map_err(|failure| match failure {
             super::capture::Failure::Resource => {
@@ -14037,6 +14750,16 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             });
         self.charge_type_work(budget.used())?;
         admitted?;
+        if !scope.attached.is_empty() {
+            return self.validate_provider_group_node(
+                id,
+                node,
+                scope,
+                type_binders,
+                handler_ids,
+                clause_contracts,
+            );
+        }
         self.validate_effect_instance(scope.descriptor.native_effect(), type_binders, id)?;
         self.validate_effect_type_rows(scope.handler_output.value(), type_binders, id)?;
         self.validate_effect_row(scope.handler_output.effects(), type_binders, id)?;
@@ -14044,7 +14767,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             id,
             node,
             &scope.handler,
-            Some(&scope.handler_output),
+            Some((&scope.handler_output, 0)),
             type_binders,
             handler_ids,
             clause_contracts,
@@ -14070,6 +14793,105 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             ));
         }
         Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn validate_provider_group_node(
+        &self,
+        id: NodeId,
+        node: &StoredNode<super::effect::EffectOperationFamily>,
+        scope: &super::provider::ProviderScopeNode,
+        type_binders: &CoreTypeBinders<'_>,
+        handler_ids: &mut HashSet<super::effect::HandlerId>,
+        contracts: &mut HashMap<
+            (super::effect::HandlerId, crate::resolved::ResumeId),
+            EffectClauseContract,
+        >,
+    ) -> Result<(), ValidationError> {
+        self.validate_effect_type_rows(scope.handler_output.value(), type_binders, id)?;
+        self.validate_effect_row(scope.handler_output.effects(), type_binders, id)?;
+        self.charge_type_work(scope.member_count())?;
+        for member in 0..scope.member_count() {
+            let handler = scope
+                .handler_member(member)
+                .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
+            let native = scope
+                .descriptor
+                .native_effect_member(member)
+                .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
+            self.validate_effect_instance(native, type_binders, id)?;
+            self.validate_effect_handler(
+                id,
+                node,
+                handler,
+                Some((&scope.handler_output, member)),
+                type_binders,
+                handler_ids,
+                contracts,
+            )?;
+        }
+        let mut row = self.least_provider_group_output(id, scope, type_binders)?;
+        if !self.same_effect_row_charged(scope.handler_output.effects(), &row, id)? {
+            return Err(ValidationError::with_cause(
+                ValidationCause::HandlerOutputRow,
+                Some(id),
+            ));
+        }
+        for root in [scope.acquire.body, scope.finish.body] {
+            let phase = self.remove_provider_native_row(
+                &self.node(root)?.effects,
+                scope.descriptor.native_effect(),
+                id,
+            )?;
+            row = self.union_effect_rows_charged(&row, &phase, id)?;
+        }
+        row = self.union_effect_rows_charged(&self.node(scope.initializer)?.effects, &row, id)?;
+        if !self.same_effect_row_charged(&row, &node.effects, id)? {
+            return Err(ValidationError::with_cause(
+                ValidationCause::HandlerOutputRow,
+                Some(id),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Reconstructs direct demand before solving the shared resume output.
+    /// Provided effects are removed only from the shared body. Each clause
+    /// interprets only its own native instance; another member grants no coverage.
+    fn least_provider_group_output(
+        &self,
+        id: NodeId,
+        scope: &super::provider::ProviderScopeNode,
+        type_binders: &CoreTypeBinders<'_>,
+    ) -> Result<EffectRow, ValidationError> {
+        let mut row = self.least_handler_output(scope.handler.body(), type_binders)?;
+        self.charge_type_work(scope.member_count())?;
+        for member in 0..scope.member_count() {
+            let handler = scope
+                .handler_member(member)
+                .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
+            row = self.provider_body_outward_row(&row, handler.effect(), id)?;
+        }
+        for member in 0..scope.member_count() {
+            let handler = scope
+                .handler_member(member)
+                .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
+            let native = scope
+                .descriptor
+                .native_effect_member(member)
+                .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
+            self.charge_type_work(handler.clauses().len())?;
+            for clause in handler.clauses() {
+                let direct = self.least_handler_output_with_owner(
+                    clause.body(),
+                    type_binders,
+                    Some(handler.id()),
+                )?;
+                let outward = self.remove_provider_native_row(&direct, native, id)?;
+                row = self.union_effect_rows_charged(&row, &outward, id)?;
+            }
+        }
+        Ok(row)
     }
 
     #[inline(never)]
@@ -14658,6 +15480,15 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(root)))?;
             discovered.insert(id);
             let node = self.node(id)?;
+            if let EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) = &node.kind {
+                self.charge_type_work(scope.attached.len())?;
+                handlers
+                    .try_reserve(scope.attached.len())
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(root)))?;
+                for attached in &scope.attached {
+                    handlers.insert(attached.handler.id());
+                }
+            }
             let discovered_handler = match &node.kind {
                 EffectExprKind::Operation(EffectOperation::Handler(handler)) => Some(handler),
                 EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
@@ -14781,6 +15612,48 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                             }
                             self.clone_effect_row_charged(child_row(access.operand())?)?
                         }
+                        EffectExprKind::Operation(EffectOperation::ProviderScope(scope))
+                            if !scope.attached.is_empty() =>
+                        {
+                            let mut row =
+                                self.clone_effect_row_charged(child_row(scope.handler.body())?)?;
+                            self.charge_type_work(scope.member_count())?;
+                            for member in 0..scope.member_count() {
+                                let handler = scope.handler_member(member).ok_or_else(|| {
+                                    ValidationError::new(ValidationReason::Registry, Some(id))
+                                })?;
+                                row = self.provider_body_outward_row(&row, handler.effect(), id)?;
+                            }
+                            for member in 0..scope.member_count() {
+                                let handler = scope.handler_member(member).ok_or_else(|| {
+                                    ValidationError::new(ValidationReason::Registry, Some(id))
+                                })?;
+                                let native = scope
+                                    .descriptor
+                                    .native_effect_member(member)
+                                    .ok_or_else(|| {
+                                        ValidationError::new(ValidationReason::Registry, Some(id))
+                                    })?;
+                                self.charge_type_work(handler.clauses().len())?;
+                                for clause in handler.clauses() {
+                                    let outward = self.remove_provider_native_row(
+                                        child_row(clause.body())?,
+                                        native,
+                                        id,
+                                    )?;
+                                    row = self.union_effect_rows_charged(&row, &outward, id)?;
+                                }
+                            }
+                            for root in [scope.acquire.body, scope.finish.body] {
+                                let phase = self.remove_provider_native_row(
+                                    child_row(root)?,
+                                    scope.descriptor.native_effect(),
+                                    id,
+                                )?;
+                                row = self.union_effect_rows_charged(&row, &phase, id)?;
+                            }
+                            self.union_effect_rows_charged(child_row(scope.initializer)?, &row, id)?
+                        }
                         EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
                             let mut row = self.provider_body_outward_row(
                                 child_row(scope.handler.body())?,
@@ -14883,7 +15756,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         id: NodeId,
         node: &StoredNode<super::effect::EffectOperationFamily>,
         handler: &super::effect::HandlerNode,
-        scoped_output: Option<&crate::types::ComputationType>,
+        scoped_output: Option<(&crate::types::ComputationType, usize)>,
         type_binders: &CoreTypeBinders<'_>,
         handler_ids: &mut HashSet<super::effect::HandlerId>,
         clause_contracts: &mut HashMap<
@@ -14891,8 +15764,17 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             EffectClauseContract,
         >,
     ) -> Result<(), ValidationError> {
-        let answer = scoped_output.map_or(&node.ty, |output| output.value());
-        let output = scoped_output.map_or(&node.effects, |output| output.effects());
+        let answer = scoped_output.map_or(&node.ty, |(output, _)| output.value());
+        let output = scoped_output.map_or(&node.effects, |(output, _)| output.effects());
+        let group = match (&node.kind, scoped_output) {
+            (
+                super::effect::EffectExprKind::Operation(
+                    super::effect::EffectOperation::ProviderScope(scope),
+                ),
+                Some((_, member)),
+            ) if !scope.attached.is_empty() => Some((scope, member)),
+            _ => None,
+        };
         self.charge_type_work(1)?;
         handler_ids
             .try_reserve(1)
@@ -15025,7 +15907,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             }
         }
         let conditional = self.conditional_node_row(id)?;
-        let remainder = if conditional {
+        let remainder = if conditional || group.is_some() {
             None
         } else {
             Some(if scoped_output.is_some() {
@@ -15065,6 +15947,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     if scoped_output.is_some() {
                         EffectClauseContract::Scoped {
                             scope: id,
+                            member: scoped_output.map_or(0, |(_, member)| member),
                             clause: clause_index,
                         }
                     } else {
@@ -15104,6 +15987,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 if scoped_output.is_some() {
                     EffectClauseContract::Scoped {
                         scope: id,
+                        member: scoped_output.map_or(0, |(_, member)| member),
                         clause: clause_index,
                     }
                 } else {
@@ -15115,14 +15999,32 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 id,
             )?;
             self.validate_clause_pattern_and_answer(&view, id, type_binders)?;
-            if !conditional && !self.effect_row_subset_charged(&clause_body.effects, output, id)? {
+            let clause_outward = group
+                .map(|(scope, member)| {
+                    let native =
+                        scope
+                            .descriptor
+                            .native_effect_member(member)
+                            .ok_or_else(|| {
+                                ValidationError::new(ValidationReason::Registry, Some(id))
+                            })?;
+                    self.remove_provider_native_row(&clause_body.effects, native, id)
+                })
+                .transpose()?;
+            if !conditional
+                && !self.effect_row_subset_charged(
+                    clause_outward.as_ref().unwrap_or(&clause_body.effects),
+                    output,
+                    id,
+                )?
+            {
                 return Err(ValidationError::with_cause(
                     ValidationCause::HandlerClauseEffects,
                     Some(id),
                 ));
             }
         }
-        if conditional {
+        if conditional || group.is_some() {
             return Ok(());
         }
         let least = if scoped_output.is_some() {
@@ -15166,7 +16068,11 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     output: ClauseOutput::Ordinary(&node.effects),
                 })
             }
-            EffectClauseContract::Scoped { scope, clause } => {
+            EffectClauseContract::Scoped {
+                scope,
+                member,
+                clause,
+            } => {
                 let node = self.node(scope)?;
                 let super::effect::EffectExprKind::Operation(
                     super::effect::EffectOperation::ProviderScope(scope),
@@ -15177,14 +16083,28 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                         Some(id),
                     ));
                 };
-                let clause = scope.handler.clauses().get(clause).ok_or_else(|| {
+                let handler = scope.handler_member(member).ok_or_else(|| {
                     ValidationError::with_cause(ValidationCause::ResumeMissingClause, Some(id))
                 })?;
+                let clause = handler.clauses().get(clause).ok_or_else(|| {
+                    ValidationError::with_cause(ValidationCause::ResumeMissingClause, Some(id))
+                })?;
+                let output =
+                    if scope.attached.is_empty() {
+                        ClauseOutput::Ordinary(scope.handler_output.effects())
+                    } else {
+                        ClauseOutput::ProviderGroup {
+                            output: scope.handler_output.effects(),
+                            native: scope.descriptor.native_effect_member(member).ok_or_else(
+                                || ValidationError::new(ValidationReason::Registry, Some(id)),
+                            )?,
+                        }
+                    };
                 Ok(BorrowedClauseContract {
-                    effect: scope.handler.effect(),
+                    effect: handler.effect(),
                     clause,
                     answer: std::borrow::Cow::Borrowed(scope.handler_output.value()),
-                    output: ClauseOutput::Ordinary(scope.handler_output.effects()),
+                    output,
                 })
             }
             EffectClauseContract::Provider { clause } => {
@@ -15195,7 +16115,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     ValidationError::with_cause(ValidationCause::ResumeMissingClause, Some(id))
                 })?;
                 Ok(BorrowedClauseContract {
-                    effect: &entry.definition.provided.instance,
+                    effect: entry.provided(),
                     clause,
                     answer: std::borrow::Cow::Owned(Type::Variable(entry.draft.hidden[0].0)),
                     output: ClauseOutput::ProvisionalOperand,
@@ -15217,7 +16137,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             return Ok(());
         };
         let id = self.program.root;
-        self.validate_effect_instance(&entry.definition.provided.instance, type_binders, id)?;
+        self.validate_effect_instance(entry.provided(), type_binders, id)?;
         self.charge_type_work(
             entry
                 .draft
@@ -15322,9 +16242,22 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             self.effect_signature(view.effect, view.clause.operation(), id, type_binders)?;
         let value = self.node(resume.value())?;
         let output = match view.output {
-            ClauseOutput::Ordinary(output) => output,
+            ClauseOutput::Ordinary(output) | ClauseOutput::ProviderGroup { output, .. } => output,
             ClauseOutput::ProvisionalOperand => &value.effects,
         };
+        let group_rows = match view.output {
+            ClauseOutput::ProviderGroup { native, .. } => Some((
+                self.union_effect_rows_charged(output, &value.effects, id)?,
+                self.remove_provider_native_row(&value.effects, native, id)?,
+            )),
+            _ => None,
+        };
+        // Raw resume demand retains the shared continuation row separately.
+        // Interpreting this clause's operand must never erase an equal effect
+        // contributed outward by another member into that shared row.
+        let (expected_node_effects, value_effects) = group_rows
+            .as_ref()
+            .map_or((output, &value.effects), |(raw, outward)| (raw, outward));
         let conditional = self.conditional_node_row(id)?;
         let cause = if resume.use_state() != super::effect::ResumeUse::Consumed {
             Some(ValidationCause::ResumeUseState)
@@ -15332,9 +16265,11 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             Some(ValidationCause::ResumeArgumentType)
         } else if !self.same_type_charged(&node.ty, view.answer.as_ref())? {
             Some(ValidationCause::ResumeResultType)
-        } else if !conditional && !self.same_effect_row_charged(&node.effects, output, id)? {
+        } else if !conditional
+            && !self.same_effect_row_charged(&node.effects, expected_node_effects, id)?
+        {
             Some(ValidationCause::ResumeEffectRow)
-        } else if !conditional && !self.effect_row_subset_charged(&value.effects, output, id)? {
+        } else if !conditional && !self.effect_row_subset_charged(value_effects, output, id)? {
             Some(ValidationCause::ResumeArgumentEffects)
         } else {
             None
@@ -15379,6 +16314,227 @@ pub(super) use tests::{registration_proof_check, registration_proof_program};
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn capture_layout_authority_requires_the_admitted_slice_family_and_complete_header() {
+        use crate::{
+            core::{EffectExprKind, EffectOperationFamily, packed::Intrinsic},
+            foreign::{ForeignRegistrations, ForeignScalarEncoding, typed_arena_manifest},
+            module::ForeignRegistrationId,
+        };
+        let directory = LinkedValidationDirectory::create();
+        let entry = directory.write(
+            "entry.ash",
+            concat!(
+                "import @foreign.memory as Native\n",
+                "main : Unit -> Native.LayoutWitness<Int>\n",
+                "main () = Native.witness ()\n",
+            ),
+        );
+        let roots = ModuleRoots::empty().with_foreign_registrations(
+            ForeignRegistrations::new([
+                typed_arena_manifest(ForeignRegistrationId::new(2)).unwrap()
+            ])
+            .unwrap(),
+        );
+        let graph = load_module_graph(&entry, &roots).unwrap();
+        let linked = link_modules(checked_linked_validation_graph(&graph), graph.entry()).unwrap();
+        let linked = validate_linked_facts_for_test(linked).unwrap();
+        let mut elaborator =
+            crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+        let typed = elaborator
+            .synthesize_effect_module_program(&linked)
+            .unwrap();
+        let program = elaborator.finish(typed.node).unwrap();
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let relations = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        let mut validator = Validator::new_modules(&program, &sources, &relations).unwrap();
+        // The test borrows the genuine entries only after the ordinary Core
+        // validator admits the complete source program and foreign dictionary.
+        validator
+            .run_effect()
+            .expect("the untouched witness source must independently validate first");
+        let entries = validator.capture_layouts.borrow();
+        let &(ordinal, producer) = entries
+            .first()
+            .expect("Core admission retains the actual native layout producer");
+        assert_eq!(producer.payload_type(), Type::Int);
+        program
+            .registry
+            .foreign_layout_dictionary(producer, &mut TypeWorkBudget::unbounded())
+            .expect("the producer must still name the original canonical dictionary");
+        assert!(matches!(&program.nodes[ordinal].kind,
+            EffectExprKind::Pure(PureExprKind::Value(PureValue::Intrinsic(intrinsic)))
+                if intrinsic.operation() == (Intrinsic::ForeignLayoutWitness { producer })));
+        let token = AuthenticatedCaptureLayouts {
+            nodes: &program.nodes,
+            entries: &entries,
+        };
+        let mut measured = TypeWorkBudget::unbounded();
+        assert!(
+            token
+                .authenticates(&program.nodes, ordinal, producer, &mut measured)
+                .unwrap()
+        );
+        let cost = measured.used();
+        assert!(cost > 0);
+
+        let cloned_nodes = program
+            .nodes
+            .iter()
+            .map(|node| StoredNode::<EffectOperationFamily> {
+                dialect: node.dialect,
+                ty: node.ty.clone(),
+                effects: node.effects.clone(),
+                origin: node.origin.clone(),
+                kind: node.kind.clone(),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(cloned_nodes.len(), program.nodes.len());
+        assert!(
+            !token
+                .authenticates(
+                    &cloned_nodes,
+                    ordinal,
+                    producer,
+                    &mut TypeWorkBudget::unbounded()
+                )
+                .unwrap(),
+            "an identical cloned arena is not the admitted source slice"
+        );
+        let pure_nodes = program
+            .nodes
+            .iter()
+            .map(|node| StoredNode::<PureOperationFamily> {
+                dialect: DialectId::PURE,
+                ty: node.ty.clone(),
+                effects: (),
+                origin: node.origin.clone(),
+                kind: EffectOperationFamily::pure(&node.kind)
+                    .expect("the witness fixture has only pure payloads")
+                    .clone(),
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            !token
+                .authenticates(
+                    &pure_nodes,
+                    ordinal,
+                    producer,
+                    &mut TypeWorkBudget::unbounded()
+                )
+                .unwrap(),
+            "a different operation family cannot use an Effect arena receipt"
+        );
+        let other_ordinal = (0..program.nodes.len())
+            .find(|candidate| {
+                entries
+                    .iter()
+                    .all(|(registered, _)| registered != candidate)
+            })
+            .expect("the source program also retains ordinary non-layout Core nodes");
+        assert!(
+            !token
+                .authenticates(
+                    &program.nodes,
+                    other_ordinal,
+                    producer,
+                    &mut TypeWorkBudget::unbounded()
+                )
+                .unwrap(),
+            "a genuine producer cannot authorize a different live node"
+        );
+        assert!(
+            !token
+                .authenticates(
+                    &program.nodes,
+                    program.nodes.len(),
+                    producer,
+                    &mut TypeWorkBudget::unbounded()
+                )
+                .unwrap(),
+            "an ordinal outside the admitted slice has no receipt"
+        );
+
+        let malformed = [
+            producer.with_header_for_test(
+                crate::interface::MethodId::new(producer.interface(), u32::MAX),
+                producer.witness(),
+                ForeignScalarEncoding::Signed64,
+            ),
+            producer.with_header_for_test(
+                producer.method(),
+                crate::types::NominalTypeId::new(producer.witness().module(), u32::MAX),
+                ForeignScalarEncoding::Signed64,
+            ),
+            producer.with_header_for_test(
+                producer.method(),
+                producer.witness(),
+                ForeignScalarEncoding::Bool,
+            ),
+        ];
+        for candidate in malformed {
+            assert_eq!(
+                candidate.dictionary(),
+                producer.dictionary(),
+                "each forgery retains the exact canonical lookup identity"
+            );
+            assert_ne!(candidate, producer);
+            assert!(
+                !token
+                    .authenticates(
+                        &program.nodes,
+                        ordinal,
+                        candidate,
+                        &mut TypeWorkBudget::unbounded()
+                    )
+                    .unwrap(),
+                "dictionary identity alone cannot replace any complete producer-header field"
+            );
+        }
+
+        for prefix in [0, 17] {
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            assert_eq!(
+                token.authenticates(&program.nodes, ordinal, producer, &mut short),
+                Err(()),
+                "work exhaustion must remain an error, not an authority refusal"
+            );
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                assert_eq!(
+                    token.authenticates(&program.nodes, ordinal, producer, &mut exact),
+                    Ok(true)
+                );
+                assert_eq!(exact.used(), prefix + cost);
+            }
+            let empty = AuthenticatedCaptureLayouts {
+                nodes: &program.nodes,
+                entries: &[],
+            };
+            let mut legacy = TypeWorkBudget::with_limit(prefix);
+            legacy.charge(prefix).unwrap();
+            assert_eq!(
+                empty.authenticates(&program.nodes, ordinal, producer, &mut legacy),
+                Ok(false)
+            );
+            assert_eq!(
+                legacy.used(),
+                prefix,
+                "an empty legacy token pays no added work"
+            );
+        }
+    }
+
     #[test]
     fn hook_root_identity_tampering_has_distinct_messages() {
         use super::super::effect::{EffectExprKind, EffectOperation};
@@ -21999,6 +23155,12 @@ mod tests {
                     };
                     anchor.role = MethodEvidenceAnchorRole::Application {
                         producer: match producer {
+                            MethodEvidenceProducer::ProviderFamily { .. } => {
+                                unreachable!("fixture uses module evidence")
+                            }
+                            MethodEvidenceProducer::NativeLayout { .. } => {
+                                unreachable!("fixture uses module evidence")
+                            }
                             MethodEvidenceProducer::Lexical { .. } => {
                                 unreachable!("fixture uses module evidence")
                             }
@@ -22043,6 +23205,12 @@ mod tests {
                         unreachable!()
                     };
                     let producer = match producer {
+                        MethodEvidenceProducer::ProviderFamily { .. } => {
+                            unreachable!("fixture uses module evidence")
+                        }
+                        MethodEvidenceProducer::NativeLayout { .. } => {
+                            unreachable!("fixture uses module evidence")
+                        }
                         MethodEvidenceProducer::Lexical { .. } => {
                             unreachable!("fixture uses module evidence")
                         }

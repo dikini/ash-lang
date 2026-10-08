@@ -104,6 +104,8 @@ pub enum NodeKind {
     ResourceDefinition,
     /// Experimental assembly field or clause block.
     ResourceField,
+    /// One optional declaration-level resource family template.
+    ResourceFamily,
     /// Source-defined resource family instance.
     ProviderResourceExpression,
     /// An empty-chain hook scope with an exact effect target and block body.

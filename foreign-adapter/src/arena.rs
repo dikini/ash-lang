@@ -129,6 +129,37 @@ pub enum AllocationFailure<E> {
     /// Caller initialization failed; no key or cursor advance was published.
     Initialization(E),
 }
+/// A checked unpublished allocation candidate. It retains no native owner.
+///
+/// Its key is physical metadata, not Ash reference authority. Dropping this
+/// candidate changes no native storage. Commit must validate the same owner
+/// and unchanged publication position before exposing any reservation bytes.
+#[derive(Debug)]
+pub struct PreparedAllocation {
+    key: AllocationKey,
+    layout: PayloadLayout,
+    alignment: usize,
+    cursor: usize,
+    objects: usize,
+    start: usize,
+    end: usize,
+}
+impl PreparedAllocation {
+    /// Returns the unpublished physical key, granting no existence or Ash authority.
+    #[must_use]
+    pub const fn candidate_key(&self) -> AllocationKey {
+        self.key
+    }
+}
+/// Failure before a prepared native allocation publishes a record.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PreparedCommitFailure<E> {
+    /// The owner or publication position changed; initialization was not called.
+    InvalidPreparation,
+    /// Initialization failed and its unpublished bytes were rolled back.
+    Initialization(E),
+}
+
 /// Failure to read a key against this owner and layout context.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AccessError {
@@ -204,8 +235,8 @@ impl RawBlock {
         if extent == 0 {
             return &mut [];
         }
-        // SAFETY: Only allocate calls this after checking the complete range
-        // against the fixed block. The exclusive owner borrow excludes reads or
+        // SAFETY: Only commit_prepared calls this after revalidating the complete
+        // range against the fixed block. The exclusive owner borrow excludes reads or
         // another reservation. Every byte was initialized by alloc_zeroed.
         unsafe { std::slice::from_raw_parts_mut(self.pointer.as_ptr().add(offset), extent) }
     }
@@ -313,18 +344,128 @@ impl Arena {
             object_slots,
         })
     }
+    /// Prepares a physical key and checked range without mutating native counters.
+    ///
+    /// The caller can complete result admission before committing this candidate.
+    /// This API establishes no source type, layout authority or owner lifetime.
+    ///
+    /// # Errors
+    /// Refuses invalid layout/alignment or insufficient byte/object capacity.
+    pub fn prepare_allocation(
+        &self,
+        layout: PayloadLayout,
+        requested_alignment: usize,
+    ) -> Result<PreparedAllocation, AllocationError> {
+        let alignment = if requested_alignment == 0 {
+            layout.alignment
+        } else {
+            requested_alignment
+        };
+        if !alignment.is_power_of_two()
+            || alignment < layout.alignment
+            || alignment > PAYLOAD_ALIGNMENT
+        {
+            return Err(AllocationError::InvalidAlignment);
+        }
+        let (start, end) = checked_range(self.cursor, layout.size, alignment)
+            .filter(|(_, end)| *end <= self.payload.layout.size())
+            .ok_or(AllocationError::OutOfPayload)?;
+        if self.objects >= self.object_slots {
+            return Err(AllocationError::OutOfObjects);
+        }
+        let object = self
+            .objects
+            .checked_add(1)
+            .and_then(|count| u64::try_from(count).ok())
+            .and_then(NonZeroU64::new)
+            .ok_or(AllocationError::OutOfObjects)?;
+        Ok(PreparedAllocation {
+            key: AllocationKey {
+                owner: self.owner,
+                object,
+            },
+            layout,
+            alignment,
+            cursor: self.cursor,
+            objects: self.objects,
+            start,
+            end,
+        })
+    }
+    /// Initializes and publishes an admitted candidate on this exact owner.
+    ///
+    /// All fallible result admission must precede this call. No caller code or
+    /// conversion follows a successful initializer before native publication.
+    ///
+    /// # Errors
+    /// Rejects a stale or foreign candidate before initialization, or rolls back
+    /// an initializer failure. A panicking initializer also rolls back.
+    pub fn commit_prepared<E>(
+        &mut self,
+        prepared: PreparedAllocation,
+        initialize: impl FnOnce(&mut [u8]) -> Result<(), E>,
+    ) -> Result<AllocationKey, PreparedCommitFailure<E>> {
+        let next_count = self
+            .objects
+            .checked_add(1)
+            .ok_or(PreparedCommitFailure::InvalidPreparation)?;
+        if prepared.key.owner != self.owner
+            || prepared.cursor != self.cursor
+            || prepared.objects != self.objects
+            || next_count > self.object_slots
+            || u64::try_from(next_count).ok() != Some(prepared.key.object.get())
+            || !prepared.alignment.is_power_of_two()
+            || prepared.alignment < prepared.layout.alignment
+            || prepared.alignment > PAYLOAD_ALIGNMENT
+            || checked_range(self.cursor, prepared.layout.size, prepared.alignment)
+                != Some((prepared.start, prepared.end))
+            || prepared.end > self.payload.layout.size()
+        {
+            return Err(PreparedCommitFailure::InvalidPreparation);
+        }
+        let record = ObjectRecord {
+            offset: prepared.start,
+            extent: prepared.layout.size,
+            layout: prepared.layout.tag,
+        };
+        let reservation = Reservation::new(
+            self.payload
+                .reservation(prepared.start, prepared.layout.size),
+        );
+        initialize(reservation.bytes).map_err(PreparedCommitFailure::Initialization)?;
+        // The pending result has already been admitted by the caller. All native
+        // checks also preceded initialization. Publication allocates nothing and
+        // invokes no further caller code or fallible conversion.
+        reservation.publish();
+        // SAFETY: The checked next_count is within the fixed aligned table.
+        // This slot is unpublished. The POD record contains initialized integer
+        // metadata, and no payload borrow survives the exclusive owner borrow.
+        unsafe {
+            self.records
+                .pointer
+                .cast::<ObjectRecord>()
+                .as_ptr()
+                .add(self.objects)
+                .write(record)
+        };
+        self.cursor = prepared.end;
+        self.objects = next_count;
+        Ok(prepared.key)
+    }
+
     /// Initializes an unpublished range, then publishes its non-owning key.
     ///
     /// Zero requested alignment uses the natural alignment. Otherwise it must
     /// be a power of two between natural alignment and 64. Padding consumes
     /// payload capacity. No backing/table allocation occurs during publication.
     ///
-    /// Returning `Ok` from the callback commits immediately. A later bridge
-    /// must complete all fallible conversion, Ref/result storage reservation,
-    /// and runtime-admission preflight before that return. Post-`Ok` publication
-    /// is infallible; published objects have no rollback/removal operation.
-    /// Layout/tag inputs must come from its authenticated dictionary; this
-    /// backing establishes neither Ash Layout nor Ref authority.
+    /// Returning `Ok` from the callback commits immediately. A bridge must
+    /// complete all fallible conversion, Ref/result storage reservation and
+    /// runtime admission first, or use [`Self::prepare_allocation`] and
+    /// [`Self::commit_prepared`] to admit its candidate result before publication.
+    /// Published objects have no rollback/removal operation. Layout/tag inputs
+    /// must come from its authenticated dictionary; this backing establishes
+    /// neither Ash Layout nor Ref authority.
     ///
     /// # Errors
     /// Returns refusal before reservation or caller failure after rollback.
@@ -336,61 +477,21 @@ impl Arena {
         requested_alignment: usize,
         initialize: impl FnOnce(&mut [u8]) -> Result<(), E>,
     ) -> Result<AllocationKey, AllocationFailure<E>> {
-        let alignment = if requested_alignment == 0 {
-            layout.alignment
-        } else {
-            requested_alignment
-        };
-        if !alignment.is_power_of_two()
-            || alignment < layout.alignment
-            || alignment > PAYLOAD_ALIGNMENT
-        {
-            return Err(AllocationFailure::Refused(
-                AllocationError::InvalidAlignment,
-            ));
-        }
-        let (start, end) = checked_range(self.cursor, layout.size, alignment)
-            .filter(|(_, end)| *end <= self.payload.layout.size())
-            .ok_or(AllocationFailure::Refused(AllocationError::OutOfPayload))?;
-        if self.objects >= self.object_slots {
-            return Err(AllocationFailure::Refused(AllocationError::OutOfObjects));
-        }
-        let next_count = self
-            .objects
-            .checked_add(1)
-            .ok_or(AllocationFailure::Refused(AllocationError::OutOfObjects))?;
-        let object = u64::try_from(next_count)
-            .ok()
-            .and_then(NonZeroU64::new)
-            .ok_or(AllocationFailure::Refused(AllocationError::OutOfObjects))?;
-        let key = AllocationKey {
-            owner: self.owner,
-            object,
-        };
-        let record = ObjectRecord {
-            offset: start,
-            extent: layout.size,
-            layout: layout.tag,
-        };
-        let reservation = Reservation::new(self.payload.reservation(start, layout.size));
-        initialize(reservation.bytes).map_err(AllocationFailure::Initialization)?;
-        // All fallible work finishes before publication. These assignments and
-        // the in-bounds POD record write do not invoke caller code or allocate.
-        reservation.publish();
-        // SAFETY: The fixed table Layout reserved object_slots aligned records.
-        // objects is strictly below that bound. This slot was never published,
-        // and ObjectRecord contains only initialized integer/POD metadata.
-        unsafe {
-            self.records
-                .pointer
-                .cast::<ObjectRecord>()
-                .as_ptr()
-                .add(self.objects)
-                .write(record)
-        };
-        self.cursor = end;
-        self.objects = next_count;
-        Ok(key)
+        let prepared = self
+            .prepare_allocation(layout, requested_alignment)
+            .map_err(AllocationFailure::Refused)?;
+        // No external code runs between preparation and validation. Staleness
+        // cannot occur through this immediate API; preserve a checked failure
+        // rather than panicking if an internal invariant is violated.
+        self.commit_prepared(prepared, initialize)
+            .map_err(|failure| match failure {
+                PreparedCommitFailure::InvalidPreparation => {
+                    AllocationFailure::Refused(AllocationError::InvalidPayload)
+                }
+                PreparedCommitFailure::Initialization(error) => {
+                    AllocationFailure::Initialization(error)
+                }
+            })
     }
     /// Reads a published record through an independently supplied layout context.
     ///
