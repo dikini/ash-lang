@@ -3681,6 +3681,33 @@ pub fn validate_modules(
     )))
 }
 
+/// Facts admitted by independent Core type validation for this exact immutable
+/// Effect arena. Source evidence and another arena cannot construct this token.
+pub(in crate::core) struct AuthenticatedCaptureLayouts<'a> {
+    nodes: &'a [StoredNode<super::effect::EffectOperationFamily>],
+    entries: &'a [(usize, crate::foreign::ForeignLayoutProducer)],
+}
+
+impl AuthenticatedCaptureLayouts<'_> {
+    pub(in crate::core) fn authenticates<F: CoreOperationFamily>(
+        &self,
+        nodes: &[StoredNode<F>],
+        ordinal: usize,
+        producer: crate::foreign::ForeignLayoutProducer,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ()> {
+        if self.entries.is_empty() { return Ok(false); }
+        work.charge(1)?;
+        if std::any::TypeId::of::<F>() != std::any::TypeId::of::<super::effect::EffectOperationFamily>()
+            || nodes.len() != self.nodes.len()
+            || !std::ptr::eq(nodes.as_ptr().cast::<()>(), self.nodes.as_ptr().cast::<()>())
+            || ordinal >= nodes.len()
+        { return Ok(false); }
+        work.charge(self.entries.len())?;
+        Ok(self.entries.iter().any(|(node, actual)| *node == ordinal && *actual == producer))
+    }
+}
+
 struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily> {
     program: &'program UnvalidatedCoreProgram<F>,
     sources: HashMap<SourceId, &'source SourceFile>,
@@ -3696,6 +3723,7 @@ struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily
     provider_handler_entry: Option<&'program super::provider::HandlerFragmentEntry<'program>>,
     provider_fragment_locals: Option<&'program [crate::types::NominalTypeId]>,
     type_work: Cell<usize>,
+    capture_layouts: std::cell::RefCell<Vec<(usize, crate::foreign::ForeignLayoutProducer)>>,
     #[cfg(test)]
     owner_parameter_index_work: Cell<usize>,
     #[cfg(test)]
@@ -3956,6 +3984,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             provider_handler_entry: None,
             provider_fragment_locals: None,
             type_work: Cell::new(0),
+            capture_layouts: std::cell::RefCell::new(Vec::new()),
             #[cfg(test)]
             owner_parameter_index_work: Cell::new(0),
             #[cfg(test)]
@@ -11058,6 +11087,16 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         {
                             return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
                         }
+                        self.charge_type_work(1)?;
+                        let mut facts = self.capture_layouts.try_borrow_mut().map_err(|_| {
+                            ValidationError::new(ValidationReason::Resource, Some(id))
+                        })?;
+                        facts.try_reserve(1).map_err(|_| {
+                            ValidationError::new(ValidationReason::Resource, Some(id))
+                        })?;
+                        facts.push((id.index().map_err(|_| {
+                            ValidationError::new(ValidationReason::NodeType, Some(id))
+                        })?, producer));
                     }
                     _ if intrinsic.authentic_module() => {}
                     _ => return Err(ValidationError::new(ValidationReason::Registry, Some(id))),
@@ -13993,16 +14032,26 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         let mut capture_work = TypeWorkBudget::with_limit(
             CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
         );
-        let capture_result = super::capture::check_nodes(
-            &self.program.nodes,
-            &[],
-            &[],
-            |kind| match kind {
+        let operation: for<'a> fn(&'a super::effect::EffectExprKind) -> Option<&'a super::effect::EffectOperation> = |kind| match kind {
                 super::effect::EffectExprKind::Operation(operation) => Some(operation),
                 _ => None,
-            },
-            &mut capture_work,
-        );
+            };
+        let layouts = self.capture_layouts.try_borrow().map_err(|_| {
+            ValidationError::new(ValidationReason::Resource, None)
+        })?;
+        let capture_result = if layouts.is_empty() {
+            super::capture::check_nodes(
+                &self.program.nodes, &[], &[], operation, &mut capture_work,
+            )
+        } else {
+            let authenticated = AuthenticatedCaptureLayouts {
+                nodes: &self.program.nodes,
+                entries: &layouts,
+            };
+            super::capture::check_nodes_with_authentic_layouts(
+                &self.program.nodes, &[], &[], operation, &authenticated, &mut capture_work,
+            )
+        };
         self.charge_type_work(capture_work.used())?;
         capture_result.map_err(|failure| match failure {
             super::capture::Failure::Resource => {
