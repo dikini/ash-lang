@@ -28,7 +28,66 @@ The starting checkpoint is historical. Later verified checkpoints were imported
 without rewriting history. Private candidates target Common's selected source;
 Common controls their application, compiled comparison and restoration.
 
-## Work
+## Current calibration batch
+
+The user redirected work on 2026-10-08 to baseline calibration before further
+optimization. Execute the [resource calibration plan](../design/provider-experiments/resource-calibration-plan.md)
+in `.worktree/resource-calibration`; Common coordinates the exclusive compiler
+window. Preserve the rejected producer and old worktrees. Measure optimized
+phase time, process peak memory and source-size/complexity growth, then derive
+provisional allowances without changing production policy.
+
+The [calibration report](../design/provider-experiments/resource-calibration/README.md)
+records two completed 44-program rounds, including actual CPU/time/RSS and
+separate admission charges. The simple size/complexity estimates miss realistic
+SQLite costs; no estimate is accepted as production policy. Retain the baseline
+and review the practical requirements before resuming optimization. This
+isolated checkpoint does not claim a new full repository gate.
+The user's follow-up permits incremental limit evaluation rather than requiring
+a whole-program prediction. The report separates existing incremental charges
+from the proposed checkpoint-based allowance decision; that control remains
+unimplemented.
+The measurement follow-up now uses language structures and checking obligations
+as its explanatory units. Budget means predicted typical cost, work means
+observed processing, and limit means continuation policy. Bayesian inference
+remains deferred. A bounded structural/Rust reference
+confirmed all 20 frozen Source/Core predictions, including eight extrapolated
+predictions at depths 24/32; eight existing language fixtures also completed.
+The follow-up evidence preserves the corrected supplemental provenance defect
+and all rejected records. Common's second compiler window is returned.
+The simple four-term offline budget estimator is implemented using completed
+data, with point predictions and errors separate from stopping policy. It does
+not change compiler limits. The completed counters still include precharged
+reservations; language-level actual-visit attribution remains planned.
+
+The informational [functional Rust SQLite comparison](../design/provider-experiments/resource-calibration/sqlite-rust.md)
+now supplies five actual SQLite counterparts. Sixty compiler jobs, ten native
+validations and one version query completed without retries. Metadata and
+both native build modes report separate CPU/wall/RSS and source sizes.
+No Ash/Cargo/C rebuild or optimization occurred; the semantic differences
+remain explicit and production policy is unchanged.
+
+The user now accepts the measured physical costs and requests a simple
+[decision-support recalibration](../design/provider-experiments/resource-calibration/decision-budgets.md).
+Use existing measurements, preserve raw coefficients and charges, distinguish
+point predictions from review tolerances and current-workload engineering
+targets, and keep production stopping policy separate. The completed offline
+replay accepts all 52 primary cases, including observed maxima. The separate
+14-case reference retains five out-of-range flags; all its physical costs meet
+the provisional targets. No compiler runs or production changes occurred.
+Optimization remains paused.
+
+Common delegated the user's adoption of the calibrated measurements with an
+explicit at-most-ten-percent accepted deficit. The offline follow-up retains
+prior evidence, reports accepted deficits as future optimization targets, and
+reviews separate charged-unit Type/Core references. The
+[completed offline adoption](../design/provider-experiments/resource-calibration/accepted-deficits.md)
+retains all 52 normal acceptances and the five reference scope flags; thirty
+synthetic boundary replays verify the new outcome and future-target reports.
+Common owns shared compiler admission changes; this worktree makes no Rust or
+stopping-policy change and uses no compiler window.
+
+## Paused optimization work
 
 Execute the [analysis plan](../design/provider-experiments/analysis-plan.md):
 
@@ -44,7 +103,7 @@ Execute the [analysis plan](../design/provider-experiments/analysis-plan.md):
    public/native programs, preserve ordinary limits and independent Core,
    and integrate verified retained deliveries into `codex/provider-experiments`.
 
-The immediate deliverable is the typed pipeline/law inventory and a concrete
+The previous deliverable was the typed pipeline/law inventory and a concrete
 candidate handoff. The execution objective is reducing the compiler work that
 blocks normal copying, bound-NUL copying and persistence. A selected rewrite
 does not count as successful merely because it has a plausible law.

@@ -1,0 +1,3450 @@
+{
+  "cases": [
+    {
+      "accepted_for_models": true,
+      "family": "flat",
+      "features": {
+        "nodes": 22,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 6
+      },
+      "id": "flat-width1",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 12700,
+            "median": 12556,
+            "min": 12504,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.0069049999999999945,
+            "median": 0.0065049999999999995,
+            "min": 0.00638,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 159,
+          "median": 159,
+          "min": 159,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 232,
+          "median": 232,
+          "min": 232,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 13,
+          "median": 13,
+          "min": 13,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 2,
+          "median": 2,
+          "min": 2,
+          "n": 3
+        },
+        "resolution": {
+          "max": 68,
+          "median": 68,
+          "min": 68,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 141,
+          "median": 141,
+          "min": 141,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "flat",
+      "features": {
+        "nodes": 34,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 9
+      },
+      "id": "flat-width2",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 12648,
+            "median": 12620,
+            "min": 12216,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.00965499999999997,
+            "median": 0.006484000000000156,
+            "min": 0.0063470000000001026,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 243,
+          "median": 243,
+          "min": 243,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 337,
+          "median": 337,
+          "min": 337,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 20,
+          "median": 20,
+          "min": 20,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 2,
+          "median": 2,
+          "min": 2,
+          "n": 3
+        },
+        "resolution": {
+          "max": 103,
+          "median": 103,
+          "min": 103,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 221,
+          "median": 221,
+          "min": 221,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "flat",
+      "features": {
+        "nodes": 58,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 15
+      },
+      "id": "flat-width4",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 12824,
+            "median": 12680,
+            "min": 12560,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.007089999999999999,
+            "median": 0.006997999999999997,
+            "min": 0.006680000000000009,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 411,
+          "median": 411,
+          "min": 411,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 547,
+          "median": 547,
+          "min": 547,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 34,
+          "median": 34,
+          "min": 34,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 2,
+          "median": 2,
+          "min": 2,
+          "n": 3
+        },
+        "resolution": {
+          "max": 173,
+          "median": 173,
+          "min": 173,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 381,
+          "median": 381,
+          "min": 381,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "flat",
+      "features": {
+        "nodes": 106,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 27
+      },
+      "id": "flat-width8",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 12544,
+            "median": 12496,
+            "min": 12424,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.00869299999999984,
+            "median": 0.0075150000000001604,
+            "min": 0.007037999999999878,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 747,
+          "median": 747,
+          "min": 747,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 967,
+          "median": 967,
+          "min": 967,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 62,
+          "median": 62,
+          "min": 62,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 2,
+          "median": 2,
+          "min": 2,
+          "n": 3
+        },
+        "resolution": {
+          "max": 313,
+          "median": 313,
+          "min": 313,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 701,
+          "median": 701,
+          "min": 701,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "flat",
+      "features": {
+        "nodes": 202,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 51
+      },
+      "id": "flat-width16",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 12700,
+            "median": 12464,
+            "min": 12448,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.008527,
+            "median": 0.007845000000000012,
+            "min": 0.007729,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 1419,
+          "median": 1419,
+          "min": 1419,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 1807,
+          "median": 1807,
+          "min": 1807,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 118,
+          "median": 118,
+          "min": 118,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 2,
+          "median": 2,
+          "min": 2,
+          "n": 3
+        },
+        "resolution": {
+          "max": 593,
+          "median": 593,
+          "min": 593,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 1341,
+          "median": 1341,
+          "min": 1341,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "flat",
+      "features": {
+        "nodes": 394,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 99
+      },
+      "id": "flat-width32",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 12948,
+            "median": 12888,
+            "min": 12776,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.013923999999999825,
+            "median": 0.013509999999999911,
+            "min": 0.010671000000000097,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 2763,
+          "median": 2763,
+          "min": 2763,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 3487,
+          "median": 3487,
+          "min": 3487,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 230,
+          "median": 230,
+          "min": 230,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 2,
+          "median": 2,
+          "min": 2,
+          "n": 3
+        },
+        "resolution": {
+          "max": 1153,
+          "median": 1153,
+          "min": 1153,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 2621,
+          "median": 2621,
+          "min": 2621,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "flat",
+      "features": {
+        "nodes": 778,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 195
+      },
+      "id": "flat-width64",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 13416,
+            "median": 13052,
+            "min": 12932,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.017777999999999988,
+            "median": 0.013098000000000012,
+            "min": 0.012491000000000002,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 5451,
+          "median": 5451,
+          "min": 5451,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 6847,
+          "median": 6847,
+          "min": 6847,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 454,
+          "median": 454,
+          "min": 454,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 2,
+          "median": 2,
+          "min": 2,
+          "n": 3
+        },
+        "resolution": {
+          "max": 2273,
+          "median": 2273,
+          "min": 2273,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 5181,
+          "median": 5181,
+          "min": 5181,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "flat",
+      "features": {
+        "nodes": 1546,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 387
+      },
+      "id": "flat-width128",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 14272,
+            "median": 13888,
+            "min": 13704,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.02583000000000002,
+            "median": 0.02503899999999981,
+            "min": 0.021004000000000023,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 10827,
+          "median": 10827,
+          "min": 10827,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 13567,
+          "median": 13567,
+          "min": 13567,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 902,
+          "median": 902,
+          "min": 902,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 2,
+          "median": 2,
+          "min": 2,
+          "n": 3
+        },
+        "resolution": {
+          "max": 4513,
+          "median": 4513,
+          "min": 4513,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 10301,
+          "median": 10301,
+          "min": 10301,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "nested_type",
+      "features": {
+        "nodes": 48,
+        "resource_sites": 0,
+        "type_depth": 3,
+        "type_nodes": 16
+      },
+      "id": "nested_type-depth1",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 13348,
+            "median": 12976,
+            "min": 12828,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.008016999999999996,
+            "median": 0.007070000000000021,
+            "min": 0.007062999999999986,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 725,
+          "median": 725,
+          "min": 725,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 748,
+          "median": 748,
+          "min": 748,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 43,
+          "median": 43,
+          "min": 43,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 24,
+          "median": 24,
+          "min": 24,
+          "n": 3
+        },
+        "resolution": {
+          "max": 205,
+          "median": 205,
+          "min": 205,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 673,
+          "median": 673,
+          "min": 673,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "nested_type",
+      "features": {
+        "nodes": 54,
+        "resource_sites": 0,
+        "type_depth": 4,
+        "type_nodes": 20
+      },
+      "id": "nested_type-depth2",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 13256,
+            "median": 13092,
+            "min": 13012,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.009009999999999962,
+            "median": 0.00766800000000023,
+            "min": 0.00723600000000002,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 1058,
+          "median": 1058,
+          "min": 1058,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 1101,
+          "median": 1101,
+          "min": 1101,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 53,
+          "median": 53,
+          "min": 53,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 24,
+          "median": 24,
+          "min": 24,
+          "n": 3
+        },
+        "resolution": {
+          "max": 254,
+          "median": 254,
+          "min": 254,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 990,
+          "median": 990,
+          "min": 990,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "nested_type",
+      "features": {
+        "nodes": 66,
+        "resource_sites": 0,
+        "type_depth": 6,
+        "type_nodes": 28
+      },
+      "id": "nested_type-depth4",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 13212,
+            "median": 13044,
+            "min": 12936,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.008709999999999968,
+            "median": 0.00850200000000001,
+            "min": 0.007786999999999988,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 1814,
+          "median": 1814,
+          "min": 1814,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 1975,
+          "median": 1975,
+          "min": 1975,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 73,
+          "median": 73,
+          "min": 73,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 24,
+          "median": 24,
+          "min": 24,
+          "n": 3
+        },
+        "resolution": {
+          "max": 352,
+          "median": 352,
+          "min": 352,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 1714,
+          "median": 1714,
+          "min": 1714,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "nested_type",
+      "features": {
+        "nodes": 90,
+        "resource_sites": 0,
+        "type_depth": 10,
+        "type_nodes": 44
+      },
+      "id": "nested_type-depth8",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 13320,
+            "median": 13244,
+            "min": 13212,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.009633000000000225,
+            "median": 0.00948099999999985,
+            "min": 0.009033000000000069,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 3686,
+          "median": 3686,
+          "min": 3686,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 4395,
+          "median": 4395,
+          "min": 4395,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 113,
+          "median": 113,
+          "min": 113,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 24,
+          "median": 24,
+          "min": 24,
+          "n": 3
+        },
+        "resolution": {
+          "max": 548,
+          "median": 548,
+          "min": 548,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 3522,
+          "median": 3522,
+          "min": 3522,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "nested_type",
+      "features": {
+        "nodes": 114,
+        "resource_sites": 0,
+        "type_depth": 14,
+        "type_nodes": 60
+      },
+      "id": "nested_type-depth12",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 13400,
+            "median": 13300,
+            "min": 13128,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.010082000000000008,
+            "median": 0.009078000000000003,
+            "min": 0.008916000000000035,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 6038,
+          "median": 6038,
+          "min": 6038,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 7711,
+          "median": 7711,
+          "min": 7711,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 153,
+          "median": 153,
+          "min": 153,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 24,
+          "median": 24,
+          "min": 24,
+          "n": 3
+        },
+        "resolution": {
+          "max": 744,
+          "median": 744,
+          "min": 744,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 5810,
+          "median": 5810,
+          "min": 5810,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "nested_type",
+      "features": {
+        "nodes": 138,
+        "resource_sites": 0,
+        "type_depth": 18,
+        "type_nodes": 76
+      },
+      "id": "nested_type-depth16",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 13340,
+            "median": 13228,
+            "min": 13216,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.011561000000000154,
+            "median": 0.01009199999999999,
+            "min": 0.00940300000000005,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 8870,
+          "median": 8870,
+          "min": 8870,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 11923,
+          "median": 11923,
+          "min": 11923,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 193,
+          "median": 193,
+          "min": 193,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 24,
+          "median": 24,
+          "min": 24,
+          "n": 3
+        },
+        "resolution": {
+          "max": 940,
+          "median": 940,
+          "min": 940,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 8578,
+          "median": 8578,
+          "min": 8578,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "prerequisite",
+      "features": {
+        "nodes": 58,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 15
+      },
+      "id": "prerequisite-depth1",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 14908,
+            "median": 14720,
+            "min": 14576,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.01150699999999999,
+            "median": 0.008786000000000016,
+            "min": 0.007826,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 1335,
+          "median": 1335,
+          "min": 1335,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 1266,
+          "median": 1266,
+          "min": 1266,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 67,
+          "median": 67,
+          "min": 67,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 43,
+          "median": 43,
+          "min": 43,
+          "n": 3
+        },
+        "resolution": {
+          "max": 246,
+          "median": 246,
+          "min": 246,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 2536,
+          "median": 2536,
+          "min": 2536,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "prerequisite",
+      "features": {
+        "nodes": 62,
+        "resource_sites": 0,
+        "type_depth": 3,
+        "type_nodes": 17
+      },
+      "id": "prerequisite-depth2",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 14752,
+            "median": 14708,
+            "min": 14592,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.007648999999999795,
+            "median": 0.007426000000000155,
+            "min": 0.007382,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 1748,
+          "median": 1748,
+          "min": 1748,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 1813,
+          "median": 1813,
+          "min": 1813,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 73,
+          "median": 73,
+          "min": 73,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 43,
+          "median": 43,
+          "min": 43,
+          "n": 3
+        },
+        "resolution": {
+          "max": 269,
+          "median": 269,
+          "min": 269,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 2957,
+          "median": 2957,
+          "min": 2957,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "prerequisite",
+      "features": {
+        "nodes": 70,
+        "resource_sites": 0,
+        "type_depth": 5,
+        "type_nodes": 21
+      },
+      "id": "prerequisite-depth4",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 14828,
+            "median": 14532,
+            "min": 14408,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.011845999999999968,
+            "median": 0.009224999999999983,
+            "min": 0.00844200000000006,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 2844,
+          "median": 2844,
+          "min": 2844,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 3378,
+          "median": 3378,
+          "min": 3378,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 85,
+          "median": 85,
+          "min": 85,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 43,
+          "median": 43,
+          "min": 43,
+          "n": 3
+        },
+        "resolution": {
+          "max": 315,
+          "median": 315,
+          "min": 315,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 3949,
+          "median": 3949,
+          "min": 3949,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "prerequisite",
+      "features": {
+        "nodes": 86,
+        "resource_sites": 0,
+        "type_depth": 9,
+        "type_nodes": 29
+      },
+      "id": "prerequisite-depth8",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 14604,
+            "median": 14560,
+            "min": 14472,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.008175999999999739,
+            "median": 0.008016000000000023,
+            "min": 0.007799999999999807,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 6116,
+          "median": 6116,
+          "min": 6116,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 8392,
+          "median": 8392,
+          "min": 8392,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 109,
+          "median": 109,
+          "min": 109,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 43,
+          "median": 43,
+          "min": 43,
+          "n": 3
+        },
+        "resolution": {
+          "max": 407,
+          "median": 407,
+          "min": 407,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 6533,
+          "median": 6533,
+          "min": 6533,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "prerequisite",
+      "features": {
+        "nodes": 102,
+        "resource_sites": 0,
+        "type_depth": 13,
+        "type_nodes": 37
+      },
+      "id": "prerequisite-depth12",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 15172,
+            "median": 15168,
+            "min": 15080,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.0181349999999999,
+            "median": 0.015915000000000012,
+            "min": 0.011815999999999993,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 10828,
+          "median": 10828,
+          "min": 10828,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 15918,
+          "median": 15918,
+          "min": 15918,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 133,
+          "median": 133,
+          "min": 133,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 43,
+          "median": 43,
+          "min": 43,
+          "n": 3
+        },
+        "resolution": {
+          "max": 499,
+          "median": 499,
+          "min": 499,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 9917,
+          "median": 9917,
+          "min": 9917,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "prerequisite",
+      "features": {
+        "nodes": 118,
+        "resource_sites": 0,
+        "type_depth": 17,
+        "type_nodes": 45
+      },
+      "id": "prerequisite-depth16",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 15120,
+            "median": 14988,
+            "min": 14656,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.011304000000000203,
+            "median": 0.01113799999999987,
+            "min": 0.010485000000000078,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 16980,
+          "median": 16980,
+          "min": 16980,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 25956,
+          "median": 25956,
+          "min": 25956,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 157,
+          "median": 157,
+          "min": 157,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 43,
+          "median": 43,
+          "min": 43,
+          "n": 3
+        },
+        "resolution": {
+          "max": 591,
+          "median": 591,
+          "min": 591,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 14101,
+          "median": 14101,
+          "min": 14101,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "reexport_width",
+      "features": {
+        "nodes": 43,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 7
+      },
+      "id": "reexport_width-width1-depth2",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 14528,
+            "median": 14176,
+            "min": 14072,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.010594000000000048,
+            "median": 0.008537000000000072,
+            "min": 0.008197999999999983,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 173,
+          "median": 173,
+          "min": 173,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 223,
+          "median": 223,
+          "min": 223,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 27,
+          "median": 27,
+          "min": 27,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 30,
+          "median": 30,
+          "min": 30,
+          "n": 3
+        },
+        "resolution": {
+          "max": 530,
+          "median": 530,
+          "min": 530,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 698,
+          "median": 698,
+          "min": 698,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "reexport_width",
+      "features": {
+        "nodes": 67,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 11
+      },
+      "id": "reexport_width-width2-depth2",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 14532,
+            "median": 14460,
+            "min": 13776,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.00695800000000002,
+            "median": 0.006569000000000047,
+            "min": 0.006421999999999928,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 242,
+          "median": 242,
+          "min": 242,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 273,
+          "median": 273,
+          "min": 273,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 44,
+          "median": 44,
+          "min": 44,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 52,
+          "median": 52,
+          "min": 52,
+          "n": 3
+        },
+        "resolution": {
+          "max": 961,
+          "median": 961,
+          "min": 961,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 1165,
+          "median": 1165,
+          "min": 1165,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "reexport_width",
+      "features": {
+        "nodes": 115,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 19
+      },
+      "id": "reexport_width-width4-depth2",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 14420,
+            "median": 14300,
+            "min": 14052,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.012221999999999955,
+            "median": 0.00877300000000003,
+            "min": 0.008727999999999958,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 380,
+          "median": 380,
+          "min": 380,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 373,
+          "median": 373,
+          "min": 373,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 78,
+          "median": 78,
+          "min": 78,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 96,
+          "median": 96,
+          "min": 96,
+          "n": 3
+        },
+        "resolution": {
+          "max": 1823,
+          "median": 1823,
+          "min": 1823,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 2099,
+          "median": 2099,
+          "min": 2099,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "reexport_width",
+      "features": {
+        "nodes": 211,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 35
+      },
+      "id": "reexport_width-width8-depth2",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 13960,
+            "median": 13932,
+            "min": 13916,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.008218999999999976,
+            "median": 0.008073999999999915,
+            "min": 0.008016000000000023,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 656,
+          "median": 656,
+          "min": 656,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 573,
+          "median": 573,
+          "min": 573,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 146,
+          "median": 146,
+          "min": 146,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 184,
+          "median": 184,
+          "min": 184,
+          "n": 3
+        },
+        "resolution": {
+          "max": 3547,
+          "median": 3547,
+          "min": 3547,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 3967,
+          "median": 3967,
+          "min": 3967,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "reexport_width",
+      "features": {
+        "nodes": 403,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 67
+      },
+      "id": "reexport_width-width16-depth2",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 14176,
+            "median": 14128,
+            "min": 13976,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.013182000000000027,
+            "median": 0.012381000000000031,
+            "min": 0.011097000000000024,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 1208,
+          "median": 1208,
+          "min": 1208,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 973,
+          "median": 973,
+          "min": 973,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 282,
+          "median": 282,
+          "min": 282,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 360,
+          "median": 360,
+          "min": 360,
+          "n": 3
+        },
+        "resolution": {
+          "max": 6995,
+          "median": 6995,
+          "min": 6995,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 7703,
+          "median": 7703,
+          "min": 7703,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "reexport_width",
+      "features": {
+        "nodes": 787,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 131
+      },
+      "id": "reexport_width-width32-depth2",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 14904,
+            "median": 14688,
+            "min": 14608,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.01182900000000009,
+            "median": 0.011301000000000228,
+            "min": 0.01083400000000001,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 2312,
+          "median": 2312,
+          "min": 2312,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 1773,
+          "median": 1773,
+          "min": 1773,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 554,
+          "median": 554,
+          "min": 554,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 712,
+          "median": 712,
+          "min": 712,
+          "n": 3
+        },
+        "resolution": {
+          "max": 13891,
+          "median": 13891,
+          "min": 13891,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 15175,
+          "median": 15175,
+          "min": 15175,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "reexport_depth",
+      "features": {
+        "nodes": 36,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 7
+      },
+      "id": "reexport_depth-width1-depth1",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 14128,
+            "median": 13944,
+            "min": 13912,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.011073999999999917,
+            "median": 0.007364000000000037,
+            "min": 0.00680600000000009,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 173,
+          "median": 173,
+          "min": 173,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 223,
+          "median": 223,
+          "min": 223,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 26,
+          "median": 26,
+          "min": 26,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 28,
+          "median": 28,
+          "min": 28,
+          "n": 3
+        },
+        "resolution": {
+          "max": 382,
+          "median": 382,
+          "min": 382,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 605,
+          "median": 605,
+          "min": 605,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "reexport_depth",
+      "features": {
+        "nodes": 43,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 7
+      },
+      "id": "reexport_depth-width1-depth2",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 14516,
+            "median": 14076,
+            "min": 14060,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.006558999999999537,
+            "median": 0.006420000000000092,
+            "min": 0.006364999999999954,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 173,
+          "median": 173,
+          "min": 173,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 223,
+          "median": 223,
+          "min": 223,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 27,
+          "median": 27,
+          "min": 27,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 30,
+          "median": 30,
+          "min": 30,
+          "n": 3
+        },
+        "resolution": {
+          "max": 530,
+          "median": 530,
+          "min": 530,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 698,
+          "median": 698,
+          "min": 698,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "reexport_depth",
+      "features": {
+        "nodes": 57,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 7
+      },
+      "id": "reexport_depth-width1-depth4",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 14336,
+            "median": 13792,
+            "min": 13632,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.011079000000000061,
+            "median": 0.009502999999999928,
+            "min": 0.008433000000000024,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 173,
+          "median": 173,
+          "min": 173,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 223,
+          "median": 223,
+          "min": 223,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 29,
+          "median": 29,
+          "min": 29,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 34,
+          "median": 34,
+          "min": 34,
+          "n": 3
+        },
+        "resolution": {
+          "max": 838,
+          "median": 838,
+          "min": 838,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 887,
+          "median": 887,
+          "min": 887,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "reexport_depth",
+      "features": {
+        "nodes": 85,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 7
+      },
+      "id": "reexport_depth-width1-depth8",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 14548,
+            "median": 14520,
+            "min": 14024,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.00727800000000034,
+            "median": 0.00711700000000004,
+            "min": 0.006876000000000104,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 173,
+          "median": 173,
+          "min": 173,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 223,
+          "median": 223,
+          "min": 223,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 33,
+          "median": 33,
+          "min": 33,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 42,
+          "median": 42,
+          "min": 42,
+          "n": 3
+        },
+        "resolution": {
+          "max": 1502,
+          "median": 1502,
+          "min": 1502,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 1277,
+          "median": 1277,
+          "min": 1277,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "reexport_depth",
+      "features": {
+        "nodes": 113,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 7
+      },
+      "id": "reexport_depth-width1-depth12",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 14448,
+            "median": 14336,
+            "min": 14104,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.013488000000000056,
+            "median": 0.01100599999999996,
+            "min": 0.009579000000000004,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 173,
+          "median": 173,
+          "min": 173,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 223,
+          "median": 223,
+          "min": 223,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 37,
+          "median": 37,
+          "min": 37,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 50,
+          "median": 50,
+          "min": 50,
+          "n": 3
+        },
+        "resolution": {
+          "max": 2230,
+          "median": 2230,
+          "min": 2230,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 1683,
+          "median": 1683,
+          "min": 1683,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "reexport_depth",
+      "features": {
+        "nodes": 141,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 7
+      },
+      "id": "reexport_depth-width1-depth16",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 14492,
+            "median": 13848,
+            "min": 13688,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.00829100000000027,
+            "median": 0.008289999999999909,
+            "min": 0.007843999999999962,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 173,
+          "median": 173,
+          "min": 173,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 223,
+          "median": 223,
+          "min": 223,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 41,
+          "median": 41,
+          "min": 41,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 58,
+          "median": 58,
+          "min": 58,
+          "n": 3
+        },
+        "resolution": {
+          "max": 3022,
+          "median": 3022,
+          "min": 3022,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 2105,
+          "median": 2105,
+          "min": 2105,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "string_payload",
+      "features": {
+        "nodes": 13,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 3
+      },
+      "id": "string_payload-payload_bytes16",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 12448,
+            "median": 12272,
+            "min": 12256,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.007806999999999897,
+            "median": 0.007547000000000081,
+            "min": 0.006159999999999943,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 83,
+          "median": 83,
+          "min": 83,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 168,
+          "median": 168,
+          "min": 168,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 7,
+          "median": 7,
+          "min": 7,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 2,
+          "median": 2,
+          "min": 2,
+          "n": 3
+        },
+        "resolution": {
+          "max": 37,
+          "median": 37,
+          "min": 37,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 69,
+          "median": 69,
+          "min": 69,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "string_payload",
+      "features": {
+        "nodes": 13,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 3
+      },
+      "id": "string_payload-payload_bytes1024",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 12564,
+            "median": 12552,
+            "min": 12408,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.009194000000000035,
+            "median": 0.00788600000000006,
+            "min": 0.007800999999999947,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 83,
+          "median": 83,
+          "min": 83,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 1176,
+          "median": 1176,
+          "min": 1176,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 7,
+          "median": 7,
+          "min": 7,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 2,
+          "median": 2,
+          "min": 2,
+          "n": 3
+        },
+        "resolution": {
+          "max": 37,
+          "median": 37,
+          "min": 37,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 69,
+          "median": 69,
+          "min": 69,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "string_payload",
+      "features": {
+        "nodes": 13,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 3
+      },
+      "id": "string_payload-payload_bytes65536",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 12840,
+            "median": 12812,
+            "min": 12436,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.006604000000000054,
+            "median": 0.0060869999999999536,
+            "min": 0.005868999999999902,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 83,
+          "median": 83,
+          "min": 83,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 65688,
+          "median": 65688,
+          "min": 65688,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 7,
+          "median": 7,
+          "min": 7,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 2,
+          "median": 2,
+          "min": 2,
+          "n": 3
+        },
+        "resolution": {
+          "max": 37,
+          "median": 37,
+          "min": 37,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 69,
+          "median": 69,
+          "min": 69,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "sqlite",
+      "features": {
+        "nodes": 1480,
+        "resource_sites": 2,
+        "type_depth": 4,
+        "type_nodes": 494
+      },
+      "id": "sqlite-copying",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 34412,
+            "median": 34380,
+            "min": 33884,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.21458399999999989,
+            "median": 0.1837040000000001,
+            "min": 0.1798390000000003,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 165717,
+          "median": 165717,
+          "min": 165717,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 903995,
+          "median": 903995,
+          "min": 903995,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 15742,
+          "median": 15742,
+          "min": 15742,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 4030,
+          "median": 4030,
+          "min": 4030,
+          "n": 3
+        },
+        "resolution": {
+          "max": 27413,
+          "median": 27413,
+          "min": 27413,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 1212707,
+          "median": 1212707,
+          "min": 1212707,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "sqlite",
+      "features": {
+        "nodes": 1604,
+        "resource_sites": 6,
+        "type_depth": 6,
+        "type_nodes": 531
+      },
+      "id": "sqlite-persistence",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 43584,
+            "median": 43400,
+            "min": 43272,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.25920400000000043,
+            "median": 0.22946599999999995,
+            "min": 0.22765299999999966,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 376641,
+          "median": 376641,
+          "min": 376641,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 1609087,
+          "median": 1609087,
+          "min": 1609087,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 48578,
+          "median": 48578,
+          "min": 48578,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 4136,
+          "median": 4136,
+          "min": 4136,
+          "n": 3
+        },
+        "resolution": {
+          "max": 44240,
+          "median": 44240,
+          "min": 44240,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 597882,
+          "median": 597882,
+          "min": 597882,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "sqlite",
+      "features": {
+        "nodes": 1030,
+        "resource_sites": 2,
+        "type_depth": 5,
+        "type_nodes": 405
+      },
+      "id": "sqlite-resume",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 23092,
+            "median": 23076,
+            "min": 22716,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.0657890000000001,
+            "median": 0.06214300000000028,
+            "min": 0.06123099999999981,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 103738,
+          "median": 103738,
+          "min": 103738,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 289063,
+          "median": 289063,
+          "min": 289063,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 15190,
+          "median": 15190,
+          "min": 15190,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 3950,
+          "median": 3950,
+          "min": 3950,
+          "n": 3
+        },
+        "resolution": {
+          "max": 25542,
+          "median": 25542,
+          "min": 25542,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 203215,
+          "median": 203215,
+          "min": 203215,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "sqlite",
+      "features": {
+        "nodes": 1480,
+        "resource_sites": 2,
+        "type_depth": 4,
+        "type_nodes": 494
+      },
+      "id": "sqlite-bound_nul",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 34432,
+            "median": 34300,
+            "min": 33856,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.1843599999999994,
+            "median": 0.1822440000000003,
+            "min": 0.17926900000000012,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 165717,
+          "median": 165717,
+          "min": 165717,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 903990,
+          "median": 903990,
+          "min": 903990,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 15742,
+          "median": 15742,
+          "min": 15742,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 4030,
+          "median": 4030,
+          "min": 4030,
+          "n": 3
+        },
+        "resolution": {
+          "max": 27413,
+          "median": 27413,
+          "min": 27413,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 1212707,
+          "median": 1212707,
+          "min": 1212707,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "sqlite",
+      "features": {
+        "nodes": 977,
+        "resource_sites": 2,
+        "type_depth": 5,
+        "type_nodes": 408
+      },
+      "id": "sqlite-forwarding",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 23220,
+            "median": 22680,
+            "min": 22484,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.06532799999999961,
+            "median": 0.06355400000000033,
+            "min": 0.06263699999999961,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 107066,
+          "median": 107066,
+          "min": 107066,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 315193,
+          "median": 315193,
+          "min": 315193,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 15098,
+          "median": 15098,
+          "min": 15098,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 3934,
+          "median": 3934,
+          "min": 3934,
+          "n": 3
+        },
+        "resolution": {
+          "max": 25557,
+          "median": 25557,
+          "min": 25557,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 216584,
+          "median": 216584,
+          "min": 216584,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "resource_width",
+      "features": {
+        "nodes": 875,
+        "resource_sites": 1,
+        "type_depth": 4,
+        "type_nodes": 367
+      },
+      "id": "resource_width-width1",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 18736,
+            "median": 18520,
+            "min": 18468,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.03576900000000005,
+            "median": 0.03492700000000004,
+            "min": 0.0321840000000001,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 6128,
+          "median": 6128,
+          "min": 6128,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 11811,
+          "median": 11811,
+          "min": 11811,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 4368,
+          "median": 4368,
+          "min": 4368,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 3891,
+          "median": 3891,
+          "min": 3891,
+          "n": 3
+        },
+        "resolution": {
+          "max": 24693,
+          "median": 24693,
+          "min": 24693,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 111611,
+          "median": 111611,
+          "min": 111611,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "resource_width",
+      "features": {
+        "nodes": 893,
+        "resource_sites": 2,
+        "type_depth": 4,
+        "type_nodes": 373
+      },
+      "id": "resource_width-width2",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 19176,
+            "median": 18752,
+            "min": 18560,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.028132999999999964,
+            "median": 0.02683599999999986,
+            "min": 0.026624999999999677,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 9947,
+          "median": 9947,
+          "min": 9947,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 19066,
+          "median": 19066,
+          "min": 19066,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 5110,
+          "median": 5110,
+          "min": 5110,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 3894,
+          "median": 3894,
+          "min": 3894,
+          "n": 3
+        },
+        "resolution": {
+          "max": 24817,
+          "median": 24817,
+          "min": 24817,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 117567,
+          "median": 117567,
+          "min": 117567,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "resource_width",
+      "features": {
+        "nodes": 929,
+        "resource_sites": 4,
+        "type_depth": 4,
+        "type_nodes": 385
+      },
+      "id": "resource_width-width4",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 19396,
+            "median": 19116,
+            "min": 18728,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.0471379999999999,
+            "median": 0.0375580000000002,
+            "min": 0.03678200000000009,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 17724,
+          "median": 17724,
+          "min": 17724,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 33984,
+          "median": 33984,
+          "min": 33984,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 6594,
+          "median": 6594,
+          "min": 6594,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 3900,
+          "median": 3900,
+          "min": 3900,
+          "n": 3
+        },
+        "resolution": {
+          "max": 25065,
+          "median": 25065,
+          "min": 25065,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 129654,
+          "median": 129654,
+          "min": 129654,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "resource_width",
+      "features": {
+        "nodes": 1001,
+        "resource_sites": 8,
+        "type_depth": 4,
+        "type_nodes": 409
+      },
+      "id": "resource_width-width8",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 19704,
+            "median": 19552,
+            "min": 19492,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.03724800000000039,
+            "median": 0.03708399999999967,
+            "min": 0.03637200000000007,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b",
+      "work": {
+        "final-elaboration": {
+          "max": 33694,
+          "median": 33694,
+          "min": 33694,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 65788,
+          "median": 65788,
+          "min": 65788,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 9562,
+          "median": 9562,
+          "min": 9562,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 3912,
+          "median": 3912,
+          "min": 3912,
+          "n": 3
+        },
+        "resolution": {
+          "max": 25561,
+          "median": 25561,
+          "min": 25561,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 154388,
+          "median": 154388,
+          "min": 154388,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "existing_higher_order",
+      "features": {
+        "nodes": 26,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 7
+      },
+      "id": "basic-higher-order",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 12908,
+            "median": 12572,
+            "min": 12568,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.010517999999999996,
+            "median": 0.009734000000000003,
+            "min": 0.006401000000000002,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "6700fc3edbcf6e21efa0d2d94d6a5dfe7d33f6373f2cae1f0099cbb00cf94758",
+      "work": {
+        "final-elaboration": {
+          "max": 200,
+          "median": 200,
+          "min": 200,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 326,
+          "median": 326,
+          "min": 326,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 18,
+          "median": 18,
+          "min": 18,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 2,
+          "median": 2,
+          "min": 2,
+          "n": 3
+        },
+        "resolution": {
+          "max": 79,
+          "median": 79,
+          "min": 79,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 180,
+          "median": 180,
+          "min": 180,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "existing_global_recursion",
+      "features": {
+        "nodes": 37,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 11
+      },
+      "id": "basic-global-recursion",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 12684,
+            "median": 12604,
+            "min": 12592,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.007129000000000003,
+            "median": 0.006795000000000002,
+            "min": 0.006508999999999994,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "6700fc3edbcf6e21efa0d2d94d6a5dfe7d33f6373f2cae1f0099cbb00cf94758",
+      "work": {
+        "final-elaboration": {
+          "max": 262,
+          "median": 262,
+          "min": 262,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 377,
+          "median": 377,
+          "min": 377,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 21,
+          "median": 21,
+          "min": 21,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 2,
+          "median": 2,
+          "min": 2,
+          "n": 3
+        },
+        "resolution": {
+          "max": 108,
+          "median": 108,
+          "min": 108,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 238,
+          "median": 238,
+          "min": 238,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "existing_local_recursion",
+      "features": {
+        "nodes": 42,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 12
+      },
+      "id": "basic-local-recursion",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 12652,
+            "median": 12368,
+            "min": 12284,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.008619000000000002,
+            "median": 0.007416999999999979,
+            "min": 0.007016000000000008,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "6700fc3edbcf6e21efa0d2d94d6a5dfe7d33f6373f2cae1f0099cbb00cf94758",
+      "work": {
+        "final-elaboration": {
+          "max": 180,
+          "median": 180,
+          "min": 180,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 388,
+          "median": 388,
+          "min": 388,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 18,
+          "median": 18,
+          "min": 18,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 2,
+          "median": 2,
+          "min": 2,
+          "n": 3
+        },
+        "resolution": {
+          "max": 98,
+          "median": 98,
+          "min": 98,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 166,
+          "median": 166,
+          "min": 166,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "existing_combined_effects",
+      "features": {
+        "nodes": 82,
+        "resource_sites": 0,
+        "type_depth": 3,
+        "type_nodes": 24
+      },
+      "id": "basic-combined-effects",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 14584,
+            "median": 14564,
+            "min": 14500,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.01378399999999999,
+            "median": 0.013595999999999983,
+            "min": 0.01035500000000003,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "6700fc3edbcf6e21efa0d2d94d6a5dfe7d33f6373f2cae1f0099cbb00cf94758",
+      "work": {
+        "final-elaboration": {
+          "max": 3936,
+          "median": 3936,
+          "min": 3936,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 1993,
+          "median": 1993,
+          "min": 1993,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 7,
+          "median": 7,
+          "min": 7,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 47,
+          "median": 47,
+          "min": 47,
+          "n": 3
+        },
+        "resolution": {
+          "max": 361,
+          "median": 361,
+          "min": 361,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 5159,
+          "median": 5159,
+          "min": 5159,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "existing_newtype_facade",
+      "features": {
+        "nodes": 29,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 7
+      },
+      "id": "basic-newtype-facade",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 12828,
+            "median": 12588,
+            "min": 12564,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.007298999999999972,
+            "median": 0.0070310000000000095,
+            "min": 0.0066920000000000035,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "6700fc3edbcf6e21efa0d2d94d6a5dfe7d33f6373f2cae1f0099cbb00cf94758",
+      "work": {
+        "final-elaboration": {
+          "max": 197,
+          "median": 197,
+          "min": 197,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 346,
+          "median": 346,
+          "min": 346,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 18,
+          "median": 18,
+          "min": 18,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 14,
+          "median": 14,
+          "min": 14,
+          "n": 3
+        },
+        "resolution": {
+          "max": 159,
+          "median": 159,
+          "min": 159,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 275,
+          "median": 275,
+          "min": 275,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "existing_higher_kinded_linked",
+      "features": {
+        "nodes": 57,
+        "resource_sites": 0,
+        "type_depth": 3,
+        "type_nodes": 14
+      },
+      "id": "basic-higher-kinded-linked",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 14616,
+            "median": 14600,
+            "min": 14076,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.008353999999999945,
+            "median": 0.007901999999999992,
+            "min": 0.007803000000000004,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "6700fc3edbcf6e21efa0d2d94d6a5dfe7d33f6373f2cae1f0099cbb00cf94758",
+      "work": {
+        "final-elaboration": {
+          "max": 765,
+          "median": 765,
+          "min": 765,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 783,
+          "median": 783,
+          "min": 783,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 56,
+          "median": 56,
+          "min": 56,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 56,
+          "median": 56,
+          "min": 56,
+          "n": 3
+        },
+        "resolution": {
+          "max": 550,
+          "median": 550,
+          "min": 550,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 1390,
+          "median": 1390,
+          "min": 1390,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "existing_polymorphic_methods",
+      "features": {
+        "nodes": 116,
+        "resource_sites": 0,
+        "type_depth": 4,
+        "type_nodes": 36
+      },
+      "id": "basic-polymorphic-methods",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 15768,
+            "median": 15460,
+            "min": 15148,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.011526999999999982,
+            "median": 0.010221999999999981,
+            "min": 0.009684999999999971,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "6700fc3edbcf6e21efa0d2d94d6a5dfe7d33f6373f2cae1f0099cbb00cf94758",
+      "work": {
+        "final-elaboration": {
+          "max": 3206,
+          "median": 3206,
+          "min": 3206,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 4147,
+          "median": 4147,
+          "min": 4147,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 190,
+          "median": 190,
+          "min": 190,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 61,
+          "median": 61,
+          "min": 61,
+          "n": 3
+        },
+        "resolution": {
+          "max": 1385,
+          "median": 1385,
+          "min": 1385,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 5486,
+          "median": 5486,
+          "min": 5486,
+          "n": 3
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "existing_relational_bundle",
+      "features": {
+        "nodes": 207,
+        "resource_sites": 0,
+        "type_depth": 4,
+        "type_nodes": 53
+      },
+      "id": "basic-relational-bundle",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 15452,
+            "median": 15212,
+            "min": 15168,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.016874000000000028,
+            "median": 0.015936000000000006,
+            "min": 0.013284000000000018,
+            "n": 3
+          }
+        }
+      },
+      "source_summary_sha256": "6700fc3edbcf6e21efa0d2d94d6a5dfe7d33f6373f2cae1f0099cbb00cf94758",
+      "work": {
+        "final-elaboration": {
+          "max": 4101,
+          "median": 4101,
+          "min": 4101,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 5032,
+          "median": 5032,
+          "min": 5032,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 299,
+          "median": 299,
+          "min": 299,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 161,
+          "median": 161,
+          "min": 161,
+          "n": 3
+        },
+        "resolution": {
+          "max": 6166,
+          "median": 6166,
+          "min": 6166,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 9244,
+          "median": 9244,
+          "min": 9244,
+          "n": 3
+        }
+      }
+    }
+  ],
+  "interpretation": "Already examined completed Ash measurements; explicit recalibration data, not blind validation or new compiler runs. Physical costs are observation-off process measurements; charged units remain separate diagnostics.",
+  "schema_version": 1,
+  "source_summaries": [
+    {
+      "case_count": 44,
+      "path": "/tmp/ash-resource-calibration-cpu-20261008/summary.json",
+      "sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b"
+    },
+    {
+      "case_count": 8,
+      "path": "/tmp/ash-resource-basics-corrected-results-20261008/summary.json",
+      "sha256": "6700fc3edbcf6e21efa0d2d94d6a5dfe7d33f6373f2cae1f0099cbb00cf94758"
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/provider-experiments)
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/provider-experiments/foreign-adapter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 40s
+     Running tests/compiler_work_reporting.rs (target/debug/deps/compiler_work_reporting-7b05e54d16601fce)
+
+running 4 tests
+test source_rejection_preserves_its_reason_and_partial_phase_measurement ... ok
+test entry_rejection_retains_observed_checking_without_fabricated_later_costs ... ok
+test constrained_entry_rejection_reports_source_work_after_its_closure_walk ... ok
+test ordinary_public_execution_reports_completed_costs_without_changing_the_value ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/provider_sqlite_control.rs (target/debug/deps/provider_sqlite_control-2fe3c8892667913b)
+
+running 2 tests
+test owned_discard_runs_source_cleanup_then_statement_finish_before_connection_close ... ok
+test captured_statement_and_connection_resume_actual_copied_query_without_reacquisition ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+
+     Running tests/provider_sqlite_copying.rs (target/debug/deps/provider_sqlite_copying-b82a66bcca474e24)
+
+running 8 tests
+test imported_unicode_text_binding_returns_an_independent_copy_after_completion ... ok
+test qualified_forwarding_chain_preserves_integer_and_source_completion ... ok
+test malformed_native_text_and_float_columns_preserve_copy_and_type_failures ... ok
+test reset_preserves_bound_text_and_clear_restores_null_after_copied_results ... ok
+test integer_width_and_nonnegative_parameter_index_fail_before_native_binding ... ok
+test wrong_storage_kind_and_bad_column_are_distinct_from_protocol_errors ... ok
+test bound_text_nul_is_an_ordinary_failure_with_both_completion_reports ... ok
+test copied_unicode_blobs_nulls_and_empty_values_survive_both_scopes ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.23s
+
+     Running tests/provider_sqlite_sessions.rs (target/debug/deps/provider_sqlite_sessions-ead443f8522b4451)
+
+running 8 tests
+test malformed_sql_reports_the_real_native_code_and_copied_diagnostic ... ok
+test representable_parameter_outside_statement_preserves_sqlite_range_error ... ok
+test negative_parameter_index_from_an_independent_sqlite_integer_is_rejected ... ok
+test genuine_constraint_failure_preserves_body_error_and_consumed_finalize_report ... ok
+test column_before_row_and_step_after_done_are_protocol_alternatives ... ok
+test refused_empty_multiple_and_nul_sql_keep_acquisition_outcomes_and_guards ... ok
+test binding_and_clear_after_a_row_reject_without_native_mutation ... ok
+test statement_reuse_transactions_generic_rows_and_reopen_preserve_every_report ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.42s
+

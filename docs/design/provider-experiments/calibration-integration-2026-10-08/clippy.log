@@ -1,0 +1,4 @@
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/provider-experiments/foreign-adapter)
+    Checking ash-native-buffer v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/provider-experiments/native-buffer)
+    Checking ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/provider-experiments)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 34.89s

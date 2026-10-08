@@ -1,0 +1,2199 @@
+{
+  "decision_support_calibration": {
+    "cpu_point_floor_seconds": 0.01,
+    "current_workload_targets": {
+      "cpu_seconds": 0.3,
+      "peak_rss_kib": 65536
+    },
+    "interpretation": [
+      "Existing coefficients and charged-work points are unchanged; the CPU point has an empirical minimum.",
+      "Review thresholds are deliberately loose decision allowances, not typical predictions or calibrated bounds.",
+      "The separately chosen current-workload targets never clamp the formula thresholds.",
+      "Acceptance requires actual measured CPU and RSS medians and maxima inside both allowances and targets.",
+      "Feature ranges are only scope checks; unmeasured combinations inside them have not been validated.",
+      "No optimizer, compiler refusal limit, production stopping policy or automatic limit adjustment is implied."
+    ],
+    "provenance": {
+      "base_model_path": "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/docs/design/provider-experiments/resource-calibration/rough-budget-model.json",
+      "base_model_sha256": "b00bc284c4b51c2742473c79a90c7f59abb0a8153dd867ba1dae8d284b0f4fe8",
+      "estimator_sha256": "3344295a728acd5fbc23a0d228c0be3ca61aec5196462d83dd2641c738ce0036",
+      "startup_summary_path": "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/docs/design/provider-experiments/resource-calibration/decision-budget-startup.json",
+      "startup_summary_sha256": "4edcca11cc1f3299afb2f51bb514ae6ea7b296096f4f1a0dfacd36ba5215e11a"
+    },
+    "review_thresholds": {
+      "cpu_seconds": {
+        "multiplier": 2.0,
+        "offset": 0.01,
+        "round_up_quantum": 0.01
+      },
+      "peak_rss_kib": {
+        "multiplier": 1.5,
+        "offset": 0.0,
+        "round_up_quantum": 4096
+      }
+    },
+    "schema": "physical-decision-support-v1",
+    "startup_control": {
+      "case": "flat-width0",
+      "measurement_count": 3,
+      "observed_cpu_seconds_median": 0.009198999999999985,
+      "round_up_quantum_seconds": 0.005
+    }
+  },
+  "excluded_case_ids": [],
+  "feature_ranges": {
+    "nodes": {
+      "max": 1604,
+      "min": 13
+    },
+    "resource_sites": {
+      "max": 8,
+      "min": 0
+    },
+    "resource_size_product": {
+      "max": 9624,
+      "min": 0
+    },
+    "type_depth": {
+      "max": 18,
+      "min": 2
+    },
+    "type_depth_product": {
+      "max": 3186,
+      "min": 6
+    },
+    "type_nodes": {
+      "max": 531,
+      "min": 3
+    }
+  },
+  "formula": "fixed_cost + b*nodes + c*(type_nodes*type_depth) + d*(resource_sites*nodes)",
+  "interpretation": [
+    "The following fit statements describe the unchanged raw base model; decision_support_calibration adds separate physical floors and review allowances.",
+    "Explicit recalibration: all completed cases are training data; earlier held-out results have been examined.",
+    "One case median per response; repetitions are not independent training cases.",
+    "Coefficients are nonnegative; the four-term form is fixed, with no feature selection or rescue fit.",
+    "Charged work includes reservations and remains a proxy; CPU and RSS retain separate physical units.",
+    "Point predictions only: no headroom, envelope, cap, stopping policy or automatic limit adjustment.",
+    "Observed ranges are axis-aligned checks, not proof that new combinations interpolate safely."
+  ],
+  "provenance": {
+    "estimator_sha256": "69506e0a0a6bcbcb07dafd37d273f0a235690e955586101403a8b2c7727f94ae",
+    "fitter_sha256": "86fb6eb2c9b7738ada6b13a217fe30006893bdd2709d39338e70622a446d1803",
+    "summary_path": "/tmp/ash-resource-calibration-cpu-20261008/summary.json",
+    "summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b"
+  },
+  "responses": {
+    "cpu_seconds": {
+      "coefficients": {
+        "intercept": 0.0,
+        "nodes": 3.0568698912858594e-05,
+        "resource_size_product": 6.217923725254652e-06,
+        "type_depth_product": 2.0861530456896997e-05
+      },
+      "fit_errors": {
+        "actual_to_predicted_ratios": {
+          "max": 15.091024503163156,
+          "median": 1.7293806861528322,
+          "min": 0.308086312174688,
+          "n": 44
+        },
+        "cases": [
+          {
+            "actual": 0.0065049999999999995,
+            "case": "flat-width1",
+            "predicted": 0.0009228497415656531
+          },
+          {
+            "actual": 0.006484000000000156,
+            "case": "flat-width2",
+            "predicted": 0.0014148433112613381
+          },
+          {
+            "actual": 0.006997999999999997,
+            "case": "flat-width4",
+            "predicted": 0.002398830450652708
+          },
+          {
+            "actual": 0.0075150000000001604,
+            "case": "flat-width8",
+            "predicted": 0.004366804729435449
+          },
+          {
+            "actual": 0.007845000000000012,
+            "case": "flat-width16",
+            "predicted": 0.00830275328700093
+          },
+          {
+            "actual": 0.013509999999999911,
+            "case": "flat-width32",
+            "predicted": 0.016174650402131893
+          },
+          {
+            "actual": 0.013098000000000012,
+            "case": "flat-width64",
+            "predicted": 0.031918444632393815
+          },
+          {
+            "actual": 0.02503899999999981,
+            "case": "flat-width128",
+            "predicted": 0.06340603309291766
+          },
+          {
+            "actual": 0.007070000000000021,
+            "case": "nested_type-depth1",
+            "predicted": 0.0024686510097482683
+          },
+          {
+            "actual": 0.00766800000000023,
+            "case": "nested_type-depth2",
+            "predicted": 0.0033196321778461236
+          },
+          {
+            "actual": 0.00850200000000001,
+            "case": "nested_type-depth4",
+            "predicted": 0.005522271245007362
+          },
+          {
+            "actual": 0.00948099999999985,
+            "case": "nested_type-depth8",
+            "predicted": 0.011930256303191953
+          },
+          {
+            "actual": 0.009078000000000003,
+            "case": "nested_type-depth12",
+            "predicted": 0.021008517259859357
+          },
+          {
+            "actual": 0.01009199999999999,
+            "case": "nested_type-depth16",
+            "predicted": 0.03275705411500958
+          },
+          {
+            "actual": 0.008786000000000016,
+            "case": "prerequisite-depth1",
+            "predicted": 0.002398830450652708
+          },
+          {
+            "actual": 0.007426000000000155,
+            "case": "prerequisite-depth2",
+            "predicted": 0.0029591973858989797
+          },
+          {
+            "actual": 0.009224999999999983,
+            "case": "prerequisite-depth4",
+            "predicted": 0.004330269621874286
+          },
+          {
+            "actual": 0.008016000000000023,
+            "case": "prerequisite-depth8",
+            "predicted": 0.008073767555755954
+          },
+          {
+            "actual": 0.015915000000000012,
+            "case": "prerequisite-depth12",
+            "predicted": 0.013152403438879034
+          },
+          {
+            "actual": 0.01113799999999987,
+            "case": "prerequisite-depth16",
+            "predicted": 0.019566177271243518
+          },
+          {
+            "actual": 0.008537000000000072,
+            "case": "reexport_width-width1-depth2",
+            "predicted": 0.0016065154796494775
+          },
+          {
+            "actual": 0.006569000000000047,
+            "case": "reexport_width-width2-depth2",
+            "predicted": 0.00250705649721326
+          },
+          {
+            "actual": 0.00877300000000003,
+            "case": "reexport_width-width4-depth2",
+            "predicted": 0.004308138532340824
+          },
+          {
+            "actual": 0.008073999999999915,
+            "case": "reexport_width-width8-depth2",
+            "predicted": 0.007910302602595953
+          },
+          {
+            "actual": 0.012381000000000031,
+            "case": "reexport_width-width16-depth2",
+            "predicted": 0.01511463074310621
+          },
+          {
+            "actual": 0.011301000000000228,
+            "case": "reexport_width-width32-depth2",
+            "predicted": 0.029523287024126727
+          },
+          {
+            "actual": 0.007364000000000037,
+            "case": "reexport_depth-width1-depth1",
+            "predicted": 0.0013925345872594674
+          },
+          {
+            "actual": 0.006420000000000092,
+            "case": "reexport_depth-width1-depth2",
+            "predicted": 0.0016065154796494775
+          },
+          {
+            "actual": 0.009502999999999928,
+            "case": "reexport_depth-width1-depth4",
+            "predicted": 0.002034477264429498
+          },
+          {
+            "actual": 0.00711700000000004,
+            "case": "reexport_depth-width1-depth8",
+            "predicted": 0.0028904008339895385
+          },
+          {
+            "actual": 0.01100599999999996,
+            "case": "reexport_depth-width1-depth12",
+            "predicted": 0.003746324403549579
+          },
+          {
+            "actual": 0.008289999999999909,
+            "case": "reexport_depth-width1-depth16",
+            "predicted": 0.004602247973109619
+          },
+          {
+            "actual": 0.007547000000000081,
+            "case": "string_payload-payload_bytes16",
+            "predicted": 0.0005225622686085437
+          },
+          {
+            "actual": 0.00788600000000006,
+            "case": "string_payload-payload_bytes1024",
+            "predicted": 0.0005225622686085437
+          },
+          {
+            "actual": 0.0060869999999999536,
+            "case": "string_payload-payload_bytes65536",
+            "predicted": 0.0005225622686085437
+          },
+          {
+            "actual": 0.1837040000000001,
+            "case": "sqlite-copying",
+            "predicted": 0.10486911280061295
+          },
+          {
+            "actual": 0.22946599999999995,
+            "case": "sqlite-persistence",
+            "predicted": 0.1753383270237498
+          },
+          {
+            "actual": 0.06214300000000028,
+            "case": "sqlite-resume",
+            "predicted": 0.08653928192948535
+          },
+          {
+            "actual": 0.1822440000000003,
+            "case": "sqlite-bound_nul",
+            "predicted": 0.10486911280061295
+          },
+          {
+            "actual": 0.06355400000000033,
+            "case": "sqlite-forwarding",
+            "predicted": 0.08457296392908031
+          },
+          {
+            "actual": 0.03492700000000004,
+            "case": "resource_width-width1",
+            "predicted": 0.06281302151907389
+          },
+          {
+            "actual": 0.02683599999999986,
+            "case": "resource_width-width2",
+            "predicted": 0.06952846334417785
+          },
+          {
+            "actual": 0.0375580000000002,
+            "case": "resource_width-width4",
+            "predicted": 0.08363088275671329
+          },
+          {
+            "actual": 0.03708399999999967,
+            "case": "resource_width-width8",
+            "predicted": 0.11452186463109419
+          }
+        ],
+        "residuals": {
+          "max": 0.07883488719938714,
+          "median": 0.0038748477648385383,
+          "min": -0.07743786463109452,
+          "n": 44
+        },
+        "rmse": 0.026303026311336186,
+        "zero_prediction_cases": []
+      },
+      "nonnegative_fit_converged": true,
+      "nonnegative_fit_iterations": 73,
+      "observed_range": {
+        "max": 0.22946599999999995,
+        "median": 0.00893200000000001,
+        "min": 0.0060869999999999536,
+        "n": 44
+      },
+      "parameters": 4,
+      "rank": 4,
+      "status": "provisional",
+      "units": "observation-off wrapper-inclusive child CPU seconds"
+    },
+    "final-elaboration": {
+      "coefficients": {
+        "intercept": 0.0,
+        "nodes": 0.01885729925716181,
+        "resource_size_product": 14.148039994436099,
+        "type_depth_product": 34.87163387694991
+      },
+      "fit_errors": {
+        "actual_to_predicted_ratios": {
+          "max": 1.523061746680875,
+          "median": 0.38316388715876776,
+          "min": 0.0963710001740885,
+          "n": 44
+        },
+        "cases": [
+          {
+            "actual": 159,
+            "case": "flat-width1",
+            "predicted": 418.87446710705643
+          },
+          {
+            "actual": 243,
+            "case": "flat-width2",
+            "predicted": 628.3305579598418
+          },
+          {
+            "actual": 411,
+            "case": "flat-width4",
+            "predicted": 1047.2427396654127
+          },
+          {
+            "actual": 747,
+            "case": "flat-width8",
+            "predicted": 1885.067103076554
+          },
+          {
+            "actual": 1419,
+            "case": "flat-width16",
+            "predicted": 3560.715829898837
+          },
+          {
+            "actual": 2763,
+            "case": "flat-width32",
+            "predicted": 6912.013283543403
+          },
+          {
+            "actual": 5451,
+            "case": "flat-width64",
+            "predicted": 13614.608190832536
+          },
+          {
+            "actual": 10827,
+            "case": "flat-width128",
+            "predicted": 27019.798005410797
+          },
+          {
+            "actual": 725,
+            "case": "nested_type-depth1",
+            "predicted": 1674.7435764579393
+          },
+          {
+            "actual": 1058,
+            "case": "nested_type-depth2",
+            "predicted": 2790.7490043158796
+          },
+          {
+            "actual": 1814,
+            "case": "nested_type-depth4",
+            "predicted": 5859.679073078557
+          },
+          {
+            "actual": 3686,
+            "case": "nested_type-depth8",
+            "predicted": 15345.216062791105
+          },
+          {
+            "actual": 6038,
+            "case": "nested_type-depth12",
+            "predicted": 29294.322188753238
+          },
+          {
+            "actual": 8870,
+            "case": "nested_type-depth16",
+            "predicted": 47706.99745096496
+          },
+          {
+            "actual": 1335,
+            "case": "prerequisite-depth1",
+            "predicted": 1047.2427396654127
+          },
+          {
+            "actual": 1748,
+            "case": "prerequisite-depth2",
+            "predicted": 1779.6224802783893
+          },
+          {
+            "actual": 2844,
+            "case": "prerequisite-depth4",
+            "predicted": 3662.8415680277417
+          },
+          {
+            "actual": 6116,
+            "case": "prerequisite-depth8",
+            "predicted": 9103.118169620042
+          },
+          {
+            "actual": 10828,
+            "case": "prerequisite-depth12",
+            "predicted": 16775.179339337134
+          },
+          {
+            "actual": 16980,
+            "case": "prerequisite-depth16",
+            "predicted": 26679.025077179023
+          },
+          {
+            "actual": 173,
+            "case": "reexport_width-width1-depth2",
+            "predicted": 489.0137381453566
+          },
+          {
+            "actual": 242,
+            "case": "reexport_width-width2-depth2",
+            "predicted": 768.4393843431278
+          },
+          {
+            "actual": 380,
+            "case": "reexport_width-width4-depth2",
+            "predicted": 1327.2906767386703
+          },
+          {
+            "actual": 656,
+            "case": "reexport_width-width8-depth2",
+            "predicted": 2444.993261529755
+          },
+          {
+            "actual": 1208,
+            "case": "reexport_width-width16-depth2",
+            "predicted": 4680.398431111924
+          },
+          {
+            "actual": 2312,
+            "case": "reexport_width-width32-depth2",
+            "predicted": 9151.208770276262
+          },
+          {
+            "actual": 173,
+            "case": "reexport_depth-width1-depth1",
+            "predicted": 488.8817370505565
+          },
+          {
+            "actual": 173,
+            "case": "reexport_depth-width1-depth2",
+            "predicted": 489.0137381453566
+          },
+          {
+            "actual": 173,
+            "case": "reexport_depth-width1-depth4",
+            "predicted": 489.2777403349569
+          },
+          {
+            "actual": 173,
+            "case": "reexport_depth-width1-depth8",
+            "predicted": 489.80574471415747
+          },
+          {
+            "actual": 173,
+            "case": "reexport_depth-width1-depth12",
+            "predicted": 490.333749093358
+          },
+          {
+            "actual": 173,
+            "case": "reexport_depth-width1-depth16",
+            "predicted": 490.8617534725585
+          },
+          {
+            "actual": 83,
+            "case": "string_payload-payload_bytes16",
+            "predicted": 209.47494815204254
+          },
+          {
+            "actual": 83,
+            "case": "string_payload-payload_bytes1024",
+            "predicted": 209.47494815204254
+          },
+          {
+            "actual": 83,
+            "case": "string_payload-payload_bytes65536",
+            "predicted": 209.47494815204254
+          },
+          {
+            "actual": 165717,
+            "case": "sqlite-copying",
+            "predicted": 110812.45572728445
+          },
+          {
+            "actual": 376641,
+            "case": "sqlite-persistence",
+            "predicted": 247292.0095464239
+          },
+          {
+            "actual": 103738,
+            "case": "sqlite-resume",
+            "predicted": 99779.44400759682
+          },
+          {
+            "actual": 165717,
+            "case": "sqlite-bound_nul",
+            "predicted": 110812.45572728445
+          },
+          {
+            "actual": 107066,
+            "case": "sqlite-forwarding",
+            "predicted": 98801.8268394802
+          },
+          {
+            "actual": 6128,
+            "case": "resource_width-width1",
+            "predicted": 63587.593663344065
+          },
+          {
+            "actual": 9947,
+            "case": "resource_width-width2",
+            "predicted": 77313.71674270878
+          },
+          {
+            "actual": 17724,
+            "case": "resource_width-width4",
+            "predicted": 106293.9512208373
+          },
+          {
+            "actual": 33694,
+            "case": "resource_width-width8",
+            "predicted": 170366.37345469074
+          }
+        ],
+        "residuals": {
+          "max": 129348.99045357609,
+          "median": -883.066122383206,
+          "min": -136672.37345469074,
+          "n": 44
+        },
+        "rmse": 36917.912682414986,
+        "zero_prediction_cases": []
+      },
+      "nonnegative_fit_converged": true,
+      "nonnegative_fit_iterations": 80,
+      "observed_range": {
+        "max": 376641,
+        "median": 1583.5,
+        "min": 83,
+        "n": 44
+      },
+      "parameters": 4,
+      "rank": 4,
+      "status": "provisional",
+      "units": "charged units, including reservations"
+    },
+    "independent-effect-core": {
+      "coefficients": {
+        "intercept": 0.0,
+        "nodes": 50.77609077073312,
+        "resource_size_product": 62.59184005552235,
+        "type_depth_product": 110.33169979433379
+      },
+      "fit_errors": {
+        "actual_to_predicted_ratios": {
+          "max": 49.68536765193421,
+          "median": 0.08463855760448967,
+          "min": 0.025620190726322458,
+          "n": 44
+        },
+        "cases": [
+          {
+            "actual": 232,
+            "case": "flat-width1",
+            "predicted": 2441.054394488134
+          },
+          {
+            "actual": 337,
+            "case": "flat-width2",
+            "predicted": 3712.357682502934
+          },
+          {
+            "actual": 547,
+            "case": "flat-width4",
+            "predicted": 6254.964258532535
+          },
+          {
+            "actual": 967,
+            "case": "flat-width8",
+            "predicted": 11340.177410591736
+          },
+          {
+            "actual": 1807,
+            "case": "flat-width16",
+            "predicted": 21510.603714710138
+          },
+          {
+            "actual": 3487,
+            "case": "flat-width32",
+            "predicted": 41851.456322946935
+          },
+          {
+            "actual": 6847,
+            "case": "flat-width64",
+            "predicted": 82533.16153942054
+          },
+          {
+            "actual": 13567,
+            "case": "flat-width128",
+            "predicted": 163896.57197236776
+          },
+          {
+            "actual": 748,
+            "case": "nested_type-depth1",
+            "predicted": 7733.173947123212
+          },
+          {
+            "actual": 1101,
+            "case": "nested_type-depth2",
+            "predicted": 11568.444885166291
+          },
+          {
+            "actual": 1975,
+            "case": "nested_type-depth4",
+            "predicted": 21886.947556316463
+          },
+          {
+            "actual": 4395,
+            "case": "nested_type-depth8",
+            "predicted": 53115.796078872845
+          },
+          {
+            "actual": 7711,
+            "case": "nested_type-depth12",
+            "predicted": 98467.10217510397
+          },
+          {
+            "actual": 11923,
+            "case": "nested_type-depth16",
+            "predicted": 157940.8658450098
+          },
+          {
+            "actual": 1266,
+            "case": "prerequisite-depth1",
+            "predicted": 6254.964258532535
+          },
+          {
+            "actual": 1813,
+            "case": "prerequisite-depth2",
+            "predicted": 8775.034317296477
+          },
+          {
+            "actual": 3378,
+            "case": "prerequisite-depth4",
+            "predicted": 15139.154832356366
+          },
+          {
+            "actual": 8392,
+            "case": "prerequisite-depth8",
+            "predicted": 33163.31745260417
+          },
+          {
+            "actual": 15918,
+            "case": "prerequisite-depth12",
+            "predicted": 58248.70885968933
+          },
+          {
+            "actual": 25956,
+            "case": "prerequisite-depth16",
+            "predicted": 90395.32905361184
+          },
+          {
+            "actual": 223,
+            "case": "reexport_width-width1-depth2",
+            "predicted": 3728.0157002621972
+          },
+          {
+            "actual": 273,
+            "case": "reexport_width-width2-depth2",
+            "predicted": 5829.295477114462
+          },
+          {
+            "actual": 373,
+            "case": "reexport_width-width4-depth2",
+            "predicted": 10031.855030818992
+          },
+          {
+            "actual": 573,
+            "case": "reexport_width-width8-depth2",
+            "predicted": 18436.97413822805
+          },
+          {
+            "actual": 973,
+            "case": "reexport_width-width16-depth2",
+            "predicted": 35247.212353046176
+          },
+          {
+            "actual": 1773,
+            "case": "reexport_width-width32-depth2",
+            "predicted": 68867.68878268241
+          },
+          {
+            "actual": 223,
+            "case": "reexport_depth-width1-depth1",
+            "predicted": 3372.5830648670653
+          },
+          {
+            "actual": 223,
+            "case": "reexport_depth-width1-depth2",
+            "predicted": 3728.0157002621972
+          },
+          {
+            "actual": 223,
+            "case": "reexport_depth-width1-depth4",
+            "predicted": 4438.880971052461
+          },
+          {
+            "actual": 223,
+            "case": "reexport_depth-width1-depth8",
+            "predicted": 5860.611512632989
+          },
+          {
+            "actual": 223,
+            "case": "reexport_depth-width1-depth12",
+            "predicted": 7282.342054213515
+          },
+          {
+            "actual": 223,
+            "case": "reexport_depth-width1-depth16",
+            "predicted": 8704.072595794043
+          },
+          {
+            "actual": 168,
+            "case": "string_payload-payload_bytes16",
+            "predicted": 1322.0793787855332
+          },
+          {
+            "actual": 1176,
+            "case": "string_payload-payload_bytes1024",
+            "predicted": 1322.0793787855332
+          },
+          {
+            "actual": 65688,
+            "case": "string_payload-payload_bytes65536",
+            "predicted": 1322.0793787855332
+          },
+          {
+            "actual": 903995,
+            "case": "sqlite-copying",
+            "predicted": 478435.89969863475
+          },
+          {
+            "actual": 1609087,
+            "case": "sqlite-persistence",
+            "predicted": 1035345.5138353505
+          },
+          {
+            "actual": 289063,
+            "case": "sqlite-resume",
+            "predicted": 404660.25609175704
+          },
+          {
+            "actual": 903990,
+            "case": "sqlite-bound_nul",
+            "predicted": 478435.89969863475
+          },
+          {
+            "actual": 315193,
+            "case": "sqlite-forwarding",
+            "predicted": 396989.36373193783
+          },
+          {
+            "actual": 11811,
+            "case": "resource_width-width1",
+            "predicted": 261163.87477105553
+          },
+          {
+            "actual": 19066,
+            "case": "resource_width-width2",
+            "predicted": 321746.9714905736
+          },
+          {
+            "actual": 33984,
+            "case": "resource_width-width4",
+            "predicted": 449673.08365560614
+          },
+          {
+            "actual": 65788,
+            "case": "resource_width-width8",
+            "predicted": 732564.9828896569
+          }
+        ],
+        "residuals": {
+          "max": 573741.4861646495,
+          "median": -10420.311147879012,
+          "min": -666776.9828896569,
+          "n": 44
+        },
+        "rmse": 188455.49832326954,
+        "zero_prediction_cases": []
+      },
+      "nonnegative_fit_converged": true,
+      "nonnegative_fit_iterations": 92,
+      "observed_range": {
+        "max": 1609087,
+        "median": 1810.0,
+        "min": 168,
+        "n": 44
+      },
+      "parameters": 4,
+      "rank": 4,
+      "status": "provisional",
+      "units": "charged units, including reservations"
+    },
+    "linked-interface": {
+      "coefficients": {
+        "intercept": 0.0,
+        "nodes": 0.0,
+        "resource_size_product": 2.288674575400164,
+        "type_depth_product": 3.7871750048476476
+      },
+      "fit_errors": {
+        "actual_to_predicted_ratios": {
+          "max": 1.424903064390946,
+          "median": 0.38393195344884246,
+          "min": 0.03725253550851019,
+          "n": 44
+        },
+        "cases": [
+          {
+            "actual": 13,
+            "case": "flat-width1",
+            "predicted": 45.44610005817177
+          },
+          {
+            "actual": 20,
+            "case": "flat-width2",
+            "predicted": 68.16915008725766
+          },
+          {
+            "actual": 34,
+            "case": "flat-width4",
+            "predicted": 113.61525014542943
+          },
+          {
+            "actual": 62,
+            "case": "flat-width8",
+            "predicted": 204.50745026177296
+          },
+          {
+            "actual": 118,
+            "case": "flat-width16",
+            "predicted": 386.29185049446005
+          },
+          {
+            "actual": 230,
+            "case": "flat-width32",
+            "predicted": 749.8606509598342
+          },
+          {
+            "actual": 454,
+            "case": "flat-width64",
+            "predicted": 1476.9982518905827
+          },
+          {
+            "actual": 902,
+            "case": "flat-width128",
+            "predicted": 2931.273453752079
+          },
+          {
+            "actual": 43,
+            "case": "nested_type-depth1",
+            "predicted": 181.7844002326871
+          },
+          {
+            "actual": 53,
+            "case": "nested_type-depth2",
+            "predicted": 302.9740003878118
+          },
+          {
+            "actual": 73,
+            "case": "nested_type-depth4",
+            "predicted": 636.2454008144048
+          },
+          {
+            "actual": 113,
+            "case": "nested_type-depth8",
+            "predicted": 1666.357002132965
+          },
+          {
+            "actual": 153,
+            "case": "nested_type-depth12",
+            "predicted": 3181.227004072024
+          },
+          {
+            "actual": 193,
+            "case": "nested_type-depth16",
+            "predicted": 5180.855406631582
+          },
+          {
+            "actual": 67,
+            "case": "prerequisite-depth1",
+            "predicted": 113.61525014542943
+          },
+          {
+            "actual": 73,
+            "case": "prerequisite-depth2",
+            "predicted": 193.14592524723002
+          },
+          {
+            "actual": 85,
+            "case": "prerequisite-depth4",
+            "predicted": 397.653375509003
+          },
+          {
+            "actual": 109,
+            "case": "prerequisite-depth8",
+            "predicted": 988.452676265236
+          },
+          {
+            "actual": 133,
+            "case": "prerequisite-depth12",
+            "predicted": 1821.6311773317184
+          },
+          {
+            "actual": 157,
+            "case": "prerequisite-depth16",
+            "predicted": 2897.1888787084504
+          },
+          {
+            "actual": 27,
+            "case": "reexport_width-width1-depth2",
+            "predicted": 53.02045006786707
+          },
+          {
+            "actual": 44,
+            "case": "reexport_width-width2-depth2",
+            "predicted": 83.31785010664825
+          },
+          {
+            "actual": 78,
+            "case": "reexport_width-width4-depth2",
+            "predicted": 143.9126501842106
+          },
+          {
+            "actual": 146,
+            "case": "reexport_width-width8-depth2",
+            "predicted": 265.10225033933534
+          },
+          {
+            "actual": 282,
+            "case": "reexport_width-width16-depth2",
+            "predicted": 507.48145064958476
+          },
+          {
+            "actual": 554,
+            "case": "reexport_width-width32-depth2",
+            "predicted": 992.2398512700837
+          },
+          {
+            "actual": 26,
+            "case": "reexport_depth-width1-depth1",
+            "predicted": 53.02045006786707
+          },
+          {
+            "actual": 27,
+            "case": "reexport_depth-width1-depth2",
+            "predicted": 53.02045006786707
+          },
+          {
+            "actual": 29,
+            "case": "reexport_depth-width1-depth4",
+            "predicted": 53.02045006786707
+          },
+          {
+            "actual": 33,
+            "case": "reexport_depth-width1-depth8",
+            "predicted": 53.02045006786707
+          },
+          {
+            "actual": 37,
+            "case": "reexport_depth-width1-depth12",
+            "predicted": 53.02045006786707
+          },
+          {
+            "actual": 41,
+            "case": "reexport_depth-width1-depth16",
+            "predicted": 53.02045006786707
+          },
+          {
+            "actual": 7,
+            "case": "string_payload-payload_bytes16",
+            "predicted": 22.723050029085886
+          },
+          {
+            "actual": 7,
+            "case": "string_payload-payload_bytes1024",
+            "predicted": 22.723050029085886
+          },
+          {
+            "actual": 7,
+            "case": "string_payload-payload_bytes65536",
+            "predicted": 22.723050029085886
+          },
+          {
+            "actual": 15742,
+            "case": "sqlite-copying",
+            "predicted": 14257.934552763436
+          },
+          {
+            "actual": 48578,
+            "case": "sqlite-persistence",
+            "predicted": 34092.14367909578
+          },
+          {
+            "actual": 15190,
+            "case": "sqlite-resume",
+            "predicted": 12383.699010140823
+          },
+          {
+            "actual": 15742,
+            "case": "sqlite-bound_nul",
+            "predicted": 14257.934552763436
+          },
+          {
+            "actual": 15098,
+            "case": "sqlite-forwarding",
+            "predicted": 12197.907130221121
+          },
+          {
+            "actual": 4368,
+            "case": "resource_width-width1",
+            "predicted": 7562.16316059149
+          },
+          {
+            "actual": 5110,
+            "case": "resource_width-width2",
+            "predicted": 9738.037898897383
+          },
+          {
+            "actual": 6594,
+            "case": "resource_width-width4",
+            "predicted": 14336.964229652385
+          },
+          {
+            "actual": 9562,
+            "case": "resource_width-width8",
+            "predicted": 24523.524307735264
+          }
+        ],
+        "residuals": {
+          "max": 14485.856320904219,
+          "median": -119.62408779328268,
+          "min": -14961.524307735264,
+          "n": 44
+        },
+        "rmse": 3692.330820879905,
+        "zero_prediction_cases": []
+      },
+      "nonnegative_fit_converged": true,
+      "nonnegative_fit_iterations": 49,
+      "observed_range": {
+        "max": 48578,
+        "median": 97.0,
+        "min": 7,
+        "n": 44
+      },
+      "parameters": 4,
+      "rank": 4,
+      "status": "provisional",
+      "units": "charged units, including reservations"
+    },
+    "module-linking": {
+      "coefficients": {
+        "intercept": 0.0,
+        "nodes": 0.5492935365342432,
+        "resource_size_product": 0.13868639553012602,
+        "type_depth_product": 1.1572067716238021
+      },
+      "fit_errors": {
+        "actual_to_predicted_ratios": {
+          "max": 1.6911788492790367,
+          "median": 0.5406590212803529,
+          "min": 0.001146206785657963,
+          "n": 44
+        },
+        "cases": [
+          {
+            "actual": 2,
+            "case": "flat-width1",
+            "predicted": 25.970939063238976
+          },
+          {
+            "actual": 2,
+            "case": "flat-width2",
+            "predicted": 39.50570213139271
+          },
+          {
+            "actual": 2,
+            "case": "flat-width4",
+            "predicted": 66.57522826770017
+          },
+          {
+            "actual": 2,
+            "case": "flat-width8",
+            "predicted": 120.71428054031509
+          },
+          {
+            "actual": 2,
+            "case": "flat-width16",
+            "predicted": 228.99238508554492
+          },
+          {
+            "actual": 2,
+            "case": "flat-width32",
+            "predicted": 445.5485941760046
+          },
+          {
+            "actual": 2,
+            "case": "flat-width64",
+            "predicted": 878.6610123569241
+          },
+          {
+            "actual": 2,
+            "case": "flat-width128",
+            "predicted": 1744.8858487187629
+          },
+          {
+            "actual": 24,
+            "case": "nested_type-depth1",
+            "predicted": 81.91201479158617
+          },
+          {
+            "actual": 24,
+            "case": "nested_type-depth2",
+            "predicted": 122.23839270275329
+          },
+          {
+            "actual": 24,
+            "case": "nested_type-depth4",
+            "predicted": 230.6641110440588
+          },
+          {
+            "actual": 24,
+            "case": "nested_type-depth8",
+            "predicted": 558.6073978025548
+          },
+          {
+            "actual": 24,
+            "case": "nested_type-depth12",
+            "predicted": 1034.6731513288976
+          },
+          {
+            "actual": 24,
+            "case": "nested_type-depth16",
+            "predicted": 1658.8613716230868
+          },
+          {
+            "actual": 43,
+            "case": "prerequisite-depth1",
+            "predicted": 66.57522826770017
+          },
+          {
+            "actual": 43,
+            "case": "prerequisite-depth2",
+            "predicted": 93.073744617937
+          },
+          {
+            "actual": 43,
+            "case": "prerequisite-depth4",
+            "predicted": 159.95725857789625
+          },
+          {
+            "actual": 43,
+            "case": "prerequisite-depth8",
+            "predicted": 349.2702115357573
+          },
+          {
+            "actual": 43,
+            "case": "prerequisite-depth12",
+            "predicted": 612.6443978775417
+          },
+          {
+            "actual": 43,
+            "case": "prerequisite-depth16",
+            "predicted": 950.0798176032494
+          },
+          {
+            "actual": 30,
+            "case": "reexport_width-width1-depth2",
+            "predicted": 39.820516873705685
+          },
+          {
+            "actual": 52,
+            "case": "reexport_width-width2-depth2",
+            "predicted": 62.26121592351794
+          },
+          {
+            "actual": 96,
+            "case": "reexport_width-width4-depth2",
+            "predicted": 107.14261402314244
+          },
+          {
+            "actual": 184,
+            "case": "reexport_width-width8-depth2",
+            "predicted": 196.90541022239148
+          },
+          {
+            "actual": 360,
+            "case": "reexport_width-width16-depth2",
+            "predicted": 376.43100262088944
+          },
+          {
+            "actual": 712,
+            "case": "reexport_width-width32-depth2",
+            "predicted": 735.4821874178856
+          },
+          {
+            "actual": 28,
+            "case": "reexport_depth-width1-depth1",
+            "predicted": 35.97546211796599
+          },
+          {
+            "actual": 30,
+            "case": "reexport_depth-width1-depth2",
+            "predicted": 39.820516873705685
+          },
+          {
+            "actual": 34,
+            "case": "reexport_depth-width1-depth4",
+            "predicted": 47.51062638518509
+          },
+          {
+            "actual": 42,
+            "case": "reexport_depth-width1-depth8",
+            "predicted": 62.8908454081439
+          },
+          {
+            "actual": 50,
+            "case": "reexport_depth-width1-depth12",
+            "predicted": 78.2710644311027
+          },
+          {
+            "actual": 58,
+            "case": "reexport_depth-width1-depth16",
+            "predicted": 93.65128345406151
+          },
+          {
+            "actual": 2,
+            "case": "string_payload-payload_bytes16",
+            "predicted": 14.084056604687973
+          },
+          {
+            "actual": 2,
+            "case": "string_payload-payload_bytes1024",
+            "predicted": 14.084056604687973
+          },
+          {
+            "actual": 2,
+            "case": "string_payload-payload_bytes65536",
+            "predicted": 14.084056604687973
+          },
+          {
+            "actual": 4030,
+            "case": "sqlite-copying",
+            "predicted": 3510.1067455684856
+          },
+          {
+            "actual": 4136,
+            "case": "sqlite-persistence",
+            "predicted": 5902.645477576292
+          },
+          {
+            "actual": 3950,
+            "case": "sqlite-resume",
+            "predicted": 3194.8100299605294
+          },
+          {
+            "actual": 4030,
+            "case": "sqlite-bound_nul",
+            "predicted": 3510.1067455684856
+          },
+          {
+            "actual": 3934,
+            "case": "sqlite-forwarding",
+            "predicted": 3168.3548161723784
+          },
+          {
+            "actual": 3891,
+            "case": "resource_width-width1",
+            "predicted": 2300.7619813000647
+          },
+          {
+            "actual": 3894,
+            "case": "resource_width-width2",
+            "predicted": 2464.765533804597
+          },
+          {
+            "actual": 3900,
+            "case": "resource_width-width4",
+            "predicted": 2807.7507695309155
+          },
+          {
+            "actual": 3912,
+            "case": "resource_width-width8",
+            "predicted": 3553.633763852567
+          }
+        ],
+        "residuals": {
+          "max": 1590.2380186999353,
+          "median": -23.77308366546957,
+          "min": -1766.6454775762923,
+          "n": 44
+        },
+        "rmse": 675.6144902341537,
+        "zero_prediction_cases": []
+      },
+      "nonnegative_fit_converged": true,
+      "nonnegative_fit_iterations": 89,
+      "observed_range": {
+        "max": 4136,
+        "median": 42.5,
+        "min": 2,
+        "n": 44
+      },
+      "parameters": 4,
+      "rank": 4,
+      "status": "provisional",
+      "units": "charged units, including reservations"
+    },
+    "peak_rss_kib": {
+      "coefficients": {
+        "intercept": 12451.99897816419,
+        "nodes": 2.7246373149120005,
+        "resource_size_product": 0.9556041157032161,
+        "type_depth_product": 3.5702431688334113
+      },
+      "fit_errors": {
+        "actual_to_predicted_ratios": {
+          "max": 1.3038605287022338,
+          "median": 1.0052736423494837,
+          "min": 0.6819016508242003,
+          "n": 44
+        },
+        "cases": [
+          {
+            "actual": 12556,
+            "case": "flat-width1",
+            "predicted": 12554.783917118255
+          },
+          {
+            "actual": 12620,
+            "case": "flat-width2",
+            "predicted": 12608.9010239102
+          },
+          {
+            "actual": 12680,
+            "case": "flat-width4",
+            "predicted": 12717.135237494089
+          },
+          {
+            "actual": 12496,
+            "case": "flat-width8",
+            "predicted": 12933.603664661867
+          },
+          {
+            "actual": 12464,
+            "case": "flat-width16",
+            "predicted": 13366.540518997423
+          },
+          {
+            "actual": 12888,
+            "case": "flat-width32",
+            "predicted": 14232.414227668534
+          },
+          {
+            "actual": 13052,
+            "case": "flat-width64",
+            "predicted": 15964.161645010758
+          },
+          {
+            "actual": 13888,
+            "case": "flat-width128",
+            "predicted": 19427.656479695204
+          },
+          {
+            "actual": 12976,
+            "case": "nested_type-depth1",
+            "predicted": 12754.15324138397
+          },
+          {
+            "actual": 13092,
+            "case": "nested_type-depth2",
+            "predicted": 12884.748846676111
+          },
+          {
+            "actual": 13044,
+            "case": "nested_type-depth4",
+            "predicted": 13231.625893312395
+          },
+          {
+            "actual": 13244,
+            "case": "nested_type-depth8",
+            "predicted": 14268.123330792972
+          },
+          {
+            "actual": 13300,
+            "case": "nested_type-depth12",
+            "predicted": 15761.611893884225
+          },
+          {
+            "actual": 13228,
+            "case": "nested_type-depth16",
+            "predicted": 17712.091582586152
+          },
+          {
+            "actual": 14720,
+            "case": "prerequisite-depth1",
+            "predicted": 12717.135237494089
+          },
+          {
+            "actual": 14708,
+            "case": "prerequisite-depth2",
+            "predicted": 12803.008893299238
+          },
+          {
+            "actual": 14532,
+            "case": "prerequisite-depth4",
+            "predicted": 13017.599122935539
+          },
+          {
+            "actual": 14560,
+            "case": "prerequisite-depth8",
+            "predicted": 13618.151254312143
+          },
+          {
+            "actual": 15168,
+            "case": "prerequisite-depth12",
+            "predicted": 14447.198948494086
+          },
+          {
+            "actual": 14988,
+            "case": "prerequisite-depth16",
+            "predicted": 15504.742205481367
+          },
+          {
+            "actual": 14176,
+            "case": "reexport_width-width1-depth2",
+            "predicted": 12619.141787069075
+          },
+          {
+            "actual": 14460,
+            "case": "reexport_width-width2-depth2",
+            "predicted": 12713.09502797763
+          },
+          {
+            "actual": 14300,
+            "case": "reexport_width-width4-depth2",
+            "predicted": 12901.00150979474
+          },
+          {
+            "actual": 13932,
+            "case": "reexport_width-width8-depth2",
+            "predicted": 13276.814473428962
+          },
+          {
+            "actual": 14128,
+            "case": "reexport_width-width16-depth2",
+            "predicted": 14028.440400697404
+          },
+          {
+            "actual": 14688,
+            "case": "reexport_width-width32-depth2",
+            "predicted": 15531.692255234288
+          },
+          {
+            "actual": 13944,
+            "case": "reexport_depth-width1-depth1",
+            "predicted": 12600.06932586469
+          },
+          {
+            "actual": 14076,
+            "case": "reexport_depth-width1-depth2",
+            "predicted": 12619.141787069075
+          },
+          {
+            "actual": 13792,
+            "case": "reexport_depth-width1-depth4",
+            "predicted": 12657.286709477843
+          },
+          {
+            "actual": 14520,
+            "case": "reexport_depth-width1-depth8",
+            "predicted": 12733.576554295378
+          },
+          {
+            "actual": 14336,
+            "case": "reexport_depth-width1-depth12",
+            "predicted": 12809.866399112914
+          },
+          {
+            "actual": 13848,
+            "case": "reexport_depth-width1-depth16",
+            "predicted": 12886.15624393045
+          },
+          {
+            "actual": 12272,
+            "case": "string_payload-payload_bytes16",
+            "predicted": 12508.840722271047
+          },
+          {
+            "actual": 12552,
+            "case": "string_payload-payload_bytes1024",
+            "predicted": 12508.840722271047
+          },
+          {
+            "actual": 12812,
+            "case": "string_payload-payload_bytes65536",
+            "predicted": 12508.840722271047
+          },
+          {
+            "actual": 34380,
+            "case": "sqlite-copying",
+            "predicted": 26367.850888330293
+          },
+          {
+            "actual": 43400,
+            "case": "sqlite-persistence",
+            "predicted": 37393.84597671404
+          },
+          {
+            "actual": 23076,
+            "case": "sqlite-resume",
+            "predicted": 24456.662307759834
+          },
+          {
+            "actual": 34300,
+            "case": "sqlite-bound_nul",
+            "predicted": 26367.850888330293
+          },
+          {
+            "actual": 22680,
+            "case": "sqlite-forwarding",
+            "predicted": 24264.51614133746
+          },
+          {
+            "actual": 18520,
+            "case": "resource_width-width1",
+            "predicted": 20913.327201799955
+          },
+          {
+            "actual": 18752,
+            "case": "resource_width-width2",
+            "predicted": 21918.611858926
+          },
+          {
+            "actual": 19116,
+            "case": "resource_width-width4",
+            "predicted": 24032.386417674046
+          },
+          {
+            "actual": 19552,
+            "case": "resource_width-width8",
+            "predicted": 28672.75651315392
+          }
+        ],
+        "residuals": {
+          "max": 8012.149111669707,
+          "median": 71.35943851577485,
+          "min": -9120.75651315392,
+          "n": 44
+        },
+        "rmse": 2984.992422773975,
+        "zero_prediction_cases": []
+      },
+      "nonnegative_fit_converged": true,
+      "nonnegative_fit_iterations": 1,
+      "observed_range": {
+        "max": 43400,
+        "median": 14102.0,
+        "min": 12272,
+        "n": 44
+      },
+      "parameters": 4,
+      "rank": 4,
+      "status": "provisional",
+      "units": "observation-off GNU time process peak RSS KiB"
+    },
+    "resolution": {
+      "coefficients": {
+        "intercept": 0.0,
+        "nodes": 6.995462400757069,
+        "resource_size_product": 1.630584114209933,
+        "type_depth_product": 5.919946775744084
+      },
+      "fit_errors": {
+        "actual_to_predicted_ratios": {
+          "max": 2.826307980390508,
+          "median": 0.3936914603520314,
+          "min": 0.1037085630445816,
+          "n": 44
+        },
+        "cases": [
+          {
+            "actual": 68,
+            "case": "flat-width1",
+            "predicted": 224.93953412558454
+          },
+          {
+            "actual": 103,
+            "case": "flat-width2",
+            "predicted": 344.40476358913384
+          },
+          {
+            "actual": 173,
+            "case": "flat-width4",
+            "predicted": 583.3352225162325
+          },
+          {
+            "actual": 313,
+            "case": "flat-width8",
+            "predicted": 1061.19614037043
+          },
+          {
+            "actual": 593,
+            "case": "flat-width16",
+            "predicted": 2016.9179760788247
+          },
+          {
+            "actual": 1153,
+            "case": "flat-width32",
+            "predicted": 3928.3616474956134
+          },
+          {
+            "actual": 2273,
+            "case": "flat-width64",
+            "predicted": 7751.248990329192
+          },
+          {
+            "actual": 4513,
+            "case": "flat-width128",
+            "predicted": 15397.023675996348
+          },
+          {
+            "actual": 205,
+            "case": "nested_type-depth1",
+            "predicted": 619.9396404720553
+          },
+          {
+            "actual": 254,
+            "case": "nested_type-depth2",
+            "predicted": 851.3507117004084
+          },
+          {
+            "actual": 352,
+            "case": "nested_type-depth4",
+            "predicted": 1456.2515767749726
+          },
+          {
+            "actual": 548,
+            "case": "nested_type-depth8",
+            "predicted": 3234.368197395533
+          },
+          {
+            "actual": 744,
+            "case": "nested_type-depth12",
+            "predicted": 5770.238005311337
+          },
+          {
+            "actual": 940,
+            "case": "nested_type-depth16",
+            "predicted": 9063.861000522382
+          },
+          {
+            "actual": 246,
+            "case": "prerequisite-depth1",
+            "predicted": 583.3352225162325
+          },
+          {
+            "actual": 269,
+            "case": "prerequisite-depth2",
+            "predicted": 735.6359544098866
+          },
+          {
+            "actual": 315,
+            "case": "prerequisite-depth4",
+            "predicted": 1111.2767795061236
+          },
+          {
+            "actual": 407,
+            "case": "prerequisite-depth8",
+            "predicted": 2146.7158749343134
+          },
+          {
+            "actual": 499,
+            "case": "prerequisite-depth12",
+            "predicted": 3561.0315640101253
+          },
+          {
+            "actual": 591,
+            "case": "prerequisite-depth16",
+            "predicted": 5354.223846733558
+          },
+          {
+            "actual": 530,
+            "case": "reexport_width-width1-depth2",
+            "predicted": 383.6841380929711
+          },
+          {
+            "actual": 961,
+            "case": "reexport_width-width2-depth2",
+            "predicted": 598.9348099170935
+          },
+          {
+            "actual": 1823,
+            "case": "reexport_width-width4-depth2",
+            "predicted": 1029.4361535653381
+          },
+          {
+            "actual": 3547,
+            "case": "reexport_width-width8-depth2",
+            "predicted": 1890.4388408618274
+          },
+          {
+            "actual": 6995,
+            "case": "reexport_width-width16-depth2",
+            "predicted": 3612.444215454806
+          },
+          {
+            "actual": 13891,
+            "case": "reexport_width-width32-depth2",
+            "predicted": 7056.454964640763
+          },
+          {
+            "actual": 382,
+            "case": "reexport_depth-width1-depth1",
+            "predicted": 334.71590128767167
+          },
+          {
+            "actual": 530,
+            "case": "reexport_depth-width1-depth2",
+            "predicted": 383.6841380929711
+          },
+          {
+            "actual": 838,
+            "case": "reexport_depth-width1-depth4",
+            "predicted": 481.6206117035701
+          },
+          {
+            "actual": 1502,
+            "case": "reexport_depth-width1-depth8",
+            "predicted": 677.4935589247681
+          },
+          {
+            "actual": 2230,
+            "case": "reexport_depth-width1-depth12",
+            "predicted": 873.366506145966
+          },
+          {
+            "actual": 3022,
+            "case": "reexport_depth-width1-depth16",
+            "predicted": 1069.239453367164
+          },
+          {
+            "actual": 37,
+            "case": "string_payload-payload_bytes16",
+            "predicted": 126.4606918643064
+          },
+          {
+            "actual": 37,
+            "case": "string_payload-payload_bytes1024",
+            "predicted": 126.4606918643064
+          },
+          {
+            "actual": 37,
+            "case": "string_payload-payload_bytes65536",
+            "predicted": 126.4606918643064
+          },
+          {
+            "actual": 27413,
+            "case": "sqlite-copying",
+            "predicted": 26877.628160052172
+          },
+          {
+            "actual": 44240,
+            "case": "sqlite-persistence",
+            "predicted": 45774.413633491386
+          },
+          {
+            "actual": 25542,
+            "case": "sqlite-resume",
+            "predicted": 22552.221768934014
+          },
+          {
+            "actual": 27413,
+            "case": "sqlite-bound_nul",
+            "predicted": 26877.628160052172
+          },
+          {
+            "actual": 25557,
+            "case": "sqlite-forwarding",
+            "predicted": 22097.419547223795
+          },
+          {
+            "actual": 24693,
+            "case": "resource_width-width1",
+            "predicted": 16238.272567388443
+          },
+          {
+            "actual": 24817,
+            "case": "resource_width-width2",
+            "predicted": 17991.731741265176
+          },
+          {
+            "actual": 25065,
+            "case": "resource_width-width4",
+            "predicted": 21674.753173353318
+          },
+          {
+            "actual": 25561,
+            "case": "resource_width-width8",
+            "predicted": 29745.208374868293
+          }
+        ],
+        "residuals": {
+          "max": 8454.727432611557,
+          "median": -123.20011299494547,
+          "min": -10884.023675996348,
+          "n": 44
+        },
+        "rmse": 3484.9894572183603,
+        "zero_prediction_cases": []
+      },
+      "nonnegative_fit_converged": true,
+      "nonnegative_fit_iterations": 87,
+      "observed_range": {
+        "max": 44240,
+        "median": 791.0,
+        "min": 37,
+        "n": 44
+      },
+      "parameters": 4,
+      "rank": 4,
+      "status": "provisional",
+      "units": "charged units, including reservations"
+    },
+    "source-checking": {
+      "coefficients": {
+        "intercept": 0.0,
+        "nodes": 202.6013111826815,
+        "resource_size_product": 7.941353740649464,
+        "type_depth_product": 77.64666176506229
+      },
+      "fit_errors": {
+        "actual_to_predicted_ratios": {
+          "max": 2.54350298717485,
+          "median": 0.07123241516119418,
+          "min": 0.022260240160444734,
+          "n": 44
+        },
+        "cases": [
+          {
+            "actual": 141,
+            "case": "flat-width1",
+            "predicted": 5388.988787199741
+          },
+          {
+            "actual": 221,
+            "case": "flat-width2",
+            "predicted": 8286.084491982292
+          },
+          {
+            "actual": 381,
+            "case": "flat-width4",
+            "predicted": 14080.275901547397
+          },
+          {
+            "actual": 701,
+            "case": "flat-width8",
+            "predicted": 25668.658720677606
+          },
+          {
+            "actual": 1341,
+            "case": "flat-width16",
+            "predicted": 48845.42435893802
+          },
+          {
+            "actual": 2621,
+            "case": "flat-width32",
+            "predicted": 95198.95563545884
+          },
+          {
+            "actual": 5181,
+            "case": "flat-width64",
+            "predicted": 187906.0181885005
+          },
+          {
+            "actual": 10301,
+            "case": "flat-width128",
+            "predicted": 373320.14329458383
+          },
+          {
+            "actual": 673,
+            "case": "nested_type-depth1",
+            "predicted": 13451.902701491705
+          },
+          {
+            "actual": 990,
+            "case": "nested_type-depth2",
+            "predicted": 17152.203745069786
+          },
+          {
+            "actual": 1714,
+            "case": "nested_type-depth4",
+            "predicted": 26416.325714587445
+          },
+          {
+            "actual": 3522,
+            "case": "nested_type-depth8",
+            "predicted": 52398.649183068745
+          },
+          {
+            "actual": 5810,
+            "case": "nested_type-depth12",
+            "predicted": 88319.74535747802
+          },
+          {
+            "actual": 8578,
+            "case": "nested_type-depth16",
+            "predicted": 134179.61423781526
+          },
+          {
+            "actual": 2536,
+            "case": "prerequisite-depth1",
+            "predicted": 14080.275901547397
+          },
+          {
+            "actual": 2957,
+            "case": "prerequisite-depth2",
+            "predicted": 16521.26104334443
+          },
+          {
+            "actual": 3949,
+            "case": "prerequisite-depth4",
+            "predicted": 22334.991268119247
+          },
+          {
+            "actual": 6533,
+            "case": "prerequisite-depth8",
+            "predicted": 37689.491482391866
+          },
+          {
+            "actual": 9917,
+            "case": "prerequisite-depth12",
+            "predicted": 58013.378049628474
+          },
+          {
+            "actual": 14101,
+            "case": "prerequisite-depth16",
+            "predicted": 83306.65096982908
+          },
+          {
+            "actual": 698,
+            "case": "reexport_width-width1-depth2",
+            "predicted": 9798.909645566177
+          },
+          {
+            "actual": 1165,
+            "case": "reexport_width-width2-depth2",
+            "predicted": 15282.51440807103
+          },
+          {
+            "actual": 2099,
+            "case": "reexport_width-width4-depth2",
+            "predicted": 26249.72393308074
+          },
+          {
+            "actual": 3967,
+            "case": "reexport_width-width8-depth2",
+            "predicted": 48184.14298310016
+          },
+          {
+            "actual": 7703,
+            "case": "reexport_width-width16-depth2",
+            "predicted": 92052.981083139
+          },
+          {
+            "actual": 15175,
+            "case": "reexport_width-width32-depth2",
+            "predicted": 179790.6572832167
+          },
+          {
+            "actual": 605,
+            "case": "reexport_depth-width1-depth1",
+            "predicted": 8380.700467287406
+          },
+          {
+            "actual": 698,
+            "case": "reexport_depth-width1-depth2",
+            "predicted": 9798.909645566177
+          },
+          {
+            "actual": 887,
+            "case": "reexport_depth-width1-depth4",
+            "predicted": 12635.328002123719
+          },
+          {
+            "actual": 1277,
+            "case": "reexport_depth-width1-depth8",
+            "predicted": 18308.164715238803
+          },
+          {
+            "actual": 1683,
+            "case": "reexport_depth-width1-depth12",
+            "predicted": 23981.001428353884
+          },
+          {
+            "actual": 2105,
+            "case": "reexport_depth-width1-depth16",
+            "predicted": 29653.838141468965
+          },
+          {
+            "actual": 69,
+            "case": "string_payload-payload_bytes16",
+            "predicted": 3099.6970159652337
+          },
+          {
+            "actual": 69,
+            "case": "string_payload-payload_bytes1024",
+            "predicted": 3099.6970159652337
+          },
+          {
+            "actual": 69,
+            "case": "string_payload-payload_bytes65536",
+            "predicted": 3099.6970159652337
+          },
+          {
+            "actual": 1212707,
+            "case": "sqlite-copying",
+            "predicted": 476786.15127045417
+          },
+          {
+            "actual": 597882,
+            "case": "sqlite-persistence",
+            "predicted": 648782.35592052
+          },
+          {
+            "actual": 203215,
+            "case": "sqlite-resume",
+            "predicted": 382273.02929815097
+          },
+          {
+            "actual": 1212707,
+            "case": "sqlite-bound_nul",
+            "predicted": 476786.15127045417
+          },
+          {
+            "actual": 216584,
+            "case": "sqlite-forwarding",
+            "predicted": 371858.07623543596
+          },
+          {
+            "actual": 111611,
+            "case": "resource_width-width1",
+            "predicted": 298210.13127902604
+          },
+          {
+            "actual": 117567,
+            "case": "resource_width-width2",
+            "predicted": 310955.0480204075
+          },
+          {
+            "actual": 129654,
+            "case": "resource_width-width4",
+            "predicted": 337302.54770716047
+          },
+          {
+            "actual": 154388,
+            "case": "resource_width-width8",
+            "predicted": 393428.211896627
+          }
+        ],
+        "residuals": {
+          "max": 735920.8487295458,
+          "median": -24834.992217632527,
+          "min": -363019.14329458383,
+          "n": 44
+        },
+        "rmse": 188590.77395982225,
+        "zero_prediction_cases": []
+      },
+      "nonnegative_fit_converged": true,
+      "nonnegative_fit_iterations": 95,
+      "observed_range": {
+        "max": 1212707,
+        "median": 2789.0,
+        "min": 69,
+        "n": 44
+      },
+      "parameters": 4,
+      "rank": 4,
+      "status": "provisional",
+      "units": "charged units, including reservations"
+    }
+  },
+  "training_case_count": 44,
+  "training_case_ids": [
+    "flat-width1",
+    "flat-width2",
+    "flat-width4",
+    "flat-width8",
+    "flat-width16",
+    "flat-width32",
+    "flat-width64",
+    "flat-width128",
+    "nested_type-depth1",
+    "nested_type-depth2",
+    "nested_type-depth4",
+    "nested_type-depth8",
+    "nested_type-depth12",
+    "nested_type-depth16",
+    "prerequisite-depth1",
+    "prerequisite-depth2",
+    "prerequisite-depth4",
+    "prerequisite-depth8",
+    "prerequisite-depth12",
+    "prerequisite-depth16",
+    "reexport_width-width1-depth2",
+    "reexport_width-width2-depth2",
+    "reexport_width-width4-depth2",
+    "reexport_width-width8-depth2",
+    "reexport_width-width16-depth2",
+    "reexport_width-width32-depth2",
+    "reexport_depth-width1-depth1",
+    "reexport_depth-width1-depth2",
+    "reexport_depth-width1-depth4",
+    "reexport_depth-width1-depth8",
+    "reexport_depth-width1-depth12",
+    "reexport_depth-width1-depth16",
+    "string_payload-payload_bytes16",
+    "string_payload-payload_bytes1024",
+    "string_payload-payload_bytes65536",
+    "sqlite-copying",
+    "sqlite-persistence",
+    "sqlite-resume",
+    "sqlite-bound_nul",
+    "sqlite-forwarding",
+    "resource_width-width1",
+    "resource_width-width2",
+    "resource_width-width4",
+    "resource_width-width8"
+  ]
+}
