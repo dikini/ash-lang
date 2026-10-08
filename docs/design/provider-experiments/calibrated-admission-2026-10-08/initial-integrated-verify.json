@@ -1,0 +1,6 @@
+{
+  "head": "0be7ecc858c859887d9830436c8e9811599ae610",
+  "command": "CARGO_BUILD_JOBS=1 RUSTC_WRAPPER= cargo xtask verify",
+  "exit_code": 1,
+  "seconds": 577.8429570198059
+}

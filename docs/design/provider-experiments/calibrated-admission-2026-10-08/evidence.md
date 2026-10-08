@@ -26,3 +26,29 @@ The integrated Original gate and integration commit will be recorded separately.
 `offline-adoption-audit.json` authenticates the separate physical-cost adoption
 at Calibration `ed3764a15f7f00e7059c3eb3eae1f6e74309040f`: its self-check passed and
 29 retained artifacts were byte-identical. Physical assessment remains offline.
+
+## Initial integrated gate
+
+Original `0be7ecc858c859887d9830436c8e9811599ae610` passed format,
+metadata and the complete workspace/all-target build (7m56s). The next strict
+all-target Clippy step rejected only the new test assertion's `<= bound - 1`
+spelling. The correction uses the equivalent `< bound` form; production code
+and test intent are unchanged. The initial gate exited 1 and is not a full pass.
+Its raw log and result remain adjacent. The host sccache wrapper was unavailable,
+so the successful build used `RUSTC_WRAPPER=` with the existing target cache.
+
+The correction receives focused verification. The complete final gate is
+reserved for the combined SQLite, calibration and arena integration, rather
+than repeating the entire build for an equivalent test-only inequality.
+
+The corrected source passes strict workspace/all-target Clippy (1m23s),
+including library test configuration and the expanded SQLite inputs. Original's
+already built architecture executable passes 42 tests and identifies one missing
+manifest entry for `ModularCoreResult`. Its entry now retains the existing shared
+validated-Core carrier profile; the focused bidirectional inventory test passes
+after correction (24.98s build, 11.54s test). No production checking behavior is
+changed by either correction. Both original failed checks remain adjacent.
+
+The original 40 focused passes and 69 connected passes remain separate evidence.
+This is a verified connected integration checkpoint; the interrupted full
+`xtask` gate remains explicitly incomplete until the combined final run.
