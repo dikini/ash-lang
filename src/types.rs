@@ -42,7 +42,7 @@ impl Default for TypeWorkBudget {
     fn default() -> Self {
         Self {
             used: 0,
-            limit: TYPE_WORK_LIMIT,
+            limit: crate::calibration::limit(TYPE_WORK_LIMIT),
         }
     }
 }

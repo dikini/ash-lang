@@ -31,6 +31,9 @@ type checking, Core execution, and actual native behavior.
 - [Analysis plan](analysis-plan.md) and [algebra study](analysis-algebra.md):
   TASK-0035's early-relevance and typed-fusion investigation, preservation
   obligations and measured acceptance gates.
+- [Retained-baseline calibration](resource-calibration/README.md): actual
+  CPU/time/memory measurements, separate admission charges and provisional
+  size/complexity allowance estimates. Optimization is paused for review.
 
 The cases are descriptions to implement, not observed results. Record results
 alongside them only after the corresponding checker or native harness runs.

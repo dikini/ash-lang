@@ -744,8 +744,17 @@ where
     ) -> Result<ValidatedProgram, ValidationError>,
     E: FnOnce(&ValidatedProgram) -> Result<Evaluation, RuntimeFailure>,
 {
+    let pipeline_phase = crate::calibration::Phase::start("pipeline");
+    let loading_phase = crate::calibration::Phase::start("loading");
     let graph = load_module_graph(&configuration.entry, &configuration.roots)
         .map_err(FileFailure::Graph)?;
+    loading_phase.finish(None, 0);
+    #[cfg(feature = "resource-calibration")]
+    if crate::calibration::observing() {
+        let metrics = crate::calibration::Phase::start("input-metrics");
+        crate::calibration_features::observe_input(&graph);
+        metrics.finish(None, 0);
+    }
     let result = run_graph_with_consumers(
         &graph,
         constraint_work,
@@ -755,6 +764,9 @@ where
         select_effect_core,
         runtime,
     );
+    if result.is_ok() {
+        pipeline_phase.finish(None, 0);
+    }
     match result {
         Err(FileFailure::Pipeline(mut context))
             if !matches!(context.failure, PipelineFailure::Runtime(_)) =>
@@ -815,6 +827,7 @@ where
             })
             .collect::<Result<Vec<_>, _>>()
             .map_err(FileFailure::from)?;
+        let resolution_phase = crate::calibration::Phase::start("resolution");
         let resolved = resolve_module_with_budget(
             module,
             &dependencies,
@@ -826,7 +839,12 @@ where
             ResolveModuleError::Kind(error) => PipelineFailure::Kind(error),
         })
         .map_err(FileFailure::from)?;
+        resolution_phase.finish(
+            Some(resolution_type_work.used()),
+            crate::types::TYPE_WORK_LIMIT,
+        );
         drop(dependencies);
+        let source_phase = crate::calibration::Phase::start("source-checking");
         let checked_module = check_module_with_budget_and_provider_codes(
             resolved,
             &provider_codes,
@@ -844,6 +862,10 @@ where
         }
         checked_by_module.insert(module.id(), checked.len());
         checked.push(checked_module);
+        source_phase.finish(
+            Some(checking_type_work.used()),
+            crate::types::TYPE_WORK_LIMIT,
+        );
     }
 
     let entry = checked
@@ -903,9 +925,23 @@ where
     if !main.scheme.requirements.is_empty() {
         return Err(entry_failure(EntryReason::MainConstrained, main_span));
     }
+    crate::calibration::work(
+        "resolution",
+        resolution_type_work.used(),
+        crate::types::TYPE_WORK_LIMIT,
+        true,
+    );
+    crate::calibration::work(
+        "source-checking",
+        checking_type_work.used(),
+        crate::types::TYPE_WORK_LIMIT,
+        true,
+    );
+    let linking_phase = crate::calibration::Phase::start("module-linking");
     let linked = link_modules_with_budget(checked, graph.entry(), constraint_work)
         .map_err(PipelineFailure::Typing)
         .map_err(FileFailure::from)?;
+    linking_phase.finish(None, crate::types::TYPE_WORK_LIMIT);
     let sources = graph
         .modules()
         .iter()
@@ -918,6 +954,7 @@ where
         .collect::<Vec<_>>();
     let mut linked_type_work = TypeWorkBudget::default();
     let (ty, type_display, unchecked): (IterativeTypeOwner, String, UnvalidatedProgram) = {
+        let interface_phase = crate::calibration::Phase::start("linked-interface");
         let validated_interfaces =
             interface_validator(linked, constraint_work, &mut linked_type_work)
                 .map_err(PipelineFailure::EvidenceValidation)
@@ -928,6 +965,13 @@ where
                 .map_err(PipelineFailure::Typing)
                 .map_err(FileFailure::from)?
         {
+            interface_phase.finish(Some(linked_type_work.used()), crate::types::TYPE_WORK_LIMIT);
+            crate::calibration::work(
+                "linked-interface",
+                linked_type_work.used(),
+                crate::types::TYPE_WORK_LIMIT,
+                true,
+            );
             return finish_effect_observation(
                 &validated_interfaces,
                 &sources,
@@ -935,6 +979,14 @@ where
                 runtime,
             );
         }
+        interface_phase.finish(Some(linked_type_work.used()), crate::types::TYPE_WORK_LIMIT);
+        crate::calibration::work(
+            "linked-interface",
+            linked_type_work.used(),
+            crate::types::TYPE_WORK_LIMIT,
+            true,
+        );
+        let elaboration_phase = crate::calibration::Phase::start("final-elaboration");
         let mut elaborator = Elaborator::for_module_program(&validated_interfaces)
             .map_err(TypeError::Internal)
             .map_err(PipelineFailure::Typing)
@@ -954,6 +1006,7 @@ where
             .map_err(PipelineFailure::Typing)
             .map_err(FileFailure::from)?;
         ::std::mem::drop(validated_interfaces);
+        elaboration_phase.finish(None, crate::types::TYPE_WORK_LIMIT);
         (ty, type_display, unchecked)
     };
     finish_observation(
@@ -974,6 +1027,7 @@ fn finish_effect_observation(
     module_sources: &[(ModuleId, SourceId)],
     runtime: Option<&mut crate::foreign::runtime::ForeignRuntime>,
 ) -> Result<Observation, FileFailure> {
+    let elaboration_phase = crate::calibration::Phase::start("final-elaboration");
     let mut elaborator = EffectElaborator::for_module_program(validated_interfaces)
         .map_err(TypeError::Internal)
         .map_err(PipelineFailure::Typing)
@@ -989,15 +1043,20 @@ fn finish_effect_observation(
         .map_err(TypeError::Internal)
         .map_err(PipelineFailure::Typing)
         .map_err(FileFailure::from)?;
+    elaboration_phase.finish(None, crate::types::TYPE_WORK_LIMIT);
+    let validation_phase = crate::calibration::Phase::start("independent-effect-core");
     let validated = validate_effect_modules(unchecked, sources, module_sources)
         .map_err(PipelineFailure::Validation)
         .map_err(FileFailure::from)?;
+    validation_phase.finish(None, 3 * crate::types::TYPE_WORK_LIMIT);
+    let evaluation_phase = crate::calibration::Phase::start("evaluation");
     let evaluation = match runtime {
         Some(runtime) => crate::eval::evaluate_effect_with_foreign_runtime(&validated, runtime),
         None => evaluate_effect(&validated),
     }
     .map_err(PipelineFailure::Runtime)
     .map_err(FileFailure::from)?;
+    evaluation_phase.finish(None, 0);
     let (value, heap) = evaluation.into_observation_parts();
     Ok(Observation {
         value,
@@ -1024,12 +1083,16 @@ where
     ) -> Result<ValidatedProgram, ValidationError>,
     E: FnOnce(&ValidatedProgram) -> Result<Evaluation, RuntimeFailure>,
 {
+    let validation_phase = crate::calibration::Phase::start("independent-effect-core");
     let validated = validator(unchecked, sources, module_sources)
         .map_err(PipelineFailure::Validation)
         .map_err(FileFailure::from)?;
+    validation_phase.finish(None, 3 * crate::types::TYPE_WORK_LIMIT);
+    let evaluation_phase = crate::calibration::Phase::start("evaluation");
     let evaluation = evaluator(&validated)
         .map_err(PipelineFailure::Runtime)
         .map_err(FileFailure::from)?;
+    evaluation_phase.finish(None, 0);
     let (value, heap) = evaluation.into_observation_parts();
     Ok(Observation {
         value,

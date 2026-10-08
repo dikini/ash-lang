@@ -49,7 +49,7 @@ impl Default for InterfaceConstraintBudget {
     fn default() -> Self {
         Self {
             used: 0,
-            limit: INTERFACE_CONSTRAINT_WORK_LIMIT,
+            limit: crate::calibration::limit(INTERFACE_CONSTRAINT_WORK_LIMIT),
         }
     }
 }
