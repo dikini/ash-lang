@@ -1,0 +1,7 @@
+
+running 2 tests
+test captured_statement_and_connection_resume_actual_copied_query_without_reacquisition ... ok
+test owned_discard_runs_source_cleanup_then_statement_finish_before_connection_close ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.04s
+

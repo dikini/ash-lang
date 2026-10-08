@@ -3334,23 +3334,39 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     pub fn for_module_program(
         program: &ValidatedInterfaceProgram,
     ) -> Result<Self, ElaborationFailure> {
+        Self::for_module_program_with_budget(program, TypeWorkBudget::default())
+            .map_err(|(failure, _)| failure)
+    }
+
+    pub(crate) fn for_module_program_with_budget(
+        program: &ValidatedInterfaceProgram,
+        type_work: TypeWorkBudget,
+    ) -> Result<Self, (ElaborationFailure, usize)> {
+        let prefix = type_work.used();
         let mut elaborator = Self::for_module_program_inputs(
             program.registry(),
             program.groups(),
             program.result(),
             Arc::clone(program.method_evidence()),
-        )?;
+            type_work,
+        )
+        .map_err(|failure| (failure, prefix))?;
         if let Some(preparation) = program.provider_preparation() {
-            preparation.apply_to(&mut elaborator)?;
+            preparation
+                .apply_to(&mut elaborator)
+                .map_err(|failure| (failure, elaborator.type_work.used()))?;
         }
-        elaborator.evidence_lowering = Some(elaborator.build_evidence_lowering(program).map_err(
-            |error| match error {
-                TypeError::Internal(failure) => failure,
-                TypeError::Source(_) | TypeError::Interface(_) | TypeError::Mismatch(_) => {
-                    ElaborationFailure::InvalidState
-                }
-            },
-        )?);
+        elaborator.evidence_lowering = Some(
+            elaborator
+                .build_evidence_lowering(program)
+                .map_err(|error| match error {
+                    TypeError::Internal(failure) => failure,
+                    TypeError::Source(_) | TypeError::Interface(_) | TypeError::Mismatch(_) => {
+                        ElaborationFailure::InvalidState
+                    }
+                })
+                .map_err(|failure| (failure, elaborator.type_work.used()))?,
+        );
         Ok(elaborator)
     }
 
@@ -3359,6 +3375,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         groups: &[crate::resolved::ResolvedModuleGroup],
         result: &ResolvedExpr,
         catalog: Arc<crate::core::dialect::MethodEvidenceCatalog>,
+        type_work: TypeWorkBudget,
     ) -> Result<Self, ElaborationFailure> {
         let registry = Arc::clone(registry);
         let mut builder =
@@ -3416,7 +3433,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             method_binders: HashMap::new(),
             selection: None,
             evidence_lowering: None,
-            type_work: TypeWorkBudget::default(),
+            type_work,
             constraint_work: InterfaceConstraintBudget::default(),
             coverage_work: UsefulnessBudget::default(),
             base_context: TypeContext::new(),
@@ -5318,19 +5335,38 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     /// [`ElaborationFailure::InvalidState`] if an earlier public synthesis or
     /// checking call failed.
     pub fn finish(
-        mut self,
+        self,
         root: NodeId,
     ) -> Result<crate::core::dialect::UnvalidatedCoreProgram<F>, ElaborationFailure> {
+        self.finish_with_work(root)
+            .map(|(program, _)| program)
+            .map_err(|(failure, _)| failure)
+    }
+
+    pub(crate) fn finish_with_work(
+        mut self,
+        root: NodeId,
+    ) -> Result<(crate::core::dialect::UnvalidatedCoreProgram<F>, usize), (ElaborationFailure, usize)>
+    {
         let root_is_authorized = match self.purpose {
             ElaborationPurpose::Standalone => self.final_root.is_none(),
             ElaborationPurpose::FinalSynthesis => self.final_root == Some(root),
             ElaborationPurpose::ModuleCheck => false,
         };
         if self.state == ElaboratorState::Poisoned || !root_is_authorized {
-            return Err(ElaborationFailure::InvalidState);
+            return Err((ElaborationFailure::InvalidState, self.type_work.used()));
         }
-        self.zonk_builder_types()?;
-        self.builder.finish(root).map_err(Into::into)
+        self.zonk_builder_types()
+            .map_err(|failure| (failure, self.type_work.used()))?;
+        let used = self.type_work.used();
+        self.builder
+            .finish(root)
+            .map(|program| (program, used))
+            .map_err(|failure| (failure.into(), used))
+    }
+
+    pub(crate) fn measured_type_work(&self) -> usize {
+        self.type_work.used()
     }
 
     fn zonk_builder_types(&mut self) -> Result<(), ElaborationFailure> {
