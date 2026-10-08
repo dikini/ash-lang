@@ -332,8 +332,11 @@ fn retain_selected_dependencies(
                 pending.extend(prerequisites.iter().rev().copied());
             }
             crate::interface::EvidenceNode::ProviderFamily { prerequisites, .. } => {
-                work.charge(prerequisites.len()).map_err(|()| type_resource())?;
-                pending.try_reserve(prerequisites.len()).map_err(|_| type_resource())?;
+                work.charge(prerequisites.len())
+                    .map_err(|()| type_resource())?;
+                pending
+                    .try_reserve(prerequisites.len())
+                    .map_err(|_| type_resource())?;
                 pending.extend(prerequisites.iter().rev().copied());
             }
             crate::interface::EvidenceNode::Lexical { .. }

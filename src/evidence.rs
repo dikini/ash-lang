@@ -14,6 +14,7 @@ use crate::{
         RequirementId, authenticate_implementation_application_goal,
         match_implementation_application_head_against_canonical_goal,
         match_implementation_application_head_in_environment,
+        match_provider_family_application_head_in_environment,
         same_kinded_argument_with_constraint_budget,
     },
     kind::{
@@ -914,7 +915,9 @@ impl PendingEvidencePublication {
                 let selected = source.node(node).ok_or(SelectionFailure::InvalidState)?;
                 let prerequisites = match selected {
                     crate::interface::EvidenceNode::Implementation { prerequisites, .. }
-                    | crate::interface::EvidenceNode::ProviderFamily { prerequisites, .. } => Some(prerequisites),
+                    | crate::interface::EvidenceNode::ProviderFamily { prerequisites, .. } => {
+                        Some(prerequisites)
+                    }
                     _ => None,
                 };
                 if !exit && let Some(prerequisites) = prerequisites {
@@ -929,13 +932,41 @@ impl PendingEvidencePublication {
                     continue;
                 }
                 let relocated = match selected {
-                    crate::interface::EvidenceNode::ProviderFamily { source, definition, parameter, application: goal, prerequisites, methods } => {
-                        constraints.charge(prerequisites.len()).map_err(|()| SelectionFailure::ConstraintResource)?;
+                    crate::interface::EvidenceNode::ProviderFamily {
+                        source,
+                        definition,
+                        parameter,
+                        application: goal,
+                        prerequisites,
+                        methods,
+                    } => {
+                        constraints
+                            .charge(prerequisites.len())
+                            .map_err(|()| SelectionFailure::ConstraintResource)?;
                         let mut children = Vec::new();
-                        children.try_reserve_exact(prerequisites.len()).map_err(|_| SelectionFailure::ConstraintResource)?;
-                        for child in prerequisites { children.push(*remapped.get(child).ok_or(SelectionFailure::InvalidState)?); }
-                        let goal = application(goal.interface(), goal.arguments(), &mut rewrite, &mut rewrite_row, types)?;
-                        builder.push_provider_family(source, definition, parameter, goal, &children, methods, constraints)
+                        children
+                            .try_reserve_exact(prerequisites.len())
+                            .map_err(|_| SelectionFailure::ConstraintResource)?;
+                        for child in prerequisites {
+                            children
+                                .push(*remapped.get(child).ok_or(SelectionFailure::InvalidState)?);
+                        }
+                        let goal = application(
+                            goal.interface(),
+                            goal.arguments(),
+                            &mut rewrite,
+                            &mut rewrite_row,
+                            types,
+                        )?;
+                        builder.push_provider_family(
+                            source,
+                            definition,
+                            parameter,
+                            goal,
+                            &children,
+                            methods,
+                            constraints,
+                        )
                     }
                     crate::interface::EvidenceNode::NativeLayout { producer } => {
                         builder.push_native_layout(producer, constraints)
@@ -1535,7 +1566,8 @@ impl EvidenceSelector {
         type_work: &mut TypeWorkBudget,
     ) -> Result<(), SelectionFailure> {
         if fact.interface().module().is_builtin_resource()
-            || registry.foreign_layout(fact.interface()).is_some() {
+            || registry.foreign_layout(fact.interface()).is_some()
+        {
             return Err(SelectionFailure::InvalidState);
         }
         if self.implementation_indices.contains_key(&fact.id) {
@@ -1975,7 +2007,8 @@ impl EvidenceSelector {
                 .get(index)
                 .ok_or(SelectionFailure::InvalidState)?;
             head = source.parent;
-            if source.family.is_some() || source.application.interface() != application.interface() {
+            if source.family.is_some() || source.application.interface() != application.interface()
+            {
                 continue;
             }
             let same_key = if let Some(key) = &interface.determination {
@@ -2112,18 +2145,33 @@ impl EvidenceSelector {
         constraint_work: &mut InterfaceConstraintBudget,
         type_work: &mut TypeWorkBudget,
     ) -> Result<(), SelectionFailure> {
-        constraint_work.charge(requirements.len()).map_err(|()| SelectionFailure::ConstraintResource)?;
+        constraint_work
+            .charge(requirements.len())
+            .map_err(|()| SelectionFailure::ConstraintResource)?;
         let mut abstracts = Vec::new();
-        abstracts.try_reserve_exact(requirements.len()).map_err(|_| SelectionFailure::ConstraintResource)?;
+        abstracts
+            .try_reserve_exact(requirements.len())
+            .map_err(|_| SelectionFailure::ConstraintResource)?;
         for (ordinal, requirement) in requirements.iter().enumerate() {
-            if requirement.id.owner() != crate::interface::RequirementOwner::ResourceFamily(definition)
-                || usize::try_from(requirement.id.declaration()).ok() != Some(ordinal) {
+            if requirement.id.owner()
+                != crate::interface::RequirementOwner::ResourceFamily(definition)
+                || usize::try_from(requirement.id.declaration()).ok() != Some(ordinal)
+            {
                 return Err(SelectionFailure::InvalidState);
             }
-            for argument in requirement.arguments() { constraint_work.charge_argument(argument).map_err(|()| SelectionFailure::ConstraintResource)?; }
-            abstracts.push(RequirementEntry { id: requirement.id,
-                application: requirement.application().clone_with_budget(type_work).map_err(|()| SelectionFailure::TypeResource)?,
-                span: requirement.span });
+            for argument in requirement.arguments() {
+                constraint_work
+                    .charge_argument(argument)
+                    .map_err(|()| SelectionFailure::ConstraintResource)?;
+            }
+            abstracts.push(RequirementEntry {
+                id: requirement.id,
+                application: requirement
+                    .application()
+                    .clone_with_budget(type_work)
+                    .map_err(|()| SelectionFailure::TypeResource)?,
+                span: requirement.span,
+            });
         }
         self.abstracts = abstracts;
         self.current = None;
@@ -2142,23 +2190,62 @@ impl EvidenceSelector {
         constraints: &mut InterfaceConstraintBudget,
         types: &mut TypeWorkBudget,
     ) -> Result<(), SelectionFailure> {
-        if self.interface_entry(application.interface())?.sealed_layout { return Err(SelectionFailure::InvalidState); }
-        constraints.charge(requirements.len().checked_add(2).ok_or(SelectionFailure::ConstraintResource)?)
+        if self.interface_entry(application.interface())?.sealed_layout {
+            return Err(SelectionFailure::InvalidState);
+        }
+        constraints
+            .charge(
+                requirements
+                    .len()
+                    .checked_add(2)
+                    .ok_or(SelectionFailure::ConstraintResource)?,
+            )
             .map_err(|()| SelectionFailure::ConstraintResource)?;
         let mut copied = Vec::new();
-        copied.try_reserve_exact(requirements.len()).map_err(|_| SelectionFailure::ConstraintResource)?;
+        copied
+            .try_reserve_exact(requirements.len())
+            .map_err(|_| SelectionFailure::ConstraintResource)?;
         for (ordinal, requirement) in requirements.iter().enumerate() {
-            if requirement.id.owner() != crate::interface::RequirementOwner::ResourceFamily(definition)
-                || usize::try_from(requirement.id.declaration()).ok() != Some(ordinal) { return Err(SelectionFailure::InvalidState); }
-            for argument in requirement.arguments() { constraints.charge_argument(argument).map_err(|()| SelectionFailure::ConstraintResource)?; }
-            copied.push(RequirementEntry { id: requirement.id, application: requirement.application().clone_with_budget(types)
-                .map_err(|()| SelectionFailure::TypeResource)?, span: requirement.span });
+            if requirement.id.owner()
+                != crate::interface::RequirementOwner::ResourceFamily(definition)
+                || usize::try_from(requirement.id.declaration()).ok() != Some(ordinal)
+            {
+                return Err(SelectionFailure::InvalidState);
+            }
+            for argument in requirement.arguments() {
+                constraints
+                    .charge_argument(argument)
+                    .map_err(|()| SelectionFailure::ConstraintResource)?;
+            }
+            copied.push(RequirementEntry {
+                id: requirement.id,
+                application: requirement
+                    .application()
+                    .clone_with_budget(types)
+                    .map_err(|()| SelectionFailure::TypeResource)?,
+                span: requirement.span,
+            });
         }
-        for argument in application.arguments() { constraints.charge_argument(argument).map_err(|()| SelectionFailure::ConstraintResource)?; }
-        self.lexical_sources.try_reserve(1).map_err(|_| SelectionFailure::ConstraintResource)?;
+        for argument in application.arguments() {
+            constraints
+                .charge_argument(argument)
+                .map_err(|()| SelectionFailure::ConstraintResource)?;
+        }
+        self.lexical_sources
+            .try_reserve(1)
+            .map_err(|_| SelectionFailure::ConstraintResource)?;
         let index = self.lexical_sources.len();
-        self.lexical_sources.push(LexicalSource { id, parent: self.lexical_head, application, span,
-            family: Some(ScopedProviderFamily { definition, parameter, requirements: copied.into_boxed_slice() }) });
+        self.lexical_sources.push(LexicalSource {
+            id,
+            parent: self.lexical_head,
+            application,
+            span,
+            family: Some(ScopedProviderFamily {
+                definition,
+                parameter,
+                requirements: copied.into_boxed_slice(),
+            }),
+        });
         self.lexical_head = Some(index);
         Ok(())
     }
@@ -3418,18 +3505,30 @@ impl EvidenceSelector {
 
     /// Copies only immutable selected-plan handles. No body traversal or new
     /// selection occurs; each node remains independently authenticated later.
-    pub(crate) fn selected_family_plans(&self, source: LexicalEvidenceId, work: &mut TypeWorkBudget)
-        -> Result<Vec<(EvidenceSelection, crate::interface::EvidenceNodeId)>, SelectionFailure> {
-        work.charge(self.selected.len()).map_err(|()| SelectionFailure::TypeResource)?;
+    pub(crate) fn selected_family_plans(
+        &self,
+        source: LexicalEvidenceId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Vec<(EvidenceSelection, crate::interface::EvidenceNodeId)>, SelectionFailure> {
+        work.charge(self.selected.len())
+            .map_err(|()| SelectionFailure::TypeResource)?;
         let mut plans = Vec::new();
         for occurrence in &self.selected {
-            let selection = occurrence.selection.as_ref().ok_or(SelectionFailure::InvalidState)?;
-            work.charge(selection.node_count()).map_err(|()| SelectionFailure::TypeResource)?;
+            let selection = occurrence
+                .selection
+                .as_ref()
+                .ok_or(SelectionFailure::InvalidState)?;
+            work.charge(selection.node_count())
+                .map_err(|()| SelectionFailure::TypeResource)?;
             for index in 0..selection.node_count() {
                 let node = crate::interface::EvidenceNodeId::new(index);
-                if matches!(selection.node(node), Some(EvidenceNode::ProviderFamily { source: candidate, .. }) if candidate == source) {
-                    work.charge(1).map_err(|()| SelectionFailure::TypeResource)?;
-                    plans.try_reserve(1).map_err(|_| SelectionFailure::TypeResource)?;
+                if matches!(selection.node(node), Some(EvidenceNode::ProviderFamily { source: candidate, .. }) if candidate == source)
+                {
+                    work.charge(1)
+                        .map_err(|()| SelectionFailure::TypeResource)?;
+                    plans
+                        .try_reserve(1)
+                        .map_err(|_| SelectionFailure::TypeResource)?;
                     plans.push((selection.clone(), node));
                 }
             }
@@ -3883,11 +3982,13 @@ impl EvidenceSelector {
                             .get(index)
                             .ok_or(SelectionFailure::InvalidState)?;
                         head = source.parent;
-                        if source.family.is_none() && same_applications_with_constraint_budget(
-                            &source.application,
-                            &goal.application,
-                            constraint_work,
-                        )? {
+                        if source.family.is_none()
+                            && same_applications_with_constraint_budget(
+                                &source.application,
+                                &goal.application,
+                                constraint_work,
+                            )?
+                        {
                             lexical_match = Some(source.id);
                             break;
                         }
@@ -3904,15 +4005,19 @@ impl EvidenceSelector {
                     // their established precedence. Only the authenticated
                     // foreign policy derives a closed scalar Layout goal.
                     if let Some(layout) = registry.foreign_layout(interface) {
-                        constraint_work.charge(3)
+                        constraint_work
+                            .charge(3)
                             .map_err(|()| SelectionFailure::ConstraintResource)?;
-                        let [KindedArgument::TypeArg(payload)] = goal.application.arguments() else {
+                        let [KindedArgument::TypeArg(payload)] = goal.application.arguments()
+                        else {
                             return Err(SelectionFailure::InvalidState);
                         };
-                        let dictionary = layout.dictionary_for_payload(payload)
+                        let dictionary = layout
+                            .dictionary_for_payload(payload)
                             .ok_or(SelectionFailure::Reason(InterfaceReason::Unsatisfied))?;
                         reserve_selection_result(&mut results, constraint_work)?;
-                        let node = builder.push_native_layout(dictionary.producer(), constraint_work)
+                        let node = builder
+                            .push_native_layout(dictionary.producer(), constraint_work)
                             .map_err(|()| SelectionFailure::ConstraintResource)?;
                         results.push(node);
                         continue;
@@ -3934,45 +4039,115 @@ impl EvidenceSelector {
                     let mut head = lexical_head;
                     let mut family_match = None;
                     while let Some(index) = head {
-                        constraint_work.charge(1).map_err(|()| SelectionFailure::ConstraintResource)?;
-                        let source = self.lexical_sources.get(index).ok_or(SelectionFailure::InvalidState)?;
+                        constraint_work
+                            .charge(1)
+                            .map_err(|()| SelectionFailure::ConstraintResource)?;
+                        let source = self
+                            .lexical_sources
+                            .get(index)
+                            .ok_or(SelectionFailure::InvalidState)?;
                         head = source.parent;
-                        let Some(family) = &source.family else { continue; };
-                        if source.application.interface() != interface { continue; }
-                        let count = source.application.arguments().len().checked_add(goal.application.arguments().len())
+                        let Some(family) = &source.family else {
+                            continue;
+                        };
+                        if source.application.interface() != interface {
+                            continue;
+                        }
+                        let count = source
+                            .application
+                            .arguments()
+                            .len()
+                            .checked_add(goal.application.arguments().len())
                             .ok_or(SelectionFailure::ConstraintResource)?;
-                        constraint_work.charge(count).map_err(|()| SelectionFailure::ConstraintResource)?;
-                        let mut candidate = Vec::new(); let mut actual = Vec::new();
-                        candidate.try_reserve_exact(source.application.arguments().len()).map_err(|_| SelectionFailure::ConstraintResource)?;
-                        actual.try_reserve_exact(goal.application.arguments().len()).map_err(|_| SelectionFailure::ConstraintResource)?;
-                        candidate.extend(source.application.arguments()); actual.extend(goal.application.arguments());
-                        if let Some(substitution) = match_implementation_application_head_in_environment(
-                            registry, InterfaceOperationWork::new(source.span, constraint_work, type_work),
-                            &goal_environments, &[family.parameter], &candidate, &actual,
-                        ).map_err(map_head_failure)? {
-                            family_match = Some((index, substitution)); break;
+                        constraint_work
+                            .charge(count)
+                            .map_err(|()| SelectionFailure::ConstraintResource)?;
+                        let mut candidate = Vec::new();
+                        let mut actual = Vec::new();
+                        candidate
+                            .try_reserve_exact(source.application.arguments().len())
+                            .map_err(|_| SelectionFailure::ConstraintResource)?;
+                        actual
+                            .try_reserve_exact(goal.application.arguments().len())
+                            .map_err(|_| SelectionFailure::ConstraintResource)?;
+                        candidate.extend(source.application.arguments());
+                        actual.extend(goal.application.arguments());
+                        if let Some(substitution) =
+                            match_provider_family_application_head_in_environment(
+                                registry,
+                                InterfaceOperationWork::new(
+                                    source.span,
+                                    constraint_work,
+                                    type_work,
+                                ),
+                                &goal_environments,
+                                family.parameter,
+                                &candidate,
+                                &actual,
+                            )
+                            .map_err(map_head_failure)?
+                        {
+                            family_match = Some((index, substitution));
+                            break;
                         }
                     }
                     if let Some((source_index, substitution)) = family_match {
-                        let source = self.lexical_sources.get(source_index).ok_or(SelectionFailure::InvalidState)?;
-                        let family = source.family.as_ref().ok_or(SelectionFailure::InvalidState)?;
+                        let source = self
+                            .lexical_sources
+                            .get(source_index)
+                            .ok_or(SelectionFailure::InvalidState)?;
+                        let family = source
+                            .family
+                            .as_ref()
+                            .ok_or(SelectionFailure::InvalidState)?;
                         let replacements = replacement_map(&substitution, type_work)?;
                         let result_start = results.len();
-                        let application = goal.application.clone_with_budget(type_work).map_err(|()| SelectionFailure::TypeResource)?;
+                        let application = goal
+                            .application
+                            .clone_with_budget(type_work)
+                            .map_err(|()| SelectionFailure::TypeResource)?;
                         let cause_marker = causes.len();
-                        work.push(SelectionTask::FinishFamily { key, source_index, application, result_start }, constraint_work)?;
+                        work.push(
+                            SelectionTask::FinishFamily {
+                                key,
+                                source_index,
+                                application,
+                                result_start,
+                            },
+                            constraint_work,
+                        )?;
                         for prerequisite in family.requirements.iter().rev() {
-                            type_work.charge(prerequisite.application.arguments().len()).map_err(|()| SelectionFailure::TypeResource)?;
+                            type_work
+                                .charge(prerequisite.application.arguments().len())
+                                .map_err(|()| SelectionFailure::TypeResource)?;
                             let mut arguments = EvidenceTypeBuffer(Vec::new());
-                            arguments.0.try_reserve_exact(prerequisite.application.arguments().len()).map_err(|_| SelectionFailure::TypeResource)?;
+                            arguments
+                                .0
+                                .try_reserve_exact(prerequisite.application.arguments().len())
+                                .map_err(|_| SelectionFailure::TypeResource)?;
                             for argument in prerequisite.application.arguments() {
-                                arguments.0.push(substitute_kinded_argument_with(argument, replacements.as_map(), &HashMap::new(),
-                                    |cells| type_work.charge(cells)).map_err(|()| SelectionFailure::TypeResource)?
-                                    .map_err(|_| SelectionFailure::InvalidState)?);
+                                arguments.0.push(
+                                    substitute_kinded_argument_with(
+                                        argument,
+                                        replacements.as_map(),
+                                        &HashMap::new(),
+                                        |cells| type_work.charge(cells),
+                                    )
+                                    .map_err(|()| SelectionFailure::TypeResource)?
+                                    .map_err(|_| SelectionFailure::InvalidState)?,
+                                );
                             }
-                            let goal = Goal { application: InterfaceApplication::new_kinded(prerequisite.application.interface(), arguments.into_boxed_slice()) };
+                            let goal = Goal {
+                                application: InterfaceApplication::new_kinded(
+                                    prerequisite.application.interface(),
+                                    arguments.into_boxed_slice(),
+                                ),
+                            };
                             charge_prerequisite_goal(&goal.application, constraint_work)?;
-                            work.push(SelectionTask::Select { goal, cause_marker }, constraint_work)?;
+                            work.push(
+                                SelectionTask::Select { goal, cause_marker },
+                                constraint_work,
+                            )?;
                         }
                         continue;
                     }
@@ -4087,17 +4262,41 @@ impl EvidenceSelector {
                     }
                     drop(goal);
                 }
-                SelectionTask::FinishFamily { key, source_index, application, result_start } => {
+                SelectionTask::FinishFamily {
+                    key,
+                    source_index,
+                    application,
+                    result_start,
+                } => {
                     charge_goal_key(&key, constraint_work)?;
-                    if !active.remove(&key) || result_start > results.len() { return Err(SelectionFailure::InvalidState); }
-                    let source = self.lexical_sources.get(source_index).ok_or(SelectionFailure::InvalidState)?;
-                    let family = source.family.as_ref().ok_or(SelectionFailure::InvalidState)?;
-                    if results.len() - result_start != family.requirements.len() { return Err(SelectionFailure::InvalidState); }
+                    if !active.remove(&key) || result_start > results.len() {
+                        return Err(SelectionFailure::InvalidState);
+                    }
+                    let source = self
+                        .lexical_sources
+                        .get(source_index)
+                        .ok_or(SelectionFailure::InvalidState)?;
+                    let family = source
+                        .family
+                        .as_ref()
+                        .ok_or(SelectionFailure::InvalidState)?;
+                    if results.len() - result_start != family.requirements.len() {
+                        return Err(SelectionFailure::InvalidState);
+                    }
                     reserve_selection_result(&mut results, constraint_work)?;
-                    let node = builder.push_provider_family(source.id, family.definition, family.parameter, application,
-                        &results[result_start..], self.interface_methods(source.application.interface())?, constraint_work)
+                    let node = builder
+                        .push_provider_family(
+                            source.id,
+                            family.definition,
+                            family.parameter,
+                            application,
+                            &results[result_start..],
+                            self.interface_methods(source.application.interface())?,
+                            constraint_work,
+                        )
                         .map_err(|()| SelectionFailure::ConstraintResource)?;
-                    results.truncate(result_start); results.push(node);
+                    results.truncate(result_start);
+                    results.push(node);
                 }
                 SelectionTask::Finish {
                     key,

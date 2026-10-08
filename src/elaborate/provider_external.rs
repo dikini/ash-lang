@@ -593,7 +593,9 @@ impl CoreElaborator<EffectOperationFamily> {
         &mut self,
         imported: &crate::resolved::ImportedFacts,
     ) -> Result<(), TypeError> {
-        if self.evidence_lowering.is_some() { return Err(invalid_state()); }
+        if self.evidence_lowering.is_some() {
+            return Err(invalid_state());
+        }
         self.evidence_lowering = Some(self.prepare_provider_import_lowering(imported)?);
         Ok(())
     }
@@ -632,8 +634,16 @@ impl CoreElaborator<EffectOperationFamily> {
         patterns: &[&CorePattern],
         pending_rows: crate::core::provider::HandlerPendingRows,
     ) -> Result<LoweredProviderForest, TypeError> {
-        self.lower_provider_source_forest_with_pending_family(roots, imported, publication,
-            substitutions, states, patterns, pending_rows, None)
+        self.lower_provider_source_forest_with_pending_family(
+            roots,
+            imported,
+            publication,
+            substitutions,
+            states,
+            patterns,
+            pending_rows,
+            None,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -736,17 +746,35 @@ impl CoreElaborator<EffectOperationFamily> {
             }
         }
         if !method_occurrences.is_empty() {
-            self.type_work.charge(method_occurrences.len().checked_mul(3).ok_or_else(type_resource)?)
+            self.type_work
+                .charge(
+                    method_occurrences
+                        .len()
+                        .checked_mul(3)
+                        .ok_or_else(type_resource)?,
+                )
                 .map_err(|()| type_resource())?;
-            replacements.try_reserve(method_occurrences.len()).map_err(|_| type_resource())?;
-            method_positions.try_reserve(method_occurrences.len()).map_err(|_| type_resource())?;
+            replacements
+                .try_reserve(method_occurrences.len())
+                .map_err(|_| type_resource())?;
+            method_positions
+                .try_reserve(method_occurrences.len())
+                .map_err(|_| type_resource())?;
             for (index, method) in method_occurrences.iter_mut().enumerate() {
-                if !matches!(method.occurrence.term, crate::resolved::ResolvedTermName::Method(_))
-                    || !replacements.insert(method.node) || method_positions.insert(method.node, index).is_some()
-                { return Err(invalid_state()); }
+                if !matches!(
+                    method.occurrence.term,
+                    crate::resolved::ResolvedTermName::Method(_)
+                ) || !replacements.insert(method.node)
+                    || method_positions.insert(method.node, index).is_some()
+                {
+                    return Err(invalid_state());
+                }
                 let zonked = IterativeTypeOwner::new(self.zonk(&method.value_type)?);
-                method.value_type = if identity_substitution { zonked }
-                    else { IterativeTypeOwner::new(substitutions.substitute(&zonked, &mut self.type_work)?) };
+                method.value_type = if identity_substitution {
+                    zonked
+                } else {
+                    IterativeTypeOwner::new(substitutions.substitute(&zonked, &mut self.type_work)?)
+                };
             }
         }
         let placeholder = CoreBuilder::<EffectOperationFamily>::with_registry_for_family(
@@ -763,22 +791,26 @@ impl CoreElaborator<EffectOperationFamily> {
             &mut self.type_work,
         )
         .map_err(provider_transform_failure)?;
-        let catalog = crate::evidence_validation::build_provider_method_evidence_catalog_with_family_scope(
-            crate::resolved::ProviderExternalFacts {
-                imported,
-                defining: self.provider_defining_facts.as_deref(),
-            },
-            &self.registry,
-            crate::core::transform::provider_draft_span(&source, root)
-                .map_err(provider_transform_failure)?,
-            occurrences.iter().map(|o| &o.occurrence)
-                .chain(method_occurrences.iter().map(|o| &o.occurrence)),
-            &publication,
-            &mut self.constraint_work,
-            &mut self.type_work,
-            family_scope,
-        )
-        .map_err(|failure| match failure.reason() {
+        let catalog =
+            crate::evidence_validation::build_provider_method_evidence_catalog_with_family_scope(
+                crate::resolved::ProviderExternalFacts {
+                    imported,
+                    defining: self.provider_defining_facts.as_deref(),
+                },
+                &self.registry,
+                crate::core::transform::provider_draft_span(&source, root)
+                    .map_err(provider_transform_failure)?,
+                occurrences
+                    .iter()
+                    .map(|o| &o.occurrence)
+                    .chain(method_occurrences.iter().map(|o| &o.occurrence)),
+                &publication,
+                &mut self.constraint_work,
+                &mut self.type_work,
+                family_scope,
+            )
+            .map_err(|failure| {
+                match failure.reason() {
             crate::evidence_validation::EvidenceValidationReason::TypeResourceExhausted => {
                 type_resource()
             }
@@ -786,7 +818,8 @@ impl CoreElaborator<EffectOperationFamily> {
                 constraint_resource()
             }
             _ => invalid_state(),
-        })?;
+        }
+            })?;
         self.builder = crate::core::transform::prepare_provider_fragment_builder_with_catalog(
             &source,
             &full_order,
@@ -894,24 +927,47 @@ impl CoreElaborator<EffectOperationFamily> {
                 } else if !method_positions.is_empty() {
                     self.type_work.charge(1).map_err(|()| type_resource())?;
                     if let Some(position) = method_positions.get(&original).copied() {
-                        let source_method = method_occurrences.get(position).ok_or_else(invalid_state)?;
-                        let crate::resolved::ResolvedTermName::Method(method) = source_method.occurrence.term else { return Err(invalid_state()); };
-                        let [slot] = source_method.occurrence.evidence.as_ref() else { return Err(invalid_state()); };
-                        let pending = publication.occurrence(slot.storage_id(), Some(method), &mut self.type_work)
+                        let source_method =
+                            method_occurrences.get(position).ok_or_else(invalid_state)?;
+                        let crate::resolved::ResolvedTermName::Method(method) =
+                            source_method.occurrence.term
+                        else {
+                            return Err(invalid_state());
+                        };
+                        let [slot] = source_method.occurrence.evidence.as_ref() else {
+                            return Err(invalid_state());
+                        };
+                        let pending = publication
+                            .occurrence(slot.storage_id(), Some(method), &mut self.type_work)
                             .map_err(|failure| selection_failure(failure, None))?;
                         let expected = pending.value_type.ok_or_else(invalid_state)?;
                         if pending.method != Some(method)
-                            || !crate::types::same_type_with_budget(expected, &source_method.value_type, &mut self.type_work)
-                                .map_err(|()| type_resource())?
-                        { return Err(invalid_state()); }
+                            || !crate::types::same_type_with_budget(
+                                expected,
+                                &source_method.value_type,
+                                &mut self.type_work,
+                            )
+                            .map_err(|()| type_resource())?
+                        {
+                            return Err(invalid_state());
+                        }
                         let typed = TypedNodeOwner::new(self.lower_checked_method_occurrence(
-                            method, &source_method.occurrence, pending.method_arguments,
-                            expected, pending.selection, &mut lowering)?);
+                            method,
+                            &source_method.occurrence,
+                            pending.method_arguments,
+                            expected,
+                            pending.selection,
+                            &mut lowering,
+                        )?);
                         typed.node
                     } else {
                         crate::core::transform::rebuild_provider_draft_node(
-                            &mut self.builder, &source, &remapped, original,
-                        ).map_err(provider_transform_failure)?
+                            &mut self.builder,
+                            &source,
+                            &remapped,
+                            original,
+                        )
+                        .map_err(provider_transform_failure)?
                     }
                 } else {
                     crate::core::transform::rebuild_provider_draft_node(
@@ -931,7 +987,9 @@ impl CoreElaborator<EffectOperationFamily> {
             let rewritten = result?;
             remapped[original.value() as usize] = Some(rewritten);
         }
-        if family_lowering { self.evidence_lowering = Some(lowering); }
+        if family_lowering {
+            self.evidence_lowering = Some(lowering);
+        }
         self.type_work
             .charge(
                 roots

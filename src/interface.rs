@@ -1104,7 +1104,9 @@ pub(crate) fn match_implementation_head_in_environment(
         candidate_parameters,
         &[candidate],
         &[goal],
-        true,
+        HeadMatchPolicy::Implementation {
+            validate_goal: true,
+        },
     )
 }
 
@@ -1123,8 +1125,39 @@ pub(crate) fn match_implementation_application_head_in_environment(
         candidate_parameters,
         candidate,
         goal,
-        true,
+        HeadMatchPolicy::Implementation {
+            validate_goal: true,
+        },
     )
+}
+
+/// Matches a scoped family while keeping every variable except its payload rigid.
+/// The original family header and complete owner actuals are already authenticated.
+pub(crate) fn match_provider_family_application_head_in_environment(
+    registry: &ResolvedRegistry,
+    operation: InterfaceOperationWork<'_>,
+    goal_environments: &KindEnvironments<'_>,
+    payload: TypeVariableId,
+    candidate: &[&KindedArgument],
+    goal: &[&KindedArgument],
+) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure> {
+    match_implementation_application_head_with_goal_validation(
+        registry,
+        operation,
+        goal_environments,
+        &[payload],
+        candidate,
+        goal,
+        HeadMatchPolicy::ScopedFamily {
+            validate_goal: true,
+        },
+    )
+}
+
+#[derive(Clone, Copy)]
+enum HeadMatchPolicy {
+    Implementation { validate_goal: bool },
+    ScopedFamily { validate_goal: bool },
 }
 
 /// Capability for one exact goal vector whose complete roots have already
@@ -1178,7 +1211,30 @@ pub(crate) fn match_implementation_application_head_against_canonical_goal(
         candidate_parameters,
         candidate,
         goal.roots,
-        false,
+        HeadMatchPolicy::Implementation {
+            validate_goal: false,
+        },
+    )
+}
+
+/// Reuses an authenticated complete goal for exact scoped-family matching.
+pub(crate) fn match_provider_family_application_head_against_canonical_goal(
+    registry: &ResolvedRegistry,
+    operation: InterfaceOperationWork<'_>,
+    payload: TypeVariableId,
+    candidate: &[&KindedArgument],
+    goal: &CanonicalImplementationGoal<'_, '_>,
+) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure> {
+    match_implementation_application_head_with_goal_validation(
+        registry,
+        operation,
+        &goal.environments,
+        &[payload],
+        candidate,
+        goal.roots,
+        HeadMatchPolicy::ScopedFamily {
+            validate_goal: false,
+        },
     )
 }
 
@@ -1189,7 +1245,7 @@ fn match_implementation_application_head_with_goal_validation(
     candidate_parameters: &[TypeVariableId],
     candidate: &[&KindedArgument],
     goal: &[&KindedArgument],
-    validate_goal: bool,
+    policy: HeadMatchPolicy,
 ) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure> {
     if candidate.len() != goal.len() {
         return Err(HeadMatchFailure::InvalidState);
@@ -1221,7 +1277,7 @@ fn match_implementation_application_head_with_goal_validation(
         candidate_parameters,
         &left,
         &right,
-        validate_goal,
+        policy,
     )
 }
 
@@ -1232,7 +1288,7 @@ fn match_type_application_head_with_goal_validation(
     candidate_parameters: &[TypeVariableId],
     candidate: &[&Type],
     goal: &[&Type],
-    validate_goal: bool,
+    policy: HeadMatchPolicy,
 ) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure> {
     if candidate.len() != goal.len() {
         return Err(HeadMatchFailure::InvalidState);
@@ -1248,7 +1304,7 @@ fn match_type_application_head_with_goal_validation(
         goal,
         constraint_budget,
         type_budget,
-        validate_goal,
+        policy,
         |parameter, binding, constraint_budget, _type_budget| {
             let expected =
                 canonical_type_variable_kind(registry, parameter, span, constraint_budget)
@@ -1295,7 +1351,9 @@ where
         &[goal],
         constraint_budget,
         type_budget,
-        true,
+        HeadMatchPolicy::Implementation {
+            validate_goal: true,
+        },
         |_, _, _, _| Ok(()),
     )
 }
@@ -1306,7 +1364,7 @@ fn match_implementation_head_with<I, F>(
     goal: &[&Type],
     constraint_budget: &mut InterfaceConstraintBudget,
     type_budget: &mut TypeWorkBudget,
-    validate_goal: bool,
+    policy: HeadMatchPolicy,
     mut authenticate_binding: F,
 ) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure>
 where
@@ -1344,9 +1402,20 @@ where
     }
 
     for candidate in candidate {
-        validate_match_type(candidate, Some(&positions), constraint_budget)?;
+        let parameters = match policy {
+            HeadMatchPolicy::Implementation { .. } => Some(&positions),
+            HeadMatchPolicy::ScopedFamily { .. } => None,
+        };
+        validate_match_type(candidate, parameters, constraint_budget)?;
     }
-    if validate_goal {
+    if matches!(
+        policy,
+        HeadMatchPolicy::Implementation {
+            validate_goal: true
+        } | HeadMatchPolicy::ScopedFamily {
+            validate_goal: true
+        }
+    ) {
         for goal in goal {
             validate_match_type(goal, None, constraint_budget)?;
         }
@@ -1373,10 +1442,17 @@ where
             .charge(1)
             .map_err(|()| HeadMatchFailure::ConstraintResource)?;
         if let Type::Variable(variable) = candidate {
-            let position = positions
-                .get(variable)
-                .copied()
-                .ok_or(HeadMatchFailure::InvalidState)?;
+            let Some(position) = positions.get(variable).copied() else {
+                if !matches!(policy, HeadMatchPolicy::ScopedFamily { .. }) {
+                    return Err(HeadMatchFailure::InvalidState);
+                }
+                if !matches!(goal, Type::Variable(_))
+                    || !match_types_equal(candidate, goal, constraint_budget)?
+                {
+                    return Ok(None);
+                }
+                continue;
+            };
             if let Some(previous) = bindings[position] {
                 if !match_types_equal(previous, goal, constraint_budget)? {
                     return Ok(None);
@@ -3362,12 +3438,12 @@ impl EvidenceNodeId {
 
 /// One complete checked interface application in declaration argument order.
 ///
-/// This compiler-private carrier is shared by checked requirements,
+/// This compiler-constructed, read-only carrier is shared by checked requirements,
 /// implementation heads, selected evidence, and independent authentication.
 /// Its argument vector is never encoded as an Ash tuple type.
 #[derive(Debug, Eq, PartialEq)]
 #[cfg_attr(test, derive(Clone))]
-pub(crate) struct InterfaceApplication {
+pub struct InterfaceApplication {
     interface: InterfaceId,
     arguments: Box<[crate::types::KindedArgument]>,
 }
@@ -3423,11 +3499,15 @@ impl InterfaceApplication {
         )
     }
 
-    pub(crate) const fn interface(&self) -> InterfaceId {
+    /// Returns the original interface identity.
+    #[must_use]
+    pub const fn interface(&self) -> InterfaceId {
         self.interface
     }
 
-    pub(crate) const fn arguments(&self) -> &[crate::types::KindedArgument] {
+    /// Borrows complete type and row arguments in declaration order.
+    #[must_use]
+    pub const fn arguments(&self) -> &[crate::types::KindedArgument] {
         &self.arguments
     }
 
@@ -3589,6 +3669,21 @@ pub enum EvidenceNode<'a> {
     },
 }
 
+impl<'a> EvidenceNode<'a> {
+    /// Returns dictionaries passed as runtime arguments to this producer.
+    /// Family prerequisites authenticate its scope-bound dictionaries; lowering
+    /// the family method reads that scope's forwarding binder instead.
+    pub(crate) const fn executable_prerequisites(self) -> Option<&'a [EvidenceNodeId]> {
+        match self {
+            Self::Implementation { prerequisites, .. } => Some(prerequisites),
+            Self::ProviderFamily { .. }
+            | Self::NativeLayout { .. }
+            | Self::Lexical { .. }
+            | Self::Abstract { .. } => None,
+        }
+    }
+}
+
 /// One rooted selection backed by an immutable flat evidence plan.
 #[derive(Clone, Debug)]
 pub struct EvidenceSelection {
@@ -3668,18 +3763,45 @@ impl EvidenceSelection {
         let mut builder = EvidenceSelectionBuilder::new();
         for node in &original.nodes {
             match node {
-                EvidenceNodeData::ProviderFamily { source, definition, parameter, application, prerequisites, methods } => {
-                    types.charge(application.arguments().len()).map_err(|()| type_resource())?;
+                EvidenceNodeData::ProviderFamily {
+                    source,
+                    definition,
+                    parameter,
+                    application,
+                    prerequisites,
+                    methods,
+                } => {
+                    types
+                        .charge(application.arguments().len())
+                        .map_err(|()| type_resource())?;
                     let mut actuals = InterfaceArgumentBuffer(Vec::new());
-                    actuals.0.try_reserve_exact(application.arguments().len()).map_err(|_| type_resource())?;
-                    for argument in application.arguments() { actuals.0.push(rewrite_argument(argument, types)?); }
-                    let application = InterfaceApplication::new_kinded(application.interface(), actuals.into_boxed_slice());
+                    actuals
+                        .0
+                        .try_reserve_exact(application.arguments().len())
+                        .map_err(|_| type_resource())?;
+                    for argument in application.arguments() {
+                        actuals.0.push(rewrite_argument(argument, types)?);
+                    }
+                    let application = InterfaceApplication::new_kinded(
+                        application.interface(),
+                        actuals.into_boxed_slice(),
+                    );
                     let source = rewrite_lexical(*source, types)?;
-                    builder.push_provider_family(source, *definition, *parameter, application, prerequisites, methods, constraints)
+                    builder
+                        .push_provider_family(
+                            source,
+                            *definition,
+                            *parameter,
+                            application,
+                            prerequisites,
+                            methods,
+                            constraints,
+                        )
                         .map_err(|()| constraint_resource())?;
                 }
                 EvidenceNodeData::NativeLayout { producer } => {
-                    builder.push_native_layout(*producer, constraints)
+                    builder
+                        .push_native_layout(*producer, constraints)
                         .map_err(|()| constraint_resource())?;
                 }
                 EvidenceNodeData::Lexical { source, methods } => {
@@ -3774,8 +3896,20 @@ impl EvidenceSelection {
 
 fn evidence_node(plan: &EvidencePlan, id: EvidenceNodeId) -> Option<EvidenceNode<'_>> {
     match plan.nodes.get(id.0)? {
-        EvidenceNodeData::ProviderFamily { source, definition, parameter, application, prerequisites, methods } => Some(EvidenceNode::ProviderFamily {
-            source: *source, definition: *definition, parameter: *parameter, application, prerequisites, methods,
+        EvidenceNodeData::ProviderFamily {
+            source,
+            definition,
+            parameter,
+            application,
+            prerequisites,
+            methods,
+        } => Some(EvidenceNode::ProviderFamily {
+            source: *source,
+            definition: *definition,
+            parameter: *parameter,
+            application,
+            prerequisites,
+            methods,
         }),
         EvidenceNodeData::NativeLayout { producer } => Some(EvidenceNode::NativeLayout {
             producer: *producer,
@@ -3835,15 +3969,32 @@ impl EvidenceSelectionBuilder {
         methods: &[MethodId],
         budget: &mut InterfaceConstraintBudget,
     ) -> Result<EvidenceNodeId, ()> {
-        let retained = 1usize.checked_add(prerequisites.len()).and_then(|n| n.checked_add(methods.len())).ok_or(())?;
+        let retained = 1usize
+            .checked_add(prerequisites.len())
+            .and_then(|n| n.checked_add(methods.len()))
+            .ok_or(())?;
         budget.charge(retained)?;
-        for argument in application.arguments() { budget.charge_argument(argument)?; }
-        if prerequisites.iter().any(|child| child.0 >= self.nodes.len()) { return Err(()); }
+        for argument in application.arguments() {
+            budget.charge_argument(argument)?;
+        }
+        if prerequisites
+            .iter()
+            .any(|child| child.0 >= self.nodes.len())
+        {
+            return Err(());
+        }
         let prerequisites = try_copy_slice(prerequisites)?;
         let methods = try_copy_slice(methods)?;
         self.nodes.try_reserve(1).map_err(|_| ())?;
         let id = EvidenceNodeId(self.nodes.len());
-        self.nodes.push(EvidenceNodeData::ProviderFamily { source, definition, parameter, application, prerequisites, methods });
+        self.nodes.push(EvidenceNodeData::ProviderFamily {
+            source,
+            definition,
+            parameter,
+            application,
+            prerequisites,
+            methods,
+        });
         Ok(id)
     }
 
@@ -5144,6 +5295,10 @@ mod tests {
         assert_eq!(substitution[0].parameter(), parameter);
         assert_eq!(substitution[0].argument(), &Type::Int);
         assert_eq!(prerequisites, &[prerequisite]);
+        assert_eq!(
+            selection.node(root).unwrap().executable_prerequisites(),
+            Some(prerequisites)
+        );
         assert_eq!(methods, &[implementation_method]);
         assert_eq!(exact.used(), 4);
 
@@ -5856,6 +6011,165 @@ mod tests {
             ),
             Ok(None),
             "the ordinary full-validation entry point remains available",
+        );
+    }
+
+    #[test]
+    fn scoped_family_matching_substitutes_only_payload_and_keeps_owner_actuals_rigid() {
+        let module = ModuleId::new(71);
+        let owner = TypeVariableId::resolved(module, 0);
+        let other_owner = TypeVariableId::resolved(module, 1);
+        let payload = TypeVariableId::resolved(module, 2);
+        let source = SourceFile::new("scoped-family-match.ash", "family")
+            .expect("the family matcher source should fit");
+        let span = source
+            .span(ByteRange::new(0, 6).expect("the family matcher range is ordered"))
+            .expect("the family matcher span should fit");
+        let registry = ResolvedRegistry::new(Vec::new(), Vec::new())
+            .with_additional_type_variables(
+                [
+                    (owner, "Owner"),
+                    (other_owner, "OtherOwner"),
+                    (payload, "Payload"),
+                ]
+                .map(|(id, spelling)| ResolvedTypeVariable {
+                    id,
+                    spelling: spelling.into(),
+                    kind: Kind::Type,
+                    origin: Origin::Source(span),
+                }),
+            );
+        let owner_pattern = KindedArgument::TypeArg(Type::Variable(owner));
+        let payload_pattern = KindedArgument::TypeArg(Type::Variable(payload));
+        let candidate = [&owner_pattern, &payload_pattern];
+        let accepted_owner = KindedArgument::TypeArg(Type::Variable(owner));
+        let accepted_payload = KindedArgument::TypeArg(Type::Int);
+        let accepted = [&accepted_owner, &accepted_payload];
+        let rejected_owner = KindedArgument::TypeArg(Type::Variable(other_owner));
+        let function_owner =
+            KindedArgument::TypeArg(Type::Function(Box::new(Type::Int), Box::new(Type::Bool)));
+
+        // Both consumers authenticate genuine canonical goal roots. The
+        // selector checks those roots again; materialization reuses the seal.
+        let run = |goal: &[&KindedArgument],
+                   reuse_goal: bool,
+                   constraints: &mut InterfaceConstraintBudget,
+                   types: &mut TypeWorkBudget| {
+            let canonical = authenticate_implementation_application_goal(
+                &registry,
+                InterfaceOperationWork::new(span, constraints, types),
+                goal,
+            )?;
+            if reuse_goal {
+                match_provider_family_application_head_against_canonical_goal(
+                    &registry,
+                    InterfaceOperationWork::new(span, constraints, types),
+                    payload,
+                    &candidate,
+                    &canonical,
+                )
+            } else {
+                match_provider_family_application_head_in_environment(
+                    &registry,
+                    InterfaceOperationWork::new(span, constraints, types),
+                    &canonical.environments,
+                    payload,
+                    &candidate,
+                    goal,
+                )
+            }
+        };
+        for reuse_goal in [false, true] {
+            let mut measured_constraints = InterfaceConstraintBudget::default();
+            let mut measured_types = TypeWorkBudget::default();
+            let substitutions = run(
+                &accepted,
+                reuse_goal,
+                &mut measured_constraints,
+                &mut measured_types,
+            )
+            .expect("the family match should authenticate")
+            .expect("the identical owner permits the scalar payload");
+            assert_eq!(substitutions.len(), 1);
+            assert_eq!(substitutions[0].parameter(), payload);
+            assert_eq!(substitutions[0].argument(), &Type::Int);
+            for rejected in [
+                [&rejected_owner, &accepted_payload],
+                [&function_owner, &accepted_payload],
+            ] {
+                assert_eq!(
+                    run(
+                        &rejected,
+                        reuse_goal,
+                        &mut InterfaceConstraintBudget::default(),
+                        &mut TypeWorkBudget::default()
+                    ),
+                    Ok(None),
+                    "a rigid owner mismatch must refuse without substitution or panic",
+                );
+            }
+
+            let constraint_cost = measured_constraints.used();
+            let type_cost = measured_types.used();
+            assert!(constraint_cost > 0 && type_cost > 0);
+            for prefix in [0, 17] {
+                let replay = |constraint_limit, type_limit| {
+                    let mut constraints = InterfaceConstraintBudget::with_limit(constraint_limit);
+                    let mut types = TypeWorkBudget::with_limit(type_limit);
+                    constraints
+                        .charge(prefix)
+                        .expect("the constraint prefix fits");
+                    types.charge(prefix).expect("the type prefix fits");
+                    let result = run(&accepted, reuse_goal, &mut constraints, &mut types);
+                    (result, constraints.used(), types.used())
+                };
+                let (result, constraints_used, types_used) =
+                    replay(prefix + constraint_cost, prefix + type_cost);
+                assert_eq!(
+                    result
+                        .expect("the exact ledgers should fit")
+                        .expect("the exact replay should match"),
+                    substitutions
+                );
+                assert_eq!(constraints_used, prefix + constraint_cost);
+                assert_eq!(types_used, prefix + type_cost);
+                assert_eq!(
+                    replay(prefix + constraint_cost - 1, prefix + type_cost).0,
+                    Err(HeadMatchFailure::ConstraintResource),
+                    "constraint exhaustion must not become a mismatch or partial match",
+                );
+                assert_eq!(
+                    replay(prefix + constraint_cost, prefix + type_cost - 1).0,
+                    Err(HeadMatchFailure::TypeResource),
+                    "type exhaustion must not become a mismatch or partial match",
+                );
+            }
+        }
+
+        let canonical = authenticate_implementation_application_goal(
+            &registry,
+            InterfaceOperationWork::new(
+                span,
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            ),
+            &accepted,
+        )
+        .expect("the ordinary comparison goal should authenticate");
+        assert_eq!(
+            match_implementation_application_head_against_canonical_goal(
+                &registry,
+                InterfaceOperationWork::new(
+                    span,
+                    &mut InterfaceConstraintBudget::default(),
+                    &mut TypeWorkBudget::default()
+                ),
+                &[payload],
+                &candidate,
+                &canonical,
+            ),
+            Err(HeadMatchFailure::InvalidState),
+            "ordinary implementation heads still reject undeclared pattern variables",
         );
     }
 

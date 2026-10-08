@@ -28,7 +28,310 @@ pub(crate) struct FinalProviderInstancePlan {
     pub(crate) copies: [CopiedProviderOccurrenceCatalog; 3],
     pub(crate) family_copies: Box<[CopiedProviderOccurrenceCatalog]>,
     pub(crate) family_members: Box<[Arc<super::PreparedProviderFamilyInstance>]>,
+    family_relocations: Box<[FinalFamilyForwardingRelocation]>,
 }
+// A private original-to-final member relation, minted only while allocating
+// final forwardings. The original payload is retained once; the final payload
+// remains owned by the plan's existing family_members vector.
+struct FinalFamilyForwardingRelocation {
+    original: Arc<super::PreparedProviderFamilyInstance>,
+    member: usize,
+}
+
+fn same_family_application(
+    left: &crate::interface::InterfaceApplication,
+    right: &crate::interface::InterfaceApplication,
+    work: &mut TypeWorkBudget,
+) -> Result<bool, TypeError> {
+    if left.interface() != right.interface() || left.arguments().len() != right.arguments().len() {
+        return Ok(false);
+    }
+    work.charge(left.arguments().len())
+        .map_err(|()| type_resource())?;
+    for (left, right) in left.arguments().iter().zip(right.arguments()) {
+        if !crate::types::same_kinded_argument_with_budget(left, right, work)
+            .map_err(|()| type_resource())?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn authenticate_family_forwarding_pair(
+    original: &super::PreparedProviderFamilyInstance,
+    final_member: &super::PreparedProviderFamilyInstance,
+    work: &mut TypeWorkBudget,
+) -> Result<(), TypeError> {
+    use crate::{resolved::BinderId, source::Origin};
+    if original.source != final_member.source
+        || original.identity != final_member.identity
+        || original.forwardings.is_empty()
+        || original.selections.is_empty()
+        || original.forwardings.len() != final_member.forwardings.len()
+        || original.requirements.len() != final_member.requirements.len()
+        || original.selections.len() != final_member.selections.len()
+        || !matches!(
+            &*original.payload,
+            crate::types::Type::Unit | crate::types::Type::Bool | crate::types::Type::Int
+        )
+        || !same_family_application(&original.application, &final_member.application, work)?
+        || !crate::types::same_type_with_budget(&original.payload, &final_member.payload, work)
+            .map_err(|()| type_resource())?
+        || crate::types::compare_effect_instances_with_budget(
+            &original.provided,
+            &final_member.provided,
+            work,
+        )
+        .map_err(|()| type_resource())?
+            != std::cmp::Ordering::Equal
+        || crate::types::compare_effect_instances_with_budget(
+            &original.native,
+            &final_member.native,
+            work,
+        )
+        .map_err(|()| type_resource())?
+            != std::cmp::Ordering::Equal
+    {
+        return Err(invalid_state());
+    }
+    work.charge(
+        original
+            .requirements
+            .len()
+            .checked_add(original.selections.len())
+            .and_then(|count| count.checked_add(original.forwardings.len()))
+            .ok_or_else(type_resource)?,
+    )
+    .map_err(|()| type_resource())?;
+    for ((left, left_node), (right, right_node)) in original
+        .requirements
+        .iter()
+        .zip(&final_member.requirements)
+        .chain(original.selections.iter().zip(&final_member.selections))
+    {
+        if left_node != right_node || left.root() != right.root() || !left.shares_plan_with(right) {
+            return Err(invalid_state());
+        }
+    }
+    for (index, ((method, operation, binder), (final_method, final_operation, final_binder))) in
+        original
+            .forwardings
+            .iter()
+            .zip(&final_member.forwardings)
+            .enumerate()
+    {
+        work.charge(index.checked_mul(2).ok_or_else(type_resource)?)
+            .map_err(|()| type_resource())?;
+        if method != final_method
+            || operation != final_operation
+            || method.interface() != original.application.interface()
+            || !matches!(binder.id(), BinderId::Generated(_))
+            || !matches!(final_binder.id(), BinderId::Generated(_))
+            || original.forwardings[..index]
+                .iter()
+                .any(|(previous, _, previous_binder)| {
+                    previous == method || previous_binder.id() == binder.id()
+                })
+            || final_member.forwardings[..index]
+                .iter()
+                .any(|(_, _, previous)| previous.id() == final_binder.id())
+            || !matches!((binder.origin(), final_binder.origin()),
+                (Origin::Source(left), Origin::Source(right)) if left == right)
+            || !crate::types::same_type_with_budget(binder.ty(), final_binder.ty(), work)
+                .map_err(|()| type_resource())?
+        {
+            return Err(invalid_state());
+        }
+    }
+    for (index, (selection, node)) in original.selections.iter().enumerate() {
+        work.charge(index).map_err(|()| type_resource())?;
+        if original.selections[..index]
+            .iter()
+            .any(|(previous, previous_node)| {
+                previous_node == node
+                    && previous.root() == selection.root()
+                    && previous.shares_plan_with(selection)
+            })
+        {
+            return Err(invalid_state());
+        }
+        // Every retained occurrence must describe the whole canonical method
+        // vector, even when a caller later requests only one forwarding.
+        authenticate_family_forwarding_claim(
+            original,
+            selection,
+            *node,
+            original.forwardings[0].0,
+            work,
+        )?;
+    }
+    Ok(())
+}
+
+fn authenticate_family_forwarding_claim(
+    original: &super::PreparedProviderFamilyInstance,
+    selection: &crate::interface::EvidenceSelection,
+    node: crate::interface::EvidenceNodeId,
+    method: crate::interface::MethodId,
+    work: &mut TypeWorkBudget,
+) -> Result<usize, TypeError> {
+    use crate::interface::EvidenceNode;
+    let Some(EvidenceNode::ProviderFamily {
+        source,
+        definition,
+        parameter,
+        application,
+        prerequisites,
+        methods,
+    }) = selection.node(node)
+    else {
+        return Err(invalid_state());
+    };
+    if source != original.source
+        || definition != original.identity.definition
+        || parameter != original.identity.parameter
+        || !same_family_application(application, &original.application, work)?
+        || methods.len() != original.forwardings.len()
+        || prerequisites.len() != original.requirements.len()
+    {
+        return Err(invalid_state());
+    }
+    work.charge(
+        original
+            .selections
+            .len()
+            .checked_add(methods.len())
+            .and_then(|count| count.checked_add(prerequisites.len()))
+            .ok_or_else(type_resource)?,
+    )
+    .map_err(|()| type_resource())?;
+    let mut recorded = false;
+    for (retained, retained_node) in &original.selections {
+        if *retained_node == node
+            && retained.root() == selection.root()
+            && retained.shares_plan_with(selection)
+        {
+            if recorded {
+                return Err(invalid_state());
+            }
+            recorded = true;
+        }
+    }
+    if !recorded {
+        return Err(invalid_state());
+    }
+    let mut selected = None;
+    for (index, (selected_method, (forwarded_method, _, _))) in
+        methods.iter().zip(&original.forwardings).enumerate()
+    {
+        if selected_method != forwarded_method {
+            return Err(invalid_state());
+        }
+        if *selected_method == method && selected.replace(index).is_some() {
+            return Err(invalid_state());
+        }
+    }
+    let (first, first_node) = original.selections.first().ok_or_else(invalid_state)?;
+    let Some(EvidenceNode::ProviderFamily {
+        prerequisites: first_prerequisites,
+        ..
+    }) = first.node(*first_node)
+    else {
+        return Err(invalid_state());
+    };
+    if first_prerequisites.len() != original.requirements.len() {
+        return Err(invalid_state());
+    }
+    for (((retained, retained_node), actual), first_prerequisite) in original
+        .requirements
+        .iter()
+        .zip(prerequisites)
+        .zip(first_prerequisites)
+    {
+        if retained_node != first_prerequisite
+            || retained_node.index() >= first_node.index()
+            || actual.index() >= node.index()
+            || retained.root() != first.root()
+            || !retained.shares_plan_with(first)
+        {
+            return Err(invalid_state());
+        }
+        let Some(EvidenceNode::NativeLayout { producer: expected }) = retained.node(*retained_node)
+        else {
+            return Err(invalid_state());
+        };
+        let Some(EvidenceNode::NativeLayout { producer: actual }) = selection.node(*actual) else {
+            return Err(invalid_state());
+        };
+        if expected != actual {
+            return Err(invalid_state());
+        }
+    }
+    selected.ok_or_else(invalid_state)
+}
+
+fn retain_family_forwarding_relocations(
+    primary: LexicalEvidenceId,
+    source: Option<LexicalEvidenceId>,
+    identity: Option<crate::core::provider::ProviderFamilyIdentity>,
+    methods: Option<&[(crate::interface::MethodId, crate::types::OperationId)]>,
+    originals: &[Arc<super::PreparedProviderFamilyInstance>],
+    finals: &[Arc<super::PreparedProviderFamilyInstance>],
+    work: &mut TypeWorkBudget,
+) -> Result<Box<[FinalFamilyForwardingRelocation]>, TypeError> {
+    if originals.is_empty() && finals.is_empty() {
+        return Ok(Box::new([]));
+    }
+    if originals.len() != finals.len() {
+        return Err(invalid_state());
+    }
+    let source = source.ok_or_else(invalid_state)?;
+    let identity = identity.ok_or_else(invalid_state)?;
+    let methods = methods.ok_or_else(invalid_state)?;
+    if methods.is_empty() {
+        return Err(invalid_state());
+    }
+    if primary == source || primary.module() != source.module() {
+        return Err(invalid_state());
+    }
+    work.charge(originals.len()).map_err(|()| type_resource())?;
+    let mut relations = Vec::new();
+    relations
+        .try_reserve_exact(originals.len())
+        .map_err(|_| type_resource())?;
+    for (member, (original, final_member)) in originals.iter().zip(finals).enumerate() {
+        if original.source != source
+            || original.identity != identity
+            || original.forwardings.len() != methods.len()
+        {
+            return Err(invalid_state());
+        }
+        work.charge(methods.len()).map_err(|()| type_resource())?;
+        for ((method, operation, _), (canonical_method, canonical_operation)) in
+            original.forwardings.iter().zip(methods)
+        {
+            if method != canonical_method || operation != canonical_operation {
+                return Err(invalid_state());
+            }
+        }
+        work.charge(member).map_err(|()| type_resource())?;
+        for previous in &originals[..member] {
+            if Arc::ptr_eq(previous, original)
+                || same_family_application(&previous.application, &original.application, work)?
+            {
+                return Err(invalid_state());
+            }
+        }
+        authenticate_family_forwarding_pair(original, final_member, work)?;
+        relations.push(FinalFamilyForwardingRelocation {
+            original: Arc::clone(original),
+            member,
+        });
+    }
+    Ok(relations.into_boxed_slice())
+}
+
 pub(crate) struct FinalProviderPreparation {
     registry: Arc<ResolvedRegistry>,
     plans: HashMap<LexicalEvidenceId, Arc<FinalProviderInstancePlan>>,
@@ -49,6 +352,57 @@ impl std::fmt::Debug for FinalProviderPreparation {
     }
 }
 impl FinalProviderPreparation {
+    /// Authenticates an original frozen family claim before returning its
+    /// genuinely allocated final forwarding identity. Claims never supply a map.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn relocate_family_forwarding(
+        &self,
+        selection: &crate::interface::EvidenceSelection,
+        node: crate::interface::EvidenceNodeId,
+        method: crate::interface::MethodId,
+        source: LexicalEvidenceId,
+        member: usize,
+        original_binder: crate::resolved::BinderId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<crate::resolved::BinderId, TypeError> {
+        work.charge(self.plans.len())
+            .map_err(|()| type_resource())?;
+        let mut selected = None;
+        for (primary, plan) in &self.plans {
+            work.charge(plan.family_relocations.len())
+                .map_err(|()| type_resource())?;
+            if plan.family_relocations.len() != plan.family_members.len() {
+                return Err(invalid_state());
+            }
+            for relation in &plan.family_relocations {
+                if relation.original.source != source || relation.member != member {
+                    continue;
+                }
+                if *primary == source || primary.module() != source.module() {
+                    return Err(invalid_state());
+                }
+                let final_member = plan.family_members.get(member).ok_or_else(invalid_state)?;
+                // The complete pair was authenticated at private construction.
+                // Both member Arcs are immutable; readers check the current
+                // occurrence claim without walking every retained receipt again.
+                let method_index = authenticate_family_forwarding_claim(
+                    &relation.original,
+                    selection,
+                    node,
+                    method,
+                    work,
+                )?;
+                if relation.original.forwardings[method_index].2.id() != original_binder
+                    || selected
+                        .replace(final_member.forwardings[method_index].2.id())
+                        .is_some()
+                {
+                    return Err(invalid_state());
+                }
+            }
+        }
+        selected.ok_or_else(invalid_state)
+    }
     pub(crate) fn plans(&self) -> &HashMap<LexicalEvidenceId, Arc<FinalProviderInstancePlan>> {
         &self.plans
     }
@@ -155,7 +509,7 @@ pub(crate) fn prepare_final_provider_program(
             .type_work
             .charge(inventory.len())
             .map_err(|()| type_resource())?;
-        let mut plans = HashMap::new();
+        let mut plans = HashMap::<LexicalEvidenceId, Arc<FinalProviderInstancePlan>>::new();
         plans
             .try_reserve(inventory.len())
             .map_err(|_| type_resource())?;
@@ -232,28 +586,66 @@ pub(crate) fn prepare_final_provider_program(
                 &mut compiler.type_work,
             )
             .map_err(evidence_failure)?;
-            let family_copies: Box<[CopiedProviderOccurrenceCatalog]> = if copyplan.family_phases.is_empty() {
-                Box::new([])
-            } else {
-                let family = source.family.as_ref().ok_or_else(invalid_state)?;
-                if copyplan.family_phases.len() != prepared.family_members.len() {
-                    return Err(invalid_state());
-                }
-                compiler.type_work.charge(copyplan.family_phases.len()).map_err(|()| type_resource())?;
-                let mut copies = Vec::new();
-                copies.try_reserve_exact(copyplan.family_phases.len()).map_err(|_| type_resource())?;
-                for phase in &copyplan.family_phases {
-                    copies.push(copy_provider_occurrences(
-                        ProviderOriginalTemplate::Handler(family.handler),
-                        &phase.context(),
-                        occurrence.span,
-                        &mut compiler.constraint_work,
-                        &mut compiler.type_work,
-                    ).map_err(evidence_failure)?);
-                }
-                copies.into_boxed_slice()
-            };
+            let family_copies: Box<[CopiedProviderOccurrenceCatalog]> =
+                if copyplan.family_phases.is_empty() {
+                    Box::new([])
+                } else {
+                    let family = source.family.as_ref().ok_or_else(invalid_state)?;
+                    if copyplan.family_phases.len() != prepared.family_members.len() {
+                        return Err(invalid_state());
+                    }
+                    compiler
+                        .type_work
+                        .charge(copyplan.family_phases.len())
+                        .map_err(|()| type_resource())?;
+                    let mut copies = Vec::new();
+                    copies
+                        .try_reserve_exact(copyplan.family_phases.len())
+                        .map_err(|_| type_resource())?;
+                    for phase in &copyplan.family_phases {
+                        copies.push(
+                            copy_provider_occurrences(
+                                ProviderOriginalTemplate::Handler(family.handler),
+                                &phase.context(),
+                                occurrence.span,
+                                &mut compiler.constraint_work,
+                                &mut compiler.type_work,
+                            )
+                            .map_err(evidence_failure)?,
+                        );
+                    }
+                    copies.into_boxed_slice()
+                };
             let family_members = compiler.prepare_final_family_members(&prepared.family_members)?;
+            let family_relocations = retain_family_forwarding_relocations(
+                prepared.provider(),
+                occurrence.resource.family_provider,
+                source.family.as_ref().map(|family| family.identity),
+                source.family.as_ref().map(|family| family.methods),
+                &prepared.family_members,
+                &family_members,
+                &mut compiler.type_work,
+            )?;
+            if let Some(first) = family_relocations.first() {
+                // A family lexical source belongs to exactly one prepared scope.
+                compiler
+                    .type_work
+                    .charge(plans.len())
+                    .map_err(|()| type_resource())?;
+                for existing in plans.values() {
+                    compiler
+                        .type_work
+                        .charge(existing.family_relocations.len())
+                        .map_err(|()| type_resource())?;
+                    if existing
+                        .family_relocations
+                        .iter()
+                        .any(|relation| relation.original.source == first.original.source)
+                    {
+                        return Err(invalid_state());
+                    }
+                }
+            }
             compiler.type_work.charge(1).map_err(|()| type_resource())?;
             plans.insert(
                 prepared.provider(),
@@ -262,6 +654,7 @@ pub(crate) fn prepare_final_provider_program(
                     copies: [acquire, finish, handler],
                     family_copies,
                     family_members,
+                    family_relocations,
                 }),
             );
         }
@@ -339,7 +732,11 @@ pub(crate) fn final_provider_catalog_relocations(
             Producer::Lexical { source } => Producer::Lexical {
                 source: context.lexical(source, work)?,
             },
-            Producer::ProviderFamily { source, member, binder } => Producer::ProviderFamily {
+            Producer::ProviderFamily {
+                source,
+                member,
+                binder,
+            } => Producer::ProviderFamily {
                 source: context.lexical(source, work)?,
                 member,
                 binder: context.binder(binder, work)?,
@@ -498,7 +895,12 @@ pub(crate) fn final_provider_catalog_relocations(
                 binder: context.binder(binder, work)?,
                 selection_node,
             },
-            Role::ProviderFamilyUse { source, member, selection_node, binder } => Role::ProviderFamilyUse {
+            Role::ProviderFamilyUse {
+                source,
+                member,
+                selection_node,
+                binder,
+            } => Role::ProviderFamilyUse {
                 source: context.lexical(source, work)?,
                 member,
                 selection_node,

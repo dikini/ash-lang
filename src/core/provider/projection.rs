@@ -276,10 +276,15 @@ pub(in crate::core) fn project(
     stored: &StoredNode<EffectOperationFamily>,
     work: &mut TypeWorkBudget,
 ) -> Result<NodeProjection, ValidationError> {
-    project_with::<EffectOperationFamily>(node, stored, |kind| match kind {
-        EffectExprKind::Operation(operation) => Some(operation),
-        EffectExprKind::Pure(_) => None,
-    }, work)
+    project_with::<EffectOperationFamily>(
+        node,
+        stored,
+        |kind| match kind {
+            EffectExprKind::Operation(operation) => Some(operation),
+            EffectExprKind::Pure(_) => None,
+        },
+        work,
+    )
 }
 
 enum ProjectionKind<'a> {

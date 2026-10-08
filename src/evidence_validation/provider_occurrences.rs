@@ -256,12 +256,18 @@ fn copy_owner(
         )),
         Some(MethodEvidenceOwner::ResourceFamily(definition)) => {
             types.charge(1).map_err(|()| type_resource(span))?;
-            let ProviderOriginalTemplate::Handler(handler) = original else { return Err(invalid_root(span)); };
+            let ProviderOriginalTemplate::Handler(handler) = original else {
+                return Err(invalid_root(span));
+            };
             let template = handler.original_template();
-            if template.definition() != definition || template.ordinal() != 3 { return Err(invalid_root(span)); }
+            if template.definition() != definition || template.ordinal() != 3 {
+                return Err(invalid_root(span));
+            }
             Some(MethodEvidenceOwner::ResourceFamily(definition))
         }
-        Some(MethodEvidenceOwner::Implementation(method)) => Some(MethodEvidenceOwner::Implementation(method)),
+        Some(MethodEvidenceOwner::Implementation(method)) => {
+            Some(MethodEvidenceOwner::Implementation(method))
+        }
         None => None,
     })
 }
@@ -279,6 +285,7 @@ fn mapping_failure(failure: crate::core::BuildError, span: Span) -> EvidenceVali
 pub(super) fn build_catalog_with_provider_copies<'a>(
     program: &ResolvedModuleProgram,
     registry: &LinkedInterfaceRegistry,
+    preparation: &crate::elaborate::FinalProviderPreparation,
     copies: impl Iterator<Item = &'a CopiedProviderOccurrenceCatalog>,
     constraints: &mut InterfaceConstraintBudget,
     types: &mut TypeWorkBudget,
@@ -330,7 +337,10 @@ pub(super) fn build_catalog_with_provider_copies<'a>(
         }
     }
     let mut catalog = build_method_evidence_catalog_from_inputs(
-        MethodEvidenceInputs::Linked(program),
+        MethodEvidenceInputs::FinalLinked {
+            program,
+            preparation,
+        },
         occurrences,
         Some(registry),
         constraints,

@@ -6046,7 +6046,22 @@ fn authenticate_imported_environments<'a>(
     // resource and interface kinds to be installed before checking references.
     for (_, resource) in imported.resource_facts() {
         if let Some(family) = &resource.family_template {
-            authenticate_resource_family_parameter(&module.registry, &family.parameter, budget)?;
+            crate::resolved::authenticate_resource_family_scope(
+                &family.parameter,
+                &resource.parameters,
+                &resource.answer,
+                budget,
+            )
+            .map_err(|failure| match failure {
+                crate::resolved::ResolvedBuildFailure::TypeResource => KindFailure::resource(
+                    family.parameter.origin.primary_span(),
+                    "imported resource family scope authentication exceeded its type-work budget",
+                ),
+                _ => KindFailure::internal_cause(
+                    family.parameter.origin.primary_span(),
+                    KindInternalCause::ConflictingDeclarationBinder,
+                ),
+            })?;
             environments.install_complete_owner_parameters(&resource.parameters, budget)?;
             let parameters = std::slice::from_ref(&family.parameter);
             environments.extend_owner_parameters(parameters, budget)?;

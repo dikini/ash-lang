@@ -724,17 +724,30 @@ fn renamed_typed_foundation_publishes_canonical_scalar_storage_facts() {
         assert_eq!(dictionary.size(), size);
         assert_eq!(dictionary.natural_alignment(), alignment);
     }
-    assert!(fact.operations.iter().any(|operation|
-        operation.id == storage.store()
-            && operation.result == ForeignResultFact::Store { storage: storage.effect() }));
-    assert!(fact.operations.iter().any(|operation|
-        operation.id == storage.load()
-            && operation.result == ForeignResultFact::Load { storage: storage.effect() }));
+    assert!(
+        fact.operations
+            .iter()
+            .any(|operation| operation.id == storage.store()
+                && operation.result
+                    == ForeignResultFact::Store {
+                        storage: storage.effect()
+                    })
+    );
+    assert!(
+        fact.operations
+            .iter()
+            .any(|operation| operation.id == storage.load()
+                && operation.result
+                    == ForeignResultFact::Load {
+                        storage: storage.effect()
+                    })
+    );
 }
 
 #[test]
 fn malformed_typed_foundation_contracts_reject_before_execution_boundary() {
-    let mutations: [(&str, fn(&mut ForeignManifestSchema)); 10] = [
+    type ManifestMutation = fn(&mut ForeignManifestSchema);
+    let mutations: [(&str, ManifestMutation); 10] = [
         ("witness coordinate", |schema| {
             schema.types[4].category = ForeignTypeCategory::LayoutWitness {
                 payload_parameter: 1,
@@ -825,7 +838,13 @@ fn typed_foundation_parameter_coordinates_are_independent() {
         let storage = fact.storage.as_ref().unwrap();
         assert_eq!(storage.owner_parameter(), usize::from(reverse_storage));
         assert_eq!(storage.payload_parameter(), usize::from(!reverse_storage));
-        assert_eq!(storage.reference_owner_parameter(), usize::from(!reverse_storage));
-        assert_eq!(storage.reference_payload_parameter(), usize::from(reverse_storage));
+        assert_eq!(
+            storage.reference_owner_parameter(),
+            usize::from(!reverse_storage)
+        );
+        assert_eq!(
+            storage.reference_payload_parameter(),
+            usize::from(reverse_storage)
+        );
     }
 }

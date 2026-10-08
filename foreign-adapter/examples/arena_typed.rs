@@ -8,7 +8,9 @@
 
 use ash::{
     driver::{RunConfiguration, run_path_with_foreign_runtime},
-    foreign::{ForeignRegistrations, typed_arena_manifest, provider_manifest, runtime::ForeignRuntime},
+    foreign::{
+        ForeignRegistrations, provider_manifest, runtime::ForeignRuntime, typed_arena_manifest,
+    },
     module::{ForeignRegistrationId, ModuleRoots},
 };
 use ash_foreign_adapter::{ArenaObservations, arena_binding};
@@ -16,12 +18,18 @@ use std::{error::Error, io, path::PathBuf, sync::Arc};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut arguments = std::env::args_os().skip(1);
-    let entry = arguments
-        .next()
-        .map(PathBuf::from)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "usage: arena_typed <entry.ash>"))?;
+    let entry = arguments.next().map(PathBuf::from).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "usage: arena_typed <entry.ash>",
+        )
+    })?;
     if arguments.next().is_some() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "usage: arena_typed <entry.ash>").into());
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "usage: arena_typed <entry.ash>",
+        )
+        .into());
     }
     let registrations = ForeignRegistrations::new([
         provider_manifest(ForeignRegistrationId::new(1))?,
@@ -46,6 +54,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     for event in observations.events() {
         eprintln!("{event:?}");
     }
-    println!("{}", result?.value_display());
+    let result = result?;
+    eprintln!("{:?}", result.compilation_work());
+    println!("{}", result.value_display());
     Ok(())
 }

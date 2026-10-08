@@ -13808,7 +13808,8 @@ impl ExportSummary {
             if interface.parameters != expected.parameters
                 || interface.origin != expected.origin
                 || interface.methods.len() != expected.methods.len()
-                || interface.determination.as_ref().map(|key| key.positions()) != Some(&[0][..])
+                || interface.determination.as_ref().map(|key| key.positions())
+                    != canonical_foreign_determinant_positions(fact, expected)?
             {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
@@ -17340,6 +17341,20 @@ fn charge_foreign_effect_comparison(
     }
     Ok(())
 }
+
+/// Authenticated foreign declarations currently admit the StateAccess key and
+/// undetermined interfaces. Keep the existing fixed-key comparison tariff.
+fn canonical_foreign_determinant_positions(
+    fact: &crate::foreign::ForeignModuleFact,
+    interface: &ResolvedInterfaceDeclaration,
+) -> Result<Option<&'static [usize]>, ResolvedBuildFailure> {
+    match (&interface.determination, &fact.state_access) {
+        (None, _) => Ok(None),
+        (Some(_), Some(state_access)) if state_access.interface == interface.id => Ok(Some(&[0])),
+        _ => Err(ResolvedBuildFailure::InvalidState),
+    }
+}
+
 fn authenticate_foreign_registry(
     registry: &ResolvedRegistry,
     fact: &crate::foreign::ForeignModuleFact,
@@ -17443,10 +17458,12 @@ fn authenticate_foreign_interfaces(
             || mirror.origin != canonical.origin
             || mirror.span != canonical.span
             || mirror.methods.len() != canonical.methods.len()
-            || mirror.determinant_positions() != Some(&[0][..])
+            || mirror.determinant_positions()
+                != canonical_foreign_determinant_positions(fact, canonical)?
             || checked.id != canonical.id
             || checked.source_index != index
-            || checked.determinant_positions() != Some(&[0][..])
+            || checked.determinant_positions()
+                != canonical_foreign_determinant_positions(fact, canonical)?
         {
             return Err(ResolvedBuildFailure::InvalidState);
         }
@@ -18162,6 +18179,9 @@ fn checked_registry_counts(
                     fact.parameters
                         .len()
                         .checked_add(1)
+                        .and_then(|count| {
+                            count.checked_add(usize::from(fact.family_template.is_some()))
+                        })
                         .ok_or(ResolvedBuildFailure::ConstraintResource)?,
                 )?;
             }
@@ -18707,7 +18727,12 @@ fn validate_checked_registries<'a>(
         if let Some(code) = &checked.providers {
             for (_, _, fact) in code.contracts().resource_contracts() {
                 let mut previous = None;
-                for parameter in fact.parameters.iter().chain(std::iter::once(&fact.answer)) {
+                for parameter in fact
+                    .parameters
+                    .iter()
+                    .chain(fact.family_template.iter().map(|family| &family.parameter))
+                    .chain(std::iter::once(&fact.answer))
+                {
                     constraint_work
                         .charge(1)
                         .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
@@ -19524,9 +19549,13 @@ impl ResolvedRegistry {
         producer: crate::foreign::ForeignLayoutProducer,
         work: &mut TypeWorkBudget,
     ) -> Result<Arc<crate::foreign::ForeignLayoutDictionary>, ResolvedBuildFailure> {
-        work.charge(self.foreign_modules.len().checked_add(1)
-            .ok_or(ResolvedBuildFailure::TypeResource)?)
-            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        work.charge(
+            self.foreign_modules
+                .len()
+                .checked_add(1)
+                .ok_or(ResolvedBuildFailure::TypeResource)?,
+        )
+        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
         self.foreign_layout(producer.interface())
             .and_then(|layout| layout.dictionary_for_producer(producer))
             .ok_or(ResolvedBuildFailure::InvalidState)
@@ -21049,10 +21078,18 @@ impl ResolvedRegistry {
                     fact.parameters
                         .len()
                         .checked_add(1)
+                        .and_then(|count| {
+                            count.checked_add(usize::from(fact.family_template.is_some()))
+                        })
                         .ok_or(ResolvedBuildFailure::TypeResource)?,
                 )
                 .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-                for parameter in fact.parameters.iter().chain(std::iter::once(&fact.answer)) {
+                for parameter in fact
+                    .parameters
+                    .iter()
+                    .chain(fact.family_template.iter().map(|family| &family.parameter))
+                    .chain(std::iter::once(&fact.answer))
+                {
                     let canonical = self
                         .type_variables
                         .get(&parameter.id)
@@ -36457,7 +36494,7 @@ impl ResolvedRegistry {
     }
 }
 
-fn authenticate_resource_family_scope(
+pub(crate) fn authenticate_resource_family_scope(
     parameter: &ResolvedTypeVariable,
     owners: &[ResolvedTypeVariable],
     answer: &ResolvedTypeVariable,
@@ -36964,6 +37001,168 @@ mod foreign_certificate_tests {
     }
     fn foreign_module() -> CheckedModule {
         registered_module(sqlite_manifest(ForeignRegistrationId::new(1)).unwrap())
+    }
+    #[test]
+    fn foreign_determinations_match_registered_layout_and_state_access_authority() {
+        let registered = |layout| {
+            registered_module(if layout {
+                crate::foreign::typed_arena_manifest(ForeignRegistrationId::new(3)).unwrap()
+            } else {
+                provider_manifest(ForeignRegistrationId::new(2)).unwrap()
+            })
+        };
+        // The actual checked foreign modules must pass both admissions before
+        // any malformed carrier can count as a negative result.
+        for layout in [false, true] {
+            let module = registered(layout);
+            let spelling = if layout { "Layout" } else { "StateAccess" };
+            let expected = if layout { None } else { Some(&[0][..]) };
+            assert_eq!(
+                module
+                    .exports
+                    .interface(spelling)
+                    .unwrap()
+                    .determinant_positions(),
+                expected
+            );
+            let mut summary_types = TypeWorkBudget::unbounded();
+            let mut summary_constraints =
+                crate::interface::InterfaceConstraintBudget::with_limit(usize::MAX);
+            module
+                .exports
+                .authenticate(&mut summary_types, &mut summary_constraints)
+                .expect("untouched registered exports must authenticate");
+            let mut linked_types = TypeWorkBudget::unbounded();
+            let mut linked_constraints =
+                crate::interface::InterfaceConstraintBudget::with_limit(usize::MAX);
+            ResolvedRegistry::combine_checked(
+                std::slice::from_ref(&module),
+                &mut linked_types,
+                &mut linked_constraints,
+            )
+            .expect("the untouched registered checked module must link");
+            let fact = module
+                .registry
+                .foreign_modules
+                .get(&module.module())
+                .unwrap();
+            authenticate_foreign_interfaces(
+                std::slice::from_ref(&module),
+                fact,
+                &mut TypeWorkBudget::default(),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            )
+            .expect(
+                "the exact foreign-interface boundary must admit its original checked carriers",
+            );
+            // Replay each real admission against its cumulative measured cost,
+            // including a nonzero prefix in both independent ledgers.
+            for prefix in [0, 17] {
+                let mut types = TypeWorkBudget::with_limit(prefix + summary_types.used());
+                let mut constraints = crate::interface::InterfaceConstraintBudget::with_limit(
+                    prefix + summary_constraints.used(),
+                );
+                types.charge(prefix).unwrap();
+                constraints.charge(prefix).unwrap();
+                module
+                    .exports
+                    .authenticate(&mut types, &mut constraints)
+                    .unwrap();
+                assert_eq!(types.used(), prefix + summary_types.used());
+                assert_eq!(constraints.used(), prefix + summary_constraints.used());
+                let mut types = TypeWorkBudget::with_limit(prefix + linked_types.used());
+                let mut constraints = crate::interface::InterfaceConstraintBudget::with_limit(
+                    prefix + linked_constraints.used(),
+                );
+                types.charge(prefix).unwrap();
+                constraints.charge(prefix).unwrap();
+                ResolvedRegistry::combine_checked(
+                    std::slice::from_ref(&module),
+                    &mut types,
+                    &mut constraints,
+                )
+                .unwrap();
+                assert_eq!(types.used(), prefix + linked_types.used());
+                assert_eq!(constraints.used(), prefix + linked_constraints.used());
+            }
+        }
+        // Layout has no key. StateAccess retains its genuine [0] key: neither
+        // removing it nor substituting the dependent coordinate is authorized.
+        for (layout, remove) in [(true, false), (false, true), (false, false)] {
+            for carrier in 0..3 {
+                let mut module = registered(layout);
+                let spelling = if layout { "Layout" } else { "StateAccess" };
+                let index = module
+                    .interfaces
+                    .iter()
+                    .position(|interface| interface.spelling == spelling)
+                    .unwrap();
+                let id = module.interfaces[index].id;
+                assert_eq!(module.interface_facts[index].id, id);
+                assert_eq!(module.checked_interfaces[index].id, id);
+                let replacement = if remove {
+                    None
+                } else {
+                    Some(DeterminationKey::new(
+                        vec![usize::from(!layout)].into_boxed_slice(),
+                    ))
+                };
+                if carrier == 0 {
+                    // DerefMut detaches the genuine checked fixture fact; the
+                    // immutable foreign registration and source stay original.
+                    module
+                        .exports
+                        .interfaces
+                        .iter_mut()
+                        .find(|interface| interface.id == id)
+                        .unwrap()
+                        .determination = replacement;
+                    assert_eq!(
+                        module.exports.authenticate(
+                            &mut TypeWorkBudget::default(),
+                            &mut crate::interface::InterfaceConstraintBudget::default(),
+                        ),
+                        Err(ResolvedBuildFailure::InvalidState),
+                        "layout={layout}, remove={remove}, export carrier",
+                    );
+                } else {
+                    if carrier == 1 {
+                        module.interface_facts[index].determination = replacement;
+                    } else {
+                        module.checked_interfaces[index]
+                            .replace_determination_for_test(replacement);
+                    }
+                    // Exercise the production foreign boundary as well as
+                    // full linking, so another structural guard cannot mask
+                    // acceptance of a counterfeit determination here.
+                    let fact = module
+                        .registry
+                        .foreign_modules
+                        .get(&module.module())
+                        .unwrap();
+                    assert_eq!(
+                        authenticate_foreign_interfaces(
+                            std::slice::from_ref(&module),
+                            fact,
+                            &mut TypeWorkBudget::default(),
+                            &mut crate::interface::InterfaceConstraintBudget::default(),
+                        ),
+                        Err(ResolvedBuildFailure::InvalidState),
+                    );
+                    assert!(
+                        matches!(
+                            ResolvedRegistry::combine_checked(
+                                &[module],
+                                &mut TypeWorkBudget::default(),
+                                &mut crate::interface::InterfaceConstraintBudget::default(),
+                            ),
+                            Err(ResolvedBuildFailure::InvalidState)
+                        ),
+                        "layout={layout}, remove={remove}, linked carrier={carrier}"
+                    );
+                }
+            }
+        }
     }
     #[test]
     fn linked_registry_rejects_changed_state_access_signature_and_checked_mirror() {

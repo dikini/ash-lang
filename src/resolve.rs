@@ -10314,14 +10314,22 @@ impl Resolver {
         let (provider, forwarding) = self.reserve_resource_forwarding(family, span)?;
         let family_provider = if self.handler_family_resources.contains(&family) {
             self.type_work.charge(1).map_err(|()| {
-                error(ResolveReason::TypeResourceExhausted, span,
-                    "resource family evidence identity exceeded its budget")
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "resource family evidence identity exceeded its budget",
+                )
             })?;
-            let id = crate::interface::LexicalEvidenceId::new(self.module, self.next_lexical_evidence);
-            self.next_lexical_evidence = self.next_lexical_evidence.checked_add(1).ok_or_else(|| {
-                identity_error(ResolveIdentitySpace::LexicalEvidence, span,
-                    "resource family evidence identity exhausted")
-            })?;
+            let id =
+                crate::interface::LexicalEvidenceId::new(self.module, self.next_lexical_evidence);
+            self.next_lexical_evidence =
+                self.next_lexical_evidence.checked_add(1).ok_or_else(|| {
+                    identity_error(
+                        ResolveIdentitySpace::LexicalEvidence,
+                        span,
+                        "resource family evidence identity exhausted",
+                    )
+                })?;
             Some(id)
         } else {
             None
@@ -10970,7 +10978,9 @@ impl Resolver {
                         || self
                             .imported
                             .foreign_state_access_interface(application.interface.id)
-                        || self.imported.foreign_layout_interface(application.interface.id)
+                        || self
+                            .imported
+                            .foreign_layout_interface(application.interface.id)
                     {
                         return Err(error(
                             ResolveReason::SealedProvider,
@@ -19614,12 +19624,18 @@ impl Resolver {
             return Ok(());
         }
         self.type_work.charge(1).map_err(|()| {
-            error(ResolveReason::TypeResourceExhausted, span,
-                "resource family classification exceeded its budget")
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "resource family classification exceeded its budget",
+            )
         })?;
         self.handler_family_resources.try_reserve(1).map_err(|_| {
-            error(ResolveReason::TypeResourceExhausted, span,
-                "resource family classification could not reserve storage")
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "resource family classification could not reserve storage",
+            )
         })?;
         self.handler_family_resources.insert(family);
         Ok(())

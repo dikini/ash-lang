@@ -98,6 +98,94 @@ impl PreparedPhaseCopy {
         }
     }
 }
+// Preparation retains genuine inventories before any target allocation.
+// These are compiler claims; final validation still checks the complete union.
+struct PreparedPhaseAllocation {
+    phase: PreparedPhaseCopy,
+    binders: Box<[BinderId]>,
+    types: Box<[(TypeVariableId, Kind)]>,
+    handlers: Box<[HandlerId]>,
+    resumes: Box<[ResumeId]>,
+    nominals: Box<[NominalTypeId]>,
+    lexicals: Box<[LexicalEvidenceId]>,
+}
+#[derive(Default)]
+struct ScopeCopyForbidden {
+    binders: HashSet<BinderId>,
+    types: HashSet<TypeVariableId>,
+    handlers: HashSet<HandlerId>,
+    resumes: HashSet<ResumeId>,
+    nominals: HashSet<NominalTypeId>,
+    lexicals: HashSet<LexicalEvidenceId>,
+}
+impl ScopeCopyForbidden {
+    fn retain(
+        &mut self,
+        allocation: &PreparedPhaseAllocation,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), TypeError> {
+        if !allocation.nominals.is_empty() {
+            return Err(invalid_state());
+        } // target registry proof remains a later obligation
+        for (count, reserve) in [
+            (allocation.binders.len(), 0),
+            (allocation.types.len(), 1),
+            (allocation.handlers.len(), 2),
+            (allocation.resumes.len(), 3),
+            (allocation.lexicals.len(), 4),
+        ] {
+            work.charge(count).map_err(|()| type_resource())?;
+            match reserve {
+                0 => self.binders.try_reserve(count),
+                1 => self.types.try_reserve(count),
+                2 => self.handlers.try_reserve(count),
+                3 => self.resumes.try_reserve(count),
+                _ => self.lexicals.try_reserve(count),
+            }
+            .map_err(|_| type_resource())?;
+        }
+        self.binders.extend(allocation.binders.iter().copied());
+        self.types
+            .extend(allocation.types.iter().map(|(id, _)| *id));
+        self.handlers.extend(allocation.handlers.iter().copied());
+        self.resumes.extend(allocation.resumes.iter().copied());
+        self.lexicals.extend(allocation.lexicals.iter().copied());
+        // Local nominal copies remain unsupported until target registry proof
+        // exists. This empty set records the complete guarded namespace.
+        self.nominals.extend(allocation.nominals.iter().copied());
+        Ok(())
+    }
+    fn retain_payloads(
+        &mut self,
+        phase: &PreparedPhaseCopy,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), TypeError> {
+        let count = phase
+            .sigma
+            .types
+            .as_map()
+            .len()
+            .checked_add(phase.sigma.rows.len())
+            .and_then(|count| count.checked_add(phase.pending.len()))
+            .and_then(|count| count.checked_add(phase.node_rows.len()))
+            .ok_or_else(type_resource)?;
+        work.charge(count).map_err(|()| type_resource())?;
+        for ty in phase.sigma.types.as_map().values() {
+            retain_type_payload_variables(ty, &mut self.types, work)?;
+        }
+        for row in phase
+            .sigma
+            .rows
+            .values()
+            .chain(phase.pending.values())
+            .chain(phase.node_rows.values())
+        {
+            retain_row_payload_variables(row, &mut self.types, work)?;
+        }
+        Ok(())
+    }
+}
+
 pub(in crate::elaborate) struct PreparedScopeCopyPlan {
     pub(in crate::elaborate) phases: [PreparedPhaseCopy; 3],
     pub(in crate::elaborate) family_phases: Box<[PreparedPhaseCopy]>,
@@ -126,49 +214,117 @@ pub(in crate::elaborate) fn lower_family_scope_copies(
     catalogs: Option<&[Vec<ProviderCatalogRelocation>]>,
     work: &mut TypeWorkBudget,
 ) -> Result<Vec<FamilyCopiedEntries>, TypeError> {
-    use crate::core::{provider::{copy_prepared_provider_forest, copy_provider_forest}, transform};
+    use crate::core::{
+        provider::{copy_prepared_provider_forest, copy_provider_forest},
+        transform,
+    };
     fn failure(error: transform::TransformError) -> TypeError {
-        match error { transform::TransformError::Build(error) => error.into(), _ => invalid_state() }
+        match error {
+            transform::TransformError::Build(error) => error.into(),
+            _ => invalid_state(),
+        }
     }
     if catalogs.is_some_and(|catalogs| catalogs.len() != plan.family_phases.len()) {
         return Err(invalid_state());
     }
-    if plan.family_phases.is_empty() { return Ok(Vec::new()); }
+    if plan.family_phases.is_empty() {
+        return Ok(Vec::new());
+    }
     let original = source.family.ok_or_else(invalid_state)?.handler;
-    work.charge(plan.family_phases.len()).map_err(|()| type_resource())?;
+    work.charge(plan.family_phases.len())
+        .map_err(|()| type_resource())?;
     let mut copied = Vec::new();
-    copied.try_reserve_exact(plan.family_phases.len()).map_err(|_| type_resource())?;
+    copied
+        .try_reserve_exact(plan.family_phases.len())
+        .map_err(|_| type_resource())?;
     transform::begin_provider_draft_work(builder, work.remaining());
     let result = (|| {
         for (index, phase) in plan.family_phases.iter().enumerate() {
-            work.charge(original.original_clauses().len().checked_add(original.original_dictionary_parameters().len()).ok_or_else(type_resource)?)
-                .map_err(|()| type_resource())?;
+            work.charge(
+                original
+                    .original_clauses()
+                    .len()
+                    .checked_add(original.original_dictionary_parameters().len())
+                    .ok_or_else(type_resource)?,
+            )
+            .map_err(|()| type_resource())?;
             let mut roots = Vec::new();
-            roots.try_reserve_exact(original.original_clauses().len()).map_err(|_| type_resource())?;
+            roots
+                .try_reserve_exact(original.original_clauses().len())
+                .map_err(|_| type_resource())?;
             roots.extend(original.original_clauses().iter().map(EffectClause::body));
             let context = phase.context();
             let replacements = HashMap::new();
             let forest = match catalogs {
-                Some(catalogs) => copy_provider_forest(builder, original.original_program(), &roots, &replacements, &context, &catalogs[index]),
-                None => copy_prepared_provider_forest(builder, original.original_program(), &roots, &replacements, &context),
-            }.map_err(failure)?;
-            if forest.roots.len() != original.original_clauses().len() { return Err(invalid_state()); }
-            let state = transform::rebuild_provider_fragment_binder_with_context(builder, original.original_state(), &context).map_err(failure)?;
-            let handler = *phase.handlers.get(&original.original_handler()).ok_or_else(invalid_state)?;
+                Some(catalogs) => copy_provider_forest(
+                    builder,
+                    original.original_program(),
+                    &roots,
+                    &replacements,
+                    &context,
+                    &catalogs[index],
+                ),
+                None => copy_prepared_provider_forest(
+                    builder,
+                    original.original_program(),
+                    &roots,
+                    &replacements,
+                    &context,
+                ),
+            }
+            .map_err(failure)?;
+            if forest.roots.len() != original.original_clauses().len() {
+                return Err(invalid_state());
+            }
+            let state = transform::rebuild_provider_fragment_binder_with_context(
+                builder,
+                original.original_state(),
+                &context,
+            )
+            .map_err(failure)?;
+            let handler = *phase
+                .handlers
+                .get(&original.original_handler())
+                .ok_or_else(invalid_state)?;
             let mut dictionaries = Vec::new();
-            dictionaries.try_reserve_exact(original.original_dictionary_parameters().len()).map_err(|_| type_resource())?;
+            dictionaries
+                .try_reserve_exact(original.original_dictionary_parameters().len())
+                .map_err(|_| type_resource())?;
             for binder in original.original_dictionary_parameters() {
-                dictionaries.push(transform::rebuild_provider_fragment_binder_with_context(builder, binder, &context).map_err(failure)?);
+                dictionaries.push(
+                    transform::rebuild_provider_fragment_binder_with_context(
+                        builder, binder, &context,
+                    )
+                    .map_err(failure)?,
+                );
             }
             let mut clauses = Vec::new();
-            clauses.try_reserve_exact(original.original_clauses().len()).map_err(|_| type_resource())?;
+            clauses
+                .try_reserve_exact(original.original_clauses().len())
+                .map_err(|_| type_resource())?;
             for (clause, body) in original.original_clauses().iter().zip(&forest.roots) {
                 let resume = context.resume(clause.resume(), work)?;
-                let origin = transform::rebuild_provider_fragment_origin(builder, clause.origin()).map_err(failure)?;
-                let pattern = transform::rebuild_provider_fragment_pattern_with_context(builder, clause.pattern(), &context).map_err(failure)?;
-                clauses.push(EffectClause::new(clause.operation(), resume, crate::core::CoreMatchArm::new(pattern, *body, origin)));
+                let origin = transform::rebuild_provider_fragment_origin(builder, clause.origin())
+                    .map_err(failure)?;
+                let pattern = transform::rebuild_provider_fragment_pattern_with_context(
+                    builder,
+                    clause.pattern(),
+                    &context,
+                )
+                .map_err(failure)?;
+                clauses.push(EffectClause::new(
+                    clause.operation(),
+                    resume,
+                    crate::core::CoreMatchArm::new(pattern, *body, origin),
+                ));
             }
-            copied.push(FamilyCopiedEntries { state, handler, clauses, dictionaries, forest });
+            copied.push(FamilyCopiedEntries {
+                state,
+                handler,
+                clauses,
+                dictionaries,
+                forest,
+            });
         }
         Ok(())
     })();
@@ -364,28 +520,71 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         module: crate::module::ModuleId,
         origin: Span,
     ) -> Result<PreparedScopeCopyPlan, TypeError> {
-        if members.len() != rows.len() { return Err(invalid_state()); }
-        let mut plan = self.prepare_scope_copy_plan(source, actuals, body, primary, module, origin)?;
-        if members.is_empty() { return Ok(plan); }
-        let family = source.family.as_ref().ok_or_else(invalid_state)?;
-        self.type_work.charge(members.len()).map_err(|()| type_resource())?;
-        let mut phases = Vec::new(); phases.try_reserve_exact(members.len()).map_err(|_| type_resource())?;
-        let family_source = super::super::provider::ProviderTemplateSource {
-            handler: family.handler, handler_occurrences: family.occurrences, methods: family.methods, ..*source
-        };
-        for (member, rows) in members.iter().zip(rows) {
-            if member.identity() != family.identity { return Err(invalid_state()); }
-            // Reuse the existing charged allocator and complete forbidden-ID
-            // reconstruction. Lifecycle scratch phases are discarded; only
-            // this member's handler phase enters the single-owner scope.
-            let prepared = self.prepare_scope_copy_plan_with_payload(&family_source, actuals, body,
-                ProviderScopeCopyRows { residual: rows.residual(), pending: rows.pending(), nodes: rows.node_rows() },
-                module, origin, Some((family.identity.parameter, &member.payload)))?;
-            let [_, _, handler] = prepared.phases;
-            phases.push(handler);
+        if members.len() != rows.len() {
+            return Err(invalid_state());
         }
-        plan.family_phases = phases.into_boxed_slice();
-        Ok(plan)
+        if members.is_empty() {
+            return self.prepare_scope_copy_plan(source, actuals, body, primary, module, origin);
+        }
+        let family = source.family.as_ref().ok_or_else(invalid_state)?;
+        let primary_rows = ProviderScopeCopyRows {
+            residual: primary.residual(),
+            pending: primary.pending(),
+            nodes: primary.node_rows(),
+        };
+        let primary_inputs =
+            self.prepare_scope_copy_phase_inputs(source, actuals, body, &primary_rows, None)?;
+        self.type_work
+            .charge(members.len())
+            .map_err(|()| type_resource())?;
+        let mut family_inputs = Vec::new();
+        family_inputs
+            .try_reserve_exact(members.len())
+            .map_err(|_| type_resource())?;
+        for (member, rows) in members.iter().zip(rows) {
+            if member.identity() != family.identity {
+                return Err(invalid_state());
+            }
+            let rows = ProviderScopeCopyRows {
+                residual: rows.residual(),
+                pending: rows.pending(),
+                nodes: rows.node_rows(),
+            };
+            let original = ProviderOriginalTemplate::Handler(family.handler);
+            let phase = self.prepare_copy_phase_sigma(
+                original,
+                source,
+                actuals,
+                body,
+                &rows,
+                Some((family.identity.parameter, &member.payload)),
+            )?;
+            family_inputs.push(self.prepare_copy_phase_inventory(original, phase)?);
+        }
+        // The immutable group covers primary and every actual family handler.
+        // No target allocator has run while either original namespace was absent.
+        let mut forbidden = ScopeCopyForbidden::default();
+        for allocation in primary_inputs.iter().chain(&family_inputs) {
+            forbidden.retain(allocation, &mut self.type_work)?;
+            forbidden.retain_payloads(&allocation.phase, &mut self.type_work)?;
+        }
+        retain_row_payload_variables(body.effects(), &mut forbidden.types, &mut self.type_work)?;
+        let phases =
+            self.allocate_primary_copy_phases(primary_inputs, &forbidden, module, origin)?;
+        self.type_work
+            .charge(members.len())
+            .map_err(|()| type_resource())?;
+        let mut family_phases = Vec::new();
+        family_phases
+            .try_reserve_exact(members.len())
+            .map_err(|_| type_resource())?;
+        for allocation in family_inputs {
+            family_phases.push(self.allocate_copy_phase(allocation, &forbidden, module, origin)?);
+        }
+        Ok(PreparedScopeCopyPlan {
+            phases,
+            family_phases: family_phases.into_boxed_slice(),
+        })
     }
 
     pub(in crate::elaborate) fn prepare_scope_copy_plan_with_rows(
@@ -411,6 +610,35 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         origin: Span,
         payload: Option<(TypeVariableId, &Type)>,
     ) -> Result<PreparedScopeCopyPlan, TypeError> {
+        let inputs = self.prepare_scope_copy_phase_inputs(source, actuals, body, &rows, payload)?;
+        let mut forbidden = ScopeCopyForbidden::default();
+        for allocation in &inputs {
+            forbidden.retain(allocation, &mut self.type_work)?;
+        }
+        // Preserve the legacy caller-payload traversal and debit exactly.
+        retain_original_copy_payload_variables(
+            actuals.arguments(),
+            body,
+            rows.residual,
+            &inputs[2].phase.pending,
+            &mut forbidden.types,
+            &mut self.type_work,
+        )?;
+        let phases = self.allocate_primary_copy_phases(inputs, &forbidden, module, origin)?;
+        Ok(PreparedScopeCopyPlan {
+            phases,
+            family_phases: Box::new([]),
+        })
+    }
+
+    fn prepare_scope_copy_phase_inputs(
+        &mut self,
+        source: &super::super::provider::ProviderTemplateSource<'_>,
+        actuals: &ResourceActuals,
+        body: &ComputationType,
+        rows: &ProviderScopeCopyRows<'_>,
+        payload: Option<(TypeVariableId, &Type)>,
+    ) -> Result<Vec<PreparedPhaseAllocation>, TypeError> {
         if actuals.arguments().len() != source.fact.parameters.len() {
             return Err(invalid_state());
         }
@@ -419,267 +647,299 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             ProviderOriginalTemplate::Lifecycle(source.finish.original, source.finish.program),
             ProviderOriginalTemplate::Handler(source.handler),
         ];
-        let mut phases = [
-            PreparedPhaseCopy::empty(),
-            PreparedPhaseCopy::empty(),
-            PreparedPhaseCopy::empty(),
+        // Keep all sigma construction before inventories, as in the legacy path.
+        let phases = [
+            self.prepare_copy_phase_sigma(originals[0], source, actuals, body, rows, None)?,
+            self.prepare_copy_phase_sigma(originals[1], source, actuals, body, rows, None)?,
+            self.prepare_copy_phase_sigma(originals[2], source, actuals, body, rows, payload)?,
         ];
-        for (index, phase) in phases.iter_mut().enumerate() {
-            match originals[index] {
-                ProviderOriginalTemplate::Lifecycle(original, _) => {
-                    if original.formals().len() != actuals.arguments().len() {
-                        return Err(invalid_state());
-                    }
-                    for ((_, generated, _), actual) in
-                        original.formals().iter().zip(actuals.arguments())
-                    {
-                        phase
-                            .sigma
-                            .insert_cloned(*generated, actual, &mut self.type_work)?;
-                    }
-                }
-                ProviderOriginalTemplate::Handler(_) => {
-                    for (formal, actual) in source.fact.parameters.iter().zip(actuals.arguments()) {
-                        phase
-                            .sigma
-                            .insert_cloned(formal.id, actual, &mut self.type_work)?;
-                    }
-                }
-            }
-            if index == 2 && let Some((parameter, payload)) = payload {
-                phase.sigma.insert_borrowed(parameter, crate::elaborate::BorrowedOwnerArgument::TypeArg(payload), &mut self.type_work)?;
-            }
-            let hidden = match originals[index] {
-                ProviderOriginalTemplate::Lifecycle(original, _) => original.hidden(),
-                ProviderOriginalTemplate::Handler(original) => original.original_hidden(),
-            };
-            if hidden[0].1 != Kind::Type || hidden[1].1 != Kind::EffectRow {
-                return Err(invalid_state());
-            }
-            phase.sigma.insert_borrowed(
-                hidden[0].0,
-                crate::elaborate::BorrowedOwnerArgument::TypeArg(body.value()),
-                &mut self.type_work,
-            )?;
-            phase.sigma.insert_borrowed(
-                hidden[1].0,
-                crate::elaborate::BorrowedOwnerArgument::RowArg(rows.residual),
-                &mut self.type_work,
-            )?;
-            if index == 2 {
-                self.type_work
-                    .charge(rows.pending.len())
-                    .map_err(|()| type_resource())?;
-                phase
-                    .pending
-                    .try_reserve(rows.pending.len())
-                    .map_err(|_| type_resource())?;
-                for (id, row) in rows.pending {
-                    phase.pending.insert(
-                        *id,
-                        clone_effect_row_with_budget(row, &mut self.type_work)
-                            .map_err(|()| type_resource())?,
-                    );
-                }
-                self.type_work
-                    .charge(rows.nodes.len())
-                    .map_err(|()| type_resource())?;
-                phase
-                    .node_rows
-                    .try_reserve(rows.nodes.len())
-                    .map_err(|_| type_resource())?;
-                for (node, row) in rows.nodes {
-                    phase.node_rows.insert(
-                        *node,
-                        clone_effect_row_with_budget(row, &mut self.type_work)
-                            .map_err(|()| type_resource())?,
-                    );
-                }
-            }
-        }
-        let mut inventories = Vec::new();
         self.type_work.charge(3).map_err(|()| type_resource())?;
-        inventories
-            .try_reserve_exact(3)
-            .map_err(|_| type_resource())?;
-        for (original, phase) in originals.iter().zip(&phases) {
-            inventories.push(
-                original
-                    .local_identities(&phase.substitution(), &mut self.type_work)
-                    .map_err(validation)?,
-            );
+        let mut inputs = Vec::new();
+        inputs.try_reserve_exact(3).map_err(|_| type_resource())?;
+        for (original, phase) in originals.into_iter().zip(phases) {
+            inputs.push(self.prepare_copy_phase_inventory(original, phase)?);
         }
-        // All originals are known before allocating targets, so one phase can
-        // never accidentally choose a local identity from another phase.
-        let mut forbidden_binders = HashSet::new();
-        let mut forbidden_types = HashSet::new();
-        let mut forbidden_handlers = HashSet::new();
-        let mut forbidden_resumes = HashSet::new();
-        let mut forbidden_lexicals = HashSet::new();
-        for inventory in &inventories {
-            if !inventory.nominals.is_empty() {
-                return Err(invalid_state());
-            } // target registry proof remains a later obligation
-            for (count, reserve) in [
-                (inventory.binders.len(), 0),
-                (inventory.types.len(), 1),
-                (inventory.handlers.len(), 2),
-                (inventory.resumes.len(), 3),
-                (inventory.lexicals.len(), 4),
-            ] {
-                self.type_work.charge(count).map_err(|()| type_resource())?;
-                match reserve {
-                    0 => forbidden_binders.try_reserve(count),
-                    1 => forbidden_types.try_reserve(count),
-                    2 => forbidden_handlers.try_reserve(count),
-                    3 => forbidden_resumes.try_reserve(count),
-                    _ => forbidden_lexicals.try_reserve(count),
-                }
-                .map_err(|_| type_resource())?;
-            }
-            forbidden_binders.extend(inventory.binders.iter().copied());
-            forbidden_types.extend(inventory.types.iter().map(|(id, _)| *id));
-            forbidden_handlers.extend(inventory.handlers.iter().copied());
-            forbidden_resumes.extend(inventory.resumes.iter().copied());
-            forbidden_lexicals.extend(inventory.lexicals.iter().copied());
-        }
-        // Actual replacements are immutable caller payloads. Fresh local
-        // binders must not capture any free or forall-bound identity inside
-        // them, including nested row members/lacks and pending row solutions.
-        retain_original_copy_payload_variables(
-            actuals.arguments(),
-            body,
-            rows.residual,
-            &phases[2].pending,
-            &mut forbidden_types,
-            &mut self.type_work,
-        )?;
-        for (phase, inventory) in phases.iter_mut().zip(inventories) {
-            reserve_pair(
-                &mut phase.binders,
-                &mut phase.binder_pairs,
-                inventory.binders.len(),
-                &mut self.type_work,
-            )?;
-            for old in inventory.binders.iter() {
-                let fresh = loop {
-                    let builder = F::effect_builder(&mut self.builder).ok_or_else(invalid_state)?;
-                    crate::core::transform::begin_provider_draft_work(
-                        builder,
-                        self.type_work.remaining(),
-                    );
-                    let allocated = builder.allocate_provider_copy_binders(1);
-                    crate::core::transform::discharge_provider_draft_work(
-                        builder,
-                        &mut self.type_work,
-                    )?;
-                    let allocated = allocated?;
-                    let fresh = *allocated.first().ok_or_else(invalid_state)?;
-                    self.type_work.charge(1).map_err(|()| type_resource())?;
-                    if !forbidden_binders.contains(&fresh) {
-                        break fresh;
-                    }
-                };
-                insert_pair(&mut phase.binders, &mut phase.binder_pairs, *old, fresh)?;
-            }
-            self.type_work
-                .charge(
-                    inventory
-                        .types
-                        .len()
-                        .checked_mul(2)
-                        .ok_or_else(type_resource)?,
-                )
-                .map_err(|()| type_resource())?;
-            phase
-                .variables
-                .try_reserve(inventory.types.len())
-                .map_err(|_| type_resource())?;
-            phase
-                .type_pairs
-                .try_reserve_exact(inventory.types.len())
-                .map_err(|_| type_resource())?;
-            for (old, kind) in inventory.types.into_vec() {
-                while forbidden_types.contains(&TypeVariableId::generated(
-                    self.next_generated_type_variable,
-                )) {
-                    self.generated_type_variables
-                        .skip_reserved(
-                            TypeVariableId::generated(self.next_generated_type_variable),
-                            &mut self.type_work,
-                        )
-                        .map_err(generated_type_variable_registry_error)?;
-                    self.next_generated_type_variable = self
-                        .next_generated_type_variable
-                        .checked_sub(1)
-                        .ok_or_else(invalid_state)?;
-                }
-                let fresh = self.fresh_type_variable(&kind, origin)?;
-                if phase.variables.insert(old, fresh).is_some() {
+        Ok(inputs)
+    }
+
+    fn prepare_copy_phase_inventory(
+        &mut self,
+        original: ProviderOriginalTemplate<'_>,
+        phase: PreparedPhaseCopy,
+    ) -> Result<PreparedPhaseAllocation, TypeError> {
+        let inventory = original
+            .local_identities(&phase.substitution(), &mut self.type_work)
+            .map_err(validation)?;
+        Ok(PreparedPhaseAllocation {
+            phase,
+            binders: inventory.binders,
+            types: inventory.types,
+            handlers: inventory.handlers,
+            resumes: inventory.resumes,
+            nominals: inventory.nominals,
+            lexicals: inventory.lexicals,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_copy_phase_sigma(
+        &mut self,
+        original: ProviderOriginalTemplate<'_>,
+        source: &super::super::provider::ProviderTemplateSource<'_>,
+        actuals: &ResourceActuals,
+        body: &ComputationType,
+        rows: &ProviderScopeCopyRows<'_>,
+        payload: Option<(TypeVariableId, &Type)>,
+    ) -> Result<PreparedPhaseCopy, TypeError> {
+        let is_handler = matches!(original, ProviderOriginalTemplate::Handler(_));
+        let mut phase = PreparedPhaseCopy::empty();
+        match original {
+            ProviderOriginalTemplate::Lifecycle(original, _) => {
+                if original.formals().len() != actuals.arguments().len() {
                     return Err(invalid_state());
                 }
-                phase.type_pairs.push((old, fresh, kind));
+                for ((_, generated, _), actual) in
+                    original.formals().iter().zip(actuals.arguments())
+                {
+                    phase
+                        .sigma
+                        .insert_cloned(*generated, actual, &mut self.type_work)?;
+                }
             }
-            reserve_pair(
-                &mut phase.handlers,
-                &mut phase.handler_pairs,
-                inventory.handlers.len(),
-                &mut self.type_work,
-            )?;
-            for old in inventory.handlers.iter() {
-                let fresh = loop {
-                    self.type_work.charge(1).map_err(|()| type_resource())?;
-                    let fresh = HandlerId::new(self.next_handler);
-                    self.next_handler =
-                        self.next_handler.checked_add(1).ok_or_else(invalid_state)?;
-                    if !forbidden_handlers.contains(&fresh) {
-                        break fresh;
-                    }
-                };
-                insert_pair(&mut phase.handlers, &mut phase.handler_pairs, *old, fresh)?;
-            }
-            reserve_pair(
-                &mut phase.resumes,
-                &mut phase.resume_pairs,
-                inventory.resumes.len(),
-                &mut self.type_work,
-            )?;
-            for old in inventory.resumes.iter() {
-                let fresh = loop {
-                    self.type_work.charge(1).map_err(|()| type_resource())?;
-                    let fresh = ResumeId::new(self.next_provider_resume);
-                    self.next_provider_resume = self
-                        .next_provider_resume
-                        .checked_sub(1)
-                        .ok_or_else(invalid_state)?;
-                    if !forbidden_resumes.contains(&fresh) {
-                        break fresh;
-                    }
-                };
-                insert_pair(&mut phase.resumes, &mut phase.resume_pairs, *old, fresh)?;
-            }
-            reserve_pair(
-                &mut phase.lexicals,
-                &mut phase.lexical_pairs,
-                inventory.lexicals.len(),
-                &mut self.type_work,
-            )?;
-            for old in inventory.lexicals.iter() {
-                let fresh = loop {
-                    self.type_work.charge(1).map_err(|()| type_resource())?;
-                    let fresh = LexicalEvidenceId::new(module, self.next_provider_lexical);
-                    self.next_provider_lexical = self
-                        .next_provider_lexical
-                        .checked_sub(1)
-                        .ok_or_else(invalid_state)?;
-                    if !forbidden_lexicals.contains(&fresh) {
-                        break fresh;
-                    }
-                };
-                insert_pair(&mut phase.lexicals, &mut phase.lexical_pairs, *old, fresh)?;
+            ProviderOriginalTemplate::Handler(_) => {
+                for (formal, actual) in source.fact.parameters.iter().zip(actuals.arguments()) {
+                    phase
+                        .sigma
+                        .insert_cloned(formal.id, actual, &mut self.type_work)?;
+                }
             }
         }
-        Ok(PreparedScopeCopyPlan { phases, family_phases: Box::new([]) })
+        if is_handler && let Some((parameter, payload)) = payload {
+            phase.sigma.insert_borrowed(
+                parameter,
+                crate::elaborate::BorrowedOwnerArgument::TypeArg(payload),
+                &mut self.type_work,
+            )?;
+        }
+        let hidden = match original {
+            ProviderOriginalTemplate::Lifecycle(original, _) => original.hidden(),
+            ProviderOriginalTemplate::Handler(original) => original.original_hidden(),
+        };
+        if hidden[0].1 != Kind::Type || hidden[1].1 != Kind::EffectRow {
+            return Err(invalid_state());
+        }
+        phase.sigma.insert_borrowed(
+            hidden[0].0,
+            crate::elaborate::BorrowedOwnerArgument::TypeArg(body.value()),
+            &mut self.type_work,
+        )?;
+        phase.sigma.insert_borrowed(
+            hidden[1].0,
+            crate::elaborate::BorrowedOwnerArgument::RowArg(rows.residual),
+            &mut self.type_work,
+        )?;
+        if is_handler {
+            self.type_work
+                .charge(rows.pending.len())
+                .map_err(|()| type_resource())?;
+            phase
+                .pending
+                .try_reserve(rows.pending.len())
+                .map_err(|_| type_resource())?;
+            for (id, row) in rows.pending {
+                phase.pending.insert(
+                    *id,
+                    clone_effect_row_with_budget(row, &mut self.type_work)
+                        .map_err(|()| type_resource())?,
+                );
+            }
+            self.type_work
+                .charge(rows.nodes.len())
+                .map_err(|()| type_resource())?;
+            phase
+                .node_rows
+                .try_reserve(rows.nodes.len())
+                .map_err(|_| type_resource())?;
+            for (node, row) in rows.nodes {
+                phase.node_rows.insert(
+                    *node,
+                    clone_effect_row_with_budget(row, &mut self.type_work)
+                        .map_err(|()| type_resource())?,
+                );
+            }
+        }
+        Ok(phase)
+    }
+
+    fn allocate_primary_copy_phases(
+        &mut self,
+        inputs: Vec<PreparedPhaseAllocation>,
+        forbidden: &ScopeCopyForbidden,
+        module: crate::module::ModuleId,
+        origin: Span,
+    ) -> Result<[PreparedPhaseCopy; 3], TypeError> {
+        if inputs.len() != 3 {
+            return Err(invalid_state());
+        }
+        let mut inputs = inputs.into_iter();
+        Ok([
+            self.allocate_copy_phase(
+                inputs.next().ok_or_else(invalid_state)?,
+                forbidden,
+                module,
+                origin,
+            )?,
+            self.allocate_copy_phase(
+                inputs.next().ok_or_else(invalid_state)?,
+                forbidden,
+                module,
+                origin,
+            )?,
+            self.allocate_copy_phase(
+                inputs.next().ok_or_else(invalid_state)?,
+                forbidden,
+                module,
+                origin,
+            )?,
+        ])
+    }
+
+    fn allocate_copy_phase(
+        &mut self,
+        allocation: PreparedPhaseAllocation,
+        forbidden: &ScopeCopyForbidden,
+        module: crate::module::ModuleId,
+        origin: Span,
+    ) -> Result<PreparedPhaseCopy, TypeError> {
+        let PreparedPhaseAllocation {
+            mut phase,
+            binders,
+            types,
+            handlers,
+            resumes,
+            nominals,
+            lexicals,
+        } = allocation;
+        if !nominals.is_empty() || !forbidden.nominals.is_empty() {
+            return Err(invalid_state());
+        }
+        reserve_pair(
+            &mut phase.binders,
+            &mut phase.binder_pairs,
+            binders.len(),
+            &mut self.type_work,
+        )?;
+        for old in binders.iter() {
+            let fresh = loop {
+                let builder = F::effect_builder(&mut self.builder).ok_or_else(invalid_state)?;
+                crate::core::transform::begin_provider_draft_work(
+                    builder,
+                    self.type_work.remaining(),
+                );
+                let allocated = builder.allocate_provider_copy_binders(1);
+                crate::core::transform::discharge_provider_draft_work(
+                    builder,
+                    &mut self.type_work,
+                )?;
+                let allocated = allocated?;
+                let fresh = *allocated.first().ok_or_else(invalid_state)?;
+                self.type_work.charge(1).map_err(|()| type_resource())?;
+                if !forbidden.binders.contains(&fresh) {
+                    break fresh;
+                }
+            };
+            insert_pair(&mut phase.binders, &mut phase.binder_pairs, *old, fresh)?;
+        }
+        self.type_work
+            .charge(types.len().checked_mul(2).ok_or_else(type_resource)?)
+            .map_err(|()| type_resource())?;
+        phase
+            .variables
+            .try_reserve(types.len())
+            .map_err(|_| type_resource())?;
+        phase
+            .type_pairs
+            .try_reserve_exact(types.len())
+            .map_err(|_| type_resource())?;
+        for (old, kind) in types.into_vec() {
+            while forbidden.types.contains(&TypeVariableId::generated(
+                self.next_generated_type_variable,
+            )) {
+                self.generated_type_variables
+                    .skip_reserved(
+                        TypeVariableId::generated(self.next_generated_type_variable),
+                        &mut self.type_work,
+                    )
+                    .map_err(generated_type_variable_registry_error)?;
+                self.next_generated_type_variable = self
+                    .next_generated_type_variable
+                    .checked_sub(1)
+                    .ok_or_else(invalid_state)?;
+            }
+            let fresh = self.fresh_type_variable(&kind, origin)?;
+            if phase.variables.insert(old, fresh).is_some() {
+                return Err(invalid_state());
+            }
+            phase.type_pairs.push((old, fresh, kind));
+        }
+        reserve_pair(
+            &mut phase.handlers,
+            &mut phase.handler_pairs,
+            handlers.len(),
+            &mut self.type_work,
+        )?;
+        for old in handlers.iter() {
+            let fresh = loop {
+                self.type_work.charge(1).map_err(|()| type_resource())?;
+                let fresh = HandlerId::new(self.next_handler);
+                self.next_handler = self.next_handler.checked_add(1).ok_or_else(invalid_state)?;
+                if !forbidden.handlers.contains(&fresh) {
+                    break fresh;
+                }
+            };
+            insert_pair(&mut phase.handlers, &mut phase.handler_pairs, *old, fresh)?;
+        }
+        reserve_pair(
+            &mut phase.resumes,
+            &mut phase.resume_pairs,
+            resumes.len(),
+            &mut self.type_work,
+        )?;
+        for old in resumes.iter() {
+            let fresh = loop {
+                self.type_work.charge(1).map_err(|()| type_resource())?;
+                let fresh = ResumeId::new(self.next_provider_resume);
+                self.next_provider_resume = self
+                    .next_provider_resume
+                    .checked_sub(1)
+                    .ok_or_else(invalid_state)?;
+                if !forbidden.resumes.contains(&fresh) {
+                    break fresh;
+                }
+            };
+            insert_pair(&mut phase.resumes, &mut phase.resume_pairs, *old, fresh)?;
+        }
+        reserve_pair(
+            &mut phase.lexicals,
+            &mut phase.lexical_pairs,
+            lexicals.len(),
+            &mut self.type_work,
+        )?;
+        for old in lexicals.iter() {
+            let fresh = loop {
+                self.type_work.charge(1).map_err(|()| type_resource())?;
+                let fresh = LexicalEvidenceId::new(module, self.next_provider_lexical);
+                self.next_provider_lexical = self
+                    .next_provider_lexical
+                    .checked_sub(1)
+                    .ok_or_else(invalid_state)?;
+                if !forbidden.lexicals.contains(&fresh) {
+                    break fresh;
+                }
+            };
+            insert_pair(&mut phase.lexicals, &mut phase.lexical_pairs, *old, fresh)?;
+        }
+        Ok(phase)
     }
 }
 

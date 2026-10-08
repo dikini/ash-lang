@@ -150,11 +150,17 @@ impl TransformFamily for EffectOperationFamily {
                 }
                 if !scope.attached.is_empty() {
                     builder.charge_effect_metadata(scope.attached.len())?;
-                    binders.try_reserve(scope.attached.len()).map_err(|_| BuildError::TypeWorkExceeded)?;
+                    binders
+                        .try_reserve(scope.attached.len())
+                        .map_err(|_| BuildError::TypeWorkExceeded)?;
                     for attached in &scope.attached {
                         binders.push(attached.state.id());
                         for clause in attached.handler.clauses() {
-                            retain_provider_pattern_binders(clause.pattern(), binders, &mut builder.type_work)?;
+                            retain_provider_pattern_binders(
+                                clause.pattern(),
+                                binders,
+                                &mut builder.type_work,
+                            )?;
                         }
                     }
                 }
@@ -323,30 +329,60 @@ impl TransformFamily for EffectOperationFamily {
                 let mut attached = Vec::new();
                 let mut family_clause_index = Vec::new();
                 if !scope.attached.is_empty() {
-                    builder.charge_effect_metadata(scope.attached.len().checked_add(scope.family_clause_index.len()).ok_or(BuildError::TypeWorkExceeded)?)?;
-                    attached.try_reserve_exact(scope.attached.len()).map_err(|_| BuildError::TypeWorkExceeded)?;
-                    family_clause_index.try_reserve_exact(scope.family_clause_index.len()).map_err(|_| BuildError::TypeWorkExceeded)?;
+                    builder.charge_effect_metadata(
+                        scope
+                            .attached
+                            .len()
+                            .checked_add(scope.family_clause_index.len())
+                            .ok_or(BuildError::TypeWorkExceeded)?,
+                    )?;
+                    attached
+                        .try_reserve_exact(scope.attached.len())
+                        .map_err(|_| BuildError::TypeWorkExceeded)?;
+                    family_clause_index
+                        .try_reserve_exact(scope.family_clause_index.len())
+                        .map_err(|_| BuildError::TypeWorkExceeded)?;
                     family_clause_index.extend_from_slice(&scope.family_clause_index);
                     for member in &scope.attached {
-                        builder.charge_effect_metadata(member.handler.clauses().len().checked_add(member.forwardings.len()).ok_or(BuildError::TypeWorkExceeded)?)?;
+                        builder.charge_effect_metadata(
+                            member
+                                .handler
+                                .clauses()
+                                .len()
+                                .checked_add(member.forwardings.len())
+                                .ok_or(BuildError::TypeWorkExceeded)?,
+                        )?;
                         let mut member_clauses = Vec::new();
-                        member_clauses.try_reserve_exact(member.handler.clauses().len()).map_err(|_| BuildError::TypeWorkExceeded)?;
+                        member_clauses
+                            .try_reserve_exact(member.handler.clauses().len())
+                            .map_err(|_| BuildError::TypeWorkExceeded)?;
                         for clause in member.handler.clauses() {
                             member_clauses.push(EffectClause::new(
-                                clause.operation(), clause.resume(),
+                                clause.operation(),
+                                clause.resume(),
                                 CoreMatchArm::new(
-                                    rebuild_pattern_with_origin_work(builder, clause.pattern(), false, context)?,
-                                    remap(remapped, clause.body())?, clause.origin().clone(),
+                                    rebuild_pattern_with_origin_work(
+                                        builder,
+                                        clause.pattern(),
+                                        false,
+                                        context,
+                                    )?,
+                                    remap(remapped, clause.body())?,
+                                    clause.origin().clone(),
                                 ),
                             ));
                         }
                         let mut member_forwardings = Vec::new();
-                        member_forwardings.try_reserve_exact(member.forwardings.len()).map_err(|_| BuildError::TypeWorkExceeded)?;
+                        member_forwardings
+                            .try_reserve_exact(member.forwardings.len())
+                            .map_err(|_| BuildError::TypeWorkExceeded)?;
                         member_forwardings.extend_from_slice(&member.forwardings);
                         attached.push(super::provider::ProviderAttachedHandler {
                             handler: super::effect::HandlerNode::new(
-                                member.handler.id(), remap(remapped, member.handler.body())?,
-                                copy_effect_instance(builder, member.handler.effect(), context)?, member_clauses,
+                                member.handler.id(),
+                                remap(remapped, member.handler.body())?,
+                                copy_effect_instance(builder, member.handler.effect(), context)?,
+                                member_clauses,
                             ),
                             state: clone_binder(builder, &member.state)?,
                             lexical: member.lexical,
@@ -1513,12 +1549,20 @@ pub(crate) fn prepare_provider_fragment_builder_with_catalog(
                                 )?;
                             }
                             if !scope.attached.is_empty() {
-                                budget.charge(scope.attached.len()).map_err(|()| BuildError::TypeWorkExceeded)?;
-                                binders.try_reserve(scope.attached.len()).map_err(|_| BuildError::TypeWorkExceeded)?;
+                                budget
+                                    .charge(scope.attached.len())
+                                    .map_err(|()| BuildError::TypeWorkExceeded)?;
+                                binders
+                                    .try_reserve(scope.attached.len())
+                                    .map_err(|_| BuildError::TypeWorkExceeded)?;
                                 for attached in &scope.attached {
                                     binders.push(attached.state.id());
                                     for clause in attached.handler.clauses() {
-                                        retain_provider_pattern_binders(clause.pattern(), &mut binders, budget)?;
+                                        retain_provider_pattern_binders(
+                                            clause.pattern(),
+                                            &mut binders,
+                                            budget,
+                                        )?;
                                     }
                                 }
                             }

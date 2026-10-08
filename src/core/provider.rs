@@ -32,21 +32,25 @@ pub(in crate::core) mod projection;
 mod scope;
 pub(in crate::core) mod specialization;
 pub(crate) use scope::{
-    AdmittedProviderScope, ProviderAttachedHandler, ProviderForwardingMethod, ProviderLifecycleEntry,
-    ProviderScopeAuthority, ProviderScopeNode, ProviderScopeProtocol,
+    AdmittedProviderScope, ProviderAttachedHandler, ProviderForwardingMethod,
+    ProviderLifecycleEntry, ProviderScopeAuthority, ProviderScopeNode, ProviderScopeProtocol,
     derive_provider_scope_protocol, interpret_native_phase_row,
 };
 pub(crate) use specialization::{
-    DeferredProviderHandlerRows, DeferredProviderRowPosition, LifecycleOriginal,
-    ProviderGroupRowsInput, prepare_group_handler_rows,
-    ResolvedProviderHandlerRows, admit_lifecycle_original,
+    AdmittedNativeStorageRelation, ProviderCopiedTemplate, ProviderFamilyAdmission,
+    ProviderFreshening, ProviderOccurrenceRelocation, ProviderOriginalTemplate,
+    ProviderPreparedFamilyOriginal, ProviderScopeAdmission, ProviderSpecializationDictionaryEntry,
+    ProviderSpecializationEntries, ProviderSpecializationFamilyEntries,
+    ProviderTemplateSubstitution,
+};
+pub(in crate::core) use specialization::{
+    AuthenticatedProviderSourceCapture, authenticate_admitted_provider_capture,
+    authenticate_native_storage_relations, authenticate_prepared_provider_capture,
 };
 pub(crate) use specialization::{
-    ProviderCopiedTemplate, ProviderFreshening, ProviderOccurrenceRelocation,
-    ProviderOriginalTemplate, ProviderFamilyAdmission, ProviderScopeAdmission, ProviderSpecializationEntries,
-    ProviderSpecializationFamilyEntries, ProviderSpecializationDictionaryEntry,
-    AdmittedNativeStorageRelation, authenticate_native_storage_relations,
-    ProviderTemplateSubstitution,
+    DeferredProviderHandlerRows, DeferredProviderRowPosition, LifecycleOriginal,
+    ProviderGroupRowsInput, ResolvedProviderHandlerRows, admit_lifecycle_original,
+    prepare_group_handler_rows,
 };
 mod external;
 mod handler;
@@ -54,11 +58,14 @@ mod row;
 pub(in crate::core) use external::ProviderLocalFlow;
 #[cfg(test)]
 pub(crate) use external::authenticate_plain_externals_with_defining;
+#[cfg(test)]
+pub(crate) use external::with_declared_layout_checks_for_test;
 pub(crate) use external::{
     AuthenticatedProviderExternals, AuthenticatedProviderMethodEvidence,
     AuthenticatedProviderStateAccesses, ProviderExternalOccurrence, ProviderSourceRelation,
     authenticate_staged_externals_with_defining,
 };
+pub(crate) use external::{DeclaredLayoutMethod, DeclaredLayoutMethods};
 #[cfg(test)]
 pub(crate) use external::{
     ExternalMutation, check_external_data_type_for_test, external_scheme_for_test,
@@ -615,6 +622,9 @@ enum Fact {
         target: NodeId,
     },
     DictionaryCallable,
+    DeclaredDictionaryCallable {
+        source: NodeId,
+    },
     ExternalCallable {
         binder: BinderId,
         occurrence: NodeId,
@@ -777,14 +787,47 @@ impl Facts {
     }
 
     fn family_data(&self, root: usize, work: &mut TypeWorkBudget) -> Result<bool, ValidationError> {
-        let mut pending = Vec::new(); charge(work, 1)?;
-        pending.try_reserve(1).map_err(|_| resource())?; pending.push(root);
+        self.family_data_with_resource_inputs(root, false, work)
+    }
+
+    // ResourceInput retains an authenticated original clause/path, not native
+    // state. It may be passed to an outward request; it still cannot be resumed
+    // as ordinary family data or used as a callable or native storage payload.
+    fn outward_family_data(
+        &self,
+        root: usize,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ValidationError> {
+        self.family_data_with_resource_inputs(root, true, work)
+    }
+
+    fn family_data_with_resource_inputs(
+        &self,
+        root: usize,
+        resource_inputs: bool,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ValidationError> {
+        let mut pending = Vec::new();
+        charge(work, 1)?;
+        pending.try_reserve(1).map_err(|_| resource())?;
+        pending.push(root);
         while let Some(id) = pending.pop() {
             charge(work, 1)?;
             match &self.0[id] {
-                Fact::Independent | Fact::Reference(_) | Fact::Data(_, None) => {},
-                Fact::Data(_, Some(payload)) => { charge(work, 1)?; pending.try_reserve(1).map_err(|_| resource())?; pending.push(*payload); },
-                Fact::Tuple(elements) => { charge(work, elements.len())?; pending.try_reserve(elements.len()).map_err(|_| resource())?; pending.extend(elements.iter().copied()); },
+                Fact::Independent | Fact::Reference(_) | Fact::Data(_, None) => {}
+                Fact::ResourceInput { .. } if resource_inputs => {}
+                Fact::Data(_, Some(payload)) => {
+                    charge(work, 1)?;
+                    pending.try_reserve(1).map_err(|_| resource())?;
+                    pending.push(*payload);
+                }
+                Fact::Tuple(elements) => {
+                    charge(work, elements.len())?;
+                    pending
+                        .try_reserve(elements.len())
+                        .map_err(|_| resource())?;
+                    pending.extend(elements.iter().copied());
+                }
                 _ => return Ok(false),
             }
         }
@@ -804,7 +847,9 @@ impl Facts {
         while let Some(id) = pending.pop() {
             charge(work, 1)?;
             match &self.0[id] {
-                Fact::ExternalCallable { .. } | Fact::UnprovedExternalCallable { .. } => {
+                Fact::ExternalCallable { .. }
+                | Fact::UnprovedExternalCallable { .. }
+                | Fact::DeclaredDictionaryCallable { .. } => {
                     return Ok(CallRequirement::ExternalInvocation);
                 }
                 Fact::DictionaryCallable => {
@@ -1147,6 +1192,9 @@ fn callable_requirement(
             if externals.contains(variable.binder()) {
                 return Ok(CallRequirement::ExternalInvocation);
             }
+            if externals.dictionary_method(program, id, work)? {
+                return Ok(CallRequirement::ExternalInvocation);
+            }
             if externals.dictionary_variable(program, id) {
                 requirement = requirement.max(CallRequirement::DictionaryInstallation);
             }
@@ -1216,18 +1264,12 @@ fn check_lifecycle_flow_context(
     )
 }
 
-pub(in crate::core) fn check_handler_native_flow(
-    entry: &HandlerFragmentEntry<'_>,
-    associations: &[DraftStateAssociation<'_>],
-    externals: Option<&AuthenticatedProviderExternals<'_>>,
-    work: &mut TypeWorkBudget,
-) -> Result<(), ValidationError> {
-    check_handler_native_storage_relations(entry, associations, externals, work).map(|_| ())
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::core) enum HandlerNativeStorageResult {
-    Store { allocated: ConstructorId, refused: ConstructorId },
+    Store {
+        allocated: ConstructorId,
+        refused: ConstructorId,
+    },
     Load,
 }
 
@@ -1242,12 +1284,24 @@ pub(in crate::core) struct HandlerNativeStorageRelation {
     result: HandlerNativeStorageResult,
 }
 impl HandlerNativeStorageRelation {
-    pub(in crate::core) fn request(&self) -> NodeId { self.request }
-    pub(in crate::core) fn operation(&self) -> OperationId { self.operation }
-    pub(in crate::core) fn effect(&self) -> &EffectInstance { &self.effect }
-    pub(in crate::core) fn owner(&self) -> crate::types::TypeVariableId { self.owner }
-    pub(in crate::core) fn family(&self) -> ProviderFamilyIdentity { self.family }
-    pub(in crate::core) fn result(&self) -> HandlerNativeStorageResult { self.result }
+    pub(in crate::core) fn request(&self) -> NodeId {
+        self.request
+    }
+    pub(in crate::core) fn operation(&self) -> OperationId {
+        self.operation
+    }
+    pub(in crate::core) fn effect(&self) -> &EffectInstance {
+        &self.effect
+    }
+    pub(in crate::core) fn owner(&self) -> crate::types::TypeVariableId {
+        self.owner
+    }
+    pub(in crate::core) fn family(&self) -> ProviderFamilyIdentity {
+        self.family
+    }
+    pub(in crate::core) fn result(&self) -> HandlerNativeStorageResult {
+        self.result
+    }
 }
 
 fn retain_handler_storage_relation(
@@ -1258,14 +1312,31 @@ fn retain_handler_storage_relation(
     result: HandlerNativeStorageResult,
     work: &mut TypeWorkBudget,
 ) -> Result<(), ValidationError> {
-    let Some(relations) = relations.as_deref_mut() else { return Ok(()); };
+    let Some(relations) = relations.as_deref_mut() else {
+        return Ok(());
+    };
     charge(work, relations.len().checked_add(1).ok_or_else(resource)?)?;
-    if relations.iter().any(|relation| relation.request == id) { return Ok(()); }
+    if relations.iter().any(|relation| relation.request == id) {
+        return Ok(());
+    }
     let family = entry.family_identity().ok_or_else(|| invalid(id))?;
-    let owner = entry.definition.parameters.first().ok_or_else(|| invalid(id))?.id;
-    let effect = crate::types::clone_effect_instance_with_budget(request.effect(), work).map_err(|()| resource())?;
+    let owner = entry
+        .definition
+        .parameters
+        .first()
+        .ok_or_else(|| invalid(id))?
+        .id;
+    let effect = crate::types::clone_effect_instance_with_budget(request.effect(), work)
+        .map_err(|()| resource())?;
     relations.try_reserve(1).map_err(|_| resource())?;
-    relations.push(HandlerNativeStorageRelation { request: id, operation: request.operation(), effect, owner, family, result });
+    relations.push(HandlerNativeStorageRelation {
+        request: id,
+        operation: request.operation(),
+        effect,
+        owner,
+        family,
+        result,
+    });
     Ok(())
 }
 
@@ -1310,7 +1381,8 @@ pub(in crate::core) fn check_handler_native_storage_relations(
                     && (!controlled
                         || operation.role != ForeignOperationRole::Borrow
                         || !(matches!(operation.result, ForeignResultFact::Independent)
-                            || (entry.family_identity().is_some() && matches!(operation.result,
+                            || (entry.family_identity().is_some()
+                                && matches!(operation.result,
                                 ForeignResultFact::Store { storage } | ForeignResultFact::Load { storage }
                                     if storage == entry.interpreted().effect())))
                         || compare_effect_instances_with_budget(
@@ -1445,18 +1517,30 @@ fn handler_domain_fact(
                         .iter()
                         .any(|definition| definition.family == family)
                 });
-                let storage = entry.family_identity().and_then(|_| entry.canonical.foreign_storage(entry.interpreted().effect()));
+                let storage = entry.family_identity().and_then(|_| {
+                    entry
+                        .canonical
+                        .foreign_storage(entry.interpreted().effect())
+                });
                 let reference = if let Some(storage) = storage {
                     if family == Some(storage.reference()) {
                         let arguments = handler::type_arguments(ty, work)?;
-                        let payload = entry.family_identity().ok_or_else(|| invalid(root))?.parameter;
+                        let payload = entry
+                            .family_identity()
+                            .ok_or_else(|| invalid(root))?
+                            .parameter;
                         if !matches!(arguments.get(storage.reference_owner_parameter()), Some(Type::Variable(owner)) if *owner == entry.definition.parameters[0].id)
-                            || !matches!(arguments.get(storage.reference_payload_parameter()), Some(Type::Variable(actual)) if *actual == payload) {
+                            || !matches!(arguments.get(storage.reference_payload_parameter()), Some(Type::Variable(actual)) if *actual == payload)
+                        {
                             return Err(invalid(root));
                         }
                         true
-                    } else { false }
-                } else { false };
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
                 let value = if reference {
                     facts.add(Fact::Reference(State::Current), work)?
                 } else if is_resource {
@@ -1538,7 +1622,15 @@ fn execute_flow_paths(
                         } else if externals
                             .is_some_and(|externals| externals.dictionary_variable(program, id))
                         {
-                            facts.add(Fact::DictionaryCallable, work)?
+                            let fact = if externals
+                                .ok_or_else(|| invalid(id))?
+                                .dictionary_method(program, id, work)?
+                            {
+                                Fact::DeclaredDictionaryCallable { source: id }
+                            } else {
+                                Fact::DictionaryCallable
+                            };
+                            facts.add(fact, work)?
                         } else {
                             return Err(invalid(id));
                         };
@@ -1790,6 +1882,14 @@ fn execute_flow_paths(
                                 work,
                             )?;
                         independent
+                    } else if let Fact::DeclaredDictionaryCallable { source } = facts.0[function] {
+                        if !facts.independent_data(argument, work)? {
+                            return Err(invalid(id));
+                        }
+                        externals
+                            .ok_or_else(|| invalid(id))?
+                            .dictionary_invocation(program, source, id, work)?;
+                        independent
                     } else if matches!(facts.0[function], Fact::DictionaryCallable) {
                         if !externals
                             .ok_or_else(|| invalid(id))?
@@ -1912,10 +2012,15 @@ fn execute_flow_paths(
                     };
                     let operation = native.operation(request.operation(), work)?;
                     if matches!(mode, FlowMode::Handler(_)) && operation.is_none() {
-                        let admitted = if matches!(mode, FlowMode::Handler(entry) if entry.family_identity().is_some()) {
-                            facts.family_data(operand, work)?
-                        } else { facts.independent_data(operand, work)? };
-                        if !admitted { return Err(invalid(id)); }
+                        let admitted = if matches!(mode, FlowMode::Handler(entry) if entry.family_identity().is_some())
+                        {
+                            facts.outward_family_data(operand, work)?
+                        } else {
+                            facts.independent_data(operand, work)?
+                        };
+                        if !admitted {
+                            return Err(invalid(id));
+                        }
                         path.value(independent, work)?;
                         continue;
                     }
@@ -1923,7 +2028,8 @@ fn execute_flow_paths(
                     if let FlowMode::Handler(entry) = mode {
                         if fact.role != ForeignOperationRole::Borrow
                             || !(matches!(fact.result, ForeignResultFact::Independent)
-                                || (entry.family_identity().is_some() && matches!(fact.result,
+                                || (entry.family_identity().is_some()
+                                    && matches!(fact.result,
                                     ForeignResultFact::Store { storage } | ForeignResultFact::Load { storage }
                                         if storage == entry.interpreted().effect())))
                         {
@@ -1947,28 +2053,73 @@ fn execute_flow_paths(
                         }
                         match fact.result {
                             ForeignResultFact::Store { storage } => {
-                                let storage = entry.canonical.foreign_storage(storage).ok_or_else(|| invalid(id))?;
-                                if request.operation() != storage.store() { return Err(invalid(id)); }
-                                let state = facts.at_path(operand, &[0], work)?.ok_or_else(|| invalid(id))?;
-                                if !matches!(facts.0[state], Fact::State(State::Current)) { return Err(invalid(id)); }
-                                retain_handler_storage_relation(&mut relations, entry, id, request,
-                                    HandlerNativeStorageResult::Store { allocated: storage.allocated_constructor(), refused: storage.refused_constructor() }, work)?;
+                                let storage = entry
+                                    .canonical
+                                    .foreign_storage(storage)
+                                    .ok_or_else(|| invalid(id))?;
+                                if request.operation() != storage.store() {
+                                    return Err(invalid(id));
+                                }
+                                let state = facts
+                                    .at_path(operand, &[0], work)?
+                                    .ok_or_else(|| invalid(id))?;
+                                if !matches!(facts.0[state], Fact::State(State::Current)) {
+                                    return Err(invalid(id));
+                                }
+                                retain_handler_storage_relation(
+                                    &mut relations,
+                                    entry,
+                                    id,
+                                    request,
+                                    HandlerNativeStorageResult::Store {
+                                        allocated: storage.allocated_constructor(),
+                                        refused: storage.refused_constructor(),
+                                    },
+                                    work,
+                                )?;
                                 let reference = facts.add(Fact::Reference(State::Current), work)?;
-                                let allocated = facts.add(Fact::Data(storage.allocated_constructor(), Some(reference)), work)?;
-                                let refused = facts.add(Fact::Data(storage.refused_constructor(), Some(independent)), work)?;
-                                let mut refusal = path.fork(work)?; refusal.value(refused, work)?;
-                                pending.try_reserve(1).map_err(|_| resource())?; pending.push(refusal);
+                                let allocated = facts.add(
+                                    Fact::Data(storage.allocated_constructor(), Some(reference)),
+                                    work,
+                                )?;
+                                let refused = facts.add(
+                                    Fact::Data(storage.refused_constructor(), Some(independent)),
+                                    work,
+                                )?;
+                                let mut refusal = path.fork(work)?;
+                                refusal.value(refused, work)?;
+                                pending.try_reserve(1).map_err(|_| resource())?;
+                                pending.push(refusal);
                                 path.value(allocated, work)?;
                             }
                             ForeignResultFact::Load { storage } => {
-                                let storage = entry.canonical.foreign_storage(storage).ok_or_else(|| invalid(id))?;
-                                if request.operation() != storage.load() { return Err(invalid(id)); }
-                                let state = facts.at_path(operand, &[0], work)?.ok_or_else(|| invalid(id))?;
-                                let reference = facts.at_path(operand, &[2], work)?.ok_or_else(|| invalid(id))?;
-                                if !matches!((
-                                    &facts.0[state], &facts.0[reference]),
-                                    (Fact::State(State::Current), Fact::Reference(State::Current))) { return Err(invalid(id)); }
-                                retain_handler_storage_relation(&mut relations, entry, id, request, HandlerNativeStorageResult::Load, work)?;
+                                let storage = entry
+                                    .canonical
+                                    .foreign_storage(storage)
+                                    .ok_or_else(|| invalid(id))?;
+                                if request.operation() != storage.load() {
+                                    return Err(invalid(id));
+                                }
+                                let state = facts
+                                    .at_path(operand, &[0], work)?
+                                    .ok_or_else(|| invalid(id))?;
+                                let reference = facts
+                                    .at_path(operand, &[2], work)?
+                                    .ok_or_else(|| invalid(id))?;
+                                if !matches!(
+                                    (&facts.0[state], &facts.0[reference]),
+                                    (Fact::State(State::Current), Fact::Reference(State::Current))
+                                ) {
+                                    return Err(invalid(id));
+                                }
+                                retain_handler_storage_relation(
+                                    &mut relations,
+                                    entry,
+                                    id,
+                                    request,
+                                    HandlerNativeStorageResult::Load,
+                                    work,
+                                )?;
                                 path.value(independent, work)?;
                             }
                             _ => path.value(independent, work)?,
@@ -2061,10 +2212,15 @@ fn execute_flow_paths(
                 }
                 Task::ResumeArgument(id) => {
                     let value = path.pop(id)?;
-                    let admitted = if matches!(mode, FlowMode::Handler(entry) if entry.family_identity().is_some()) {
+                    let admitted = if matches!(mode, FlowMode::Handler(entry) if entry.family_identity().is_some())
+                    {
                         facts.family_data(value, work)?
-                    } else { facts.independent_data(value, work)? };
-                    if !admitted { return Err(invalid(id)); }
+                    } else {
+                        facts.independent_data(value, work)?
+                    };
+                    if !admitted {
+                        return Err(invalid(id));
+                    }
                     path.value(independent, work)?;
                 }
                 Task::CleanupAction(id) => {
@@ -2144,6 +2300,64 @@ fn execute_flow_paths(
 #[cfg(test)]
 mod dictionary_carrier_tests {
     use super::*;
+
+    #[test]
+    fn outward_family_request_handles_do_not_admit_state_callables_or_returns() {
+        let constructor =
+            ConstructorId::new(NominalTypeId::new(crate::module::ModuleId::new(0), 0), 0);
+        let mut facts = Facts(vec![
+            Fact::Independent,
+            Fact::ResourceInput {
+                clause: NodeId::new(crate::core::dialect::ArenaId::new(1), 0),
+                path: Box::new([0]),
+            },
+            Fact::Data(constructor, Some(1)),
+            Fact::Tuple(Box::new([0, 2])),
+        ]);
+        let mut measured = TypeWorkBudget::unbounded();
+        assert!(facts.outward_family_data(3, &mut measured).unwrap());
+        let cost = measured.used();
+        assert!(cost > 0);
+        assert!(
+            !facts
+                .family_data(3, &mut TypeWorkBudget::unbounded())
+                .unwrap()
+        );
+        assert!(
+            !facts
+                .independent_data(3, &mut TypeWorkBudget::unbounded())
+                .unwrap()
+        );
+        for prefix in [0, 17] {
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            assert_eq!(
+                facts
+                    .outward_family_data(3, &mut short)
+                    .unwrap_err()
+                    .reason(),
+                ValidationReason::Resource
+            );
+            let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+            exact.charge(prefix).unwrap();
+            assert!(facts.outward_family_data(3, &mut exact).unwrap());
+            assert_eq!(exact.used(), prefix + cost);
+        }
+        // Mutate the same nested operand, preserving its container graph.
+        // Passing a resource handle grants no corresponding state/call right.
+        for replacement in [
+            Fact::State(State::Current),
+            Fact::Callable,
+            Fact::DictionaryCallable,
+        ] {
+            facts.0[1] = replacement;
+            assert!(
+                !facts
+                    .outward_family_data(3, &mut TypeWorkBudget::unbounded())
+                    .unwrap()
+            );
+        }
+    }
 
     #[test]
     fn nested_dictionary_carriers_have_exact_fallible_traversal_and_retry() {

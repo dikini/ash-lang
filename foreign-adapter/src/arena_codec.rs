@@ -6,17 +6,17 @@
 //! Aggregate descriptors and constructor identities must come from a bridge
 //! that authenticates the complete type dictionary. Local consistency checks
 //! cannot detect a forged sole-constructor subset or grant Ash Layout evidence.
-//! Aggregate preparation supports only acyclic by-value data and duplicates
+//! Test-only aggregate preparation supports acyclic by-value data and duplicates
 //! shared inline fields. The production scalar entry points require authenticated
 //! dictionaries from the caller and an evaluator work debit. Reference payloads
 //! and source callbacks remain unsupported.
 
 use crate::arena::{AllocationError, LayoutTag, PayloadLayout};
 use ash::foreign::runtime::{ForeignData, ForeignDataNode, ForeignExecutionError};
-use ash::{
-    integer::Integer,
-    types::{ConstructorId, TYPE_WORK_LIMIT},
-};
+#[cfg(test)]
+use ash::types::ConstructorId;
+use ash::{integer::Integer, types::TYPE_WORK_LIMIT};
+#[cfg(test)]
 use std::{collections::HashSet, sync::Arc};
 
 /// Recoverable payload refusal remains distinct from terminal host exhaustion.
@@ -53,7 +53,9 @@ pub(super) enum ScalarKind {
     Unit,
     Boolean,
     Integer,
+    #[cfg(test)]
     Bytes,
+    #[cfg(test)]
     String,
 }
 
@@ -61,12 +63,14 @@ pub(super) enum ScalarKind {
 /// identify graph edges; IDs identify supplied layout facts, never value names.
 /// No graph here establishes source layout authority or owner dependencies.
 #[derive(Debug)]
+#[cfg(test)]
 pub(super) struct LayoutDescriptor {
     pub(super) id: u64,
     pub(super) shape: LayoutShape,
 }
 
 #[derive(Debug)]
+#[cfg(test)]
 pub(super) enum LayoutShape {
     Scalar(ScalarKind),
     Tuple(Box<[usize]>),
@@ -77,6 +81,7 @@ pub(super) enum LayoutShape {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[cfg(test)]
 pub(super) struct ConstructorLayout {
     pub(super) constructor: ConstructorId,
     /// Foreign constructor payloads have one child; multiple source fields use
@@ -85,16 +90,19 @@ pub(super) struct ConstructorLayout {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[cfg(test)]
 pub(super) struct LayoutGraph<'a> {
     pub(super) descriptors: &'a [LayoutDescriptor],
     pub(super) root: usize,
 }
 
 #[derive(Default)]
+#[cfg(test)]
 struct Work {
     used: usize,
 }
 
+#[cfg(test)]
 impl Work {
     fn charge(&mut self, amount: usize) -> Result<(), ForeignExecutionError> {
         self.used = self
@@ -106,18 +114,21 @@ impl Work {
     }
 }
 
+#[cfg(test)]
 fn reserve<T>(values: &mut Vec<T>, extra: usize) -> Result<(), ForeignExecutionError> {
     values
         .try_reserve(extra)
         .map_err(|_| ForeignExecutionError::STORAGE_REFUSED)
 }
 
+#[cfg(test)]
 fn aligned(cursor: usize, alignment: usize) -> Option<usize> {
     cursor
         .checked_add(alignment.checked_sub(1)?)
         .map(|value| value & !(alignment - 1))
 }
 
+#[cfg(test)]
 fn append(
     bytes: &mut Vec<u8>,
     contents: &[u8],
@@ -129,6 +140,7 @@ fn append(
     Ok(())
 }
 
+#[cfg(test)]
 fn scalar_matches(kind: ScalarKind, node: &ForeignDataNode) -> bool {
     matches!(
         (kind, node),
@@ -140,6 +152,7 @@ fn scalar_matches(kind: ScalarKind, node: &ForeignDataNode) -> bool {
     )
 }
 
+#[cfg(test)]
 fn charge_scalar(work: &mut Work, node: &ForeignDataNode) -> Result<(), ForeignExecutionError> {
     let contents = match node {
         // ForeignData validation counts both the copied integer and its root
@@ -155,12 +168,14 @@ fn charge_scalar(work: &mut Work, node: &ForeignDataNode) -> Result<(), ForeignE
     work.charge(contents)
 }
 
+#[cfg(test)]
 enum DecodeTask {
     Value(usize),
     Tuple(usize),
     Constructor(ConstructorId, bool),
 }
 
+#[cfg(test)]
 impl LayoutShape {
     fn edge_count(&self) -> usize {
         match self {
@@ -179,6 +194,7 @@ impl LayoutShape {
     }
 }
 
+#[cfg(test)]
 impl LayoutGraph<'_> {
     /// Reject every by-value cycle, including an unselected constructor branch,
     /// before traversing values. Flat storage also avoids recursive destruction.
@@ -286,6 +302,7 @@ pub(super) struct PreparedPayload {
 
 impl PreparedPayload {
     /// Expands admitted inline sharing without recursion before arena mutation.
+    #[cfg(test)]
     pub(super) fn value(
         tag: LayoutTag,
         graph: LayoutGraph<'_>,
@@ -369,11 +386,13 @@ impl PreparedPayload {
                 fixed = integer.to_le_bytes();
                 (&fixed, None, 8)
             }
+            #[cfg(test)]
             ForeignDataNode::Bytes(bytes) => {
                 let count = u64::try_from(bytes.len())
                     .map_err(|_| PreparationError::Refused(AllocationError::InvalidPayload))?;
                 (bytes, Some(count.to_le_bytes()), 8)
             }
+            #[cfg(test)]
             ForeignDataNode::String(text) => {
                 let count = u64::try_from(text.len())
                     .map_err(|_| PreparationError::Refused(AllocationError::InvalidPayload))?;
@@ -404,6 +423,7 @@ impl PreparedPayload {
     }
 }
 
+#[cfg(test)]
 pub(super) fn decode_value(
     graph: LayoutGraph<'_>,
     bytes: &[u8],
@@ -560,6 +580,7 @@ fn decode_scalar_node(
             let encoded: [u8; 8] = bytes.try_into().map_err(|_| mismatch)?;
             ForeignDataNode::Integer(Integer::from_i64(i64::from_le_bytes(encoded)))
         }
+        #[cfg(test)]
         ScalarKind::Bytes | ScalarKind::String => {
             let header: [u8; 8] = bytes
                 .get(..8)
@@ -589,6 +610,52 @@ fn decode_scalar_node(
         _ => return Err(mismatch),
     };
     Ok(node)
+}
+
+/// Production scalar entry: the authenticated caller supplies the full
+/// dictionary and pays conversion plus the eventual native byte copy first.
+pub(super) fn prepare_scalar_with_work(
+    tag: LayoutTag,
+    value: &ForeignDataNode,
+    work: &mut ash::foreign::runtime::ForeignInvocationWork<'_>,
+) -> Result<PreparedPayload, PreparationError> {
+    let (conversion, extent) = match value {
+        ForeignDataNode::Unit => (1, 0),
+        ForeignDataNode::Boolean(_) => (1, 1),
+        ForeignDataNode::Integer(integer) => (
+            usize::try_from(integer.magnitude_byte_length())
+                .map_err(|_| PreparationError::Internal(ForeignExecutionError::WORK_EXHAUSTED))?
+                .max(1),
+            8,
+        ),
+        _ => {
+            return Err(PreparationError::Internal(ForeignExecutionError(
+                "unsupported arena scalar",
+            )));
+        }
+    };
+    let units = conversion
+        .checked_add(extent)
+        .and_then(|units| units.checked_add(extent))
+        .ok_or(PreparationError::Internal(
+            ForeignExecutionError::WORK_EXHAUSTED,
+        ))?;
+    work.charge(units).map_err(PreparationError::Internal)?;
+    PreparedPayload::scalar(tag, value)
+}
+
+pub(super) fn decode_scalar_with_work(
+    kind: ScalarKind,
+    bytes: &[u8],
+    work: &mut ash::foreign::runtime::ForeignInvocationWork<'_>,
+) -> Result<ForeignData, ForeignExecutionError> {
+    work.charge(
+        bytes
+            .len()
+            .checked_add(1)
+            .ok_or(ForeignExecutionError::WORK_EXHAUSTED)?,
+    )?;
+    decode_scalar(kind, bytes)
 }
 
 #[cfg(test)]
@@ -1002,36 +1069,4 @@ mod tests {
             assert!(decode_scalar(kind, &bytes).is_err());
         }
     }
-}
-
-
-/// Production scalar entry: the authenticated caller supplies the full
-/// dictionary and pays conversion plus the eventual native byte copy first.
-pub(super) fn prepare_scalar_with_work(
-    tag: LayoutTag,
-    value: &ForeignDataNode,
-    work: &mut ash::foreign::runtime::ForeignInvocationWork<'_>,
-) -> Result<PreparedPayload, PreparationError> {
-    let (conversion, extent) = match value {
-        ForeignDataNode::Unit => (1, 0),
-        ForeignDataNode::Boolean(_) => (1, 1),
-        ForeignDataNode::Integer(integer) => (
-            usize::try_from(integer.magnitude_byte_length()).map_err(|_| PreparationError::Internal(ForeignExecutionError::WORK_EXHAUSTED))?.max(1),
-            8,
-        ),
-        _ => return Err(PreparationError::Internal(ForeignExecutionError("unsupported arena scalar"))),
-    };
-    let units = conversion.checked_add(extent).and_then(|units| units.checked_add(extent))
-        .ok_or(PreparationError::Internal(ForeignExecutionError::WORK_EXHAUSTED))?;
-    work.charge(units).map_err(PreparationError::Internal)?;
-    PreparedPayload::scalar(tag, value)
-}
-
-pub(super) fn decode_scalar_with_work(
-    kind: ScalarKind,
-    bytes: &[u8],
-    work: &mut ash::foreign::runtime::ForeignInvocationWork<'_>,
-) -> Result<ForeignData, ForeignExecutionError> {
-    work.charge(bytes.len().checked_add(1).ok_or(ForeignExecutionError::WORK_EXHAUSTED)?)?;
-    decode_scalar(kind, bytes)
 }

@@ -960,34 +960,66 @@ pub(super) fn method_evidence_anchor_matches_expectation(
     type_work.charge(1)?;
     match (expected.role, role) {
         (
-            MethodEvidenceExpectedRole::ProviderFamilyUse { source, member, selection_node, binder },
+            MethodEvidenceExpectedRole::ProviderFamilyUse {
+                source,
+                member,
+                selection_node,
+                binder,
+            },
             MethodEvidenceAnchorRole::ProviderFamilyUse {
-                source: actual_source, member: actual_member,
-                selection_node: actual_node, binder: actual_binder,
+                source: actual_source,
+                member: actual_member,
+                selection_node: actual_node,
+                binder: actual_binder,
             },
         ) => {
-            let Some(occurrence) = expected.occurrence.and_then(|slot| catalog.occurrence(slot)) else {
+            let Some(occurrence) = expected
+                .occurrence
+                .and_then(|slot| catalog.occurrence(slot))
+            else {
                 return Ok(false);
             };
-            let Some(EvidenceNode::ProviderFamily { source: selected, application: goal, methods, .. })
-                = occurrence.selection.node(selection_node) else { return Ok(false); };
+            let Some(EvidenceNode::ProviderFamily {
+                source: selected,
+                application: goal,
+                methods,
+                ..
+            }) = occurrence.selection.node(selection_node)
+            else {
+                return Ok(false);
+            };
             type_work.charge(methods.len())?;
-            Ok(source == actual_source && member == actual_member && binder == actual_binder
-                && selection_node == actual_node && selected == source
-                && methods.contains(&expected.method) && requirement.is_none() && owner.is_none()
+            Ok(source == actual_source
+                && member == actual_member
+                && binder == actual_binder
+                && selection_node == actual_node
+                && selected == source
+                && methods.contains(&expected.method)
+                && requirement.is_none()
+                && owner.is_none()
                 && same_interface_application_with_budget(goal, application, type_work)?)
         }
         (
-            MethodEvidenceExpectedRole::NativeLayoutUse { producer, selection_node },
-            MethodEvidenceAnchorRole::NativeLayoutUse { producer: actual, selection_node: actual_node },
+            MethodEvidenceExpectedRole::NativeLayoutUse {
+                producer,
+                selection_node,
+            },
+            MethodEvidenceAnchorRole::NativeLayoutUse {
+                producer: actual,
+                selection_node: actual_node,
+            },
         ) => {
-            let Some(occurrence) = expected.occurrence.and_then(|slot| catalog.occurrence(slot)) else {
+            let Some(occurrence) = expected
+                .occurrence
+                .and_then(|slot| catalog.occurrence(slot))
+            else {
                 return Ok(false);
             };
             let [crate::types::KindedArgument::TypeArg(payload)] = application.arguments() else {
                 return Ok(false);
             };
-            Ok(producer == actual && selection_node == actual_node
+            Ok(producer == actual
+                && selection_node == actual_node
                 && producer.method() == expected.method
                 && application.interface() == producer.interface()
                 && *payload == producer.payload_type()
@@ -1431,8 +1463,17 @@ pub(super) fn method_evidence_producer_matches(
         actual,
     ) {
         (
-            Some(MethodEvidenceExpectedRole::ProviderFamilyUse { source, member, binder, .. }),
-            MethodEvidenceProducer::ProviderFamily { source: actual_source, member: actual_member, binder: actual_binder },
+            Some(MethodEvidenceExpectedRole::ProviderFamilyUse {
+                source,
+                member,
+                binder,
+                ..
+            }),
+            MethodEvidenceProducer::ProviderFamily {
+                source: actual_source,
+                member: actual_member,
+                binder: actual_binder,
+            },
         ) => source == actual_source && member == actual_member && binder == actual_binder,
         (
             Some(MethodEvidenceExpectedRole::NativeLayoutUse { producer, .. }),
@@ -1470,10 +1511,9 @@ fn selection_contains_method(
 ) -> Result<bool, ()> {
     selection_contains(selection, type_work, |node| match node {
         EvidenceNode::NativeLayout { producer } => producer.method() == method,
-        EvidenceNode::Abstract { methods, .. } | EvidenceNode::Lexical { methods, .. }
-        | EvidenceNode::ProviderFamily { methods, .. } => {
-            methods.contains(&method)
-        }
+        EvidenceNode::Abstract { methods, .. }
+        | EvidenceNode::Lexical { methods, .. }
+        | EvidenceNode::ProviderFamily { methods, .. } => methods.contains(&method),
         EvidenceNode::Implementation { methods, .. } => {
             methods.iter().any(|candidate| candidate.method() == method)
         }
@@ -1506,10 +1546,9 @@ fn selection_contains(
         };
         let method_count = match node {
             EvidenceNode::NativeLayout { .. } => 1,
-            EvidenceNode::Abstract { methods, .. } | EvidenceNode::Lexical { methods, .. }
-        | EvidenceNode::ProviderFamily { methods, .. } => {
-                methods.len()
-            }
+            EvidenceNode::Abstract { methods, .. }
+            | EvidenceNode::Lexical { methods, .. }
+            | EvidenceNode::ProviderFamily { methods, .. } => methods.len(),
             EvidenceNode::Implementation { methods, .. } => methods.len(),
         };
         type_work.charge(method_count)?;
@@ -1517,7 +1556,8 @@ fn selection_contains(
             return Ok(true);
         }
         if let EvidenceNode::Implementation { prerequisites, .. }
-            | EvidenceNode::ProviderFamily { prerequisites, .. } = node {
+        | EvidenceNode::ProviderFamily { prerequisites, .. } = node
+        {
             type_work.charge(prerequisites.len())?;
             pending.try_reserve(prerequisites.len()).map_err(|_| ())?;
             pending.extend(prerequisites.iter().copied());
@@ -1605,6 +1645,143 @@ pub(crate) struct MethodEvidenceAnchor {
     pub(crate) role: MethodEvidenceAnchorRole,
     pub(crate) occurrence: Option<usize>,
     pub(crate) expectation: usize,
+}
+
+/// Exact ordinary Layout producers retained from one sealed builder catalogue.
+/// This source-analysis view does not establish final independent Core validity.
+pub(super) struct AuthenticatedSourceLayoutOccurrences<'a> {
+    anchors: Vec<&'a MethodEvidenceAnchor>,
+    nodes_address: *const (),
+    nodes_len: usize,
+    operation_family: std::any::TypeId,
+}
+impl AuthenticatedSourceLayoutOccurrences<'_> {
+    pub(super) fn is_empty(&self) -> bool {
+        self.anchors.is_empty()
+    }
+    pub(super) fn authenticates<F: CoreOperationFamily>(
+        &self,
+        nodes: &[StoredNode<F>],
+        ordinal: usize,
+        producer: crate::foreign::ForeignLayoutProducer,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ()> {
+        work.charge(1)?;
+        if self.operation_family != std::any::TypeId::of::<F>()
+            || self.nodes_len != nodes.len()
+            || ordinal >= nodes.len()
+            || !std::ptr::eq(self.nodes_address, nodes.as_ptr().cast::<()>())
+        {
+            return Ok(false);
+        }
+        work.charge(self.anchors.len())?;
+        Ok(self.anchors.iter().any(|anchor| {
+            anchor.node.index().ok() == Some(ordinal)
+                && matches!(anchor.role, MethodEvidenceAnchorRole::NativeLayoutUse {
+                    producer: actual, ..
+                } if actual == producer)
+        }))
+    }
+}
+
+/// Original occurrence/selection identity comes from the sealed builder's
+/// catalogue and anchors. Origins are current admitted node metadata, not
+/// original-span authority. Borrowing the exact node slice freezes this view.
+#[inline(never)]
+pub(super) fn authenticate_source_layout_occurrences<'a, F: CoreOperationFamily>(
+    builder: &'a CoreBuilder<F>,
+    nodes: &'a [StoredNode<F>],
+    work: &mut TypeWorkBudget,
+) -> Result<AuthenticatedSourceLayoutOccurrences<'a>, BuildError> {
+    let mut view = AuthenticatedSourceLayoutOccurrences {
+        anchors: Vec::new(),
+        nodes_address: nodes.as_ptr().cast::<()>(),
+        nodes_len: nodes.len(),
+        operation_family: std::any::TypeId::of::<F>(),
+    };
+    if builder.method_evidence_anchors.is_empty() {
+        return Ok(view);
+    }
+    work.charge(1).map_err(|()| BuildError::TypeWorkExceeded)?;
+    if nodes.len() != builder.nodes.len() || !std::ptr::eq(nodes.as_ptr(), builder.nodes.as_ptr()) {
+        return Err(BuildError::InvalidPayload);
+    }
+    let arena = builder.arena.ok_or(BuildError::InvalidNodeId)?;
+    let catalog = &builder.method_evidence;
+    let mut seen_nodes = HashSet::new();
+    let mut seen_expectations = HashSet::new();
+    work.charge(builder.method_evidence_anchors.len())
+        .map_err(|()| BuildError::TypeWorkExceeded)?;
+    for anchor in &builder.method_evidence_anchors {
+        let MethodEvidenceAnchorRole::NativeLayoutUse { producer, .. } = anchor.role else {
+            continue;
+        };
+        let expected = catalog
+            .expectations()
+            .get(anchor.expectation)
+            .ok_or(BuildError::InvalidPayload)?;
+        if anchor.node.arena() != arena
+            || expected.occurrence != anchor.occurrence
+            || expected.method != anchor.method
+            || !method_evidence_anchor_matches_expectation(
+                catalog,
+                expected,
+                anchor.owner,
+                anchor.requirement,
+                anchor.role,
+                &anchor.application,
+                work,
+            )
+            .map_err(|()| BuildError::TypeWorkExceeded)?
+            || catalog.method(anchor.method).is_none()
+        {
+            return Err(BuildError::InvalidPayload);
+        }
+        let dictionary = builder
+            .registry
+            .foreign_layout_dictionary(producer, work)
+            .map_err(|failure| {
+                if failure.is_resource_exhaustion() {
+                    BuildError::TypeWorkExceeded
+                } else {
+                    BuildError::InvalidPayload
+                }
+            })?;
+        let stored = nodes
+            .get(anchor.node.index()?)
+            .ok_or(BuildError::InvalidNodeId)?;
+        let Some(PureExprKind::Value(PureValue::Intrinsic(intrinsic))) = F::pure(&stored.kind)
+        else {
+            return Err(BuildError::InvalidPayload);
+        };
+        let ty = IterativeTypeOwner::new(producer.producer_type());
+        if dictionary.producer() != producer
+            || intrinsic.module() != producer.interface().module()
+            || intrinsic.operation()
+                != (super::packed::Intrinsic::ForeignLayoutWitness { producer })
+            || !F::effect_row(&stored.effects).is_empty()
+            || stored.origin.is_none()
+            || !same_type_with_budget(&stored.ty, &ty, work)
+                .map_err(|()| BuildError::TypeWorkExceeded)?
+        {
+            return Err(BuildError::InvalidPayload);
+        }
+        work.charge(3).map_err(|()| BuildError::TypeWorkExceeded)?;
+        seen_nodes
+            .try_reserve(1)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        seen_expectations
+            .try_reserve(1)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        view.anchors
+            .try_reserve(1)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        if !seen_nodes.insert(anchor.node) || !seen_expectations.insert(anchor.expectation) {
+            return Err(BuildError::InvalidPayload);
+        }
+        view.anchors.push(anchor);
+    }
+    Ok(view)
 }
 
 /// Names the closed pure Core dialect selected by Ash.
@@ -2621,18 +2798,45 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             _ => owner,
         };
         let selection_authority = match (role, occurrence) {
-            (MethodEvidenceAnchorRole::ProviderFamilyUse { source, selection_node, .. }, Some(slot)) => {
-                let selection = self.method_evidence.occurrence(slot).map(|row| row.selection.clone());
-                match selection.as_ref().and_then(|selection| selection.node(selection_node)) {
-                    Some(EvidenceNode::ProviderFamily { source: selected, methods, .. }) => {
-                        self.type_work.charge(methods.len()).map_err(|()| BuildError::TypeWorkExceeded)?;
+            (
+                MethodEvidenceAnchorRole::ProviderFamilyUse {
+                    source,
+                    selection_node,
+                    ..
+                },
+                Some(slot),
+            ) => {
+                let selection = self
+                    .method_evidence
+                    .occurrence(slot)
+                    .map(|row| row.selection.clone());
+                match selection
+                    .as_ref()
+                    .and_then(|selection| selection.node(selection_node))
+                {
+                    Some(EvidenceNode::ProviderFamily {
+                        source: selected,
+                        methods,
+                        ..
+                    }) => {
+                        self.type_work
+                            .charge(methods.len())
+                            .map_err(|()| BuildError::TypeWorkExceeded)?;
                         selected == source && methods.contains(&method)
                     }
                     _ => false,
                 }
             }
-            (MethodEvidenceAnchorRole::NativeLayoutUse { producer, selection_node }, Some(slot)) => {
-                self.type_work.charge(1).map_err(|()| BuildError::TypeWorkExceeded)?;
+            (
+                MethodEvidenceAnchorRole::NativeLayoutUse {
+                    producer,
+                    selection_node,
+                },
+                Some(slot),
+            ) => {
+                self.type_work
+                    .charge(1)
+                    .map_err(|()| BuildError::TypeWorkExceeded)?;
                 self.method_evidence.occurrence(slot)
                     .and_then(|expected| expected.selection.node(selection_node))
                     .is_some_and(|selected| matches!(selected,
@@ -2715,14 +2919,20 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             );
         let source_identity_matches = match role {
             MethodEvidenceAnchorRole::ProviderFamilyUse { binder, .. } => {
-                self.type_work.charge(method_evidence_anchor_identity_work(role))
+                self.type_work
+                    .charge(method_evidence_anchor_identity_work(role))
                     .map_err(|()| BuildError::TypeWorkExceeded)?;
-                node.index().ok().and_then(|index| self.nodes.get(index))
-                    .is_some_and(|stored| matches!(F::pure(&stored.kind),
-                        Some(PureExprKind::Variable(variable)) if variable.binder() == binder))
+                node.index()
+                    .ok()
+                    .and_then(|index| self.nodes.get(index))
+                    .is_some_and(|stored| {
+                        matches!(F::pure(&stored.kind),
+                        Some(PureExprKind::Variable(variable)) if variable.binder() == binder)
+                    })
             }
             MethodEvidenceAnchorRole::NativeLayoutUse { producer, .. } => {
-                self.type_work.charge(method_evidence_anchor_identity_work(role))
+                self.type_work
+                    .charge(method_evidence_anchor_identity_work(role))
                     .map_err(|()| BuildError::TypeWorkExceeded)?;
                 node.index().ok().and_then(|index| self.nodes.get(index))
                     .is_some_and(|stored| matches!(F::pure(&stored.kind),
@@ -3008,6 +3218,33 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         Ok(TypedBinder::new(arena, id, ty, origin))
     }
 
+    /// Copies a generated forwarding binder's metadata within its original builder.
+    /// Its declaration identity remains unchanged; final validation checks usage.
+    pub(crate) fn clone_provider_forwarding_binder(
+        &mut self,
+        binder: &TypedBinder,
+    ) -> Result<TypedBinder, BuildError> {
+        self.type_work
+            .charge(2)
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        if self.arena != Some(binder.arena()) || !self.generated_binders.contains(&binder.id()) {
+            return Err(BuildError::ForeignBinder);
+        }
+        // Forwarding preparation creates source origins only. Reject richer
+        // provenance here rather than copying it through an unmetered clone.
+        let Origin::Source(span) = binder.origin() else {
+            return Err(BuildError::InvalidPayload);
+        };
+        let ty = clone_type_with_budget(binder.ty(), &mut self.type_work)
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        Ok(TypedBinder::new(
+            binder.arena(),
+            binder.id(),
+            ty,
+            Origin::Source(*span),
+        ))
+    }
+
     /// Reads the compiler preparation allocator position.
     pub(crate) const fn provider_copy_binder_cursor(&self) -> u32 {
         self.next_binder
@@ -3190,17 +3427,6 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
                 operation, module,
             ))),
         )
-    }
-
-    /// Adds an unchecked sealed Layout producer for independent validation.
-    pub(crate) fn layout_witness_producer(
-        &mut self,
-        producer: crate::foreign::ForeignLayoutProducer,
-        ty: Type,
-        origin: Origin,
-    ) -> Result<NodeId, BuildError> {
-        self.intrinsic(super::packed::Intrinsic::ForeignLayoutWitness { producer },
-            producer.interface().module(), ty, origin)
     }
 
     /// Adds a Boolean payload with an unchecked result annotation.
@@ -4078,6 +4304,11 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
     /// Borrows the immutable final catalogue; this view grants no admission.
     pub(crate) fn provider_method_catalog(&self) -> &Arc<MethodEvidenceCatalog> {
         &self.method_evidence
+    }
+
+    /// Borrows the original registry for independent provider authentication.
+    pub(in crate::core) fn provider_registry(&self) -> &ResolvedRegistry {
+        &self.registry
     }
 
     /// Finishes unchecked construction at `root`.
@@ -5274,6 +5505,295 @@ mod tests {
 
     fn resolved_id(local: u32) -> BinderId {
         BinderId::resolved(ModuleId::new(0), local)
+    }
+
+    #[test]
+    fn genuine_source_layout_occurrences_are_exact_atomic_and_budgeted() {
+        use crate::{
+            core::{
+                EffectCoreBuilder, EffectExprKind, EffectOperationFamily,
+                transform::identity_effect_traversal, validate_effect_modules,
+            },
+            elaborate::{
+                EffectElaborator, ProviderCodeAvailability,
+                check_module_with_budget_and_provider_codes, link_modules,
+            },
+            foreign::{ForeignRegistrations, provider_manifest, typed_arena_manifest},
+            interface::InterfaceConstraintBudget,
+            module::{ForeignRegistrationId, ModuleRoots, load_module_graph},
+            pattern::UsefulnessBudget,
+            resolve::{DependencyExports, resolve_module_with_budget},
+            resolved::CheckedModule,
+        };
+        let entry = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/provider-experiments/arena-typed/multiple-entry.ash");
+        let roots = ModuleRoots::empty().with_foreign_registrations(
+            ForeignRegistrations::new([
+                provider_manifest(ForeignRegistrationId::new(1)).unwrap(),
+                typed_arena_manifest(ForeignRegistrationId::new(2)).unwrap(),
+            ])
+            .unwrap(),
+        );
+        let graph = load_module_graph(&entry, &roots).unwrap();
+        let mut checked = Vec::<CheckedModule>::new();
+        let mut availability = ProviderCodeAvailability::default();
+        let mut resolution = TypeWorkBudget::default();
+        let mut checking = TypeWorkBudget::default();
+        let mut constraints = InterfaceConstraintBudget::default();
+        let mut coverage = UsefulnessBudget::default();
+        for loaded in graph.modules() {
+            let dependencies = loaded
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    DependencyExports::new(
+                        edge,
+                        checked
+                            .iter()
+                            .find(|module| module.module() == edge.target())
+                            .unwrap()
+                            .exports(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let resolved = resolve_module_with_budget(
+                loaded,
+                &dependencies,
+                &mut resolution,
+                &mut constraints,
+            )
+            .expect("the real mixed scalar fixture resolves");
+            let module = check_module_with_budget_and_provider_codes(
+                resolved,
+                &availability,
+                &mut checking,
+                &mut coverage,
+                &mut constraints,
+            )
+            .expect("the real mixed scalar fixture completes source checking");
+            if let Some(code) = module.provider_code() {
+                availability
+                    .retain(module.module(), code, &mut checking)
+                    .unwrap();
+            }
+            checked.push(module);
+        }
+        let linked = crate::evidence_validation::validate_interface_evidence(
+            link_modules(checked, graph.entry()).unwrap(),
+        )
+        .expect("genuine linked occurrence and family evidence validates");
+        let mut elaborator = EffectElaborator::for_module_program(&linked).unwrap();
+        let typed = elaborator
+            .synthesize_effect_module_program(&linked)
+            .unwrap();
+        let unchecked = elaborator.finish(typed.node).unwrap();
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let relation = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        let validated = validate_effect_modules(unchecked, &sources, &relation)
+            .expect("the untouched mixed scalar source must independently validate first");
+        // Reuse the actual transformed node/catalog/anchor allocations. Scratch
+        // builders below are analysis inputs only and are never finished.
+        let scratch = || {
+            let raw = identity_effect_traversal(&validated).unwrap();
+            let (registry, catalog, anchors, arena, nodes, _) = raw.into_parts();
+            let mut builder =
+                CoreBuilder::<EffectOperationFamily>::with_registry_and_method_evidence(
+                    registry, catalog,
+                )
+                .unwrap();
+            builder.arena = Some(arena);
+            builder.nodes = nodes;
+            builder.method_evidence_anchors = anchors.into_vec();
+            builder
+        };
+        let integer_use = |builder: &EffectCoreBuilder| {
+            builder
+                .method_evidence_anchors
+                .iter()
+                .enumerate()
+                .find_map(|(position, anchor)| {
+                    let MethodEvidenceAnchorRole::NativeLayoutUse { producer, .. } = anchor.role
+                    else {
+                        return None;
+                    };
+                    (producer.payload_type() == Type::Int).then_some((
+                        position,
+                        anchor.node,
+                        producer,
+                    ))
+                })
+                .expect("an ordinary imported helper has genuine Int Layout evidence")
+        };
+        let measured = scratch();
+        let (_, target, producer) = integer_use(&measured);
+        let other = measured
+            .method_evidence_anchors
+            .iter()
+            .find_map(|anchor| {
+                let MethodEvidenceAnchorRole::NativeLayoutUse { producer, .. } = anchor.role else {
+                    return None;
+                };
+                (producer.payload_type() == Type::Bool).then_some(producer)
+            })
+            .expect("the same source genuinely selects Bool Layout evidence");
+        let exercise = |builder: &EffectCoreBuilder, work: &mut TypeWorkBudget| {
+            let view = authenticate_source_layout_occurrences(builder, &builder.nodes, work)?;
+            assert!(!view.is_empty());
+            for anchor in &view.anchors {
+                let MethodEvidenceAnchorRole::NativeLayoutUse { producer, .. } = anchor.role else {
+                    unreachable!();
+                };
+                assert!(
+                    view.authenticates(
+                        &builder.nodes,
+                        anchor.node.index().unwrap(),
+                        producer,
+                        work
+                    )
+                    .map_err(|()| BuildError::TypeWorkExceeded)?
+                );
+            }
+            Ok::<_, BuildError>(view.anchors.len())
+        };
+        let mut work = TypeWorkBudget::unbounded();
+        let count = exercise(&measured, &mut work).unwrap();
+        let cost = work.used();
+        assert!(
+            count >= 4,
+            "allocate/load of both scalars have distinct original occurrences"
+        );
+        assert!(cost > 0);
+        for prefix in [0, 17] {
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            assert_eq!(
+                exercise(&measured, &mut short),
+                Err(BuildError::TypeWorkExceeded)
+            );
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                assert_eq!(exercise(&measured, &mut exact).unwrap(), count);
+                assert_eq!(exact.used(), prefix + cost);
+            }
+        }
+        let view = authenticate_source_layout_occurrences(
+            &measured,
+            &measured.nodes,
+            &mut TypeWorkBudget::unbounded(),
+        )
+        .unwrap();
+        assert!(
+            !view
+                .authenticates(
+                    &measured.nodes,
+                    target.index().unwrap(),
+                    other,
+                    &mut TypeWorkBudget::unbounded()
+                )
+                .unwrap()
+        );
+        let identical = measured
+            .nodes
+            .iter()
+            .map(|node| StoredNode::<EffectOperationFamily> {
+                dialect: node.dialect,
+                ty: node.ty.clone(),
+                effects: node.effects.clone(),
+                origin: node.origin.clone(),
+                kind: node.kind.clone(),
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            !view
+                .authenticates(
+                    &identical,
+                    target.index().unwrap(),
+                    producer,
+                    &mut TypeWorkBudget::unbounded()
+                )
+                .unwrap()
+        );
+        assert_eq!(
+            authenticate_source_layout_occurrences(
+                &measured,
+                &identical,
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .err(),
+            Some(BuildError::InvalidPayload)
+        );
+
+        let mut unrecorded = scratch();
+        let (_, target, producer) = integer_use(&unrecorded);
+        let original = &unrecorded.nodes[target.index().unwrap()];
+        let copied = StoredNode::<EffectOperationFamily> {
+            dialect: original.dialect,
+            ty: original.ty.clone(),
+            effects: original.effects.clone(),
+            origin: original.origin.clone(),
+            kind: original.kind.clone(),
+        };
+        let copied_ordinal = unrecorded.nodes.len();
+        unrecorded.nodes.push(copied);
+        let view = authenticate_source_layout_occurrences(
+            &unrecorded,
+            &unrecorded.nodes,
+            &mut TypeWorkBudget::unbounded(),
+        )
+        .unwrap();
+        assert!(
+            !view
+                .authenticates(
+                    &unrecorded.nodes,
+                    copied_ordinal,
+                    producer,
+                    &mut TypeWorkBudget::unbounded()
+                )
+                .unwrap(),
+            "an identical intrinsic without its original anchored occurrence grants nothing"
+        );
+        for mutation in 0..3 {
+            let mut changed = scratch();
+            exercise(&changed, &mut TypeWorkBudget::unbounded()).unwrap();
+            let (position, target, producer) = integer_use(&changed);
+            match mutation {
+                0 => {
+                    changed.method_evidence_anchors[position].owner =
+                        Some(MethodEvidenceOwner::Global(resolved_id(u32::MAX)))
+                }
+                1 => {
+                    changed.nodes[target.index().unwrap()].kind =
+                        EffectExprKind::Pure(PureExprKind::Value(PureValue::Intrinsic(
+                            super::super::packed::IntrinsicNode::new(
+                                super::super::packed::Intrinsic::ForeignLayoutWitness { producer },
+                                ModuleId::new(u32::MAX),
+                            ),
+                        )))
+                }
+                2 => changed.method_evidence_anchors[position].occurrence = None,
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                authenticate_source_layout_occurrences(
+                    &changed,
+                    &changed.nodes,
+                    &mut TypeWorkBudget::unbounded(),
+                )
+                .err(),
+                Some(BuildError::InvalidPayload),
+                "mutation {mutation}"
+            );
+        }
     }
 
     #[test]
@@ -7452,6 +7972,121 @@ mod tests {
             builder.resolved_binder(resolved_id(0), Type::Unit, origin),
             Err(BuildError::DuplicateResolvedBinder)
         );
+    }
+
+    #[test]
+    fn provider_forwarding_clone_preserves_capability_and_has_an_exact_work_boundary() {
+        use crate::{
+            core::effect::EffectOperationFamily,
+            types::{ComputationType, EffectId, EffectInstance, EffectRow},
+        };
+
+        let source =
+            SourceFile::new("forwarding-binder.ash", "()").expect("the forwarding source fits");
+        let origin = generated_origin(&source, 0);
+        let mut builder = CoreBuilder::<EffectOperationFamily>::with_effect_registry(Arc::new(
+            ResolvedRegistry::default(),
+        ));
+        let reserved = resolved_id(0);
+        builder
+            .reserve_resolved_binders([reserved])
+            .expect("the resolver identity is reserved");
+        let effects = EffectRow::singleton(EffectInstance::new(
+            EffectId::new(ModuleId::new(0), 0),
+            Box::new([]),
+        ));
+        let forwarding = builder
+            .binder(
+                Type::function_computation(Type::Int, ComputationType::new(Type::Bool, effects)),
+                origin.clone(),
+            )
+            .expect("the original forwarding capability is admitted");
+        let cursor = builder.next_binder;
+        let generated = builder.generated_binders.clone();
+        let reservations = builder.reserved_resolved.clone();
+        let materialized = builder.materialized_resolved.clone();
+        let arena = builder.arena;
+        let nodes = builder.nodes.len();
+        builder.type_work = TypeWorkBudget::default();
+        let cloned = builder
+            .clone_provider_forwarding_binder(&forwarding)
+            .expect("same-arena forwarding metadata can be copied");
+        assert_eq!(
+            cloned, forwarding,
+            "arena, identity, complete type and provenance are preserved"
+        );
+        let cost = builder.type_work.used();
+        assert!(
+            cost > 2,
+            "the complete effectful type clone must be charged"
+        );
+        for prefix in [0, 17] {
+            builder.type_work = TypeWorkBudget::with_limit(prefix + cost - 1);
+            builder
+                .type_work
+                .charge(prefix)
+                .expect("the short prefix fits");
+            assert_eq!(
+                builder.clone_provider_forwarding_binder(&forwarding),
+                Err(BuildError::TypeWorkExceeded)
+            );
+            builder.type_work = TypeWorkBudget::with_limit(prefix + cost);
+            builder
+                .type_work
+                .charge(prefix)
+                .expect("the exact prefix fits");
+            assert_eq!(
+                builder.clone_provider_forwarding_binder(&forwarding),
+                Ok(forwarding.clone())
+            );
+            assert_eq!(builder.type_work.used(), prefix + cost);
+        }
+        assert_eq!(builder.next_binder, cursor);
+        assert_eq!(builder.generated_binders, generated);
+        assert_eq!(builder.reserved_resolved, reservations);
+        assert_eq!(builder.materialized_resolved, materialized);
+        assert_eq!(builder.arena, arena);
+        assert_eq!(builder.nodes.len(), nodes);
+
+        let mut foreign_builder = CoreBuilder::new();
+        let foreign = foreign_builder
+            .binder(Type::Unit, origin.clone())
+            .expect("the foreign builder admits its own capability");
+        assert_eq!(
+            foreign.id(),
+            forwarding.id(),
+            "numeric identity alone grants no authority"
+        );
+        builder.type_work = TypeWorkBudget::default();
+        assert_eq!(
+            builder.clone_provider_forwarding_binder(&foreign),
+            Err(BuildError::ForeignBinder)
+        );
+
+        // Only this private malformed-input test constructs a same-arena token
+        // for a reservation that has never been materialized.
+        let reserved_only = TypedBinder::new(forwarding.arena(), reserved, Type::Unit, origin);
+        assert_eq!(
+            builder.clone_provider_forwarding_binder(&reserved_only),
+            Err(BuildError::ForeignBinder)
+        );
+        assert!(!builder.materialized_resolved.contains(&reserved));
+        assert_eq!(builder.next_binder, cursor);
+        assert_eq!(builder.generated_binders, generated);
+        assert_eq!(builder.reserved_resolved, reservations);
+        assert_eq!(builder.materialized_resolved, materialized);
+
+        let recursive_origin = builder
+            .binder(Type::Unit, generated_origin(&source, 1))
+            .expect("ordinary binder admission permits generated causal provenance");
+        let cursor = builder.next_binder;
+        let generated = builder.generated_binders.clone();
+        assert_eq!(
+            builder.clone_provider_forwarding_binder(&recursive_origin),
+            Err(BuildError::InvalidPayload)
+        );
+        assert_eq!(builder.next_binder, cursor);
+        assert_eq!(builder.generated_binders, generated);
     }
 
     #[test]

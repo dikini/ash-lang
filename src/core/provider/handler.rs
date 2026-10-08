@@ -73,15 +73,26 @@ impl<'a> HandlerFragmentEntry<'a> {
         let family = if draft.template == ProviderTemplateId::new(definition.id, 2) {
             None
         } else if draft.template == ProviderTemplateId::new(definition.id, 3) {
-            Some(definition.family_template.as_ref().ok_or_else(|| invalid(program.root))?)
+            Some(
+                definition
+                    .family_template
+                    .as_ref()
+                    .ok_or_else(|| invalid(program.root))?,
+            )
         } else {
             return Err(invalid(program.root));
         };
-        if family.is_none() && (!draft.dictionary_parameters.is_empty() || !draft.family_requirements.is_empty()) {
+        if family.is_none()
+            && (!draft.dictionary_parameters.is_empty() || !draft.family_requirements.is_empty())
+        {
             return Err(invalid(program.root));
         }
-        let handlers_binder = family.map_or(&definition.handlers_binder, |family| &family.handlers_binder);
-        let handlers = family.map_or(definition.handlers.as_ref(), |family| family.handlers.as_ref());
+        let handlers_binder = family.map_or(&definition.handlers_binder, |family| {
+            &family.handlers_binder
+        });
+        let handlers = family.map_or(definition.handlers.as_ref(), |family| {
+            family.handlers.as_ref()
+        });
         let provided = family.map_or(&definition.provided, |family| &family.provided);
         if definition.id.module() != module.module()
             || draft.state.id() != handlers_binder.id
@@ -197,8 +208,7 @@ impl<'a> HandlerFragmentEntry<'a> {
         roots
             .try_reserve_exact(draft.clauses.len())
             .map_err(|_| resource())?;
-        for (index, (clause, source)) in draft.clauses.iter().zip(handlers).enumerate()
-        {
+        for (index, (clause, source)) in draft.clauses.iter().zip(handlers).enumerate() {
             charge(work, 1)?;
             if clause.operation() != source.operation
                 || clause.operation().owner() != declaration.id
@@ -263,7 +273,11 @@ impl<'a> HandlerFragmentEntry<'a> {
         type_parameters
             .try_reserve(parameter_count)
             .map_err(|_| resource())?;
-        for formal in definition.parameters.iter().chain(family.map(|family| &family.parameter)) {
+        for formal in definition
+            .parameters
+            .iter()
+            .chain(family.map(|family| &family.parameter))
+        {
             let declared = canonical
                 .type_variable(formal.id)
                 .ok_or_else(|| invalid(program.root))?;
@@ -307,10 +321,21 @@ impl<'a> HandlerFragmentEntry<'a> {
     pub(in crate::core) fn family_definition(&self) -> Option<&'a ResolvedResourceDefinition> {
         self.family.map(|_| self.definition)
     }
-    pub(in crate::core) fn family_requirements(&self) -> &[crate::interface::CheckedRequirement] { &self.draft.family_requirements }
-    pub(in crate::core) fn dictionary_parameters(&self) -> &[TypedBinder] { &self.draft.dictionary_parameters }
-    pub(in crate::core) fn source_methods(&self) -> impl Iterator<Item=&'a crate::resolved::ResolvedOccurrence> {
-        self.imports.values().copied().filter(|occurrence| matches!(occurrence.term, crate::resolved::ResolvedTermName::Method(_)))
+    pub(in crate::core) fn family_requirements(&self) -> &[crate::interface::CheckedRequirement] {
+        &self.draft.family_requirements
+    }
+    pub(in crate::core) fn dictionary_parameters(&self) -> &[TypedBinder] {
+        &self.draft.dictionary_parameters
+    }
+    pub(in crate::core) fn source_methods(
+        &self,
+    ) -> impl Iterator<Item = &'a crate::resolved::ResolvedOccurrence> {
+        self.imports.values().copied().filter(|occurrence| {
+            matches!(
+                occurrence.term,
+                crate::resolved::ResolvedTermName::Method(_)
+            )
+        })
     }
     pub(in crate::core) fn family_identity(&self) -> Option<super::ProviderFamilyIdentity> {
         self.family.map(|family| super::ProviderFamilyIdentity {
@@ -319,16 +344,27 @@ impl<'a> HandlerFragmentEntry<'a> {
         })
     }
 
-    pub(in crate::core) fn parameters(&self) -> impl Iterator<Item = &crate::resolved::ResolvedTypeVariable> {
-        self.definition.parameters.iter().chain(self.family.map(|family| &family.parameter))
+    pub(in crate::core) fn parameters(
+        &self,
+    ) -> impl Iterator<Item = &crate::resolved::ResolvedTypeVariable> {
+        self.definition
+            .parameters
+            .iter()
+            .chain(self.family.map(|family| &family.parameter))
     }
 
     pub(in crate::core) fn provided(&self) -> &crate::types::EffectInstance {
-        &self.family.map_or(&self.definition.provided, |family| &family.provided).instance
+        &self
+            .family
+            .map_or(&self.definition.provided, |family| &family.provided)
+            .instance
     }
 
     pub(in crate::core) fn interpreted(&self) -> &crate::types::EffectInstance {
-        &self.family.map_or(&self.definition.interpreted, |family| &family.interpreted).instance
+        &self
+            .family
+            .map_or(&self.definition.interpreted, |family| &family.interpreted)
+            .instance
     }
 
     pub(in crate::core) fn roots(&self) -> &[NodeId] {
@@ -436,7 +472,12 @@ fn source_imports<'a>(
                 ResolvedExprKind::Occurrence(occurrence) => {
                     if occurrence.global_binder().is_some_and(|binder| {
                         facts.is_some_and(|facts| facts.global(binder).is_some())
-                    }) || (include_methods && matches!(occurrence.term, crate::resolved::ResolvedTermName::Method(_))) {
+                    }) || (include_methods
+                        && matches!(
+                            occurrence.term,
+                            crate::resolved::ResolvedTermName::Method(_)
+                        ))
+                    {
                         charge(work, 1)?;
                         found.try_reserve(1).map_err(|_| resource())?;
                         if found

@@ -689,28 +689,56 @@ pub struct ForeignLayoutProducer {
 impl ForeignLayoutProducer {
     /// Returns the qualified dictionary lookup identity.
     #[must_use]
-    pub const fn dictionary(self) -> ForeignLayoutDictionaryId { self.dictionary }
+    pub const fn dictionary(self) -> ForeignLayoutDictionaryId {
+        self.dictionary
+    }
     /// Returns the original defining interface.
     #[must_use]
-    pub const fn interface(self) -> InterfaceId { self.dictionary.interface }
+    pub const fn interface(self) -> InterfaceId {
+        self.dictionary.interface
+    }
     /// Returns the original defining witness method.
     #[must_use]
-    pub const fn method(self) -> MethodId { self.method }
+    pub const fn method(self) -> MethodId {
+        self.method
+    }
     /// Returns the original opaque witness family.
     #[must_use]
-    pub const fn witness(self) -> NominalTypeId { self.witness }
+    pub const fn witness(self) -> NominalTypeId {
+        self.witness
+    }
     /// Returns the exact closed payload type represented by this header.
     #[must_use]
-    pub fn payload_type(self) -> Type { self.payload.payload_type() }
+    pub fn payload_type(self) -> Type {
+        self.payload.payload_type()
+    }
     /// Returns the ordinary nominal witness type.
     #[must_use]
     pub fn witness_type(self) -> Type {
-        Type::Application(Box::new(Type::Nominal(self.witness)), Box::new(self.payload_type()))
+        Type::Application(
+            Box::new(Type::Nominal(self.witness)),
+            Box::new(self.payload_type()),
+        )
     }
     /// Returns the pure witness-producing method type.
     #[must_use]
     pub fn producer_type(self) -> Type {
         Type::Function(Box::new(Type::Unit), Box::new(self.witness_type()))
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn with_header_for_test(
+        self,
+        method: MethodId,
+        witness: NominalTypeId,
+        payload: ForeignScalarEncoding,
+    ) -> Self {
+        Self {
+            method,
+            witness,
+            payload,
+            ..self
+        }
     }
 }
 
@@ -728,19 +756,29 @@ pub struct ForeignLayoutDictionary {
 impl ForeignLayoutDictionary {
     /// Returns its copied pure-callable header.
     #[must_use]
-    pub const fn producer(&self) -> ForeignLayoutProducer { self.producer }
+    pub const fn producer(&self) -> ForeignLayoutProducer {
+        self.producer
+    }
     /// Returns its exact canonical payload type.
     #[must_use]
-    pub const fn payload_type(&self) -> &Type { &self.payload_type }
+    pub const fn payload_type(&self) -> &Type {
+        &self.payload_type
+    }
     /// Returns its validated native encoding.
     #[must_use]
-    pub const fn encoding(&self) -> ForeignScalarEncoding { self.encoding }
+    pub const fn encoding(&self) -> ForeignScalarEncoding {
+        self.encoding
+    }
     /// Returns the encoded scalar extent.
     #[must_use]
-    pub const fn size(&self) -> usize { self.size }
+    pub const fn size(&self) -> usize {
+        self.size
+    }
     /// Returns the encoded scalar natural alignment.
     #[must_use]
-    pub const fn natural_alignment(&self) -> usize { self.natural_alignment }
+    pub const fn natural_alignment(&self) -> usize {
+        self.natural_alignment
+    }
 }
 
 /// Original sealed Layout authority and its finite scalar dictionary table.
@@ -755,27 +793,45 @@ pub struct ForeignLayoutFact {
 impl ForeignLayoutFact {
     /// Returns the sealed defining interface.
     #[must_use]
-    pub const fn interface(&self) -> InterfaceId { self.interface }
+    pub const fn interface(&self) -> InterfaceId {
+        self.interface
+    }
     /// Returns the original witness-producing method.
     #[must_use]
-    pub const fn method(&self) -> MethodId { self.method }
+    pub const fn method(&self) -> MethodId {
+        self.method
+    }
     /// Returns the opaque witness nominal.
     #[must_use]
-    pub const fn witness(&self) -> NominalTypeId { self.witness }
+    pub const fn witness(&self) -> NominalTypeId {
+        self.witness
+    }
     /// Returns the canonical interface payload binder.
     #[must_use]
-    pub const fn payload_parameter(&self) -> TypeVariableId { self.payload_parameter }
+    pub const fn payload_parameter(&self) -> TypeVariableId {
+        self.payload_parameter
+    }
     /// Resolves and checks the entire header, never just its ordinal.
     #[must_use]
-    pub fn dictionary_for_producer(&self, producer: ForeignLayoutProducer) -> Option<Arc<ForeignLayoutDictionary>> {
-        if producer.interface() != self.interface { return None; }
-        let dictionary = self.dictionaries.get(usize::from(producer.dictionary.ordinal))?;
+    pub fn dictionary_for_producer(
+        &self,
+        producer: ForeignLayoutProducer,
+    ) -> Option<Arc<ForeignLayoutDictionary>> {
+        if producer.interface() != self.interface {
+            return None;
+        }
+        let dictionary = self
+            .dictionaries
+            .get(usize::from(producer.dictionary.ordinal))?;
         (dictionary.producer == producer).then(|| Arc::clone(dictionary))
     }
     /// Derives only the admitted closed scalar payload goals.
     #[must_use]
     pub fn dictionary_for_payload(&self, payload: &Type) -> Option<Arc<ForeignLayoutDictionary>> {
-        self.dictionaries.iter().find(|dictionary| &dictionary.payload_type == payload).map(Arc::clone)
+        self.dictionaries
+            .iter()
+            .find(|dictionary| &dictionary.payload_type == payload)
+            .map(Arc::clone)
     }
 }
 
@@ -1249,37 +1305,52 @@ impl ForeignModuleSource {
                 work,
             )?;
             charge(work, 3)?;
-            fact.effects.try_reserve(1).map_err(|_| ForeignRegistrationError {
-                message: "foreign storage fact reservation refused".into(), resource: true,
-            })?;
-            fact.operations.try_reserve(2).map_err(|_| ForeignRegistrationError {
-                message: "foreign storage operation reservation refused".into(), resource: true,
-            })?;
+            fact.effects
+                .try_reserve(1)
+                .map_err(|_| ForeignRegistrationError {
+                    message: "foreign storage fact reservation refused".into(),
+                    resource: true,
+                })?;
+            fact.operations
+                .try_reserve(2)
+                .map_err(|_| ForeignRegistrationError {
+                    message: "foreign storage operation reservation refused".into(),
+                    resource: true,
+                })?;
             fact.effects.push(prepared.storage.effect());
             for (operation, result) in prepared.declaration.operations.iter().zip([
-                ForeignResultFact::Store { storage: prepared.storage.effect() },
-                ForeignResultFact::Load { storage: prepared.storage.effect() },
+                ForeignResultFact::Store {
+                    storage: prepared.storage.effect(),
+                },
+                ForeignResultFact::Load {
+                    storage: prepared.storage.effect(),
+                },
             ]) {
-                let signature = crate::types::clone_type_with_budget(&operation.annotation.ty, work)
-                    .map_err(|()| ForeignRegistrationError { message: "foreign registration type-work budget exhausted".into(), resource: true })?;
+                let signature =
+                    crate::types::clone_type_with_budget(&operation.annotation.ty, work).map_err(
+                        |()| ForeignRegistrationError {
+                            message: "foreign registration type-work budget exhausted".into(),
+                            resource: true,
+                        },
+                    )?;
                 fact.operations.push(ForeignOperationFact {
                     id: operation.id,
                     role: ForeignOperationRole::Borrow,
                     owned_identity_position: prepared.storage.owner_parameter(),
                     state_operands: vec![vec![0]],
                     state_lineage: vec![ForeignStateOperandFact {
-                        path: vec![0], state: prepared.storage.state(),
+                        path: vec![0],
+                        state: prepared.storage.state(),
                         lineage: vec![prepared.storage.owner_parameter()],
                     }],
                     retained_arguments: vec![],
-                    result, signature, origin: operation.origin.clone(),
+                    result,
+                    signature,
+                    origin: operation.origin.clone(),
                 });
             }
             fact.layout = Some(prepared.layout);
             fact.storage = Some(prepared.storage);
-            // Remove only after the connected dictionary, Core, family and
-            // runtime consumers have passed their joint admission review.
-            return Err(invalid("typed foreign storage is not executable in this admission phase"));
         }
         Ok(Arc::new(fact))
     }
@@ -1302,14 +1373,13 @@ impl<'a> FoundationTypeBindings<'a> {
         nominal: &'a ResolvedNominalType,
         category: ForeignTypeCategory,
     ) {
-        if nominal.spelling == declaration.storage.reference {
-            if let ForeignTypeCategory::Reference {
+        if nominal.spelling == declaration.storage.reference
+            && let ForeignTypeCategory::Reference {
                 owner_parameter,
                 payload_parameter,
             } = category
-            {
-                self.reference_coordinates = Some((owner_parameter, payload_parameter));
-            }
+        {
+            self.reference_coordinates = Some((owner_parameter, payload_parameter));
         }
         for (name, slot) in [
             (&declaration.storage.state, &mut self.state),
@@ -1642,24 +1712,43 @@ fn prepare_foreign_foundation<'a>(
         let (encoding, size, natural_alignment) = policies[ordinal];
         Arc::new(ForeignLayoutDictionary {
             producer: ForeignLayoutProducer {
-                dictionary: ForeignLayoutDictionaryId { interface: layout.id, ordinal: ordinal as u8 },
-                method: method.id, witness: witness.id, payload: encoding,
+                dictionary: ForeignLayoutDictionaryId {
+                    interface: layout.id,
+                    ordinal: ordinal as u8,
+                },
+                method: method.id,
+                witness: witness.id,
+                payload: encoding,
             },
-            payload_type: encoding.payload_type(), encoding, size, natural_alignment,
+            payload_type: encoding.payload_type(),
+            encoding,
+            size,
+            natural_alignment,
         })
     });
     Ok(PreparedForeignFoundation {
         layout: ForeignLayoutFact {
-            interface: layout.id, method: method.id, witness: witness.id,
-            payload_parameter: layout.parameters[0].id, dictionaries,
+            interface: layout.id,
+            method: method.id,
+            witness: witness.id,
+            payload_parameter: layout.parameters[0].id,
+            dictionaries,
         },
         storage: ForeignStorageFact {
-            effect: storage.id, store: store.id, load: load.id,
-            state: state.id, witness: witness.id, reference: reference.id,
-            report: report.id, error: error.id,
-            allocated_constructor: *success_id, refused_constructor: *refused_id,
-            owner_parameter: owner_position, payload_parameter: payload_position,
-            reference_owner_parameter: reference_owner, reference_payload_parameter: reference_payload,
+            effect: storage.id,
+            store: store.id,
+            load: load.id,
+            state: state.id,
+            witness: witness.id,
+            reference: reference.id,
+            report: report.id,
+            error: error.id,
+            allocated_constructor: *success_id,
+            refused_constructor: *refused_id,
+            owner_parameter: owner_position,
+            payload_parameter: payload_position,
+            reference_owner_parameter: reference_owner,
+            reference_payload_parameter: reference_payload,
         },
         declaration: storage,
     })

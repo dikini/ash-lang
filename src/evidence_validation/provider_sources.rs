@@ -1021,117 +1021,378 @@ pub(super) fn validate_provider_family_selection(
     work: &mut TypeWorkBudget,
     span: Span,
 ) -> Result<ValidatedProviderFamilySelection, EvidenceValidationFailure> {
-    let Some(crate::interface::EvidenceNode::ProviderFamily { source: candidate, definition, parameter, application, prerequisites, methods }) = selection.node(node) else {
+    let Some(crate::interface::EvidenceNode::ProviderFamily {
+        source: candidate,
+        definition,
+        parameter,
+        application,
+        prerequisites,
+        methods,
+    }) = selection.node(node)
+    else {
         return Err(invalid_root(span));
     };
     charge(budget, methods.len(), span)?;
     let plan = source.prepared.get().ok_or_else(|| invalid_root(span))?;
-    if candidate.module() != source.provider.module() || candidate == source.provider
-        || source.family_provider != Some(candidate) || definition != source.definition
-        || plan.definition().id != definition || !methods.contains(&method) { return Err(invalid_root(span)); }
-    work.charge(program.registry().provider_contract_count()).map_err(|()| type_resource(span))?;
-    let certificate = program.registry().provider_contracts().find(|(module, _)| **module == definition.module())
-        .map(|(_, certificate)| certificate).ok_or_else(|| invalid_root(span))?;
-    work.charge(certificate.resource_count()).map_err(|()| type_resource(span))?;
-    let identity = certificate.family_identity(definition).ok_or_else(|| invalid_root(span))?;
-    let header = certificate.family_provider_application(definition).ok_or_else(|| invalid_root(span))?;
-    let declared = certificate.family_requirements(definition).ok_or_else(|| invalid_root(span))?;
-    if identity.parameter != parameter || declared.len() != prerequisites.len()
-        || plan.arguments().len() != plan.definition().parameters.len()
-        || !certificate.resource_contracts().any(|(_, _, original)| std::ptr::eq(original.as_ref(), plan.definition())) {
+    if candidate.module() != source.provider.module()
+        || candidate == source.provider
+        || source.family_provider != Some(candidate)
+        || definition != source.definition
+        || plan.definition().id != definition
+        || !methods.contains(&method)
+    {
         return Err(invalid_root(span));
     }
-    let mut replacements = OwnerReplacements { types: HashMap::new(), rows: HashMap::new() };
-    let count = plan.arguments().len().checked_add(1).ok_or_else(|| type_resource(span))?;
-    work.charge(count).map_err(|()| type_resource(span))?;
-    replacements.types.try_reserve(count).map_err(|_| type_resource(span))?;
-    replacements.rows.try_reserve(count).map_err(|_| type_resource(span))?;
-    for (formal, actual) in plan.definition().parameters.iter().zip(plan.arguments()) {
-        let actual = clone_kinded_argument_with_budget(actual, work).map_err(|()| type_resource(span))?;
-        if replacements.insert_discarding_previous(formal.id, actual) { return Err(invalid_root(span)); }
+    work.charge(program.registry().provider_contract_count())
+        .map_err(|()| type_resource(span))?;
+    let certificate = program
+        .registry()
+        .provider_contracts()
+        .find(|(module, _)| **module == definition.module())
+        .map(|(_, certificate)| certificate)
+        .ok_or_else(|| invalid_root(span))?;
+    work.charge(certificate.resource_count())
+        .map_err(|()| type_resource(span))?;
+    let identity = certificate
+        .family_identity(definition)
+        .ok_or_else(|| invalid_root(span))?;
+    let header = certificate
+        .family_provider_application(definition)
+        .ok_or_else(|| invalid_root(span))?;
+    let declared = certificate
+        .family_requirements(definition)
+        .ok_or_else(|| invalid_root(span))?;
+    if identity.parameter != parameter
+        || declared.len() != prerequisites.len()
+        || plan.arguments().len() != plan.definition().parameters.len()
+        || !certificate
+            .resource_contracts()
+            .any(|(_, _, original)| std::ptr::eq(original.as_ref(), plan.definition()))
+    {
+        return Err(invalid_root(span));
     }
-    fn apply(application: &InterfaceApplication, replacements: &OwnerReplacements, work: &mut TypeWorkBudget, span: Span)
-        -> Result<InterfaceApplication, EvidenceValidationFailure> {
-        work.charge(application.arguments().len()).map_err(|()| type_resource(span))?;
-        let mut arguments = FamilyArguments(Vec::new());
-        arguments.0.try_reserve_exact(application.arguments().len()).map_err(|_| type_resource(span))?;
-        for argument in application.arguments() {
-            arguments.0.push(crate::types::substitute_kinded_argument_with(argument, &replacements.types, &replacements.rows,
-                |units| work.charge(units)).map_err(|()| type_resource(span))?.map_err(|_| invalid_root(span))?);
+    let mut replacements = OwnerReplacements {
+        types: HashMap::new(),
+        rows: HashMap::new(),
+    };
+    let count = plan
+        .arguments()
+        .len()
+        .checked_add(1)
+        .ok_or_else(|| type_resource(span))?;
+    work.charge(count).map_err(|()| type_resource(span))?;
+    replacements
+        .types
+        .try_reserve(count)
+        .map_err(|_| type_resource(span))?;
+    replacements
+        .rows
+        .try_reserve(count)
+        .map_err(|_| type_resource(span))?;
+    for (formal, actual) in plan.definition().parameters.iter().zip(plan.arguments()) {
+        let actual =
+            clone_kinded_argument_with_budget(actual, work).map_err(|()| type_resource(span))?;
+        if replacements.insert_discarding_previous(formal.id, actual) {
+            return Err(invalid_root(span));
         }
-        Ok(InterfaceApplication::new_kinded(application.interface(), std::mem::take(&mut arguments.0).into_boxed_slice()))
+    }
+    fn apply(
+        application: &InterfaceApplication,
+        replacements: &OwnerReplacements,
+        work: &mut TypeWorkBudget,
+        span: Span,
+    ) -> Result<InterfaceApplication, EvidenceValidationFailure> {
+        work.charge(application.arguments().len())
+            .map_err(|()| type_resource(span))?;
+        let mut arguments = FamilyArguments(Vec::new());
+        arguments
+            .0
+            .try_reserve_exact(application.arguments().len())
+            .map_err(|_| type_resource(span))?;
+        for argument in application.arguments() {
+            arguments.0.push(
+                crate::types::substitute_kinded_argument_with(
+                    argument,
+                    &replacements.types,
+                    &replacements.rows,
+                    |units| work.charge(units),
+                )
+                .map_err(|()| type_resource(span))?
+                .map_err(|_| invalid_root(span))?,
+            );
+        }
+        Ok(InterfaceApplication::new_kinded(
+            application.interface(),
+            std::mem::take(&mut arguments.0).into_boxed_slice(),
+        ))
     }
     let expected = apply(header, &replacements, work, span)?;
-    charge(budget, expected.arguments().len().checked_add(application.arguments().len()).ok_or_else(|| resource(span))?, span)?;
-    let mut pattern = Vec::new(); let mut goal = Vec::new();
-    pattern.try_reserve_exact(expected.arguments().len()).map_err(|_| resource(span))?;
-    goal.try_reserve_exact(application.arguments().len()).map_err(|_| resource(span))?;
-    pattern.extend(expected.arguments()); goal.extend(application.arguments());
-    if expected.interface() != application.interface() { return Err(invalid_root(span)); }
-    let canonical = crate::interface::authenticate_implementation_application_goal(program.registry(),
-        crate::interface::InterfaceOperationWork::new(span, budget, work), &goal)
-        .map_err(|failure| family_match_failure(failure, span))?;
-    let substitution = crate::interface::match_implementation_application_head_against_canonical_goal(program.registry(),
-        crate::interface::InterfaceOperationWork::new(span, budget, work), &[parameter], &pattern, &canonical)
-        .map_err(|failure| family_match_failure(failure, span))?.ok_or_else(|| invalid_root(span))?;
-    let [substitution] = &*substitution else { return Err(invalid_root(span)); };
-    if substitution.parameter() != parameter || !matches!(substitution.argument(), Type::Unit | Type::Bool | Type::Int) { return Err(invalid_root(span)); }
-    if replacements.insert_discarding_previous(parameter, KindedArgument::TypeArg(crate::types::clone_type_with_budget(substitution.argument(), work)
-        .map_err(|()| type_resource(span))?)) { return Err(invalid_root(span)); }
-    work.charge(plan.family_members().len()).map_err(|()| type_resource(span))?;
+    charge(
+        budget,
+        expected
+            .arguments()
+            .len()
+            .checked_add(application.arguments().len())
+            .ok_or_else(|| resource(span))?,
+        span,
+    )?;
+    let mut pattern = Vec::new();
+    let mut goal = Vec::new();
+    pattern
+        .try_reserve_exact(expected.arguments().len())
+        .map_err(|_| resource(span))?;
+    goal.try_reserve_exact(application.arguments().len())
+        .map_err(|_| resource(span))?;
+    pattern.extend(expected.arguments());
+    goal.extend(application.arguments());
+    if expected.interface() != application.interface() {
+        return Err(invalid_root(span));
+    }
+    let canonical = crate::interface::authenticate_implementation_application_goal(
+        program.registry(),
+        crate::interface::InterfaceOperationWork::new(span, budget, work),
+        &goal,
+    )
+    .map_err(|failure| family_match_failure(failure, span))?;
+    let substitution =
+        crate::interface::match_provider_family_application_head_against_canonical_goal(
+            program.registry(),
+            crate::interface::InterfaceOperationWork::new(span, budget, work),
+            parameter,
+            &pattern,
+            &canonical,
+        )
+        .map_err(|failure| family_match_failure(failure, span))?
+        .ok_or_else(|| invalid_root(span))?;
+    let [substitution] = &*substitution else {
+        return Err(invalid_root(span));
+    };
+    if substitution.parameter() != parameter
+        || !matches!(substitution.argument(), Type::Unit | Type::Bool | Type::Int)
+    {
+        return Err(invalid_root(span));
+    }
+    if replacements.insert_discarding_previous(
+        parameter,
+        KindedArgument::TypeArg(
+            crate::types::clone_type_with_budget(substitution.argument(), work)
+                .map_err(|()| type_resource(span))?,
+        ),
+    ) {
+        return Err(invalid_root(span));
+    }
+    work.charge(plan.family_members().len())
+        .map_err(|()| type_resource(span))?;
     let mut selected = None;
     for (index, member) in plan.family_members().iter().enumerate() {
-        if member.source() != candidate || member.identity() != identity { continue; }
-        if same_application_parts_charged(member.application(), application.interface(), application.arguments(), budget, span)? {
-            if selected.is_some() { return Err(invalid_root(span)); }
+        if member.source() != candidate || member.identity() != identity {
+            continue;
+        }
+        if same_application_parts_charged(
+            member.application(),
+            application.interface(),
+            application.arguments(),
+            budget,
+            span,
+        )? {
+            if selected.is_some() {
+                return Err(invalid_root(span));
+            }
             selected = Some((index, member));
         }
     }
     let (member_index, member) = selected.ok_or_else(|| invalid_root(span))?;
-    if member.requirements().len() != prerequisites.len() { return Err(invalid_root(span)); }
-    charge(budget, prerequisites.len(), span)?;
-    for ((retained, retained_node), actual) in member.requirements().iter().zip(prerequisites) {
-        if retained_node != actual || actual.index() >= node.index() || !retained.shares_plan_with(selection) { return Err(invalid_root(span)); }
+    if member.requirements().len() != prerequisites.len() {
+        return Err(invalid_root(span));
     }
-    work.charge(program.groups().len()).map_err(|()| type_resource(span))?;
+    work.charge(member.selections().len())
+        .map_err(|()| type_resource(span))?;
+    let mut recorded = false;
+    for (retained, retained_node) in member.selections() {
+        if *retained_node == node
+            && retained.root() == selection.root()
+            && retained.shares_plan_with(selection)
+        {
+            if recorded {
+                return Err(invalid_root(span));
+            }
+            recorded = true;
+        }
+    }
+    if !recorded {
+        return Err(invalid_root(span));
+    }
+    let (original_selection, original_node) = member
+        .selections()
+        .first()
+        .ok_or_else(|| invalid_root(span))?;
+    let Some(crate::interface::EvidenceNode::ProviderFamily {
+        source: original_source,
+        definition: original_definition,
+        parameter: original_parameter,
+        application: original_application,
+        prerequisites: original_prerequisites,
+        methods: original_methods,
+    }) = original_selection.node(*original_node)
+    else {
+        return Err(invalid_root(span));
+    };
+    charge(
+        budget,
+        original_methods
+            .len()
+            .checked_add(prerequisites.len())
+            .ok_or_else(|| resource(span))?,
+        span,
+    )?;
+    if original_source != candidate
+        || original_definition != definition
+        || original_parameter != parameter
+        || original_methods != methods
+        || original_prerequisites.len() != member.requirements().len()
+        || !same_application_parts_charged(
+            original_application,
+            application.interface(),
+            application.arguments(),
+            budget,
+            span,
+        )?
+    {
+        return Err(invalid_root(span));
+    }
+    for (((retained, retained_node), actual), original_prerequisite) in member
+        .requirements()
+        .iter()
+        .zip(prerequisites)
+        .zip(original_prerequisites)
+    {
+        if retained_node != original_prerequisite
+            || retained_node.index() >= original_node.index()
+            || actual.index() >= node.index()
+            || retained.root() != original_selection.root()
+            || !retained.shares_plan_with(original_selection)
+        {
+            return Err(invalid_root(span));
+        }
+        let Some(crate::interface::EvidenceNode::NativeLayout { producer }) =
+            selection.node(*actual)
+        else {
+            return Err(invalid_root(span));
+        };
+        let Some(crate::interface::EvidenceNode::NativeLayout {
+            producer: original_producer,
+        }) = retained.node(*retained_node)
+        else {
+            return Err(invalid_root(span));
+        };
+        if producer != original_producer {
+            return Err(invalid_root(span));
+        }
+    }
+    work.charge(program.groups().len())
+        .map_err(|()| type_resource(span))?;
     let mut canonical_interface = None;
     for group in program.groups() {
-        work.charge(group.interface_facts().len()).map_err(|()| type_resource(span))?;
-        if let Some(interface) = group.interface_facts().iter().find(|interface| interface.id == application.interface()) {
-            if canonical_interface.replace(interface.as_ref()).is_some() { return Err(invalid_root(span)); }
+        work.charge(group.interface_facts().len())
+            .map_err(|()| type_resource(span))?;
+        if let Some(interface) = group
+            .interface_facts()
+            .iter()
+            .find(|interface| interface.id == application.interface())
+            && canonical_interface.replace(interface.as_ref()).is_some()
+        {
+            return Err(invalid_root(span));
         }
     }
     let interface = canonical_interface.ok_or_else(|| invalid_root(span))?;
-    charge(budget, interface.methods.len().checked_add(methods.len()).ok_or_else(|| resource(span))?, span)?;
-    if methods.len() != interface.methods.len() || !methods.iter().copied().eq(interface.methods.iter().map(|method| method.id)) {
+    charge(
+        budget,
+        interface
+            .methods
+            .len()
+            .checked_add(methods.len())
+            .ok_or_else(|| resource(span))?,
+        span,
+    )?;
+    if methods.len() != interface.methods.len()
+        || !methods
+            .iter()
+            .copied()
+            .eq(interface.methods.iter().map(|method| method.id))
+    {
         return Err(invalid_root(span));
     }
     let mut binder = None;
     let mut actuals = member.forwarding_methods();
     let mut seen_binders = std::collections::HashSet::new();
-    seen_binders.try_reserve(interface.methods.len()).map_err(|_| resource(span))?;
+    seen_binders
+        .try_reserve(interface.methods.len())
+        .map_err(|_| resource(span))?;
     for canonical in &interface.methods {
-        let (candidate_method, candidate_binder, ty) = actuals.next().ok_or_else(|| invalid_root(span))?;
-        if candidate_method != canonical.id || !matches!(candidate_binder, crate::resolved::BinderId::Generated(_))
-            || !seen_binders.insert(candidate_binder) || !canonical.authoritative_type_parameters().is_empty()
-            || !super::same_type_after_interface_substitution(canonical.value_type(), &interface.parameters,
-                application.arguments(), ty, budget, span)? { return Err(invalid_root(span)); }
-        if candidate_method == method { binder = Some(candidate_binder); }
+        let (candidate_method, candidate_binder, ty) =
+            actuals.next().ok_or_else(|| invalid_root(span))?;
+        if candidate_method != canonical.id
+            || !matches!(candidate_binder, crate::resolved::BinderId::Generated(_))
+            || !seen_binders.insert(candidate_binder)
+            || !canonical.authoritative_type_parameters().is_empty()
+            || !super::same_type_after_interface_substitution(
+                canonical.value_type(),
+                &interface.parameters,
+                application.arguments(),
+                ty,
+                budget,
+                span,
+            )?
+        {
+            return Err(invalid_root(span));
+        }
+        if candidate_method == method {
+            binder = Some(candidate_binder);
+        }
     }
-    if actuals.next().is_some() { return Err(invalid_root(span)); }
+    if actuals.next().is_some() {
+        return Err(invalid_root(span));
+    }
     let binder = binder.ok_or_else(|| invalid_root(span))?;
-    work.charge(declared.len()).map_err(|()| type_resource(span))?;
+    work.charge(declared.len())
+        .map_err(|()| type_resource(span))?;
     let mut requirements = Vec::new();
-    requirements.try_reserve_exact(declared.len()).map_err(|_| type_resource(span))?;
+    requirements
+        .try_reserve_exact(declared.len())
+        .map_err(|_| type_resource(span))?;
     for (ordinal, requirement) in declared.iter().enumerate() {
         if requirement.id.owner() != crate::interface::RequirementOwner::ResourceFamily(definition)
-            || usize::try_from(requirement.id.declaration()).ok() != Some(ordinal) { return Err(invalid_root(span)); }
-        requirements.push(apply(requirement.application(), &replacements, work, span)?);
+            || usize::try_from(requirement.id.declaration()).ok() != Some(ordinal)
+        {
+            return Err(invalid_root(span));
+        }
+        let required = apply(requirement.application(), &replacements, work, span)?;
+        let Some(crate::interface::EvidenceNode::NativeLayout { producer }) =
+            selection.node(prerequisites[ordinal])
+        else {
+            return Err(invalid_root(span));
+        };
+        super::validate_native_layout_dictionary(
+            program.registry(),
+            producer,
+            &required,
+            budget,
+            work,
+            span,
+        )?;
+        requirements.push(required);
     }
-    Ok(ValidatedProviderFamilySelection { member: member_index, binder, requirements: requirements.into_boxed_slice() })
+    Ok(ValidatedProviderFamilySelection {
+        member: member_index,
+        binder,
+        requirements: requirements.into_boxed_slice(),
+    })
 }
 
-fn family_match_failure(failure: crate::interface::HeadMatchFailure, span: Span) -> EvidenceValidationFailure {
+fn family_match_failure(
+    failure: crate::interface::HeadMatchFailure,
+    span: Span,
+) -> EvidenceValidationFailure {
     match failure {
         crate::interface::HeadMatchFailure::TypeResource => type_resource(span),
         crate::interface::HeadMatchFailure::ConstraintResource => resource(span),
@@ -1142,6 +1403,8 @@ fn family_match_failure(failure: crate::interface::HeadMatchFailure, span: Span)
 struct FamilyArguments(Vec<KindedArgument>);
 impl Drop for FamilyArguments {
     fn drop(&mut self) {
-        for argument in self.0.drain(..) { crate::types::discard_kinded_argument_iteratively(argument); }
+        for argument in self.0.drain(..) {
+            crate::types::discard_kinded_argument_iteratively(argument);
+        }
     }
 }
