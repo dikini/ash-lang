@@ -52,3 +52,16 @@ changed by either correction. Both original failed checks remain adjacent.
 The original 40 focused passes and 69 connected passes remain separate evidence.
 This is a verified connected integration checkpoint; the interrupted full
 `xtask` gate remains explicitly incomplete until the combined final run.
+
+Original's corrected integration commit
+`cce01bebe3a3ff112c264e72d3343c9a6743917b` passes a fresh focused build
+and 19 tests: bidirectional inventory (1), public phase reporting (4),
+SQLite source execution (10) and native arena lifecycle (4). The log and receipt
+are adjacent. This checkpoint is the stable compiler handoff to the independent
+SQLite delivery; it includes Common `51fb2b8cb26fad98fd7dc2dd3d26721264dcca2c`
+and quality correction `a8be0a3` through unsigned preserving merges.
+
+SQLite reuses the 17 expanded test passes after checking all 160 input pins:
+158 match exactly; only control-file opening comments and a helper lint annotation
+differ. Its new host, packaged examples and forwarding regression receive their
+own verification. The next full Original gate covers combined deliveries.
