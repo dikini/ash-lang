@@ -1264,7 +1264,7 @@ pub fn sqlite_manifest(
         data(
             "OpenConfig",
             &[],
-            &[("InMemory", None), ("File", Some("Bytes"))],
+            &[("InMemory", None), ("File", Some("String"))],
         ),
         data(
             "InputFault",
@@ -1278,6 +1278,7 @@ pub fn sqlite_manifest(
                 ("BadSql", None),
                 ("MultipleStatements", None),
                 ("BadPath", None),
+                ("BadText", None),
             ],
         ),
         data(
@@ -1294,7 +1295,7 @@ pub fn sqlite_manifest(
             "Error",
             &[],
             &[
-                ("NativeFailure", Some("Int, Bytes")),
+                ("NativeFailure", Some("Int, String")),
                 ("InputFailure", Some("InputFault")),
                 ("ProtocolFailure", Some("ProtocolFault")),
                 ("ConversionFailure", None),
@@ -1338,6 +1339,11 @@ pub fn sqlite_manifest(
                 ("Retained", Some("State, E")),
             ],
         ),
+        data(
+            "TextOrNull",
+            &[],
+            &[("NullText", None), ("TextValue", Some("String"))],
+        ),
     ];
     let acquire = |state: &str, error: &str, retained_parameters| ForeignResultRelation::Acquire {
         state: state.into(),
@@ -1377,13 +1383,13 @@ pub fn sqlite_manifest(
             ),
         ],
     };
-    let statement = ForeignEffectDeclaration {
+    let mut statement = ForeignEffectDeclaration {
         name: "Statement".into(),
         parameters: vec!["S".into(), "C".into()],
         operations: vec![
             operation(
                 "prepare",
-                "(ConnectionState<C>, Bytes) -> Acquire<StatementState<S, C>, PrepareError>",
+                "(ConnectionState<C>, String) -> Acquire<StatementState<S, C>, PrepareError>",
                 Acquire,
                 vec![vec![0]],
                 acquire("StatementState", "PrepareError", vec![1]),
@@ -1446,6 +1452,22 @@ pub fn sqlite_manifest(
             ),
         ],
     };
+    statement.operations.extend([
+        operation(
+            "bind_text",
+            "(StatementState<S, C>, Int, TextOrNull) -> Result<Unit>",
+            Borrow,
+            vec![vec![0]],
+            ForeignResultRelation::Independent,
+        ),
+        operation(
+            "column_text",
+            "(StatementState<S, C>, Int) -> Result<TextOrNull>",
+            Borrow,
+            vec![vec![0]],
+            ForeignResultRelation::Independent,
+        ),
+    ]);
     ForeignManifest::new(
         "@foreign.sqlite",
         id,

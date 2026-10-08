@@ -6124,7 +6124,7 @@ mod tests {
         assert!(effects.is_empty());
     }
 
-    const STATEMENT: &str = "pub interface StatementReader<S, C> {\ncolumn : Statement<S, C> -> Native.Result<Int> ! {StatementOps<S, C>}\n}\npub effect StatementOps<S, C> {\ncolumn : Statement<S, C> -> Native.Result<Int>\n}\npub resource Statement<S, C> {\ninput (Connection<C>, Bytes)\nstate Native.StatementState<S, C>\nresult Scope<Native.PrepareError, Native.FinalizeError, T> for <T>\nprovider StatementReader<S, C>\neffect StatementOps<S, C>\ninterpret Native.Statement<S, C>\nacquire config => match config {\n(db, sql) => perform Native.Statement<S, C>.prepare (Provider.state_of db, sql)\n}\nfinish state => perform Native.Statement<S, C>.finalize state\nhandlers state {\ncolumn stmt => resume (perform Native.Statement<S, C>.column_int (state, 0))\n}\n}\n";
+    const STATEMENT: &str = "pub interface StatementReader<S, C> {\ncolumn : Statement<S, C> -> Native.Result<Int> ! {StatementOps<S, C>}\n}\npub effect StatementOps<S, C> {\ncolumn : Statement<S, C> -> Native.Result<Int>\n}\npub resource Statement<S, C> {\ninput (Connection<C>, String)\nstate Native.StatementState<S, C>\nresult Scope<Native.PrepareError, Native.FinalizeError, T> for <T>\nprovider StatementReader<S, C>\neffect StatementOps<S, C>\ninterpret Native.Statement<S, C>\nacquire config => match config {\n(db, sql) => perform Native.Statement<S, C>.prepare (Provider.state_of db, sql)\n}\nfinish state => perform Native.Statement<S, C>.finalize state\nhandlers state {\ncolumn stmt => resume (perform Native.Statement<S, C>.column_int (state, 0))\n}\n}\n";
 
     #[test]
     fn direct_state_access_draft_rejects_first_class_callable_and_wrong_operand_paths() {

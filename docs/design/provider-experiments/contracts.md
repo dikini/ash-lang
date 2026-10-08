@@ -126,3 +126,30 @@ Reference counting, tracing roots, general cycle copying, process heaps, and
 ownership transfer are not required for the first native baselines. Their
 pressure remains visible in the later cases and DN-0035; they require another
 bounded contract before implementation.
+
+## SQLite copying workstream obligations
+
+The selected copying profile in [semantics](semantics.md#sqlite-copying-profile-and-conversion-outcomes)
+uses immutable built-in Bytes and String. It retains the same native ownership
+and canonical registration obligations; copied payloads have no state token,
+native address or release authority. The adapter must check arbitrary Ash
+integers at the selected ABI boundary, reject incompatible column kinds before
+conversion, and use explicit checked lengths for transient TEXT/BLOB bindings
+and independent output copies. Empty values and SQL null stay distinct.
+
+The public copying comparison binds Unicode, zero/255 BLOB bytes, empty values
+and null, then observes copied results after both native scopes complete. Reset
+must preserve bindings; clearing must remove them separately. SQL/path/bound
+TEXT NUL rejection differs from explicit-length output TEXT, which may contain
+NUL but must be valid UTF-8. Runtime work/storage refusal must remain terminal
+and separate from a native result. Exact native codes and copied diagnostics
+remain observable even when finalization consumes the statement after failure.
+
+The session comparison uses ordinary SQL for creation and transactions, imports
+a generic row helper, reuses an INSERT statement, closes, and reopens the file.
+It preserves every body/completion envelope and observes dependent finalize
+before close. Native invalid-close-order evidence belongs to the reference
+harness; source ownership checks must remain intact. Captured-control evidence
+is conditional on verified common support. The copying capability does not
+require retained inputs or scoped views. [Execution](execution.md) records which
+comparisons have actually passed and their integrated revision.
