@@ -6,7 +6,7 @@ establish current language semantics, a formal theorem or production adoption.
 
 The unsigned source delivery is `ffa1d8ef4178cb1e5651411162ff09c117b725f7`.
 Its preserving Common source merge is `c49d4bdc6004168a161c8d51d90b43cf3afddbd6`. That merge has independent
-static review; combined executable verification remains pending. Consult the
+static review. Complete Original verification passes at `7a518e83230fec568978b269b1d69776ab6051c5`; the [combined receipt](../combined-delivery-2026-10-08/README.md) records the full gate. Main delivery remains pending. Consult the
 [consolidation record](../execution.md#current-consolidation-checkpoint) for
 subsequent integrated results and exact checked commits.
 

@@ -1,0 +1,188 @@
+{
+  "gate_complete": false,
+  "receipt_completed": true,
+  "receipt_exit_code": 1,
+  "stage_order_valid": true,
+  "observed_stage_labels": [
+    "format",
+    "metadata",
+    "build",
+    "clippy",
+    "test"
+  ],
+  "stages": [
+    {
+      "label": "format",
+      "observed": true,
+      "completed": true,
+      "evidence": "next serial stage started"
+    },
+    {
+      "label": "metadata",
+      "observed": true,
+      "completed": true,
+      "evidence": "next serial stage started"
+    },
+    {
+      "label": "build",
+      "observed": true,
+      "completed": true,
+      "evidence": "next serial stage started"
+    },
+    {
+      "label": "clippy",
+      "observed": true,
+      "completed": true,
+      "evidence": "next serial stage started"
+    },
+    {
+      "label": "test",
+      "observed": true,
+      "completed": false,
+      "evidence": "started, no successful completion evidence"
+    },
+    {
+      "label": "documentation",
+      "observed": false,
+      "completed": false,
+      "evidence": "not observed"
+    }
+  ],
+  "test_targets": [
+    {
+      "target": "unittests src/lib.rs (target/debug/deps/ash-bb8bc7485e622fa8)",
+      "stage": "test",
+      "result": "ok",
+      "passed": 1674,
+      "failed": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filtered_out": 0,
+      "executed_cases": 1674
+    },
+    {
+      "target": "unittests src/main.rs (target/debug/deps/ash-8b610172e8c517df)",
+      "stage": "test",
+      "result": "ok",
+      "passed": 18,
+      "failed": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filtered_out": 0,
+      "executed_cases": 18
+    },
+    {
+      "target": "tests/architecture.rs (target/debug/deps/architecture-44f5dc63a14c17c1)",
+      "stage": "test",
+      "result": "FAILED",
+      "passed": 41,
+      "failed": 3,
+      "ignored": 0,
+      "measured": 0,
+      "filtered_out": 0,
+      "executed_cases": 44
+    }
+  ],
+  "nested_child_summaries": [
+    {
+      "target": "unittests src/lib.rs (target/debug/deps/ash-bb8bc7485e622fa8)",
+      "stage": "test",
+      "result": "ok",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filtered_out": 1673,
+      "executed_cases": 1
+    },
+    {
+      "target": "unittests src/lib.rs (target/debug/deps/ash-bb8bc7485e622fa8)",
+      "stage": "test",
+      "result": "ok",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filtered_out": 1673,
+      "executed_cases": 1
+    },
+    {
+      "target": "unittests src/lib.rs (target/debug/deps/ash-bb8bc7485e622fa8)",
+      "stage": "test",
+      "result": "ok",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filtered_out": 1673,
+      "executed_cases": 1
+    },
+    {
+      "target": "unittests src/lib.rs (target/debug/deps/ash-bb8bc7485e622fa8)",
+      "stage": "test",
+      "result": "ok",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filtered_out": 1673,
+      "executed_cases": 1
+    },
+    {
+      "target": "unittests src/lib.rs (target/debug/deps/ash-bb8bc7485e622fa8)",
+      "stage": "test",
+      "result": "ok",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filtered_out": 1673,
+      "executed_cases": 1
+    },
+    {
+      "target": "unittests src/lib.rs (target/debug/deps/ash-bb8bc7485e622fa8)",
+      "stage": "test",
+      "result": "ok",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filtered_out": 1673,
+      "executed_cases": 1
+    }
+  ],
+  "unattributed_summaries": [],
+  "test_totals": {
+    "passed": 1733,
+    "failed": 3,
+    "ignored": 0,
+    "measured": 0,
+    "filtered_out": 0,
+    "executed_cases": 1736
+  },
+  "zero_test_targets": [],
+  "diagnostics": [
+    "error: test failed, to rerun pass `-p ash --test architecture`",
+    "test check exited with exit status: 101"
+  ],
+  "invariance": {
+    "recorded_head": "c18ed9f3a07294ad1db06d3499cd00017c213cf0",
+    "recorded_tree": "684ecd603f0dfe76e15a74c389712c2e3bafad4a",
+    "recorded_source_paths": 1484,
+    "recorded_draft_paths": 8,
+    "receipt_post_fields": {
+      "post_head": "c18ed9f3a07294ad1db06d3499cd00017c213cf0",
+      "post_status": " M docs/design/README.md\n M docs/tasks/README.md\n?? docs/design/DN-0038-resource-properties-and-mutable-variable-usage.md\n?? docs/design/DN-0039-files-and-filesystem-resources.md\n?? docs/design/DN-0040-floating-point-semantics-and-representation.md\n?? docs/design/DN-0041-typed-serialization-and-data-pipelines.md\n?? docs/design/provider-experiments/arena-plan.md\n?? docs/tasks/TASK-0034-immutable-arena-provider-experiment.md\n",
+      "drafts_unchanged": true
+    },
+    "current_head": "c18ed9f3a07294ad1db06d3499cd00017c213cf0",
+    "current_tree": "684ecd603f0dfe76e15a74c389712c2e3bafad4a",
+    "head_matches": true,
+    "tree_matches": true,
+    "source_mismatches": [],
+    "draft_mismatches": [],
+    "status_matches_pre": true,
+    "current_status": " M docs/design/README.md\n M docs/tasks/README.md\n?? docs/design/DN-0038-resource-properties-and-mutable-variable-usage.md\n?? docs/design/DN-0039-files-and-filesystem-resources.md\n?? docs/design/DN-0040-floating-point-semantics-and-representation.md\n?? docs/design/DN-0041-typed-serialization-and-data-pipelines.md\n?? docs/design/provider-experiments/arena-plan.md\n?? docs/tasks/TASK-0034-immutable-arena-provider-experiment.md\n"
+  },
+  "qualification": "Counts use only the last outer result summary within each Cargo Running header; preceding nested child summaries are retained separately and excluded from totals. Zero-test targets contribute no executed cases. Successive stage starts prove preceding serial command success. Current invariance is a read-only snapshot, not a substitute for the final wrapper receipt."
+}

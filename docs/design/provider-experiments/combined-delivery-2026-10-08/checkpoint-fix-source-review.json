@@ -1,0 +1,10 @@
+{
+  "base": "4f11a97c5086df033f565344cd5b82087008140f",
+  "common_commit": "80c9fc29b91c5dc8d79584a11ecf723537f2b51d",
+  "integration_commit": "7a518e83230fec568978b269b1d69776ab6051c5",
+  "file": "tests/resource_provider_resolution.rs",
+  "sha256": "70b6484bfd7d88dea69b4e520305715dd9bd49175ecc5b1b0d95893b89745830",
+  "review": "Root reviewed complete candidate and exact selected P1 check_provider_header authentication before family/lifecycle checks. All resolver identity/order/kind/provenance checks retained; three ordinary-data fixtures assert TypeReason::Argument, exact native-state message and state span. No production/limit change. Global checkpoint expectation audit found no other obsolete expected failure.",
+  "focused": "checkpoint-expectations-check-v2:fmt and17cases pass, invariant source/status. Prior focused formatting-only failure retained separately.",
+  "remaining_audit": "remaining-suite-audit:allremainingrootintegration targets expose onlyknownresource-templateexpectation; nonAshworkspace tests and warning-denied rustdoc pass. This audit itself is not an all-green gate."
+}

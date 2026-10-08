@@ -1,0 +1,33 @@
+verification command: ["cargo", "fmt", "--all", "--", "--check"]
+verification command: ["cargo", "test", "--locked", "-p", "ash", "--no-fail-fast", "--test", "method_parameter_resources", "--test", "resource_provider_resolution", "--", "--test-threads=1"]
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/common-resource-support)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.57s
+     Running tests/method_parameter_resources.rs (target/debug/deps/method_parameter_resources-680d0f44ef46e7b8)
+
+running 4 tests
+test adapter_heavy_core_and_rejected_occurrences_dispose_on_a_256_kib_stack ... ok
+test deep_and_wide_method_carriers_accept_and_reject_on_a_256_kib_stack ... ok
+test exact_unit_formulas_remain_attached_to_their_owning_probes ... ok
+test syntax_method_binders_have_an_exact_additive_token_and_event_formula ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+     Running tests/resource_provider_resolution.rs (target/debug/deps/resource_provider_resolution-635ad10dbe2e3a5b)
+
+running 13 tests
+test acquire_and_finish_binders_do_not_leak_into_other_templates ... ok
+test declarations_preserve_templates_and_instances_reference_the_defining_family ... ok
+test family_effect_actuals_preserve_existing_argument_kind_rejection ... ok
+test family_effect_arity_actuals_are_retained_until_the_checker_boundary ... ok
+test family_failure_paths_drop_retained_bodies_and_current_patterns_on_a_small_stack ... ok
+test family_payload_and_state_binders_do_not_leak_across_template_boundaries ... ok
+test family_templates_retain_distinct_scope_ordered_arguments_and_canonical_operations ... ok
+test fresh_handle_and_identity_are_unavailable_in_initializer_and_after_body ... ok
+test nested_provider_instances_resolve_and_drop_on_a_small_stack ... ok
+test ordinary_data_state_cannot_publish_a_checked_resource_module ... ok
+test resource_answer_parameter_is_distinct_from_resource_identity ... ok
+test second_resource_parameter_remains_a_template_while_instances_bind_only_fresh_identity ... ok
+test unknown_family_requirements_associations_and_operations_reject_resolution ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+

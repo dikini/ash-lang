@@ -150,7 +150,7 @@ Its assertions require `Completed(41, Closed)`, one eight-byte store and load,
 matching native owner/allocation identities, one scope release and zero retained
 owners. The selected functional checkpoint passes this test and the wider seven-case
 allocation suite. The consolidation checkpoint distinguishes that frozen source
-from subsequent scanner/lint changes and the pending combined workspace gate. The selected `StorageProvider<R, T>` family covers
+from subsequent scanner/lint changes and the completed Original gate recorded in the consolidation checkpoint. The selected `StorageProvider<R, T>` family covers
 finite scalar layouts. Additional payload layouts, general containment, borrowing
 and sharing, and providers beyond this selected family remain separate arena work.
 

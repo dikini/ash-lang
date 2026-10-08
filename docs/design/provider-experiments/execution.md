@@ -22,7 +22,7 @@ mechanical-source checks: two affected architecture tests, strict workspace
 lint, 41 adapter unit and ten backing cases, native41 and formatting all pass.
 Actual native execution returns `Completed(41, Closed)` with source/final/Core
 charges 88,793 / 27,096 / 82,277. These are attributable Arena results; fresh
-combined SQLite/arena costs and the complete integrated gate remain pending.
+combined SQLite/arena costs remain pending; the complete integrated gate is recorded below.
 
 The delivery uses the existing Common checkout, followed by a preserving merge
 into the original experimental branch and its complete workspace gate. The
@@ -30,6 +30,8 @@ separately authorized Common-to-main merge follows successful combined
 verification. Retention does not adopt experimental language semantics or
 production architecture. Paused Lean and Core one-shot work, unrelated design
 drafts and the rejected compound analysis candidate remain outside this delivery.
+
+The complete Original gate passes at `7a518e83230fec568978b269b1d69776ab6051c5` and tree `8af28e134fbe17e19034d77bf56335a9a6bc6421`. All six ordered stages complete: format, metadata, build, strict lint, workspace/all-target/all-feature tests and warning-denied documentation. Outer Cargo target summaries record 3,475 passes, 0 failures and 1 ignored case (the generated calibration fixture) across 119 targets; 4 targets contain no executed cases. Nine nested child summaries are excluded from these totals. The [combined-delivery-2026-10-08 receipt](combined-delivery-2026-10-08/README.md) retains raw output, exact commands, the corrected outer-target summary and unchanged source/eight-draft evidence. Main delivery, focused Main checks, fresh combined native phase measurements and related cleanup remain pending. This is bounded DN-0036 experimental retention, without semantic adoption or a formal proof.
 
 Earlier receipts below retain their original checkpoint scope. Final integrated
 commits, full-gate attribution and cleanup disposition are recorded only after

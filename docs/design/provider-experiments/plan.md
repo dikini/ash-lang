@@ -105,7 +105,7 @@ matched reuse of seventeen original cases, and a fresh supplementary forwarding
 regression. Historical default-budget refusals retain their original scope;
 calibrated admission does not establish reduced compiler work. At that SQLite
 source checkpoint, preserving integration and the final combined gate remained
-pending. Consult the consolidation record for later verification and disposition.
+pending. The [combined Original receipt](combined-delivery-2026-10-08/README.md) now records the completed full gate; Main delivery and its focused/native checks remain pending. Consult the consolidation record for later disposition.
 Standalone/explicit
 budgets, depth and validation remain unchanged; the
 [calibrated policy](calibrated-admission-2026-10-08/README.md) records the larger
