@@ -524,6 +524,26 @@ pub(super) fn validate_codec(
     Ok(())
 }
 
+pub(super) fn instantiate_layout_witness(
+    registry: &crate::resolved::ResolvedRegistry,
+    producer: crate::foreign::ForeignLayoutProducer,
+    work: &mut TypeWorkBudget,
+    phase: RuntimePhase,
+) -> Result<Value, RuntimeFailure> {
+    let dictionary = registry
+        .foreign_layout_dictionary(producer, work)
+        .map_err(|failure| {
+            if failure.is_resource_exhaustion() {
+                super::effect_work_failure(work, None, phase)
+            } else {
+                RuntimeFailure::ForeignBinding
+            }
+        })?;
+    Ok(Value::LayoutWitness(
+        crate::foreign::runtime::ForeignLayoutWitness::from_dictionary(dictionary),
+    ))
+}
+
 fn authenticate_codec_witness(
     witness: &crate::foreign::runtime::ForeignLayoutWitness,
     registry: &crate::resolved::ResolvedRegistry,

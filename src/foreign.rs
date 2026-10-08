@@ -692,6 +692,12 @@ impl ForeignLayoutProducer {
     pub const fn dictionary(self) -> ForeignLayoutDictionaryId {
         self.dictionary
     }
+    /// Returns the original dictionary's defining module.
+    /// This header does not replace canonical dictionary authentication.
+    #[must_use]
+    pub const fn module(self) -> crate::module::ModuleId {
+        self.dictionary.interface.module()
+    }
     /// Returns the original defining interface.
     #[must_use]
     pub const fn interface(self) -> InterfaceId {
@@ -980,8 +986,19 @@ pub struct ForeignModuleFact {
     pub storage: Option<ForeignStorageFact>,
 }
 
+fn discard_foreign_layout_iteratively(layout: ForeignLayoutFact) {
+    for dictionary in layout.dictionaries {
+        if let Ok(dictionary) = Arc::try_unwrap(dictionary) {
+            crate::types::discard_type_iteratively(dictionary.payload_type);
+        }
+    }
+}
+
 impl Drop for ForeignModuleFact {
     fn drop(&mut self) {
+        if let Some(layout) = self.layout.take() {
+            discard_foreign_layout_iteratively(layout);
+        }
         for interface in self.canonical_interfaces.drain(..) {
             crate::resolved::discard_resolved_interface_iteratively(interface);
         }
@@ -1049,6 +1066,12 @@ impl ForeignModuleFact {
     #[must_use]
     pub fn manifest(&self) -> &Arc<ForeignManifest> {
         &self.manifest
+    }
+
+    fn set_layout(&mut self, layout: ForeignLayoutFact) {
+        if let Some(displaced) = self.layout.replace(layout) {
+            discard_foreign_layout_iteratively(displaced);
+        }
     }
 
     fn set_state_access(&mut self, access: ForeignStateAccessFact) {
@@ -1349,7 +1372,7 @@ impl ForeignModuleSource {
                     origin: operation.origin.clone(),
                 });
             }
-            fact.layout = Some(prepared.layout);
+            fact.set_layout(prepared.layout);
             fact.storage = Some(prepared.storage);
         }
         Ok(Arc::new(fact))

@@ -36388,6 +36388,37 @@ impl ResourceFamilyTypeFact {
                 }
             }
         }
+        impl Assembly {
+            fn finish(
+                mut self,
+                template: &ResolvedResourceFamilyTemplate,
+            ) -> ResourceFamilyTypeFact {
+                // Every remaining move is infallible; the assembly owns partial copies.
+                let parameter =
+                    std::mem::replace(&mut self.parameters, ResolvedTypeVariableBuffer(Vec::new()))
+                        .into_vec()
+                        .pop()
+                        .expect("one family payload parameter retained");
+                let mut applications = std::mem::take(&mut self.applications);
+                let provider = applications
+                    .pop()
+                    .expect("family provider retained after requirements");
+                let mut effects = std::mem::take(&mut self.effects).into_iter();
+                ResourceFamilyTypeFact {
+                    parameter,
+                    requirements: applications.into_boxed_slice(),
+                    provider,
+                    provider_application: crate::interface::InterfaceApplication::new_kinded(
+                        template.provider.interface.id,
+                        std::mem::take(&mut self.actuals).into_boxed_slice(),
+                    ),
+                    provided: effects.next().expect("family provided effect retained"),
+                    interpreted: effects.next().expect("family interpreted effect retained"),
+                    origin: template.origin.clone(),
+                    span: template.span,
+                }
+            }
+        }
         let count = template.requirements.len().checked_add(1).ok_or(())?;
         budget.charge(count.checked_add(3).ok_or(())?)?;
         charge_retained_origin(&template.origin, budget)?;
@@ -36443,32 +36474,7 @@ impl ResourceFamilyTypeFact {
                     budget,
                 )?);
         }
-        // Every remaining move is infallible; the assembly owns partial copies.
-        let parameter = std::mem::replace(
-            &mut assembly.parameters,
-            ResolvedTypeVariableBuffer(Vec::new()),
-        )
-        .into_vec()
-        .pop()
-        .expect("one family payload parameter retained");
-        let mut applications = std::mem::take(&mut assembly.applications);
-        let provider = applications
-            .pop()
-            .expect("family provider retained after requirements");
-        let mut effects = std::mem::take(&mut assembly.effects).into_iter();
-        Ok(Self {
-            parameter,
-            requirements: applications.into_boxed_slice(),
-            provider,
-            provider_application: crate::interface::InterfaceApplication::new_kinded(
-                template.provider.interface.id,
-                std::mem::take(&mut assembly.actuals).into_boxed_slice(),
-            ),
-            provided: effects.next().expect("family provided effect retained"),
-            interpreted: effects.next().expect("family interpreted effect retained"),
-            origin: template.origin.clone(),
-            span: template.span,
-        })
+        Ok(assembly.finish(template))
     }
 }
 
@@ -36522,6 +36528,11 @@ fn clone_family_application_with_budget(
     budget: &mut TypeWorkBudget,
 ) -> Result<ResolvedInterfaceApplication, ()> {
     struct Arguments(Vec<ResolvedOwnerArgument>);
+    impl Arguments {
+        fn into_boxed_slice(mut self) -> Box<[ResolvedOwnerArgument]> {
+            std::mem::take(&mut self.0).into_boxed_slice()
+        }
+    }
     impl Drop for Arguments {
         fn drop(&mut self) {
             for argument in self.0.drain(..) {
@@ -36559,7 +36570,7 @@ fn clone_family_application_with_budget(
             spelling,
             origin: source.interface.origin.clone(),
         },
-        arguments: std::mem::take(&mut arguments.0).into_boxed_slice(),
+        arguments: arguments.into_boxed_slice(),
         span: source.span,
     })
 }
@@ -36673,7 +36684,7 @@ impl ResourceTypeFact {
             types: Vec<ResolvedType>,
             arguments: Vec<ResolvedOwnerArgument>,
             effects: Vec<ResolvedEffectInstance>,
-            provider_application: Option<crate::interface::InterfaceApplication>,
+            actuals: Vec<crate::types::KindedArgument>,
             family_template: Option<ResourceFamilyTypeFact>,
         }
         impl Drop for Assembly {
@@ -36683,6 +36694,9 @@ impl ResourceTypeFact {
                 }
                 for argument in self.arguments.drain(..) {
                     argument.discard_iteratively();
+                }
+                for actual in self.actuals.drain(..) {
+                    crate::types::discard_kinded_argument_iteratively(actual);
                 }
                 for effect in self.effects.drain(..) {
                     drop(effect.instance);
@@ -36728,10 +36742,10 @@ impl ResourceTypeFact {
                         arguments,
                         span: definition.provider.span,
                     },
-                    provider_application: self
-                        .provider_application
-                        .take()
-                        .expect("canonical provider association retained"),
+                    provider_application: crate::interface::InterfaceApplication::new_kinded(
+                        definition.provider.interface.id,
+                        std::mem::take(&mut self.actuals).into_boxed_slice(),
+                    ),
                     provided: effects.next().expect("provided effect retained"),
                     interpreted: effects.next().expect("interpreted effect retained"),
                     family_template: self.family_template.take(),
@@ -36785,7 +36799,7 @@ impl ResourceTypeFact {
             types: Vec::new(),
             arguments: Vec::new(),
             effects: Vec::new(),
-            provider_application: None,
+            actuals: Vec::new(),
             family_template: None,
         };
         assembly.parameters.try_reserve(1).map_err(|_| ())?;
@@ -36804,8 +36818,8 @@ impl ResourceTypeFact {
             .arguments
             .try_reserve_exact(definition.provider.arguments.len())
             .map_err(|_| ())?;
-        let mut actuals = Vec::new();
-        actuals
+        assembly
+            .actuals
             .try_reserve_exact(definition.provider.arguments.len())
             .map_err(|_| ())?;
         for argument in &definition.provider.arguments {
@@ -36815,15 +36829,13 @@ impl ResourceTypeFact {
                 origin: argument.origin.clone(),
                 span: argument.span,
             });
-            actuals.push(crate::types::clone_kinded_argument_with_budget(
-                &argument.ty,
-                budget,
-            )?);
+            assembly
+                .actuals
+                .push(crate::types::clone_kinded_argument_with_budget(
+                    &argument.ty,
+                    budget,
+                )?);
         }
-        assembly.provider_application = Some(crate::interface::InterfaceApplication::new_kinded(
-            definition.provider.interface.id,
-            actuals.into_boxed_slice(),
-        ));
         for source in [&definition.provided, &definition.interpreted] {
             assembly.effects.push(effect(source, budget)?);
         }

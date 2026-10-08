@@ -579,7 +579,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/elaborate/provider_instance/final_preparation.rs::FinalProviderInstancePlan.family_members", FieldProviderCodeShared),
     kind_site!("src/elaborate/provider_instance/final_preparation.rs::FinalProviderInstancePlan.family_relocations", FieldProviderCodeShared),
     kind_site!("src/elaborate/provider_instance/final_preparation.rs::FinalFamilyForwardingRelocation.original", FieldProviderCodeShared),
-    kind_site!("src/eval/foreign.rs::$impl_Machine::$fn_interpret_foreign::$block_18_0_6::StorageReplacements.0", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationTransientWork),
+    kind_site!("src/eval/foreign.rs::$impl_Machine::$fn_interpret_foreign::$block_19_0_6::StorageReplacements.0", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationTransientWork),
     kind_site!("src/eval/value.rs::Value.LayoutWitness.0", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
     kind_site!("src/eval/value.rs::Value.Reference.reference", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
     kind_site!("src/evidence.rs::LexicalSource.family", FieldEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
@@ -795,7 +795,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::$impl_ResolvedRegistry::$fn_display_structural_with_inference::Task.Type.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/resolved.rs::$impl_ResolvedRegistry::$fn_with_effects_with_budget::Owned.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolved.rs::$impl_ResourceTypeFact::$fn_from_definition_with_budget::Assembly.arguments", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
-    kind_site!("src/resolved.rs::$impl_ResourceTypeFact::$fn_from_definition_with_budget::Assembly.provider_application", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
+    kind_site!("src/resolved.rs::$impl_ResourceTypeFact::$fn_from_definition_with_budget::Assembly.actuals", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolved.rs::NonMaterializedNominalKind.Ordinary.0", FieldRegistryCarrierRetentionPreservedCarrierElaborationInferenceTypeRegistryTree),
     // Interface declarations, facts and original owner records borrow the
     // same immutable parameter allocation. The sized record alone owns its
@@ -8017,7 +8017,35 @@ fn relational_vector_owners_charge_before_allocation() {
         fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/elaborate.rs"))
             .expect("elaboration source should be readable");
     let elaboration = production_rust_code_tokens(&elaboration_source);
-    let lowering = function_body(&elaboration, &["fn", "lower_constrained_scheme", "("]);
+    let scheme_lowering = function_body(&elaboration, &["fn", "lower_constrained_scheme", "("]);
+    let requirement_charge = position(
+        scheme_lowering,
+        &[
+            "self",
+            ".",
+            "type_work",
+            ".",
+            "charge",
+            "(",
+            "scheme",
+            ".",
+            "requirements",
+            ".",
+            "len",
+            "(",
+            ")",
+            ")",
+        ],
+    );
+    let requirement_lowering = position(
+        scheme_lowering,
+        &["self", ".", "lower_evidence_requirements", "("],
+    );
+    assert!(
+        requirement_charge < requirement_lowering,
+        "scheme requirement ownership must charge before delegating to shared lowering",
+    );
+    let lowering = function_body(&elaboration, &["fn", "lower_evidence_requirements", "("]);
     let method_row_charge = position(
         lowering,
         &[
@@ -8317,6 +8345,96 @@ fn private_core_allowlist_excludes_scalar_interface_carriers() {
     }
 }
 
+#[test]
+fn private_core_layout_and_family_authentication_is_path_confined() {
+    let allowed: &[(&str, &[&str])] = &[
+        (
+            "EvidenceSlot",
+            &["src/core/provider/external.rs", "src/core/validate.rs"],
+        ),
+        (
+            "LexicalEvidenceId",
+            &[
+                "src/core/dialect.rs",
+                "src/core/validate.rs",
+                "src/core/transform.rs",
+            ],
+        ),
+        (
+            "ProviderFamilyEvidenceScope",
+            &["src/core/provider/external.rs"],
+        ),
+        ("RequirementOwner", &["src/core/provider/external.rs"]),
+        (
+            "authenticate_family_dictionary_variable",
+            &["src/core/provider/external.rs"],
+        ),
+        (
+            "authenticate_native_layout_dictionary_node",
+            &["src/core/provider/external.rs"],
+        ),
+        (
+            "build_provider_method_evidence_catalog_with_family_scope",
+            &["src/core/provider/external.rs"],
+        ),
+        (
+            "dictionary",
+            &[
+                "src/core/dialect.rs",
+                "src/core/provider/external.rs",
+                "src/core/validate.rs",
+            ],
+        ),
+        ("dictionary_formals", &["src/core/provider/external.rs"]),
+        (
+            "dictionary_parameters",
+            &["src/core/provider/external.rs", "src/core/validate.rs"],
+        ),
+        ("family_dictionary_binder", &["src/core/validate.rs"]),
+        (
+            "foreign_layout_dictionary",
+            &[
+                "src/core/dialect.rs",
+                "src/core/provider/external.rs",
+                "src/core/validate.rs",
+            ],
+        ),
+        ("original_dictionary_parameters", &["src/core/validate.rs"]),
+        (
+            "original_evidence_slots",
+            &["src/core/provider/external.rs", "src/core/validate.rs"],
+        ),
+        (
+            "provider_family_dictionary_binder",
+            &["src/core/validate.rs"],
+        ),
+    ];
+    for (identifier, paths) in allowed {
+        assert!(is_forbidden_interface_identifier(identifier));
+        for (path, _) in CORE_SOURCES {
+            assert_eq!(
+                is_allowed_private_core_method_evidence_identifier(path, identifier),
+                paths.contains(path),
+                "private authentication allowance changed for {path}::{identifier}",
+            );
+        }
+        for (path, _) in EVALUATOR_SOURCES {
+            assert!(
+                !is_allowed_private_core_method_evidence_identifier(path, identifier),
+                "evaluator gained an authentication allowance for {path}::{identifier}",
+            );
+        }
+    }
+    for identifier in ["runtime_dictionary_dispatch", "interface_runtime_lookup"] {
+        assert!(is_forbidden_interface_identifier(identifier));
+        for (path, _) in CORE_SOURCES.iter().chain(EVALUATOR_SOURCES.iter()) {
+            assert!(!is_allowed_private_core_method_evidence_identifier(
+                path, identifier
+            ));
+        }
+    }
+}
+
 fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &str) -> bool {
     let shared = matches!(
         identifier,
@@ -8347,7 +8465,10 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
         || match path {
             "src/core/dialect.rs" => matches!(
                 identifier,
-                "MethodEvidenceResourceOwner"
+                // Canonical Layout/family authentication; no runtime selection.
+                "dictionary"
+                    | "foreign_layout_dictionary"
+                    | "MethodEvidenceResourceOwner"
                     | "ProviderEvidenceOwner"
                     | "MethodEvidenceAdapter"
                     | "MethodEvidenceLexicalOwner"
@@ -8398,6 +8519,18 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
             // the unpublished Core occurrence graph. None selects evaluator dispatch.
             "src/core/provider/external.rs" => matches!(
                 identifier,
+                // Canonical Layout/family authentication; no runtime selection.
+                "ProviderFamilyEvidenceScope"
+                    | "RequirementOwner"
+                    | "authenticate_family_dictionary_variable"
+                    | "authenticate_native_layout_dictionary_node"
+                    | "build_provider_method_evidence_catalog_with_family_scope"
+                    | "dictionary"
+                    | "dictionary_formals"
+                    | "dictionary_parameters"
+                    | "foreign_layout_dictionary"
+                    | "original_evidence_slots"
+                    |
                 "AuthenticatedProviderMethodEvidence"
                     // Publication retains original body-free occurrence/catalog
                     // and producer routing; executable bodies stay separately owned.
@@ -8468,6 +8601,17 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
             ),
             "src/core/validate.rs" => matches!(
                 identifier,
+                // Canonical Layout/family authentication; no runtime selection.
+                "EvidenceSlot"
+                    | "LexicalEvidenceId"
+                    | "dictionary"
+                    | "dictionary_parameters"
+                    | "family_dictionary_binder"
+                    | "foreign_layout_dictionary"
+                    | "original_dictionary_parameters"
+                    | "original_evidence_slots"
+                    | "provider_family_dictionary_binder"
+                    |
                 // Canonical owner-signature authentication, not selection or runtime dispatch.
                 "MethodEvidenceResourceOwner"
                     | "Interface"
@@ -9547,6 +9691,7 @@ fn assert_automatic_iterative_owner_apis_are_narrow(sources: &[(&str, &str)], ow
         .flat_map(|(_, source)| custom_drop_owner_names(&production_rust_code_tokens(source)))
         .collect::<BTreeSet<_>>();
 
+    let mut violations = Vec::new();
     for (path, source) in sources {
         let tokens = production_rust_code_tokens(source);
         let mut guarded = owners
@@ -9573,22 +9718,39 @@ fn assert_automatic_iterative_owner_apis_are_narrow(sources: &[(&str, &str)], ow
             if owner_fields.is_empty() {
                 continue;
             }
-            assert!(
-                !tokens.windows(3).any(|window| {
-                    window[0] == "DerefMut" && window[1] == "for" && window[2] == owner
-                }),
-                "{path} must not expose broad DerefMut for automatic owner {owner}",
-            );
-            assert_no_destructive_backing_field_bypass(
-                path,
-                &tokens,
-                &owner,
-                &owner_fields,
-                &unsafe_terminals,
-                &custom_drop_owners,
-            );
+            // Report independent owner failures together so one defect cannot
+            // hide another source file until the next build.
+            let checked = std::panic::catch_unwind(|| {
+                assert!(
+                    !tokens.windows(3).any(|window| {
+                        window[0] == "DerefMut" && window[1] == "for" && window[2] == owner
+                    }),
+                    "{path} must not expose broad DerefMut for automatic owner {owner}",
+                );
+                assert_no_destructive_backing_field_bypass(
+                    path,
+                    &tokens,
+                    &owner,
+                    &owner_fields,
+                    &unsafe_terminals,
+                    &custom_drop_owners,
+                );
+            });
+            if let Err(failure) = checked {
+                let message = failure
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| failure.downcast_ref::<&str>().copied())
+                    .unwrap_or("owner guard panicked without a diagnostic");
+                violations.push(format!("{path}::{owner}: {message}"));
+            }
         }
     }
+    assert!(
+        violations.is_empty(),
+        "automatic owner API violations:\n{}",
+        violations.join("\n"),
+    );
 }
 
 #[test]

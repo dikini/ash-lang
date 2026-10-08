@@ -1353,31 +1353,16 @@ impl<'runtime> Machine<'runtime> {
                     if let crate::core::packed::Intrinsic::ForeignLayoutWitness { producer } =
                         intrinsic.operation()
                     {
-                        if !matches!(value, Value::Unit)
-                            || intrinsic.module() != producer.interface().module()
+                        if !matches!(value, Value::Unit) || intrinsic.module() != producer.module()
                         {
                             return Err(RuntimeFailure::InvalidControlState);
                         }
-                        let dictionary = self
-                            .program
-                            .registry()
-                            .foreign_layout_dictionary(producer, &mut self.instantiation_work)
-                            .map_err(|failure| {
-                                if failure.is_resource_exhaustion() {
-                                    effect_work_failure(
-                                        &self.instantiation_work,
-                                        None,
-                                        RuntimePhase::Evaluation,
-                                    )
-                                } else {
-                                    RuntimeFailure::ForeignBinding
-                                }
-                            })?;
-                        Value::LayoutWitness(
-                            crate::foreign::runtime::ForeignLayoutWitness::from_dictionary(
-                                dictionary,
-                            ),
-                        )
+                        foreign::instantiate_layout_witness(
+                            self.program.registry(),
+                            producer,
+                            &mut self.instantiation_work,
+                            RuntimePhase::Evaluation,
+                        )?
                     } else {
                         apply_intrinsic(
                             intrinsic,
