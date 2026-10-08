@@ -67,6 +67,16 @@ both native build modes report separate CPU/wall/RSS and source sizes.
 No Ash/Cargo/C rebuild or optimization occurred; the semantic differences
 remain explicit and production policy is unchanged.
 
+The user now accepts the measured physical costs and requests a simple
+[decision-support recalibration](../design/provider-experiments/resource-calibration/decision-budgets.md).
+Use existing measurements, preserve raw coefficients and charges, distinguish
+point predictions from review tolerances and current-workload engineering
+targets, and keep production stopping policy separate. The completed offline
+replay accepts all 52 primary cases, including observed maxima. The separate
+14-case reference retains five out-of-range flags; all its physical costs meet
+the provisional targets. No compiler runs or production changes occurred.
+Optimization remains paused.
+
 ## Paused optimization work
 
 Execute the [analysis plan](../design/provider-experiments/analysis-plan.md):

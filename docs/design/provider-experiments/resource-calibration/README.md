@@ -3,7 +3,8 @@
 This is isolated [TASK-0035](../../../tasks/TASK-0035-resource-analysis-relevance-and-fusion.md)
 evidence under [DN-0036](../../DN-0036-foreign-library-and-memory-provider-experiments.md).
 It changes neither Ash semantics nor production resource policy. Further
-optimization is paused pending review of these results.
+optimization is paused; the user accepts current measured physical costs for
+continued feature development under the provisional decision budgets below.
 
 ## Finding
 
@@ -502,6 +503,20 @@ allowance-envelope fits remain unchanged. Bayesian inference and richer
 predictors are deferred until a practical decision needs them. Prediction
 beyond the observed domain still needs confirmation; see the
 [NIST guidance on extrapolation](https://www.itl.nist.gov/div898/handbook/pri/section5/pri5998.htm).
+
+## Accepted current costs and decision budgets
+
+The [decision-support calibration](decision-budgets.md) accepts all 52 primary
+measured cases under provisional current-workload objectives of **300 ms CPU
+and 64 MiB peak RSS**. No further optimization is required by these measurements.
+The largest observations are 259.204 ms CPU and 42.5625 MiB peak RSS.
+
+The raw four-term coefficients and charged-unit predictions remain unchanged.
+A measured startup control supplies a 10 ms CPU prediction floor. Separate
+review tolerances are twice predicted CPU plus 10 ms and 1.5 times predicted
+RSS, rounded to 10 ms and 4 MiB. Point predictions, tolerances, engineering
+targets and compiler stopping limits remain distinct. Ordinary compiler limits
+are unchanged, and new program shapes still need completed measurements.
 
 ## Functional Rust SQLite reference
 

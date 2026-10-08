@@ -279,3 +279,38 @@ modes; metadata emission has its own checking/encoding boundary. Program
 execution and SQLite I/O are excluded from compiler measurements. Compiler
 statistics are an informational reference, not an estimate of equivalent Ash
 checking work or a reason to reopen optimization automatically.
+
+## Decision-support recalibration
+
+The user accepts the current measured costs and requests a calibration useful
+for deciding whether optimization is necessary. Use existing completed evidence
+only. This offline batch needs no compiler window, rebuild, optimization or
+change to production stopping policy.
+
+Preserve the original four-term coefficients, raw point predictions, charged
+work estimates and measurement artifacts. Use the measured zero-width Ash
+control to select a coarse CPU prediction floor: round its median up to five
+milliseconds, giving ten milliseconds on this host. The calibrated CPU point
+is the larger of that floor and the original prediction; RSS retains its
+original prediction. The control is a complete small-program run, not a
+universal startup lower bound. Keep prediction errors visible.
+
+Record separate provisional review tolerances: twice predicted CPU plus ten
+milliseconds, rounded up to ten milliseconds; 1.5 times predicted peak RSS,
+rounded up to four MiB. Separately choose 300 ms CPU and 64 MiB as engineering
+targets for the current workloads. Do not clamp model tolerances to these
+targets or use either to change compiler refusal limits. Charged-unit misses
+remain diagnostic and do not independently demand optimization.
+
+Evaluate all 44 original cases and eight examined language fixtures using
+both measured medians and observed maxima. Retain the paired structural
+reference as a descriptive cross-check, including extrapolation flags.
+All data have already been examined; this is recalibration, not blind
+validation or a general coverage guarantee. A new shape needs completed
+measurements, even when its descriptors lie inside recorded ranges.
+
+Deliver the calibrated offline tool, model and decision report in one batch.
+Use the connected offline self-check and real stored-data replay, including
+an over-budget observation and an outside-range case. Authenticate the source
+summaries against preserved archives and check documentation links. Preserve
+an unsigned pushed checkpoint and return a readable coordination handoff.
