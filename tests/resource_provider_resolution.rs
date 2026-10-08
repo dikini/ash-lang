@@ -39,6 +39,23 @@ fn body(module: &ash::resolved::ResolvedModule) -> &ash::resolved::ResolvedExpr 
     &global.equations[0].body
 }
 
+fn assert_ordinary_data_state_rejected(module: ash::resolved::ResolvedModule) {
+    let state_span = module.resources()[0].state.span;
+    let diagnostic = match ash::elaborate::check_module(module) {
+        Err(ash::elaborate::TypeError::Source(diagnostic)) => diagnostic,
+        Err(error) => {
+            panic!("ordinary data state must reach native-state authentication: {error:?}")
+        }
+        Ok(_) => panic!("ordinary data state must not publish a checked resource module"),
+    };
+    assert_eq!(diagnostic.reason, ash::elaborate::TypeReason::Argument);
+    assert_eq!(diagnostic.primary.span(), state_span);
+    assert_eq!(
+        diagnostic.primary.message(),
+        "resource state must be an authenticated opaque native state",
+    );
+}
+
 #[test]
 fn declarations_preserve_templates_and_instances_reference_the_defining_family() {
     let source = Source::new(&format!(
@@ -138,11 +155,11 @@ fn second_resource_parameter_remains_a_template_while_instances_bind_only_fresh_
 }
 
 #[test]
-fn frontend_resource_templates_cannot_publish_checked_modules_before_lifecycle_support() {
+fn ordinary_data_state_cannot_publish_a_checked_resource_module() {
     let source = Source::new(&format!("{PRELUDE}{DEFINITION}"));
     let graph = load_module_graph(&source.0, &ModuleRoots::empty()).unwrap();
     let module = resolve_module(graph.modules().last().unwrap(), &[]).unwrap();
-    assert!(ash::elaborate::check_module(module).is_err());
+    assert_ordinary_data_state_rejected(module);
 }
 
 #[test]
@@ -389,17 +406,7 @@ fn family_templates_retain_distinct_scope_ordered_arguments_and_canonical_operat
         &loaded.source().text()[span.range().start() as usize..span.range().end() as usize],
         "Payload"
     );
-    let diagnostic = match ash::elaborate::check_module(module) {
-        Err(ash::elaborate::TypeError::Source(diagnostic)) => diagnostic,
-        Err(error) => panic!(
-            "resolved family metadata must reach the explicit unsupported checkpoint: {error:?}"
-        ),
-        Ok(_) => panic!("resolved family metadata must not become executable"),
-    };
-    assert_eq!(
-        diagnostic.primary.message(),
-        "resource family templates are not executable in this experimental checkpoint"
-    );
+    assert_ordinary_data_state_rejected(module);
 }
 
 #[test]
@@ -500,9 +507,9 @@ fn family_effect_arity_actuals_are_retained_until_the_checker_boundary() {
     ] {
         let source = Source::new(&valid.replace(from, to));
         let graph = load_module_graph(&source.0, &ModuleRoots::empty()).unwrap();
-        // Existing owner kind preflight leaves arity diagnostics to checking.
-        // The carrier must retain every written actual instead of dropping it
-        // or inventing an argument while this family remains non-executable.
+        // Resolution retains every written actual without dropping or
+        // inventing arguments. This fixture's ordinary data state is rejected
+        // at native-state authentication before the family arity is checked.
         let module = resolve_module(graph.modules().last().unwrap(), &[]).unwrap();
         let family = module.resources()[0].family_template.as_ref().unwrap();
         assert_eq!(family.provided.instance.arguments().len(), provided_count);
@@ -510,6 +517,6 @@ fn family_effect_arity_actuals_are_retained_until_the_checker_boundary() {
             family.interpreted.instance.arguments().len(),
             interpreted_count
         );
-        assert!(ash::elaborate::check_module(module).is_err(), "{to}");
+        assert_ordinary_data_state_rejected(module);
     }
 }
