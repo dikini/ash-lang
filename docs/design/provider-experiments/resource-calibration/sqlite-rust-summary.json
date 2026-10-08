@@ -1,0 +1,1164 @@
+{
+  "cases": [
+    {
+      "compiler_modes": {
+        "full_optimized": {
+          "complete": true,
+          "measured_processes": 3,
+          "metrics": {
+            "target_peak_rss_kib": {
+              "max": 141012,
+              "median": 139940,
+              "min": 139768,
+              "n": 3
+            },
+            "target_system_seconds": {
+              "max": 0.11,
+              "median": 0.11,
+              "min": 0.1,
+              "n": 3
+            },
+            "target_user_seconds": {
+              "max": 0.78,
+              "median": 0.71,
+              "min": 0.71,
+              "n": 3
+            },
+            "target_wall_seconds": {
+              "max": 0.87,
+              "median": 0.8,
+              "min": 0.8,
+              "n": 3
+            },
+            "wrapper_child_system_seconds": {
+              "max": 0.11472700000000002,
+              "median": 0.112645,
+              "min": 0.11042300000000005,
+              "n": 3
+            },
+            "wrapper_child_total_seconds": {
+              "max": 0.9032330000000004,
+              "median": 0.8301390000000001,
+              "min": 0.8226910000000002,
+              "n": 3
+            },
+            "wrapper_child_user_seconds": {
+              "max": 0.7885060000000004,
+              "median": 0.719716,
+              "min": 0.7100460000000002,
+              "n": 3
+            },
+            "wrapper_wall_seconds": {
+              "max": 0.875905489,
+              "median": 0.807087762,
+              "min": 0.801897442,
+              "n": 3
+            }
+          },
+          "valid_measured_processes": 3
+        },
+        "full_unoptimized": {
+          "complete": true,
+          "measured_processes": 3,
+          "metrics": {
+            "target_peak_rss_kib": {
+              "max": 137380,
+              "median": 137068,
+              "min": 136480,
+              "n": 3
+            },
+            "target_system_seconds": {
+              "max": 0.1,
+              "median": 0.09,
+              "min": 0.08,
+              "n": 3
+            },
+            "target_user_seconds": {
+              "max": 0.29,
+              "median": 0.27,
+              "min": 0.27,
+              "n": 3
+            },
+            "target_wall_seconds": {
+              "max": 0.35,
+              "median": 0.35,
+              "min": 0.34,
+              "n": 3
+            },
+            "wrapper_child_system_seconds": {
+              "max": 0.10983399999999999,
+              "median": 0.097327,
+              "min": 0.08989599999999998,
+              "n": 3
+            },
+            "wrapper_child_total_seconds": {
+              "max": 0.3883580000000002,
+              "median": 0.38425799999999977,
+              "min": 0.37285299999999993,
+              "n": 3
+            },
+            "wrapper_child_user_seconds": {
+              "max": 0.2984620000000002,
+              "median": 0.27552599999999994,
+              "min": 0.2744239999999998,
+              "n": 3
+            },
+            "wrapper_wall_seconds": {
+              "max": 0.361418683,
+              "median": 0.358369316,
+              "min": 0.345932481,
+              "n": 3
+            }
+          },
+          "valid_measured_processes": 3
+        },
+        "metadata": {
+          "complete": true,
+          "measured_processes": 3,
+          "metrics": {
+            "target_peak_rss_kib": {
+              "max": 112272,
+              "median": 111912,
+              "min": 111708,
+              "n": 3
+            },
+            "target_system_seconds": {
+              "max": 0.05,
+              "median": 0.04,
+              "min": 0.03,
+              "n": 3
+            },
+            "target_user_seconds": {
+              "max": 0.11,
+              "median": 0.09,
+              "min": 0.08,
+              "n": 3
+            },
+            "target_wall_seconds": {
+              "max": 0.16,
+              "median": 0.13,
+              "min": 0.12,
+              "n": 3
+            },
+            "wrapper_child_system_seconds": {
+              "max": 0.05174999999999996,
+              "median": 0.04141400000000006,
+              "min": 0.03927899999999995,
+              "n": 3
+            },
+            "wrapper_child_total_seconds": {
+              "max": 0.1629499999999997,
+              "median": 0.13483100000000003,
+              "min": 0.12938500000000008,
+              "n": 3
+            },
+            "wrapper_child_user_seconds": {
+              "max": 0.11119999999999974,
+              "median": 0.09555200000000008,
+              "min": 0.08797100000000002,
+              "n": 3
+            },
+            "wrapper_wall_seconds": {
+              "max": 0.162904932,
+              "median": 0.135652177,
+              "min": 0.130847984,
+              "n": 3
+            }
+          },
+          "valid_measured_processes": 3
+        }
+      },
+      "id": "copying",
+      "issues": [],
+      "runtime_validation": {
+        "complete": true,
+        "records": [
+          {
+            "executable_sha256": "791644a7e9cf6b42edb733110da9a5a98a310b73e83dd656e4705140f2b05a61",
+            "issues": [],
+            "label": "copying/runtime-full_unoptimized",
+            "mode": "full_unoptimized",
+            "stdout": {
+              "path": "/tmp/ash-rust-sqlite-reference-20261008/copying/runtime-full_unoptimized/stdout.log",
+              "sha256": "f5fb45545187f6f7ed2ae146bda3fea5c94b7b0b848336e5c9661f0cb982f6e7"
+            },
+            "valid": true
+          },
+          {
+            "executable_sha256": "cc60dac82ba3cf14a024d6f32b553b6e1f3726bd8a3bf0089e79ccc5df5f4d92",
+            "issues": [],
+            "label": "copying/runtime-full_optimized",
+            "mode": "full_optimized",
+            "stdout": {
+              "path": "/tmp/ash-rust-sqlite-reference-20261008/copying/runtime-full_optimized/stdout.log",
+              "sha256": "f5fb45545187f6f7ed2ae146bda3fea5c94b7b0b848336e5c9661f0cb982f6e7"
+            },
+            "valid": true
+          }
+        ]
+      },
+      "rust_source_statistics": {
+        "interpretation": "Physical Rust source files counted once; regex tokens include possible comments/strings and are not semantic API or AST counts.",
+        "sources": [
+          {
+            "bytes": 16610,
+            "lexical_function_tokens": 64,
+            "lexical_type_declaration_tokens": 18,
+            "lines": 351,
+            "nonblank_lines": 340,
+            "path": "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/bridge.rs",
+            "sha256": "9ba62b690f688fc47bca26f3db14eced364f3ee39335edf46391f67b105a5fe1"
+          },
+          {
+            "bytes": 3041,
+            "lexical_function_tokens": 7,
+            "lexical_type_declaration_tokens": 1,
+            "lines": 63,
+            "nonblank_lines": 61,
+            "path": "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/copying.rs",
+            "sha256": "4b3cca91a5cd1f2ceecee413e9bd300667d4846441e322ab7bc9b1a92cab22cc"
+          }
+        ],
+        "totals": {
+          "bytes": 19651,
+          "lexical_function_tokens": 71,
+          "lexical_type_declaration_tokens": 19,
+          "lines": 414,
+          "nonblank_lines": 401
+        }
+      }
+    },
+    {
+      "compiler_modes": {
+        "full_optimized": {
+          "complete": true,
+          "measured_processes": 3,
+          "metrics": {
+            "target_peak_rss_kib": {
+              "max": 143152,
+              "median": 143136,
+              "min": 142712,
+              "n": 3
+            },
+            "target_system_seconds": {
+              "max": 0.09,
+              "median": 0.08,
+              "min": 0.08,
+              "n": 3
+            },
+            "target_user_seconds": {
+              "max": 0.59,
+              "median": 0.57,
+              "min": 0.55,
+              "n": 3
+            },
+            "target_wall_seconds": {
+              "max": 0.67,
+              "median": 0.63,
+              "min": 0.61,
+              "n": 3
+            },
+            "wrapper_child_system_seconds": {
+              "max": 0.09668500000000013,
+              "median": 0.0893870000000001,
+              "min": 0.08722600000000003,
+              "n": 3
+            },
+            "wrapper_child_total_seconds": {
+              "max": 0.6960759999999999,
+              "median": 0.6609119999999995,
+              "min": 0.6425210000000001,
+              "n": 3
+            },
+            "wrapper_child_user_seconds": {
+              "max": 0.5993909999999998,
+              "median": 0.5736859999999995,
+              "min": 0.553134,
+              "n": 3
+            },
+            "wrapper_wall_seconds": {
+              "max": 0.680165515,
+              "median": 0.638544576,
+              "min": 0.620118024,
+              "n": 3
+            }
+          },
+          "valid_measured_processes": 3
+        },
+        "full_unoptimized": {
+          "complete": true,
+          "measured_processes": 3,
+          "metrics": {
+            "target_peak_rss_kib": {
+              "max": 139576,
+              "median": 139576,
+              "min": 139352,
+              "n": 3
+            },
+            "target_system_seconds": {
+              "max": 0.08,
+              "median": 0.08,
+              "min": 0.08,
+              "n": 3
+            },
+            "target_user_seconds": {
+              "max": 0.23,
+              "median": 0.22,
+              "min": 0.22,
+              "n": 3
+            },
+            "target_wall_seconds": {
+              "max": 0.29,
+              "median": 0.29,
+              "min": 0.28,
+              "n": 3
+            },
+            "wrapper_child_system_seconds": {
+              "max": 0.08932899999999999,
+              "median": 0.0863910000000001,
+              "min": 0.08633699999999989,
+              "n": 3
+            },
+            "wrapper_child_total_seconds": {
+              "max": 0.3206870000000006,
+              "median": 0.3170850000000003,
+              "min": 0.3143689999999997,
+              "n": 3
+            },
+            "wrapper_child_user_seconds": {
+              "max": 0.2342960000000005,
+              "median": 0.2280319999999998,
+              "min": 0.2277560000000003,
+              "n": 3
+            },
+            "wrapper_wall_seconds": {
+              "max": 0.2959467,
+              "median": 0.294049816,
+              "min": 0.290403754,
+              "n": 3
+            }
+          },
+          "valid_measured_processes": 3
+        },
+        "metadata": {
+          "complete": true,
+          "measured_processes": 3,
+          "metrics": {
+            "target_peak_rss_kib": {
+              "max": 113456,
+              "median": 113328,
+              "min": 113140,
+              "n": 3
+            },
+            "target_system_seconds": {
+              "max": 0.03,
+              "median": 0.03,
+              "min": 0.03,
+              "n": 3
+            },
+            "target_user_seconds": {
+              "max": 0.08,
+              "median": 0.07,
+              "min": 0.07,
+              "n": 3
+            },
+            "target_wall_seconds": {
+              "max": 0.11,
+              "median": 0.11,
+              "min": 0.1,
+              "n": 3
+            },
+            "wrapper_child_system_seconds": {
+              "max": 0.036406999999999856,
+              "median": 0.03403299999999998,
+              "min": 0.0319259999999999,
+              "n": 3
+            },
+            "wrapper_child_total_seconds": {
+              "max": 0.11612400000000012,
+              "median": 0.11389599999999978,
+              "min": 0.11082299999999945,
+              "n": 3
+            },
+            "wrapper_child_user_seconds": {
+              "max": 0.08209100000000014,
+              "median": 0.07889699999999955,
+              "min": 0.07748899999999992,
+              "n": 3
+            },
+            "wrapper_wall_seconds": {
+              "max": 0.116317764,
+              "median": 0.113955333,
+              "min": 0.110697013,
+              "n": 3
+            }
+          },
+          "valid_measured_processes": 3
+        }
+      },
+      "id": "persistence",
+      "issues": [],
+      "runtime_validation": {
+        "complete": true,
+        "records": [
+          {
+            "executable_sha256": "fc527d3fe82d89e88a99f1c681f6c61e7d038f2a8aecbb3429f9918616c2c862",
+            "issues": [],
+            "label": "persistence/runtime-full_unoptimized",
+            "mode": "full_unoptimized",
+            "stdout": {
+              "path": "/tmp/ash-rust-sqlite-reference-20261008/persistence/runtime-full_unoptimized/stdout.log",
+              "sha256": "73776180cd780a5dd9fdaa8a88e39935cdcec6cad7bab1fbdf7ddb8f7987a38e"
+            },
+            "valid": true
+          },
+          {
+            "executable_sha256": "f839351ee00ab6bcbfc55f3c9e52938f7ab43f0b118604b88757feb98e9d02d3",
+            "issues": [],
+            "label": "persistence/runtime-full_optimized",
+            "mode": "full_optimized",
+            "stdout": {
+              "path": "/tmp/ash-rust-sqlite-reference-20261008/persistence/runtime-full_optimized/stdout.log",
+              "sha256": "73776180cd780a5dd9fdaa8a88e39935cdcec6cad7bab1fbdf7ddb8f7987a38e"
+            },
+            "valid": true
+          }
+        ]
+      },
+      "rust_source_statistics": {
+        "interpretation": "Physical Rust source files counted once; regex tokens include possible comments/strings and are not semantic API or AST counts.",
+        "sources": [
+          {
+            "bytes": 16610,
+            "lexical_function_tokens": 64,
+            "lexical_type_declaration_tokens": 18,
+            "lines": 351,
+            "nonblank_lines": 340,
+            "path": "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/bridge.rs",
+            "sha256": "9ba62b690f688fc47bca26f3db14eced364f3ee39335edf46391f67b105a5fe1"
+          },
+          {
+            "bytes": 3548,
+            "lexical_function_tokens": 7,
+            "lexical_type_declaration_tokens": 2,
+            "lines": 72,
+            "nonblank_lines": 71,
+            "path": "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/persistence.rs",
+            "sha256": "b15baa8745f6a7ac7b9a45a20e531b7a4dd8fa3e2fb7187ea79c65cc66e764dc"
+          }
+        ],
+        "totals": {
+          "bytes": 20158,
+          "lexical_function_tokens": 71,
+          "lexical_type_declaration_tokens": 20,
+          "lines": 423,
+          "nonblank_lines": 411
+        }
+      }
+    },
+    {
+      "compiler_modes": {
+        "full_optimized": {
+          "complete": true,
+          "measured_processes": 3,
+          "metrics": {
+            "target_peak_rss_kib": {
+              "max": 137624,
+              "median": 137004,
+              "min": 135900,
+              "n": 3
+            },
+            "target_system_seconds": {
+              "max": 0.07,
+              "median": 0.07,
+              "min": 0.06,
+              "n": 3
+            },
+            "target_user_seconds": {
+              "max": 0.43,
+              "median": 0.42,
+              "min": 0.42,
+              "n": 3
+            },
+            "target_wall_seconds": {
+              "max": 0.49,
+              "median": 0.47,
+              "min": 0.47,
+              "n": 3
+            },
+            "wrapper_child_system_seconds": {
+              "max": 0.07794999999999952,
+              "median": 0.07350999999999974,
+              "min": 0.06863000000000019,
+              "n": 3
+            },
+            "wrapper_child_total_seconds": {
+              "max": 0.5156209999999994,
+              "median": 0.49688400000000055,
+              "min": 0.49491400000000096,
+              "n": 3
+            },
+            "wrapper_child_user_seconds": {
+              "max": 0.4376709999999999,
+              "median": 0.4262840000000008,
+              "min": 0.4233740000000008,
+              "n": 3
+            },
+            "wrapper_wall_seconds": {
+              "max": 0.495513424,
+              "median": 0.475279767,
+              "min": 0.473951223,
+              "n": 3
+            }
+          },
+          "valid_measured_processes": 3
+        },
+        "full_unoptimized": {
+          "complete": true,
+          "measured_processes": 3,
+          "metrics": {
+            "target_peak_rss_kib": {
+              "max": 131860,
+              "median": 131216,
+              "min": 130672,
+              "n": 3
+            },
+            "target_system_seconds": {
+              "max": 0.08,
+              "median": 0.07,
+              "min": 0.07,
+              "n": 3
+            },
+            "target_user_seconds": {
+              "max": 0.18,
+              "median": 0.16,
+              "min": 0.16,
+              "n": 3
+            },
+            "target_wall_seconds": {
+              "max": 0.22,
+              "median": 0.22,
+              "min": 0.21,
+              "n": 3
+            },
+            "wrapper_child_system_seconds": {
+              "max": 0.08196700000000012,
+              "median": 0.07423400000000013,
+              "min": 0.07075699999999996,
+              "n": 3
+            },
+            "wrapper_child_total_seconds": {
+              "max": 0.2518289999999985,
+              "median": 0.24772599999999967,
+              "min": 0.24408299999999938,
+              "n": 3
+            },
+            "wrapper_child_user_seconds": {
+              "max": 0.18107199999999857,
+              "median": 0.16984899999999925,
+              "min": 0.16575899999999955,
+              "n": 3
+            },
+            "wrapper_wall_seconds": {
+              "max": 0.230080524,
+              "median": 0.225203954,
+              "min": 0.220730535,
+              "n": 3
+            }
+          },
+          "valid_measured_processes": 3
+        },
+        "metadata": {
+          "complete": true,
+          "measured_processes": 3,
+          "metrics": {
+            "target_peak_rss_kib": {
+              "max": 110668,
+              "median": 110496,
+              "min": 110296,
+              "n": 3
+            },
+            "target_system_seconds": {
+              "max": 0.03,
+              "median": 0.03,
+              "min": 0.03,
+              "n": 3
+            },
+            "target_user_seconds": {
+              "max": 0.06,
+              "median": 0.06,
+              "min": 0.06,
+              "n": 3
+            },
+            "target_wall_seconds": {
+              "max": 0.1,
+              "median": 0.1,
+              "min": 0.09,
+              "n": 3
+            },
+            "wrapper_child_system_seconds": {
+              "max": 0.041016000000000385,
+              "median": 0.040227000000000235,
+              "min": 0.033046999999999827,
+              "n": 3
+            },
+            "wrapper_child_total_seconds": {
+              "max": 0.10448200000000041,
+              "median": 0.10322700000000085,
+              "min": 0.10050400000000081,
+              "n": 3
+            },
+            "wrapper_child_user_seconds": {
+              "max": 0.06745700000000099,
+              "median": 0.06346600000000002,
+              "min": 0.06300000000000061,
+              "n": 3
+            },
+            "wrapper_wall_seconds": {
+              "max": 0.106519631,
+              "median": 0.103083816,
+              "min": 0.100550303,
+              "n": 3
+            }
+          },
+          "valid_measured_processes": 3
+        }
+      },
+      "id": "resume",
+      "issues": [],
+      "runtime_validation": {
+        "complete": true,
+        "records": [
+          {
+            "executable_sha256": "57bd13b6ea560594e4b1b0261645a93af624084c296b52ccff03e91826934353",
+            "issues": [],
+            "label": "resume/runtime-full_unoptimized",
+            "mode": "full_unoptimized",
+            "stdout": {
+              "path": "/tmp/ash-rust-sqlite-reference-20261008/resume/runtime-full_unoptimized/stdout.log",
+              "sha256": "a0afe2a04d8d8b77595bf852e05f58da74c72e097512d3c3fd47dc65a3877fae"
+            },
+            "valid": true
+          },
+          {
+            "executable_sha256": "91dd2f60ec327cab0f4d4425f25d2ba37c52da5e37fddf4cf1f2a47f12dfe63d",
+            "issues": [],
+            "label": "resume/runtime-full_optimized",
+            "mode": "full_optimized",
+            "stdout": {
+              "path": "/tmp/ash-rust-sqlite-reference-20261008/resume/runtime-full_optimized/stdout.log",
+              "sha256": "a0afe2a04d8d8b77595bf852e05f58da74c72e097512d3c3fd47dc65a3877fae"
+            },
+            "valid": true
+          }
+        ]
+      },
+      "rust_source_statistics": {
+        "interpretation": "Physical Rust source files counted once; regex tokens include possible comments/strings and are not semantic API or AST counts.",
+        "sources": [
+          {
+            "bytes": 16610,
+            "lexical_function_tokens": 64,
+            "lexical_type_declaration_tokens": 18,
+            "lines": 351,
+            "nonblank_lines": 340,
+            "path": "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/bridge.rs",
+            "sha256": "9ba62b690f688fc47bca26f3db14eced364f3ee39335edf46391f67b105a5fe1"
+          },
+          {
+            "bytes": 1349,
+            "lexical_function_tokens": 3,
+            "lexical_type_declaration_tokens": 1,
+            "lines": 35,
+            "nonblank_lines": 34,
+            "path": "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/resume.rs",
+            "sha256": "ecdf2df1d1d085241f5e34da5b7e05bf8516269fd45bd7ad50baabb0f6fa76a3"
+          }
+        ],
+        "totals": {
+          "bytes": 17959,
+          "lexical_function_tokens": 67,
+          "lexical_type_declaration_tokens": 19,
+          "lines": 386,
+          "nonblank_lines": 374
+        }
+      }
+    },
+    {
+      "compiler_modes": {
+        "full_optimized": {
+          "complete": true,
+          "measured_processes": 3,
+          "metrics": {
+            "target_peak_rss_kib": {
+              "max": 139268,
+              "median": 138588,
+              "min": 138112,
+              "n": 3
+            },
+            "target_system_seconds": {
+              "max": 0.09,
+              "median": 0.08,
+              "min": 0.08,
+              "n": 3
+            },
+            "target_user_seconds": {
+              "max": 0.5,
+              "median": 0.5,
+              "min": 0.47,
+              "n": 3
+            },
+            "target_wall_seconds": {
+              "max": 0.56,
+              "median": 0.56,
+              "min": 0.54,
+              "n": 3
+            },
+            "wrapper_child_system_seconds": {
+              "max": 0.09573400000000021,
+              "median": 0.08991900000000008,
+              "min": 0.08885299999999985,
+              "n": 3
+            },
+            "wrapper_child_total_seconds": {
+              "max": 0.5924370000000003,
+              "median": 0.5912530000000014,
+              "min": 0.5730029999999999,
+              "n": 3
+            },
+            "wrapper_child_user_seconds": {
+              "max": 0.5025180000000002,
+              "median": 0.5024000000000015,
+              "min": 0.4772689999999997,
+              "n": 3
+            },
+            "wrapper_wall_seconds": {
+              "max": 0.570787297,
+              "median": 0.569165301,
+              "min": 0.548394611,
+              "n": 3
+            }
+          },
+          "valid_measured_processes": 3
+        },
+        "full_unoptimized": {
+          "complete": true,
+          "measured_processes": 3,
+          "metrics": {
+            "target_peak_rss_kib": {
+              "max": 136256,
+              "median": 136024,
+              "min": 135680,
+              "n": 3
+            },
+            "target_system_seconds": {
+              "max": 0.08,
+              "median": 0.08,
+              "min": 0.07,
+              "n": 3
+            },
+            "target_user_seconds": {
+              "max": 0.19,
+              "median": 0.19,
+              "min": 0.18,
+              "n": 3
+            },
+            "target_wall_seconds": {
+              "max": 0.26,
+              "median": 0.25,
+              "min": 0.24,
+              "n": 3
+            },
+            "wrapper_child_system_seconds": {
+              "max": 0.08667800000000003,
+              "median": 0.08367799999999992,
+              "min": 0.08077699999999988,
+              "n": 3
+            },
+            "wrapper_child_total_seconds": {
+              "max": 0.2849649999999988,
+              "median": 0.27667499999999956,
+              "min": 0.27220199999999917,
+              "n": 3
+            },
+            "wrapper_child_user_seconds": {
+              "max": 0.19828699999999877,
+              "median": 0.19589799999999968,
+              "min": 0.18852399999999925,
+              "n": 3
+            },
+            "wrapper_wall_seconds": {
+              "max": 0.263552367,
+              "median": 0.258118657,
+              "min": 0.24921497,
+              "n": 3
+            }
+          },
+          "valid_measured_processes": 3
+        },
+        "metadata": {
+          "complete": true,
+          "measured_processes": 3,
+          "metrics": {
+            "target_peak_rss_kib": {
+              "max": 111528,
+              "median": 111444,
+              "min": 111364,
+              "n": 3
+            },
+            "target_system_seconds": {
+              "max": 0.03,
+              "median": 0.03,
+              "min": 0.03,
+              "n": 3
+            },
+            "target_user_seconds": {
+              "max": 0.07,
+              "median": 0.07,
+              "min": 0.06,
+              "n": 3
+            },
+            "target_wall_seconds": {
+              "max": 0.1,
+              "median": 0.1,
+              "min": 0.1,
+              "n": 3
+            },
+            "wrapper_child_system_seconds": {
+              "max": 0.03399699999999983,
+              "median": 0.03309400000000018,
+              "min": 0.031616999999999784,
+              "n": 3
+            },
+            "wrapper_child_total_seconds": {
+              "max": 0.10974900000000076,
+              "median": 0.1040359999999998,
+              "min": 0.10397899999999938,
+              "n": 3
+            },
+            "wrapper_child_user_seconds": {
+              "max": 0.07665500000000058,
+              "median": 0.07241900000000001,
+              "min": 0.06998199999999954,
+              "n": 3
+            },
+            "wrapper_wall_seconds": {
+              "max": 0.110250741,
+              "median": 0.104764253,
+              "min": 0.104250865,
+              "n": 3
+            }
+          },
+          "valid_measured_processes": 3
+        }
+      },
+      "id": "bound_nul",
+      "issues": [],
+      "runtime_validation": {
+        "complete": true,
+        "records": [
+          {
+            "executable_sha256": "1927239e2d5f5feb5822acbbbb575f260b9f132e33c8c468ea56c9c5cea675a6",
+            "issues": [],
+            "label": "bound_nul/runtime-full_unoptimized",
+            "mode": "full_unoptimized",
+            "stdout": {
+              "path": "/tmp/ash-rust-sqlite-reference-20261008/bound_nul/runtime-full_unoptimized/stdout.log",
+              "sha256": "7c19912fe78db75ea54ff1c4ec7f73c2d582c5d5486cdb0886ca8c102e500ff8"
+            },
+            "valid": true
+          },
+          {
+            "executable_sha256": "e2e4b7948291a40c596354a677c6013c79aaf0d15f01325a56e6620b7392ac53",
+            "issues": [],
+            "label": "bound_nul/runtime-full_optimized",
+            "mode": "full_optimized",
+            "stdout": {
+              "path": "/tmp/ash-rust-sqlite-reference-20261008/bound_nul/runtime-full_optimized/stdout.log",
+              "sha256": "7c19912fe78db75ea54ff1c4ec7f73c2d582c5d5486cdb0886ca8c102e500ff8"
+            },
+            "valid": true
+          }
+        ]
+      },
+      "rust_source_statistics": {
+        "interpretation": "Physical Rust source files counted once; regex tokens include possible comments/strings and are not semantic API or AST counts.",
+        "sources": [
+          {
+            "bytes": 2640,
+            "lexical_function_tokens": 7,
+            "lexical_type_declaration_tokens": 1,
+            "lines": 58,
+            "nonblank_lines": 57,
+            "path": "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/bound_nul.rs",
+            "sha256": "fca31e418390aef6cf21e90fb2fdcc169494a80bbb56ad64c5663acc42b6e29c"
+          },
+          {
+            "bytes": 16610,
+            "lexical_function_tokens": 64,
+            "lexical_type_declaration_tokens": 18,
+            "lines": 351,
+            "nonblank_lines": 340,
+            "path": "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/bridge.rs",
+            "sha256": "9ba62b690f688fc47bca26f3db14eced364f3ee39335edf46391f67b105a5fe1"
+          }
+        ],
+        "totals": {
+          "bytes": 19250,
+          "lexical_function_tokens": 71,
+          "lexical_type_declaration_tokens": 19,
+          "lines": 409,
+          "nonblank_lines": 397
+        }
+      }
+    },
+    {
+      "compiler_modes": {
+        "full_optimized": {
+          "complete": true,
+          "measured_processes": 3,
+          "metrics": {
+            "target_peak_rss_kib": {
+              "max": 134944,
+              "median": 134804,
+              "min": 134460,
+              "n": 3
+            },
+            "target_system_seconds": {
+              "max": 0.08,
+              "median": 0.08,
+              "min": 0.07,
+              "n": 3
+            },
+            "target_user_seconds": {
+              "max": 0.35,
+              "median": 0.35,
+              "min": 0.34,
+              "n": 3
+            },
+            "target_wall_seconds": {
+              "max": 0.42,
+              "median": 0.41,
+              "min": 0.4,
+              "n": 3
+            },
+            "wrapper_child_system_seconds": {
+              "max": 0.08953999999999995,
+              "median": 0.08661599999999936,
+              "min": 0.0746159999999998,
+              "n": 3
+            },
+            "wrapper_child_total_seconds": {
+              "max": 0.44545900000000005,
+              "median": 0.43421999999999805,
+              "min": 0.4324629999999994,
+              "n": 3
+            },
+            "wrapper_child_user_seconds": {
+              "max": 0.3578469999999996,
+              "median": 0.3559190000000001,
+              "min": 0.3476039999999987,
+              "n": 3
+            },
+            "wrapper_wall_seconds": {
+              "max": 0.426171689,
+              "median": 0.41307476,
+              "min": 0.408001781,
+              "n": 3
+            }
+          },
+          "valid_measured_processes": 3
+        },
+        "full_unoptimized": {
+          "complete": true,
+          "measured_processes": 3,
+          "metrics": {
+            "target_peak_rss_kib": {
+              "max": 129940,
+              "median": 129904,
+              "min": 129812,
+              "n": 3
+            },
+            "target_system_seconds": {
+              "max": 0.08,
+              "median": 0.07,
+              "min": 0.07,
+              "n": 3
+            },
+            "target_user_seconds": {
+              "max": 0.15,
+              "median": 0.15,
+              "min": 0.13,
+              "n": 3
+            },
+            "target_wall_seconds": {
+              "max": 0.21,
+              "median": 0.2,
+              "min": 0.2,
+              "n": 3
+            },
+            "wrapper_child_system_seconds": {
+              "max": 0.08795700000000028,
+              "median": 0.07940700000000067,
+              "min": 0.0739099999999997,
+              "n": 3
+            },
+            "wrapper_child_total_seconds": {
+              "max": 0.2332649999999994,
+              "median": 0.23170500000000072,
+              "min": 0.22841400000000167,
+              "n": 3
+            },
+            "wrapper_child_user_seconds": {
+              "max": 0.1593549999999997,
+              "median": 0.15229800000000004,
+              "min": 0.1404570000000014,
+              "n": 3
+            },
+            "wrapper_wall_seconds": {
+              "max": 0.212170795,
+              "median": 0.209523647,
+              "min": 0.206853015,
+              "n": 3
+            }
+          },
+          "valid_measured_processes": 3
+        },
+        "metadata": {
+          "complete": true,
+          "measured_processes": 3,
+          "metrics": {
+            "target_peak_rss_kib": {
+              "max": 110104,
+              "median": 109700,
+              "min": 109560,
+              "n": 3
+            },
+            "target_system_seconds": {
+              "max": 0.03,
+              "median": 0.02,
+              "min": 0.02,
+              "n": 3
+            },
+            "target_user_seconds": {
+              "max": 0.07,
+              "median": 0.06,
+              "min": 0.06,
+              "n": 3
+            },
+            "target_wall_seconds": {
+              "max": 0.1,
+              "median": 0.09,
+              "min": 0.09,
+              "n": 3
+            },
+            "wrapper_child_system_seconds": {
+              "max": 0.03261800000000026,
+              "median": 0.029828000000000188,
+              "min": 0.028132999999999964,
+              "n": 3
+            },
+            "wrapper_child_total_seconds": {
+              "max": 0.10151300000000019,
+              "median": 0.09756000000000231,
+              "min": 0.09500399999999942,
+              "n": 3
+            },
+            "wrapper_child_user_seconds": {
+              "max": 0.07338000000000022,
+              "median": 0.06517599999999923,
+              "min": 0.06494200000000205,
+              "n": 3
+            },
+            "wrapper_wall_seconds": {
+              "max": 0.102356406,
+              "median": 0.098203651,
+              "min": 0.095706044,
+              "n": 3
+            }
+          },
+          "valid_measured_processes": 3
+        }
+      },
+      "id": "forwarding",
+      "issues": [],
+      "runtime_validation": {
+        "complete": true,
+        "records": [
+          {
+            "executable_sha256": "ed3a84dbe51092162d442d19930fb94c8ff422f18c27b003bc83a60ca1429525",
+            "issues": [],
+            "label": "forwarding/runtime-full_unoptimized",
+            "mode": "full_unoptimized",
+            "stdout": {
+              "path": "/tmp/ash-rust-sqlite-reference-20261008/forwarding/runtime-full_unoptimized/stdout.log",
+              "sha256": "db6c02a4cdcecc62fe3274735197d34b1fb1c11d51c2e2ca91f210161478e591"
+            },
+            "valid": true
+          },
+          {
+            "executable_sha256": "55cbd92c9ba5f7f4fe8a9c9f2007f41347077c0d33497ce2556178833b27157c",
+            "issues": [],
+            "label": "forwarding/runtime-full_optimized",
+            "mode": "full_optimized",
+            "stdout": {
+              "path": "/tmp/ash-rust-sqlite-reference-20261008/forwarding/runtime-full_optimized/stdout.log",
+              "sha256": "db6c02a4cdcecc62fe3274735197d34b1fb1c11d51c2e2ca91f210161478e591"
+            },
+            "valid": true
+          }
+        ]
+      },
+      "rust_source_statistics": {
+        "interpretation": "Physical Rust source files counted once; regex tokens include possible comments/strings and are not semantic API or AST counts.",
+        "sources": [
+          {
+            "bytes": 16610,
+            "lexical_function_tokens": 64,
+            "lexical_type_declaration_tokens": 18,
+            "lines": 351,
+            "nonblank_lines": 340,
+            "path": "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/bridge.rs",
+            "sha256": "9ba62b690f688fc47bca26f3db14eced364f3ee39335edf46391f67b105a5fe1"
+          },
+          {
+            "bytes": 1159,
+            "lexical_function_tokens": 5,
+            "lexical_type_declaration_tokens": 0,
+            "lines": 25,
+            "nonblank_lines": 24,
+            "path": "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/forwarding.rs",
+            "sha256": "b7aa227864caa004353ceb8525c8b0c43e74b51893a8a3d856b3ff9105c6ac86"
+          }
+        ],
+        "totals": {
+          "bytes": 17769,
+          "lexical_function_tokens": 69,
+          "lexical_type_declaration_tokens": 18,
+          "lines": 376,
+          "nonblank_lines": 364
+        }
+      }
+    }
+  ],
+  "compiler_process_count": 60,
+  "complete": true,
+  "created_utc": "2026-10-08T06:35:07.388218+00:00",
+  "elapsed_window_seconds": 21.95787074600048,
+  "interrupted": null,
+  "limitations": [
+    "Five Rust SQLite counterparts; not equivalent language semantics or compiler pipelines, and not an application corpus.",
+    "Metadata emission, unoptimized native linking and optimized native linking are separate compiler boundaries.",
+    "Runtime assertion/output checks are excluded from compiler timing summaries; sampled metrics remain in raw validation records.",
+    "One warmup and three measured fresh compiler processes per case/mode; no Cargo, incremental compilation or fitted model.",
+    "Wrapper CPU includes GNU time and reaped target descendants, excludes Python; wrapper CPU and wall bracket the same interval.",
+    "GNU time target wall/CPU have centisecond formatting; RSS is process peak resident memory, not allocation bytes or live heap.",
+    "Compiler threads can consume aggregate CPU greater than wall time; failed timeout descendant CPU can be incomplete.",
+    "Only declared inputs and the direct compiler binary are pinned; host linker/sysroot/transitive system inputs are not exhaustively captured.",
+    "Lexical source counts do not measure Ash/Rust semantic AST nodes, checking obligations or equivalent runtime representations."
+  ],
+  "manifest_sha256": "a832c3aa12f2eba00316a92d3ed737a365b93cf49cbf9b7bfce4f67f4c5ce70d",
+  "raw_process_count": 71,
+  "runtime_validation_process_count": 10,
+  "version_query_process_count": 1
+}

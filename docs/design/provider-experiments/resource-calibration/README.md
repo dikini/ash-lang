@@ -503,11 +503,26 @@ predictors are deferred until a practical decision needs them. Prediction
 beyond the observed domain still needs confirmation; see the
 [NIST guidance on extrapolation](https://www.itl.nist.gov/div898/handbook/pri/section5/pri5998.htm).
 
+## Functional Rust SQLite reference
+
+Five working Rust counterparts now cover copying, persistence, resume,
+bound-NUL refusal and forwarding. All 60 fresh compiler jobs and ten native
+validations passed in one bounded round. Median Rust metadata checking cost
+98–135 ms CPU and 107–111 MiB peak RSS; complete native compilation cost
+232–384 ms CPU at O0 and 434–830 ms at O3. The shared Rust bridge is compiled
+in every job, and the source size is 17.8–20.2 KB versus Ash's 8.2–13.2 KB.
+
+The [full Rust comparison](sqlite-rust.md) reports per-case CPU, wall, RSS,
+source sizes, executable sizes and semantic differences. Rust lifetimes and
+one-shot closures approximate the overlapping resource behavior; they do not
+reproduce Ash's effect machinery or independent Core verification. These
+informational results do not reopen optimization or change compiler policy.
+
 ## Evidence and reproduction
 
 [The capsule manifest](manifest.json) pins compressed raw runs, generated
 inputs, collector versions, compiler source hashes, artifact hashes, build
-receipts and analysis. The archives omit compiled binaries; build them from
+receipts and analysis. The original archives omit compiled binaries; build them from
 this isolated source checkpoint. The separate [reference evidence index](reference-evidence.json)
 authenticates the paired and supplemental rounds, generated inputs, tool bytes,
 rejected records, corrected manifest and execution receipt. Original archives

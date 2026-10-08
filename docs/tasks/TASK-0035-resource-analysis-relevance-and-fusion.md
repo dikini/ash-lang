@@ -60,6 +60,13 @@ data, with point predictions and errors separate from stopping policy. It does
 not change compiler limits. The completed counters still include precharged
 reservations; language-level actual-visit attribution remains planned.
 
+The informational [functional Rust SQLite comparison](../design/provider-experiments/resource-calibration/sqlite-rust.md)
+now supplies five actual SQLite counterparts. Sixty compiler jobs, ten native
+validations and one version query completed without retries. Metadata and
+both native build modes report separate CPU/wall/RSS and source sizes.
+No Ash/Cargo/C rebuild or optimization occurred; the semantic differences
+remain explicit and production policy is unchanged.
+
 ## Paused optimization work
 
 Execute the [analysis plan](../design/provider-experiments/analysis-plan.md):

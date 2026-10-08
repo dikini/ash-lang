@@ -245,3 +245,37 @@ refitting. Report poor predictions and observations outside recorded feature
 ranges. Do not add more features, a family classifier or a Bayesian model to
 rescue this first estimate. The language-level attribution plan remains useful
 if this rough reference fails to explain a material cost.
+
+## Functional Rust compiler reference
+
+The user requested informational Rust counterparts after agreeing to stop
+open-ended optimization. Extend the existing calibration worktree with five
+small Rust programs corresponding to copying, persistence, resume, bound-NUL
+refusal and forwarding. Include a shared typed SQLite bridge in every fresh
+Rust compilation; reuse the already-built two-function C copy shim and the
+same system SQLite shared library. No Cargo, Ash rebuild, new language support
+or optimization belongs to this batch.
+
+Preserve the overlapping database values, input copying/refusal, statement
+reuse, file reopen, generic helper chains and explicit completion reports.
+Use Rust lifetimes for statement/connection dependence. The resume counterpart
+uses a one-shot closure; this approximates the observed operation without
+implementing Ash's effect-handler or independent Core obligations. Compare
+complete loaded source sizes and report those differences rather than padding
+source files.
+
+Freeze source/native/compiler hashes and commands before dispatch. In Common's
+reserved exclusive window, run serial metadata-only, unoptimized-native and
+optimized-native compilations with one warmup and three measurements per case
+and mode: 60 compiler processes. Execute all ten final native programs outside
+the compilation measurements to validate assertions. One compiler-version query
+brings the total to 71 target processes. Bound the combined window to 180
+seconds and each process to ten seconds. Preserve any failed attempts and
+revise the finite count explicitly before a correction run.
+
+Record compiler-job CPU, matching wrapper elapsed time, target GNU wall/RSS,
+output size and min/median/max. Linking belongs to the two native compilation
+modes; metadata emission has its own checking/encoding boundary. Program
+execution and SQLite I/O are excluded from compiler measurements. Compiler
+statistics are an informational reference, not an estimate of equivalent Ash
+checking work or a reason to reopen optimization automatically.
