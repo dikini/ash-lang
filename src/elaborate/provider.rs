@@ -4899,6 +4899,90 @@ mod tests {
     }
 
     #[test]
+    fn resource_fact_late_actual_failure_drains_retained_canonical_actual_on_small_stack() {
+        let source = SOURCE
+            .replace("interface Reader<R>", "interface Reader<R, A>")
+            .replace("provider Reader<R>", "provider Reader<R, Int>");
+        let fixture = Fixture::new(&source);
+        let mut definition = fixture.resolved.resources()[0].clone();
+        assert_eq!(definition.provider.arguments.len(), 2);
+        // This compiler-private copy probe exceeds admission depth. It grants
+        // no source or executable authority to the substituted metadata.
+        crate::types::discard_kinded_argument_iteratively(std::mem::replace(
+            &mut definition.provider.arguments[0].ty,
+            crate::types::KindedArgument::TypeArg(deep_assembly_type().into_inner()),
+        ));
+        std::thread::Builder::new()
+            .name("resource-fact-retained-canonical-actual".to_owned())
+            .stack_size(64 * 1024)
+            .spawn(move || {
+                let mut measured = TypeWorkBudget::unbounded();
+                drop(
+                    crate::resolved::ResourceTypeFact::from_definition_with_budget(
+                        &definition,
+                        &mut measured,
+                    )
+                    .unwrap(),
+                );
+                let cost = measured.used();
+
+                // Derive the suffix from the same canonical clone meters.
+                // Removing it stops before either copy of the second actual,
+                // after both deep copies of the first actual were retained.
+                let mut suffix = TypeWorkBudget::unbounded();
+                for _ in 0..2 {
+                    crate::types::discard_kinded_argument_iteratively(
+                        crate::types::clone_kinded_argument_with_budget(
+                            &definition.provider.arguments[1].ty,
+                            &mut suffix,
+                        )
+                        .unwrap(),
+                    );
+                }
+                assert!(definition.family_template.is_none());
+                for effect in [&definition.provided, &definition.interpreted] {
+                    assert!(matches!(&effect.origin, Origin::Source(_)));
+                    // A source origin costs two retained provenance slots.
+                    suffix.charge(2 + effect.argument_provenance.len()).unwrap();
+                    drop(clone_effect_instance_with_budget(&effect.instance, &mut suffix).unwrap());
+                }
+                let before_second_actual = cost.checked_sub(suffix.used()).unwrap();
+                assert!(before_second_actual > 128_000);
+                assert!(before_second_actual < cost);
+                for prefix in [0, 17] {
+                    let mut short = TypeWorkBudget::with_limit(prefix + before_second_actual);
+                    short.charge(prefix).unwrap();
+                    assert!(
+                        crate::resolved::ResourceTypeFact::from_definition_with_budget(
+                            &definition,
+                            &mut short,
+                        )
+                        .is_err(),
+                        "the second actual must fail while the first canonical actual is retained",
+                    );
+                    assert_eq!(short.used(), prefix + before_second_actual);
+                    for _ in 0..2 {
+                        let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                        exact.charge(prefix).unwrap();
+                        let copied =
+                            crate::resolved::ResourceTypeFact::from_definition_with_budget(
+                                &definition,
+                                &mut exact,
+                            )
+                            .unwrap();
+                        assert_eq!(copied.provider_application.arguments().len(), 2);
+                        assert_eq!(exact.used(), prefix + cost);
+                        drop(copied);
+                    }
+                }
+                crate::resolved::discard_resolved_resource_definition(definition);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
     fn lifecycle_function_assembly_late_failure_drains_deep_sibling_types() {
         const CHILD: &str = "ASH_LIFECYCLE_FUNCTION_ASSEMBLY_CHILD";
         if std::env::var_os(CHILD).is_none() {

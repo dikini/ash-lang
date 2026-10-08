@@ -7839,7 +7839,11 @@ impl Resolver {
             &mut self.lexical_nominal_parameters,
             ResolvedNominalParameterOwnerBuffer(Vec::new()),
         );
-        let lexical_method_parameters = std::mem::take(&mut self.lexical_method_parameters.0);
+        let lexical_method_parameters = std::mem::replace(
+            &mut self.lexical_method_parameters,
+            ImportedTypeVariableBuffer(Vec::new()),
+        )
+        .into_vec();
         let registry = Arc::new(
             registry
                 .with_additional_type_variables(lexical_method_parameters)
@@ -19287,6 +19291,27 @@ impl Resolver {
             provided: Option<ResolvedEffectInstance>,
             interpreted: Option<ResolvedEffectInstance>,
         }
+        fn discard_resource_effect(effect: ResolvedEffectInstance) {
+            drop(effect.instance);
+            discard_origin_iteratively(effect.origin);
+        }
+        impl Parts {
+            fn set_provider(&mut self, application: ResolvedInterfaceApplication) {
+                if let Some(displaced) = self.provider.replace(application) {
+                    crate::resolved::discard_resolved_interface_application(displaced);
+                }
+            }
+            fn set_provided(&mut self, effect: ResolvedEffectInstance) {
+                if let Some(displaced) = self.provided.replace(effect) {
+                    discard_resource_effect(displaced);
+                }
+            }
+            fn set_interpreted(&mut self, effect: ResolvedEffectInstance) {
+                if let Some(displaced) = self.interpreted.replace(effect) {
+                    discard_resource_effect(displaced);
+                }
+            }
+        }
         impl Drop for Parts {
             fn drop(&mut self) {
                 for application in self.requirements.drain(..).chain(self.provider.take()) {
@@ -19298,8 +19323,7 @@ impl Resolver {
                     .into_iter()
                     .chain(self.interpreted.take())
                 {
-                    drop(effect.instance);
-                    discard_origin_iteratively(effect.origin);
+                    discard_resource_effect(effect);
                 }
             }
         }
@@ -19340,13 +19364,13 @@ impl Resolver {
                     .requirements
                     .push(self.resolve_interface_application(requirement)?);
             }
-            parts.provider = Some(self.resolve_interface_application(&source.provider)?);
-            parts.provided = Some(self.resolve_effect_instance_parts(
+            parts.set_provider(self.resolve_interface_application(&source.provider)?);
+            parts.set_provided(self.resolve_effect_instance_parts(
                 &source.provided.effect,
                 &source.provided.arguments,
                 source.provided.span,
             )?);
-            parts.interpreted = Some(self.resolve_effect_instance_parts(
+            parts.set_interpreted(self.resolve_effect_instance_parts(
                 &source.interpreted.effect,
                 &source.interpreted.arguments,
                 source.interpreted.span,
@@ -20058,6 +20082,11 @@ impl Resolver {
                 )
             })?;
         struct Clauses(Vec<ResolvedHandlerClause>);
+        impl Clauses {
+            fn into_vec(mut self) -> Vec<ResolvedHandlerClause> {
+                std::mem::take(&mut self.0)
+            }
+        }
         impl Drop for Clauses {
             fn drop(&mut self) {
                 for clause in self.0.drain(..) {
@@ -20127,6 +20156,6 @@ impl Resolver {
                 span: clause.span,
             });
         }
-        Ok(std::mem::take(&mut clauses.0))
+        Ok(clauses.into_vec())
     }
 }

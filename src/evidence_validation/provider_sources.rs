@@ -1123,7 +1123,7 @@ pub(super) fn validate_provider_family_selection(
         }
         Ok(InterfaceApplication::new_kinded(
             application.interface(),
-            std::mem::take(&mut arguments.0).into_boxed_slice(),
+            arguments.into_boxed_slice(),
         ))
     }
     let expected = apply(header, &replacements, work, span)?;
@@ -1401,6 +1401,11 @@ fn family_match_failure(
 }
 
 struct FamilyArguments(Vec<KindedArgument>);
+impl FamilyArguments {
+    fn into_boxed_slice(mut self) -> Box<[KindedArgument]> {
+        std::mem::take(&mut self.0).into_boxed_slice()
+    }
+}
 impl Drop for FamilyArguments {
     fn drop(&mut self) {
         for argument in self.0.drain(..) {

@@ -129,6 +129,11 @@ impl PreparedProviderFamilyInstance {
 }
 
 struct ProviderFamilyArguments(Vec<KindedArgument>);
+impl ProviderFamilyArguments {
+    fn into_boxed_slice(mut self) -> Box<[KindedArgument]> {
+        std::mem::take(&mut self.0).into_boxed_slice()
+    }
+}
 impl Drop for ProviderFamilyArguments {
     fn drop(&mut self) {
         for argument in self.0.drain(..) {
@@ -268,10 +273,10 @@ fn authenticate_family_forwarding(
         replacements: &OwnerReplacementBuffer,
         work: &mut TypeWorkBudget,
     ) -> Result<InterfaceApplication, Failure> {
-        let mut arguments = apply_arguments(application.arguments(), replacements, work)?;
+        let arguments = apply_arguments(application.arguments(), replacements, work)?;
         Ok(InterfaceApplication::new_kinded(
             application.interface(),
-            std::mem::take(&mut arguments.0).into_boxed_slice(),
+            arguments.into_boxed_slice(),
         ))
     }
     fn apply_effect(
@@ -279,10 +284,10 @@ fn authenticate_family_forwarding(
         replacements: &OwnerReplacementBuffer,
         work: &mut TypeWorkBudget,
     ) -> Result<EffectInstance, Failure> {
-        let mut arguments = apply_arguments(effect.arguments(), replacements, work)?;
+        let arguments = apply_arguments(effect.arguments(), replacements, work)?;
         Ok(EffectInstance::new_kinded(
             effect.effect(),
-            std::mem::take(&mut arguments.0).into_boxed_slice(),
+            arguments.into_boxed_slice(),
         ))
     }
     fn same_effect(
@@ -1059,7 +1064,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             }
             Ok(InterfaceApplication::new_kinded(
                 application.interface(),
-                std::mem::take(&mut arguments.0).into_boxed_slice(),
+                arguments.into_boxed_slice(),
             ))
         }
         fn effect(
