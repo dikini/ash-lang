@@ -655,7 +655,10 @@ fn foundation_schema() -> ForeignManifestSchema {
 const STORAGE_NOT_EXECUTABLE: &str =
     "typed foreign storage is not executable in this admission phase";
 
-fn foundation_rejection(schema: ForeignManifestSchema, malformed: bool) -> String {
+fn foundation_resolution(
+    schema: ForeignManifestSchema,
+    malformed: bool,
+) -> Result<ash::resolved::ResolvedModule, String> {
     let manifest = match ForeignManifest::new(
         "@foreign.mock.renamed",
         ForeignRegistrationId::new(101),
@@ -667,7 +670,7 @@ fn foundation_rejection(schema: ForeignManifestSchema, malformed: bool) -> Strin
                 malformed,
                 "valid foundation failed manifest construction: {error}"
             );
-            return error.to_string();
+            return Err(error.to_string());
         }
     };
     let tree = Tree::new();
@@ -678,7 +681,10 @@ fn foundation_rejection(schema: ForeignManifestSchema, malformed: bool) -> Strin
         .iter()
         .find(|module| module.foreign_admission().is_some())
         .unwrap();
-    let failure = resolve_module(native, &[]).unwrap_err();
+    let failure = match resolve_module(native, &[]) {
+        Ok(resolved) => return Ok(resolved),
+        Err(failure) => failure,
+    };
     let ash::resolve::ResolveModuleError::Resolution(diagnostic) = failure else {
         panic!("expected foreign contract admission refusal: {failure:?}");
     };
@@ -686,18 +692,44 @@ fn foundation_rejection(schema: ForeignManifestSchema, malformed: bool) -> Strin
         diagnostic.reason,
         ash::resolve::ResolveReason::TypeResourceExhausted
     );
-    diagnostic.primary.message().to_owned()
+    Err(diagnostic.primary.message().to_owned())
+}
+
+fn foundation_rejection(schema: ForeignManifestSchema, malformed: bool) -> String {
+    foundation_resolution(schema, malformed).unwrap_err()
 }
 
 #[test]
-fn renamed_typed_foundation_validates_then_refuses_executable_admission() {
+fn renamed_typed_foundation_publishes_canonical_scalar_storage_facts() {
     let schema = foundation_schema();
     assert_eq!(schema.effects[0].operations.len(), 3);
     assert!(matches!(
         schema.effects[0].operations[1].result,
         ForeignResultRelation::Independent
     ));
-    assert_eq!(foundation_rejection(schema, false), STORAGE_NOT_EXECUTABLE);
+    let resolved = foundation_resolution(schema, false).unwrap();
+    let fact = resolved.registry().foreign_modules().next().unwrap();
+    let layout = fact.layout.as_ref().unwrap();
+    let storage = fact.storage.as_ref().unwrap();
+    assert_eq!(layout.witness(), storage.witness());
+    for (payload, size, alignment) in [
+        (ash::types::Type::Unit, 0, 1),
+        (ash::types::Type::Bool, 1, 1),
+        (ash::types::Type::Int, 8, 8),
+    ] {
+        let dictionary = layout.dictionary_for_payload(&payload).unwrap();
+        assert_eq!(dictionary.payload_type(), &payload);
+        assert_eq!(dictionary.producer().method(), layout.method());
+        assert_eq!(dictionary.producer().witness(), layout.witness());
+        assert_eq!(dictionary.size(), size);
+        assert_eq!(dictionary.natural_alignment(), alignment);
+    }
+    assert!(fact.operations.iter().any(|operation|
+        operation.id == storage.store()
+            && operation.result == ForeignResultFact::Store { storage: storage.effect() }));
+    assert!(fact.operations.iter().any(|operation|
+        operation.id == storage.load()
+            && operation.result == ForeignResultFact::Load { storage: storage.effect() }));
 }
 
 #[test]
@@ -787,10 +819,13 @@ fn typed_foundation_parameter_coordinates_are_independent() {
             storage.load.signature =
                 "(Token<Region>, Measured<Payload>, Handle<Payload, Region>) -> Payload".into();
         }
-        assert_eq!(
-            foundation_rejection(schema, false),
-            STORAGE_NOT_EXECUTABLE,
-            "reverse_storage={reverse_storage}"
-        );
+        let resolved = foundation_resolution(schema, false)
+            .unwrap_or_else(|failure| panic!("reverse_storage={reverse_storage}: {failure}"));
+        let fact = resolved.registry().foreign_modules().next().unwrap();
+        let storage = fact.storage.as_ref().unwrap();
+        assert_eq!(storage.owner_parameter(), usize::from(reverse_storage));
+        assert_eq!(storage.payload_parameter(), usize::from(!reverse_storage));
+        assert_eq!(storage.reference_owner_parameter(), usize::from(!reverse_storage));
+        assert_eq!(storage.reference_payload_parameter(), usize::from(reverse_storage));
     }
 }

@@ -100,8 +100,8 @@ fn typed_capacity_alignment_and_refusal_cases_preserve_actual_usage() {
         ),
         (
             "range-refusal-entry.ash",
-            "Completed((InvalidPayload, (0, 8, 0, 1)), Closed)",
-            8, 1, &[][..], &[][..],
+            "Completed((InvalidPayload, 41, (8, 16, 1, 2)), Closed)",
+            16, 2, &[(8, 8, 8)][..], &[0][..],
         ),
         (
             "maximum-integer-entry.ash",
@@ -112,6 +112,16 @@ fn typed_capacity_alignment_and_refusal_cases_preserve_actual_usage() {
             "source-refusal-entry.ash",
             "Completed((InvalidPayload, (0, 8, 0, 1)), Closed)",
             8, 1, &[][..], &[][..],
+        ),
+        (
+            "source-load-override-entry.ash",
+            "Completed((99, (8, 8, 1, 1)), Closed)",
+            8, 1, &[(8, 8, 8)][..], &[][..],
+        ),
+        (
+            "source-allocation-reuse-entry.ash",
+            "Completed((41, (8, 16, 1, 2)), Closed)",
+            16, 2, &[(8, 8, 8)][..], &[0][..],
         ),
         (
             "unit-entry.ash",
@@ -253,6 +263,9 @@ fn attached_family_preserves_handler_outward_storage_requests() {
     let failure = run_path_with_foreign_runtime(configuration, &mut runtime)
         .expect_err("body demand must not discharge the handlers' outward Bool request");
     assert!(failure.is_source_rejection(), "{failure:?}");
+    // Pin the outward-row diagnostic and source location after the connected
+    // executable gate establishes them; no earlier typing failure is evidence
+    // that the handlers' Bool request survived effect discharge.
     assert!(
         matches!(failure.pipeline_failure(), Some(ash::driver::PipelineFailure::Typing(_))),
         "expected the connected effect-row refusal after successful imports: {failure:?}"
@@ -289,6 +302,23 @@ fn references_cannot_escape_or_change_owner_and_numeric_tuples_grant_no_authorit
             panic!("expected connected source typing refusal for {name}: {failure:?}");
         };
         assert_eq!(diagnostic.reason, reason, "{name}: {failure:?}");
+        assert!(failure.is_source_rejection(), "{name}: {failure:?}");
+        assert!(observations.events().is_empty(), "{name}: {:?}", observations.events());
+        assert_eq!(runtime.retained_owner_count(), 0, "{name}");
+    }
+}
+
+#[test]
+fn source_cannot_supply_sealed_layout_through_impl_or_lexical_evidence() {
+    require_connected_typed_storage();
+    for name in ["layout-impl-refusal-entry.ash", "layout-with-refusal-entry.ash"] {
+        let (configuration, mut runtime, observations) = configuration(name);
+        let failure = run_path_with_foreign_runtime(configuration, &mut runtime)
+            .expect_err("source evidence must not forge the registered Layout interface");
+        let Some(ash::driver::PipelineFailure::Resolution(diagnostic)) = failure.pipeline_failure() else {
+            panic!("expected sealed Layout resolution refusal for {name}: {failure:?}");
+        };
+        assert_eq!(diagnostic.reason, ash::resolve::ResolveReason::SealedProvider, "{name}: {failure:?}");
         assert!(failure.is_source_rejection(), "{name}: {failure:?}");
         assert!(observations.events().is_empty(), "{name}: {:?}", observations.events());
         assert_eq!(runtime.retained_owner_count(), 0, "{name}");

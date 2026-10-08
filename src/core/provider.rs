@@ -45,7 +45,7 @@ pub(crate) use specialization::{
     ProviderCopiedTemplate, ProviderFreshening, ProviderOccurrenceRelocation,
     ProviderOriginalTemplate, ProviderFamilyAdmission, ProviderScopeAdmission, ProviderSpecializationEntries,
     ProviderSpecializationFamilyEntries, ProviderSpecializationDictionaryEntry,
-    AdmittedNativeStorageRelation,
+    AdmittedNativeStorageRelation, authenticate_native_storage_relations,
     ProviderTemplateSubstitution,
 };
 mod external;

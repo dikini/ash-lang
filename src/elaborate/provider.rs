@@ -515,6 +515,7 @@ struct CheckedConditionalHandler {
 /// Concrete body demand specializes this authority; it never checks a new
 /// source body or acquires an additional native owner.
 struct CheckedProviderFamilyOriginal {
+    authority: Arc<ProviderFamilyOriginalAuthority>,
     identity: crate::core::provider::ProviderFamilyIdentity,
     requirements: Arc<[crate::interface::CheckedRequirement]>,
     provider_application: Arc<crate::interface::InterfaceApplication>,
@@ -522,9 +523,58 @@ struct CheckedProviderFamilyOriginal {
     handler: CheckedConditionalHandler,
 }
 
+/// Body-free authority minted only from an independently checked family original.
+/// It is available during local capture preparation before group publication.
+/// Demands and copied headers cannot construct or replace this token.
+pub(super) struct ProviderFamilyOriginalAuthority {
+    fact: Arc<crate::resolved::ResourceTypeFact>,
+    identity: crate::core::provider::ProviderFamilyIdentity,
+    requirements: Arc<[crate::interface::CheckedRequirement]>,
+    application: Arc<crate::interface::InterfaceApplication>,
+    methods: Arc<[(MethodId, OperationId)]>,
+    handler: crate::core::validate::CheckedHandlerContractCertificate,
+}
+
+impl std::fmt::Debug for ProviderFamilyOriginalAuthority {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("ProviderFamilyOriginalAuthority")
+            .field("identity", &self.identity).finish_non_exhaustive()
+    }
+}
+
+impl ProviderFamilyOriginalAuthority {
+    pub(super) fn fact(&self) -> &Arc<crate::resolved::ResourceTypeFact> { &self.fact }
+    pub(super) fn identity(&self) -> crate::core::provider::ProviderFamilyIdentity { self.identity }
+    pub(super) fn requirements(&self) -> &[crate::interface::CheckedRequirement] { &self.requirements }
+    pub(super) fn application(&self) -> &crate::interface::InterfaceApplication { &self.application }
+    pub(super) fn methods(&self) -> &[(MethodId, OperationId)] { &self.methods }
+    pub(super) fn handler_certificate(&self) -> &crate::core::validate::CheckedHandlerContractCertificate { &self.handler }
+    /// The caller supplies the genuine original publication phase. Pending
+    /// local originals and committed originals have different slot obligations.
+    pub(super) fn authenticate(
+        &self,
+        committed: bool,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), crate::core::ValidationError> {
+        self.handler.authenticate(&self.fact, committed, work)
+    }
+    fn authenticates_original(
+        &self,
+        fact: &Arc<crate::resolved::ResourceTypeFact>,
+        original: &CheckedProviderFamilyOriginal,
+    ) -> bool {
+        Arc::ptr_eq(&self.fact, fact) && self.identity == original.identity
+            && Arc::ptr_eq(&self.requirements, &original.requirements)
+            && Arc::ptr_eq(&self.application, &original.provider_application)
+            && Arc::ptr_eq(&self.methods, &original.methods)
+            && original.handler.template.authenticates_certificate(&self.handler)
+    }
+}
+
 /// Borrowed defining inputs for a finite exact family specialization.
 #[derive(Clone, Copy)]
 pub(super) struct ProviderFamilyTemplateSource<'a> {
+    pub(super) authority: &'a Arc<ProviderFamilyOriginalAuthority>,
     pub(super) identity: crate::core::provider::ProviderFamilyIdentity,
     pub(super) requirements: &'a [crate::interface::CheckedRequirement],
     pub(super) provider_application: &'a crate::interface::InterfaceApplication,
@@ -1200,6 +1250,8 @@ struct ProviderDeclarationContract {
     family: Option<ProviderFamilyContract>,
 }
 struct ProviderFamilyContract {
+    authority: Arc<ProviderFamilyOriginalAuthority>,
+    methods: Arc<[(MethodId, OperationId)]>,
     identity: crate::core::provider::ProviderFamilyIdentity,
     requirements: Arc<[crate::interface::CheckedRequirement]>,
     application: Arc<crate::interface::InterfaceApplication>,
@@ -1231,6 +1283,7 @@ impl std::fmt::Debug for CheckedProviderContracts {
             .finish_non_exhaustive()
     }
 }
+#[cfg(test)]
 fn authenticate_provider_application_witness(
     fact: &crate::resolved::ResourceTypeFact,
     checked_application: &crate::interface::InterfaceApplication,
@@ -1280,6 +1333,31 @@ fn authenticate_primary_provider_application(
 }
 
 impl CheckedProviderContracts {
+    /// Original local carrier retained through publication. Callers charge
+    /// resource_count before lookup and compare the returned Arc by identity.
+    pub(super) fn family_original_authority(
+        &self,
+        definition: crate::resolved::ResourceDefinitionId,
+    ) -> Option<&Arc<ProviderFamilyOriginalAuthority>> {
+        let family = self.declarations.iter()
+            .find(|entry| entry.fact.id == definition)?.family.as_ref()?;
+        (family.identity.definition == definition).then_some(&family.authority)
+    }
+    /// Exact checked method vector; callers charge resource_count for lookup.
+    pub(crate) fn family_methods(&self, definition: crate::resolved::ResourceDefinitionId) -> Option<&[(MethodId, OperationId)]> {
+        let family = self.declarations.iter().find(|entry| entry.fact.id == definition)?.family.as_ref()?;
+        (family.identity.definition == definition).then_some(family.methods.as_ref())
+    }
+    /// Original handler token; callers charge resource_count for lookup.
+    pub(crate) fn family_handler_certificate(
+        &self,
+        definition: crate::resolved::ResourceDefinitionId,
+    ) -> Option<&crate::core::validate::CheckedHandlerContractCertificate> {
+        let family = self.declarations.iter()
+            .find(|entry| entry.fact.id == definition)?.family.as_ref()?;
+        (family.identity.definition == definition).then_some(&family.handlers)
+    }
+
     pub(crate) fn family_identity(&self, definition: crate::resolved::ResourceDefinitionId) -> Option<crate::core::provider::ProviderFamilyIdentity> {
         let family = self.declarations.iter().find(|entry| entry.fact.id == definition)?.family.as_ref()?;
         (family.identity.definition == definition).then_some(family.identity)
@@ -1380,7 +1458,12 @@ impl CheckedProviderContracts {
             match (&fact.family_template, &declaration.family) {
                 (None, None) => {},
                 (Some(written), Some(family)) => {
-                    if family.identity.definition != fact.id || family.identity.parameter != written.parameter.id
+                    if !Arc::ptr_eq(&family.authority.fact, fact)
+                        || family.authority.identity != family.identity
+                        || !Arc::ptr_eq(&family.authority.requirements, &family.requirements)
+                        || !Arc::ptr_eq(&family.authority.application, &family.application)
+                        || !Arc::ptr_eq(&family.authority.methods, &family.methods)
+                        || family.identity.definition != fact.id || family.identity.parameter != written.parameter.id
                         || family.requirements.len() != written.requirements.len()
                         || family.application.interface() != written.provider_application.interface()
                         || family.application.arguments().len() != written.provider_application.arguments().len() {
@@ -1949,6 +2032,10 @@ fn declaration_template_source<'a>(
                 .occurrences,
         })
     }
+    if declaration.family.as_ref().is_some_and(|family|
+        !family.authority.authenticates_original(&declaration.fact, family)) {
+        return Err(invalid_state());
+    }
     Ok(ProviderTemplateSource {
         fact: &declaration.fact,
         acquire: lifecycle(&declaration.acquire, work)?,
@@ -1957,6 +2044,7 @@ fn declaration_template_source<'a>(
         handler_occurrences: &declaration.handlers.staged_externals.occurrences,
         methods: &declaration.methods,
         family: declaration.family.as_ref().map(|family| ProviderFamilyTemplateSource {
+            authority: &family.authority,
             identity: family.identity,
             requirements: &family.requirements,
             provider_application: &family.provider_application,
@@ -1986,6 +2074,10 @@ fn prepared_declaration_template_source(
                 .occurrences,
         })
     }
+    if declaration.family.as_ref().is_some_and(|family|
+        !family.authority.authenticates_original(&declaration.fact, family)) {
+        return Err(invalid_state());
+    }
     Ok(ProviderTemplateSource {
         fact: &declaration.fact,
         acquire: lifecycle(&declaration.acquire)?,
@@ -1994,6 +2086,7 @@ fn prepared_declaration_template_source(
         handler_occurrences: &declaration.handlers.staged_externals.occurrences,
         methods: &declaration.methods,
         family: declaration.family.as_ref().map(|family| ProviderFamilyTemplateSource {
+            authority: &family.authority,
             identity: family.identity,
             requirements: &family.requirements,
             provider_application: &family.provider_application,
@@ -2021,6 +2114,9 @@ fn authenticate_original_relation(
     match (&code.family, &contract.family) {
         (None, None) => {},
         (Some(code), Some(proof)) if code.identity == proof.identity
+            && Arc::ptr_eq(&code.authority, &proof.authority)
+            && code.authority.authenticates_original(&contract.fact, code)
+            && Arc::ptr_eq(&code.methods, &proof.methods)
             && Arc::ptr_eq(&code.requirements, &proof.requirements)
             && Arc::ptr_eq(&code.provider_application, &proof.application)
             && code.handler.template.authenticates_certificate(&proof.handlers) => {
@@ -2366,6 +2462,11 @@ pub(super) fn check_module_provider_original(
         )
         .map_err(module_provider_failure)?;
 
+    let fact = Arc::new(
+        crate::resolved::ResourceTypeFact::from_definition_with_budget(definition, type_work)
+            .map_err(|()| type_resource())?,
+    );
+
     let mut family_original = if let Some(family) = &definition.family_template {
         let (application, methods, requirements, draft) = with_module_provider_compiler(
             module, &preparation.registry, defining, type_work, coverage_work, constraint_work,
@@ -2378,18 +2479,21 @@ pub(super) fn check_module_provider_original(
         )?;
         let handler = draft.admit_with_native_memo(module, &sources, &module_sources, Some(&preparation.native_authentication), type_work)
             .map_err(module_provider_failure)?;
-        type_work.charge(3).map_err(|()| type_resource())?;
+        type_work.charge(4).map_err(|()| type_resource())?;
+        let identity = crate::core::provider::ProviderFamilyIdentity { definition: definition.id, parameter: family.parameter.id };
+        let requirements: Arc<[crate::interface::CheckedRequirement]> = Arc::from(requirements);
+        let provider_application = Arc::new(application);
+        let methods: Arc<[(MethodId, OperationId)]> = Arc::from(methods.into_boxed_slice());
+        let authority = Arc::new(ProviderFamilyOriginalAuthority {
+            fact: Arc::clone(&fact), identity,
+            requirements: Arc::clone(&requirements), application: Arc::clone(&provider_application),
+            methods: Arc::clone(&methods), handler: handler.template.contract_certificate(),
+        });
         Some(CheckedProviderFamilyOriginal {
-            identity: crate::core::provider::ProviderFamilyIdentity { definition: definition.id, parameter: family.parameter.id },
-            requirements: Arc::from(requirements), provider_application: Arc::new(application),
-            methods: Arc::from(methods.into_boxed_slice()), handler,
+            authority, identity, requirements, provider_application, methods, handler,
         })
     } else { None };
 
-    let fact = Arc::new(
-        crate::resolved::ResourceTypeFact::from_definition_with_budget(definition, type_work)
-            .map_err(|()| type_resource())?,
-    );
     for staged in [
         acquire
             .draft
@@ -2495,6 +2599,8 @@ pub(super) fn check_module_provider_original(
         finish,
         handlers: declaration.handlers.template.contract_certificate(),
         family: declaration.family.as_ref().map(|family| ProviderFamilyContract {
+            authority: Arc::clone(&family.authority),
+            methods: Arc::clone(&family.methods),
             identity: family.identity,
             requirements: Arc::clone(&family.requirements),
             application: Arc::clone(&family.provider_application),
@@ -2544,6 +2650,17 @@ pub(super) fn finish_module_provider_originals(
             || component.declaration.public != component.contract.public
         {
             return Err(invalid_state());
+        }
+        match (&component.declaration.family, &component.contract.family) {
+            (None, None) => {},
+            (Some(code), Some(proof)) if code.identity == proof.identity
+                && Arc::ptr_eq(&code.authority, &proof.authority)
+                && code.authority.authenticates_original(&component.contract.fact, code)
+                && Arc::ptr_eq(&code.methods, &proof.methods)
+                && Arc::ptr_eq(&code.requirements, &proof.requirements)
+                && Arc::ptr_eq(&code.provider_application, &proof.application)
+                && code.handler.template.authenticates_certificate(&proof.handlers) => {},
+            _ => return Err(invalid_state()),
         }
         declarations.push(Arc::clone(&component.declaration));
         contracts.push(Arc::clone(&component.contract));
@@ -3948,9 +4065,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         module: &ResolvedModule,
         definition: &ResolvedResourceDefinition,
     ) -> Result<ProviderHeader, TypeError> {
-        if let Some(family) = &definition.family_template {
-            return Err(unsupported_resource_family(family.span));
-        }
         let registry = Arc::clone(&self.registry);
         let owner = definition.parameters.first().ok_or_else(invalid_state)?;
         if owner.kind != Kind::Type || definition.answer.kind != Kind::Type {

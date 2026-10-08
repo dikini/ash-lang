@@ -78,6 +78,7 @@ pub(crate) struct PreparedProviderFamilyInstance {
     identity: crate::core::provider::ProviderFamilyIdentity,
     application: InterfaceApplication,
     requirements: Box<[(crate::interface::EvidenceSelection, crate::interface::EvidenceNodeId)]>,
+    selections: Vec<(crate::interface::EvidenceSelection, crate::interface::EvidenceNodeId)>,
     pub(super) payload: IterativeTypeOwner,
     provided: EffectInstance,
     native: EffectInstance,
@@ -88,6 +89,7 @@ impl PreparedProviderFamilyInstance {
     pub(crate) fn identity(&self) -> crate::core::provider::ProviderFamilyIdentity { self.identity }
     pub(crate) fn application(&self) -> &InterfaceApplication { &self.application }
     pub(crate) fn requirements(&self) -> &[(crate::interface::EvidenceSelection, crate::interface::EvidenceNodeId)] { &self.requirements }
+    pub(crate) fn selections(&self) -> &[(crate::interface::EvidenceSelection, crate::interface::EvidenceNodeId)] { &self.selections }
     pub(crate) fn forwarding_methods(&self) -> impl Iterator<Item=(MethodId, BinderId, &Type)> {
         self.forwardings.iter().map(|(method, _, binder)| (*method, binder.id(), binder.ty()))
     }
@@ -100,6 +102,11 @@ impl Drop for ProviderFamilyArguments {
 
 pub(super) struct ProviderFamilyDemandScope {
     source: crate::interface::LexicalEvidenceId,
+    primary_source: crate::interface::LexicalEvidenceId,
+    original: Arc<ResourceTypeFact>,
+    authority: Arc<provider::ProviderFamilyOriginalAuthority>,
+    certificate: Option<Arc<provider::CheckedProviderContracts>>,
+    arguments: ProviderFamilyArguments,
     identity: crate::core::provider::ProviderFamilyIdentity,
     application: InterfaceApplication,
     requirements: Box<[crate::interface::CheckedRequirement]>,
@@ -109,6 +116,329 @@ pub(super) struct ProviderFamilyDemandScope {
     members: Vec<Arc<PreparedProviderFamilyInstance>>,
     frozen: bool,
     origin: Origin,
+}
+
+/// Resolves an existing forwarding binder without selecting or materializing
+/// evidence. Scope/member indices locate claims; original certificates and the
+/// exact immutable prerequisite plan authenticate them.
+pub(super) fn capture_family_forwarding(
+    scopes: &[ProviderFamilyDemandScope],
+    registry: &crate::resolved::ResolvedRegistry,
+    selection: &crate::interface::EvidenceSelection,
+    node: crate::interface::EvidenceNodeId,
+    method: MethodId,
+    work: &mut TypeWorkBudget,
+) -> Result<BinderId, crate::core::capture::Failure> {
+    authenticate_family_forwarding(scopes, registry, selection, node, method, true, work)
+}
+
+/// Only unfrozen materialization may authenticate a new occurrence receipt.
+/// Capture and frozen synthesis always require the retained exact receipt.
+fn authenticate_family_forwarding(
+    scopes: &[ProviderFamilyDemandScope],
+    registry: &crate::resolved::ResolvedRegistry,
+    selection: &crate::interface::EvidenceSelection,
+    node: crate::interface::EvidenceNodeId,
+    method: MethodId,
+    require_recorded: bool,
+    work: &mut TypeWorkBudget,
+) -> Result<BinderId, crate::core::capture::Failure> {
+    use crate::core::capture::Failure;
+    use crate::interface::{EvidenceNode, RequirementOwner};
+    use crate::resolved::ResolvedBuildFailure;
+
+    fn lowering_failure(failure: TypeError) -> Failure {
+        match failure {
+            TypeError::Internal(ElaborationFailure::TypeResourceExhausted
+                | ElaborationFailure::ConstraintResourceExhausted) => Failure::Resource,
+            _ => Failure::Invalid,
+        }
+    }
+    fn resolved_failure(failure: ResolvedBuildFailure) -> Failure {
+        match failure {
+            ResolvedBuildFailure::TypeResource => Failure::Resource,
+            _ => Failure::Invalid,
+        }
+    }
+    fn same_arguments(
+        left: &[KindedArgument], right: &[KindedArgument], work: &mut TypeWorkBudget,
+    ) -> Result<bool, Failure> {
+        work.charge(left.len()).map_err(|()| Failure::Resource)?;
+        if left.len() != right.len() { return Ok(false); }
+        for (left, right) in left.iter().zip(right) {
+            if !crate::types::same_kinded_argument_with_budget(left, right, work)
+                .map_err(|()| Failure::Resource)? { return Ok(false); }
+        }
+        Ok(true)
+    }
+    fn same_application(
+        left: &InterfaceApplication, right: &InterfaceApplication, work: &mut TypeWorkBudget,
+    ) -> Result<bool, Failure> {
+        Ok(left.interface() == right.interface()
+            && same_arguments(left.arguments(), right.arguments(), work)?)
+    }
+    fn apply_arguments(
+        arguments: &[KindedArgument], replacements: &OwnerReplacementBuffer,
+        work: &mut TypeWorkBudget,
+    ) -> Result<ProviderFamilyArguments, Failure> {
+        work.charge(arguments.len()).map_err(|()| Failure::Resource)?;
+        let mut result = ProviderFamilyArguments(Vec::new());
+        result.0.try_reserve_exact(arguments.len()).map_err(|_| Failure::Resource)?;
+        for argument in arguments {
+            result.0.push(crate::types::substitute_kinded_argument_with(argument,
+                replacements.types.as_map(), &replacements.rows, |units| work.charge(units))
+                .map_err(|()| Failure::Resource)?.map_err(|_| Failure::Invalid)?);
+        }
+        Ok(result)
+    }
+    fn apply_application(
+        application: &InterfaceApplication, replacements: &OwnerReplacementBuffer,
+        work: &mut TypeWorkBudget,
+    ) -> Result<InterfaceApplication, Failure> {
+        let mut arguments = apply_arguments(application.arguments(), replacements, work)?;
+        Ok(InterfaceApplication::new_kinded(application.interface(),
+            std::mem::take(&mut arguments.0).into_boxed_slice()))
+    }
+    fn apply_effect(
+        effect: &EffectInstance, replacements: &OwnerReplacementBuffer,
+        work: &mut TypeWorkBudget,
+    ) -> Result<EffectInstance, Failure> {
+        let mut arguments = apply_arguments(effect.arguments(), replacements, work)?;
+        Ok(EffectInstance::new_kinded(effect.effect(),
+            std::mem::take(&mut arguments.0).into_boxed_slice()))
+    }
+    fn same_effect(
+        left: &EffectInstance, right: &EffectInstance, work: &mut TypeWorkBudget,
+    ) -> Result<bool, Failure> {
+        Ok(left.effect() == right.effect()
+            && same_arguments(left.arguments(), right.arguments(), work)?)
+    }
+
+    let Some(EvidenceNode::ProviderFamily {
+        source, definition, parameter, application, prerequisites, methods,
+    }) = selection.node(node) else { return Err(Failure::Invalid); };
+    work.charge(scopes.len()).map_err(|()| Failure::Resource)?;
+    let mut candidates = scopes.iter().filter(|scope| scope.source == source);
+    let scope = candidates.next().ok_or(Failure::Invalid)?;
+    if candidates.next().is_some() || scope.primary_source == source
+        || scope.primary_source.module() != source.module()
+        || scope.identity.definition != definition || scope.identity.parameter != parameter
+        || scope.original.id != definition || scope.arguments.0.len() != scope.original.parameters.len() {
+        return Err(Failure::Invalid);
+    }
+    work.charge(registry.provider_contract_count()).map_err(|()| Failure::Resource)?;
+    let certificate = registry.provider_contracts()
+        .find(|(module, _)| **module == definition.module())
+        .map(|(_, certificate)| certificate);
+    let authority = &scope.authority;
+    if !Arc::ptr_eq(authority.fact(), &scope.original) || authority.identity() != scope.identity {
+        return Err(Failure::Invalid);
+    }
+    let identity = authority.identity();
+    let header = authority.application();
+    let requirements = authority.requirements();
+    let associations = authority.methods();
+    let handler = authority.handler_certificate();
+    if let Some(certificate) = certificate {
+        if certificate.module() != definition.module()
+            || scope.certificate.as_ref().is_some_and(|original| !Arc::ptr_eq(original, certificate)) {
+            return Err(Failure::Invalid);
+        }
+        work.charge(certificate.resource_count().checked_mul(7).ok_or(Failure::Resource)?)
+            .map_err(|()| Failure::Resource)?;
+        if !certificate.resource_contracts().any(|(_, _, original)| Arc::ptr_eq(original, &scope.original)) {
+            return Err(Failure::Invalid);
+        }
+        if !Arc::ptr_eq(certificate.family_original_authority(definition).ok_or(Failure::Invalid)?, authority) {
+            return Err(Failure::Invalid);
+        }
+        // This exact original carrier has a published registry certificate.
+        // Authenticate its filled slots in the committed phase, including
+        // imported and final-synthesis queries; do not probe the pending phase.
+        authority.authenticate(true, work)
+            .map_err(|failure| resolved_failure(contract_validation_failure(failure)))?;
+        certificate.authenticate(true, work).map_err(resolved_failure)?;
+        certificate.authenticate_linked_native_facts(registry, work).map_err(resolved_failure)?;
+        if certificate.family_identity(definition) != Some(identity)
+            || !same_application(certificate.family_provider_application(definition).ok_or(Failure::Invalid)?, header, work)? {
+            return Err(Failure::Invalid);
+        }
+        let published_requirements = certificate.family_requirements(definition).ok_or(Failure::Invalid)?;
+        let published_methods = certificate.family_methods(definition).ok_or(Failure::Invalid)?;
+        work.charge(requirements.len().checked_add(associations.len()).ok_or(Failure::Resource)?)
+            .map_err(|()| Failure::Resource)?;
+        if published_requirements.len() != requirements.len() || published_methods != associations {
+            return Err(Failure::Invalid);
+        }
+        for (published, original) in published_requirements.iter().zip(requirements) {
+            if published.id != original.id || !same_application(published.application(), original.application(), work)? {
+                return Err(Failure::Invalid);
+            }
+        }
+        if !std::ptr::eq(certificate.family_handler_certificate(definition).ok_or(Failure::Invalid)?.canonical_registry(),
+            handler.canonical_registry()) { return Err(Failure::Invalid); }
+    } else if scope.certificate.is_some() {
+        return Err(Failure::Invalid);
+    } else {
+        // Only a genuine local original without a published source contract
+        // uses pending-slot authentication.
+        authority.authenticate(false, work)
+            .map_err(|failure| resolved_failure(contract_validation_failure(failure)))?;
+    }
+    // Private local originals use the same genuine handler authority before
+    // group publication. Their registered native facts must still be original.
+    for original in handler.canonical_registry().foreign_modules() {
+        work.charge(1).map_err(|()| Failure::Resource)?;
+        let mut found = false;
+        for linked in registry.foreign_modules() {
+            work.charge(1).map_err(|()| Failure::Resource)?;
+            if linked.admission.module_id == original.admission.module_id {
+                if !Arc::ptr_eq(linked, original) { return Err(Failure::Invalid); }
+                found = true;
+            }
+        }
+        if !found { return Err(Failure::Invalid); }
+    }
+    let original = scope.original.family_template.as_ref().ok_or(Failure::Invalid)?;
+    if identity != scope.identity || original.parameter.id != parameter
+        || original.parameter.kind != Kind::Type || requirements.len() != 1
+        || prerequisites.len() != requirements.len() || scope.requirements.len() != requirements.len() {
+        return Err(Failure::Invalid);
+    }
+
+    let mut replacements = OwnerReplacementBuffer::new();
+    work.charge(scope.arguments.0.len()).map_err(|()| Failure::Resource)?;
+    for (formal, actual) in scope.original.parameters.iter().zip(&scope.arguments.0) {
+        if matches!(formal.kind, Kind::EffectRow) != matches!(actual, KindedArgument::RowArg(_)) {
+            return Err(Failure::Invalid);
+        }
+        replacements.insert_cloned(formal.id, actual, work).map_err(lowering_failure)?;
+    }
+    if !same_application(&apply_application(header, &replacements, work)?, &scope.application, work)?
+        || !same_effect(&apply_effect(&original.provided.instance, &replacements, work)?, &scope.provided, work)?
+        || !same_effect(&apply_effect(&original.interpreted.instance, &replacements, work)?, &scope.native, work)? {
+        return Err(Failure::Invalid);
+    }
+    work.charge(requirements.len()).map_err(|()| Failure::Resource)?;
+    for (ordinal, (canonical, retained)) in requirements.iter().zip(&scope.requirements).enumerate() {
+        if canonical.id.owner() != RequirementOwner::ResourceFamily(definition)
+            || usize::try_from(canonical.id.declaration()).ok() != Some(ordinal)
+            || canonical.id != retained.id
+            || !same_application(&apply_application(canonical.application(), &replacements, work)?,
+                retained.application(), work)? { return Err(Failure::Invalid); }
+    }
+
+    work.charge(scope.members.len()).map_err(|()| Failure::Resource)?;
+    let mut selected = None;
+    for member in &scope.members {
+        if same_application(member.application(), application, work)? {
+            if selected.replace(member.as_ref()).is_some() { return Err(Failure::Invalid); }
+        }
+    }
+    let member = selected.ok_or(Failure::Invalid)?;
+    if member.source != source || member.identity != identity
+        || !matches!(&*member.payload, Type::Unit | Type::Bool | Type::Int)
+        || member.requirements.len() != prerequisites.len() { return Err(Failure::Invalid); }
+    work.charge(member.selections.len()).map_err(|()| Failure::Resource)?;
+    let mut recorded = false;
+    for (retained, retained_node) in &member.selections {
+        if *retained_node == node && retained.root() == selection.root() && retained.shares_plan_with(selection) {
+            if recorded { return Err(Failure::Invalid); }
+            recorded = true;
+        }
+    }
+    if require_recorded && !recorded { return Err(Failure::Invalid); }
+    replacements.insert_borrowed(parameter, super::BorrowedOwnerArgument::TypeArg(&member.payload), work)
+        .map_err(lowering_failure)?;
+    if !same_application(&apply_application(header, &replacements, work)?, application, work)? {
+        return Err(Failure::Invalid);
+    }
+    let provided = apply_effect(&original.provided.instance, &replacements, work)?;
+    let native = apply_effect(&original.interpreted.instance, &replacements, work)?;
+    if !same_effect(&provided, &member.provided, work)? || !same_effect(&native, &member.native, work)? {
+        return Err(Failure::Invalid);
+    }
+
+    // Keep the whole selection owner: a family node may be a prerequisite of
+    // an enclosing Implementation rather than the plan's root.
+    work.charge(prerequisites.len()).map_err(|()| Failure::Resource)?;
+    let (original_selection, original_node) = member.selections.first().ok_or(Failure::Invalid)?;
+    let Some(EvidenceNode::ProviderFamily { prerequisites: original_prerequisites, .. }) = original_selection.node(*original_node)
+        else { return Err(Failure::Invalid); };
+    if original_prerequisites.len() != member.requirements.len() { return Err(Failure::Invalid); }
+    for ((((retained, retained_node), actual), canonical), original_prerequisite) in member.requirements.iter()
+        .zip(prerequisites).zip(requirements).zip(original_prerequisites) {
+        if retained_node != original_prerequisite || retained_node.index() >= original_node.index()
+            || actual.index() >= node.index() || retained.root() != original_selection.root()
+            || !retained.shares_plan_with(original_selection) { return Err(Failure::Invalid); }
+        let required = apply_application(canonical.application(), &replacements, work)?;
+        let Some(EvidenceNode::NativeLayout { producer }) = selection.node(*actual) else {
+            return Err(Failure::Invalid);
+        };
+        let Some(EvidenceNode::NativeLayout { producer: original_producer }) = retained.node(*retained_node) else {
+            return Err(Failure::Invalid);
+        };
+        if producer != original_producer { return Err(Failure::Invalid); }
+        let [KindedArgument::TypeArg(payload)] = required.arguments() else { return Err(Failure::Invalid); };
+        let dictionary = registry.foreign_layout_dictionary(producer, work).map_err(resolved_failure)?;
+        let (encoding, size, alignment) = match payload {
+            Type::Unit => (crate::foreign::ForeignScalarEncoding::Unit, 0, 1),
+            Type::Bool => (crate::foreign::ForeignScalarEncoding::Bool, 1, 1),
+            Type::Int => (crate::foreign::ForeignScalarEncoding::Signed64, 8, 8),
+            _ => return Err(Failure::Invalid),
+        };
+        if producer.interface() != required.interface() || producer.method().interface() != required.interface()
+            || producer.method().declaration() != 0 || dictionary.producer() != producer
+            || dictionary.payload_type() != payload || producer.payload_type() != *payload
+            || dictionary.encoding() != encoding || dictionary.size() != size
+            || dictionary.natural_alignment() != alignment { return Err(Failure::Invalid); }
+    }
+
+    work.charge(associations.len().checked_mul(3).ok_or(Failure::Resource)?)
+        .map_err(|()| Failure::Resource)?;
+    if methods.len() != associations.len() || scope.methods.as_ref() != associations
+        || member.forwardings.len() != associations.len()
+        || !methods.iter().copied().eq(associations.iter().map(|(method, _)| *method)) {
+        return Err(Failure::Invalid);
+    }
+    let canonical = handler.canonical_registry();
+    let declaration = canonical.effect(provided.effect()).ok_or(Failure::Invalid)?;
+    canonical.authenticate_owner_signature(crate::resolved::OwnerId::Effect(declaration.id),
+        None, &declaration.parameters, work).map_err(resolved_failure)?;
+    if declaration.parameters.len() != provided.arguments().len() { return Err(Failure::Invalid); }
+    let mut operation_replacements = OwnerReplacementBuffer::new();
+    work.charge(declaration.parameters.len()).map_err(|()| Failure::Resource)?;
+    for (formal, actual) in declaration.parameters.iter().zip(provided.arguments()) {
+        operation_replacements.insert_cloned(formal.id, actual, work).map_err(lowering_failure)?;
+    }
+    let mut binders = std::collections::HashSet::new();
+    binders.try_reserve(associations.len()).map_err(|_| Failure::Resource)?;
+    let mut selected_binder = None;
+    for ((canonical_method, canonical_operation), (actual_method, actual_operation, binder))
+        in associations.iter().zip(&member.forwardings) {
+        if canonical_method.interface() != application.interface() || canonical_operation.owner() != declaration.id
+            || actual_method != canonical_method || actual_operation != canonical_operation
+            || !matches!(binder.id(), BinderId::Generated(_)) || !binders.insert(binder.id())
+            || binder.origin() != &scope.origin { return Err(Failure::Invalid); }
+        let operation = declaration.operations.get(usize::try_from(canonical_operation.operation()).map_err(|_| Failure::Invalid)?)
+            .filter(|operation| operation.id == *canonical_operation).ok_or(Failure::Invalid)?;
+        let signature = IterativeTypeOwner::new(operation_replacements.substitute(&operation.annotation.ty, work)
+            .map_err(lowering_failure)?);
+        let function = signature.function_view().ok_or(Failure::Invalid)?;
+        let domain = IterativeTypeOwner::new(crate::types::clone_type_with_budget(function.domain(), work)
+            .map_err(|()| Failure::Resource)?);
+        let result = IterativeTypeOwner::new(crate::types::clone_type_with_budget(function.value(), work)
+            .map_err(|()| Failure::Resource)?);
+        let effect = crate::types::clone_effect_instance_with_budget(&provided, work).map_err(|()| Failure::Resource)?;
+        work.charge(3).map_err(|()| Failure::Resource)?;
+        let expected = IterativeTypeOwner::new(Type::function_computation(domain.into_inner(),
+            ComputationType::new(result.into_inner(), EffectRow::singleton(effect))));
+        if !crate::types::same_type_with_budget(&expected, binder.ty(), work).map_err(|()| Failure::Resource)? {
+            return Err(Failure::Invalid);
+        }
+        if *canonical_method == method { selected_binder = Some(binder.id()); }
+    }
+    selected_binder.ok_or(Failure::Invalid)
 }
 
 pub(super) struct ProviderComputationOwner(pub(super) ComputationType);
@@ -304,11 +634,15 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let mut members = Vec::new();
         members.try_reserve_exact(originals.len()).map_err(|_| type_resource())?;
         for original in originals {
-            self.type_work.charge(original.requirements.len().checked_add(original.forwardings.len()).ok_or_else(type_resource)?)
+            self.type_work.charge(original.requirements.len().checked_add(original.forwardings.len())
+                .and_then(|count| count.checked_add(original.selections.len())).ok_or_else(type_resource)?)
                 .map_err(|()| type_resource())?;
             let mut requirements = Vec::new();
             requirements.try_reserve_exact(original.requirements.len()).map_err(|_| type_resource())?;
             requirements.extend(original.requirements.iter().cloned());
+            let mut selections = Vec::new();
+            selections.try_reserve_exact(original.selections.len()).map_err(|_| type_resource())?;
+            selections.extend(original.selections.iter().cloned());
             let mut forwardings = Vec::new();
             forwardings.try_reserve_exact(original.forwardings.len()).map_err(|_| type_resource())?;
             for (method, operation, binder) in &original.forwardings {
@@ -320,6 +654,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 source: original.source, identity: original.identity,
                 application: original.application.clone_with_budget(&mut self.type_work).map_err(|()| type_resource())?,
                 requirements: requirements.into_boxed_slice(),
+                selections,
                 payload: IterativeTypeOwner::new(self.clone_type(&original.payload)?),
                 provided: crate::types::clone_effect_instance_with_budget(&original.provided, &mut self.type_work).map_err(|()| type_resource())?,
                 native: crate::types::clone_effect_instance_with_budget(&original.native, &mut self.type_work).map_err(|()| type_resource())?,
@@ -391,7 +726,16 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 resource.origin.primary_span(), &mut self.constraint_work, &mut self.type_work)
                 .map_err(|failure| selection_failure(failure, Some(resource.origin.primary_span())))?;
         }
+        let arguments = ProviderFamilyArguments(crate::types::clone_kinded_arguments_with_budget(
+            actuals.arguments().iter(), &mut self.type_work).map_err(|()| type_resource())?.into_vec());
+        self.type_work.charge(self.registry.provider_contract_count().checked_add(3).ok_or_else(type_resource)?)
+            .map_err(|()| type_resource())?;
+        let certificate = self.registry.provider_contracts()
+            .find(|(module, _)| **module == resource.definition.module())
+            .map(|(_, certificate)| Arc::clone(certificate));
         self.provider_family_demands.push(ProviderFamilyDemandScope { source: candidate, identity: family.identity,
+            primary_source: resource.provider, original: Arc::clone(source.fact), authority: Arc::clone(family.authority),
+            certificate, arguments,
             application, requirements: requirements.into_boxed_slice(), provided, native, methods: methods.into_boxed_slice(),
             members, frozen, origin: Origin::Source(resource.origin.primary_span()) });
         Ok(())
@@ -457,6 +801,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let Some(crate::interface::EvidenceNode::ProviderFamily { source, definition, parameter, application, prerequisites, methods }) = selection.node(node) else {
             return Err(invalid_state());
         };
+        self.type_work.charge(methods.len()).map_err(|()| type_resource())?;
         if !methods.contains(&method) { return Err(invalid_state()); }
         self.type_work.charge(self.provider_family_demands.len()).map_err(|()| type_resource())?;
         let index = self.provider_family_demands.iter().position(|scope| scope.source == source).ok_or_else(invalid_state)?;
@@ -464,13 +809,39 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         if scope.identity.definition != definition || scope.identity.parameter != parameter
             || prerequisites.len() != scope.requirements.len() { return Err(invalid_state()); }
         self.type_work.charge(scope.members.len()).map_err(|()| type_resource())?;
+        let mut cached = None;
         for (member, retained) in scope.members.iter().enumerate() {
             if crate::evidence::same_applications_with_constraint_budget(retained.application(), application, &mut self.constraint_work)
                 .map_err(|()| constraint_resource())? {
-                let (_, _, binder) = retained.forwardings.iter().find(|(id, _, _)| *id == method).ok_or_else(invalid_state)?;
-                let ty = crate::types::clone_type_with_budget(binder.ty(), &mut self.type_work).map_err(|()| type_resource())?;
-                return Ok((member, binder.id(), ty));
+                if cached.replace(member).is_some() { return Err(invalid_state()); }
             }
+        }
+        if let Some(member) = cached {
+            let frozen = scope.frozen;
+            let binder = authenticate_family_forwarding(&self.provider_family_demands, &self.registry,
+                selection, node, method, frozen, &mut self.type_work).map_err(|failure| match failure {
+                    crate::core::capture::Failure::Resource => type_resource(),
+                    _ => invalid_state(),
+                })?;
+            let retained = &self.provider_family_demands[index].members[member];
+            self.type_work.charge(retained.selections.len()).map_err(|()| type_resource())?;
+            let recorded = retained.selections.iter().any(|(original, original_node)| *original_node == node
+                && original.root() == selection.root() && original.shares_plan_with(selection));
+            let (_, _, forwarding) = retained.forwardings.iter().find(|(id, _, _)| *id == method).ok_or_else(invalid_state)?;
+            let ty = IterativeTypeOwner::new(crate::types::clone_type_with_budget(forwarding.ty(), &mut self.type_work)
+                .map_err(|()| type_resource())?);
+            if !recorded {
+                if frozen { return Err(invalid_state()); }
+                self.type_work.charge(1).map_err(|()| type_resource())?;
+                // Unfrozen members are private to this scope. The first Arc
+                // clones occur in freeze_provider_family_demands, which also
+                // closes the inventory before another materialization.
+                let retained = Arc::get_mut(&mut self.provider_family_demands[index].members[member])
+                    .ok_or_else(invalid_state)?;
+                retained.selections.try_reserve(1).map_err(|_| type_resource())?;
+                retained.selections.push((selection.clone(), node));
+            }
+            return Ok((member, binder, ty.into_inner()));
         }
         if scope.frozen { return Err(invalid_state()); }
         // Match every ordered argument. Only the original rigid payload is a
@@ -526,10 +897,21 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             forwardings.push((method, operation, binder));
         }
         let member = self.provider_family_demands[index].members.len();
-        self.type_work.charge(1).map_err(|()| type_resource())?;
+        self.type_work.charge(2).map_err(|()| type_resource())?;
+        let mut selections = Vec::new();
+        selections.try_reserve_exact(1).map_err(|_| type_resource())?;
+        selections.push((selection.clone(), node));
         self.provider_family_demands[index].members.try_reserve(1).map_err(|_| type_resource())?;
         self.provider_family_demands[index].members.push(Arc::new(PreparedProviderFamilyInstance { source, identity, application,
-            requirements: requirements.into_boxed_slice(), payload, provided, native, forwardings: forwardings.into_boxed_slice() }));
+            requirements: requirements.into_boxed_slice(), selections, payload, provided, native, forwardings: forwardings.into_boxed_slice() }));
+        if let Err(failure) = capture_family_forwarding(&self.provider_family_demands, &self.registry,
+            selection, node, method, &mut self.type_work) {
+            self.provider_family_demands[index].members.pop();
+            return Err(match failure {
+                crate::core::capture::Failure::Resource => type_resource(),
+                _ => invalid_state(),
+            });
+        }
         let (_, _, binder) = self.provider_family_demands[index].members[member].forwardings.iter().find(|(id, _, _)| *id == method).ok_or_else(invalid_state)?;
         Ok((member, binder.id(), crate::types::clone_type_with_budget(binder.ty(), &mut self.type_work).map_err(|()| type_resource())?))
     }
@@ -1405,16 +1787,21 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let mut family_admissions = Vec::new();
         family_admissions.try_reserve_exact(family_members.len()).map_err(|_| type_resource())?;
         for member in &family_members {
-            self.type_work.charge(member.requirements.len()).map_err(|()| type_resource())?;
+            self.type_work.charge(member.requirements.len().checked_add(member.selections.len()).ok_or_else(type_resource)?)
+                .map_err(|()| type_resource())?;
             let mut requirements = Vec::new();
             requirements.try_reserve_exact(member.requirements.len()).map_err(|_| type_resource())?;
             requirements.extend(member.requirements.iter().cloned());
+            let mut selections = Vec::new();
+            selections.try_reserve_exact(member.selections.len()).map_err(|_| type_resource())?;
+            selections.extend(member.selections.iter().cloned());
             family_admissions.push(crate::core::provider::ProviderFamilyAdmission {
                 identity: member.identity, lexical: member.source,
                 application: member.application.clone_with_budget(&mut self.type_work).map_err(|()| type_resource())?,
                 payload: self.clone_type(&member.payload)?,
                 native_effect: crate::types::clone_effect_instance_with_budget(&member.native, &mut self.type_work).map_err(|()| type_resource())?,
                 requirements: requirements.into_boxed_slice(),
+                selections: selections.into_boxed_slice(),
             });
         }
         let admission = ProviderScopeAdmission {

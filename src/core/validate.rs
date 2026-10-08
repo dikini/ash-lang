@@ -3737,6 +3737,14 @@ pub(super) trait ScopeFamily: CoreOperationFamily {
         _work: &mut TypeWorkBudget,
     ) -> Result<bool, ValidationError> { Ok(false) }
 
+    fn provider_family_dictionary_binder(
+        _program: &UnvalidatedCoreProgram<Self>,
+        _occurrence_node: NodeId,
+        _definition: crate::resolved::ResourceDefinitionId,
+        _position: usize,
+        _work: &mut TypeWorkBudget,
+    ) -> Result<Option<BinderId>, ValidationError> { Ok(None) }
+
     fn resume_capability(
         _kind: &Self::Kind,
     ) -> Option<(super::effect::HandlerId, crate::resolved::ResumeId)> {
@@ -3761,6 +3769,32 @@ pub(super) trait ScopeFamily: CoreOperationFamily {
 impl ScopeFamily for PureOperationFamily {}
 
 impl ScopeFamily for super::effect::EffectOperationFamily {
+    fn provider_family_dictionary_binder(
+        program: &UnvalidatedCoreProgram<Self>,
+        occurrence_node: NodeId,
+        definition: crate::resolved::ResourceDefinitionId,
+        position: usize,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Option<BinderId>, ValidationError> {
+        work.charge(program.nodes.len()).map_err(|()|
+            ValidationError::new(ValidationReason::Resource, Some(occurrence_node)))?;
+        let mut found = None;
+        for (index, node) in program.nodes.iter().enumerate() {
+            let Some(scope) = Self::provider_scope(&node.kind) else { continue; };
+            if scope.descriptor.definition().id != definition { continue; }
+            let id = node_id(program.arena, index)?;
+            let proof = scope.descriptor.specialization().ok_or_else(||
+                ValidationError::new(ValidationReason::ResourceEscape, Some(id)))?;
+            if let Some(binder) = proof.family_dictionary_binder(
+                program, id, scope, occurrence_node, definition, position, work,
+            )? {
+                if found.replace(binder).is_some() {
+                    return Err(ValidationError::new(ValidationReason::ApplicationType, Some(occurrence_node)));
+                }
+            }
+        }
+        Ok(found)
+    }
     fn resource_scope(kind: &Self::Kind) -> Option<&super::effect::ResourceScopeNode> {
         match kind {
             super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Resource(
@@ -3806,10 +3840,11 @@ impl ScopeFamily for super::effect::EffectOperationFamily {
                 .map_err(|()| ValidationError::new(ValidationReason::Resource, Some(id)))?
                 || family.requirements.len() != prerequisites.len()
             { return Ok(false); }
-            work.charge(prerequisites.len()).map_err(|()| ValidationError::new(ValidationReason::Resource, Some(id)))?;
-            for ((original, original_node), actual) in family.requirements.iter().zip(prerequisites) {
-                if original_node != actual || !original.shares_plan_with(selection) { return Ok(false); }
-            }
+            work.charge(family.selections.len()).map_err(|()| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+            if !family.selections.iter().any(|(original, original_node)|
+                *original_node == selection_node && original.shares_plan_with(selection)
+                    && original.root() == selection.root())
+            { return Ok(false); }
             let Some(attached) = scope.attached.get(member) else { return Ok(false); };
             if attached.lexical != source { return Ok(false); }
             work.charge(attached.forwardings.len()).map_err(|()| ValidationError::new(ValidationReason::Resource, Some(id)))?;
@@ -7345,15 +7380,25 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 ValidationError::new(ValidationReason::ApplicationType, Some(anchor.node))
             })?;
         if let Some(MethodEvidenceOwner::ResourceFamily(definition)) = occurrence.scope {
-            let entry = self.provider_handler_entry.ok_or_else(||
-                ValidationError::new(ValidationReason::ApplicationType, Some(anchor.node)))?;
-            if occurrence.scope_binder.is_some()
-                || entry.family_definition().is_none_or(|original| original.id != definition)
-            {
+            if occurrence.scope_binder.is_some() {
                 return Err(ValidationError::new(ValidationReason::ApplicationType, Some(anchor.node)));
             }
-            self.charge_type_work(1)?;
-            return entry.dictionary_parameters().get(position).map(TypedBinder::id).ok_or_else(||
+            if let Some(entry) = self.provider_handler_entry {
+                if entry.family_definition().is_none_or(|original| original.id != definition) {
+                    return Err(ValidationError::new(ValidationReason::ApplicationType, Some(anchor.node)));
+                }
+                self.charge_type_work(1)?;
+                return entry.dictionary_parameters().get(position).map(TypedBinder::id).ok_or_else(||
+                    ValidationError::new(ValidationReason::ApplicationType, Some(anchor.node)));
+            }
+            let mut work = TypeWorkBudget::with_limit(
+                CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+            );
+            let result = F::provider_family_dictionary_binder(
+                self.program, anchor.node, definition, position, &mut work,
+            );
+            self.charge_type_work(work.used())?;
+            return result?.ok_or_else(||
                 ValidationError::new(ValidationReason::ApplicationType, Some(anchor.node)));
         }
         let scope_binder = occurrence.scope_binder.ok_or_else(|| {

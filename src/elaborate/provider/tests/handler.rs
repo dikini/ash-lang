@@ -1043,6 +1043,8 @@ fn fragment(draft: HandlerSourceDraft) -> crate::core::provider::HandlerFragment
             ),
         ],
         clauses,
+        dictionary_parameters: Box::new([]),
+        family_requirements: Box::new([]),
         direct_demands: draft.direct_demands,
         pending_rows: draft.pending_rows,
     }

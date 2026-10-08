@@ -551,6 +551,68 @@ pub(crate) fn derive_provider_scope_protocol(
     })
 }
 
+/// A member's method vector does not authorize an arbitrary same-typed value.
+/// Reconstruct the generated ordinary forwarding graph against the original
+/// checked method-to-operation association. Whole-Core scope checking separately
+/// establishes that these bindings dominate their uses.
+fn authenticate_family_forwardings(
+    program: &crate::core::UnvalidatedEffectProgram,
+    definition: &Arc<ResourceTypeFact>,
+    attached: &ProviderAttachedHandler,
+    budget: &mut crate::types::TypeWorkBudget,
+) -> Result<(), crate::core::ValidationError> {
+    use crate::core::{PureComputation, PureExprKind, PureValue, effect::{EffectExprKind, EffectOperation}};
+    budget.charge(program.registry.provider_contract_count()).map_err(|()| resource())?;
+    let mut methods = None;
+    for (_, certificate) in program.registry.provider_contracts() {
+        budget.charge(certificate.resource_count()).map_err(|()| resource())?;
+        if certificate.resource_contracts().any(|(_, _, fact)| Arc::ptr_eq(fact, definition)) {
+            if methods.replace(certificate.family_methods(definition.id).ok_or_else(invalid)?).is_some() {
+                return Err(invalid());
+            }
+        }
+    }
+    let methods = methods.ok_or_else(invalid)?;
+    if methods.len() != attached.forwardings.len() { return Err(invalid()); }
+    for forwarding in &attached.forwardings {
+        budget.charge(methods.len().checked_add(program.nodes.len()).ok_or_else(resource)?)
+            .map_err(|()| resource())?;
+        let mut matching = methods.iter().filter(|(method, _)| *method == forwarding.method);
+        let (_, operation) = matching.next().ok_or_else(invalid)?;
+        if matching.next().is_some() || operation.owner() != attached.handler.effect().effect() {
+            return Err(invalid());
+        }
+        let mut binding = None;
+        for stored in &program.nodes {
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(candidate))) = &stored.kind else { continue; };
+            if candidate.binder().id() == forwarding.binder && binding.replace(candidate).is_some() {
+                return Err(invalid());
+            }
+        }
+        let binding = binding.ok_or_else(invalid)?;
+        let initializer = super::node(program, binding.initializer())?;
+        let EffectExprKind::Pure(PureExprKind::Value(PureValue::Function(function))) = &initializer.kind else { return Err(invalid()); };
+        let request_node = super::node(program, function.body())?;
+        let EffectExprKind::Operation(EffectOperation::Request(request)) = &request_node.kind else { return Err(invalid()); };
+        let operand = super::node(program, request.operand())?;
+        if request.operation() != *operation
+            || crate::types::compare_effect_instances_with_budget(request.effect(), attached.handler.effect(), budget)
+                .map_err(|()| resource())? != std::cmp::Ordering::Equal
+            || !matches!(&operand.kind, EffectExprKind::Pure(PureExprKind::Variable(variable))
+                if variable.binder() == function.parameter().id())
+            || !crate::types::same_type_with_budget(binding.binder().ty(), &initializer.ty, budget).map_err(|()| resource())?
+            || !crate::types::same_type_with_budget(function.parameter().ty(), &operand.ty, budget).map_err(|()| resource())?
+        { return Err(invalid()); }
+        let signature = initializer.ty.function_view().ok_or_else(invalid)?;
+        let effects = signature.effects().ok_or_else(invalid)?;
+        if !crate::types::same_type_with_budget(signature.domain(), function.parameter().ty(), budget).map_err(|()| resource())?
+            || !crate::types::same_type_with_budget(signature.value(), &request_node.ty, budget).map_err(|()| resource())?
+            || !crate::types::same_effect_rows_with_budget(effects, &request_node.effects, budget).map_err(|()| resource())?
+        { return Err(invalid()); }
+    }
+    Ok(())
+}
+
 impl ProviderScopeNode {
     /// Reconstructs the typed instance relation from the original definition.
     /// The copied-code certificate is authenticated independently afterwards.
@@ -800,6 +862,7 @@ impl ProviderScopeNode {
                     budget.charge(ordinal).map_err(|()| resource())?;
                     if attached.forwardings[..ordinal].iter().any(|other| other.binder == forwarding.binder) { return Err(invalid()); }
                 }
+                authenticate_family_forwardings(program, &admitted.definition, attached, budget)?;
             }
         }
         // A handle is a family instance, never the owned native state.
