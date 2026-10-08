@@ -207,5 +207,35 @@
     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
     "cc": "cc (Ubuntu 15.2.0-16ubuntu1) 15.2.0",
     "observation": "Read-only ctypes metadata plus native adapter suite; no header/runtime source identity equivalence inferred."
+  },
+  "sqlite_calibrated_host_delivery": {
+    "date": "2026-10-08",
+    "sqlite_shared_import": "817f3828ab8c738cd6233b9f4386d9df4c5083a6",
+    "integration_shared_commit": "cce01bebe3a3ff112c264e72d3343c9a6743917b",
+    "cargo_build_jobs": 1,
+    "rustc_wrapper": "",
+    "diagnostic_allowance": false,
+    "host_programs_passed": [
+      "text-entry.ash",
+      "copying-entry.ash",
+      "session-entry.ash",
+      "control-resume.ash",
+      "control-discard.ash"
+    ],
+    "original_public_tests": {
+      "passed": 17,
+      "scope": "Common final evidence reused against matched executable source inputs; original assertions unchanged"
+    },
+    "supplementary_forwarding_passed": true,
+    "phase_measurements": {
+      "completed": 15,
+      "accepted_deficits": 0,
+      "source_nominal": 1245184,
+      "final_elaboration_nominal": 393216,
+      "independent_core_nominal": 1638400
+    },
+    "evidence": "sqlite-copying-delivery-2026-10-08/README.md",
+    "native_inputs": "Same pinned runtime library and vendored header recorded above; no global environment change",
+    "full_workspace_gate": "Pending combined integrated verification"
   }
 }

@@ -21,34 +21,27 @@ copies a Unicode TEXT/BLOB row without reacquisition. `control-discard.ash`
 discards that owned continuation: source cleanup queries the outer connection
 before statement finalization and connection close. Both control entries pass
 the public driver and actual host after the verified shared repair import.
-The recorded full seventeen-case public checkpoint passes fourteen cases,
-including the original reset/clear program, and retains three compiler work
-failures: copying, its NUL-input alternative and persistence. Fresh runs of the
-four original tests at the value-context extension import `618842d` confirm that
-resume passes and the same three programs still exhaust Type work at normal limits. These
-four runs do not repeat the full suite. Later verified shared imports through
-`b0fa2a5` do not rerun those programs; they add no new SQLite acceptance claim.
-The recorded text, resume and discard host runs return their required values,
-authenticated finalize/close reports
-and zero retained owners. The three larger hosts stop before any native
-observation.
-The manifest and control fixtures are committed in the SQLite worktree; the
-complete SQLite delivery remains pending those larger programs.
-The [current execution record](../../execution.md#current-sqlite-checkpoint)
-records the verified import, passing assertions and remaining requirements.
+All five packaged entries now pass through the actual host with their required
+source results, native lifecycle and copy observations, and zero retained owners.
+The original seventeen public copying/session/control cases pass in Common's
+matched source evidence; SQLite reuses that evidence and freshly passes the
+supplementary forwarding regression. The
+[delivery record](../../sqlite-copying-delivery-2026-10-08/README.md) distinguishes
+these checks and records the exact source comparison. Final integrated
+whole-workspace verification remains pending.
 
-Earlier receipts 136 and 150 record fourteen passes and the same three failures
-on their own source snapshots. Receipt 154 traces those earlier compiler inputs;
-its internal boundaries are historical evidence, not a fresh trace of the
-imported repair. The [earlier compiler evidence](../../execution.md#explicit-callable-metadata-presence)
-retains that account.
+The public driver uses calibrated, separate source, final-elaborator and Core
+budgets. These larger allowances admit the programs; they do not establish a
+compiler-cost reduction. The host prints actual charged units, nominal and hard
+budgets, completion flags, assessments and optimization targets. An absent
+measurement is unobserved. All fifteen measured phases in the five-entry run
+complete within their nominal budgets, without an accepted deficit.
 
 The [host example](../../../../../foreign-adapter/examples/sqlite_session.rs)
 registers the authenticated provider and SQLite manifests and executable binding.
 It prints source values and types, native observations, copy sizes, and retained
 owner counts. The commands below are reproduction inputs, not verification
-claims. Required larger programs currently exhaust the compiler work budget
-before native execution. The [measurement account](../../execution.md#sqlite-compiler-work-measurement-receipt-109)
+claims. The [measurement account](../../execution.md#sqlite-compiler-work-measurement-receipt-109)
 distinguishes the Rust harness, compiled Ash inputs and charged analysis work.
 
 From the repository root, build with Cargo in the workspace to select its
@@ -72,7 +65,7 @@ pinned Rust toolchain. Then run the binary against a private copy of the package
 ```
 
 The recipe runs every entry and returns a failing status if any entry fails.
-The larger copying and session entries currently make that aggregate status fail.
+The recorded five-entry run satisfies every required outcome below.
 
 The session database belongs to the printed temporary directory. Use a fresh directory
 for another session run because the entry creates its table. Keep the directory
@@ -104,11 +97,7 @@ The public tests compare the required source results and native observations:
 CARGO_BUILD_JOBS=1 cargo test --locked -p ash --test provider_sqlite_copying --test provider_sqlite_sessions --test provider_sqlite_control
 ```
 
-Run these checks in the SQLite worktree in the agreed Cargo window. Shared
-support is verified and imported, and the String/TEXT manifest, native adapter
-and source fixtures are paired. The latest checks still report fourteen passes
-and three compiler work failures; the full copying, bound-NUL and persistence
-programs must pass before SQLite delivery integrates. Profile 109 and receipt
-154 describe earlier compiler inputs. Keep the remaining failures in the
-execution record until the complete programs pass. The commands and required
-outcomes above do not establish a completed SQLite delivery.
+Run these checks in the SQLite worktree in the agreed Cargo window. Keep the
+original tests and complete native assertions. The selected API remains a
+DN-0036 experiment; the [current execution record](../../execution.md#current-sqlite-checkpoint)
+records the preserving imports, evidence reuse and pending final integration.

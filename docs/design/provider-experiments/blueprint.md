@@ -1,12 +1,14 @@
 # SQLite copying provider authoring blueprint
 
-This is a draft handoff under [DN-0036](../DN-0036-foreign-library-and-memory-provider-experiments.md).
+This is an experimental handoff under [DN-0036](../DN-0036-foreign-library-and-memory-provider-experiments.md).
 It describes the selected copying API for the SQLite workstream, including
 TEXT operations. It defines no current Ash semantics or production
-foreign ABI. The copying and file-session programs remain under verification;
-their final execution, observations, and integration checks remain pending.
-The short Unicode TEXT entry passes the public driver and host example locally;
-it supplements the required larger programs and is not a delivered API checkpoint.
+foreign ABI. All five packaged source programs now pass through the actual host,
+including copying, file-session persistence, resume and discard. The
+[delivery evidence](sqlite-copying-delivery-2026-10-08/README.md) records their
+complete values and native observations, matched original test evidence and
+remaining integrated verification. Calibrated public-driver admission enables
+these results; it does not demonstrate reduced compiler work.
 Use [execution](execution.md) for recorded verification, not this blueprint as a
 completion report. The selected candidate account is in
 [semantics](semantics.md#selected-copying-values-and-literals-sqlite-workstream);
@@ -34,19 +36,10 @@ Recorded normal-limit public-driver and host runs verify both programs after
 the shared control import. The
 [current SQLite checkpoint](execution.md#current-sqlite-checkpoint) identifies
 the checked commits, fresh program runs and remaining delivery requirements.
-The preserved code checkpoint is `b0fa2a5`. Its later shared native-preparation
-and architecture-test imports do not rerun the original four SQLite programs;
-their last recorded execution is at the value-context extension import `618842d`.
-
-Receipts 136 and 150 record earlier fourteen-operation candidates with fourteen
-passes and three typing failures. Receipt 154 traces those earlier inputs:
-copying exhausts during value propagation and persistence during callable type
-admission. These are historical boundaries, not fresh traces of the later
-committed shared repairs. The
-[earlier compiler evidence](execution.md#explicit-callable-metadata-presence)
-retains their measurements. The shared repairs are committed and integrated;
-the complete SQLite delivery still requires normal-limit acceptance of copying,
-its NUL-input alternative and persistence.
+SQLite imports the corrected calibrated Common checkpoint through unsigned
+merge `817f3828`. Historical compiler exhaustion receipts retain their original
+inputs and allowances; the current delivery record supersedes their pending
+program status without rewriting those measurements.
 
 The host authors two manifests with distinct registration identities:
 `provider_manifest` for `@foreign.provider` and `sqlite_manifest` for
@@ -67,8 +60,8 @@ CARGO_BUILD_JOBS=1 cargo run --locked -p ash-foreign-adapter --example sqlite_se
 
 The short
 `tests/fixtures/provider-experiments/sqlite-copying/text-entry.ash` passes this
-host locally. The larger `copying-entry.ash` still awaits the required common
-compiler-cost repair and combined verification. The example prints the source value and type, native
+host locally. The larger copying and file-session examples also pass. The
+example prints the source value and type, measured compiler phase work, native
 status-call/data-query events, copied input/output byte sizes, and the retained
 owner count. The runtime count reports quarantined owners; it alone does not
 prove that source finishers ran. `FinishDispatched` records admitted binding
@@ -77,11 +70,11 @@ calls and completion reports establish their respective outcomes. The host
 supplies no SQL or session shortcut. The public session fixture
 contains `__SQLITE_FILE__`; its host test substitutes an owned absolute path.
 The packaged session example uses `"session.sqlite3"` and the package README
-runs it from an owned temporary directory. The larger copying and
-file-session examples remain pending while common resolves the measured compiler
-work refusal. The [measurement account](execution.md#sqlite-compiler-work-measurement-receipt-109)
-records earlier compiled inputs and exact refused charges. Use the current
-SQLite checkpoint above for the latest verified inputs and outcomes.
+runs it from an owned temporary directory. The current [delivery evidence](sqlite-copying-delivery-2026-10-08/README.md)
+records these actual programs. Each phase report includes charged units, nominal
+and hard budgets, completion, assessment and optimization target. Missing
+measurements are unobserved; failure retains its original error. Final combined
+integration verification remains pending.
 
 Imports are passive. Importing the source SQLite module, `@foreign.sqlite`, or
 `@builtin.bytes`/`@builtin.string` does not open a database or initialize SQLite.
@@ -242,16 +235,16 @@ An observation does not prove an arbitrary foreign library's contract. A Rust
 borrow-checker result does not prove Ash typing. The
 [generic row helper](../../../tests/fixtures/provider-experiments/sqlite-copying/rows.ash)
 uses exact statement/provider parameters and a caller-supplied row decoder;
-its typed rows and provider constraints are authored explicitly. The remaining
-compiler work refusal is a common compiler requirement; the ordinary
-helper-module partition comparison also refuses at the unchanged limit before
-native execution. It does not supply a cost repair.
+its typed rows and provider constraints are authored explicitly. The full
+collector and persistence program now executes under calibrated public-driver
+admission. Earlier helper partition comparisons retain their measured costs;
+this successful admission is not an algorithmic cost repair.
 
 ## Verification and extension handoff
 
-Run the following from the worktree root after the selected API and fixtures
-have converged. These are reproduction commands, not claims that this draft has
-passed them:
+Run the following from the worktree root in the coordinated build window.
+These are reproduction commands; the current delivery evidence distinguishes
+fresh, reused and still-pending checks:
 
 ```sh
 CARGO_BUILD_JOBS=1 cargo test --locked -p ash --test bytes_strings --test packed_core --test string_literals
@@ -269,8 +262,8 @@ copying, null and empty values, invalid native UTF-8, range/protocol checks,
 consuming finalize, and refused close. Shared-value tests cover source literals,
 passive builtin imports, ordinary callable application, independent malformed
 Core rejection, and transform revalidation. Record actual commands, revision,
-inputs, and outcomes in the experiment evidence before changing this draft's
-pending status.
+inputs and outcomes in the experiment evidence. The final integrated
+whole-workspace gate remains pending.
 
 To extend the copying API, first add the operation's upstream contract and
 positive/negative comparison cases. Update the manifest, source effect and

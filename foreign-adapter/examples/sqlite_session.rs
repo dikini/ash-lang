@@ -1,6 +1,7 @@
 //! Registers the copying SQLite experiment and runs an ordinary Ash entry module.
 
 use ash::{
+    compiler_work::{CompilationPhase, CompilationWork},
     driver::{RunConfiguration, run_path_with_foreign_runtime},
     foreign::{ForeignRegistrations, provider_manifest, runtime::ForeignRuntime, sqlite_manifest},
     module::{ForeignRegistrationId, ModuleRoots},
@@ -33,6 +34,9 @@ fn run(entry: PathBuf) -> Result<(), Box<dyn Error>> {
     if let Ok(result) = &result {
         println!("value: {}", result.value_display());
         println!("type: {}", result.type_display());
+        print_compilation_work(Some(result.compilation_work()));
+    } else if let Err(failure) = &result {
+        print_compilation_work(failure.compilation_work());
     }
     for event in observations.events() {
         println!("observation: {event:?}");
@@ -40,6 +44,32 @@ fn run(entry: PathBuf) -> Result<(), Box<dyn Error>> {
     println!("retained owners: {}", runtime.retained_owner_count());
     result?;
     Ok(())
+}
+
+fn print_compilation_work(work: Option<&CompilationWork>) {
+    let observed = work.copied().unwrap_or_default();
+    for (phase, cost) in [
+        (CompilationPhase::SourceChecking, observed.source_checking),
+        (
+            CompilationPhase::FinalElaboration,
+            observed.final_elaboration,
+        ),
+        (CompilationPhase::IndependentCore, observed.independent_core),
+    ] {
+        if let Some(cost) = cost {
+            println!(
+                "compiler work: {phase:?} used={} budget={} hard_limit={} completed={} assessment={:?} optimization_target={}",
+                cost.used,
+                phase.budget(),
+                phase.hard_limit(),
+                cost.completed,
+                cost.assessment(),
+                cost.optimization_target(),
+            );
+        } else {
+            println!("compiler work: {phase:?} unobserved");
+        }
+    }
 }
 
 fn main() -> ExitCode {

@@ -8,6 +8,62 @@
 
 ## Current SQLite checkpoint
 
+SQLite imports the corrected calibrated Common delivery through unsigned merge
+`817f3828ab8c738cd6233b9f4386d9df4c5083a6`, preserving Original
+`cce01bebe3a3ff112c264e72d3343c9a6743917b` and all SQLite work. The
+[delivery evidence](sqlite-copying-delivery-2026-10-08/README.md) pins the checked
+source and records fresh host, forwarding and lint results.
+
+All five packaged programs execute through the actual host with their full
+required source values, copied payloads, native counts and source completion
+reports. The file session creates its table, preserves reset bindings, clears
+and rebinds separately, collects three rows through ordinary helpers, closes,
+and reopens the actual database. Resume retains the original owners; discard
+runs its diagnostic cleanup before dependent finalization and close.
+No program or original assertion was reduced to obtain these results.
+
+| Packaged program | Source checking | Final elaboration | Independent Core |
+| --- | ---: | ---: | ---: |
+| Unicode TEXT | 163,782 | 60,618 | 91,011 |
+| Copying | 1,212,707 | 165,717 | 903,995 |
+| File session and reopen | 597,855 | 376,641 | 1,609,027 |
+| Captured resume | 203,215 | 103,738 | 289,063 |
+| Owned discard | 263,159 | 147,254 | 109,243 |
+
+Every measured phase completes within its calibrated nominal budget; none uses
+an accepted deficit. These are cumulative charged units, including reservations,
+not CPU time or peak memory. The
+[calibrated admission account](calibrated-admission-2026-10-08/README.md) records
+the larger public-driver phase budgets and finite 10% margins. This admission
+policy does not reduce the copying program's previously measured source work.
+Standalone/explicit budgets, depth limits and validation remain unchanged.
+
+Common's final seventeen original copying/session/control passes are reused
+against matched executable inputs. The source comparison retains the complete
+original test bodies; differences are opening documentation comments, a
+shared-harness unused-code annotation and a later test-only Clippy correction.
+SQLite appends one supplementary forwarding case, which passes freshly with
+its exact nested closed result, native integer read and source completion checks.
+It does not replace any original program. The host now prints phase measurements,
+completion flags, assessments and optimization targets. An actual typing-error
+probe retains its failure exit and partial source report; unobserved later phases
+are printed as unobserved rather than zero.
+
+The fresh connected batch passes host build, formatting, all five actual
+packaged programs, the exact forwarding test, adapter all-target Clippy and
+Clippy for all three public SQLite targets with warnings denied. Earlier
+sixty-case adapter execution evidence remains historical; it is not repeated
+for this reporting change. Independent static reviews find no actionable
+adapter/library or selected-contract issues. The String/TEXT contract is
+reconciled with the native manifest without promoting experimental semantics.
+
+Common retains shared compiler/Core/runtime ownership and serial integration
+coordination. The preserving SQLite merge into `codex/provider-experiments`
+and final combined `cargo xtask verify` remain pending. No full-workspace pass
+or normative language adoption is claimed by this source checkpoint.
+
+## Previous SQLite checkpoint before calibrated admission
+
 The preserved SQLite code checkpoint is unsigned merge
 `b0fa2a5ff46a7342ca2bba7bf1f513fcd1c32ca3`. After the value-context extension
 checkpoint below, SQLite imported three verified shared deliveries:

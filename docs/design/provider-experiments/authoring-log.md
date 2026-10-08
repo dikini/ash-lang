@@ -2946,3 +2946,31 @@ independent normal typing limits. Their measured completed-native observations
 do not constitute normal-limit acceptance. Fusion remains an unverified
 follow-on. Experimental DN-0036 evidence does not establish current Ash
 semantics, production architecture, or an intrinsic lower bound.
+
+
+## 2026-10-08: SQLite copying execution under calibrated admission
+
+The SQLite worktree imports corrected Common delivery `cce01be` through unsigned
+merge `817f3828`, preserving all independent adapter, library and example work.
+All five packaged programs now execute through the actual host: Unicode TEXT,
+full copying, transaction/reuse/reopen persistence, captured resume and owned
+discard. Complete source results, copy sizes and native completion observations
+match the existing assertions. The supplementary forwarding case passes freshly;
+Common's original seventeen passes transfer under matched executable input pins.
+
+The host prints charged source, final-elaborator and Core work, nominal/hard
+budgets, completion and assessment on success and partial failure. Missing
+measurements are unobserved. All fifteen measured phases fit nominal calibrated
+budgets without accepted deficits. Copying retains 1,212,707 source units: the
+admission change does not establish reduced compiler work. Native ownership and
+independent validation are unchanged.
+
+The selected String/TEXT contract is reconciled with exact manifest identities,
+appended coordinates, fourteen native operations and copying outcomes. NOMEM
+retains its native failure code; host work/storage refusal remains terminal.
+Independent static reviews find no actionable adapter/library, host or contract
+issues. [Delivery evidence](sqlite-copying-delivery-2026-10-08/README.md) records
+fresh build, programs, forwarding and strict affected lint returns, plus exact
+source pins and explicitly reused evidence. No full native suite or combined
+workspace gate is claimed from those focused checks. Preserving SQLite
+integration and final combined verification remain with the coordinator.

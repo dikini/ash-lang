@@ -1,3 +1,8 @@
+#![allow(
+    dead_code,
+    reason = "integration binaries use different subsets of this shared fixture harness"
+)]
+
 use ash::{
     driver::{RunConfiguration, run_path_with_foreign_runtime},
     foreign::{ForeignRegistrations, provider_manifest, runtime::ForeignRuntime, sqlite_manifest},
