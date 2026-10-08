@@ -1,0 +1,305 @@
+{
+  "scope": "Timing replay of a frozen29-module closure; not new integration evidence",
+  "date": "2026-10-03",
+  "evidence_sha256": "d48ade7bfc899ef3f7cb8253564175d8640acae7e841e09fcd22e35ae3b8c1c5",
+  "host_note": "Background alignment compilation varied. This is an observed comparison, not an isolated speedup estimate. All new jobs respected launch admission. Unmanaged processes may start later.",
+  "serial": {
+    "status": "complete",
+    "wall_seconds": 332.2465355279983,
+    "preparation_seconds": 3.089410942999166,
+    "total_seconds": 335.3406317810004,
+    "max_running": 1,
+    "other_compilers_at_start": 1,
+    "jobs": 1,
+    "memory_mb": 4096,
+    "headroom_mb": 4096,
+    "compiler_threads": 1,
+    "module_count": 29,
+    "largest_module_peak_rss_kib": 3758068,
+    "overlapping_per_module_peak_rss_sum_kib_upper_bound": 3758068,
+    "runner_sha256": "f12692ccb4f385775292b73ad4dc35df960537b9004f40cfb137d01d20a588c2",
+    "modules": {
+      "CoreCallableFiniteClauseTemplate": {
+        "wall_seconds": 3.1310932690012123,
+        "peak_rss_kib": 1336304
+      },
+      "CoreCallableFiniteHandlerDeclarations": {
+        "wall_seconds": 2.129307044999223,
+        "peak_rss_kib": 1339304
+      },
+      "CoreCallableFiniteHandlerSource": {
+        "wall_seconds": 0.9369353210004192,
+        "peak_rss_kib": 1313692
+      },
+      "FiniteHandlerSourceProbes": {
+        "wall_seconds": 1.5270242820006388,
+        "peak_rss_kib": 1335972
+      },
+      "CoreCallableFiniteHandlerAdmission": {
+        "wall_seconds": 2.1840125150010863,
+        "peak_rss_kib": 1364884
+      },
+      "FiniteHandlerAdmissionProbes": {
+        "wall_seconds": 2.375377484000637,
+        "peak_rss_kib": 1355776
+      },
+      "CoreCallableFiniteHandlerBodyRoutes": {
+        "wall_seconds": 7.44814576600038,
+        "peak_rss_kib": 1443748
+      },
+      "FiniteHandlerBodyRoutingProbes": {
+        "wall_seconds": 6.02716529799909,
+        "peak_rss_kib": 1395856
+      },
+      "CoreCallableFiniteHandlerEffectfulSuffix": {
+        "wall_seconds": 4.626360577000014,
+        "peak_rss_kib": 1411780
+      },
+      "FiniteHandlerEffectfulSuffixProbes": {
+        "wall_seconds": 4.344288364000022,
+        "peak_rss_kib": 1389316
+      },
+      "OriginalHandlerSeamProbes": {
+        "wall_seconds": 1.0127714939990256,
+        "peak_rss_kib": 1324792
+      },
+      "CoreCallableOriginalCallableCurrent": {
+        "wall_seconds": 39.48533544200109,
+        "peak_rss_kib": 2937416
+      },
+      "OriginalCurrentProviderProbes": {
+        "wall_seconds": 0.6484292180011835,
+        "peak_rss_kib": 1383000
+      },
+      "CoreCallableFiniteHandlerRegistryCoverage": {
+        "wall_seconds": 0.750604894999924,
+        "peak_rss_kib": 1303840
+      },
+      "CoreCallableFiniteHandlerRegistryTransport": {
+        "wall_seconds": 4.194008716998724,
+        "peak_rss_kib": 1445824
+      },
+      "OriginalHandlerBranchPrerequisiteProbes": {
+        "wall_seconds": 101.66672313600066,
+        "peak_rss_kib": 2939144
+      },
+      "CoreCallableOriginalHigherCurrent": {
+        "wall_seconds": 3.1790644749999046,
+        "peak_rss_kib": 1453696
+      },
+      "CoreCallableOriginalBetaCurrent": {
+        "wall_seconds": 2.0064826880006876,
+        "peak_rss_kib": 1450840
+      },
+      "OriginalBetaCurrentProviderProbes": {
+        "wall_seconds": 0.7101649720007117,
+        "peak_rss_kib": 1384492
+      },
+      "CoreCallableClauseActualSupport": {
+        "wall_seconds": 1.8266340750014933,
+        "peak_rss_kib": 1341416
+      },
+      "ClauseActualSupportProbes": {
+        "wall_seconds": 68.63358298200001,
+        "peak_rss_kib": 3758068
+      },
+      "CoreCallableRestoredBindContinuationOrigins": {
+        "wall_seconds": 5.4537212979994365,
+        "peak_rss_kib": 1432464
+      },
+      "CoreCallableRestoredBindContinuationConsumers": {
+        "wall_seconds": 1.2040839000001142,
+        "peak_rss_kib": 1341752
+      },
+      "RestoredBindContinuationInterfaces": {
+        "wall_seconds": 8.12519550199977,
+        "peak_rss_kib": 1436772
+      },
+      "CoreCallableOriginalSecondBetaCurrent": {
+        "wall_seconds": 2.5428250700006174,
+        "peak_rss_kib": 1478292
+      },
+      "CoreCallableOriginalReadCompletionCurrent": {
+        "wall_seconds": 21.21788553100123,
+        "peak_rss_kib": 3083296
+      },
+      "OriginalSecondBetaCompletionCurrentProbes": {
+        "wall_seconds": 1.157831147998877,
+        "peak_rss_kib": 1408452
+      },
+      "CoreCallableSelectedOperandDomainSupport": {
+        "wall_seconds": 1.3843196670004545,
+        "peak_rss_kib": 1341148
+      },
+      "CoreCallableSelectedDomainDeclarationTransfer": {
+        "wall_seconds": 28.54913850900084,
+        "peak_rss_kib": 1482616
+      }
+    }
+  },
+  "two_jobs": {
+    "status": "complete",
+    "wall_seconds": 220.0439163810006,
+    "preparation_seconds": 3.0263365940008953,
+    "total_seconds": 223.07419609700082,
+    "max_running": 2,
+    "other_compilers_at_start": 1,
+    "jobs": 2,
+    "memory_mb": 4096,
+    "headroom_mb": 4096,
+    "compiler_threads": 1,
+    "module_count": 29,
+    "largest_module_peak_rss_kib": 3747480,
+    "overlapping_per_module_peak_rss_sum_kib_upper_bound": 6803068,
+    "runner_sha256": "f12692ccb4f385775292b73ad4dc35df960537b9004f40cfb137d01d20a588c2",
+    "modules": {
+      "CoreCallableFiniteClauseTemplate": {
+        "wall_seconds": 2.9351077910014283,
+        "peak_rss_kib": 1336820
+      },
+      "CoreCallableFiniteHandlerDeclarations": {
+        "wall_seconds": 2.0821439669998654,
+        "peak_rss_kib": 1338568
+      },
+      "CoreCallableFiniteHandlerSource": {
+        "wall_seconds": 0.8148170069998741,
+        "peak_rss_kib": 1313960
+      },
+      "FiniteHandlerSourceProbes": {
+        "wall_seconds": 1.4478989159997582,
+        "peak_rss_kib": 1336152
+      },
+      "CoreCallableFiniteHandlerAdmission": {
+        "wall_seconds": 2.0742302799990284,
+        "peak_rss_kib": 1365052
+      },
+      "FiniteHandlerAdmissionProbes": {
+        "wall_seconds": 2.5636249569997744,
+        "peak_rss_kib": 1356460
+      },
+      "CoreCallableFiniteHandlerBodyRoutes": {
+        "wall_seconds": 8.116919084999608,
+        "peak_rss_kib": 1436180
+      },
+      "CoreCallableFiniteHandlerEffectfulSuffix": {
+        "wall_seconds": 4.747978174998934,
+        "peak_rss_kib": 1415936
+      },
+      "OriginalHandlerSeamProbes": {
+        "wall_seconds": 0.9790382030005276,
+        "peak_rss_kib": 1324528
+      },
+      "FiniteHandlerBodyRoutingProbes": {
+        "wall_seconds": 6.050717150999844,
+        "peak_rss_kib": 1396080
+      },
+      "FiniteHandlerEffectfulSuffixProbes": {
+        "wall_seconds": 4.552565052999853,
+        "peak_rss_kib": 1391380
+      },
+      "CoreCallableFiniteHandlerRegistryCoverage": {
+        "wall_seconds": 0.757909578998806,
+        "peak_rss_kib": 1303988
+      },
+      "CoreCallableFiniteHandlerRegistryTransport": {
+        "wall_seconds": 4.58485584600021,
+        "peak_rss_kib": 1444608
+      },
+      "CoreCallableOriginalCallableCurrent": {
+        "wall_seconds": 42.82364925899856,
+        "peak_rss_kib": 2935620
+      },
+      "OriginalCurrentProviderProbes": {
+        "wall_seconds": 0.6979379649983457,
+        "peak_rss_kib": 1383036
+      },
+      "CoreCallableOriginalHigherCurrent": {
+        "wall_seconds": 3.0409699310002907,
+        "peak_rss_kib": 1456760
+      },
+      "CoreCallableOriginalBetaCurrent": {
+        "wall_seconds": 1.9798726579992945,
+        "peak_rss_kib": 1452916
+      },
+      "OriginalBetaCurrentProviderProbes": {
+        "wall_seconds": 0.7007469390009646,
+        "peak_rss_kib": 1386436
+      },
+      "CoreCallableClauseActualSupport": {
+        "wall_seconds": 1.9571332609993988,
+        "peak_rss_kib": 1337884
+      },
+      "OriginalHandlerBranchPrerequisiteProbes": {
+        "wall_seconds": 107.22586150200004,
+        "peak_rss_kib": 2879788
+      },
+      "CoreCallableRestoredBindContinuationOrigins": {
+        "wall_seconds": 5.63265990400032,
+        "peak_rss_kib": 1433872
+      },
+      "CoreCallableRestoredBindContinuationConsumers": {
+        "wall_seconds": 1.2368912250003632,
+        "peak_rss_kib": 1342452
+      },
+      "RestoredBindContinuationInterfaces": {
+        "wall_seconds": 8.43929427600051,
+        "peak_rss_kib": 1436044
+      },
+      "CoreCallableOriginalSecondBetaCurrent": {
+        "wall_seconds": 2.599572981000165,
+        "peak_rss_kib": 1479768
+      },
+      "CoreCallableOriginalReadCompletionCurrent": {
+        "wall_seconds": 24.546103434000543,
+        "peak_rss_kib": 3055588
+      },
+      "OriginalSecondBetaCompletionCurrentProbes": {
+        "wall_seconds": 1.1124122239998542,
+        "peak_rss_kib": 1409792
+      },
+      "CoreCallableSelectedOperandDomainSupport": {
+        "wall_seconds": 1.3332305069998256,
+        "peak_rss_kib": 1341880
+      },
+      "ClauseActualSupportProbes": {
+        "wall_seconds": 68.62095091800074,
+        "peak_rss_kib": 3747480
+      },
+      "CoreCallableSelectedDomainDeclarationTransfer": {
+        "wall_seconds": 29.15329125000062,
+        "peak_rss_kib": 1440472
+      }
+    }
+  },
+  "observed_elapsed_reduction_percent": 33.47832771941487,
+  "refused_attempt": {
+    "status": "resource_blocked",
+    "max_running": 0,
+    "other_compilers_at_start": 2,
+    "host_compiler_launch_limit": 2,
+    "total_seconds": 4.517077106000215
+  },
+  "initial_serial_total_seconds": 354.68920554000033,
+  "receipt_reuse": {
+    "status": "complete",
+    "wall_seconds": 2.8137314439991314,
+    "preparation_seconds": 4.06825878500058,
+    "total_seconds": 6.885909796001215,
+    "max_running": 1,
+    "other_compilers_at_start": 0,
+    "cache_hits": 29,
+    "module_compilations": 0,
+    "dependency_queries": 29
+  },
+  "integration_smoke": {
+    "source_delta": "Trailing comment only in RichAdmittedEventInterfaces; no proof change",
+    "registered_modules": 1035,
+    "reports": 13388,
+    "fresh_stage_seconds": 1.412030338000477,
+    "receipt_retry_stage_seconds": 0.44685095400018326,
+    "fresh_preparation_seconds": 6.2151561209993815,
+    "retry_preparation_seconds": 7.96001403199989,
+    "fresh_evidence_sha256": "0629da3fcd91bffaf4e572dae3faeebaf25f6a4776a470e9ba301f85a07819ad",
+    "retry_evidence_sha256": "a4febdeee5907d22b3eceeea88597bd5de1f8aee04a05c57e3516f8b38e1f5c3"
+  }
+}

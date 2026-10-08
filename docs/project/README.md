@@ -9,5 +9,8 @@ dependencies, specification discipline, and writing:
 - [Formal notation](notation.md)
 - [Specification discipline](specification.md)
 - [Writing guide](writing.md)
+- [Proof development tooling](proof-tooling.md)
+- [Lean proof navigation](proof-lsp.md)
 
-The [reboot foundations](../design/DN-0001-reboot-foundations.md) record the informative design intent from which these rules were derived.
+The [reboot foundations](../design/DN-0001-reboot-foundations.md) record the
+informative design intent from which these rules were derived.
