@@ -45,7 +45,7 @@ These quantities remain separate:
 | Quantity | Measurement | Meaning and limits |
 | --- | --- | --- |
 | CPU execution | Native-precision `getrusage(RUSAGE_CHILDREN)` deltas | Actual user plus system CPU consumed by the timer wrapper and reaped target descendants; excludes the Python runner. It is not a machine instruction count. |
-| Elapsed time | Target GNU time and per-phase monotonic timers | GNU time has centisecond formatting; phase timers retain nanoseconds. Wall time includes scheduling and I/O delays. |
+| Elapsed time | Target GNU time and per-phase monotonic timers | GNU time has centisecond formatting; phase timers retain nanoseconds. Wall time includes scheduling and I/O delays. The paired reference also records matching wrapper wall time. |
 | Resident memory | Whole-process peak RSS; `/proc/self/status` at phase boundaries | Peak RSS includes libraries and allocator retention. Boundary RSS is not a phase peak, live heap size or allocated-byte total. |
 | Admission charges | Six existing ledger endpoints | Counts visits, comparisons, retained records and precharged storage capacity. These are policy charges, not literal operations or physical memory bytes. |
 | Input descriptors | One pre-inference surface graph traversal | Immutable size/complexity predictors; they never substitute for measured execution. |
@@ -71,6 +71,10 @@ artifacts directly; build time is excluded. The same binary runs with
 observation on and off and the same diagnostic base allowance of 16,777,216
 units; Core retains its threefold allowance of 50,331,648. The ordinary
 327,680 / 983,040 constants remain unchanged.
+
+The historical builds used two Cargo jobs, a deviation from the coordinated
+one-job policy. Their receipts remain unchanged. Future reproduction uses one
+job; no rebuild or replacement of measured artifacts is implied.
 
 The corpus contains 44 programs: flat declaration width, nested types,
 prerequisite depth, public reexport width/depth, string payload size, repeated
@@ -155,6 +159,65 @@ from approximately −0.1% to +7.2% in the precision round. Small negative
 differences reflect measurement variation, not negative observer cost. Both
 modes retain feature-enabled allowance machinery. This comparison does not
 measure that machinery against a separately built ordinary executable.
+
+## Existing Ash language fixtures
+
+Eight existing positive fixtures supplement the resource corpus. Each completed
+one warmup and three measurements in both observation modes, with exact outputs
+and source/test provenance checked. These are ordinary language baselines,
+not an application corpus. The table uses observation-on charge medians and
+observation-off physical measurements. GNU wall time is formatted in 10 ms
+steps; `0.00` does not mean zero elapsed time.
+
+| Existing fixture | Source units | Final units | Core units | OFF CPU median (ms) | OFF CPU range (ms) | OFF wall median (s) | OFF peak RSS median (MiB) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Higher-order application | 180 | 200 | 326 | 9.734 | 6.401–10.518 | 0.00 | 12.28 |
+| Global recursive scope | 238 | 262 | 377 | 6.795 | 6.509–7.129 | 0.00 | 12.31 |
+| Local recursive scope | 166 | 180 | 388 | 7.417 | 7.016–8.619 | 0.00 | 12.08 |
+| Combined effects/rows | 5,159 | 3,936 | 1,993 | 13.596 | 10.355–13.784 | 0.01 | 14.22 |
+| Newtype facade | 275 | 197 | 346 | 7.031 | 6.692–7.299 | 0.00 | 12.29 |
+| Higher-kinded linked | 1,390 | 765 | 783 | 7.902 | 7.803–8.354 | 0.00 | 14.26 |
+| Polymorphic methods | 5,486 | 3,206 | 4,147 | 10.222 | 9.685–11.527 | 0.00 | 15.10 |
+| Relational module bundle | 9,244 | 4,101 | 5,032 | 15.936 | 13.284–16.874 | 0.01 | 14.86 |
+
+All six reported ledgers remain below their ordinary limits in these fixtures.
+Global/local recursive examples exercise simultaneous scope and retained
+recursive references; their executed path terminates without invoking the
+retained back-reference. They do not measure deep runtime recursion or scaling
+in recursive checker obligations. The repository still lacks an established
+basic application corpus of parsers, data pipelines and substantial algorithms
+for this comparison.
+
+The original supplemental manifest declared pinned test source hashes but
+omitted their snapshot paths. The collector correctly rejected all 64 records
+for incomplete provenance snapshots, although outputs and file hashes agreed.
+Adding the missing paths corrected the manifest; the 64-process rerun passed.
+Both rounds remain preserved, and rejected records stay excluded from estimates.
+The paired and supplemental collection therefore used 256 processes instead
+of the planned 192, with 192 valid and 64 rejected. Serial execution including
+review and correction finished in 95.6 seconds, within the frozen 180-second
+window. Common's compiler window has been returned; no further engines ran.
+
+## Budget, work and limit
+
+The user's terminology distinguishes three roles:
+
+- A **budget** predicts how much a language structure should typically cost.
+- **Work** records how much processing actually occurred; CPU/time/memory
+  record corresponding execution costs in their own units.
+- A **limit** controls whether checking may continue. Headroom and stopping
+  thresholds belong to this policy, not to the typical-cost estimate.
+
+Existing implementation names such as `TypeWorkBudget` refer to bounded
+accounting. Keep their recorded charges distinct from a new predictive budget
+and from executed-operation counts: their reservation component prevents
+calling every charged unit actual processing. The next instrumentation must
+separate those components before fitting a language-level work budget.
+
+For the known witnesses, measured medians provide reference costs. They are
+not general budgets for other structures. The initial fitted envelopes below
+include cushions/headroom and were evaluated as possible allowances; they
+must not be relabeled typical-cost predictions.
 
 ## Charges and allowance estimates
 
@@ -261,19 +324,201 @@ overhead and failure/retry behavior to be reviewed. The
 already separates bounded compiler policy from Ash value semantics and requires retry
 with sufficient work to agree with a fresh run.
 
+Budget evaluation can also be incremental. At a checkpoint, compare observed
+work with the budget for the same processed language structure. Record both
+`work - budget` and `work / budget` where the budget is positive; keep an
+unfinished obligation separate. The budget may change as new relevant
+structure is discovered. A stopping decision remains a separate limit policy.
+
+## Language-level measures
+
+The user's next clarification sets the unit of study: language structures and
+their checking obligations. A program is a witness of those structures, not
+the definition of complexity. Surface node totals and the five SQLite programs
+alone cannot justify a language-wide allowance or checker design.
+
+The [follow-up measurement plan](../resource-calibration-plan.md#language-structure-follow-up)
+derives measures from current type instantiation, evidence selection, exact
+effect instances, recursive bindings and resource-dependency rules. It pairs
+those structures with actual implementation visits, retained structures and
+CPU/RSS. This separates the question "which obligations arise?" from "how
+much work does this checker perform to discharge them?" without assuming that
+every repeated obligation is redundant.
+
+These measures may be discovered incrementally. No complete static expansion
+or runtime-recursion unrolling is required before checking begins. The next
+decision needs controlled variation of depth, branching, reuse and lexical
+identity, plus realistic end-to-end witnesses. The new attribution instrumentation remains planned. The bounded structural
+reference below is complete using existing charged ledgers; it does not
+implement the distinction between executed visits and reservations.
+
+## Structural predictions and Rust reference
+
+The follow-up reused the same optimized Ash executable without rebuilding it.
+A protocol froze four empirical charged-cost curves before execution, using
+prior completed depths 1, 2, 4, 8, 12 and 16:
+
+```text
+Nested type Source(d) = 15*d^2 + 272*d + 386
+Nested type Core(d)   = 28*d^2 + 269*d + 451
+Prerequisite Source(d) = 25*d^2 + 346*d + 2165
+Prerequisite Core(d)   = (157*d^2 + 623*d + 1752) / 2
+```
+
+All 20 Source/Core predictions matched the observed ledgers at depths 1, 4,
+16, 24 and 32. Eight predictions concerned the previously unmeasured depths
+24 and 32. No coefficient was refitted. This confirms these charged-cost
+curves over the extended tested range. It does not prove asymptotic bounds,
+predict arbitrary compositions or explain SQLite's amplification. These are
+predictions of heterogeneous charged units, not a new count of actual
+executed operations or a CPU/memory budget.
+
+Fourteen pairs match flat declaration width, nested algebraic types with
+polymorphic identity use, and recursive interface/trait prerequisites. Width
+zero supplies a startup control. Rust uses a custom Option type and explicit
+generic trait implementations; its result is checked by a separate untimed
+native harness with all 14 assertions. The timed Rust command emits library
+metadata without LLVM, object generation or native linking. It includes
+resolution, type/trait and MIR borrow checking plus metadata encoding. This
+boundary follows the pinned [Rust 1.97.1 analysis implementation](https://github.com/rust-lang/rust/blob/1.97.1/compiler/rustc_interface/src/passes.rs#L1062)
+and [output configuration](https://github.com/rust-lang/rust/blob/1.97.1/compiler/rustc_session/src/config.rs#L809).
+Ash includes its own checking, independent Core validation, evaluation,
+rendering and teardown. These shared structures permit a useful reference;
+the compilers do not perform equivalent work. Rust work-unit counters are
+unavailable and are not inferred from time.
+
+Selected observation-off CPU medians and three-run ranges, in milliseconds:
+
+| Structure | Ash CPU ms (range) | Rust CPU ms (range) | Ash / Rust peak RSS MiB |
+| --- | ---: | ---: | ---: |
+| flat-width0 | 9.2 (6.1–9.2) | 31.5 (31.2–34.1) | 12.10 / 57.16 |
+| flat-width128 | 27.3 (20.6–30.8) | 50.1 (42.3–55.4) | 13.90 / 62.51 |
+| nested_type-depth24 | 18.3 (15.3–19.5) | 46.2 (33.5–48.6) | 13.14 / 62.36 |
+| nested_type-depth32 | 14.5 (14.5–15.2) | 35.8 (33.9–37.1) | 13.30 / 62.20 |
+| prerequisite-depth24 | 18.7 (17.7–22.5) | 37.3 (35.9–39.0) | 14.84 / 68.76 |
+| prerequisite-depth32 | 23.9 (23.4–28.9) | 36.9 (36.7–37.6) | 15.20 / 68.81 |
+
+Across all 14 pairs, Ash CPU medians are approximately 7.6–27.3 ms and Rust
+medians 31.5–50.1 ms. Startup contributes much of these small totals. Depth 24
+nested-type timing exceeds depth 32 in this round, illustrating variation.
+Report the absolute sampled costs and growth in charges; these measurements
+do not establish general relative compiler efficiency or CPU complexity.
+Do not subtract noisy startup medians or resident memory and call the
+remainder semantic work.
+
+The new sampler brackets a blocking wait with monotonic wall time and child
+CPU measurements over the same wrapper interval. Every measured Ash process
+has CPU below this matching wall measurement. Target GNU time remains a
+separate measurement with 10 ms formatting granularity. Use the user's
+accepted ±10 ms comparison tolerance for those displayed times; it is not a
+calibration of absolute instrument error. Scheduling and I/O can increase
+wall time independently of the process's CPU consumption. Repeated-run
+ranges remain necessary even with finer timestamp precision.
+
+The paired round completed 128 valid processes: 84 measured, 28 warmups,
+14 Ash observers and the untimed harness build/run. Independent audit
+verified every raw record, input/executable/log hash, required phase and
+frozen prediction. No Cargo build, optimizer change or production-limit
+change occurred.
+
+## Initial rough budget procedure
+
+The user selected a simple first procedure. The offline
+[estimator](../../../../tools/resource_budget_estimates.py) uses one fixed form:
+
+```text
+budget = a + b*nodes
+           + c*(type_nodes*type_depth)
+           + d*(resource_sites*nodes)
+```
+
+`nodes` is the measured surface structure total; `type_nodes` and `type_depth`
+describe surface type syntax. `resource_sites` counts lexical resource
+initialization/binding sites, not dynamic operations. These existing input
+descriptors are available before inference. They are rough proxies for the
+language obligations identified in the follow-up plan, not the new typed
+attribution measures that remain unimplemented.
+
+Use the procedure as follows:
+
+1. Collect completed case medians with a pinned compiler and measurement
+   boundary. Keep CPU seconds, peak RSS KiB and each ledger's charged units
+   separate.
+2. Fit nonnegative coefficients for each response using the same four terms.
+   Keep a single point estimate; do not add cushions or headroom to the budget.
+3. Freeze the model and input hash. For a new measured feature vector, evaluate
+   the formula and flag values outside recorded feature ranges. Being inside
+   every range does not establish that a new combination is well represented.
+4. Compare actual cost with prediction in the same units. Record the signed
+   residual and actual/predicted ratio. Recalibrate explicitly when new evidence
+   warrants it; repeated observations are not new language examples.
+5. Decide stopping limits separately. The estimator neither changes compiler
+   allowances nor feeds expanded work back into its own budget.
+
+The first [model artifact](rough-budget-model.json) recalibrates on all 44
+completed CPU-precision cases, including the already examined former held-out
+cases. It fits per-case medians, not maxima. The
+[transfer comparison](rough-budget-transfer.json) describes the eight existing
+Ash fixtures without refitting. Those measurements were already examined;
+this is not blind validation. Every response fit converged. Poor predictions
+remain visible, with no extra feature search or family classifier.
+
+RMSE measures absolute prediction error in each response's own units:
+
+| Response | Units | 44-case fitting error | Eight-fixture transfer error |
+| --- | --- | ---: | ---: |
+| cpu_seconds | ms | 26.30 | 6.40 |
+| peak_rss_kib | MiB | 2.92 | 1.24 |
+| source-checking | charged units | 188,590.77 | 22,379.57 |
+| final-elaboration | charged units | 36,917.91 | 1,480.73 |
+| independent-effect-core | charged units | 188,455.50 | 12,943.99 |
+
+For example, the CPU estimate is 105 ms against copying's observed 184 ms, and
+175 ms against persistence's 229 ms. Predicted RSS is 25.75 MiB versus 33.57
+MiB for copying, and 36.52 MiB versus 42.38 MiB for persistence. These are rough
+references. The fitted CPU intercept is zero, although measured startup has a
+real cost; small-program CPU predictions understate that fixed cost. Relative
+error can therefore be large even when absolute error is a few milliseconds.
+
+Ledger predictions are much weaker: copying Source is estimated at 476,786
+against 1,212,707 charged units, while many basic programs are overestimated.
+Neither that miss nor an excessive ledger ratio proves excessive physical
+compiler cost. Use CPU and memory evidence alongside the charges when deciding
+whether optimization is needed. This initial procedure is implemented; a
+general calibrated budget or revised stopping policy is not.
+
+The model is reproducible from completed evidence:
+
+```bash
+python3 tools/resource_budget_estimates.py fit SUMMARY_JSON --output MODEL_JSON
+python3 tools/resource_budget_estimates.py predict MODEL_JSON FEATURES_JSON
+python3 tools/resource_budget_estimates.py evaluate MODEL_JSON ANOTHER_SUMMARY_JSON
+```
+
+`FEATURES_JSON` supplies `nodes`, `type_nodes`, `type_depth` and
+`resource_sites`, or a case with those fields inside `features`. The artifact
+pins the estimator, existing fitter and training summary hashes. The original
+allowance-envelope fits remain unchanged. Bayesian inference and richer
+predictors are deferred until a practical decision needs them. Prediction
+beyond the observed domain still needs confirmation; see the
+[NIST guidance on extrapolation](https://www.itl.nist.gov/div898/handbook/pri/section5/pri5998.htm).
+
 ## Evidence and reproduction
 
 [The capsule manifest](manifest.json) pins compressed raw runs, generated
 inputs, collector versions, compiler source hashes, artifact hashes, build
 receipts and analysis. The archives omit compiled binaries; build them from
-this isolated source checkpoint. Recorded local paths identify historical
+this isolated source checkpoint. The separate [reference evidence index](reference-evidence.json)
+authenticates the paired and supplemental rounds, generated inputs, tool bytes,
+rejected records, corrected manifest and execution receipt. Original archives
+and their manifest remain byte-identical. Recorded local paths identify historical
 inputs and need relocation for reproduction.
 
 From this worktree, build with `RUSTC_WRAPPER=` and
 `CARGO_TARGET_DIR=target/calibration`:
 
 ```bash
-cargo test --offline --locked --release --no-run --features resource-calibration --bin ash --test provider_sqlite_copying --test provider_sqlite_sessions --test provider_sqlite_control --test resource_calibration_native --jobs 2 --message-format=json
+cargo test --offline --locked --release --no-run --features resource-calibration --bin ash --test provider_sqlite_copying --test provider_sqlite_sessions --test provider_sqlite_control --test resource_calibration_native --jobs 1 --message-format=json
 ```
 
 Use the returned release binary paths with the

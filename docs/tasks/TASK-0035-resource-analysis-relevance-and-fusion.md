@@ -47,6 +47,18 @@ The user's follow-up permits incremental limit evaluation rather than requiring
 a whole-program prediction. The report separates existing incremental charges
 from the proposed checkpoint-based allowance decision; that control remains
 unimplemented.
+The measurement follow-up now uses language structures and checking obligations
+as its explanatory units. Budget means predicted typical cost, work means
+observed processing, and limit means continuation policy. Bayesian inference
+remains deferred. A bounded structural/Rust reference
+confirmed all 20 frozen Source/Core predictions, including eight extrapolated
+predictions at depths 24/32; eight existing language fixtures also completed.
+The follow-up evidence preserves the corrected supplemental provenance defect
+and all rejected records. Common's second compiler window is returned.
+The simple four-term offline budget estimator is implemented using completed
+data, with point predictions and errors separate from stopping policy. It does
+not change compiler limits. The completed counters still include precharged
+reservations; language-level actual-visit attribution remains planned.
 
 ## Paused optimization work
 

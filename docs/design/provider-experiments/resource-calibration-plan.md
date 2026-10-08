@@ -6,7 +6,10 @@ no optimization or production limit change.
 
 The collection and review batches are complete. The
 [calibration report](resource-calibration/README.md) records the evidence and
-remaining policy decisions. No production allowance was selected.
+remaining policy decisions. No production allowance was selected. The later
+language-level attribution instrumentation below remains planned. A bounded
+structural prediction/Rust reference and eight existing Ash fixtures have now
+completed using the existing ledgers; see the report. No optimizer resumed.
 
 The user's later direction permits incremental allowance evaluation. The
 completed measurements used fixed diagnostic allowances and immutable input
@@ -26,7 +29,11 @@ preparation passed focused integration and Clippy; the preceding `2a0595d`
 checkpoint has the last complete workspace gate. No full gate is claimed for
 the latest baseline. The rejected producer
 stays at recovery `7af4f89`. Other worktrees, draft files and recovery history
-remain intact. Calibration owns Common's exclusive compiler window.
+remain intact. Calibration held Common's exclusive compiler window for the
+completed collection and returned it after the checkpoint. A second reserved
+window completed the paired reference and supplemental fixture round; it has
+also been returned. Future execution
+requires another coordinated window; optimization remains paused.
 
 The five realistic SQLite programs require the separately preserved adapter
 and fixture snapshot at `11de19c8`. Apply the exact `measurement-inputs.patch`
@@ -120,3 +127,121 @@ compiler test inventory. Check formatting, changed documentation links,
 source/input hashes, restoration and ledger ownership. A full repository gate
 is required before any shared implementation retention, not before collecting
 isolated experimental measurements.
+
+## Language-structure follow-up
+
+The user's later direction requires measures meaningful from the language's
+point of view. Treat programs as controlled witnesses, derive the structures
+from current judgments, and measure their implementation cost separately.
+Use the user's distinction: budget predicts typical cost, work measures actual
+processing, and limit determines whether checking continues. Compare budget
+and work in the same units for the same processed structure. Existing charged
+units include reservations, which must remain separate from actual processing.
+This is a measurement-design follow-up, not authorization to restart an
+optimization or choose a production allowance. Keep the retained baseline and
+use one Cargo build job in a coordinated window.
+
+### Structures and meanings
+
+| Structure | Language-level measure | Separate implementation observations |
+| --- | --- | --- |
+| Monotypes, kinds and schemes | Unary application/tuple/function shape, depth and branching; ordered binder kinds; substitution domain and argument structure | Actual node visits, comparisons, copies and retained bytes by operation; capacity reservations separately |
+| Rank-1 instantiation and callable composition | Scheme occurrences, ordered Type/Row arguments, composition depth/fanout and distinct lexical creations | Actual instantiation/substitution passes, analysis context creations/reuses and transfer attempts |
+| Constraint evidence | Complete interface goals in their exact selection context; ordered prerequisite edges, branching, repeated goals and active cycles | Actual candidate tests, matches, prerequisite visits and evidence records retained |
+| Effect rows and handlers | Exact effect instances, argument structure, row members/lacks relations and handler nesting | Actual row comparisons/substitutions, continuation-flow passes and retained control facts |
+| Resource dependencies | Acquisition identities and scope nesting; dependencies through selected fields, captured values and actual calls; stored versus request-carried obligations | Actual dependency propagation, failed/repeated transfers, owner queries and live analysis storage |
+| Recursive bindings | Members, binder-reference edges and cycle structure; rigid self-instantiation and guarded initialization obligations | Fixed-point rounds, new facts versus repeated visits, queue/storage growth; no runtime unfolding charged as static work |
+
+The sources of these meanings are
+[kinds and schemes](../../../spec/static-semantics.md#kinds-monotypes-and-schemes),
+[rank-1 inference](../../../spec/static-semantics.md#inference-and-rank-1-restrictions),
+[evidence selection](../../../spec/static-semantics.md#constraint-satisfaction-and-checked-evidence),
+[effects](../../../spec/static-semantics.md#effects),
+[resource dependencies](../../../spec/static-semantics.md#scoped-cells-and-resource-dependencies),
+and [recursive Core structure](../../../spec/elaboration.md#recursive-binding-structure).
+Implicit source instantiation and explicit Core instantiation are distinct
+from structural unary type application; measure both under their
+[elaboration contract](../../../spec/elaboration.md#explicit-rank-1-operations).
+General foreign providers remain DN-0036 experiments, not current language
+rules.
+
+These are proposed measurement units, not new normative complexity guarantees.
+Define identity and scope for every count before instrumenting it. Equal types
+alone do not identify equivalent lexical creations, evidence environments,
+owner identities or required analyses. Record both obligation occurrences and
+any proved reusable facts; do not assume they may be merged.
+
+### Ordered batches
+
+1. Define the metric protocol against those judgments and the current checker.
+   For each measure, state its type, identity, scope, owner, unit and discovery
+   point. Separate source facts, rule obligations, actual executed visits,
+   retained data and reservations. Audit counters against their operation;
+   preserve CPU/time/RSS as direct execution measurements. Emit compact phase
+   summaries rather than per-node logs.
+2. Study rank-1 callable composition with resource-dependent captures first,
+   because the prior copying census places most Invoke contexts at type
+   applications returning functions. Independently vary composition depth,
+   fanout, Type/Row argument shape and captured-port count. Compare reuse of one
+   lexical creation with distinct creations of the same type; retain owner
+   identity and actual-call distinctions. Use terminating witnesses with
+   checked results and matched controls. A population census is a reason to
+   investigate this family, not proof that it causes the elapsed cost.
+3. Study constraint prerequisite depth/branching and repeated complete goals,
+   with exact lexical evidence contexts recorded. Pair valid selections with a
+   bounded active-cycle rejection. Separately study recursive term groups with
+   fixed rigid types, varying members/backedges and capture propagation. The
+   language does not fresh-instantiate a recursive self-use or recursively own
+   its body in the Core arena. Do not substitute runtime call depth for static
+   structure or assume that analysis rounds are language-required unfoldings.
+4. Cross the dominant dimensions with effect-row/handler and acquisition-scope
+   depth. Include copied results and dependent closures, with a corresponding
+   escape/control rejection where needed. Determine whether costs combine
+   additively or multiply; avoid a large undirected Cartesian test inventory.
+   Rerun realistic SQLite witnesses as integration evidence, reserving new
+   witnesses for validation of any revised model.
+5. Use the initial rough budget procedure below as the first reference. Compare
+   observed work with prediction for the same processed facts, separately from
+   stopping policy. Use new families/compositions for validation; repeated runs
+   measure execution noise, not additional independent language examples.
+   Version fitted models. Defer Bayesian inference and richer predictors until
+   a practical decision needs them.
+   Separately evaluate limit policies and what justifies an allowance adjustment.
+   Report which growth follows increasing
+   language obligations and which comes from representation expansion or
+   repeated implementation work. Preserve uncertainty where attribution is
+   incomplete. Then choose whether the evidence calls for policy adjustment,
+   an implementation change, or language-design investigation.
+
+Each execution batch should reuse one optimized build, run connected e2e and
+integration witnesses, measure observer overhead and preserve completed versus
+refused outcomes. Add regression tests only for demonstrated defects. A metric
+or candidate is useful when it enables a stated decision with transferable
+evidence, not merely when it predicts one SQL program's counter.
+
+## Initial rough budget procedure
+
+The user's latest direction selects a simple first estimator. Its offline
+implementation and descriptive comparison are complete in the linked report.
+Use the completed
+44-case CPU-precision round to recalibrate a four-term nonnegative polynomial:
+
+```text
+budget = a + b*surface_nodes
+           + c*(type_nodes*type_depth)
+           + d*(resource_sites*surface_nodes)
+```
+
+Fit separate point predictions for CPU seconds, peak RSS KiB and each of the
+six reservation-including ledger charges. Fit per-case medians; do not include
+headroom, residual cushions or refusal ceilings in the budget. Record the
+training input hash, coefficients, units and prediction errors. This is an
+offline reference, not compiler limit enforcement. Previously examined
+held-out cases now become explicit recalibration data; never present them as
+fresh validation of the new fit.
+
+Use the eight existing fixtures for a descriptive transfer check without
+refitting. Report poor predictions and observations outside recorded feature
+ranges. Do not add more features, a family classifier or a Bayesian model to
+rescue this first estimate. The language-level attribution plan remains useful
+if this rough reference fails to explain a material cost.
