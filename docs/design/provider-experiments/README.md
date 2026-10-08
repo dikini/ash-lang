@@ -28,12 +28,14 @@ type checking, Core execution, and actual native behavior.
   to evaluate during the implementation.
 - [Execution record](execution.md): active checkpoint ownership and verified
   evidence; it has no independent semantic authority.
-- [Analysis plan](analysis-plan.md) and [algebra study](analysis-algebra.md):
-  TASK-0035's early-relevance and typed-fusion investigation, preservation
-  obligations and measured acceptance gates.
-- [Retained-baseline calibration](resource-calibration/README.md): actual
-  CPU/time/memory measurements, separate admission charges and provisional
-  size/complexity allowance estimates. Optimization is paused for review.
+- [Analysis disposition](analysis-closure.md) and [algebra study](analysis-algebra.md):
+  retained F-2 findings, the rejected compound F-1 trial and calibrated admission.
+  The former task and execution plans are retired; further algorithmic reduction
+  remains a future optimization target.
+- [Retained-baseline calibration](https://github.com/dikini/ash-lang/blob/ed3764a15f7f00e7059c3eb3eae1f6e74309040f/docs/design/provider-experiments/resource-calibration/README.md):
+  frozen CPU/time/memory measurements, separate admission charges and
+  decision-support estimates. The disposition records the later selected
+  ordinary admission; further algorithmic reduction remains deferred.
 
 The cases are descriptions to implement, not observed results. Record results
 alongside them only after the corresponding checker or native harness runs.

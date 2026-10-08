@@ -1,7 +1,7 @@
 # Calibration observer integration
 
-This [TASK-0035](../../../tasks/TASK-0035-resource-analysis-relevance-and-fusion.md)
-tooling reconciliation preserves the historical calibration evidence and
+This tooling reconciliation follows the [TASK-0035 disposition](../analysis-closure.md)
+and preserves the historical calibration evidence and
 Common's separately selected public phase allowances. It remains part of the
 bounded [DN-0036](../../DN-0036-foreign-library-and-memory-provider-experiments.md)
 experiment; it defines no Ash semantics or general compiler admission

@@ -1,9 +1,9 @@
 # Resource analysis algebra study
 
-> Informative DN-0036 study owned by
-> [TASK-0035](../../tasks/TASK-0035-resource-analysis-relevance-and-fusion.md).
-> The [execution plan](analysis-plan.md) names implementation gates. Equations
-> below describe proposed implementation equivalences, not new Ash rules.
+> Informative [DN-0036](../DN-0036-foreign-library-and-memory-provider-experiments.md)
+> study retained after TASK-0035 execution was superseded. The
+> [disposition](analysis-closure.md) records retained and rejected results.
+> Equations below describe proposed implementation equivalences, not new Ash rules.
 
 ## Semantic model and measured pressure
 
@@ -563,8 +563,8 @@ The external evidence archive is
 `/home/dikini/.codex/ash-provider-evidence/common-resource-support-2026-10-04/requested-root-metadata-160/`.
 Receipt inputs are `author/context-prefix-measurement-runner-274/return.json`,
 `bounds/actual-residual-decisions-274/report-corrected.md` and
-`author/fanout-census-274/report.md`. Task progress distinguishes later retained
-implementation from this read-only analysis.
+`author/fanout-census-274/report.md`. The [disposition](analysis-closure.md)
+distinguishes later retained implementation from this initial read-only analysis.
 
 ## F-2 measured candidate
 
@@ -603,9 +603,9 @@ The candidate adds temporary key/mask state, wider pending entries and a sparse
 ordered recipe for one body. It introduces no per-context or per-slot cache.
 Allocation bytes and peak resident memory have not been measured, so this
 result establishes reduced charged work, not reduced memory or an asymptotic
-improvement. Source checking still exceeds 327,680 for copying, NUL copying
-and persistence. Persistence also exceeds independent Core and final
-elaboration. The candidate therefore remains a partial reduction.
+improvement. At this measured checkpoint, Source checking still exceeds
+327,680 for copying, NUL copying and persistence. Persistence also exceeds
+independent Core and final elaboration. The candidate is a partial reduction.
 
 Retention review passes, conditional on the full integrated repository gate.
 The raw measurement archive is `requested-root-metadata-160/author/f2-candidate-only-measurement-runner/`
@@ -613,5 +613,6 @@ under the external Common evidence root. Its `return.json` hash is
 `df5f900004db12f7a629d4cf2bd5661411cd9271e3ceba865f0f3e2821642ad4`.
 The formatted candidate and normal logs are in `f2-product-candidate-280/`
 under `/home/dikini/.codex/ash-provider-evidence/common-resource-support-2026-10-04/`.
-The task records the later integrated disposition; this study does not claim
-that the normal three-program acceptance objective has been met.
+The [later disposition](analysis-closure.md) records F-2 retention and the
+user-selected calibrated ordinary admission. These F-2 measurements alone do
+not establish ordinary acceptance or completion of the optimization objective.
