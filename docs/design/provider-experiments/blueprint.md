@@ -34,6 +34,9 @@ Recorded normal-limit public-driver and host runs verify both programs after
 the shared control import. The
 [current SQLite checkpoint](execution.md#current-sqlite-checkpoint) identifies
 the checked commits, fresh program runs and remaining delivery requirements.
+The preserved code checkpoint is `b0fa2a5`. Its later shared native-preparation
+and architecture-test imports do not rerun the original four SQLite programs;
+their last recorded execution is at the value-context extension import `618842d`.
 
 Receipts 136 and 150 record earlier fourteen-operation candidates with fourteen
 passes and three typing failures. Receipt 154 traces those earlier inputs:

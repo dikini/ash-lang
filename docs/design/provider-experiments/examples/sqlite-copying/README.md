@@ -24,10 +24,12 @@ the public driver and actual host after the verified shared repair import.
 The recorded full seventeen-case public checkpoint passes fourteen cases,
 including the original reset/clear program, and retains three compiler work
 failures: copying, its NUL-input alternative and persistence. Fresh runs of the
-four original tests after the latest shared import confirm that resume passes
-and the same three programs still exhaust Type work at normal limits. These
-four runs do not repeat the full suite. The recorded text, resume and discard
-host runs return their required values, authenticated finalize/close reports
+four original tests at the value-context extension import `618842d` confirm that
+resume passes and the same three programs still exhaust Type work at normal limits. These
+four runs do not repeat the full suite. Later verified shared imports through
+`b0fa2a5` do not rerun those programs; they add no new SQLite acceptance claim.
+The recorded text, resume and discard host runs return their required values,
+authenticated finalize/close reports
 and zero retained owners. The three larger hosts stop before any native
 observation.
 The manifest and control fixtures are committed in the SQLite worktree; the

@@ -8,6 +8,26 @@
 
 ## Current SQLite checkpoint
 
+The preserved SQLite code checkpoint is unsigned merge
+`b0fa2a5ff46a7342ca2bba7bf1f513fcd1c32ca3`. After the value-context extension
+checkpoint below, SQLite imported three verified shared deliveries:
+
+| SQLite merge | Shared delivery | Evidence reused from integration |
+| --- | --- | --- |
+| `292303b` | Staged borrowed-result admission | Full six-stage gate at `2a0595d`, with 3,369 passes and no failures or ignored cases. |
+| `3784cd0` | Architecture-test analysis optimisation | All 43 architecture cases; production and native source unchanged. |
+| `b0fa2a5` | Bounded native invocation preparation work | 42 selected cases on Common and integration, all 43 architecture cases, and library Clippy with warnings denied. |
+
+These imports preserve SQLite's source programs and assertions. Their import
+checks compare the reviewed incoming source and preserve the other worktrees;
+they do not rerun the original four SQLite programs or establish a new full
+SQLite acceptance result. The native preparation delivery defers its full gate to
+the next combined feature checkpoint. Import receipts are under
+`sqlite-2026-10-05/handoff/` in `staged-borrow-verified-import/`,
+`architecture-test-only-verified-import/` and `metered-native-verified-import/`.
+The last execution evidence for the four original programs remains the following
+value-context extension checkpoint.
+
 The verified value-context extension delivery is imported through unsigned merge
 `618842da5bd2b0f0f2c574c3084455ee1db2baea`. Its parents preserve SQLite checkpoint
 `208275b8b940e20431807ebdc4025ad844765024` and integration tip
@@ -19,7 +39,8 @@ The later integration delta contains only three tracking documents. The merged
 execution and authoring journals preserve both histories. All forty-two other
 SQLite-owned files, including the one-job blueprint correction, remain exact.
 
-Four fresh exact original program tests run with one Cargo job, one test thread,
+At that checkpoint, four exact original program tests run with one Cargo job,
+one test thread,
 no diagnostic observers and unchanged normal limits. Captured resume passes.
 Copying, bound-NUL copying and transaction/reopen persistence each fail with
 `Typing(Internal(TypeResourceExhausted))`. Every case is attempted once. The
@@ -44,7 +65,7 @@ independent Core to 983,040 and parser depth to 128. Final elaboration is
 no capacity debit is discounted. The private Fusion candidate remains outside
 this imported delivery and requires its own verification and integration.
 
-The fresh normal-program run returns at 2026-10-07T16:24:35.170755+00:00 after 22.998 seconds.
+That normal-program run returns at 2026-10-07T16:24:35.170755+00:00 after 22.998 seconds.
 All Common, integration and SQLite guards, heads, statuses and indexes remain
 unchanged during these runs, and no engine remains. Exact commands and raw
 logs are in `sqlite-2026-10-05/handoff/verified-context-extension-import-normal-programs/`

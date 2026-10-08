@@ -233,11 +233,13 @@ copied input and output bytes, and leaves no retained native owner. The packaged
 resume and discard entries also pass through the actual host. Shared compiler
 cost support is verified and imported into the SQLite worktree. Recorded full
 checks pass all sixty adapter tests and fourteen of seventeen public SQLite
-cases. Four fresh original-program tests after the latest shared import confirm
-that resume passes, while copying, the NUL-input alternative and file-session
+cases. Four original-program tests at the value-context extension import
+`618842d` confirm that resume passes, while copying, the NUL-input alternative and file-session
 persistence still stop with TypeResourceExhausted before native observations.
 The fresh four-case run does not repeat the full adapter or public suite;
-further shared compiler repair remains required. The
+further shared compiler support remains required. Later verified shared imports
+through `b0fa2a5` do not rerun those programs or establish a new SQLite acceptance
+result. The
 [current execution record](../docs/design/provider-experiments/execution.md#current-sqlite-checkpoint)
 records the checked import and remaining failures. Earlier receipts 136 and
 150 retain their own source evidence. This does not establish a completed
