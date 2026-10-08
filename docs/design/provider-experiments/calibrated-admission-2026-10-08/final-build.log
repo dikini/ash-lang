@@ -1,0 +1,8 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/common-resource-support)
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/common-resource-support/foreign-adapter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 09s
+  Executable unittests src/lib.rs (target/debug/deps/ash-94445b49e5489316)
+  Executable tests/compiler_work_reporting.rs (target/debug/deps/compiler_work_reporting-7b05e54d16601fce)
+  Executable tests/provider_sqlite_control.rs (target/debug/deps/provider_sqlite_control-2fe3c8892667913b)
+  Executable tests/provider_sqlite_copying.rs (target/debug/deps/provider_sqlite_copying-b82a66bcca474e24)
+  Executable tests/provider_sqlite_sessions.rs (target/debug/deps/provider_sqlite_sessions-ead443f8522b4451)
