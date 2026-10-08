@@ -79,23 +79,30 @@ Typed object access is related to its fresh owner identity. Contents are opaque
 to clients except through typed operations. Reclamation happens at arena
 completion; aliases and object bindings own no release operation.
 
-| Property | Initial contract or choice to resolve before coding |
+| Property | A-0 candidate contract |
 | --- | --- |
-| Capacity | Name payload capacity in bytes. Account for alignment padding within it; report object/access metadata separately. Test arithmetic before reservation. |
-| Zero capacity and zero-sized objects | Compare a valid empty arena with rejection of zero capacity. Choose before tests. Define whether a zero-sized object requires a distinct identity and metadata. |
-| Object layout | Define size, alignment, and field representation for the admitted integers, tuples, and references. Native layout is not assumed to equal arbitrary Ash heap layout. |
+| Capacity | A-0 names payload bytes and object slots separately. Payload usage includes alignment padding; metadata does not consume payload capacity. Check arithmetic before preparation. |
+| Zero capacity and zero-sized objects | A-0 admits an empty arena. Each zero-extent object consumes a distinct record; an explicit stronger alignment may still consume padding. |
+| Object layout | Use A-0's private checked serialization and sealed Layout evidence. Tuple/nominal extents have no trailing padding; a constructor's optional semantic payload is one aligned child. Native layout is not arbitrary Ash heap layout. |
 | Address stability | Backing storage does not move during the owner's lifetime. Foreign access still needs compatible layout, permitted aliases, and a valid interval. |
-| Publication | Publish an object only after initialization finishes. Specify cursor rollback and disposal of partial initialization; earlier objects remain valid after failure. |
+| Publication | A-0 prepares bytes, a candidate and the result without publishing. Authenticate and admit the result before commit; failed preparation/admission leaves counters and earlier records unchanged. Commit rechecks owner/position before initialization, then publishes without further fallible conversion. |
 | Sharing | Creating an alias preserves identity and dependencies without copying payloads. Immutable shared objects need no individual release authority. |
-| Nested arenas | Inner objects may depend on live outer storage. Reject surviving outer state with inner dependencies unless a separately checked scoped-access case establishes removal. |
+| Nested arenas | A-0 native stores retain only their destination or enclosing owners. Selected source overrides retain their actual clause relations. Immutable A-0 provides no removal operation that could justify temporary inward retention. |
 | Completion | Run required actions while storage remains available, then reclaim once. Bulk release does not imply discovery or invocation of general object destructors. |
-| Copying | Separate independent deep copying from shallow alias transport. Define preserved sharing and supported cycles; do not call a shallow copy independent. |
+| Copying | A-0 explicit deep copying initially duplicates shared payloads. Shallow loading preserves embedded Ref dependencies. Cycle-aware and sharing-preserving graph copying remain separate contracts. |
 | Ownership restriction | The owner cannot be returned, packaged with values, reference-counted past its scope, or transferred between processes. Captured control may retain the owned scope under the admitted continuation rules. |
 
 Native backing storage can use a system allocation primitive through the isolated
 adapter. That does not place SQLite's internal allocations in the arena. The
 study concerns the contracts between those storage owners, not a mandatory
 single allocator for all memory.
+
+These selected choices are defined by [candidate A-0](semantics.md#selected-arena-contract-a-0).
+The [scalar results](arena-results.md) and [safety record](arena-safety.md)
+record actual Unit/Bool/signed-64 source storage and its reviewed assumptions.
+The broader layout, stored-reference, graph-sharing and deep-copy rows remain
+candidate obligations. Later family-specialization placement remains open;
+these contract rows do not resolve it.
 
 ## Inference and explicit information
 

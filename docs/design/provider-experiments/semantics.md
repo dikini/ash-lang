@@ -1047,8 +1047,8 @@ references. Arena capacity counts payload bytes plus alignment padding.
 References encode owner and object identities in private stable storage, not
 exposed addresses. Arbitrary-precision integers outside the selected layout
 return `InvalidPayload` rather than truncate. Zero capacity is a valid empty
-arena; zero-sized objects still receive fresh object metadata but consume no
-payload bytes. Metadata is measured separately. Alignment and overflow checks
+arena; zero-sized objects still receive fresh object metadata and have zero encoded
+extent; alignment padding still counts. Metadata is measured separately. Alignment and overflow checks
 precede reservation; complete initialization and metadata reservation precede
 publication. Failure rolls the cursor back and preserves earlier objects.
 Closures stored as arena payloads and cyclic construction require another
@@ -1638,6 +1638,13 @@ copying and structural completion. It does not select retained foreign input,
 mutable objects, row views, counting or tracing. X-01 through X-04 still need
 their separate access contract.
 
+The executed source fragment currently admits Unit, Bool and checked signed-64
+storage, finite family handlers, local Ref use and captured-control completion.
+[Scalar results](arena-results.md) distinguish this evidence from the broader
+candidate below. Aggregate and Ref-containing stored payloads, graph sharing,
+and explicit deep or recipient-arena copying still need later deliveries.
+Native aggregate-codec preparation does not admit those source payloads.
+
 ### Types and evidence before syntax
 
 The source library defines `Arena<R> : Type -> Type` through a resource
@@ -1736,17 +1743,22 @@ data. Admitted rules are:
 | --- | --- |
 | `Unit` | Zero bytes, alignment 1. |
 | `Bool` | One byte 0/1, alignment 1. |
-| `Int` | Eight-byte signed integer, alignment 8; values outside signed-64-bit range refuse allocation. Ash integers elsewhere retain arbitrary precision. |
-| Registered byte data | Checked length header and bytes, alignment 8; all byte values fit `[0,255]`. |
-| `Ref<A,T>` | Two private 64-bit owner/object identities, alignment 8; the target payload T is not recursively inlined. |
-| Tuple | Fields in source order with checked alignment padding; maximum field alignment. |
-| Ordinary nominal data | Sole-constructor payload may omit a tag; multiple constructors store a checked tag then the selected fields with padding. The by-value nominal layout graph must be acyclic. |
+| `Int` | Eight-byte signed two's-complement little-endian integer, alignment 8; values outside signed-64-bit range refuse allocation. Ash integers elsewhere retain arbitrary precision. |
+| `Bytes` | Eight-byte unsigned little-endian byte-count header followed by the exact packed contents, alignment 8. Arbitrary byte values are preserved. |
+| `String` | The same checked byte-count header followed by exact UTF-8 contents, alignment 8. Count bytes rather than characters; preserve NUL and reject invalid UTF-8 on decoding. |
+| `Ref<A,T>` | Two private unsigned 64-bit little-endian owner/object identities, alignment 8; the target payload T is not recursively inlined. |
+| Tuple | Fields in source order, each preceded by checked padding to its natural alignment; maximum field alignment, or 1 for an empty tuple. No trailing padding. |
+| Ordinary nominal data | Sole-constructor payload omits a tag; multiple constructors store a checked unsigned 32-bit little-endian zero-based defining-order tag. Encode the selected constructor's entire optional semantic payload as one child, aligned after the tag. No trailing padding. Natural alignment is the maximum over all alternatives' payload alignments, with base 1 and minimum 4 when tagged. The by-value nominal layout graph must be acyclic. |
 
 Layout dictionaries are finite graphs keyed by type/layout IDs; a reference edge
 does not expand its target layout. By-value recursive nominal types are
-unsupported, even when one input value happens to be acyclic. Registered byte
-data has a dedicated dynamic-length codec, so its ordinary list representation
-is the explicit exception. Acyclic admitted ordinary values encode recursively,
+unsupported, even when one input value happens to be acyclic. Packed Bytes and String
+have dedicated dynamic-length codecs; the earlier registered-list representation
+is not part of this selected fragment. The header contributes eight bytes even
+for empty payloads. Check host-size conversion, header-plus-length arithmetic and
+object extent before reservation or read. These widths and byte orders describe
+private arena serialization, not the representation of evaluator packed values
+or a C ABI for arbitrary Ash values. Acyclic admitted ordinary values encode recursively,
 duplicating ordinary shared inline fields. Arena reference fields preserve their
 object identities and never copy target payloads. State tokens, resource access
 families, functions, evidence and arbitrary native opaque families have no
@@ -1754,16 +1766,34 @@ derived payload layout. A capturing closure may still live in ordinary storage
 and retain an arena reference. A closure-as-payload rejection is a layout
 limitation, not evidence of owner-escape checking.
 
+Aggregate alignment belongs to the type dictionary, not the selected value.
+An absent constructor payload has alignment 1. A constructor with several
+declared fields has one tuple payload, as in ordinary Ash; encoding does not
+flatten that tuple across the constructor boundary. For example, a tagged
+`(Bool,Int,Bool)` payload stores its tag at bytes 0--3, padding at 4--7,
+and its tuple child at byte 8, with fields at offsets 8, 16 and 24. Its extent
+is 25 and alignment 8; the same sole-constructor payload has extent 17.
+Decoding advances by each field's actual extent, including dynamic contents,
+then aligns the next field. The containing field or next object separately
+aligns its start; no aggregate extent is rounded to its natural alignment.
+
 The alignment operand is zero or a power of two at least the natural alignment
 and no greater than 64. Unsupported alignment, value conversion and all
 arithmetic checks precede reservation. For cursor c, size n and admitted
 alignment a, compute `start = align_up(c,a)` and `end = start+n` with checked
 arithmetic; require `end <= payload_bytes` and an available object record.
-Padding counts against payload capacity. Metadata does not count as payload
-bytes.
+Padding is zero-initialized and counts against payload capacity. Unit has zero
+encoded extent but an explicit stronger alignment may still advance the cursor
+through padding. Distinct Unit objects always consume distinct records. Metadata
+does not count as payload bytes.
 
-Native initialization and reserved reference/result metadata complete before
-publication. A failed conversion, initializer or runtime admission publishes no
+Native initialization and reserved reference/result metadata, including checked
+codec conversion and evaluator result admission, complete before publication.
+Preparing a native store may reserve unpublished scratch and a candidate key;
+it does not change counters. Admission failure drops that preparation. The
+synchronous final commit publishes initialized bytes and one record before
+the already-admitted result enters evaluator control. No fallible conversion
+follows native publication. A failed conversion, initializer or runtime admission publishes no
 reference and leaves the cursor/object count unchanged. Writes to an unpublished
 reservation cannot touch earlier objects. If initialization fails after writing
 the reservation, roll back its cursor/record and dispose partial temporary
