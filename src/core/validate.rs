@@ -3552,6 +3552,20 @@ pub(super) fn validate_effect_modules_family(
     sources: &[&SourceFile],
     module_sources: &[(ModuleId, SourceId)],
 ) -> Result<ValidatedCoreProgram<super::effect::EffectOperationFamily>, ValidationError> {
+    validate_effect_modules_with_work(
+        program,
+        sources,
+        module_sources,
+        &mut TypeWorkBudget::with_limit(CORE_VALIDATION_TYPE_WORK_LIMIT),
+    )
+}
+
+pub(crate) fn validate_effect_modules_with_work(
+    program: UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
+    sources: &[&SourceFile],
+    module_sources: &[(ModuleId, SourceId)],
+    work: &mut TypeWorkBudget,
+) -> Result<ValidatedCoreProgram<super::effect::EffectOperationFamily>, ValidationError> {
     let mut validator = match Validator::new_modules(&program, sources, module_sources) {
         Ok(validator) => validator,
         Err(error) => {
@@ -3559,7 +3573,12 @@ pub(super) fn validate_effect_modules_family(
             return Err(error);
         }
     };
-    if let Err(error) = validator.run_effect() {
+    validator.type_work_limit = work.remaining();
+    let result = validator.run_effect();
+    // The validator debits this exact remaining allowance, including failures.
+    work.charge(validator.type_work.get())
+        .map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
+    if let Err(error) = result {
         program.discard_iteratively();
         return Err(error);
     }
@@ -3606,6 +3625,20 @@ pub fn validate_modules(
     sources: &[&SourceFile],
     module_sources: &[(ModuleId, SourceId)],
 ) -> Result<ValidatedProgram, ValidationError> {
+    validate_modules_with_work(
+        program,
+        sources,
+        module_sources,
+        &mut TypeWorkBudget::with_limit(CORE_VALIDATION_TYPE_WORK_LIMIT),
+    )
+}
+
+pub(crate) fn validate_modules_with_work(
+    program: UnvalidatedProgram,
+    sources: &[&SourceFile],
+    module_sources: &[(ModuleId, SourceId)],
+    work: &mut TypeWorkBudget,
+) -> Result<ValidatedProgram, ValidationError> {
     let mut validator =
         match Validator::<PureOperationFamily>::new_modules(&program, sources, module_sources) {
             Ok(validator) => validator,
@@ -3614,7 +3647,12 @@ pub fn validate_modules(
                 return Err(error);
             }
         };
-    if let Err(error) = validator.run() {
+    validator.type_work_limit = work.remaining();
+    let result = validator.run();
+    // The validator debits this exact remaining allowance, including failures.
+    work.charge(validator.type_work.get())
+        .map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
+    if let Err(error) = result {
         program.discard_iteratively();
         return Err(error);
     }
@@ -3663,6 +3701,7 @@ struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily
     provider_handler_entry: Option<&'program super::provider::HandlerFragmentEntry<'program>>,
     provider_fragment_locals: Option<&'program [crate::types::NominalTypeId]>,
     type_work: Cell<usize>,
+    type_work_limit: usize,
     #[cfg(test)]
     owner_parameter_index_work: Cell<usize>,
     #[cfg(test)]
@@ -3824,6 +3863,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             provider_handler_entry: None,
             provider_fragment_locals: None,
             type_work: Cell::new(0),
+            type_work_limit: CORE_VALIDATION_TYPE_WORK_LIMIT,
             #[cfg(test)]
             owner_parameter_index_work: Cell::new(0),
             #[cfg(test)]
@@ -4018,7 +4058,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 ));
             };
             let mut expectation_work = TypeWorkBudget::with_limit(
-                CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+                self.type_work_limit.saturating_sub(self.type_work.get()),
             );
             let expectation_matches = super::dialect::method_evidence_anchor_matches_expectation(
                 catalog,
@@ -4709,7 +4749,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     }
                     for (left, right) in evidence.arguments.iter().zip(descriptor.arguments()) {
                         let mut budget = TypeWorkBudget::with_limit(
-                            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+                            self.type_work_limit.saturating_sub(self.type_work.get()),
                         );
                         let equal = crate::types::same_kinded_argument_with_budget(
                             left,
@@ -5010,9 +5050,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             return Ok(false);
         }
         let mut contains_tail = false;
-        let mut budget = TypeWorkBudget::with_limit(
-            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
-        );
+        let mut budget =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let result = crate::types::visit_owner_components_with_charge(
             arguments.iter(),
             &mut budget,
@@ -7226,7 +7265,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     fn validate_registry(&self) -> Result<RegistryParameterOwners, ValidationError> {
         if let Some(canonical) = self.contextual_registry {
             let mut work = TypeWorkBudget::with_limit(
-                CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+                self.type_work_limit.saturating_sub(self.type_work.get()),
             );
             let result = if let Some(session) = self.contextual_native_authentication {
                 let mut native_authentication = session
@@ -7580,9 +7619,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             .module_sources
             .as_ref()
             .expect("module registry validation requires an explicit relation");
-        let mut contract_work = TypeWorkBudget::with_limit(
-            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
-        );
+        let mut contract_work =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let contract_result = registry.authenticate_provider_contracts(&mut contract_work);
         self.charge_type_work(contract_work.used())?;
         // Contextual provider checking has its separately admitted defining
@@ -8060,9 +8098,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         module_sources: Option<&HashMap<ModuleId, SourceId>>,
         parameter_owners: &mut RegistryParameterOwners,
     ) -> Result<(), ValidationError> {
-        let mut owner_work = TypeWorkBudget::with_limit(
-            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
-        );
+        let mut owner_work =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let owner_result = self
             .program
             .registry
@@ -8672,7 +8709,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             .get()
             .checked_add(cells)
             .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?;
-        if attempted > CORE_VALIDATION_TYPE_WORK_LIMIT {
+        if attempted > self.type_work_limit {
             return Err(ValidationError::new(ValidationReason::Resource, None));
         }
         let next = attempted;
@@ -8744,7 +8781,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
 
     fn same_type_charged(&self, left: &Type, right: &Type) -> Result<bool, ValidationError> {
         let mut budget = crate::types::TypeWorkBudget::with_limit(
-            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+            self.type_work_limit.saturating_sub(self.type_work.get()),
         );
         let result = same_type_with_budget(left, right, &mut budget);
         self.charge_type_work(budget.used())?;
@@ -8770,7 +8807,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 ) => self.same_type_charged(left, right)?,
                 _ => {
                     let mut budget = TypeWorkBudget::with_limit(
-                        CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+                        self.type_work_limit.saturating_sub(self.type_work.get()),
                     );
                     let result =
                         crate::types::same_kinded_argument_with_budget(left, right, &mut budget);
@@ -8811,7 +8848,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
         for argument in application.arguments() {
             let mut budget = TypeWorkBudget::with_limit(
-                CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+                self.type_work_limit.saturating_sub(self.type_work.get()),
             );
             let result = crate::types::map_kinded_argument_types_with_budget(
                 argument,
@@ -8840,18 +8877,16 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     }
 
     fn clone_type_charged(&self, ty: &Type) -> Result<Type, ValidationError> {
-        let mut budget = TypeWorkBudget::with_limit(
-            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
-        );
+        let mut budget =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let result = clone_type_with_budget(ty, &mut budget);
         self.charge_type_work(budget.used())?;
         result.map_err(|()| ValidationError::new(ValidationReason::Resource, None))
     }
 
     fn clone_effect_row_charged(&self, row: &EffectRow) -> Result<EffectRow, ValidationError> {
-        let mut budget = TypeWorkBudget::with_limit(
-            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
-        );
+        let mut budget =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let result = clone_effect_row_with_budget(row, &mut budget);
         self.charge_type_work(budget.used())?;
         result.map_err(|()| ValidationError::new(ValidationReason::Resource, None))
@@ -8863,9 +8898,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         right: &EffectRow,
         node: NodeId,
     ) -> Result<bool, ValidationError> {
-        let mut budget = TypeWorkBudget::with_limit(
-            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
-        );
+        let mut budget =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let result = same_effect_rows_with_budget(left, right, &mut budget);
         self.charge_type_work(budget.used())?;
         result.map_err(|()| ValidationError::new(ValidationReason::Resource, Some(node)))
@@ -8877,9 +8911,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         right: &EffectRow,
         node: NodeId,
     ) -> Result<EffectRow, ValidationError> {
-        let mut budget = TypeWorkBudget::with_limit(
-            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
-        );
+        let mut budget =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let result = left.union_with_budget(right, &mut budget);
         self.charge_type_work(budget.used())?;
         result
@@ -8893,9 +8926,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         effect: &EffectInstance,
         node: NodeId,
     ) -> Result<EffectRow, ValidationError> {
-        let mut budget = TypeWorkBudget::with_limit(
-            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
-        );
+        let mut budget =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let result = row.remove_exact_with_budget(effect, &mut budget);
         self.charge_type_work(budget.used())?;
         result
@@ -8912,9 +8944,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         if handler.hook_root.is_none() && handler.hook_registration.is_none() {
             return self.remove_effect_row_charged(row, &handler.effect, node);
         }
-        let mut budget = TypeWorkBudget::with_limit(
-            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
-        );
+        let mut budget =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let result = row.remove_exact_with_budget(&handler.effect, &mut budget);
         self.charge_type_work(budget.used())?;
         match result.map_err(|()| ValidationError::new(ValidationReason::Resource, Some(node)))? {
@@ -8932,9 +8963,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         effect: &EffectInstance,
         node: NodeId,
     ) -> Result<EffectRow, ValidationError> {
-        let mut budget = TypeWorkBudget::with_limit(
-            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
-        );
+        let mut budget =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let removed = row.remove_exact_with_budget(effect, &mut budget);
         self.charge_type_work(budget.used())?;
         match removed.map_err(|()| ValidationError::new(ValidationReason::Resource, Some(node)))? {
@@ -8949,9 +8979,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         effect: &EffectInstance,
         node: NodeId,
     ) -> Result<EffectRow, ValidationError> {
-        let mut budget = TypeWorkBudget::with_limit(
-            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
-        );
+        let mut budget =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let result = rebuild_effect_row_with_budget(
             std::iter::once(effect),
             None,
@@ -9079,9 +9108,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         left: &crate::types::KindedArgument,
         right: &crate::types::KindedArgument,
     ) -> Result<bool, ValidationError> {
-        let mut budget = TypeWorkBudget::with_limit(
-            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
-        );
+        let mut budget =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let result = crate::types::same_kinded_argument_with_budget(left, right, &mut budget);
         self.charge_type_work(budget.used())?;
         result.map_err(|()| ValidationError::new(ValidationReason::Resource, None))
@@ -9969,9 +9997,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     }
 
     fn charge_row_structure(&self, row: &EffectRow) -> Result<(), ValidationError> {
-        let mut budget = TypeWorkBudget::with_limit(
-            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
-        );
+        let mut budget =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let result = crate::types::charge_effect_row_cells(row, &mut budget);
         self.charge_type_work(budget.used())?;
         result.map_err(|()| ValidationError::new(ValidationReason::Resource, None))
@@ -10611,9 +10638,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         };
         // Written rows retain their known members without duplicating the
         // corresponding tail constraints. Those members already prove lacks.
-        let mut budget = TypeWorkBudget::with_limit(
-            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
-        );
+        let mut budget =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let normalized = rebuild_effect_row_with_budget(
             superset.known(),
             Some(tail.variable()),
@@ -10634,9 +10660,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let Some(recipe) = entry.row_recipe else {
             return Ok(false);
         };
-        let mut work = TypeWorkBudget::with_limit(
-            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
-        );
+        let mut work =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let result = recipe.deferred_node(entry, id, &mut work);
         self.charge_type_work(work.used())?;
         result
@@ -10653,9 +10678,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let Some(recipe) = entry.row_recipe else {
             return Ok(false);
         };
-        let mut work = TypeWorkBudget::with_limit(
-            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
-        );
+        let mut work =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let result = recipe.permits_row_position(entry, id, row, &mut work);
         self.charge_type_work(work.used())?;
         result
@@ -10668,9 +10692,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let Some(recipe) = entry.row_recipe else {
             return Ok(false);
         };
-        let mut work = TypeWorkBudget::with_limit(
-            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
-        );
+        let mut work =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let result = recipe.deferred_function(entry, id, &mut work);
         self.charge_type_work(work.used())?;
         result
@@ -12898,9 +12921,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         requirements: &mut ScopeRequirements,
     ) -> Result<(), ValidationError> {
         let mut identities = HashSet::new();
-        let mut budget = TypeWorkBudget::with_limit(
-            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
-        );
+        let mut budget =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let result = crate::resolved::collect_nominal_identities(ty, &mut identities, &mut budget);
         self.charge_type_work(budget.used())?;
         result.map_err(|()| ValidationError::new(ValidationReason::Resource, Some(occurrence)))?;
@@ -13265,9 +13287,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         let CorePatternKind::Binder(input) = &clause.pattern().kind else {
             return Err(invalid(ValidationCause::HookInputPattern));
         };
-        let mut budget = TypeWorkBudget::with_limit(
-            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
-        );
+        let mut budget =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let target_matches = crate::types::compare_effect_instances_with_budget(
             &contract.target,
             &handler.effect,
@@ -13356,9 +13377,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     && node.origin.as_ref().map(Origin::primary_span) == Some(contract.target_span),
             )
         };
-        let mut budget = TypeWorkBudget::with_limit(
-            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
-        );
+        let mut budget =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let forwarding_matches = crate::types::compare_effect_instances_with_budget(
             request.effect(),
             &contract.target,
@@ -13616,9 +13636,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         {
             return Ok(());
         }
-        let mut capture_work = TypeWorkBudget::with_limit(
-            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
-        );
+        let mut capture_work =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let capture_result = super::capture::check_nodes(
             &self.program.nodes,
             &[],
@@ -13859,9 +13878,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         self.charge_type_work(2)?;
         let instance =
             EffectInstance::new(api.ops(), Box::new([Type::Variable(acquisition.identity)]));
-        let mut budget = TypeWorkBudget::with_limit(
-            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
-        );
+        let mut budget =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let result = body.remove_exact_with_budget(&instance, &mut budget);
         self.charge_type_work(budget.used())?;
         match result.map_err(|()| ValidationError::new(ValidationReason::Resource, Some(id)))? {
@@ -13993,9 +14011,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             EffectClauseContract,
         >,
     ) -> Result<(), ValidationError> {
-        let mut budget = TypeWorkBudget::with_limit(
-            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
-        );
+        let mut budget =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let admitted = scope
             .authenticate_structure(self.program, id, &mut budget)
             .and_then(|()| scope.authenticate_protocol(self.program, id, &mut budget))
@@ -14328,7 +14345,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             {
                 for fact in codomain.effects().known().iter().chain(tail.lacks()) {
                     let mut budget = TypeWorkBudget::with_limit(
-                        CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+                        self.type_work_limit.saturating_sub(self.type_work.get()),
                     );
                     let matches = crate::types::compare_effect_instances_with_budget(
                         fact,
@@ -14414,7 +14431,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         if same_lacks {
             for (left, right) in tail.lacks().iter().zip(reported_tail.lacks()) {
                 let mut budget = TypeWorkBudget::with_limit(
-                    CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+                    self.type_work_limit.saturating_sub(self.type_work.get()),
                 );
                 let matches =
                     crate::types::compare_effect_instances_with_budget(left, right, &mut budget);
@@ -14433,7 +14450,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             let mut found = false;
             for existing in tail.lacks() {
                 let mut budget = TypeWorkBudget::with_limit(
-                    CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+                    self.type_work_limit.saturating_sub(self.type_work.get()),
                 );
                 let matches =
                     crate::types::compare_effect_instances_with_budget(fact, existing, &mut budget);
@@ -14456,9 +14473,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         if !added {
             return Ok(std::borrow::Cow::Borrowed(row));
         }
-        let mut budget = TypeWorkBudget::with_limit(
-            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
-        );
+        let mut budget =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let qualified = rebuild_effect_row_with_budget(
             row.known(),
             Some(tail.variable()),
@@ -14538,7 +14554,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 continue;
             };
             let mut budget = TypeWorkBudget::with_limit(
-                CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+                self.type_work_limit.saturating_sub(self.type_work.get()),
             );
             let authenticated = scope
                 .descriptor
@@ -14559,9 +14575,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         native: &EffectInstance,
         id: NodeId,
     ) -> Result<EffectRow, ValidationError> {
-        let mut budget = TypeWorkBudget::with_limit(
-            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
-        );
+        let mut budget =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let removed = super::provider::interpret_native_phase_row(row, native, &mut budget);
         self.charge_type_work(budget.used())?;
         removed.map_err(|error| ValidationError::new(error.reason(), Some(id)))
@@ -14945,7 +14960,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 return Err(invalid(ValidationCause::HookRootValueShape));
             };
             let mut budget = TypeWorkBudget::with_limit(
-                CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+                self.type_work_limit.saturating_sub(self.type_work.get()),
             );
             let target_matches = crate::types::compare_effect_instances_with_budget(
                 &root.target,

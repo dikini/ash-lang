@@ -1,0 +1,7 @@
+{
+  "production_identical_to_v2": true,
+  "changed": [
+    "src/core/capture/value/mixed_origin_tests.rs"
+  ],
+  "v3_pins_sha256": "cc1b9e387ec6925f0b9c6c871ab412c7f43fef83d0a57ad7a97eac3f53f63896"
+}

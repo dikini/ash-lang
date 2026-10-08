@@ -1,0 +1,268 @@
+[
+  {
+    "lane": "candidate",
+    "case": "copying",
+    "argv": [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "ash",
+      "--test",
+      "provider_sqlite_copying",
+      "copied_unicode_blobs_nulls_and_empty_values_survive_both_scopes",
+      "--",
+      "--exact",
+      "--test-threads=1",
+      "--nocapture"
+    ],
+    "exit": 0,
+    "seconds": 51.46297599100217,
+    "log_sha256": "57513fdacfe80e2cd89803c8f2654a3d1745f3caf474dd5b28feb8333f8a6932",
+    "owners": {
+      "resolution": 27413,
+      "source-checking": 33595389,
+      "module-linking": 4030,
+      "linked-interface": 15742,
+      "final-elaboration": 165717,
+      "independent-effect-core": 1034670
+    },
+    "connected_hits": [
+      [
+        756,
+        309,
+        0,
+        127,
+        120,
+        127,
+        120,
+        0
+      ],
+      [
+        788,
+        331,
+        0,
+        127,
+        120,
+        0,
+        0,
+        1
+      ],
+      [
+        815,
+        356,
+        0,
+        127,
+        120,
+        0,
+        0,
+        1
+      ],
+      [
+        837,
+        381,
+        0,
+        127,
+        120,
+        0,
+        0,
+        1
+      ],
+      [
+        871,
+        409,
+        0,
+        127,
+        120,
+        0,
+        0,
+        1
+      ],
+      [
+        903,
+        431,
+        0,
+        127,
+        120,
+        0,
+        0,
+        1
+      ],
+      [
+        944,
+        456,
+        0,
+        127,
+        120,
+        0,
+        0,
+        1
+      ]
+    ],
+    "harness": {
+      "groups": [
+        {
+          "header": "Running tests/provider_sqlite_copying.rs (target/debug/deps/provider_sqlite_copying-b82a66bcca474e24)",
+          "header_line": 128,
+          "kind": "binary",
+          "parent": {
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered": 7,
+            "line": 877,
+            "announced": 1
+          },
+          "nested": []
+        }
+      ],
+      "raw_summaries": [
+        {
+          "status": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 7,
+          "line": 877,
+          "announced": 1
+        }
+      ]
+    }
+  },
+  {
+    "lane": "candidate",
+    "case": "bound_nul",
+    "argv": [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "ash",
+      "--test",
+      "provider_sqlite_copying",
+      "bound_text_nul_is_an_ordinary_failure_with_both_completion_reports",
+      "--",
+      "--exact",
+      "--test-threads=1",
+      "--nocapture"
+    ],
+    "exit": 0,
+    "seconds": 8.313907363000908,
+    "log_sha256": "1ed5e1624adf3c74d88c24afa32d1792bb91c16545fc83eb4ed5b03fc933bc02",
+    "owners": {
+      "resolution": 27413,
+      "source-checking": 33595389,
+      "module-linking": 4030,
+      "linked-interface": 15742,
+      "final-elaboration": 165717,
+      "independent-effect-core": 1034665
+    },
+    "connected_hits": [
+      [
+        756,
+        309,
+        0,
+        127,
+        120,
+        127,
+        120,
+        0
+      ],
+      [
+        788,
+        331,
+        0,
+        127,
+        120,
+        0,
+        0,
+        1
+      ],
+      [
+        815,
+        356,
+        0,
+        127,
+        120,
+        0,
+        0,
+        1
+      ],
+      [
+        837,
+        381,
+        0,
+        127,
+        120,
+        0,
+        0,
+        1
+      ],
+      [
+        871,
+        409,
+        0,
+        127,
+        120,
+        0,
+        0,
+        1
+      ],
+      [
+        903,
+        431,
+        0,
+        127,
+        120,
+        0,
+        0,
+        1
+      ],
+      [
+        944,
+        456,
+        0,
+        127,
+        120,
+        0,
+        0,
+        1
+      ]
+    ],
+    "harness": {
+      "groups": [
+        {
+          "header": "Running tests/provider_sqlite_copying.rs (target/debug/deps/provider_sqlite_copying-b82a66bcca474e24)",
+          "header_line": 126,
+          "kind": "binary",
+          "parent": {
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered": 7,
+            "line": 875,
+            "announced": 1
+          },
+          "nested": []
+        }
+      ],
+      "raw_summaries": [
+        {
+          "status": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 7,
+          "line": 875,
+          "announced": 1
+        }
+      ]
+    }
+  }
+]

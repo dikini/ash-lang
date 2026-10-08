@@ -1,0 +1,12 @@
+
+running 7 tests
+test bound_text_nul_is_an_ordinary_failure_with_both_completion_reports ... ok
+test copied_unicode_blobs_nulls_and_empty_values_survive_both_scopes ... ok
+test imported_unicode_text_binding_returns_an_independent_copy_after_completion ... ok
+test integer_width_and_nonnegative_parameter_index_fail_before_native_binding ... ok
+test malformed_native_text_and_float_columns_preserve_copy_and_type_failures ... ok
+test reset_preserves_bound_text_and_clear_restores_null_after_copied_results ... ok
+test wrong_storage_kind_and_bad_column_are_distinct_from_protocol_errors ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.64s
+

@@ -1,0 +1,30 @@
+[
+  {
+    "target": "provider_sqlite_copying",
+    "test": "copied_unicode_blobs_nulls_and_empty_values_survive_both_scopes",
+    "exit_code": 0,
+    "elapsed_seconds": 1.597478959,
+    "binary": "target/debug/deps/provider_sqlite_copying-b82a66bcca474e24"
+  },
+  {
+    "target": "provider_sqlite_copying",
+    "test": "bound_text_nul_is_an_ordinary_failure_with_both_completion_reports",
+    "exit_code": 0,
+    "elapsed_seconds": 1.5765801970010216,
+    "binary": "target/debug/deps/provider_sqlite_copying-b82a66bcca474e24"
+  },
+  {
+    "target": "provider_sqlite_sessions",
+    "test": "statement_reuse_transactions_generic_rows_and_reopen_preserve_every_report",
+    "exit_code": 0,
+    "elapsed_seconds": 1.8507674619995669,
+    "binary": "target/debug/deps/provider_sqlite_sessions-ead443f8522b4451"
+  },
+  {
+    "target": "provider_sqlite_control",
+    "test": "captured_statement_and_connection_resume_actual_copied_query_without_reacquisition",
+    "exit_code": 0,
+    "elapsed_seconds": 0.535925190000853,
+    "binary": "target/debug/deps/provider_sqlite_control-2fe3c8892667913b"
+  }
+]

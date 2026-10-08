@@ -9,6 +9,7 @@
 //! interfaces and their implementation do not define additional language
 //! behavior.
 
+pub mod compiler_work;
 pub mod core;
 pub mod diagnostic;
 pub mod driver;

@@ -1,0 +1,94 @@
+{
+  "utc": "2026-10-07T21:59:29.279661+00:00",
+  "elapsed_seconds": 48.110818342996936,
+  "failure": "AssertionError(('native', 101))",
+  "restoration_error": null,
+  "engines": [],
+  "results": [
+    {
+      "name": "value",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "ash",
+        "--lib",
+        "core::capture::value::tests::",
+        "--",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 43.44478933699429,
+      "log_sha256": "abdcfd4eb67c68e6403ac259fcaa21767b9cccef09a29af41b80e5035b194896",
+      "harness": {
+        "groups": [
+          {
+            "header": "Running unittests src/lib.rs (target/debug/deps/ash-94445b49e5489316)",
+            "header_line": 149,
+            "kind": "binary",
+            "parent": {
+              "status": "ok",
+              "passed": 63,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered": 1586,
+              "line": 366,
+              "announced": 63
+            },
+            "nested": []
+          }
+        ],
+        "raw_summaries": [
+          {
+            "status": "ok",
+            "passed": 63,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered": 1586,
+            "line": 366,
+            "announced": 63
+          }
+        ]
+      },
+      "required_tests": [
+        "connected_nonleaf_producer_preserves_original_evidence_tuple_roots_and_control",
+        "symbolic_returned_root_keeps_both_full_specializations_and_original_typecall",
+        "recursive_callee_contexts_join_calls_but_keep_distinct_entries",
+        "canonical_context_prefixes_preserve_source_order_and_atomic_cold_publication",
+        "immutable_setup_keeps_late_real_owners_closure_dependencies_and_direct_readers",
+        "evidence_input_phase_keeps_late_live_atoms_and_other_direct_readers",
+        "evidence_completion_refusals_never_publish_attempted_transfers",
+        "call_transfer_completion_has_prefilled_refusal_and_fresh_exact_retry_boundaries",
+        "evidence_coalesces_complementary_empty_capture_ports_before_provider_validity"
+      ]
+    },
+    {
+      "name": "native",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "ash",
+        "--test",
+        "provider_sqlite_copying",
+        "qualified_forwarding_chain_preserves_integer_and_source_completion",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit": 101,
+      "seconds": 3.808869947999483,
+      "log_sha256": "250c36c08fd91d5d4a71f3716fc91be64b71e52a1cf534263bc655ce584338b0"
+    }
+  ],
+  "explicit_return": true,
+  "all_three_guards_restored": true,
+  "normal_limits_unchanged": true,
+  "pass": false
+}

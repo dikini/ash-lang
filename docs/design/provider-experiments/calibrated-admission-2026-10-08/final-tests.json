@@ -1,0 +1,76 @@
+[
+  {
+    "name": "driver-final",
+    "command": [
+      "ash-94445b49e5489316",
+      "driver::tests::",
+      "--test-threads=1"
+    ],
+    "exit_code": 0,
+    "seconds": 2.269381333000638,
+    "result": [
+      "test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 1631 filtered out; finished in 2.23s"
+    ]
+  },
+  {
+    "name": "policy-final",
+    "command": [
+      "ash-94445b49e5489316",
+      "compiler_work::tests::",
+      "--test-threads=1"
+    ],
+    "exit_code": 0,
+    "seconds": 0.008266803999504191,
+    "result": [
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1648 filtered out; finished in 0.00s"
+    ]
+  },
+  {
+    "name": "reporting-final",
+    "command": [
+      "compiler_work_reporting-7b05e54d16601fce",
+      "--test-threads=1"
+    ],
+    "exit_code": 0,
+    "seconds": 0.03244082099990919,
+    "result": [
+      "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+    ]
+  },
+  {
+    "name": "sqlite-control-final",
+    "command": [
+      "provider_sqlite_control-2fe3c8892667913b",
+      "--test-threads=1"
+    ],
+    "exit_code": 0,
+    "seconds": 1.0669004419996782,
+    "result": [
+      "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.04s"
+    ]
+  },
+  {
+    "name": "sqlite-copying-final",
+    "command": [
+      "provider_sqlite_copying-b82a66bcca474e24",
+      "--test-threads=1"
+    ],
+    "exit_code": 0,
+    "seconds": 5.675998775001062,
+    "result": [
+      "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.64s"
+    ]
+  },
+  {
+    "name": "sqlite-sessions-final",
+    "command": [
+      "provider_sqlite_sessions-ead443f8522b4451",
+      "--test-threads=1"
+    ],
+    "exit_code": 0,
+    "seconds": 5.024769465000645,
+    "result": [
+      "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.02s"
+    ]
+  }
+]

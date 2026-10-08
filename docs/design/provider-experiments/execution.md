@@ -7509,3 +7509,26 @@ The earlier full workspace verification remains historical evidence; this
 test-only delivery ran its affected architecture gate, and the next combined
 feature or final checkpoint still requires full `cargo xtask verify`.
 Core alignment remains paused pending SQLite and Arena stabilisation.
+
+### Cost comparison and requested pause (2026-10-08)
+
+The connected source producer candidate passes 63 Value capture cases, but
+normal native forwarding still exhausts typing work. A fresh five-program
+comparison against Common `5a1da1ce` completes under temporary diagnostic
+ceilings and establishes a compound cost regression, not an optimisation:
+copying and bound NUL increase from 1,212,707 to 33,595,389 source-checking
+units; persistence from 597,882 to 757,922; resume from 203,215 to 253,310;
+forwarding from 216,584 to 401,561. Copying's independent Core cost also rises
+from 903,995 to 1,034,670, above its normal 983,040 capacity. The original native
+assertions pass only in the completed diagnostic runs. No candidate source or
+raised ceiling is admitted or merged.
+
+The [cost checkpoint](common-cost-checkpoint-2026-10-08/README.md) retains all
+six-owner measurements, raw results, failed attempts, source pins, reproduction
+patches and exact restoration receipts. Normal ceilings and all three worktree
+guards are restored; no build engines remain. All Common, Fusion, SQLite and
+Arena work is paused at the user's request after preservation checkpoints.
+Core alignment remains paused. The latest verified source integration is
+`eee40a1ba4e65c79714dd57c6c6049e6934e5841`; this receipt changes documentation and
+preserves experimental evidence only. Further cost attribution and any repair
+require a resumed workstream.
