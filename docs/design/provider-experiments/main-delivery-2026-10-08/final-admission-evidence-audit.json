@@ -1,0 +1,407 @@
+{
+  "verdict": "GO",
+  "issues": [],
+  "audit_kind": "independent read-only evidence and calibrated-admission audit; no compiler/native rerun",
+  "executed_main_tip": "f51f538455cb997e5e1f5db6eec8cf36d616c7d1",
+  "verified_full_gate_tip": "7a518e83230fec568978b269b1d69776ab6051c5",
+  "common_delivery": "f56070ccb88d21ba833c5ca70106070318b9145a",
+  "main_tree": "6801bf0b2f853f3bd68db382b15f61d81e67958f",
+  "aggregate": {
+    "path": "/tmp/ash-consolidation-20261008/main-final-aggregate.json",
+    "sha256": "806e6ad659a67acff44db17c0de8ea74defe85e1f938308255f0d714e475bfdb",
+    "referenced_hashes_verified": 27
+  },
+  "source_equality": {
+    "main_common_tree_equal": true,
+    "gate_to_main_changes_only_docs": true,
+    "gate_to_main_document_paths": 34,
+    "actual_compiler_test_adapter_configuration_pins_checked": 377,
+    "pin_mismatches": []
+  },
+  "full_gate": {
+    "execution_location": "Original",
+    "passed": 3475,
+    "failed": 0,
+    "ignored": 1,
+    "outer_targets": 119,
+    "excluded_nested_summaries": 9,
+    "stages": [
+      "format",
+      "metadata",
+      "build",
+      "clippy",
+      "test",
+      "documentation"
+    ],
+    "receipt_exit_code": 0,
+    "source_unchanged_during_run": true,
+    "drafts_unchanged_during_run": true
+  },
+  "fresh_main": {
+    "focused_targets": 6,
+    "focused_passed": 39,
+    "focused_failed": 0,
+    "native_hosts": [
+      {
+        "entry": "text-entry.ash",
+        "exit_code": 0,
+        "full_source_value_matched": true,
+        "copy_sizes_matched": true,
+        "native_acquisition_completion_order_matched": true,
+        "retained_owners": 0,
+        "connections": 1,
+        "statements": 1
+      },
+      {
+        "entry": "copying-entry.ash",
+        "exit_code": 0,
+        "full_source_value_matched": true,
+        "copy_sizes_matched": true,
+        "native_acquisition_completion_order_matched": true,
+        "retained_owners": 0,
+        "connections": 1,
+        "statements": 1
+      },
+      {
+        "entry": "session-entry.ash",
+        "exit_code": 0,
+        "full_source_value_matched": true,
+        "copy_sizes_matched": true,
+        "native_acquisition_completion_order_matched": true,
+        "retained_owners": 0,
+        "connections": 2,
+        "statements": 6
+      },
+      {
+        "entry": "control-resume.ash",
+        "exit_code": 0,
+        "full_source_value_matched": true,
+        "copy_sizes_matched": true,
+        "native_acquisition_completion_order_matched": true,
+        "retained_owners": 0,
+        "connections": 1,
+        "statements": 1
+      },
+      {
+        "entry": "control-discard.ash",
+        "exit_code": 0,
+        "full_source_value_matched": true,
+        "copy_sizes_matched": true,
+        "native_acquisition_completion_order_matched": true,
+        "retained_owners": 0,
+        "connections": 1,
+        "statements": 1
+      },
+      {
+        "entry": "arena-typed/allocation-entry.ash",
+        "exit_code": 0,
+        "full_source_value_matched": true,
+        "value": "Completed(41, Closed)",
+        "exact_events": [
+          "Acquired",
+          "Stored",
+          "Loaded",
+          "Released"
+        ],
+        "same_owner_object_layout": true,
+        "bytes_read": 8,
+        "host_teardown": false
+      }
+    ],
+    "completed_phase_observations": [
+      {
+        "entry": "text-entry.ash",
+        "phase": "SourceChecking",
+        "completed": true,
+        "used": 164084,
+        "budget": 1245184,
+        "hard_limit": 1369702,
+        "headroom_to_nominal": 1081100,
+        "deficit_units": 0,
+        "assessment": "WithinBudget",
+        "optimization_target": false
+      },
+      {
+        "entry": "text-entry.ash",
+        "phase": "FinalElaboration",
+        "completed": true,
+        "used": 60696,
+        "budget": 393216,
+        "hard_limit": 432537,
+        "headroom_to_nominal": 332520,
+        "deficit_units": 0,
+        "assessment": "WithinBudget",
+        "optimization_target": false
+      },
+      {
+        "entry": "text-entry.ash",
+        "phase": "IndependentCore",
+        "completed": true,
+        "used": 91011,
+        "budget": 1638400,
+        "hard_limit": 1802240,
+        "headroom_to_nominal": 1547389,
+        "deficit_units": 0,
+        "assessment": "WithinBudget",
+        "optimization_target": false
+      },
+      {
+        "entry": "copying-entry.ash",
+        "phase": "SourceChecking",
+        "completed": true,
+        "used": 1213287,
+        "budget": 1245184,
+        "hard_limit": 1369702,
+        "headroom_to_nominal": 31897,
+        "deficit_units": 0,
+        "assessment": "WithinBudget",
+        "optimization_target": false
+      },
+      {
+        "entry": "copying-entry.ash",
+        "phase": "FinalElaboration",
+        "completed": true,
+        "used": 166073,
+        "budget": 393216,
+        "hard_limit": 432537,
+        "headroom_to_nominal": 227143,
+        "deficit_units": 0,
+        "assessment": "WithinBudget",
+        "optimization_target": false
+      },
+      {
+        "entry": "copying-entry.ash",
+        "phase": "IndependentCore",
+        "completed": true,
+        "used": 903995,
+        "budget": 1638400,
+        "hard_limit": 1802240,
+        "headroom_to_nominal": 734405,
+        "deficit_units": 0,
+        "assessment": "WithinBudget",
+        "optimization_target": false
+      },
+      {
+        "entry": "session-entry.ash",
+        "phase": "SourceChecking",
+        "completed": true,
+        "used": 598589,
+        "budget": 1245184,
+        "hard_limit": 1369702,
+        "headroom_to_nominal": 646595,
+        "deficit_units": 0,
+        "assessment": "WithinBudget",
+        "optimization_target": false
+      },
+      {
+        "entry": "session-entry.ash",
+        "phase": "FinalElaboration",
+        "completed": true,
+        "used": 377132,
+        "budget": 393216,
+        "hard_limit": 432537,
+        "headroom_to_nominal": 16084,
+        "deficit_units": 0,
+        "assessment": "WithinBudget",
+        "optimization_target": false
+      },
+      {
+        "entry": "session-entry.ash",
+        "phase": "IndependentCore",
+        "completed": true,
+        "used": 1609027,
+        "budget": 1638400,
+        "hard_limit": 1802240,
+        "headroom_to_nominal": 29373,
+        "deficit_units": 0,
+        "assessment": "WithinBudget",
+        "optimization_target": false
+      },
+      {
+        "entry": "control-resume.ash",
+        "phase": "SourceChecking",
+        "completed": true,
+        "used": 203627,
+        "budget": 1245184,
+        "hard_limit": 1369702,
+        "headroom_to_nominal": 1041557,
+        "deficit_units": 0,
+        "assessment": "WithinBudget",
+        "optimization_target": false
+      },
+      {
+        "entry": "control-resume.ash",
+        "phase": "FinalElaboration",
+        "completed": true,
+        "used": 103926,
+        "budget": 393216,
+        "hard_limit": 432537,
+        "headroom_to_nominal": 289290,
+        "deficit_units": 0,
+        "assessment": "WithinBudget",
+        "optimization_target": false
+      },
+      {
+        "entry": "control-resume.ash",
+        "phase": "IndependentCore",
+        "completed": true,
+        "used": 289063,
+        "budget": 1638400,
+        "hard_limit": 1802240,
+        "headroom_to_nominal": 1349337,
+        "deficit_units": 0,
+        "assessment": "WithinBudget",
+        "optimization_target": false
+      },
+      {
+        "entry": "control-discard.ash",
+        "phase": "SourceChecking",
+        "completed": true,
+        "used": 263417,
+        "budget": 1245184,
+        "hard_limit": 1369702,
+        "headroom_to_nominal": 981767,
+        "deficit_units": 0,
+        "assessment": "WithinBudget",
+        "optimization_target": false
+      },
+      {
+        "entry": "control-discard.ash",
+        "phase": "FinalElaboration",
+        "completed": true,
+        "used": 147288,
+        "budget": 393216,
+        "hard_limit": 432537,
+        "headroom_to_nominal": 245928,
+        "deficit_units": 0,
+        "assessment": "WithinBudget",
+        "optimization_target": false
+      },
+      {
+        "entry": "control-discard.ash",
+        "phase": "IndependentCore",
+        "completed": true,
+        "used": 109243,
+        "budget": 1638400,
+        "hard_limit": 1802240,
+        "headroom_to_nominal": 1529157,
+        "deficit_units": 0,
+        "assessment": "WithinBudget",
+        "optimization_target": false
+      },
+      {
+        "entry": "arena-typed/allocation-entry.ash",
+        "phase": "SourceChecking",
+        "completed": true,
+        "used": 88793,
+        "budget": 1245184,
+        "hard_limit": 1369702,
+        "headroom_to_nominal": 1156391,
+        "deficit_units": 0,
+        "assessment": "WithinBudget",
+        "optimization_target": false
+      },
+      {
+        "entry": "arena-typed/allocation-entry.ash",
+        "phase": "FinalElaboration",
+        "completed": true,
+        "used": 27096,
+        "budget": 393216,
+        "hard_limit": 432537,
+        "headroom_to_nominal": 366120,
+        "deficit_units": 0,
+        "assessment": "WithinBudget",
+        "optimization_target": false
+      },
+      {
+        "entry": "arena-typed/allocation-entry.ash",
+        "phase": "IndependentCore",
+        "completed": true,
+        "used": 82277,
+        "budget": 1638400,
+        "hard_limit": 1802240,
+        "headroom_to_nominal": 1556123,
+        "deficit_units": 0,
+        "assessment": "WithinBudget",
+        "optimization_target": false
+      }
+    ],
+    "phase_maxima": {
+      "SourceChecking": {
+        "entry": "copying-entry.ash",
+        "phase": "SourceChecking",
+        "completed": true,
+        "used": 1213287,
+        "budget": 1245184,
+        "hard_limit": 1369702,
+        "headroom_to_nominal": 31897,
+        "deficit_units": 0,
+        "assessment": "WithinBudget",
+        "optimization_target": false
+      },
+      "FinalElaboration": {
+        "entry": "session-entry.ash",
+        "phase": "FinalElaboration",
+        "completed": true,
+        "used": 377132,
+        "budget": 393216,
+        "hard_limit": 432537,
+        "headroom_to_nominal": 16084,
+        "deficit_units": 0,
+        "assessment": "WithinBudget",
+        "optimization_target": false
+      },
+      "IndependentCore": {
+        "entry": "session-entry.ash",
+        "phase": "IndependentCore",
+        "completed": true,
+        "used": 1609027,
+        "budget": 1638400,
+        "hard_limit": 1802240,
+        "headroom_to_nominal": 29373,
+        "deficit_units": 0,
+        "assessment": "WithinBudget",
+        "optimization_target": false
+      }
+    },
+    "accepted_deficits": {},
+    "host_source_pins_verified": 8,
+    "sqlite_binary_hash_verified": "a529cf7e2f3da9f03f7b50b6f00a55b8120f787d059ad81e04b52c36a9994441"
+  },
+  "admission_contract": {
+    "budget_source": "src/compiler_work.rs",
+    "budget_source_sha256": "237cd42ba0397e874556e06a7bcf281ef2435b3b33d7e01a1f51b4bf43cfd884",
+    "budgets": {
+      "SourceChecking": 1245184,
+      "FinalElaboration": 393216,
+      "IndependentCore": 1638400
+    },
+    "hard_limits": {
+      "SourceChecking": 1369702,
+      "FinalElaboration": 432537,
+      "IndependentCore": 1802240
+    },
+    "max_additional_units": {
+      "SourceChecking": 124518,
+      "FinalElaboration": 39321,
+      "IndependentCore": 163840
+    },
+    "all_fresh_costs_within_nominal": true,
+    "deficits_reported_honestly": true,
+    "earlier_linked_provider_preparation_excluded_from_final_phase": true,
+    "independent_final_core_validation_preserved": true,
+    "prepared_source_views_do_not_grant_final_execution": true,
+    "feature_off_native_runs_use_normal_policy": true
+  },
+  "consolidation_disposition": {
+    "path": "/tmp/ash-consolidation-20261008/consolidation-final-disposition.json",
+    "sha256": "6e9cdf1e2cdf11a8b0e1f739ae8f3fb74fce59acdf6df89225124e1ca0712f33"
+  },
+  "qualifications": [
+    "The full gate ran on Original 7a518e8, not Main; exact compiler/test/adapter/config source equality transfers its evidence. Main freshly ran six focused suites and six native host programs at f51f538.",
+    "Later documentation-only descendants are not represented as a full-gate rerun.",
+    "Native Arena assessment is derived from its raw completed counts using the reviewed source budgets; it is not another host observation.",
+    "Work units are cumulative charged operations, including reserved work; these records establish no CPU, RSS, memory-efficiency, or speed improvement.",
+    "The three compilation reports exclude separately owned builder, rewrite, constraint, syntax, runtime and earlier linked-interface provider preparation ledgers."
+  ]
+}

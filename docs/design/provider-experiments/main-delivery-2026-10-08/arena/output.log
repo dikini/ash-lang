@@ -1,0 +1,9 @@
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/foreign-adapter)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.89s
+     Running `.worktree/cache/provider-final-20261008/debug/examples/arena_typed tests/fixtures/provider-experiments/arena-typed/allocation-entry.ash`
+Acquired { activation: 0, usage: Usage { used_payload_bytes: 0, payload_capacity: 8, object_count: 0, object_capacity: 1 } }
+Stored { activation: 0, allocation: AllocationKey { owner: 1, object: 1 }, layout: PayloadLayout { tag: LayoutTag(3), size: 8, alignment: 8 }, usage: Usage { used_payload_bytes: 8, payload_capacity: 8, object_count: 1, object_capacity: 1 } }
+Loaded { activation: 0, allocation: AllocationKey { owner: 1, object: 1 }, layout: LayoutTag(3), bytes_read: 8, usage: Usage { used_payload_bytes: 8, payload_capacity: 8, object_count: 1, object_capacity: 1 } }
+Released { activation: 0, host_teardown: false }
+CompilationWork { source_checking: Some(PhaseCost { completed: true, phase: SourceChecking, used: 88793 }), final_elaboration: Some(PhaseCost { completed: true, phase: FinalElaboration, used: 27096 }), independent_core: Some(PhaseCost { completed: true, phase: IndependentCore, used: 82277 }) }
+Completed(41, Closed)

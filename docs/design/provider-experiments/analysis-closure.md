@@ -57,4 +57,4 @@ contains the corresponding source and authenticated evidence. No frozen report,
 manifest, model or archive is rewritten to make this disposition appear earlier.
 
 The [execution record](execution.md#current-consolidation-checkpoint) identifies integrated
-verification separately from historical candidate checks. The [combined Original receipt](combined-delivery-2026-10-08/README.md) records the completed full gate at `7a518e83230fec568978b269b1d69776ab6051c5`; Main delivery remains pending. This closure document adds no new compiler run or language authority.
+verification separately from historical candidate checks. The [combined Original receipt](combined-delivery-2026-10-08/README.md) records the completed full gate at `7a518e83230fec568978b269b1d69776ab6051c5`; Main retention and disposition are recorded in [main-delivery-2026-10-08 receipt](main-delivery-2026-10-08/README.md). This closure document adds no new compiler run or language authority.

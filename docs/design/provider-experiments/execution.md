@@ -9,33 +9,56 @@
 
 ## Current consolidation checkpoint
 
-The unsigned Common source merge `c49d4bdc6004168a161c8d51d90b43cf3afddbd6` preserves the previously
-integrated SQLite and calibrated admission together with Arena source delivery
-`ffa1d8ef4178cb1e5651411162ff09c117b725f7`. Independent source review retains
-all fourteen SQLite operations, nine handlers, String/TEXT contracts, dynamic
-Core limits and exact caller-prefix accounting alongside Arena authority and
-capture checks. Source review alone does not establish combined execution.
+The unsigned Common source merge `c49d4bdc6004168a161c8d51d90b43cf3afddbd6` preserves
+the previously integrated SQLite and calibrated admission together with Arena source
+delivery `ffa1d8ef4178cb1e5651411162ff09c117b725f7`. Independent source review retains
+all fourteen SQLite operations, nine handlers, String/TEXT contracts, dynamic Core
+limits and exact caller-prefix accounting alongside Arena authority and capture checks.
+Source review alone does not establish combined execution.
 
-The [selected Arena receipts](arena-selected-2026-10-08/README.md) distinguish
-its frozen 1,674-library/seven-public functional checkpoint from the final
-mechanical-source checks: two affected architecture tests, strict workspace
-lint, 41 adapter unit and ten backing cases, native41 and formatting all pass.
-Actual native execution returns `Completed(41, Closed)` with source/final/Core
-charges 88,793 / 27,096 / 82,277. These are attributable Arena results; fresh
-combined SQLite/arena costs remain pending; the complete integrated gate is recorded below.
+The [selected Arena receipts](arena-selected-2026-10-08/README.md) distinguish its
+frozen 1,674-library/seven-public functional checkpoint from the final mechanical-source
+checks: two affected architecture tests, strict workspace lint, 41 adapter unit and ten
+backing cases, native41 and formatting all pass. Actual native execution returns
+`Completed(41, Closed)` with source/final/Core charges 88,793 / 27,096 / 82,277. These
+are attributable Arena results; fresh Main combined SQLite/arena costs are recorded in
+the Main receipt below; the complete Original gate is recorded separately.
 
-The delivery uses the existing Common checkout, followed by a preserving merge
-into the original experimental branch and its complete workspace gate. The
-separately authorized Common-to-main merge follows successful combined
-verification. Retention does not adopt experimental language semantics or
-production architecture. Paused Lean and Core one-shot work, unrelated design
-drafts and the rejected compound analysis candidate remain outside this delivery.
+The delivery preserves Common and Original history through the completed Original gate
+and the explicit Main merge recorded below. Retention does not adopt experimental
+language semantics or production architecture. Paused Lean and Core one-shot work,
+unrelated design drafts and the rejected compound analysis candidate remain outside this
+delivery.
 
-The complete Original gate passes at `7a518e83230fec568978b269b1d69776ab6051c5` and tree `8af28e134fbe17e19034d77bf56335a9a6bc6421`. All six ordered stages complete: format, metadata, build, strict lint, workspace/all-target/all-feature tests and warning-denied documentation. Outer Cargo target summaries record 3,475 passes, 0 failures and 1 ignored case (the generated calibration fixture) across 119 targets; 4 targets contain no executed cases. Nine nested child summaries are excluded from these totals. The [combined-delivery-2026-10-08 receipt](combined-delivery-2026-10-08/README.md) retains raw output, exact commands, the corrected outer-target summary and unchanged source/eight-draft evidence. Main delivery, focused Main checks, fresh combined native phase measurements and related cleanup remain pending. This is bounded DN-0036 experimental retention, without semantic adoption or a formal proof.
+The complete Original gate passes at `7a518e83230fec568978b269b1d69776ab6051c5` and tree
+`8af28e134fbe17e19034d77bf56335a9a6bc6421`. All six ordered stages complete: format,
+metadata, build, strict lint, workspace/all-target/all-feature tests and warning-denied
+documentation. Outer Cargo target summaries record 3,475 passes, 0 failures and 1
+ignored case (the generated calibration fixture) across 119 targets; 4 targets contain
+no executed cases. Nine nested child summaries are excluded from these totals. The
+[combined-delivery-2026-10-08 receipt](combined-delivery-2026-10-08/README.md) retains
+raw output, exact commands, the corrected outer-target summary and unchanged
+source/eight-draft evidence.
 
-Earlier receipts below retain their original checkpoint scope. Final integrated
-commits, full-gate attribution and cleanup disposition are recorded only after
-those actions complete.
+Main merge `f51f538455cb997e5e1f5db6eec8cf36d616c7d1` retains Common
+`f56070ccb88d21ba833c5ca70106070318b9145a`. Focused verification at this Main source
+passes 39 cases across six Cargo targets, with 0 failures and 0 ignored cases. All five
+packaged SQLite hosts and the selected scalar Arena host pass their recorded
+source/native assertions. The [main-delivery-2026-10-08
+receipt](main-delivery-2026-10-08/README.md) retains exact commands, raw logs, source
+pins, phase measurements and cleanup disposition. The full workspace gate belongs to
+Original `7a518e83230fec568978b269b1d69776ab6051c5`; its documentation descendant
+`f56070ccb88d21ba833c5ca70106070318b9145a` and this Main merge retain the executable
+source. Later result prose does not constitute another full gate. Broader TASK-0034
+payload/graph-sharing/copying work and paused Lean/Core/proof work remain unfinished and
+excluded. This retains informative DN-0036 evidence without semantic or production
+adoption or a formal proof.
+
+Actual related cleanup is recorded in [main-delivery-2026-10-08
+receipt](main-delivery-2026-10-08/README.md).
+
+Earlier receipts below retain their original checkpoint scope. The current records above
+identify the completed integration, verification and cleanup separately.
 
 ## Current SQLite checkpoint
 

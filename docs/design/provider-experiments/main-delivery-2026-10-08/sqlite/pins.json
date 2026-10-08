@@ -1,0 +1,22 @@
+{
+  "repo": "/home/dikini/Projects/ash-lang",
+  "head": "f51f538455cb997e5e1f5db6eec8cf36d616c7d1",
+  "binary": "/home/dikini/Projects/ash-lang/.worktree/cache/provider-final-20261008/debug/examples/sqlite_session",
+  "binary_sha256": "a529cf7e2f3da9f03f7b50b6f00a55b8120f787d059ad81e04b52c36a9994441",
+  "compiler_work_sha256": "237cd42ba0397e874556e06a7bcf281ef2435b3b33d7e01a1f51b4bf43cfd884",
+  "expected_phase_budgets": {
+    "SourceChecking": 1245184,
+    "FinalElaboration": 393216,
+    "IndependentCore": 1638400
+  },
+  "sources": {
+    "docs/design/provider-experiments/examples/sqlite-copying/control-resume.ash": "f76cd0a5c6cb9b6ec14193cc2d9b9d411b86faae8ef3067d2cff33b3e8fdff62",
+    "docs/design/provider-experiments/examples/sqlite-copying/copying-entry.ash": "4027fbff9846f2910e1d8745edd55bad2f5e859743998e0003a5b39feadb3929",
+    "docs/design/provider-experiments/examples/sqlite-copying/rows.ash": "a08e3c868ac46e4aee18724966c4bc91c0724e0b459b45489a5c74d62ba4a79c",
+    "docs/design/provider-experiments/examples/sqlite-copying/text-entry.ash": "ec5a12700597b7b5ac54ccc9ef5ae4cbb8d9563922db0c053d3db01a981df0bb",
+    "docs/design/provider-experiments/examples/sqlite-copying/sqlite.ash": "9805a8fe171af91af688a262aeb3275ebc36bad39fde7eafdb579bc2ad1240f9",
+    "docs/design/provider-experiments/examples/sqlite-copying/provider.ash": "1775841df8016044671de9fcbd4d8ffa905f36060da01dd878d90fa6ea378fb6",
+    "docs/design/provider-experiments/examples/sqlite-copying/session-entry.ash": "e811e9f1e961a69484437b39e47287ab6d9525dc7ef31cda23e665bd3265bbd6",
+    "docs/design/provider-experiments/examples/sqlite-copying/control-discard.ash": "e546518b91b819cc73fb87b8087994078929a2bc0082bf28e3994b40c2a0baba"
+  }
+}

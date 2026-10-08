@@ -1,0 +1,78 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang)
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/foreign-adapter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 31s
+     Running tests/provider_arena_allocation.rs (.worktree/cache/provider-final-20261008/debug/deps/provider_arena_allocation-beb2c8b715a178cb)
+
+running 7 tests
+test ash_allocates_and_reads_native_storage_before_arena_completion ... ok
+test attached_family_preserves_handler_outward_storage_requests ... ok
+test grouped_scalar_storage_survives_resume_and_runs_cleanup_before_owned_discard_completion ... ok
+test ordinary_aggregate_and_closure_can_use_a_reference_but_cannot_carry_it_out ... ok
+test references_cannot_escape_or_change_owner_and_numeric_tuples_grant_no_authority ... ok
+test source_cannot_supply_sealed_layout_through_impl_or_lexical_evidence ... ok
+test typed_capacity_alignment_and_refusal_cases_preserve_actual_usage ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.29s
+
+     Running tests/provider_arena_source.rs (.worktree/cache/provider-final-20261008/debug/deps/provider_arena_source-92dfb16534e1853c)
+
+running 4 tests
+test arena_acquires_queries_actual_usage_and_releases_through_public_driver ... ok
+test arena_native_configuration_refusal_executes_no_body_or_release ... ok
+test repeated_and_nested_arenas_have_unique_native_owners_and_one_release_each ... ok
+test resource_dependent_arena_access_cannot_escape ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.37s
+
+     Running tests/provider_sqlite_control.rs (.worktree/cache/provider-final-20261008/debug/deps/provider_sqlite_control-2fe3c8892667913b)
+
+running 2 tests
+test captured_statement_and_connection_resume_actual_copied_query_without_reacquisition ... ok
+test owned_discard_runs_source_cleanup_then_statement_finish_before_connection_close ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.73s
+
+     Running tests/provider_sqlite_copying.rs (.worktree/cache/provider-final-20261008/debug/deps/provider_sqlite_copying-b82a66bcca474e24)
+
+running 8 tests
+test bound_text_nul_is_an_ordinary_failure_with_both_completion_reports ... ok
+test copied_unicode_blobs_nulls_and_empty_values_survive_both_scopes ... ok
+test imported_unicode_text_binding_returns_an_independent_copy_after_completion ... ok
+test integer_width_and_nonnegative_parameter_index_fail_before_native_binding ... ok
+test malformed_native_text_and_float_columns_preserve_copy_and_type_failures ... ok
+test qualified_forwarding_chain_preserves_integer_and_source_completion ... ok
+test reset_preserves_bound_text_and_clear_restores_null_after_copied_results ... ok
+test wrong_storage_kind_and_bad_column_are_distinct_from_protocol_errors ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.46s
+
+     Running tests/provider_sqlite_sessions.rs (.worktree/cache/provider-final-20261008/debug/deps/provider_sqlite_sessions-ead443f8522b4451)
+
+running 8 tests
+test binding_and_clear_after_a_row_reject_without_native_mutation ... ok
+test column_before_row_and_step_after_done_are_protocol_alternatives ... ok
+test genuine_constraint_failure_preserves_body_error_and_consumed_finalize_report ... ok
+test malformed_sql_reports_the_real_native_code_and_copied_diagnostic ... ok
+test negative_parameter_index_from_an_independent_sqlite_integer_is_rejected ... ok
+test refused_empty_multiple_and_nul_sql_keep_acquisition_outcomes_and_guards ... ok
+test representable_parameter_outside_statement_preserves_sqlite_range_error ... ok
+test statement_reuse_transactions_generic_rows_and_reopen_preserve_every_report ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.66s
+
+     Running tests/provider_sqlite_source.rs (.worktree/cache/provider-final-20261008/debug/deps/provider_sqlite_source-51cc827a60b0b13c)
+
+running 10 tests
+test copying_sqlite_session_executes_through_public_foreign_runtime ... ok
+test first_copying_sqlite_source_bundle_parses_with_the_ordinary_frontend ... ok
+test imported_resource_report_dependencies_do_not_require_a_client_type_annotation ... ok
+test local_resource_definitions_execute_through_public_foreign_runtime ... ok
+test original_four_match_client_exhausts_projection_depth_before_provider_checking ... ok
+test refused_statement_acquisition_executes_no_statement_body_or_finish ... ok
+test repeated_and_simultaneous_sqlite_scopes_resolve_their_actual_activations ... ok
+test resource_initializer_executes_once_in_the_preceding_scope ... ok
+test sqlite_library_declarations_check_against_registered_dependencies ... ok
+test static_foreign_registration_does_not_authorize_native_execution ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.37s
+

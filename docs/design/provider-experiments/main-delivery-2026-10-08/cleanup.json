@@ -1,0 +1,483 @@
+{
+  "passed": true,
+  "completed": true,
+  "checked_head": "f51f538455cb997e5e1f5db6eec8cf36d616c7d1",
+  "main_tip": "f51f538455cb997e5e1f5db6eec8cf36d616c7d1",
+  "removed_worktrees": {
+    "original": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/provider-experiments",
+      "tip": "f56070ccb88d21ba833c5ca70106070318b9145a",
+      "branch": "refs/heads/codex/provider-experiments",
+      "archive_commit": "2ea6f8e20255543bf84d140d21e65219645845ca",
+      "dirty_paths": [
+        "docs/design/README.md",
+        "docs/tasks/README.md",
+        "docs/design/DN-0038-resource-properties-and-mutable-variable-usage.md",
+        "docs/design/DN-0039-files-and-filesystem-resources.md",
+        "docs/design/DN-0040-floating-point-semantics-and-representation.md",
+        "docs/design/DN-0041-typed-serialization-and-data-pipelines.md",
+        "docs/design/provider-experiments/arena-plan.md",
+        "docs/tasks/TASK-0034-immutable-arena-provider-experiment.md"
+      ]
+    },
+    "arena": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/arena-provider",
+      "tip": "0e596fa7e4ad7638a68bc59297eb806a17a63cd3",
+      "branch": "refs/heads/codex/arena-provider",
+      "archive_commit": "8bd25753613fbb6e237c2b0c79eb71e090c8c0a4",
+      "dirty_paths": [
+        "docs/tasks/README.md",
+        "docs/design/provider-experiments/arena-execution.md",
+        "docs/design/provider-experiments/arena-plan.md",
+        "docs/tasks/TASK-0034-immutable-arena-provider-experiment.md"
+      ]
+    },
+    "fusion": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/algebraic-resource-analysis",
+      "tip": "04b9643f43f5ab5abaf230cadc41aec78446fe2f",
+      "branch": "refs/heads/codex/algebraic-resource-analysis",
+      "archive_commit": "69b08b1bf27532761958961fe16c87d19cd04fc6",
+      "dirty_paths": [
+        "src/core/capture.rs",
+        "src/core/capture/value.rs"
+      ]
+    },
+    "common": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/common-resource-support",
+      "tip": "f56070ccb88d21ba833c5ca70106070318b9145a",
+      "branch": "refs/heads/codex/common-resource-support",
+      "archive_commit": null,
+      "dirty_paths": []
+    },
+    "sqlite": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/sqlite-provider",
+      "tip": "604cbf8a12d3e509b74769c1cee0305df3440a11",
+      "branch": "refs/heads/codex/sqlite-provider",
+      "archive_commit": null,
+      "dirty_paths": []
+    },
+    "calibration": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/resource-calibration",
+      "tip": "ed3764a15f7f00e7059c3eb3eae1f6e74309040f",
+      "branch": "refs/heads/codex/resource-calibration",
+      "archive_commit": null,
+      "dirty_paths": []
+    }
+  },
+  "protected_worktrees": {
+    "/home/dikini/.config/superpowers/worktrees/ash-lang/ash-doc-lib-pin": {
+      "tip": "d1e323d23390cdad03202ee3df76cd9100556e1d",
+      "branch": null,
+      "detached": true,
+      "dirty": {},
+      "target": null,
+      "cache_roots": {
+        "target": {
+          "device": 66309,
+          "inode": 52167338,
+          "symlink": false
+        }
+      }
+    },
+    "/home/dikini/.config/superpowers/worktrees/ash-lang/ash-doc-modular-pin": {
+      "tip": "dca16039923475c48025c5f17beadeb6bcb6a4bf",
+      "branch": null,
+      "detached": true,
+      "dirty": {},
+      "target": null,
+      "cache_roots": {
+        "target": {
+          "device": 66309,
+          "inode": 52301098,
+          "symlink": false
+        }
+      }
+    },
+    "/home/dikini/Projects/ash-lang/.worktree/core-alignment": {
+      "tip": "657f6c0c3d674cd09802bb555f25364f1acfac68",
+      "branch": "refs/heads/codex/core-alignment",
+      "detached": false,
+      "dirty": {},
+      "target": null,
+      "cache_roots": {
+        "target": {
+          "device": 66309,
+          "inode": 49817922,
+          "symlink": false
+        }
+      }
+    },
+    "/home/dikini/Projects/ash-lang/.worktree/proof-coverage": {
+      "tip": "eb8fc7e9b317eba208c14ea25397a4fcbbf4f334",
+      "branch": "refs/heads/codex/one-shot-proof-coverage",
+      "detached": false,
+      "dirty": {},
+      "target": null
+    },
+    "/home/dikini/Projects/ash-lang/.worktree/proof-tooling": {
+      "tip": "fad115a1fcd2f5868810a7a0aa55ec8edc48dc64",
+      "branch": "refs/heads/codex/proof-tooling-efficiency",
+      "detached": false,
+      "dirty": {},
+      "target": null,
+      "cache_roots": {
+        "target": {
+          "device": 66309,
+          "inode": 49436190,
+          "symlink": false
+        }
+      }
+    }
+  },
+  "protected_untouched": true,
+  "normal_removal_only": true,
+  "stash_count": 33,
+  "stashes_unchanged": true,
+  "cache_records": {
+    "original": {
+      "source": "/home/dikini/Projects/ash-lang/.worktree/provider-experiments/target",
+      "destination": "/home/dikini/Projects/ash-lang/.worktree/cache/provider-final-20261008",
+      "device": 66309,
+      "inode": 51263159,
+      "state": "retained"
+    },
+    "common": {
+      "source": "/home/dikini/Projects/ash-lang/.worktree/common-resource-support/target",
+      "destination": "/home/dikini/Projects/ash-lang/.worktree/cache/common-before-consolidation-20261008",
+      "device": 66309,
+      "inode": 49557509,
+      "state": "retained"
+    },
+    "sqlite": {
+      "source": "/home/dikini/Projects/ash-lang/.worktree/sqlite-provider/target",
+      "destination": "/home/dikini/Projects/ash-lang/.worktree/cache/sqlite-before-consolidation-20261008",
+      "device": 66309,
+      "inode": 49560962,
+      "state": "retained"
+    },
+    "calibration": {
+      "source": "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/target",
+      "destination": "/home/dikini/Projects/ash-lang/.worktree/cache/calibration-before-consolidation-20261008",
+      "device": 66309,
+      "inode": 50106153,
+      "state": "retained"
+    },
+    "arena": {
+      "source": "/home/dikini/Projects/ash-lang/.worktree/arena-provider/target",
+      "destination": "/home/dikini/Projects/ash-lang/.worktree/cache/arena-before-consolidation-20261008",
+      "device": 66309,
+      "inode": 49569791,
+      "state": "retained"
+    },
+    "original-lean": {
+      "source": "/home/dikini/Projects/ash-lang/.worktree/provider-experiments/tools/lean/__pycache__",
+      "destination": "/home/dikini/Projects/ash-lang/.worktree/cache/original-lean-bytecode-20261008",
+      "device": 66309,
+      "inode": 51282129,
+      "state": "retained"
+    }
+  },
+  "main_target": {
+    "path": "target",
+    "device": 66309,
+    "inode": 39459318,
+    "symlink": false,
+    "exists": true
+  },
+  "archive_refs": {
+    "refs/heads/archive/experiments/resource-analysis-coordination-checkpoint-2026-10-08": "04b9643f43f5ab5abaf230cadc41aec78446fe2f",
+    "refs/heads/archive/experiments/resource-analysis-failed-compound-f1-2026-10-08": "7af4f896cdadc9636c0b7ff2a275069928506eb8",
+    "refs/heads/archive/experiments/resource-analysis-inactive-recovery-2026-10-08": "0a2a8e93b11736cbf44354563db5a02349daf3b3",
+    "refs/heads/archive/experiments/resource-analysis-return-guard-recovery-2026-10-08": "11de19c8e627d74d5e0e3c25dc4a8cfb4f5e0ce6",
+    "refs/heads/archive/wip/provider-final-eight-drafts-2026-10-08": "2ea6f8e20255543bf84d140d21e65219645845ca",
+    "refs/heads/archive/wip/arena-final-four-drafts-2026-10-08": "8bd25753613fbb6e237c2b0c79eb71e090c8c0a4",
+    "refs/heads/archive/wip/resource-analysis-fusion-trial-2026-10-08": "69b08b1bf27532761958961fe16c87d19cd04fc6"
+  },
+  "all_refs_unchanged": true,
+  "all_33_stashes_unchanged": true,
+  "retention_sha256": {
+    ".worktrees/consolidation-draft-retention-2026-10-08/main/docs/design/DN-0036-foreign-library-and-memory-provider-experiments.md": {
+      "sha256": "b8eec488df6ed411d4227d925e1d16494aaaedbc2b1f14976492bad05f40df15",
+      "bytes": 41050,
+      "mode": 420,
+      "symlink": false
+    },
+    ".worktrees/consolidation-draft-retention-2026-10-08/indexes-before-transfer/docs/design/README.md": {
+      "sha256": "823ef69ed9dac952674b59f7c00ef6e53b7b7e3b4293a592a68e8e8b90e2ca8c",
+      "bytes": 12644,
+      "mode": 436,
+      "symlink": false
+    },
+    ".worktrees/consolidation-draft-retention-2026-10-08/indexes-before-transfer/docs/tasks/README.md": {
+      "sha256": "f5d892e0083dac2cd8c8cdeb304afb68aadc93fa70883e89467f49691cecbd8d",
+      "bytes": 360,
+      "mode": 436,
+      "symlink": false
+    },
+    ".worktrees/consolidation-draft-retention-2026-10-08/source-checkouts/arena/manifest.json": {
+      "sha256": "c8d7dd4b95750a1ea5d7fb449f63251332bf22c2e990349ee07adc540a5563bd",
+      "bytes": 1356,
+      "mode": 420,
+      "symlink": false
+    },
+    ".worktrees/consolidation-draft-retention-2026-10-08/source-checkouts/original/manifest.json": {
+      "sha256": "55869972ea06a490a0b8ef31451b10bba568d5729d39e34f349794114c094fc4",
+      "bytes": 2373,
+      "mode": 420,
+      "symlink": false
+    },
+    ".worktrees/consolidation-draft-retention-2026-10-08/source-checkouts/fusion/manifest.json": {
+      "sha256": "d0913651ce8c5e2cf6034a1076eebf65f1771476eeb2f072a4688fffe54f3fdf",
+      "bytes": 856,
+      "mode": 420,
+      "symlink": false
+    },
+    ".worktrees/consolidation-draft-retention-2026-10-08/source-checkouts/arena/relocated/docs/tasks/TASK-0034-immutable-arena-provider-experiment.md": {
+      "sha256": "09b30ccdb9dc088ff9e2e9d4d68b3c0e384f2495abeb950edb9029eb3876bbfb",
+      "bytes": 25711,
+      "mode": 436,
+      "symlink": false
+    },
+    ".worktrees/consolidation-draft-retention-2026-10-08/source-checkouts/arena/relocated/docs/design/provider-experiments/arena-execution.md": {
+      "sha256": "fb8abccfb317be04e79689ff384ebaa2c3a0d5052f740f4d19f2f1c4b9e2fd4a",
+      "bytes": 59498,
+      "mode": 436,
+      "symlink": false
+    },
+    ".worktrees/consolidation-draft-retention-2026-10-08/source-checkouts/arena/relocated/docs/design/provider-experiments/arena-plan.md": {
+      "sha256": "a6118ee956fa7a364011ed65019a029300f3646e6f0bb25b191783ebb4618a8a",
+      "bytes": 23331,
+      "mode": 436,
+      "symlink": false
+    },
+    ".worktrees/consolidation-draft-retention-2026-10-08/source-checkouts/arena/files/docs/tasks/TASK-0034-immutable-arena-provider-experiment.md": {
+      "sha256": "09b30ccdb9dc088ff9e2e9d4d68b3c0e384f2495abeb950edb9029eb3876bbfb",
+      "bytes": 25711,
+      "mode": 436,
+      "symlink": false
+    },
+    ".worktrees/consolidation-draft-retention-2026-10-08/source-checkouts/arena/files/docs/tasks/README.md": {
+      "sha256": "631d959cf1a81f52347c45416ea01ca5c1026586d72fa219970d8f18dff5eb6d",
+      "bytes": 728,
+      "mode": 436,
+      "symlink": false
+    },
+    ".worktrees/consolidation-draft-retention-2026-10-08/source-checkouts/arena/files/docs/design/provider-experiments/arena-execution.md": {
+      "sha256": "fb8abccfb317be04e79689ff384ebaa2c3a0d5052f740f4d19f2f1c4b9e2fd4a",
+      "bytes": 59498,
+      "mode": 436,
+      "symlink": false
+    },
+    ".worktrees/consolidation-draft-retention-2026-10-08/source-checkouts/arena/files/docs/design/provider-experiments/arena-plan.md": {
+      "sha256": "a6118ee956fa7a364011ed65019a029300f3646e6f0bb25b191783ebb4618a8a",
+      "bytes": 23331,
+      "mode": 436,
+      "symlink": false
+    },
+    ".worktrees/consolidation-draft-retention-2026-10-08/source-checkouts/original/relocated/docs/design/DN-0040-floating-point-semantics-and-representation.md": {
+      "sha256": "314e33f1e67058920a4b954c61677c4accf55c44d77ac437400fd635fda845bc",
+      "bytes": 16604,
+      "mode": 436,
+      "symlink": false
+    },
+    ".worktrees/consolidation-draft-retention-2026-10-08/source-checkouts/original/relocated/docs/design/DN-0039-files-and-filesystem-resources.md": {
+      "sha256": "08b01242e234f94bc523b5117099549a28821db5fe9e7c34080b5a5a3b7808ca",
+      "bytes": 18339,
+      "mode": 436,
+      "symlink": false
+    },
+    ".worktrees/consolidation-draft-retention-2026-10-08/source-checkouts/original/relocated/docs/design/DN-0038-resource-properties-and-mutable-variable-usage.md": {
+      "sha256": "5f696ca2ae14b6dbd9548e4a01994cfe26eb7817b596c83411e211e676489dfa",
+      "bytes": 37169,
+      "mode": 436,
+      "symlink": false
+    },
+    ".worktrees/consolidation-draft-retention-2026-10-08/source-checkouts/original/relocated/docs/design/DN-0041-typed-serialization-and-data-pipelines.md": {
+      "sha256": "d0d380165f889615290cfc71a778bc44faea3a88759017e042f6425aea87241d",
+      "bytes": 28623,
+      "mode": 436,
+      "symlink": false
+    },
+    ".worktrees/consolidation-draft-retention-2026-10-08/source-checkouts/original/relocated/docs/tasks/TASK-0034-immutable-arena-provider-experiment.md": {
+      "sha256": "aa3f7479b0969854fe756c6e90a5a983161d6431c8808908cc0534c6832c4f9e",
+      "bytes": 3102,
+      "mode": 436,
+      "symlink": false
+    },
+    ".worktrees/consolidation-draft-retention-2026-10-08/source-checkouts/original/relocated/docs/design/provider-experiments/arena-plan.md": {
+      "sha256": "a6118ee956fa7a364011ed65019a029300f3646e6f0bb25b191783ebb4618a8a",
+      "bytes": 23331,
+      "mode": 436,
+      "symlink": false
+    },
+    ".worktrees/consolidation-draft-retention-2026-10-08/source-checkouts/original/files/docs/design/DN-0040-floating-point-semantics-and-representation.md": {
+      "sha256": "314e33f1e67058920a4b954c61677c4accf55c44d77ac437400fd635fda845bc",
+      "bytes": 16604,
+      "mode": 436,
+      "symlink": false
+    },
+    ".worktrees/consolidation-draft-retention-2026-10-08/source-checkouts/original/files/docs/design/DN-0039-files-and-filesystem-resources.md": {
+      "sha256": "08b01242e234f94bc523b5117099549a28821db5fe9e7c34080b5a5a3b7808ca",
+      "bytes": 18339,
+      "mode": 436,
+      "symlink": false
+    },
+    ".worktrees/consolidation-draft-retention-2026-10-08/source-checkouts/original/files/docs/design/DN-0038-resource-properties-and-mutable-variable-usage.md": {
+      "sha256": "5f696ca2ae14b6dbd9548e4a01994cfe26eb7817b596c83411e211e676489dfa",
+      "bytes": 37169,
+      "mode": 436,
+      "symlink": false
+    },
+    ".worktrees/consolidation-draft-retention-2026-10-08/source-checkouts/original/files/docs/design/README.md": {
+      "sha256": "a1ac99fbc04541446f75387b11eb6a734e2e30203fdc731e2aab6580986b5221",
+      "bytes": 13791,
+      "mode": 436,
+      "symlink": false
+    },
+    ".worktrees/consolidation-draft-retention-2026-10-08/source-checkouts/original/files/docs/design/DN-0041-typed-serialization-and-data-pipelines.md": {
+      "sha256": "d0d380165f889615290cfc71a778bc44faea3a88759017e042f6425aea87241d",
+      "bytes": 28623,
+      "mode": 436,
+      "symlink": false
+    },
+    ".worktrees/consolidation-draft-retention-2026-10-08/source-checkouts/original/files/docs/tasks/TASK-0034-immutable-arena-provider-experiment.md": {
+      "sha256": "aa3f7479b0969854fe756c6e90a5a983161d6431c8808908cc0534c6832c4f9e",
+      "bytes": 3102,
+      "mode": 436,
+      "symlink": false
+    },
+    ".worktrees/consolidation-draft-retention-2026-10-08/source-checkouts/original/files/docs/tasks/README.md": {
+      "sha256": "4469132d77571c777d1d2d1b218350865b34c7009169300c2ef14393a80294ed",
+      "bytes": 615,
+      "mode": 436,
+      "symlink": false
+    },
+    ".worktrees/consolidation-draft-retention-2026-10-08/source-checkouts/original/files/docs/design/provider-experiments/arena-plan.md": {
+      "sha256": "a6118ee956fa7a364011ed65019a029300f3646e6f0bb25b191783ebb4618a8a",
+      "bytes": 23331,
+      "mode": 436,
+      "symlink": false
+    },
+    ".worktrees/consolidation-draft-retention-2026-10-08/source-checkouts/fusion/files/src/core/capture.rs": {
+      "sha256": "898faef05af09613173fbe22d977c2cedae68e2ac9e5ffc2f87f1d892dd54095",
+      "bytes": 286838,
+      "mode": 436,
+      "symlink": false
+    },
+    ".worktrees/consolidation-draft-retention-2026-10-08/source-checkouts/fusion/files/src/core/capture/value.rs": {
+      "sha256": "b142a01e0ec95ff362dad3e968fd39887876c0190fec0a0fb3ee83bdb55faf07",
+      "bytes": 409180,
+      "mode": 436,
+      "symlink": false
+    },
+    ".worktrees/consolidation-draft-retention-2026-10-08/original/docs/tasks/TASK-0034-immutable-arena-provider-experiment.md": {
+      "sha256": "aa3f7479b0969854fe756c6e90a5a983161d6431c8808908cc0534c6832c4f9e",
+      "bytes": 3102,
+      "mode": 420,
+      "symlink": false
+    }
+  },
+  "retained_draft_sha256": {
+    "docs/design/DN-0038-resource-properties-and-mutable-variable-usage.md": "5f696ca2ae14b6dbd9548e4a01994cfe26eb7817b596c83411e211e676489dfa",
+    "docs/design/DN-0039-files-and-filesystem-resources.md": "08b01242e234f94bc523b5117099549a28821db5fe9e7c34080b5a5a3b7808ca",
+    "docs/design/DN-0040-floating-point-semantics-and-representation.md": "314e33f1e67058920a4b954c61677c4accf55c44d77ac437400fd635fda845bc",
+    "docs/design/DN-0041-typed-serialization-and-data-pipelines.md": "d0d380165f889615290cfc71a778bc44faea3a88759017e042f6425aea87241d",
+    "docs/design/provider-experiments/arena-plan.md": "a6118ee956fa7a364011ed65019a029300f3646e6f0bb25b191783ebb4618a8a",
+    "docs/design/provider-experiments/arena-execution.md": "fb8abccfb317be04e79689ff384ebaa2c3a0d5052f740f4d19f2f1c4b9e2fd4a",
+    "docs/tasks/TASK-0034-immutable-arena-provider-experiment.md": "09b30ccdb9dc088ff9e2e9d4d68b3c0e384f2495abeb950edb9029eb3876bbfb",
+    "reader-checks.json": "468adaa8010a596dd260a11bd1b4d075287cfe4099a20db555e79f80dcea8e80",
+    "docs/design/README.md": "a1ac99fbc04541446f75387b11eb6a734e2e30203fdc731e2aab6580986b5221",
+    "docs/tasks/README.md": "5b215689d9908d5351f969dd4b058a8ea62889ebb3889b164dd0a49e024ab294"
+  },
+  "transferred_drafts": {
+    "docs/design/DN-0038-resource-properties-and-mutable-variable-usage.md": {
+      "sha256": "5f696ca2ae14b6dbd9548e4a01994cfe26eb7817b596c83411e211e676489dfa",
+      "bytes": 37169
+    },
+    "docs/design/DN-0039-files-and-filesystem-resources.md": {
+      "sha256": "08b01242e234f94bc523b5117099549a28821db5fe9e7c34080b5a5a3b7808ca",
+      "bytes": 18339
+    },
+    "docs/design/DN-0040-floating-point-semantics-and-representation.md": {
+      "sha256": "314e33f1e67058920a4b954c61677c4accf55c44d77ac437400fd635fda845bc",
+      "bytes": 16604
+    },
+    "docs/design/DN-0041-typed-serialization-and-data-pipelines.md": {
+      "sha256": "d0d380165f889615290cfc71a778bc44faea3a88759017e042f6425aea87241d",
+      "bytes": 28623
+    },
+    "docs/design/provider-experiments/arena-plan.md": {
+      "sha256": "a6118ee956fa7a364011ed65019a029300f3646e6f0bb25b191783ebb4618a8a",
+      "bytes": 23331
+    },
+    "docs/design/provider-experiments/arena-execution.md": {
+      "sha256": "fb8abccfb317be04e79689ff384ebaa2c3a0d5052f740f4d19f2f1c4b9e2fd4a",
+      "bytes": 59498
+    },
+    "docs/tasks/TASK-0034-immutable-arena-provider-experiment.md": {
+      "sha256": "09b30ccdb9dc088ff9e2e9d4d68b3c0e384f2495abeb950edb9029eb3876bbfb",
+      "bytes": 25711
+    },
+    "reader-checks.json": {
+      "sha256": "468adaa8010a596dd260a11bd1b4d075287cfe4099a20db555e79f80dcea8e80",
+      "bytes": 155
+    },
+    "docs/design/README.md": {
+      "sha256": "a1ac99fbc04541446f75387b11eb6a734e2e30203fdc731e2aab6580986b5221",
+      "bytes": 13791
+    },
+    "docs/tasks/README.md": {
+      "sha256": "5b215689d9908d5351f969dd4b058a8ea62889ebb3889b164dd0a49e024ab294",
+      "bytes": 692
+    }
+  },
+  "retained_conflicting_drafts": {
+    "original/docs/tasks/TASK-0034-immutable-arena-provider-experiment.md": {
+      "sha256": "aa3f7479b0969854fe756c6e90a5a983161d6431c8808908cc0534c6832c4f9e",
+      "bytes": 3102
+    },
+    "main/docs/design/DN-0036-foreign-library-and-memory-provider-experiments.md": {
+      "sha256": "b8eec488df6ed411d4227d925e1d16494aaaedbc2b1f14976492bad05f40df15",
+      "bytes": 41050
+    }
+  },
+  "registry": {
+    "/home/dikini/Projects/ash-lang": {
+      "worktree": "/home/dikini/Projects/ash-lang",
+      "HEAD": "f51f538455cb997e5e1f5db6eec8cf36d616c7d1",
+      "branch": "refs/heads/main"
+    },
+    "/home/dikini/.config/superpowers/worktrees/ash-lang/ash-doc-lib-pin": {
+      "worktree": "/home/dikini/.config/superpowers/worktrees/ash-lang/ash-doc-lib-pin",
+      "HEAD": "d1e323d23390cdad03202ee3df76cd9100556e1d",
+      "detached": true
+    },
+    "/home/dikini/.config/superpowers/worktrees/ash-lang/ash-doc-modular-pin": {
+      "worktree": "/home/dikini/.config/superpowers/worktrees/ash-lang/ash-doc-modular-pin",
+      "HEAD": "dca16039923475c48025c5f17beadeb6bcb6a4bf",
+      "detached": true
+    },
+    "/home/dikini/Projects/ash-lang/.worktree/core-alignment": {
+      "worktree": "/home/dikini/Projects/ash-lang/.worktree/core-alignment",
+      "HEAD": "657f6c0c3d674cd09802bb555f25364f1acfac68",
+      "branch": "refs/heads/codex/core-alignment"
+    },
+    "/home/dikini/Projects/ash-lang/.worktree/proof-coverage": {
+      "worktree": "/home/dikini/Projects/ash-lang/.worktree/proof-coverage",
+      "HEAD": "eb8fc7e9b317eba208c14ea25397a4fcbbf4f334",
+      "branch": "refs/heads/codex/one-shot-proof-coverage"
+    },
+    "/home/dikini/Projects/ash-lang/.worktree/proof-tooling": {
+      "worktree": "/home/dikini/Projects/ash-lang/.worktree/proof-tooling",
+      "HEAD": "fad115a1fcd2f5868810a7a0aa55ec8edc48dc64",
+      "branch": "refs/heads/codex/proof-tooling-efficiency"
+    }
+  },
+  "guard_pins_sha256": "211ee67f1ed4eacf9850127a78bd53a939779c83494d8109e513c86ea68d67d6",
+  "cleanup_receipt": {
+    "path": "/tmp/ash-consolidation-20261008/consolidation-helper-receipts/f59bff437f39497a91d93901a13e32c7-after.json",
+    "sha256": "0aa9557732c302d8519ef726f0d9e00be0b5be7f48c51598c792e9344666d32f"
+  },
+  "operational_limit": "Eight exact reviewed inaccessible OS service identities were exempted from fd inspection. Relevant build processes, children and all other accessible processes remained checked; Root and coordinated source writers held an exclusive stopped-engine lease. No OS services were stopped.",
+  "summary_markdown": "Normal removal completed for the Original, Common, SQLite, calibration, Arena and Fusion checkouts after exact-tip Main ancestry, draft/archive/backup and cache identity checks. All branch and archive refs and 33 shared stashes are unchanged. Selected drafts now remain uncommitted in Main; conflicting originals and archived Fusion trials are retained under ignored .worktrees/consolidation-draft-retention-2026-10-08. All six non-Main caches were retained by same-device rename. Main target and all five protected paused Core/Lean/proof/external documentation-pin worktrees and caches are unchanged. The failed Fusion candidate remains archived and unmerged."
+}

@@ -1,0 +1,127 @@
+{
+  "stage": "main-final",
+  "passed": true,
+  "executed_main_tip": "f51f538455cb997e5e1f5db6eec8cf36d616c7d1",
+  "tree": "6801bf0b2f853f3bd68db382b15f61d81e67958f",
+  "receipts": [
+    {
+      "path": "/tmp/ash-consolidation-20261008/main-focused-check-v2/receipt.json",
+      "sha256": "95bcd9a4571e1da396e799cafc914bed0d11aeaf7a9d30e74fafd245773dc220"
+    },
+    {
+      "path": "/tmp/ash-consolidation-20261008/main-focused-check-v2/output.log",
+      "sha256": "0ea70cb1eb54ffc634b024f6c07ad873ddeaf533383ee70172b3f34ecc832e21"
+    },
+    {
+      "path": "/tmp/ash-consolidation-20261008/main-arena-host-check/receipt.json",
+      "sha256": "7e7744e9547a66f4d8281139f4c2abd58602688035d9ad2721aa08a84ffd44ac"
+    },
+    {
+      "path": "/tmp/ash-consolidation-20261008/main-arena-host-check/output.log",
+      "sha256": "bf4aa8d54e14ecd7c3c7371fc7dcc6183b98a77837990cd6fcfda0f6d4f65e83"
+    },
+    {
+      "path": "/tmp/ash-consolidation-20261008/main-sqlite-host-build/receipt.json",
+      "sha256": "e29715e2aa171844519d5e9ebdd0714b07580ebb0171aeb9683440031aac7f72"
+    },
+    {
+      "path": "/tmp/ash-consolidation-20261008/main-sqlite-host-build/output.log",
+      "sha256": "86bbf50995d11a423c00af5fe1986046ee1404afb52e1c0092c977b397235f7d"
+    },
+    {
+      "path": "/tmp/ash-consolidation-20261008/main-host-evidence/control-discard.ash.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/tmp/ash-consolidation-20261008/main-host-evidence/control-discard.ash.stdout",
+      "sha256": "15ab6332b7cdae5f9b827777c3015e92abbc582eba4d5229299174fc015982b1"
+    },
+    {
+      "path": "/tmp/ash-consolidation-20261008/main-host-evidence/control-resume.ash.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/tmp/ash-consolidation-20261008/main-host-evidence/control-resume.ash.stdout",
+      "sha256": "0decbe46b07127f4ee196a3f90503017b936ef04351e820c68ca6ac88847865d"
+    },
+    {
+      "path": "/tmp/ash-consolidation-20261008/main-host-evidence/copying-entry.ash.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/tmp/ash-consolidation-20261008/main-host-evidence/copying-entry.ash.stdout",
+      "sha256": "d398cc600b4b1eb6ab06f5d46112ec902dfb2139f07411564da1643b63513232"
+    },
+    {
+      "path": "/tmp/ash-consolidation-20261008/main-host-evidence/pins.json",
+      "sha256": "8299ef438eb38fa1b2438c8e319265e1f57a75bf72fcbc9d2482668228f92814"
+    },
+    {
+      "path": "/tmp/ash-consolidation-20261008/main-host-evidence/results.json",
+      "sha256": "cb2050c104912c9d4c44b188722e7ca6f525d595cc276e57a53896528bddd56f"
+    },
+    {
+      "path": "/tmp/ash-consolidation-20261008/main-host-evidence/session-entry.ash.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/tmp/ash-consolidation-20261008/main-host-evidence/session-entry.ash.stdout",
+      "sha256": "74ad6961d0a446c4c13677cfb3724e41e81b300e6a76f3c5a8377541f0ae05be"
+    },
+    {
+      "path": "/tmp/ash-consolidation-20261008/main-host-evidence/text-entry.ash.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/tmp/ash-consolidation-20261008/main-host-evidence/text-entry.ash.stdout",
+      "sha256": "0191907d715aec25edca943617865f207fb54e98ea36d47e94f19fe9c255455b"
+    },
+    {
+      "path": "/tmp/ash-consolidation-20261008/main-arena-host-check/validated-native-and-costs.json",
+      "sha256": "a03a396f434ee82a66d124b137ab58b0cedd11b3a159cc02e08f258bc28d8d03"
+    },
+    {
+      "path": "/tmp/ash-consolidation-20261008/check-main-arena-evidence.py",
+      "sha256": "338dcb1957c76c5cfbcb7b08f5c25681b5355d18170abcc722ef274d44f1ff46"
+    },
+    {
+      "path": "/tmp/ash-consolidation-20261008/check-main-sqlite-host.py",
+      "sha256": "abdffbc81030ff768dc013e02b740cd90e80c6384dbd3861c45f770d91c053bc"
+    },
+    {
+      "path": "/tmp/ash-consolidation-20261008/phase_report.py",
+      "sha256": "2d5e0e50072f2f72f370314f270d7470e070c3cacf6e058f3a417ad79d72f851"
+    },
+    {
+      "path": "/tmp/ash-consolidation-20261008/main-merge-source-transfer.json",
+      "sha256": "56b1a059e00fb44fd015a1d824b0649eabb7b379653c4f635d6135f82ce637d5"
+    },
+    {
+      "path": "/tmp/ash-consolidation-20261008/original-final-gate-v4/receipt.json",
+      "sha256": "4ac92b014f137bea143946b5e07afcaf6a4570fb1d67a156285d5c1e52e5f5ad"
+    },
+    {
+      "path": "/tmp/ash-consolidation-20261008/original-final-gate-v4/summary.json",
+      "sha256": "6ed575b2126f6e68915a330883c5a6cba3f5340a39232204920406e2f9dc1e04"
+    },
+    {
+      "path": "/tmp/ash-consolidation-20261008/original-final-gate-v4/output.log",
+      "sha256": "2628df65f92f1dfd19af19008cf59c779d40026f7cd5276dbd0d3753452edb1a"
+    },
+    {
+      "path": "/tmp/ash-consolidation-20261008/main-toolchain.json",
+      "sha256": "df677ff8d8257313f3fe2b9bb3b053261b0507ff66566bc0257e1eb958bef7b7"
+    }
+  ],
+  "focused_summary": {
+    "targets": 6,
+    "passed": 39,
+    "failed": 0,
+    "ignored": 0
+  },
+  "native_hosts": 6,
+  "completed_phase_observations": 18,
+  "accepted_deficits": {},
+  "source_and_drafts_unchanged": true,
+  "note": "Full gate executed on Original 7a518e8; Main source equality verified, six focused suites and six native programs freshly executed at this Main merge. Later documentation-only descendants do not imply a rerun of the full gate."
+}
