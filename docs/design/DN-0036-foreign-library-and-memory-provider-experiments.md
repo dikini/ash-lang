@@ -573,8 +573,9 @@ coherent product checkpoint with parsing and resolution cases, typing and Core
 validation tests, operational traces, applicable proof or correspondence
 evidence, specification and library documentation, and full verification.
 Any changed surface syntax and Core operational semantics must be specified in
-the same product checkpoint as their implementation. Integration into `main`
-establishes current Ash behavior.
+the same product checkpoint as their implementation. Integrating that accepted
+product checkpoint into `main` establishes current Ash behavior. Retaining a
+bounded experiment is a separate action and grants no such authority.
 
 Possible checkpoints are a checked foreign boundary and scoped provision,
 scoped arena allocation and access, and library APIs with developer tooling.
@@ -591,10 +592,22 @@ product checks. Discard or replace failed candidate machinery when justified by
 the findings; preserve its useful counterexamples. Retention alone establishes
 neither current language semantics nor production authority.
 
-Do not merge an unsuccessful experiment branch into `main`. A successful
+Do not merge unsuccessful candidate machinery into `main`. A successful
 experiment proceeds through the adoption work above using the useful retained
-implementation. Worktree isolation supplies the integration boundary; failure
-does not require deleting the branch or its evidence.
+implementation. Failure does not require deleting its branch or evidence.
+
+On 2026-10-08 the user separately authorized consolidating the completed,
+verified common, SQLite and selected arena deliveries and retaining them in
+`main`, conditional on combined verification. This is an explicit experimental
+retention checkpoint, not product adoption. Keep the experimental entry points,
+fixtures, semantic delta, trusted foreign assumptions and limitations identified;
+leave `spec/` unchanged. The accepted proposal, architectural decisions and
+product correspondence work described above remain required for adoption.
+Exclude unsuccessful optimization candidates and the paused Lean and Core
+one-shot work from that integration. Preserve their histories and unrelated
+working drafts during cleanup. The [execution record](provider-experiments/execution.md)
+records completed capabilities and the actual integration and verification
+receipts; this authorization does not imply that the final gate has passed.
 
 ## Open questions
 

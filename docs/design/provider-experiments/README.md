@@ -144,6 +144,11 @@ extensions for later product adoption and retain counterexamples that explain
 failed candidates. Replace or discard implementation only when the findings
 justify it and its useful evidence remains reproducible.
 
-Do not merge an unsuccessful experiment. A successful branch proceeds through
-the adoption steps, including surface syntax and Core semantics, specification,
-standard-library APIs, review, and product verification before integration.
+Do not merge unsuccessful candidate machinery. Product adoption requires the
+surface syntax and Core semantics, specification, library APIs, review and
+verification described in DN-0036. The user's separately authorized 2026-10-08
+consolidation may retain the verified bounded implementation in `main` without
+adopting its experimental semantics or architecture. Its final merge remains
+conditional on combined verification. Paused Lean/Core one-shot work and failed
+optimization candidates remain outside that delivery. The execution record
+identifies actual results; branch location alone grants no language authority.
