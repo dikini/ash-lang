@@ -1,0 +1,8 @@
+{
+  "reason": "Premature Main focused build stopped before cache-transfer prerequisite; no passing claim",
+  "source": "/home/dikini/Projects/ash-lang/.worktree/cache/provider-final-20261008",
+  "destination": "/home/dikini/Projects/ash-lang/.worktree/cache/aborted-main-build-before-cache-transfer-20261008",
+  "device": 66309,
+  "inode": 50213201,
+  "original_cache_inode": 51263159
+}

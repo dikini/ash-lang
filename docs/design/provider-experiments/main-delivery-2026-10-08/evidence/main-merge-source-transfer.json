@@ -1,0 +1,11 @@
+{
+  "verified_original_source": "7a518e83230fec568978b269b1d69776ab6051c5",
+  "original_delivery": "f56070ccb88d21ba833c5ca70106070318b9145a",
+  "common_delivery": "f56070ccb88d21ba833c5ca70106070318b9145a",
+  "main_merge": "f51f538455cb997e5e1f5db6eec8cf36d616c7d1",
+  "tree": "6801bf0b2f853f3bd68db382b15f61d81e67958f",
+  "parents": "a2ced870f491457a60e3131ac613f295ea77e441 f56070ccb88d21ba833c5ca70106070318b9145a",
+  "signature": "N",
+  "main_original_common_trees_equal": true,
+  "source_delta_from_gate": []
+}

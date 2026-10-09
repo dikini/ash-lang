@@ -1,0 +1,18 @@
+{
+  "rejected_fusion_candidate": {
+    "commit": "7af4f896cdadc9636c0b7ff2a275069928506eb8",
+    "ancestor_of_main": false
+  },
+  "paused_core_one_shot": {
+    "commit": "657f6c0c3d674cd09802bb555f25364f1acfac68",
+    "ancestor_of_main": false
+  },
+  ".worktree/cache/aborted-main-build-before-cache-transfer-20261008": {
+    "device": 66309,
+    "inode": 50213201
+  },
+  "target": {
+    "device": 66309,
+    "inode": 39459318
+  }
+}

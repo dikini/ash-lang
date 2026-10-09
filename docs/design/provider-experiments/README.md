@@ -5,9 +5,7 @@
 > Candidate contracts, syntax, and Core rules are experimental. The
 > [execution record](execution.md#current-consolidation-checkpoint) identifies implemented and
 > reviewed components. The public SQLite session is verified and integrated on the
-> original experimental branch. Basic arena integration is also verified and
-> merged. Advanced row/control support is merged into the original branch; the execution
-> record identifies connected checks and the final original verification receipt. Experimental
+> original experimental branch. Common, calibrated SQLite and the selected finite scalar Arena delivery are retained through the verified Main merge; the execution record distinguishes the Original full gate from fresh Main focused/native receipts. Experimental
 > evidence does not change current Ash semantics.
 
 The first slice establishes a copying SQLite bridge and a fixed-capacity scoped
@@ -39,8 +37,7 @@ type checking, Core execution, and actual native behavior.
 
 The cases are descriptions to implement, not observed results. Record results
 alongside them only after the corresponding checker or native harness runs.
-The blueprint and tooling report will be derived from that work, using the
-deliverables in DN-0036.
+The selected [scalar authoring blueprint](arena-blueprint.md) and [results](arena-results.md) retain the completed bounded work. Broader tooling and borrowing work remains subject to the deliverables in DN-0036.
 
 [DN-0037](../DN-0037-ash-authored-foreign-library-interfaces.md) records the
 separate program for Ash-authored foreign-library interfaces and generic host
@@ -201,7 +198,6 @@ Do not merge unsuccessful candidate machinery. Product adoption requires the
 surface syntax and Core semantics, specification, library APIs, review and
 verification described in DN-0036. The user's separately authorized 2026-10-08
 consolidation may retain the verified bounded implementation in `main` without
-adopting its experimental semantics or architecture. Its final merge remains
-conditional on combined verification. Paused Lean/Core one-shot work and failed
+adopting its experimental semantics or architecture. Its explicit Main merge and fresh focused/native results are retained in [main-delivery-2026-10-08 receipt](main-delivery-2026-10-08/README.md). Paused Lean/Core one-shot work and failed
 optimization candidates remain outside that delivery. The execution record
 identifies actual results; branch location alone grants no language authority.

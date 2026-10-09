@@ -6,7 +6,7 @@ establish current language semantics, a formal theorem or production adoption.
 
 The unsigned source delivery is `ffa1d8ef4178cb1e5651411162ff09c117b725f7`.
 Its preserving Common source merge is `c49d4bdc6004168a161c8d51d90b43cf3afddbd6`. That merge has independent
-static review. Complete Original verification passes at `7a518e83230fec568978b269b1d69776ab6051c5`; the [combined receipt](../combined-delivery-2026-10-08/README.md) records the full gate. Main delivery remains pending. Consult the
+static review. Complete Original verification passes at `7a518e83230fec568978b269b1d69776ab6051c5`; the [combined receipt](../combined-delivery-2026-10-08/README.md) records the full gate. Main delivery and fresh native costs are retained in the [Main receipt](../main-delivery-2026-10-08/README.md). Consult the
 [consolidation record](../execution.md#current-consolidation-checkpoint) for
 subsequent integrated results and exact checked commits.
 
@@ -59,8 +59,7 @@ owner remains retained. The complete observed compilation phases use:
 | Independent Core | 82,277 |
 
 These counts belong to the frozen Arena host run. They measure charged work,
-not CPU time or memory. Fresh combined SQLite/arena costs and any accepted
-within-10% deficit must be recorded separately after integration. The
+not CPU time or memory. Fresh combined SQLite/arena costs and any accepted deficit are recorded separately in the [Main receipt](../main-delivery-2026-10-08/README.md). Historical Arena values above retain their original source attribution. The
 [calibration policy](../calibrated-admission-2026-10-08/README.md) defines that
 allowance and requires explicit optimization targets for accepted deficits.
 

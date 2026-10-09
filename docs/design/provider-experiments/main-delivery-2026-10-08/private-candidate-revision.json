@@ -1,0 +1,14 @@
+{
+  "revision": 2,
+  "previous_private_candidate": {
+    "manifest_sha256": "4c85d52080e9fa61254f2ffb8ab37952fc9babc740ed0608281bba4987d9ad2c",
+    "patch_sha256": "ed6455d7aa8350e1113d0a1baa7216daf05bf79e9ac1912bddc60e1e86d3e497"
+  },
+  "changes": [
+    "Fixed duplicate fresh wording and wrapped current execution prose",
+    "Changed historical plan imperative to descriptive evidence",
+    "Appended immutable independent admission review artifacts",
+    "Removed only verified duplicate raw copies and added aggregate source-path to portable-path map"
+  ],
+  "repository_files_changed": false
+}

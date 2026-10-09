@@ -1,0 +1,61 @@
+value: CopySession(Completed(Completed(Ok(Copied(42, TextValue("héllo 世界"), BlobBytes([0, 255]), TextValue(""), BlobBytes([]), NullText, NullBytes, TextValue("世界\0tail"))), Closed), Closed))
+type: CopyOutcome
+compiler work: SourceChecking used=1213287 budget=1245184 hard_limit=1369702 completed=true assessment=WithinBudget optimization_target=false
+compiler work: FinalElaboration used=166073 budget=393216 hard_limit=432537 completed=true assessment=WithinBudget optimization_target=false
+compiler work: IndependentCore used=903995 budget=1638400 hard_limit=1802240 completed=true assessment=WithinBudget optimization_target=false
+observation: Call { operation: "initialize", code: 0 }
+observation: Call { operation: "open", code: 0 }
+observation: Call { operation: "prepare", code: 0 }
+observation: Call { operation: "bind_int64", code: 0 }
+observation: Call { operation: "bind_text_copy", code: 0 }
+observation: InputCopied(13)
+observation: Call { operation: "bind_blob_copy", code: 0 }
+observation: InputCopied(2)
+observation: Call { operation: "bind_text_copy", code: 0 }
+observation: InputCopied(0)
+observation: Call { operation: "bind_blob_copy", code: 0 }
+observation: InputCopied(0)
+observation: Call { operation: "bind_null", code: 0 }
+observation: Call { operation: "bind_null", code: 0 }
+observation: Call { operation: "step", code: 100 }
+observation: Query { operation: "column_count" }
+observation: Query { operation: "column_type" }
+observation: Query { operation: "column_int64" }
+observation: Query { operation: "column_count" }
+observation: Query { operation: "column_type" }
+observation: Query { operation: "column_text" }
+observation: Query { operation: "column_bytes" }
+observation: OutputCopied(13)
+observation: Query { operation: "column_count" }
+observation: Query { operation: "column_type" }
+observation: Query { operation: "column_blob" }
+observation: Query { operation: "column_bytes" }
+observation: OutputCopied(2)
+observation: Query { operation: "column_count" }
+observation: Query { operation: "column_type" }
+observation: Query { operation: "column_text" }
+observation: Query { operation: "column_bytes" }
+observation: Query { operation: "errcode" }
+observation: OutputCopied(0)
+observation: Query { operation: "column_count" }
+observation: Query { operation: "column_type" }
+observation: Query { operation: "column_blob" }
+observation: Query { operation: "errcode" }
+observation: Query { operation: "column_bytes" }
+observation: Query { operation: "errcode" }
+observation: OutputCopied(0)
+observation: Query { operation: "column_count" }
+observation: Query { operation: "column_type" }
+observation: Query { operation: "column_count" }
+observation: Query { operation: "column_type" }
+observation: Query { operation: "column_count" }
+observation: Query { operation: "column_type" }
+observation: Query { operation: "column_text" }
+observation: Query { operation: "column_bytes" }
+observation: OutputCopied(11)
+observation: Call { operation: "step", code: 101 }
+observation: FinishDispatched { operation: "finalize" }
+observation: Call { operation: "finalize", code: 0 }
+observation: FinishDispatched { operation: "close" }
+observation: Call { operation: "close", code: 0 }
+retained owners: 0

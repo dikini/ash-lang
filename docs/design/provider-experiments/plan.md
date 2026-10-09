@@ -22,12 +22,9 @@ the checked source, results and retention status. Retaining a verified bounded
 experiment on `main` does not adopt its candidate semantics or architecture.
 
 The user's 2026-10-03 direction prioritizes completed source capabilities over
-additional internal test granularity. The immediate integration target is S-01:
+additional internal test granularity. The historical immediate integration target was S-01:
 an Ash library and client execute a real SQLite session through the public
-driver, with checked Core and observed completion. Continue the shared instance
-bridge needed for that target; judge each prerequisite by the execution boundary
-it removes. Later targets are the remaining SQLite, arena and borrowing cases,
-then the authoring blueprint and adoption evidence.
+driver, with checked Core and observed completion. The shared instance bridge supplied that execution boundary; each prerequisite was assessed by the boundary it removed. Later targets in that historical sequence were the remaining SQLite, arena and borrowing cases, then authoring and adoption evidence. The current bounded SQLite/scalar Arena results are recorded in the consolidation checkpoint; broader borrowing and payload work remains unfinished.
 
 The plan covers the copying SQLite bridge, a fixed-capacity scoped arena, and
 their first borrowing comparison. Arena owner transport, foreign callback ABI, concurrency,
@@ -105,7 +102,7 @@ matched reuse of seventeen original cases, and a fresh supplementary forwarding
 regression. Historical default-budget refusals retain their original scope;
 calibrated admission does not establish reduced compiler work. At that SQLite
 source checkpoint, preserving integration and the final combined gate remained
-pending. The [combined Original receipt](combined-delivery-2026-10-08/README.md) now records the completed full gate; Main delivery and its focused/native checks remain pending. Consult the consolidation record for later disposition.
+pending. The [combined Original receipt](combined-delivery-2026-10-08/README.md) now records the completed full gate; actual Main delivery and focused/native evidence are recorded in [main-delivery-2026-10-08 receipt](main-delivery-2026-10-08/README.md). Consult the consolidation record for later disposition.
 Standalone/explicit
 budgets, depth and validation remain unchanged; the
 [calibrated policy](calibrated-admission-2026-10-08/README.md) records the larger
@@ -118,10 +115,9 @@ windows, tracking, unsigned commits and real original-branch merges. Independent
 reviews and private studies may proceed in parallel without shared-file writes.
 An implementation obstacle does not authorize changing the selected semantics.
 
-SQLite-specific work after S-01 includes the remaining copying/API cases.
+Historical Common-support boundary: SQLite-specific work after S-01 included the then-remaining copying/API cases.
 Arena-specific work after the basic lifecycle includes typed allocation, Layout,
-references, containment, borrowing and storage families. Those are excluded from
-common support, as are DN-0037 and DN-0038.
+references, containment, borrowing and storage families. Those were excluded from the initial Common-support batches. The later Common delivery includes the selected finite scalar StorageProvider family; containment, borrowing and wider stored payloads remain open. DN-0037 and DN-0038 remain separate.
 
 ## Existing implementation and planned changes
 
@@ -556,7 +552,7 @@ eligible for merge.
 ## Calibrated public-driver admission, 2026-10-08
 
 The user accepted the completed practical costs and selected finite phase
-allowances with explicitly reported deficits up to 10%. This supersedes the
+allowances with exact per-phase deficits at most floor(nominal/10), each AcceptedDeficit retained as a future optimization target. OutsideAllowance and incomplete phase evidence fail. This empirical allowance does not establish reduced CPU or memory cost. This supersedes the
 earlier no-limit-change follow-on checkpoints above. Only the public modular
 pipeline selects the calibrated source, final-elaborator and independent-Core
 budgets; standalone and explicit caller budgets and all depth limits retain
@@ -569,5 +565,4 @@ at `ed3764a`; it retains all prior measurements and reports accepted physical
 cost deficits as optimization targets. Its library-input snapshot is not
 implicitly merged into Common. Common owns the shared driver/Core policy;
 SQLite owns the preserved library/native delivery and example-host visibility.
-Root retains the serial compiler/integration window until the verified shared
-delivery is merged and checked in the original worktree.
+The shared delivery and completed Original gate are retained with fresh Main verification in [main-delivery-2026-10-08 receipt](main-delivery-2026-10-08/README.md). All five packaged SQLite host receipts are separate from the historical four-case calibration baseline.
