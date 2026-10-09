@@ -2,6 +2,59 @@
 
 This is evidence for the bounded experiment governed by [DN-0036](../DN-0036-foreign-library-and-memory-provider-experiments.md) and [candidate A-0](semantics.md#selected-arena-contract-a-0), not current Ash semantics or accepted architecture. The selected storage fragment is Unit, Bool and checked signed-64 Int. Wider stored payloads, reference-containing graph sharing and explicit graph copying remain future work.
 
+## Regression-only scope and deferred work, 2026-10-09
+
+The user narrowed active work to regressions against verified integrated
+`f23ea778189cc0f3ae1ec37a98219fdbcb7e4155`: Common resources/control, SQLite
+String/TEXT copying and scalar Arena allocation/loading. No new feature is part
+of this delivery. Fresh connected verification passes the established contract; only a
+reproduced failure of that baseline justifies a code repair.
+
+The wider experiment is preserved in unsigned recovery commit
+`1aef8c15d454d26db5b0c74fcb378b9aa2b2afe9` on
+`codex/arena-provider-recovery-20261009`, tree
+`8dc2827adbcecbe1955d7a0daeffd65972ee7006`. All 92 owned file hashes match
+that checkpoint. It includes source, fixtures, task, plan, execution record and
+unfinished repairs; it may not compile and is not a verified delivery. A separate
+1,834,128-byte working-file archive has SHA-256
+`65392eb968c07af6d0b9d244f0204bf2f4eb41a967f2c1acf4f132074c42ca20`.
+Both it and the frozen failed-round receipts remain under
+`.worktree/recovery/arena-completion-20261009`. Unrelated drafts, all 33 stashes,
+archive references and other worktrees are preserved.
+
+| Deferred scope | Evidence and remaining work |
+| --- | --- |
+| Wider payloads, immutable graph sharing, closures, nested loading, copying and scratch scopes | Partial implementation. Round 22 passed seven wider tests but failed eleven; round 24 passed four and failed fourteen. Intermediate positives in failed rounds do not establish an accepted capability. Restore exact dispatch/context precision and complete connected native, ownership and integration gates before resuming delivery. |
+| Abstract Layout forwarding and finite borrowed families | Partial implementation and source/Core checks; no complete delivery. Prepared source receipts must survive trusted cleanup row changes without granting executable authority. |
+| Generic stored Ref/Link, nested terminal composition and borrowed-family discard | Never passed their required connected gates. Generic composite substitution loses information; terminal composition rejects an outgoing payload; borrowed discard fails completed capture authentication. Contextual substitution and cleanup-proof replay are unfinished. |
+| Graph discard work budget | Never completed its wider gate. Repeated type-universe comparison exhausts the existing final allowance. No larger work or stack limit is authorized. |
+| General borrowing, retained SQLite inputs/views and cycles | Unimplemented future DN-0036 scope. Sharing-preserving cyclic copy and broader memory policy require separate contracts. |
+| Owner transport | Explicitly excluded from DN-0036; it is not an unimplemented obligation of this experiment. |
+
+Round 24's strict lint, 45 architecture tests and seven scalar tests passed;
+its exact experimental library group passed 26 and failed three, and the nested
+terminal test failed. Those source pins and failures remain separate from both
+the earlier partial positives and the fresh baseline receipt. No wider source is
+merged. These are informative experimental findings, with no language-semantic
+adoption, production-architecture acceptance or new Main merge/push.
+
+The [regression disposition receipt](arena-regression-2026-10-09/README.md)
+retains the recovery manifest, failed-round source identities and independent
+review. Fresh connected verification passed 39 public cases, five existing
+stack/dictionary regressions, 49 adapter unit cases and ten backing cases, plus
+all five packaged SQLite hosts and scalar Arena. No baseline regression was
+reproduced, so this delivery changes no executable source. The single actual
+integration gate passes at unsigned merge
+`7e754bd89b32acad2caa87620c7ea84af3c49e89`, tree
+`a372685987f567c568978c82df2f0d5f82020600`: all six stages, 3,475 passes,
+zero failures and one existing ignored calibration case across 119 outer Cargo
+targets. Nine nested child summaries are excluded; four targets execute no
+cases. Its tested 403 Rust/Ash/Cargo hashes, six draft hashes and HEAD remain
+unchanged. The later documentation-only tracking commit retains that executable
+source; it does not constitute a second gate. The linked receipt records exact
+merge parents, log hash and supplemental native-source equality. Main remains
+`f23ea77`, and the wider recovery branch is excluded from integration ancestry.
+
 ## Verification boundary
 
 The unsigned scalar source delivery is `ffa1d8ef4178cb1e5651411162ff09c117b725f7`. Its 352-file source manifest is `round-retention-lint-pins.json`, SHA-256 `3d351316ad975160a55343e3f0f6cc37de4c23655e2bbd6e431219d360feabc3`. The [selected receipts](arena-selected-2026-10-08/README.md) retain exact source identity, commands, results and native observations.

@@ -1,0 +1,105 @@
+{
+  "utc": "2026-10-09T05:14:37Z",
+  "source_manifest": "/home/dikini/Projects/ash-lang/.worktree/recovery/arena-completion-20261009/round-22-source-pins.json",
+  "source_mismatches": [],
+  "draft_mismatches": [],
+  "commands": [
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--keep-going",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_status": 0,
+      "duration_seconds": 70.19532494300006,
+      "log": "/home/dikini/Projects/ash-lang/.worktree/recovery/arena-completion-20261009/round-22-1.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--all-features",
+        "-p",
+        "ash",
+        "--test",
+        "architecture",
+        "--test",
+        "provider_arena_allocation",
+        "--test",
+        "provider_arena_complete",
+        "--no-fail-fast",
+        "--",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_status": 101,
+      "duration_seconds": 188.63639499200008,
+      "log": "/home/dikini/Projects/ash-lang/.worktree/recovery/arena-completion-20261009/round-22-2.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "--no-fail-fast",
+        "nested_graph_terminal_rejection_tears_down_inner_then_outer_without_cleanup",
+        "--",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_status": 101,
+      "duration_seconds": 138.87038093399997,
+      "log": "/home/dikini/Projects/ash-lang/.worktree/recovery/arena-completion-20261009/round-22-3.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "--no-fail-fast",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture",
+        "core::capture::tests::deep_capture_equations_and_retained_types_are_stack_safe_and_retryable",
+        "core::capture::tests::actual_capture_domain_preserves_ordinals_and_refuses_reachable_orphan_completion",
+        "core::capture::tests::arena_actual_capture_domain_follows_its_internal_dictionary_binding",
+        "eval::machine::tests::arena_dictionary_initialization_refusal_quarantines_the_acquired_guard",
+        "core::capture::value::tests::arena_synthetic_entries_keep_lexical_inputs_separate_from_actual_invocations",
+        "core::capture::value::tests::arena_synthetic_entry_retains_its_real_lexical_owner_dependency",
+        "core::capture::value::tests::arena_selected_adapter_uses_do_not_become_lexical_definitions",
+        "core::capture::value::tests::arena_shared_nested_lambda_uses_its_common_lexical_entry",
+        "core::capture::value::tests::arena_shared_function_bodies_keep_each_synthetic_safety_entry",
+        "elaborate::tests::final_core_zonk_ignores_unrelated_row_solutions_without_rebuilding_the_type",
+        "elaborate::tests::final_core_zonk_authenticates_type_inference_introduced_by_row_substitution",
+        "core::capture::value::tests::arena_provider_identity_reads_only_its_exact_resource_metadata_and_work",
+        "core::capture::control::tests::arena_provider_owner_labels_exclude_only_different_authenticated_rigid_identities",
+        "core::provider::specialization::executable_scope_tests::arena_opaque_store_independence_requires_its_exact_forwarded_physical_layout",
+        "core::capture::control::tests::discard_orders_its_new_driver_before_owner_queries_without_pruning_owned_captures",
+        "core::capture::control::tests::effect_label_ambiguity_follows_only_its_scoped_inputs_and_unproved_replacements",
+        "core::capture::control::tests::complete_code_inventory_retains_member_only_owner_payload_and_lacks_types",
+        "core::capture::control::tests::type_universe_reuses_only_the_same_immutable_borrow_before_structural_matching",
+        "elaborate::tests::ordinary_and_selection_zonk_ignore_only_unrelated_row_solutions",
+        "core::capture::value::tests::native_load_rechecks_every_late_state_reference_and_tuple_alternative",
+        "core::capture::value::tests::native_load_refuses_a_reference_without_its_exact_original_store"
+      ],
+      "exit_status": 101,
+      "duration_seconds": 2.6972615129998303,
+      "log": "/home/dikini/Projects/ash-lang/.worktree/recovery/arena-completion-20261009/round-22-4.log"
+    }
+  ]
+}
