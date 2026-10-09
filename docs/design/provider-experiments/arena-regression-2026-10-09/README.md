@@ -14,9 +14,8 @@ The recovery commit includes later unfinished edits and is not the exact source
 of either test round; the manifests identify those tested sources separately.
 
 [Independent review](independent-review.md) verifies scope, authority boundaries
-and preservation. Fresh connected baseline evidence is recorded below; the actual integration
-gate remains pending. No new Main action or push is part of this
-work. The temporary task, plan and execution record are retained in recovery
+and preservation. Fresh connected baseline and actual integration evidence are
+recorded below. No new Main action or push is part of this work. The temporary task, plan and execution record are retained in recovery
 Git history rather than restored to the active project-management tree.
 
 ## Fresh baseline verification
@@ -25,7 +24,7 @@ All commands ran against unchanged `f23ea77` executable source (401 Rust/Ash and
 Cargo file hashes), with the six unrelated draft hashes unchanged. The
 [connected receipt](baseline-receipt.json) records exact commands, exit status,
 duration and raw-log hashes. [Source pins](baseline-source-pins.json) retain
-the complete tested executable file inventory. No baseline bug was reproduced
+the 401 tested Rust/Ash/Cargo files. No baseline bug was reproduced
 and no production or test implementation change is delivered.
 
 | Connected check | Observed outcome |
@@ -57,9 +56,37 @@ Every completed phase fits its unchanged nominal budget: 1,245,184 source,
 unchanged. These are charged work, not time or physical memory measurements.
 Codec scratch, evaluator heap and allocator overhead remain unmeasured.
 
-The original full integration gate is still required in the actual
-`codex/provider-experiments` checkout. This receipt does not yet establish that
-gate. Raw logs remain in the persistent ignored recovery directory. The retained
-runner scripts are the exact capture definitions for this checkout, not a
-portable build tool; reproduction commands remain in the
+## Actual integration verification
+
+Unsigned merge `7e754bd89b32acad2caa87620c7ea84af3c49e89`, tree
+`a372685987f567c568978c82df2f0d5f82020600`, preserves integration parent
+`f56070ccb88d21ba833c5ca70106070318b9145a` and documentation delivery
+`09fdf41f4d66f4ec9dd492f7ef8ebfdd3bde2d5f`. The wider recovery commit is
+excluded from this ancestry. Executable source remains the verified baseline.
+
+The single `cargo xtask verify` in the actual `codex/provider-experiments`
+checkout passed all six ordered stages: format, metadata, all-target build,
+strict all-feature lint, workspace/all-target/all-feature tests and
+warning-denied documentation. The [integration receipt](integration-receipt.json)
+records exit 0, 1,434.08 seconds, unchanged 403 Rust/Ash/Cargo file hashes,
+unchanged six draft hashes and unchanged tested HEAD. Outer Cargo summaries
+record 3,475 passes, zero failures and one existing ignored calibration case
+across 119 targets. Four targets execute no cases; nine nested child summaries
+are excluded. The ignored case is
+`generated_resource_sessions_close_every_connection`, which requires an
+explicit generated calibration fixture and session count.
+
+The [accounting and native-source review](integration-review.json) retains
+capture environment, merge parents and a post-gate snapshot of the SQLite C
+bridge/header. Both native files equal the tested commit and baseline. This
+snapshot was captured after verification. The later documentation-only tracking
+commit retains the same executable source and does not establish another full
+gate. Main remains `f23ea77`; no new Main merge or push occurred. All 33 stashes
+and the six unrelated drafts remain preserved.
+
+Raw logs remain in the persistent ignored recovery directory; the integration
+log SHA-256 is
+`b854ee5397d65960162e31607d7b8dca6724b392040bad923c268d70c100b6c3`.
+The retained runner scripts are the exact capture definitions for this checkout,
+not a portable build tool; reproduction commands remain in the
 [established delivery recipe](../main-delivery-2026-10-08/README.md#reproduce).

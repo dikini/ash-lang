@@ -43,8 +43,17 @@ retains the recovery manifest, failed-round source identities and independent
 review. Fresh connected verification passed 39 public cases, five existing
 stack/dictionary regressions, 49 adapter unit cases and ten backing cases, plus
 all five packaged SQLite hosts and scalar Arena. No baseline regression was
-reproduced, so this delivery changes no executable source. The actual integration
-gate remains pending.
+reproduced, so this delivery changes no executable source. The single actual
+integration gate passes at unsigned merge
+`7e754bd89b32acad2caa87620c7ea84af3c49e89`, tree
+`a372685987f567c568978c82df2f0d5f82020600`: all six stages, 3,475 passes,
+zero failures and one existing ignored calibration case across 119 outer Cargo
+targets. Nine nested child summaries are excluded; four targets execute no
+cases. Its tested 403 Rust/Ash/Cargo hashes, six draft hashes and HEAD remain
+unchanged. The later documentation-only tracking commit retains that executable
+source; it does not constitute a second gate. The linked receipt records exact
+merge parents, log hash and supplemental native-source equality. Main remains
+`f23ea77`, and the wider recovery branch is excluded from integration ancestry.
 
 ## Verification boundary
 

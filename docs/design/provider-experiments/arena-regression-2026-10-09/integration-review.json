@@ -1,0 +1,38 @@
+{
+  "tested_head": "7e754bd89b32acad2caa87620c7ea84af3c49e89",
+  "tested_tree": "a372685987f567c568978c82df2f0d5f82020600",
+  "baseline": "f23ea778189cc0f3ae1ec37a98219fdbcb7e4155",
+  "merge_parents": [
+    "f56070ccb88d21ba833c5ca70106070318b9145a",
+    "09fdf41f4d66f4ec9dd492f7ef8ebfdd3bde2d5f"
+  ],
+  "environment": {
+    "CARGO_BUILD_JOBS": "1",
+    "RUSTC_WRAPPER": "",
+    "RUST_TEST_THREADS": "1",
+    "ASH_ARENA_DIAGNOSTICS": "removed"
+  },
+  "outer_target_count": 119,
+  "zero_executed_case_target_count": 4,
+  "excluded_nested_child_summary_count": 9,
+  "ignored_case": "generated_resource_sessions_close_every_connection",
+  "ignored_reason": "explicit calibration measurement requires a generated fixture and session count",
+  "supplemental_native_source_snapshot": {
+    "timing": "After the completed gate; equality to tested commit and baseline, not a before/after capture",
+    "files": {
+      "foreign-adapter/sqlite_bridge.c": {
+        "sha256": "2baf1966655199e5f78175b3210e95620b80e1e7ccdca382bf90233bd308a19a",
+        "equals_tested_commit": true,
+        "equals_baseline": true
+      },
+      "foreign-adapter/vendor/sqlite3.h": {
+        "sha256": "89b62c671c5964e137409ce034941b7b05a3af2c9875aba41f47f9483d0c2515",
+        "equals_tested_commit": true,
+        "equals_baseline": true
+      }
+    }
+  },
+  "documentation_boundary": "The later documentation-only tracking commit retains this tested executable source; it is not a second full gate.",
+  "pinned_source_count": 403,
+  "inventory_boundary": "The integration inventory includes the 401 baseline Rust/Ash/Cargo files plus .cargo/config.toml and rust-toolchain.toml. Native C/header source equality is separately captured after the gate."
+}
