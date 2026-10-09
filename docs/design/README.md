@@ -151,6 +151,20 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 
 ### Downstream type-system and resource exploration
 
+- [DN-0041: Typed Serialization and Data Pipelines](DN-0041-typed-serialization-and-data-pipelines.md)
+  — an Ash adaptation of Serde's architecture, first-class JSON/YAML/CSV/TOML/BSON
+  contracts, owned and incremental processing, scoped storage and attributable
+  type/runtime costs.
+- [DN-0040: Floating-Point Semantics and Representation](DN-0040-floating-point-semantics-and-representation.md)
+  — a minimal binary64 language direction, source/Core/operational obligations,
+  numerical conversions and format contracts, with measured representation costs.
+- [DN-0039: Files and Filesystem Resources](DN-0039-files-and-filesystem-resources.md)
+  — scoped file access and filesystem authority, copying I/O, partial progress,
+  fallible completion, host profiles and later arena/buffer integration.
+- [DN-0038: Resource Properties and Mutable Variable Usage](DN-0038-resource-properties-and-mutable-variable-usage.md)
+  — separate usage, uniqueness, access, lifetime, payload and completion
+  properties; compare Rust-like regimes, semantics, Core, proofs, surface forms
+  and memory/performance opportunities before choosing a design.
 - [DN-0037: Ash-Authored Foreign-Library Interfaces](DN-0037-ash-authored-foreign-library-interfaces.md)
   — a separate program for typed foreign contracts, generic host ABI calls,
   memory and linking, with Ash binding code and declarative native build inputs.
