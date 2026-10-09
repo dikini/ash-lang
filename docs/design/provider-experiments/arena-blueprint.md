@@ -1,5 +1,9 @@
 # Scalar arena authoring blueprint
 
+The active contract remains the verified scalar fragment below. Wider payload,
+graph, copying and borrowed-family work is deferred; see the
+[regression-only scope and recovery record](arena-results.md#regression-only-scope-and-deferred-work-2026-10-09).
+
 Authoring guidance for the selected Unit/Bool/checked signed-64 experiment under [DN-0036](../DN-0036-foreign-library-and-memory-provider-experiments.md) and [A-0](semantics.md#selected-arena-contract-a-0). This is experimental authoring guidance, not current language truth. [Results](arena-results.md) distinguish observed behavior, foreign assumptions, excluded work and the exact verification boundaries.
 
 ## Start with an independent result
