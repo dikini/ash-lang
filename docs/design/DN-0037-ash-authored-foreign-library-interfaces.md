@@ -67,6 +67,17 @@ present Rust authoring interface is not a required public library API for this
 program. Moving declarations into Ash and replacing hand-written adapters
 remain separate questions with separate evidence.
 
+The [DN-0036 readiness review](foreign-authoring/dn-0036-readiness.md) records
+the verified Main capabilities, outstanding and worktree evidence, and the
+selected first authoring target: a copying SQLite binding on one host ABI.
+The selected first execution direction generates typed native bridges and links
+a host using the existing evaluator. This starts proposal design without
+accepting source forms or an architectural decision. SQLite is the first complete
+binding delivery; a minimal native arena acquisition, usage and release
+interface is a second worked design case through the same generated bridges.
+Unfinished general borrowing and wider Arena work are not prerequisites.
+Native storage interfaces and region validity contracts remain distinct.
+
 [AD-0007](../decisions/AD-0007-typed-core-dialects.md) requires typed Core and
 independent validation; [AD-0008](../decisions/AD-0008-explicit-evaluator-machine.md)
 provides the explicit evaluator boundary. A generic foreign-call path must

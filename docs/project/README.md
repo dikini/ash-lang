@@ -3,6 +3,8 @@
 These documents govern Ash documentation and development: artifacts,
 dependencies, specification discipline, and writing:
 
+- [Implemented features on Main](implemented-features.md) — a snapshot of
+  specified features and retained experiments, with design and test references.
 - [Artifact guide](artifacts.md)
 - [Dependency policy](dependencies.md)
 - [Documentation policy](documentation.md)
