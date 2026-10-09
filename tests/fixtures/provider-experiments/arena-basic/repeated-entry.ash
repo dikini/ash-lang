@@ -6,5 +6,5 @@ main () = (session (), session ())
 
 session : Unit -> Provider.Scope<Memory.ArenaInitError, Memory.ArenaFinishError, (Int, Int, Int, Int)>
 session () = resource Memory.Arena<R> arena = (Memory.ArenaConfig (64, 4)) {
-Memory.usage arena
+    Memory.usage arena
 }

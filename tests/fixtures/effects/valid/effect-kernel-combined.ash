@@ -18,7 +18,7 @@ combined () = {
 main : Unit -> Int
 main () = handle (
     handle (combined ()) with Read<Bool> {
-        read ignored => resume true
+    read ignored => resume true
     }
 ) with Read<Int> {
     read ignored => resume 42

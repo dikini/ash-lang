@@ -1,8 +1,8 @@
 effect Number {
-  get : Unit -> Int
+    get : Unit -> Int
 }
 
 main : Unit -> Int
 main () = handle (perform Number.get ()) with Number {
-  get ignored => resume 17
+    get ignored => resume 17
 }

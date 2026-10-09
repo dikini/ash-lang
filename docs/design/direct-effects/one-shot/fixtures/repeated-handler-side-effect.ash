@@ -1,24 +1,24 @@
 effect Pulse {
-  tick : Unit -> Unit
+    tick : Unit -> Unit
 }
 
 effect Audit {
-  mark : Unit -> Unit
+    mark : Unit -> Unit
 }
 
 main : Unit -> Int
 main () = handle (handle {
-  let first = perform Pulse.tick ()
-  let second = perform Pulse.tick ()
-  0
-} with Pulse {
-  tick ignored => {
-    let recorded = perform Audit.mark ()
-    resume ()
-  }
+    let first = perform Pulse.tick ()
+    let second = perform Pulse.tick ()
+    0
+    } with Pulse {
+    tick ignored => {
+        let recorded = perform Audit.mark ()
+        resume ()
+    }
 }) with Audit {
-  mark ignored => {
-    let result = resume ()
-    result + 1
-  }
+    mark ignored => {
+        let result = resume ()
+        result + 1
+    }
 }

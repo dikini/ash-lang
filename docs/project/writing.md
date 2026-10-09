@@ -24,3 +24,15 @@ Gentzen-style inference rules. Use `ebnf` fences for grammar productions and
 every formal-notation fence in prose and keep the explanation consistent with
 the notation. Use ordinary prose or inline notation when no production or
 inference structure is needed.
+
+## Ash source layout
+
+Use four spaces for each indentation level in Ash files. Indent braced block
+bodies and multiline continuations; keep closing delimiters aligned with their
+opening construct. Indentation is presentation, not language semantics.
+
+The layout helper `python3 tools/ash_indent.py FILE...` changes leading
+whitespace without changing tokens or logical line boundaries. Use `--check`
+to inspect files without rewriting them. The calibration input generator uses
+the same helper. Historical input archives and source-hash receipts retain
+their original bytes.

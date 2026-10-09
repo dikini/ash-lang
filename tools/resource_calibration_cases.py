@@ -15,6 +15,8 @@ from pathlib import Path
 import re
 from typing import Any
 
+from ash_indent import indent_source
+
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 PHASES = [
@@ -65,7 +67,7 @@ NATIVE_CASES = [
 
 def write_source(path: Path, source: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(source, encoding="utf-8", newline="\n")
+    path.write_text(indent_source(source), encoding="utf-8", newline="\n")
 
 
 def flat_program(width: int) -> str:
