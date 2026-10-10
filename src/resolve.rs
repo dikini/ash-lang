@@ -7431,10 +7431,45 @@ impl Resolver {
                 )
             })?;
 
+        let mut next_ordinary_effect = 0;
+        let mut next_foreign_library = 0;
         for declaration in &surface.declaration_order {
             match *declaration {
-                SurfaceDeclarationIndex::ForeignLibrary(_)
-                | SurfaceDeclarationIndex::Resource(_) => {}
+                SurfaceDeclarationIndex::ForeignLibrary(index) => {
+                    let library = surface.foreign_libraries.get(index).ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            surface.span,
+                            "the surface declaration order contains an invalid foreign library index",
+                        )
+                    })?;
+                    if index != next_foreign_library {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            library.span,
+                            "the surface declaration order repeats, skips or reorders a foreign library",
+                        ));
+                    }
+                    self.type_work.charge(library.members.len()).map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            library.span,
+                            "foreign parameter-source classification exceeded its work budget",
+                        )
+                    })?;
+                    for member in &library.members {
+                        if let crate::surface::SurfaceForeignMember::Symbol(symbol) = member {
+                            effect_type_parameters.push(self.allocate_effect_type_parameters(
+                                &EffectSource::Foreign {
+                                    public: library.public,
+                                    symbol,
+                                },
+                            )?);
+                        }
+                    }
+                    next_foreign_library += 1;
+                }
+                SurfaceDeclarationIndex::Resource(_) => {}
                 SurfaceDeclarationIndex::Type(index) => {
                     let source = surface.type_declarations.get(index).ok_or_else(|| {
                         error(
@@ -7519,7 +7554,7 @@ impl Resolver {
                             problem: "invalid-index",
                         })
                     })?;
-                    if index != effect_type_parameters.len() {
+                    if index != next_ordinary_effect {
                         return Err(error(
                             ResolveReason::InternalState,
                             source.span,
@@ -7529,6 +7564,7 @@ impl Resolver {
                     effect_type_parameters.push(
                         self.allocate_effect_type_parameters(&EffectSource::Ordinary(source))?,
                     );
+                    next_ordinary_effect += 1;
                 }
                 SurfaceDeclarationIndex::Global(index) => {
                     let source = surface.definitions.get(index).ok_or_else(|| {
@@ -7635,7 +7671,7 @@ impl Resolver {
                 problem: "omitted",
             }));
         }
-        if effect_type_parameters.len() != surface.effects.len() {
+        if next_ordinary_effect != surface.effects.len() {
             return Err(error(
                 ResolveReason::InternalState,
                 surface.span,
@@ -7661,8 +7697,14 @@ impl Resolver {
             }));
         }
 
-        for source in &effect_sources[surface.effects.len()..] {
-            effect_type_parameters.push(self.allocate_effect_type_parameters(source)?);
+        if next_foreign_library != surface.foreign_libraries.len()
+            || effect_type_parameters.len() != effect_sources.len()
+        {
+            return Err(error(
+                ResolveReason::InternalState,
+                surface.span,
+                "the surface declaration order omits a foreign effect group",
+            ));
         }
 
         let (registry, constructor_payload_provenance) = self.resolve_registry_with_prepared(
