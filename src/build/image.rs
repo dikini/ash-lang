@@ -3091,6 +3091,7 @@ struct ScalarValueRecord {
 
 #[derive(Clone, Copy, Debug)]
 struct PreparedRepresentationRecord {
+    member_index: u32,
     name: Slice,
     representation: ScalarRepresentationRecord,
     span: SpanRecord,
@@ -3098,6 +3099,7 @@ struct PreparedRepresentationRecord {
 
 #[derive(Clone, Copy, Debug)]
 struct PreparedConstantRecord {
+    member_index: u32,
     name: Slice,
     representation: ScalarRepresentationRecord,
     value: ScalarValueRecord,
@@ -3139,6 +3141,7 @@ struct PreparedOutcomeRecord {
 
 #[derive(Clone, Copy, Debug)]
 struct PreparedSymbolRecord {
+    member_index: u32,
     name: Slice,
     native_name: Slice,
     parameters: Slice,
@@ -3230,10 +3233,18 @@ wire_struct!(
 );
 wire_struct!(ScalarRepresentationRecord, 3, signed, bits, size_t);
 wire_struct!(ScalarValueRecord, 9, negative, magnitude);
-wire_struct!(PreparedRepresentationRecord, 23, name, representation, span);
+wire_struct!(
+    PreparedRepresentationRecord,
+    27,
+    member_index,
+    name,
+    representation,
+    span
+);
 wire_struct!(
     PreparedConstantRecord,
-    32,
+    36,
+    member_index,
     name,
     representation,
     value,
@@ -3245,7 +3256,8 @@ wire_struct!(PreparedPredicateRecord, 9, value);
 wire_struct!(PreparedOutcomeRecord, 20, predicates, span);
 wire_struct!(
     PreparedSymbolRecord,
-    61,
+    65,
+    member_index,
     name,
     native_name,
     parameters,
@@ -4248,6 +4260,9 @@ impl Encoder<'_> {
         };
         charge(self.work, 1)?;
         let key = Arc::as_ptr(original);
+        if !original.owners().is_empty() {
+            return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
+        }
         if let Some(slot) = self.prepared_libraries.get(&key) {
             return Ok(*slot);
         }
@@ -4270,8 +4285,16 @@ impl Encoder<'_> {
             push(
                 &mut self.image.prepared_representations,
                 PreparedRepresentationRecord {
+                    member_index: index(representation.member_index())?,
                     name,
-                    representation: Self::scalar_representation(representation.representation()),
+                    representation: match representation.representation() {
+                        crate::foreign::source_contract::PreparedRepresentation::Scalar(value) => {
+                            Self::scalar_representation(value)
+                        }
+                        crate::foreign::source_contract::PreparedRepresentation::Address(_) => {
+                            return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
+                        }
+                    },
                     span,
                 },
                 self.work,
@@ -4287,6 +4310,7 @@ impl Encoder<'_> {
             push(
                 &mut self.image.prepared_constants,
                 PreparedConstantRecord {
+                    member_index: index(constant.member_index())?,
                     name,
                     representation: Self::scalar_representation(constant.representation()),
                     value: ScalarValueRecord {
@@ -4302,6 +4326,12 @@ impl Encoder<'_> {
         let start = self.image.prepared_symbols.len();
         for symbol in original.symbols() {
             charge(self.work, 1)?;
+            if !matches!(
+                symbol.call(),
+                crate::foreign::source_contract::PreparedForeignCall::Scalar { .. }
+            ) {
+                return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
+            }
             let name = append(&mut self.image.bytes, symbol.name().as_bytes(), self.work)?;
             let native_name = append(
                 &mut self.image.bytes,
@@ -4344,6 +4374,9 @@ impl Encoder<'_> {
             for operand in symbol.operands() {
                 charge(self.work, 1)?;
                 let source = match operand.source() {
+                    PreparedOperandSource::Current(_) => {
+                        return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
+                    }
                     PreparedOperandSource::Constant(position) => {
                         PreparedOperandRecordSource::Constant(index(*position)?)
                     }
@@ -4362,7 +4395,16 @@ impl Encoder<'_> {
                 push(
                     &mut self.image.prepared_operands,
                     PreparedOperandRecord {
-                        representation: Self::scalar_representation(operand.representation()),
+                        representation: match operand.representation() {
+                            crate::foreign::source_contract::PreparedRepresentation::Scalar(
+                                value,
+                            ) => Self::scalar_representation(value),
+                            crate::foreign::source_contract::PreparedRepresentation::Address(_) => {
+                                return Err(ImageFailure::Unsupported(
+                                    Unsupported::RegistryMetadata,
+                                ));
+                            }
+                        },
                         source,
                         span,
                     },
@@ -4400,6 +4442,9 @@ impl Encoder<'_> {
             }
             let outcomes = Slice::of(&self.image.prepared_outcomes, outcome_start)?;
             let result = match symbol.result() {
+                PreparedAbiResult::Address(_) => {
+                    return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
+                }
                 PreparedAbiResult::Void => None,
                 PreparedAbiResult::Scalar(representation) => {
                     Some(Self::scalar_representation(representation))
@@ -4408,6 +4453,7 @@ impl Encoder<'_> {
             push(
                 &mut self.image.prepared_symbols,
                 PreparedSymbolRecord {
+                    member_index: index(symbol.member_index())?,
                     name,
                     native_name,
                     parameters,
@@ -4811,19 +4857,34 @@ impl Encoder<'_> {
                     // Preserve unused constant metadata, but do not admit active
                     // constant native operands before the scalar bridge supports them.
                     charge(self.work, interpretation.symbol().symbol().operands().len())?;
-                    if interpretation
-                        .symbol()
-                        .symbol()
-                        .operands()
-                        .iter()
-                        .any(|operand| {
-                            matches!(
-                                operand.source(),
-                                crate::foreign::source_contract::PreparedOperandSource::Constant(_)
-                            )
-                        })
+                    if !interpretation.symbol().prepared().owners().is_empty()
+                        || !matches!(
+                            interpretation.symbol().symbol().call(),
+                            crate::foreign::source_contract::PreparedForeignCall::Scalar { .. }
+                        )
                     {
-                        return Err(ImageFailure::Unsupported(Unsupported::ConstantOperand));
+                        return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
+                    }
+                    for operand in interpretation.symbol().symbol().operands() {
+                        match operand.source() {
+                            crate::foreign::source_contract::PreparedOperandSource::Constant(_) => {
+                                return Err(ImageFailure::Unsupported(
+                                    Unsupported::ConstantOperand,
+                                ));
+                            }
+                            crate::foreign::source_contract::PreparedOperandSource::Current(_) => {
+                                return Err(ImageFailure::Unsupported(
+                                    Unsupported::RegistryMetadata,
+                                ));
+                            }
+                            crate::foreign::source_contract::PreparedOperandSource::Source(_) => {}
+                        }
+                        if !matches!(
+                            operand.representation(),
+                            crate::foreign::source_contract::PreparedRepresentation::Scalar(_)
+                        ) {
+                            return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
+                        }
                     }
                     let effect =
                         self.encode_structural(StructuralInput::Instance(interpretation.effect()))?;
@@ -5098,8 +5159,12 @@ impl Decoder<'_> {
             .get(&self.image.prepared_representations)?
         {
             let value = PrivatePreparedRepresentationParts {
+                member_index: usize::try_from(record.member_index)
+                    .map_err(|_| ImageFailure::InvalidRecord)?,
                 name: self.text(record.name)?,
-                representation: Self::scalar_representation(record.representation)?,
+                representation: PreparedRepresentation::Scalar(Self::scalar_representation(
+                    record.representation,
+                )?),
                 span: self.span(record.span)?,
             };
             push(&mut representations, value, self.work)?;
@@ -5107,6 +5172,8 @@ impl Decoder<'_> {
         let mut constants = Vec::new();
         for record in record.constants.get(&self.image.prepared_constants)? {
             let value = PrivatePreparedConstantParts {
+                member_index: usize::try_from(record.member_index)
+                    .map_err(|_| ImageFailure::InvalidRecord)?,
                 name: self.text(record.name)?,
                 representation: Self::scalar_representation(record.representation)?,
                 value: PreparedScalarValue {
@@ -5150,7 +5217,9 @@ impl Decoder<'_> {
             let mut operands = Vec::new();
             for record in record.operands.get(&self.image.prepared_operands)? {
                 let span = self.span(record.span)?;
-                let representation = Self::scalar_representation(record.representation)?;
+                let representation = PreparedRepresentation::Scalar(Self::scalar_representation(
+                    record.representation,
+                )?);
                 let source = match record.source {
                     PreparedOperandRecordSource::Constant(index) => {
                         PreparedOperandSource::Constant(
@@ -5210,13 +5279,15 @@ impl Decoder<'_> {
             push(
                 &mut symbols,
                 PrivatePreparedSymbolParts {
+                    member_index: usize::try_from(record.member_index)
+                        .map_err(|_| ImageFailure::InvalidRecord)?,
                     name,
                     native_name,
                     parameters,
                     native_type_projection,
                     operands,
                     result,
-                    outcomes,
+                    call: PrivatePreparedCall::Scalar { outcomes },
                     span,
                 },
                 self.work,
@@ -5228,6 +5299,7 @@ impl Decoder<'_> {
             public: record.public,
             representations,
             constants,
+            owners: Vec::new(),
             symbols,
             span,
         })
@@ -5714,13 +5786,34 @@ impl Decoder<'_> {
                     admit_closed_native_instance(&effect, self.work)?;
                     let symbol = get(symbols, record.symbol)?;
                     charge(self.work, symbol.symbol().operands().len())?;
-                    if symbol.symbol().operands().iter().any(|operand| {
-                        matches!(
-                            operand.source(),
-                            crate::foreign::source_contract::PreparedOperandSource::Constant(_)
+                    if !symbol.prepared().owners().is_empty()
+                        || !matches!(
+                            symbol.symbol().call(),
+                            crate::foreign::source_contract::PreparedForeignCall::Scalar { .. }
                         )
-                    }) {
-                        return Err(ImageFailure::Unsupported(Unsupported::ConstantOperand));
+                    {
+                        return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
+                    }
+                    for operand in symbol.symbol().operands() {
+                        match operand.source() {
+                            crate::foreign::source_contract::PreparedOperandSource::Constant(_) => {
+                                return Err(ImageFailure::Unsupported(
+                                    Unsupported::ConstantOperand,
+                                ));
+                            }
+                            crate::foreign::source_contract::PreparedOperandSource::Current(_) => {
+                                return Err(ImageFailure::Unsupported(
+                                    Unsupported::RegistryMetadata,
+                                ));
+                            }
+                            crate::foreign::source_contract::PreparedOperandSource::Source(_) => {}
+                        }
+                        if !matches!(
+                            operand.representation(),
+                            crate::foreign::source_contract::PreparedRepresentation::Scalar(_)
+                        ) {
+                            return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
+                        }
                     }
                     interpretations.push(crate::core::NativeInterpretation::new(
                         effect,

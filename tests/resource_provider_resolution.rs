@@ -103,6 +103,51 @@ fn fresh_handle_and_identity_are_unavailable_in_initializer_and_after_body() {
 }
 
 #[test]
+fn complete_surface_arguments_preserve_legacy_identity_and_initializer_boundaries() {
+    for arguments in ["Int", "C -> C", "{| Delta}", "Native.C"] {
+        let source = Source::new(&format!(
+            "{PRELUDE}{DEFINITION}main : Unit -> Int\nmain () = resource Connection<{arguments}> db = 0 {{\n    42\n}}\n"
+        ));
+        let graph = load_module_graph(&source.0, &ModuleRoots::empty()).unwrap();
+        let Err(ResolveModuleError::Resolution(failure)) =
+            resolve_module(graph.modules().last().unwrap(), &[])
+        else {
+            panic!("first-slot refusal belongs to resolution");
+        };
+        assert_eq!(failure.reason, ResolveReason::TypeKind, "{arguments}");
+    }
+    let source = Source::new(&format!(
+        "{PRELUDE}{DEFINITION}main : Unit -> Int\nmain () = resource Connection<Int> db = missing_initializer {{\n    42\n}}\n"
+    ));
+    let graph = load_module_graph(&source.0, &ModuleRoots::empty()).unwrap();
+    let Err(ResolveModuleError::Resolution(failure)) =
+        resolve_module(graph.modules().last().unwrap(), &[])
+    else {
+        panic!("initializer lookup belongs to resolution");
+    };
+    assert_eq!(failure.reason, ResolveReason::UnknownName);
+}
+
+#[test]
+fn parsed_product_resources_refuse_unprepared_owner_admission() {
+    // This is a temporary preparation refusal, not completed product semantics.
+    let text = "resource Pending<Before : EffectRow, R, After : EffectRow> {\n    owned R\n    input Unit\n    state Native.State<R>\n    data Unit\n    acquisition Acquire<Native.State<R>, Unit, Unit>\n    completion Finish<Native.State<R>, Unit>\n    result Scope<Unit, Unit, T> for <T>\n    codec scope\n    provider Provider<R>\n    effect Ops<R>\n    interpret Native.Allocate<R>, Native.Free<R>\n    acquire () => Acquired\n    finish state => Consumed\n    handlers state {\n        use () => resume ()\n    }\n}\n";
+    let source = Source::new(text);
+    let graph = load_module_graph(&source.0, &ModuleRoots::empty()).unwrap();
+    let loaded = graph.modules().last().unwrap();
+    assert!(loaded.surface().resources.is_empty());
+    assert_eq!(loaded.surface().source_resources.len(), 1);
+    let Err(ResolveModuleError::Resolution(failure)) = resolve_module(loaded, &[]) else {
+        panic!("unprepared source resources must not enter kind checking");
+    };
+    assert_eq!(failure.reason, ResolveReason::ForeignContract);
+    assert_eq!(
+        failure.diagnostic().primary.span(),
+        loaded.surface().source_resources[0].span
+    );
+}
+
+#[test]
 fn acquire_and_finish_binders_do_not_leak_into_other_templates() {
     let bad = DEFINITION.replace("close state", "close config");
     let source = Source::new(&format!("{PRELUDE}{bad}"));

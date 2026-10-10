@@ -132,10 +132,12 @@ pub enum NodeKind {
     ResumeExpression,
     /// One builtin cell acquisition with an identity binder and scoped body.
     ResourceExpression,
-    /// Experimental module-owned resource assembly.
+    /// A module-owned experimental assembly or explicit source resource declaration.
     ResourceDefinition,
     /// Experimental assembly field or clause block.
     ResourceField,
+    /// Product resource field; kept distinct from experimental field syntax.
+    SourceResourceField,
     /// One optional declaration-level resource family template.
     ResourceFamily,
     /// Source-defined resource family instance.

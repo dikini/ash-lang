@@ -212,6 +212,45 @@ fn seed_module<'a>(
                 .map(|handler| Visit::Handler(handler, 0)),
         );
     }
+    features.resource_definitions += module.source_resources.len();
+    features.nodes += module.source_resources.len();
+    for resource in &module.source_resources {
+        pending.extend(resource.parameters.iter().map(Visit::Parameter));
+        pending.extend(resource.result_parameters.iter().map(Visit::Parameter));
+        for ty in [
+            &resource.input,
+            &resource.state,
+            &resource.data,
+            &resource.acquisition,
+            &resource.completion,
+            &resource.result,
+            &resource.provider,
+        ] {
+            pending.push(Visit::Type(ty, 1));
+        }
+        pending.push(Visit::Effect(&resource.provided, 1));
+        pending.extend(
+            resource
+                .interpreted
+                .iter()
+                .map(|effect| Visit::Effect(effect, 1)),
+        );
+        for pattern in [
+            &resource.acquire_pattern,
+            &resource.finish_pattern,
+            &resource.handlers_pattern,
+        ] {
+            pending.push(Visit::Pattern(pattern));
+        }
+        pending.push(Visit::Expr(&resource.acquire, 0));
+        pending.push(Visit::Expr(&resource.finish, 0));
+        pending.extend(
+            resource
+                .handlers
+                .iter()
+                .map(|handler| Visit::Handler(handler, 0)),
+        );
+    }
 }
 
 fn walk<'a>(features: &mut Features, pending: &mut Vec<Visit<'a>>) {
@@ -380,9 +419,7 @@ fn walk<'a>(features: &mut Features, pending: &mut Vec<Visit<'a>>) {
                     }
                     SurfaceExprKind::ProviderResource(resource) => {
                         features.resource_sites += 1;
-                        if let Some(arguments) = &resource.arguments {
-                            pending.extend(arguments.iter().map(|ty| Visit::Type(ty, 1)));
-                        }
+                        pending.extend(resource.arguments.iter().map(|ty| Visit::Type(ty, 1)));
                         pending.push(Visit::Expr(&resource.initializer, scope));
                         pending.push(Visit::Block(&resource.body, scope));
                     }

@@ -237,11 +237,12 @@ impl<'runtime> super::Machine<'runtime> {
             };
             let integer =
                 source_integer_leaf(&self.heap, &value, path, &mut self.instantiation_work)?;
-            match narrow_gnu_scalar(
-                integer,
-                operand.representation(),
-                &mut self.instantiation_work,
-            ) {
+            let crate::foreign::source_contract::PreparedRepresentation::Scalar(representation) =
+                operand.representation()
+            else {
+                return Err(super::RuntimeFailure::ForeignBinding);
+            };
+            match narrow_gnu_scalar(integer, representation, &mut self.instantiation_work) {
                 Ok(operand) => operands.push(operand),
                 Err(NativeScalarConversionError::OutOfRange) => {
                     self.control = Some(super::Control::Return(prepare_conversion_refusal(

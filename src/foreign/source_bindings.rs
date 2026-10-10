@@ -48,6 +48,18 @@ impl SourceNativeBindings {
             return Err(RuntimeFailure::ForeignBinding);
         }
         let symbol = sealed.into_source();
+        if !symbol.prepared().owners().is_empty()
+            || !matches!(
+                symbol.symbol().call(),
+                super::source_contract::PreparedForeignCall::Scalar { .. }
+            )
+            || matches!(
+                symbol.symbol().result(),
+                super::source_contract::PreparedAbiResult::Address(_)
+            )
+        {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
         // Subset admission inspects only borrowed normalized metadata; it does
         // not prepare another ABI or normalize library policy again.
         paid(work, symbol.symbol().operands().len())?;
@@ -55,6 +67,9 @@ impl SourceNativeBindings {
             !matches!(
                 operand.source(),
                 super::source_contract::PreparedOperandSource::Source(_)
+            ) || !matches!(
+                operand.representation(),
+                super::source_contract::PreparedRepresentation::Scalar(_)
             )
         }) {
             return Err(RuntimeFailure::ForeignBinding);

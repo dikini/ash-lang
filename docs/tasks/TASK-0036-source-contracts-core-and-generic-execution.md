@@ -159,6 +159,30 @@ interpreter payload admission from that caller's ledger. The phase boundary now
 restores the builder meter after both success and refusal; exact and one-short
 cuts retain the caller's prior charges and fresh retries use a fresh caller.
 
+The product resource header has its own unresolved Surface carrier. It retains
+the explicit owned selector, complete Type/Row actuals, private data and lifecycle
+codecs, ordered native interpretations and lifecycle patterns. The experimental
+header remains a separate comparison carrier. Resolution refuses the product
+header before identity setup until canonical owner/resource admission is
+connected; parsing does not grant provider authority.
+
+Dependency-free owner ABI preparation uses mutually exclusive scalar/acquire/
+teardown call variants and tagged owner arguments. Original library member
+coordinates and assumption spans survive preparation, restoration and exact
+correspondence. Each symbol is normalized once; teardown checks borrow those
+prepared facts. Byte owners require an initialized extent; opaque acquisition
+need not declare one. An authored initialization fact remains a foreign promise,
+not a consequence of its address representation or non-nullness.
+
+Private owner restoration checks flat phase, coordinate, tag and span consistency.
+It cannot recheck a source path's leaf type without the original signature; exact
+correspondence authenticates the retained path, and future resolved binding must
+authenticate its type. The executable scalar path explicitly refuses owner,
+current-state and address facts. Whole source libraries with owner/address
+members also refuse before publication, including libraries with no symbols.
+Resource execution, guard publication, data/byte primitives and library ports
+remain separate required work.
+
 ## Deviations
 
 None authorized. Return concrete semantic gaps to CP-0022 instead of resolving

@@ -22,7 +22,8 @@ use crate::{
 };
 
 use super::source_contract::{
-    PreparedAbiResult, PreparedForeignLibrary, PreparedForeignSymbol, PreparedOperandSource,
+    PreparedAbiResult, PreparedForeignCall, PreparedForeignLibrary, PreparedForeignSymbol,
+    PreparedOperandSource, PreparedRepresentation,
 };
 
 /// The defining library coordinate, allocated during ordinary source admission.
@@ -637,7 +638,10 @@ fn validate_foreign_symbol_source<'effect>(
     let codec = &context.codec;
     let library_span = primary_span(prepared.origin(), work, effect.span)?;
     charge(work, 5, library_span)?;
-    if library.module != prepared.module() || effect.id.module() != library.module {
+    if library.module != prepared.module()
+        || effect.id.module() != library.module
+        || !prepared.owners().is_empty()
+    {
         return Err(failure(
             ForeignAdmissionReason::InvalidLibrary,
             library_span,
@@ -648,6 +652,9 @@ fn validate_foreign_symbol_source<'effect>(
         .get(symbol_index)
         .ok_or_else(|| failure(ForeignAdmissionReason::InvalidLibrary, library_span))?;
     let span = primary_span(symbol.origin(), work, library_span)?;
+    if !matches!(symbol.call(), PreparedForeignCall::Scalar { .. }) {
+        return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
+    }
     if !contains(library_span, span)
         || effect.span != span
         || !same_origin_with_budget(&effect.origin, symbol.origin(), work)
@@ -758,6 +765,11 @@ fn validate_foreign_symbol_source<'effect>(
     check_domain(domain, &seen, registry, work, span)?;
     for operand in symbol.operands() {
         charge(work, 1, span)?;
+        if !matches!(operand.representation(), PreparedRepresentation::Scalar(_))
+            || matches!(operand.source(), PreparedOperandSource::Current(_))
+        {
+            return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
+        }
         if let PreparedOperandSource::Source(path) = operand.source() {
             check_source_path(domain, path, work, span)?;
         }
