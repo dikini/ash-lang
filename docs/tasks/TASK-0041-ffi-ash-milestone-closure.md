@@ -13,7 +13,7 @@
 
 ## Dependencies
 
-Complete issue outcomes #2–#6 verified on integration/ffi-ash, with signed
+Complete issue outcomes #2–#6 verified on integration/ffi-ash, with unsigned
 explicit merges and receipts. The final Main integration gate remains separate.
 
 ## Work
@@ -57,5 +57,8 @@ properties, foreign assumptions, calibration deficits and unproved properties.
 
 ## Deviations
 
-None authorized. Return concrete semantic gaps to CP-0022 instead of resolving
+The execution instruction requires unsigned milestone commits/merges and a
+signed final merge into Main. This changes Git signing policy only.
+
+Return concrete semantic gaps to CP-0022 instead of resolving
 them locally. Keep excluded features outside this task.

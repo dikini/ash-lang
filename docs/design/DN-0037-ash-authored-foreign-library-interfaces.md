@@ -57,7 +57,8 @@ Use [AD-0011](../decisions/AD-0011-milestone-worktree-lifecycle.md): persistent
 `integration/ffi-ash` plus one active product checkpoint worktree. Main stays
 unchanged until the separate final integration gate. PRs target that branch;
 the final delivery PR targets Main. Preserve checkpoint histories with explicit
-merges and signed commits.
+merges. Milestone commits and intermediate merges are unsigned; the final
+merge into Main is signed, following the updated execution instruction.
 
 Issues #2–#6 are connected stages of one CP-0022 product checkpoint. Keep its
 accepted proposal and active worktree until the complete semantic transition,
