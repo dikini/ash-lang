@@ -19049,14 +19049,31 @@ Memory.AllocationRefused(error) => 0
 
     #[test]
     fn linked_selection_accepts_a_specific_closed_effectful_implementation_head() {
-        let mut program = generic_program();
+        let mut program = entry_program(concat!(
+            "effect Probe<A> {\n",
+            "    call : A -> Bool\n",
+            "}\n\n",
+            "interface Equal<A> {\n",
+            "    equal : (A, A) -> Bool\n",
+            "}\n\n",
+            "impl Equal<Int> {\n",
+            "    equal (left, right) = left == right\n",
+            "}\n\n",
+            "main : Unit -> Bool\n",
+            "main () = equal((1, 1))\n",
+        ));
         let module = program.groups()[0].module();
+        let [effect] = program.registry().effects() else {
+            panic!("the fixture must retain exactly one canonical effect");
+        };
+        assert_eq!(effect.spelling, "Probe");
+        let effect_id = effect.id;
         let closed = Type::function_computation(
             Type::Unit,
             crate::types::ComputationType::new(
                 Type::Bool,
                 crate::types::EffectRow::singleton(crate::types::EffectInstance::new(
-                    crate::types::EffectId::new(module, 0),
+                    effect_id,
                     Box::new([Type::Int]),
                 )),
             ),
@@ -19086,6 +19103,45 @@ Memory.AllocationRefused(error) => 0
             group.span(),
         )
         .expect("the selected specific closed-effect head should match its linked goal");
+
+        let missing_effect = crate::types::EffectId::new(effect_id.module(), u32::MAX);
+        assert!(program.registry().effect(missing_effect).is_none());
+        let malformed = Type::function_computation(
+            Type::Unit,
+            crate::types::ComputationType::new(
+                Type::Bool,
+                crate::types::EffectRow::singleton(crate::types::EffectInstance::new(
+                    missing_effect,
+                    Box::new([Type::Int]),
+                )),
+            ),
+        );
+        assert!(program.replace_first_implementation_argument_for_test(module, malformed.clone()));
+        let group = &program.groups()[0];
+        let fact = &group.implementation_facts()[0];
+        let selection =
+            implementation_selection_for_argument(fact.id, fact.interface(), &methods, malformed);
+        let failure = validate_selection(
+            &program,
+            &registry,
+            group,
+            &selection,
+            fact.interface(),
+            &mut InterfaceConstraintBudget::default(),
+            group.span(),
+        )
+        .expect_err("a matching retained head and goal cannot authorize an absent effect");
+        assert_eq!(
+            failure.reason(),
+            EvidenceValidationReason::InvalidEvidenceRoot
+        );
+        assert_eq!(
+            failure
+                .kind_context()
+                .expect("the canonical kind cause must be retained")
+                .name(),
+            "missing-row-effect",
+        );
     }
 
     #[test]

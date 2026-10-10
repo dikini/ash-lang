@@ -3987,9 +3987,10 @@ mod tests {
             "main : Unit -> Int\nmain () = handle (helper 0) with E<Int> {\nask ignored => resume 42\n}\n",
         ));
         // Application: 3. Request argument: 2 slots + substitution root + Int.
+        // Exact source-native registry lookup (absent for this request): 1.
         // Handler search: 1. Handler argument: 2 slots + Int.
         // Exact comparison: argument tag + Int.
-        const REQUIRED: usize = 13;
+        const REQUIRED: usize = 14;
         let mut short = Machine::new_effect(&program);
         short.instantiation_work = TypeWorkBudget::with_limit(REQUIRED - 1);
         assert!(is_work_exhaustion(short.run().unwrap_err()));
