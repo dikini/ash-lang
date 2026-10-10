@@ -51,6 +51,13 @@ The evaluator and private Core stay the execution engine. Bridge generation
 replaces the experiment's handwritten executable adapters; header verification
 is optional and cannot repair missing source contracts.
 
+Standalone Core reconstruction needs original source provenance, registry and
+method catalogs in addition to nodes. Capture those inputs while the canonical
+compiler owns the admitted graph; reopening source paths after compilation can
+read changed files. Reconstruction must preserve shared original contract
+allocations and then invoke the existing independent modular validator. Recursive
+serialization of Core alone would lose authority and safe traversal properties.
+
 ## Deviations
 
 None authorized. Return concrete semantic gaps to CP-0022 instead of resolving

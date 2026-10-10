@@ -1,5 +1,8 @@
 //! Closed assembly of the grammar forms accepted by this parser dialect.
 
+#[path = "foreign_grammar.rs"]
+mod foreign;
+
 use crate::lexer::TokenKind;
 
 use super::{ExpectedForm, NodeKind, ParseReason, Parser, SynchronizationBoundary, expression};
@@ -391,7 +394,8 @@ fn expect_upper_identifier(parser: &mut Parser<'_>) {
 }
 
 fn starts_module_declaration(parser: &Parser<'_>) -> bool {
-    parser.at(&TokenKind::Type)
+    foreign::starts_library(parser)
+        || parser.at(&TokenKind::Type)
         || parser.at(&TokenKind::Newtype)
         || parser.at(&TokenKind::Resource)
         || parser.at(&TokenKind::Effect)
@@ -416,7 +420,9 @@ fn starts_module_declaration(parser: &Parser<'_>) -> bool {
 }
 
 fn module_declaration(parser: &mut Parser<'_>) -> TypeParametersOutcome {
-    if parser.at(&TokenKind::Resource)
+    if foreign::starts_library(parser) {
+        foreign::library(parser)
+    } else if parser.at(&TokenKind::Resource)
         || parser.at(&TokenKind::Pub) && parser.nth(1) == Some(&TokenKind::Resource)
     {
         resource_definition(parser)

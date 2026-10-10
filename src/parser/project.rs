@@ -1,5 +1,8 @@
 //! Projection from recovery-free concrete syntax to spanned surface syntax.
 
+#[path = "foreign_project.rs"]
+mod foreign;
+
 use crate::{
     lexer::{Token, TokenKind},
     source::{ByteRange, SourceFile, Span},
@@ -259,12 +262,29 @@ fn validate_node_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), Proj
 fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), ProjectionError> {
     let mut shape = ShapeCursor::new(node, tokens);
     match node.kind {
+        NodeKind::ForeignLibrary
+        | NodeKind::ForeignMember
+        | NodeKind::ForeignRepresentation
+        | NodeKind::ForeignReference
+        | NodeKind::ForeignInteger
+        | NodeKind::ForeignSourcePosition
+        | NodeKind::ForeignNativePosition
+        | NodeKind::ForeignAbiOperand
+        | NodeKind::ForeignAbiRepresentation
+        | NodeKind::ForeignCallContract
+        | NodeKind::ForeignOperandRole
+        | NodeKind::ForeignOutputRole
+        | NodeKind::ForeignOutcomeTest
+        | NodeKind::ForeignOutcomeAtom
+        | NodeKind::ForeignOutcomeFact
+        | NodeKind::ForeignInputDiscipline => return foreign::validate_shape(node, tokens),
         NodeKind::Module => {
             while shape.peek_node_is(NodeKind::ImportDeclaration) {
                 shape.node(NodeKind::ImportDeclaration)?;
                 shape.token(&TokenKind::LineEnd)?;
             }
-            while shape.peek_node_is(NodeKind::TypeDeclaration)
+            while shape.peek_node_is(NodeKind::ForeignLibrary)
+                || shape.peek_node_is(NodeKind::TypeDeclaration)
                 || shape.peek_node_is(NodeKind::NewtypeDeclaration)
                 || shape.peek_node_is(NodeKind::InterfaceDeclaration)
                 || shape.peek_node_is(NodeKind::ResourceDefinition)
@@ -1238,6 +1258,7 @@ fn project_surface_module(
 ) -> Result<SurfaceModule, ProjectionError> {
     require_kind(node, NodeKind::Module)?;
     let mut imports = Vec::new();
+    let mut foreign_libraries = Vec::new();
     let mut declaration_order = Vec::new();
     let mut type_declarations = Vec::new();
     let mut interfaces = Vec::new();
@@ -1248,6 +1269,12 @@ fn project_surface_module(
     for child in child_nodes(node) {
         match child.kind {
             NodeKind::ImportDeclaration => imports.push(project_import(source, child, tokens)?),
+            NodeKind::ForeignLibrary => {
+                declaration_order.push(SurfaceDeclarationIndex::ForeignLibrary(
+                    foreign_libraries.len(),
+                ));
+                foreign_libraries.push(foreign::library(source, child, tokens)?);
+            }
             NodeKind::TypeDeclaration => {
                 declaration_order.push(SurfaceDeclarationIndex::Type(type_declarations.len()));
                 type_declarations.push(project_type_declaration(source, child, tokens)?);
@@ -1283,6 +1310,7 @@ fn project_surface_module(
     }
     Ok(SurfaceModule {
         imports,
+        foreign_libraries,
         declaration_order,
         type_declarations,
         interfaces,

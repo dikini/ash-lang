@@ -750,6 +750,8 @@ impl Drop for ResolvedMatchArmBuffer {
 /// The semantic reason that prevented name resolution.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResolveReason {
+    /// A source foreign declaration has not passed canonical contract admission.
+    ForeignContract,
     /// Source evidence cannot introduce the compiler-owned cell provider.
     SealedProvider,
     /// Resource acquisition requires a direct compiler-owned cell dependency.
@@ -815,6 +817,7 @@ pub enum ResolveReason {
 impl fmt::Display for ResolveReason {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::ForeignContract => "foreign.contract",
             Self::SealedProvider => "resolve.sealed-provider",
             Self::ResourceBuiltinRequired => "resolve.resource-builtin-required",
             Self::UnknownName => "resolve.unknown-name",
@@ -1839,26 +1842,36 @@ fn retain_declaration_order(
             "resolved declaration-order retention could not reserve storage",
         )
     })?;
-    retained.extend(source.iter().map(|declaration| match *declaration {
-        SurfaceDeclarationIndex::Resource(index) => {
-            crate::resolved::ResolvedDeclarationIndex::Resource(index)
-        }
-        SurfaceDeclarationIndex::Type(index) => {
-            crate::resolved::ResolvedDeclarationIndex::Type(index)
-        }
-        SurfaceDeclarationIndex::Interface(index) => {
-            crate::resolved::ResolvedDeclarationIndex::Interface(index)
-        }
-        SurfaceDeclarationIndex::Effect(index) => {
-            crate::resolved::ResolvedDeclarationIndex::Effect(index)
-        }
-        SurfaceDeclarationIndex::Global(index) => {
-            crate::resolved::ResolvedDeclarationIndex::Global(index)
-        }
-        SurfaceDeclarationIndex::Implementation(index) => {
-            crate::resolved::ResolvedDeclarationIndex::Implementation(index)
-        }
-    }));
+    for declaration in source {
+        let declaration = match *declaration {
+            SurfaceDeclarationIndex::ForeignLibrary(_) => {
+                return Err(error(
+                    ResolveReason::ForeignContract,
+                    span,
+                    "source foreign declarations require canonical contract admission",
+                ));
+            }
+            SurfaceDeclarationIndex::Resource(index) => {
+                crate::resolved::ResolvedDeclarationIndex::Resource(index)
+            }
+            SurfaceDeclarationIndex::Type(index) => {
+                crate::resolved::ResolvedDeclarationIndex::Type(index)
+            }
+            SurfaceDeclarationIndex::Interface(index) => {
+                crate::resolved::ResolvedDeclarationIndex::Interface(index)
+            }
+            SurfaceDeclarationIndex::Effect(index) => {
+                crate::resolved::ResolvedDeclarationIndex::Effect(index)
+            }
+            SurfaceDeclarationIndex::Global(index) => {
+                crate::resolved::ResolvedDeclarationIndex::Global(index)
+            }
+            SurfaceDeclarationIndex::Implementation(index) => {
+                crate::resolved::ResolvedDeclarationIndex::Implementation(index)
+            }
+        };
+        retained.push(declaration);
+    }
     Ok(retained)
 }
 
@@ -2632,6 +2645,17 @@ impl Resolver {
 
         for declaration in &surface.declaration_order {
             match *declaration {
+                SurfaceDeclarationIndex::ForeignLibrary(index) => {
+                    let span = surface
+                        .foreign_libraries
+                        .get(index)
+                        .map_or(surface.span, |library| library.span);
+                    return Err(error(
+                        ResolveReason::ForeignContract,
+                        span,
+                        "source foreign declarations require canonical contract admission",
+                    ));
+                }
                 SurfaceDeclarationIndex::Resource(index) => {
                     let resource = &surface.resources[index];
                     self.validate_local_type_name(
@@ -7186,7 +7210,8 @@ impl Resolver {
 
         for declaration in &surface.declaration_order {
             match *declaration {
-                SurfaceDeclarationIndex::Resource(_) => {}
+                SurfaceDeclarationIndex::ForeignLibrary(_)
+                | SurfaceDeclarationIndex::Resource(_) => {}
                 SurfaceDeclarationIndex::Type(index) => {
                     let source = surface.type_declarations.get(index).ok_or_else(|| {
                         error(
@@ -7568,7 +7593,8 @@ impl Resolver {
                             Some(self.allocate_binder(&first.name.text, first.name.span)?);
                     }
                 }
-                SurfaceDeclarationIndex::Resource(_)
+                SurfaceDeclarationIndex::ForeignLibrary(_)
+                | SurfaceDeclarationIndex::Resource(_)
                 | SurfaceDeclarationIndex::Type(_)
                 | SurfaceDeclarationIndex::Interface(_)
                 | SurfaceDeclarationIndex::Effect(_) => {}

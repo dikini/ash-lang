@@ -4,6 +4,7 @@
 //! carry no dynamic symbol names and do not initialize or execute an adapter.
 mod arena;
 pub mod runtime;
+pub mod source_contract;
 pub use arena::{arena_manifest, typed_arena_manifest};
 
 use crate::{

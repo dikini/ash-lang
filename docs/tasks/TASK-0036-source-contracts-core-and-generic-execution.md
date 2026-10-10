@@ -53,6 +53,17 @@ Rust-authored manifests/adapters are experimental comparison evidence. They
 cannot become the source authoring API. Private replaceable payloads and finite
 window contracts are new obligations in CP-0022.
 
+A zero-argument `void` call exposed a nonempty-outcome grammar gap: no output
+or owner exists to justify a fact. CP-0022 now permits empty outcome fact lists
+with mandatory semantic coverage, accepted on 2026-10-10. Ash still reports
+Unit after the call; no native result is read.
+
+ABI preparation must price string comparisons and NUL scans by inspected bytes
+before scanning. A single borrowed mapping table decodes each authored ABI
+position once, rejects repeated positions and projects each mapped source path
+once. Preparation alone has no resolved type or operation authority; binding
+must still authenticate the canonical result codec and complete owner arguments.
+
 ## Deviations
 
 None authorized. Return concrete semantic gaps to CP-0022 instead of resolving
