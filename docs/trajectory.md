@@ -5,6 +5,18 @@ uses: `idea → speculative → outlined → designed → specified →
 implementation`. A completed row records `complete / implementation` to
 distinguish its result from its maturity.
 
+The next bounded product milestone is
+[`ffi-ash`](design/DN-0037-ash-authored-foreign-library-interfaces.md#agreed-ffi-ash-milestone):
+Ash-authored foreign contracts and library policy, generated Rust native-call
+bridges and runnable evaluator hosts. Its durable scope and sequence live in
+DN-0037; [DN-0042](design/DN-0042-native-interaction-and-efficient-data.md) supplies
+the broader context. [GitHub](https://github.com/dikini/ash-lang/milestone/1)
+owns live progress and PR status. [CP-0022](proposals/CP-0022-ash-authored-foreign-interfaces.md)
+is accepted; [AD-0013](decisions/AD-0013-generated-native-bridges-and-program-builds.md)
+records the agreed build boundary. The [implementation tasks](tasks/README.md)
+carry the authorized scope; the separate milestone gate controls integration
+into Main.
+
 The Mini-Ash milestone is retained historically at the `mini-ash` tag, whose
 peeled commit is `d62d3ba`. Its
 [closure report](design/mini-ash/closure.md) records the complete dialect
