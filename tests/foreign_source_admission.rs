@@ -5,6 +5,7 @@ use std::{
 };
 
 use ash::driver::{PipelineFailure, RunConfiguration, run_path};
+use ash::kind::KindFailure;
 use ash::module::ModuleRoots;
 use ash::resolve::ResolveReason;
 
@@ -78,6 +79,13 @@ fn published_native_effects_keep_their_complete_kinds_through_imports() {
     assert!(
         run_path(fixture.configuration()).is_err(),
         "Type arguments must not stand in for row arguments"
+    );
+    fs::write(fixture.0.join("entry.ash"), "import native as Native\nprobe<Before : EffectRow, T, After : EffectRow> : Unit -> Int ! {Native.Abs<Before, T, After>}\nprobe () = 42\nmain : Unit -> Int\nmain () = 42\n").unwrap();
+    let failure = run_path(fixture.configuration()).unwrap_err();
+    assert!(
+        matches!(failure.pipeline_failure(), Some(PipelineFailure::Kind(KindFailure::Source(error)))
+            if error.to_string().contains("this row slot requires a written effect-row argument")),
+        "a TypeArg with row kind must still require the written row form: {failure:?}"
     );
 }
 

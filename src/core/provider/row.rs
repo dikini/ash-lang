@@ -175,6 +175,7 @@ pub(in crate::core) enum RowEquationOperation {
     Empty,
     Union { callable: Option<NodeId> },
     Request,
+    NativeInterpret,
     StateAccess,
     Handler { output: HandlerOutputId },
     Resume { output: HandlerOutputId },
@@ -479,6 +480,9 @@ impl HandlerRowRecipeDraft {
                             _ => None,
                         },
                     }
+                }
+                EffectExprKind::Operation(EffectOperation::NativeInterpret(_)) => {
+                    RowEquationOperation::NativeInterpret
                 }
                 EffectExprKind::Operation(EffectOperation::Request(_)) => {
                     RowEquationOperation::Request

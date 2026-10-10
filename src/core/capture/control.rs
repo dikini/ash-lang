@@ -218,6 +218,10 @@ fn retain_owner_row_universe<'a>(
 
 #[derive(Debug)]
 pub(super) enum Control {
+    NativeInterpret {
+        body: usize,
+        effects: Vec<Request>,
+    },
     Cleanup {
         body: usize,
         action: usize,
@@ -273,6 +277,38 @@ pub(super) struct Clause {
 }
 
 impl Control {
+    pub(super) fn requests(&self) -> impl Iterator<Item = &Request> {
+        let single = match self {
+            Self::Request(request)
+            | Self::Handler {
+                effect: request, ..
+            }
+            | Self::Resource {
+                effect: request, ..
+            } => Some(request),
+            _ => None,
+        };
+        let multiple: &[Request] = match self {
+            Self::NativeInterpret { effects, .. } => effects,
+            _ => &[],
+        };
+        single.into_iter().chain(multiple.iter())
+    }
+
+    pub(super) fn requests_mut(&mut self) -> impl Iterator<Item = &mut Request> {
+        let (single, multiple): (Option<&mut Request>, &mut [Request]) = match self {
+            Self::Request(request)
+            | Self::Handler {
+                effect: request, ..
+            }
+            | Self::Resource {
+                effect: request, ..
+            } => (Some(request), &mut []),
+            Self::NativeInterpret { effects, .. } => (None, effects),
+            _ => (None, &mut []),
+        };
+        single.into_iter().chain(multiple.iter_mut())
+    }
     fn children(
         &self,
         graph: &SummaryGraph,
@@ -309,7 +345,8 @@ impl Control {
                 pending.push(*body);
                 pending.extend(clauses.iter().map(|clause| clause.body));
             }
-            Self::Resume { value, .. }
+            Self::NativeInterpret { body: value, .. }
+            | Self::Resume { value, .. }
             | Self::Resource { body: value, .. }
             | Self::Registration { body: value, .. } => {
                 pending.try_reserve(1).map_err(|_| Failure::Resource)?;
@@ -343,6 +380,20 @@ impl Control {
                 body: body + code_offset,
                 source: *source,
             },
+            Self::NativeInterpret { body, effects } => {
+                charge(budget, effects.len())?;
+                let mut copied = Vec::new();
+                copied
+                    .try_reserve_exact(effects.len())
+                    .map_err(|_| Failure::Resource)?;
+                for effect in effects {
+                    copied.push(effect.copy(budget)?);
+                }
+                Self::NativeInterpret {
+                    body: body + code_offset,
+                    effects: copied,
+                }
+            }
             Self::Return => Self::Return,
             Self::Unavailable => Self::Unavailable,
             Self::Sequence(children) | Self::Choice(children) => {
@@ -466,6 +517,7 @@ enum Site {
     RemovedHandler(usize),
     Cleanup(usize, bool),
     Registration(usize),
+    NativeInterpret(usize),
     Next(Position),
     Handler(usize),
     Resource(usize),
@@ -531,6 +583,11 @@ struct ProviderResourceOccurrence {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 enum Frame {
+    NativeInterpret {
+        code: usize,
+        context: usize,
+        value_context: usize,
+    },
     Closing {
         code: usize,
         site: Site,
@@ -595,6 +652,7 @@ impl Frame {
             | Self::Closing { value_context, .. }
             | Self::RemovedHandler { value_context, .. }
             | Self::Cleanup { value_context, .. }
+            | Self::NativeInterpret { value_context, .. }
             | Self::Registration { value_context, .. }
             | Self::Handler { value_context, .. }
             | Self::Resource { value_context, .. } => value_context,
@@ -609,6 +667,7 @@ impl Frame {
             Self::Cleanup { code, running, .. } => Site::Cleanup(code, running),
             Self::Next { position, .. } => Site::Next(position),
             Self::Registration { code, .. } => Site::Registration(code),
+            Self::NativeInterpret { code, .. } => Site::NativeInterpret(code),
             Self::Handler { code, .. } => Site::Handler(code),
             Self::Resource { code, .. } => Site::Resource(code),
             Self::Clause {
@@ -1394,6 +1453,14 @@ impl<'a> ControlCodeInventory<'a> {
                         budget,
                     )?;
                     retain_owner_row_universe(member.native.arguments(), &mut owner_rows, budget)?;
+                }
+            }
+            if let Control::NativeInterpret { effects, .. } = code {
+                charge(budget, effects.len())?;
+                for request in effects {
+                    if let Some(effect) = &request.effect {
+                        retain_owner_row_universe(effect.arguments(), &mut owner_rows, budget)?;
+                    }
                 }
             }
             match code {
@@ -2453,7 +2520,8 @@ impl<'a> Analysis<'a> {
                     Control::Handler { body, .. }
                     | Control::Cleanup { body, .. }
                     | Control::Resource { body, .. }
-                    | Control::Registration { body, .. } => {
+                    | Control::Registration { body, .. }
+                    | Control::NativeInterpret { body, .. } => {
                         self.discover_boundary(state, *body, &mut pending, &mut visited, budget)?;
                     }
                     Control::Request(_) => {
@@ -2634,6 +2702,12 @@ impl<'a> Analysis<'a> {
                 context: next.context,
                 value_context: next.value_context,
                 focused: false,
+            }
+        } else if matches!(self.graph.code[code], Control::NativeInterpret { .. }) {
+            Frame::NativeInterpret {
+                code,
+                context: next.context,
+                value_context: next.value_context,
             }
         } else if matches!(self.graph.code[code], Control::Registration { .. }) {
             Frame::Registration {
@@ -2982,6 +3056,11 @@ impl<'a> Analysis<'a> {
                     value_context,
                     ..
                 }
+                | Frame::NativeInterpret {
+                    code,
+                    value_context,
+                    ..
+                }
                 | Frame::Registration {
                     code,
                     value_context,
@@ -2990,7 +3069,8 @@ impl<'a> Analysis<'a> {
                     let body = match &self.graph.code[*code] {
                         Control::Handler { body, .. }
                         | Control::Resource { body, .. }
-                        | Control::Registration { body, .. } => *body,
+                        | Control::Registration { body, .. }
+                        | Control::NativeInterpret { body, .. } => *body,
                         _ => return Err(Failure::Invalid),
                     };
                     let cut = data.restore_cut(
@@ -3225,6 +3305,11 @@ impl<'a> Analysis<'a> {
                     value_context,
                     ..
                 }
+                | Frame::NativeInterpret {
+                    context,
+                    value_context,
+                    ..
+                }
                 | Frame::Registration {
                     context,
                     value_context,
@@ -3408,7 +3493,8 @@ impl<'a> Analysis<'a> {
         let (code, context) = match frame {
             Frame::Handler { code, context, .. }
             | Frame::RemovedHandler { code, context, .. }
-            | Frame::Resource { code, context, .. } => (code, context),
+            | Frame::Resource { code, context, .. }
+            | Frame::NativeInterpret { code, context, .. } => (code, context),
             _ => unreachable!("only interpreter boundaries have match keys"),
         };
         let grouped = matches!(&self.graph.code[code],
@@ -3446,9 +3532,26 @@ impl<'a> Analysis<'a> {
         for edge in &state.heap {
             if let Frame::Handler { code, context, .. }
             | Frame::Resource { code, context, .. }
-            | Frame::RemovedHandler { code, context, .. } = edge.frame
+            | Frame::RemovedHandler { code, context, .. }
+            | Frame::NativeInterpret { code, context, .. } = edge.frame
                 && !matching.contains_key(&self.boundary_match_key(edge.frame))
             {
+                if let (Frame::NativeInterpret { .. }, Control::NativeInterpret { effects, .. }) =
+                    (&edge.frame, &self.graph.code[code])
+                {
+                    charge(budget, effects.len())?;
+                    let mut possible = false;
+                    let mut outward = true;
+                    for request in effects {
+                        let target = self.specialize_label(request, context, budget)?;
+                        let relation = self.match_labels(event.label, target, budget)?;
+                        possible |= relation.0;
+                        outward &= relation.1;
+                    }
+                    matching.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    matching.insert(self.boundary_match_key(edge.frame), (possible, outward));
+                    continue;
+                }
                 let grouped = match (&edge.frame, &self.graph.code[code]) {
                     (Frame::Resource { .. }, Control::Resource { effect, .. })
                     | (
@@ -3485,7 +3588,8 @@ impl<'a> Analysis<'a> {
                 Ok(match frame {
                     Frame::Handler { .. }
                     | Frame::Resource { .. }
-                    | Frame::RemovedHandler { .. } => matching[&self.boundary_match_key(frame)],
+                    | Frame::RemovedHandler { .. }
+                    | Frame::NativeInterpret { .. } => matching[&self.boundary_match_key(frame)],
                     _ => (false, true),
                 })
             },
@@ -3507,6 +3611,24 @@ impl<'a> Analysis<'a> {
             self.requested_escape(state, event, pending, visited, budget)?;
         }
         for selected in selected {
+            if matches!(selected.boundary.frame, Frame::NativeInterpret { .. }) {
+                // This boundary has no storage relation or resource permission.
+                if matches!(
+                    &self.graph.code[event.code],
+                    Control::Request(Request {
+                        native_storage: Some(_),
+                        ..
+                    })
+                ) {
+                    return Err(Failure::Invalid);
+                }
+                self.check_payload(state, event, &selected.prefix, budget)?;
+                if let (Some(data), Some(port)) = (&mut self.data, event.port) {
+                    data.external_result(port, budget)?;
+                }
+                self.returned(state.copy(budget)?, pending, visited, budget)?;
+                continue;
+            }
             if let Frame::RemovedHandler { code, .. } = selected.boundary.frame {
                 if self.infer_cleanup_rows && !self.authenticate_actual_captures {
                     self.returned(state.copy(budget)?, pending, visited, budget)?;

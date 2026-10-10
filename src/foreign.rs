@@ -2630,3 +2630,5 @@ mod storage_tests {
             .unwrap();
     }
 }
+
+pub(crate) mod source_bindings;

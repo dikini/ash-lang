@@ -1,19 +1,18 @@
 //! Native hosts containing matching-compiler private Core construction data.
 //!
-//! The initial build path supports monomorphic Pure programs. It preserves the
-//! existing evaluator and independently validates reconstructed Core; it has no
-//! runtime Ash compilation or stable Core file format. Effect/foreign program
-//! building remains an explicit unsupported case until its connected delivery.
+//! Supports the established monomorphic Pure subset and a closed owner-free
+//! scalar/void native Effect slice. Both preserve the existing evaluator and
+//! independently validate reconstructed Core. There is no runtime Ash compiler
+//! or stable Core file format; ownership/access remain explicit exclusions.
 
-#[cfg(test)]
 mod bridge;
 mod emit;
 mod host;
 mod image;
 
 pub use host::{
-    BuildConfiguration, BuildFailure, BuiltProgram, NATIVE_TARGET, PreparedProgramBuild,
-    build_path, build_prepared, prepare_program,
+    BuildConfiguration, BuildFailure, BuiltProgram, NATIVE_TARGET, NativeLinkInput,
+    PreparedProgramBuild, build_path, build_prepared, prepare_program,
 };
 
 use std::{error::Error, fmt};
@@ -39,6 +38,7 @@ enum PrivateFailure {
     RuntimeMismatch,
     Image(image::ImageFailure),
     Evaluation(crate::eval::RuntimeFailure),
+    ForeignAdmission(crate::foreign::checked_source::ForeignAdmissionError),
 }
 
 impl fmt::Display for PrivateProgramFailure {
@@ -49,6 +49,11 @@ impl fmt::Display for PrivateProgramFailure {
             }
             PrivateFailure::Image(error) => error.fmt(formatter),
             PrivateFailure::Evaluation(error) => error.fmt(formatter),
+            PrivateFailure::ForeignAdmission(error) => write!(
+                formatter,
+                "embedded native binding admission refused: {:?}",
+                error.reason()
+            ),
         }
     }
 }
@@ -120,3 +125,214 @@ pub fn __run_private_pure_image(
         .map(PrivateProgramOutput)
         .map_err(|error| PrivateProgramFailure(PrivateFailure::Evaluation(error)))
 }
+
+// This is the only native cross-crate entry. Generated Rust never names private
+// registry/image/seal constructors. PrivateProgramOutput retains Evaluation's heap.
+
+#[doc(hidden)]
+pub type PrivateNativeScalarCallback = fn(
+    &[crate::foreign::source_runtime::NativeScalarValue],
+) -> Result<
+    crate::foreign::source_runtime::NativeScalarReply,
+    crate::foreign::source_runtime::NativeScalarCallError,
+>;
+
+/// Passive original coordinates baked separately into selection and provider.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PrivateNativeCoordinates {
+    pub image_library: u32,
+    pub library_module: u32,
+    pub library_ordinal: u32,
+    pub image_symbol: u32,
+    pub symbol_index: u32,
+    pub operation_module: u32,
+    pub operation_effect: u32,
+    pub operation_local: u32,
+}
+
+/// Opaque PASSIVE emitter data; it has no executable-symbol authority.
+/// The generated typed provider binds its own literal expectation and callback.
+#[doc(hidden)]
+pub struct PrivateNativeBridge {
+    coordinates: PrivateNativeCoordinates,
+    expected_facts: &'static [u8],
+    callback: PrivateNativeScalarCallback,
+}
+
+/// Constructs passive generated data, never a checked registry/symbol or binding.
+///
+/// Matching emitter code is trusted to supply its typed call site. Runtime fact
+/// checks cannot prove an arbitrary fn pointer's or external binary's semantics.
+/// Only the private Core/original-contract gate can register this data.
+#[doc(hidden)]
+pub fn __private_native_bridge(
+    coordinates: PrivateNativeCoordinates,
+    expected_facts: &'static [u8],
+    callback: PrivateNativeScalarCallback,
+) -> PrivateNativeBridge {
+    PrivateNativeBridge {
+        coordinates,
+        expected_facts,
+        callback,
+    }
+}
+
+#[doc(hidden)]
+pub type PrivateNativeBridgeProvider = fn() -> PrivateNativeBridge;
+
+/// Separately selected original coordinate, with no mutable callback field.
+#[doc(hidden)]
+pub struct PrivateNativeMember {
+    pub coordinates: PrivateNativeCoordinates,
+    pub provider: PrivateNativeBridgeProvider,
+}
+
+/// Emitter-selected original library coordinates and typed wrappers. The whole
+/// normalized ABI/source fact payload remains in IMAGE, encoded once.
+#[doc(hidden)]
+pub struct PrivateNativeLibrary<'members> {
+    pub image_library: u32,
+    pub module: u32,
+    pub ordinal: u32,
+    pub members: &'members [PrivateNativeMember],
+}
+
+#[doc(hidden)]
+pub fn __run_private_effect_image(
+    expected_runtime: &[u8; 32],
+    bytes: &[u8],
+    expected_facts: &'static [u8],
+    libraries: &[PrivateNativeLibrary<'_>],
+) -> Result<PrivateProgramOutput, PrivateProgramFailure> {
+    use crate::foreign::checked_source::{
+        admit_executable_foreign_symbol, check_executable_foreign_library_in_program,
+    };
+    use crate::foreign::source_bindings::{SourceNativeBindings, admit_source_native_program};
+    use std::collections::HashSet;
+    if !__private_runtime_matches(expected_runtime) {
+        return Err(PrivateProgramFailure(PrivateFailure::RuntimeMismatch));
+    }
+    if !cfg!(all(
+        target_arch = "x86_64",
+        target_os = "linux",
+        target_env = "gnu",
+        target_pointer_width = "64"
+    )) {
+        return Err(PrivateProgramFailure(PrivateFailure::Evaluation(
+            crate::eval::RuntimeFailure::ForeignBinding,
+        )));
+    }
+    let image_error = |error| PrivateProgramFailure(PrivateFailure::Image(error));
+    let foreign_error = |error| PrivateProgramFailure(PrivateFailure::ForeignAdmission(error));
+    let runtime_error = |error| PrivateProgramFailure(PrivateFailure::Evaluation(error));
+    let mut work = crate::types::TypeWorkBudget::default();
+    let image = image::PureImage::decode_bytes(bytes, &mut work).map_err(image_error)?;
+    let facts = image
+        .admit_expected_native_facts(expected_facts, &mut work)
+        .map_err(image_error)?;
+    let restored = image.restore_effect(&mut work).map_err(image_error)?;
+    // Source admission, reconstruction and independent validation have now
+    // completed. The correspondence gate consumes that inaccessible phase.
+    let mut seen_libraries = HashSet::new();
+    work.charge(libraries.len())
+        .map_err(|()| image_error(image::ImageFailure::Resource))?;
+    seen_libraries
+        .try_reserve(libraries.len())
+        .map_err(|_| image_error(image::ImageFailure::Resource))?;
+    let mut bindings = SourceNativeBindings::default();
+    for library in libraries {
+        work.charge(2)
+            .map_err(|()| image_error(image::ImageFailure::Resource))?;
+        if !seen_libraries.insert(library.image_library) {
+            return Err(image_error(image::ImageFailure::InvalidRecord));
+        }
+        let slot = usize::try_from(library.image_library)
+            .map_err(|_| image_error(image::ImageFailure::InvalidRecord))?;
+        let original = restored
+            .prepared
+            .get(slot)
+            .ok_or_else(|| image_error(image::ImageFailure::InvalidRecord))?;
+        let expected = facts
+            .library(library.image_library, &restored, &mut work)
+            .map_err(image_error)?;
+        let identity = restored
+            .relocate_library(library.module, library.ordinal, &mut work)
+            .map_err(image_error)?;
+        work.charge(1)
+            .map_err(|()| image_error(image::ImageFailure::Resource))?;
+        let checked = check_executable_foreign_library_in_program(
+            identity,
+            std::sync::Arc::clone(original),
+            &expected,
+            host::NATIVE_TARGET,
+            &restored.program,
+            &mut work,
+        )
+        .map_err(foreign_error)?;
+        work.charge(library.members.len())
+            .map_err(|()| image_error(image::ImageFailure::Resource))?;
+        for member in library.members {
+            // This fn constructs only passive metadata; generated code never
+            // invokes a native call here. Its own fixed expectation cannot be
+            // chosen by a caller passing a different identity into a provider.
+            let bridge = (member.provider)();
+            work.charge(12)
+                .map_err(|()| image_error(image::ImageFailure::Resource))?;
+            if bridge.coordinates != member.coordinates
+                || bridge.coordinates.image_library != library.image_library
+                || bridge.coordinates.library_module != library.module
+                || bridge.coordinates.library_ordinal != library.ordinal
+                || !std::ptr::eq(bridge.expected_facts, expected_facts)
+            {
+                return Err(image_error(image::ImageFailure::InvalidRecord));
+            }
+            let coordinates = bridge.coordinates;
+            let slot = usize::try_from(coordinates.image_symbol)
+                .map_err(|_| image_error(image::ImageFailure::InvalidRecord))?;
+            let source = restored
+                .symbols
+                .get(slot)
+                .ok_or_else(|| image_error(image::ImageFailure::InvalidRecord))?;
+            let operation = restored
+                .relocate_operation(
+                    coordinates.operation_module,
+                    coordinates.operation_effect,
+                    coordinates.operation_local,
+                    &mut work,
+                )
+                .map_err(image_error)?;
+            let index = usize::try_from(coordinates.symbol_index)
+                .map_err(|_| image_error(image::ImageFailure::InvalidRecord))?;
+            let checked_symbol =
+                admit_executable_foreign_symbol(&checked, source, index, operation, &mut work)
+                    .map_err(foreign_error)?;
+            // Consume the private callback only after original fact/identity
+            // checks; it cannot be replaced through a public member field.
+            bindings
+                .insert_checked(checked_symbol, bridge.callback, &mut work)
+                .map_err(runtime_error)?;
+        }
+    }
+    drop(facts);
+    let program = restored.into_program();
+    drop(image);
+    let admitted =
+        admit_source_native_program(&program, &mut bindings, &mut work).map_err(runtime_error)?;
+    crate::eval::evaluate_effect_with_source_native_program(admitted)
+        .map(PrivateProgramOutput)
+        .map_err(runtime_error)
+}
+
+#[cfg(test)]
+#[path = "source_scalar_post_record_tests.rs"]
+mod source_scalar_post_record_tests;
+
+#[cfg(test)]
+#[cfg(all(
+    target_arch = "x86_64",
+    target_os = "linux",
+    target_env = "gnu",
+    target_pointer_width = "64"
+))]
+mod native_image_tests;

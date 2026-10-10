@@ -381,6 +381,9 @@ fn checked_source_lowers_to_explicit_effect_core() {
                 EffectOperation::ProviderStateAccess(_) => {
                     panic!("resume-only fixture cannot contain provider state access")
                 }
+                EffectOperation::NativeInterpret(_) => {
+                    panic!("resume-only fixture cannot contain native interpretation")
+                }
             }
         }
         pending.extend((0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)));

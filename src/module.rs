@@ -2442,3 +2442,46 @@ pub enum ForeignOperationRole {
     /// Consumes or retains ownership under a finish capability.
     Finish,
 }
+
+// Compiler-private role reconstruction. Put beside module graph identity
+// allocation; the image retains this enum separately from its source pathname.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ImageModuleRole {
+    Ordinary,
+    BuiltinForeign,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ImageModuleFailure {
+    Resource,
+    InvalidBuiltinSource,
+}
+
+pub(crate) fn restore_image_module(
+    source: &SourceFile,
+    role: ImageModuleRole,
+    work: &mut crate::types::TypeWorkBudget,
+) -> Result<ModuleId, ImageModuleFailure> {
+    work.charge(1).map_err(|()| ImageModuleFailure::Resource)?;
+    match role {
+        ImageModuleRole::Ordinary => Ok(ModuleId::from(source.id())),
+        ImageModuleRole::BuiltinForeign => {
+            if source.text().len() != FOREIGN_SOURCE.len() {
+                return Err(ImageModuleFailure::InvalidBuiltinSource);
+            }
+            work.charge(source.text().len())
+                .map_err(|()| ImageModuleFailure::Resource)?;
+            if source.text().as_bytes() != FOREIGN_SOURCE.as_bytes() {
+                return Err(ImageModuleFailure::InvalidBuiltinSource);
+            }
+            work.charge(1).map_err(|()| ImageModuleFailure::Resource)?;
+            let graph =
+                allocate_module_graph_identity().map_err(|_| ImageModuleFailure::Resource)?;
+            Ok(ModuleId {
+                namespace: ModuleIdNamespace::BuiltinForeign,
+                graph,
+                value: source.id().value(),
+            })
+        }
+    }
+}

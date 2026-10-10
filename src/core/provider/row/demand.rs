@@ -948,6 +948,13 @@ impl DirectDemandProof {
                     let requested = proof.ordinary(&row, work)?;
                     expression = proof.union(expression, &requested, work)?;
                 }
+                EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) => {
+                    charge(work, boundary.interpretations().len())?;
+                    for interpretation in boundary.interpretations() {
+                        expression =
+                            proof.remove(&expression, interpretation.effect(), true, work)?;
+                    }
+                }
                 EffectExprKind::Operation(EffectOperation::Discard(_)) => {
                     let RowEquationOperation::Discard { capture } = equation.operation else {
                         return Err(invalid(equation.node));

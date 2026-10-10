@@ -178,6 +178,18 @@ impl HandlerRowRecipeDraft {
                         .map_err(|()| resource())?;
                         row = union(&row, &requested, work)?;
                     }
+                    RowEquationOperation::NativeInterpret => {
+                        let EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) =
+                            &stored.kind
+                        else {
+                            return Err(invalid(equation.node));
+                        };
+                        charge(work, boundary.interpretations().len())?;
+                        for interpretation in boundary.interpretations() {
+                            let actual = instance(interpretation.effect(), work)?;
+                            row = remove(&row, &actual, true, work)?;
+                        }
+                    }
                     RowEquationOperation::Handler { output } => {
                         row = copy(&outputs[output.0], work)?;
                     }

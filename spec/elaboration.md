@@ -55,9 +55,29 @@ hidden signature closure preserve those same allocations. Summary and final
 Core validation reconstruct table/tag correspondence, defining identities,
 complete ordered parameter kinds and the canonical source signature. Display
 aliases grant no replacement contract or result-codec authority. An ordinary
-Core handler cannot target an admitted native symbol. This checkpoint installs
-no owner-free native interpretation boundary and provides no source-native
-execution; the entry application still has an empty outward row.
+Core handler cannot target an admitted native symbol.
+
+An owner-free native entry lowers to an explicit Effect Core interpretation of
+the generated entry application. Each listed member retains the complete ordered
+Type/EffectRow instance and the exact original checked symbol allocation. The
+body and boundary have the same value type; the boundary's row is the body's row
+minus only the listed exact native instances. This is a compiler-generated Core
+boundary, not an additional source expression. Pure Core remains closed.
+
+Independent Core validation authenticates the registry's original source
+correspondence, then reconstructs each boundary's exact table/tag membership,
+complete argument kinds and saturation, lexical dependencies, duplicate-free
+membership, body type and row subtraction. A same-operation donor allocation
+cannot replace the original symbol. Transforming the body or complete actuals
+requires corresponding reconstruction and independent validation. Capture
+summaries retain those full actuals and specialize both Type and Row arguments
+under their saved contexts.
+
+Compilation retains this checked boundary without loading executable bindings.
+Default execution refuses an unbound native requirement before Ash runs, including
+requirements in nested Core boundaries. Executable binding admission is separate
+from source and Core authority. This scalar/void boundary supplies no resource,
+ownership, access or copy-window authority.
 
 A resource expression lowers to one Effect `Resource` carrier with an
 initializer and body. It retains the acquisition's identity binder, handle

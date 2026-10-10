@@ -9,6 +9,9 @@ use instantiation::Instantiation;
 #[path = "foreign.rs"]
 mod foreign;
 
+#[path = "source_scalar_phases.rs"]
+mod source_scalar_phases;
+
 #[path = "native_buffer.rs"]
 mod native_buffer;
 
@@ -647,6 +650,10 @@ enum Frame {
         body: NodeId,
         environment: Environment,
     },
+    NativeInterpretBoundary {
+        node: NodeId,
+        environment: Environment,
+    },
     HandlerBoundary {
         node: NodeId,
         environment: Environment,
@@ -920,6 +927,10 @@ type WorkTrace = Arc<std::sync::Mutex<Vec<(NodeId, usize)>>>;
 #[derive(Debug)]
 pub struct Machine<'runtime> {
     foreign_runtime: Option<&'runtime mut crate::foreign::runtime::ForeignRuntime>,
+    source_bindings: Option<&'runtime crate::foreign::source_bindings::SourceNativeBindings>,
+    source_errors:
+        Option<&'runtime std::collections::HashMap<crate::module::ModuleId, ConstructorId>>,
+    pending_source_call: Option<source_scalar_phases::ScalarCallProgress<'runtime>>,
     cleanup_limit: usize,
     live_cleanups: usize,
     program: ExecutableProgram,
@@ -946,6 +957,9 @@ impl<'runtime> Machine<'runtime> {
     fn new(program: &ValidatedProgram) -> Self {
         Self {
             foreign_runtime: None,
+            source_bindings: None,
+            source_errors: None,
+            pending_source_call: None,
             program: ExecutableProgram::Pure(program.shared()),
             cleanup_limit: 0,
             live_cleanups: 0,
@@ -979,6 +993,9 @@ impl<'runtime> Machine<'runtime> {
     ) -> Self {
         Self {
             foreign_runtime: None,
+            source_bindings: None,
+            source_errors: None,
+            pending_source_call: None,
             program: ExecutableProgram::Effect(program.shared()),
             cleanup_limit: MAX_CAPTURED_FRAME_CELLS,
             live_cleanups: 0,
@@ -1088,6 +1105,11 @@ impl<'runtime> Machine<'runtime> {
 
     fn run_loop(&mut self) -> Result<Evaluation, RuntimeFailure> {
         loop {
+            // Recording is the first step after a native return. No generic
+            // disposal/work/trace/report refusal may precede that receipt.
+            if self.step_source_scalar()? {
+                continue;
+            }
             disposal::check()?;
             let control = self
                 .control
@@ -1133,6 +1155,21 @@ impl<'runtime> Machine<'runtime> {
                     }
                     let transition =
                         dispatch_entry(&self.program, node, environment, &mut self.heap)?;
+                    if matches!(
+                        &transition.frame,
+                        Some(Frame::NativeInterpretBoundary { .. })
+                    ) {
+                        charge_effect_work(&mut self.instantiation_work, 1, RuntimePhase::Access)?;
+                        self.frames.try_reserve(1).map_err(|_| {
+                            resource_failure(
+                                ResourceFailureCause::StorageReservationFailed,
+                                RuntimePhase::Access,
+                                RuntimeResource::FrameStorage,
+                                Some(1),
+                                None,
+                            )
+                        })?;
+                    }
                     disposal::check()?;
                     self.apply(transition);
                 }
@@ -1291,6 +1328,9 @@ impl<'runtime> Machine<'runtime> {
                 };
                 self.trace_effect(EffectTraceEvent::ResourceReleased(key.0));
                 self.control = Some(Control::Return(result));
+            }
+            Frame::NativeInterpretBoundary { .. } => {
+                self.control = Some(Control::Return(value));
             }
             Frame::HandlerBoundary {
                 node, registration, ..
@@ -1936,6 +1976,56 @@ impl<'runtime> Machine<'runtime> {
             &mut self.instantiation_work,
             Some(RuntimePhase::Access),
         )?;
+        // Source-native operations are interpreted only by the mandatory exact
+        // native boundary. They never enter ordinary handler selection or the
+        // legacy manifest/provider fallback.
+        charge_effect_work(&mut self.instantiation_work, 1, RuntimePhase::Access)?;
+        let source_symbol = self
+            .program
+            .registry()
+            .native_symbol(operation)
+            .map(Arc::clone);
+        if let Some(symbol) = source_symbol {
+            let native_program = self.program.clone();
+            let mut admitted = false;
+            for frame in self.frames.iter().rev() {
+                charge_effect_work(&mut self.instantiation_work, 1, RuntimePhase::Access)?;
+                let Frame::NativeInterpretBoundary { node, environment } = frame else {
+                    continue;
+                };
+                let Some(ExecutableNode::Effect(expression)) = native_program.node(*node) else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                let EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) =
+                    &expression.kind
+                else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                for entry in boundary.interpretations() {
+                    charge_effect_work(&mut self.instantiation_work, 1, RuntimePhase::Access)?;
+                    if !Arc::ptr_eq(entry.symbol(), &symbol) {
+                        continue;
+                    }
+                    let handled = environment.instantiation.effect(
+                        entry.effect(),
+                        &mut self.instantiation_work,
+                        Some(RuntimePhase::Access),
+                    )?;
+                    if same_effect_instance(&handled, &effect, &mut self.instantiation_work)? {
+                        admitted = true;
+                        break;
+                    }
+                }
+                if admitted {
+                    break;
+                }
+            }
+            if !admitted {
+                return Err(RuntimeFailure::ForeignBinding);
+            }
+            self.trace_effect(EffectTraceEvent::Request(operation));
+            return self.prepare_source_scalar_request(operation, effect, value, &symbol);
+        }
         let mut selected = None;
         let mut selected_member = 0;
         // Keep immutable program authority borrowed independently of the mutable
@@ -2940,6 +3030,10 @@ fn dispatch_entry(
                             instantiation: environment.instantiation,
                         },
                     ),
+                    EffectOperation::NativeInterpret(boundary) => Transition::suspend(
+                        Control::Evaluate(boundary.body(), environment.clone()),
+                        Frame::NativeInterpretBoundary { node, environment },
+                    ),
                     EffectOperation::Handler(handler) => Transition::suspend(
                         Control::Evaluate(handler.body(), environment.clone()),
                         Frame::HandlerBoundary {
@@ -3289,6 +3383,7 @@ fn dispatch_return(
             environment,
         } => return_recursive_initialization(pending, next, body, environment, value, heap),
         Frame::HandlerBoundary { .. }
+        | Frame::NativeInterpretBoundary { .. }
         | Frame::CleanupBoundary { .. }
         | Frame::CleanupCompletion { .. }
         | Frame::ResourceInitializer { .. }
@@ -3738,7 +3833,25 @@ pub fn evaluate(program: &ValidatedProgram) -> Result<Evaluation, RuntimeFailure
 
 /// Evaluates one independently validated effect Core program.
 pub fn evaluate_effect(program: &ValidatedEffectProgram) -> Result<Evaluation, RuntimeFailure> {
+    let mut work = TypeWorkBudget::default();
+    crate::foreign::source_bindings::reject_missing_source_bindings(program, &mut work)?;
     Machine::new_effect(program).run()
+}
+
+/// Evaluates only a program whose source-native bindings were admitted before
+/// Ash execution. This borrows the immutable original binding table throughout.
+///
+/// # Errors
+/// Native conversion, work/storage admission and existing evaluation failures
+/// terminate without retrying an already returned external call.
+pub fn evaluate_effect_with_source_native_program(
+    admitted: crate::foreign::source_bindings::AdmittedSourceNativeProgram<'_, '_>,
+) -> Result<Evaluation, RuntimeFailure> {
+    let (program, bindings, errors) = admitted.into_parts();
+    let mut machine = Machine::new_effect(program);
+    machine.source_bindings = Some(bindings);
+    machine.source_errors = Some(&errors);
+    machine.run()
 }
 
 /// Evaluates validated Effect Core using identity-bound executable host bindings.
@@ -3752,6 +3865,8 @@ pub fn evaluate_effect_with_foreign_runtime(
     program: &ValidatedEffectProgram,
     runtime: &mut crate::foreign::runtime::ForeignRuntime,
 ) -> Result<Evaluation, RuntimeFailure> {
+    let mut work = TypeWorkBudget::default();
+    crate::foreign::source_bindings::reject_missing_source_bindings(program, &mut work)?;
     let mut machine = Machine::new_effect(program);
     machine.foreign_runtime = Some(runtime);
     machine.run()
@@ -3872,9 +3987,10 @@ mod tests {
             "main : Unit -> Int\nmain () = handle (helper 0) with E<Int> {\nask ignored => resume 42\n}\n",
         ));
         // Application: 3. Request argument: 2 slots + substitution root + Int.
+        // Exact source-native registry lookup (absent for this request): 1.
         // Handler search: 1. Handler argument: 2 slots + Int.
         // Exact comparison: argument tag + Int.
-        const REQUIRED: usize = 13;
+        const REQUIRED: usize = 14;
         let mut short = Machine::new_effect(&program);
         short.instantiation_work = TypeWorkBudget::with_limit(REQUIRED - 1);
         assert!(is_work_exhaustion(short.run().unwrap_err()));
@@ -7582,3 +7698,6 @@ mod tests {
 #[cfg(test)]
 #[path = "provider_publication_tests.rs"]
 mod provider_publication_tests;
+
+#[cfg(test)]
+pub(crate) use source_scalar_phases::post_record_test as source_scalar_post_record_test;

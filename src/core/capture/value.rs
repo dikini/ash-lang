@@ -1749,6 +1749,7 @@ impl Graph {
         let node = nodes.get(id).ok_or(Failure::Invalid)?;
         let source = self.sources[id];
         Ok(match operation(&node.kind) {
+            Some(EffectOperation::NativeInterpret(boundary)) => Expr::Alias(index(boundary.body())),
             Some(EffectOperation::ProviderStateAccess(_)) => Expr::Unknown,
             Some(EffectOperation::Cleanup(scope)) => Expr::Cleanup {
                 body: index(scope.body),

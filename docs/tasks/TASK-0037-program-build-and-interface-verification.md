@@ -70,8 +70,9 @@ features as well as the admitted program data.
 Program preparation owns its generated host inputs and native configuration.
 Linking consumes that completed phase, rather than encoding or checking the
 source graph again. Generated source and tool logs remain reviewable; executable
-publication follows successful linking. The first carrier is a bounded Pure
-subset, not completion of Effect/foreign builds or the library deliveries.
+publication follows successful linking. The private construction carrier has
+bounded Pure and owner-free scalar/void Effect profiles. These profiles do not
+complete foreign ownership/access execution or the library deliveries.
 
 Core builder payload admission is part of reconstruction work. Lending the
 same cumulative meter to builder operations preserves both prior charges and
@@ -83,6 +84,72 @@ Generated Cargo profiles must preserve compiler feature, optimization, panic and
 assertion settings. The emitted host checks its baked runtime identity in a Rust
 constant assertion as well as at startup. This prevents successful linking from
 publishing a host whose dependency configuration rejects the admitted image.
+
+Generated typed wrappers retain their own emitter-selected coordinates and
+expected source facts behind an opaque provider. Startup independently checks
+the full normalized library/source correspondence once, then consumes sealed
+exact members into a binding table. Per-member registration uses original
+operation/library/index and allocation identity; a native spelling or arbitrary
+callback cannot replace that authority. Validation of final reconstructed Core
+precedes registration, without replaying ABI preparation at each request.
+
+Explicit native inputs are whole-program linker files in caller-supplied order,
+including static archive dependency order. The bounded file-kind check admits
+regular archives and ELF64 little-endian x86-64 shared libraries; it supplies no
+contract facts or evidence that a binary obeys declared assumptions. Shared
+linkage uses ordinary loader search without an automatic rpath. Loader paths
+for executable evidence belong to the child process, not the compiler's global
+environment. Configuring these inputs currently uses the Rust build API.
+
+Rust-callback Core/image/phase witnesses do not establish real C linkage or
+native observations. The public scalar case must retain exact I8 range refusal
+with zero calls, unsigned 64-bit widening, void Unit, imported mixed Row/Type/Row
+instances and repeated calls for both static and shared inputs. A combined entry
+requires tuple `(127, 900, 18446744073709551615, (), 83)` and trace `iuvii`;
+two fresh runs follow source removal before preparation/linkage. Shared-loader
+refusal must precede every native call without the explicitly supplied child
+loader path. This remains a bounded scalar profile, not ownership/access or
+library-port completion.
+
+Imported generic helpers contribute defining global parameter rows in addition
+to nominal and effect parameters. The private image must retain those original
+owner identities, ordered parameter IDs, complete kinds and origins; accepting
+only nominal/effect variables loses a valid helper's scheme metadata. One flat
+row carrier restores the canonical facts by consuming guarded records. Exact
+table coverage and the independent Core checks still authenticate each row
+against its actual lexical type abstraction. The private matching-runtime
+format changes with this carrier; it promises no cross-version compatibility.
+
+Writing binary image/fact payloads as hexadecimal Rust arrays inflated each
+encoded byte into five text bytes plus indentation, then charged reserve and
+write for that expanded text. The imported-helper C program exhausted the
+unchanged preparation allowance at emission. Native preparation now owns the
+two exact encoded byte vectors; the consuming tool stage writes fixed payload
+roles for compile-time inclusion. Counting and copying charge actual generated
+Rust text. Independent expected-fact authentication remains mandatory, and the
+executable must run after the generated source and payload files are removed.
+Pure emission retains its existing path.
+
+Private wire records must preserve Core's structural Type depth rather than
+counting serialization wrappers. Row, instance and argument records retain
+the surrounding depth; unary application function spines represent width.
+Function, tuple, quantifier body and application argument edges add depth, as
+does entry into an effectful function's children. One shared rule now governs
+encoding and reconstruction. The public 42/43 nested-row regression exposed
+the old artificial cutoff; the existing linked hosts also exercise 43 nested
+phantom rows. Work charges, backward-reference checks and the original depth
+allowance remain unchanged.
+
+The deeper row witness also exposed a separate startup cost: correspondence
+serialized the construction image's facts into an owned buffer solely to
+compare and discard it. A diagnostic measurement reached 384,923 units through
+Core reconstruction, exceeding the unchanged 327,680 startup allowance. The
+68,722-byte expected payload accounts for one avoidable copy and allocation.
+Owned emission and streaming comparison now share the same canonical wire
+traversal. Comparison pays each byte once and checks exact length; startup
+still decodes the original independent expectations and completes all Core,
+library, symbol, provider and required-binding checks. The diagnostic allowance
+does not change delivery acceptance or production limits.
 
 ## Deviations
 

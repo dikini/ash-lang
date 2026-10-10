@@ -17987,6 +17987,10 @@ impl ResolvedTypeVariableBuffer {
         self.0.iter()
     }
 
+    fn pop(&mut self) -> Option<ResolvedTypeVariable> {
+        self.0.pop()
+    }
+
     fn into_vec(mut self) -> Vec<ResolvedTypeVariable> {
         std::mem::take(&mut self.0)
     }
@@ -18007,6 +18011,29 @@ impl Drop for ResolvedTypeVariableBuffer {
 struct ResolvedNominalParameterBuffer(Vec<(NominalTypeId, Box<[ResolvedTypeVariable]>)>);
 
 struct ResolvedNominalParameterVecBuffer(Vec<(NominalTypeId, Vec<ResolvedTypeVariable>)>);
+
+struct ResolvedGlobalParameterVecBuffer(Vec<(BinderId, Vec<ResolvedTypeVariable>)>);
+impl ResolvedGlobalParameterVecBuffer {
+    fn iter(&self) -> std::slice::Iter<'_, (BinderId, Vec<ResolvedTypeVariable>)> {
+        self.0.iter()
+    }
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+    fn reverse(&mut self) {
+        self.0.reverse();
+    }
+    fn pop(&mut self) -> Option<(BinderId, Vec<ResolvedTypeVariable>)> {
+        self.0.pop()
+    }
+}
+impl Drop for ResolvedGlobalParameterVecBuffer {
+    fn drop(&mut self) {
+        for (_, parameters) in self.0.drain(..) {
+            drop(ResolvedTypeVariableBuffer(parameters));
+        }
+    }
+}
 
 impl ResolvedNominalParameterBuffer {
     fn into_vec(mut self) -> Vec<(NominalTypeId, Box<[ResolvedTypeVariable]>)> {
@@ -19837,6 +19864,337 @@ impl ResolvedRegistry {
         operation: OperationId,
     ) -> Option<&Arc<crate::foreign::checked_source::CheckedForeignSymbol>> {
         self.native_symbols.get(&operation)
+    }
+
+    // Insert in impl ResolvedRegistry. Call after new_with_budget,
+    // with_type_parameters_with_budget and with_effects_with_budget, but before
+    // binding/retaining source-native symbols. `parameters` holds only effect-owned
+    // canonical variables not already installed by nominal parameter construction.
+    pub(crate) fn with_image_kind_facts(
+        mut self,
+        parameters: Vec<ResolvedTypeVariable>,
+        abstracts: Vec<(NominalTypeId, String, Kind, Span)>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, ResolvedBuildFailure> {
+        let mut pending = ResolvedTypeVariableBuffer(parameters);
+        let resource = || ResolvedBuildFailure::TypeResource;
+        let invalid = || ResolvedBuildFailure::InvalidState;
+        let expected_count = self.effects.iter().try_fold(0usize, |count, effect| {
+            count
+                .checked_add(effect.parameters.len())
+                .ok_or_else(resource)
+        })?;
+        let count = expected_count
+            .checked_add(pending.0.len())
+            .and_then(|count| count.checked_add(abstracts.len().checked_mul(2)?))
+            .ok_or_else(resource)?;
+        work.charge(count).map_err(|()| resource())?;
+        let mut expected = HashMap::new();
+        expected
+            .try_reserve(expected_count)
+            .map_err(|_| resource())?;
+        for effect in &self.effects {
+            for parameter in &effect.parameters {
+                if parameter.id.module() != Some(effect.id.module())
+                    || self.type_variables.contains_key(&parameter.id)
+                    || expected.insert(parameter.id, parameter).is_some()
+                {
+                    return Err(invalid());
+                }
+            }
+        }
+        if pending.0.len() != expected.len() {
+            return Err(invalid());
+        }
+        self.type_variables
+            .try_reserve(pending.0.len())
+            .map_err(|_| resource())?;
+        for parameter in pending.iter() {
+            let original = expected.remove(&parameter.id).ok_or_else(invalid)?;
+            let bytes = parameter
+                .spelling
+                .len()
+                .checked_add(original.spelling.len())
+                .ok_or_else(resource)?;
+            work.charge(bytes).map_err(|()| resource())?;
+            work.charge(2).map_err(|()| resource())?;
+            let kind_matches = matches!(
+                (&parameter.kind, &original.kind),
+                (Kind::Type, Kind::Type) | (Kind::EffectRow, Kind::EffectRow)
+            );
+            if parameter.id != original.id
+                || parameter.spelling != original.spelling
+                || !kind_matches
+                || !same_origin_with_budget(&parameter.origin, &original.origin, work)
+                    .map_err(|()| resource())?
+            {
+                return Err(invalid());
+            }
+        }
+        if !expected.is_empty() {
+            return Err(invalid());
+        }
+        drop(expected);
+        self.abstract_nominal_names
+            .try_reserve(abstracts.len())
+            .map_err(|_| resource())?;
+        self.abstract_nominal_kinds
+            .try_reserve(abstracts.len())
+            .map_err(|_| resource())?;
+        for (id, spelling, kind, origin) in abstracts {
+            // The initial native image may preserve only the common module's
+            // opaque ConversionError role. Resource/provider abstractions and
+            // arbitrary opaque source metadata remain explicit subset refusals.
+            if !id.module().is_builtin_foreign()
+                || id.declaration() != 0
+                || !matches!(kind, Kind::Type)
+                || self.nominal(id).is_some()
+                || self.abstract_nominal_names.contains_key(&id)
+                || self.abstract_nominal_kinds.contains_key(&id)
+            {
+                return Err(invalid());
+            }
+            self.abstract_nominal_names.insert(id, spelling);
+            match self.abstract_nominal_kinds.entry(id) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(NonMaterializedNominalKindFact {
+                        kind: NonMaterializedNominalKind::Ordinary(kind),
+                        origin,
+                    });
+                }
+                std::collections::hash_map::Entry::Occupied(_) => {
+                    return Err(invalid());
+                }
+            }
+        }
+        // Keep unvisited records guarded even on correspondence failure.
+        while let Some(parameter) = pending.pop() {
+            let identity = parameter.id;
+            match self.type_variables.entry(identity) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(parameter.into());
+                }
+                std::collections::hash_map::Entry::Occupied(_) => {
+                    discard_resolved_type_variable(parameter);
+                    return Err(invalid());
+                }
+            }
+        }
+        Ok(self)
+    }
+
+    /// Restores unchecked global scheme rows and their original canonical facts.
+    /// Independent Core validation must still match each row to its lexical owner.
+    pub(crate) fn with_image_global_parameters(
+        mut self,
+        rows: Vec<(BinderId, Vec<ResolvedTypeVariable>)>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, ResolvedBuildFailure> {
+        let mut pending = ResolvedGlobalParameterVecBuffer(rows);
+        let resource = || ResolvedBuildFailure::TypeResource;
+        let invalid = || ResolvedBuildFailure::InvalidState;
+        if !self.global_parameter_rows.is_empty() || !self.global_parameter_positions.is_empty() {
+            return Err(invalid());
+        }
+        // Price row counting first; the following precharge covers owner
+        // correspondence, reverse-order staging and row retention, plus each
+        // parameter's correspondence, ordered ID copy and consuming insertion.
+        work.charge(pending.len()).map_err(|()| resource())?;
+        let count = pending.iter().try_fold(0usize, |count, (_, parameters)| {
+            count.checked_add(parameters.len()).ok_or_else(resource)
+        })?;
+        work.charge(
+            pending
+                .len()
+                .checked_mul(3)
+                .and_then(|rows| {
+                    count
+                        .checked_mul(3)
+                        .and_then(|parameters| rows.checked_add(parameters))
+                })
+                .ok_or_else(resource)?,
+        )
+        .map_err(|()| resource())?;
+        let mut seen = HashSet::new();
+        seen.try_reserve(count).map_err(|_| resource())?;
+        self.type_variables
+            .try_reserve(count)
+            .map_err(|_| resource())?;
+        self.global_parameter_positions
+            .try_reserve(pending.len())
+            .map_err(|_| resource())?;
+        let mut retained = Vec::new();
+        retained
+            .try_reserve_exact(pending.len())
+            .map_err(|_| resource())?;
+        for (position, (owner, parameters)) in pending.iter().enumerate() {
+            let Some(module) = owner.module() else {
+                return Err(invalid());
+            };
+            if !matches!(owner, BinderId::Resolved { .. })
+                || parameters.is_empty()
+                || self
+                    .global_parameter_positions
+                    .insert(*owner, position)
+                    .is_some()
+            {
+                return Err(invalid());
+            }
+            for parameter in parameters {
+                if parameter.id.module() != Some(module)
+                    || self.type_variables.contains_key(&parameter.id)
+                    || !seen.insert(parameter.id)
+                {
+                    return Err(invalid());
+                }
+            }
+        }
+        pending.reverse();
+        while let Some((owner, parameters)) = pending.pop() {
+            let mut parameters = ResolvedTypeVariableBuffer(parameters);
+            let mut identities = Vec::new();
+            identities
+                .try_reserve_exact(parameters.0.len())
+                .map_err(|_| resource())?;
+            identities.extend(parameters.iter().map(|parameter| parameter.id));
+            while let Some(parameter) = parameters.pop() {
+                let identity = parameter.id;
+                match self.type_variables.entry(identity) {
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(parameter.into());
+                    }
+                    std::collections::hash_map::Entry::Occupied(_) => {
+                        discard_resolved_type_variable(parameter);
+                        return Err(invalid());
+                    }
+                }
+            }
+            retained.push(ResolvedGlobalParameterRow {
+                owner,
+                parameters: identities.into_boxed_slice(),
+            });
+        }
+        self.global_parameter_rows = retained.into_boxed_slice();
+        Ok(self)
+    }
+
+    // This is a supported-subset inventory, not a validation capability;
+    // the caller already holds independently validated
+    // Core and restoration must return through that same independent validator.
+    pub(crate) fn image_abstract_nominal_name(&self, id: NominalTypeId) -> Option<&str> {
+        self.abstract_nominal_names.get(&id).map(String::as_str)
+    }
+
+    pub(crate) fn native_image_subset(
+        &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ResolvedBuildFailure> {
+        let resource = || ResolvedBuildFailure::TypeResource;
+        work.charge(20).map_err(|()| resource())?;
+        if !self.lexical_nominals.is_empty()
+            || !self.lexical_constructors.is_empty()
+            || !self.lexical_nominal_positions.is_empty()
+            || !self.lexical_constructor_positions.is_empty()
+            || self.global_parameter_rows.len() != self.global_parameter_positions.len()
+            || !self.provider_contracts.is_empty()
+            || !self.foreign_modules.is_empty()
+            || !self.owner_signatures.interfaces.is_empty()
+            || !self.owner_signatures.resources.is_empty()
+            || self.abstract_nominal_names.len() != self.abstract_nominal_kinds.len()
+            || self.owner_definitions.len() != self.effects.len()
+            || self.owner_definition_positions.len() != self.effects.len()
+        {
+            return Ok(false);
+        }
+        let count = self
+            .nominal_parameters
+            .values()
+            .try_fold(0usize, |count, parameters| {
+                count.checked_add(parameters.len()).ok_or_else(resource)
+            })?;
+        let count = self.effects.iter().try_fold(count, |count, effect| {
+            count
+                .checked_add(effect.parameters.len())
+                .ok_or_else(resource)
+        })?;
+        work.charge(self.global_parameter_rows.len())
+            .map_err(|()| resource())?;
+        let count = self
+            .global_parameter_rows
+            .iter()
+            .try_fold(count, |count, row| {
+                count.checked_add(row.parameters.len()).ok_or_else(resource)
+            })?;
+        work.charge(
+            count
+                .checked_add(self.abstract_nominal_kinds.len())
+                .ok_or_else(resource)?,
+        )
+        .map_err(|()| resource())?;
+        let mut expected = HashSet::new();
+        expected.try_reserve(count).map_err(|_| resource())?;
+        for (owner, parameters) in &self.nominal_parameters {
+            if self.nominal(*owner).is_none() {
+                return Ok(false);
+            }
+            for parameter in parameters.iter() {
+                if parameter.id.module() != Some(owner.module()) || !expected.insert(parameter.id) {
+                    return Ok(false);
+                }
+            }
+        }
+        for effect in &self.effects {
+            for parameter in effect.parameters.iter() {
+                if parameter.id.module() != Some(effect.id.module())
+                    || !matches!(parameter.kind, Kind::Type | Kind::EffectRow)
+                    || !expected.insert(parameter.id)
+                {
+                    return Ok(false);
+                }
+            }
+        }
+        work.charge(
+            self.global_parameter_rows
+                .len()
+                .checked_mul(2)
+                .ok_or_else(resource)?,
+        )
+        .map_err(|()| resource())?;
+        for (position, row) in self.global_parameter_rows.iter().enumerate() {
+            let Some(module) = row.owner.module() else {
+                return Ok(false);
+            };
+            if !matches!(row.owner, BinderId::Resolved { .. })
+                || row.parameters.is_empty()
+                || self.global_parameter_positions.get(&row.owner) != Some(&position)
+            {
+                return Ok(false);
+            }
+            for identity in row.parameters.iter() {
+                if identity.module() != Some(module) || !expected.insert(*identity) {
+                    return Ok(false);
+                }
+            }
+        }
+        if expected.len() != self.type_variables.len() {
+            return Ok(false);
+        }
+        work.charge(self.type_variables.len())
+            .map_err(|()| resource())?;
+        if self.type_variables.keys().any(|id| !expected.contains(id)) {
+            return Ok(false);
+        }
+        for (id, fact) in &self.abstract_nominal_kinds {
+            if !id.module().is_builtin_foreign()
+                || id.declaration() != 0
+                || !matches!(fact.kind, NonMaterializedNominalKind::Ordinary(Kind::Type))
+                || self.nominal(*id).is_some()
+                || !self.abstract_nominal_names.contains_key(id)
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     /// Reconstructs source-native correspondence once in an independent registry pass.
@@ -22584,6 +22942,12 @@ impl ResolvedTypeProvenance {
             return None;
         };
         elements.iter().map(|root| self.view(*root)).collect()
+    }
+
+    /// Returns a paid shared construction-provenance view, without source authority.
+    pub(crate) fn image_view(&self, root: usize, work: &mut TypeWorkBudget) -> Result<Self, ()> {
+        work.charge(1)?;
+        self.view(root).ok_or(())
     }
 
     fn view(&self, root: usize) -> Option<Self> {

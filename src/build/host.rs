@@ -1,8 +1,9 @@
-//! Native tool invocation for the initial matching-compiler Pure host.
+//! Native tool invocation for matching-compiler evaluator hosts.
 
 use std::{
     error::Error,
     fmt, fs, io,
+    io::Read,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
@@ -28,6 +29,9 @@ pub struct BuildConfiguration {
     pub target: String,
     /// Optional shared Cargo cache. No cache is copied into a generated project.
     pub cargo_target_directory: Option<PathBuf>,
+    /// Ordered whole-program linker dependencies; these grant no native dispatch authority.
+    /// Shared libraries use the caller's ordinary loader configuration; no rpath is added.
+    pub native_inputs: Vec<NativeLinkInput>,
 }
 
 impl BuildConfiguration {
@@ -38,11 +42,37 @@ impl BuildConfiguration {
             output,
             target: NATIVE_TARGET.to_owned(),
             cargo_target_directory: None,
+            native_inputs: Vec::new(),
         }
     }
 }
 
-/// Completed private Core preparation and generated Rust, ready for native linking.
+/// Explicit native linker files for the bounded GNU64 target.
+///
+/// Order is preserved for the native linker, including archive dependency order.
+/// File-kind checks do not certify exported symbols, headers or binary behavior.
+#[derive(Clone, Debug)]
+pub enum NativeLinkInput {
+    /// A regular non-thin `ar` archive. Its members are checked by the linker.
+    StaticArchive(PathBuf),
+    /// An ordinary ELF64 little-endian x86_64 shared object.
+    SharedLibrary(PathBuf),
+}
+impl NativeLinkInput {
+    fn path(&self) -> &Path {
+        match self {
+            Self::StaticArchive(path) | Self::SharedLibrary(path) => path,
+        }
+    }
+    fn replace_path(&mut self, replacement: PathBuf) {
+        match self {
+            Self::StaticArchive(path) | Self::SharedLibrary(path) => *path = replacement,
+        }
+    }
+}
+
+/// Completed private Core preparation, generated Rust and any exact encoded
+/// compile-time payloads, ready for native linking.
 ///
 /// Preparation performs no Ash evaluation. This phase is consumed by
 /// [`build_prepared`]; linking does not repeat Core encoding or source checking.
@@ -50,6 +80,7 @@ impl BuildConfiguration {
 pub struct PreparedProgramBuild {
     configuration: BuildConfiguration,
     generated_rust: String,
+    native_payloads: Option<emit::NativePayloads>,
     preparation_work: usize,
     compilation_work: CompilationWork,
 }
@@ -121,6 +152,9 @@ enum Failure {
     UnsupportedCompilerConfiguration,
     UnsupportedProgram,
     InvalidOutput,
+    InvalidNativeInput(usize),
+    PreparationResource,
+    Bridge(super::bridge::ForeignBridgeFailure),
     Image(image::ImageFailure),
     Emission(emit::EmissionFailure),
     Io(io::Error),
@@ -138,6 +172,9 @@ impl BuildFailure {
             Failure::UnsupportedCompilerConfiguration => "build.unsupported-compiler-configuration",
             Failure::UnsupportedProgram => "build.unsupported-program",
             Failure::InvalidOutput => "build.invalid-output",
+            Failure::InvalidNativeInput(_) => "build.native-input",
+            Failure::PreparationResource => "build.preparation-resource",
+            Failure::Bridge(_) => "build.bridge-preparation",
             Failure::Image(_) => "build.core-preparation",
             Failure::Emission(_) => "build.host-emission",
             Failure::Io(_) => "build.input-output",
@@ -153,6 +190,8 @@ impl BuildFailure {
             | Failure::UnsupportedCompilerConfiguration
             | Failure::UnsupportedProgram
             | Failure::InvalidOutput => "invocation",
+            Failure::InvalidNativeInput(_) => "input",
+            Failure::PreparationResource | Failure::Bridge(_) => "compiler",
             Failure::Io(_) | Failure::NativeTool(_) => "input",
             Failure::Source(_) => "source",
             Failure::Image(_) | Failure::Emission(_) => "compiler",
@@ -190,10 +229,20 @@ impl fmt::Display for BuildFailure {
                 "native program build requires a matching Cargo dev or release compiler profile",
             ),
             Failure::UnsupportedProgram => formatter.write_str(
-                "native program build currently requires retained monomorphic Pure Core",
+                "native program build requires retained supported Pure or scalar/void Effect Core",
             ),
             Failure::InvalidOutput => {
                 formatter.write_str("native program output must name an executable file")
+            }
+            Failure::InvalidNativeInput(index) => write!(
+                formatter,
+                "native input {index} is not a supported regular archive/shared object"
+            ),
+            Failure::PreparationResource => {
+                formatter.write_str("native program preparation work or storage admission refused")
+            }
+            Failure::Bridge(error) => {
+                write!(formatter, "native bridge preparation refused: {error}")
             }
             Failure::Image(error) => error.fmt(formatter),
             Failure::Emission(error) => error.fmt(formatter),
@@ -228,9 +277,9 @@ impl From<io::Error> for BuildFailure {
 
 /// Prepares one checked program for the supported native host.
 ///
-/// The initial slice accepts monomorphic Pure Core and refuses unsupported
-/// metadata explicitly. Effect programs and foreign linking are subsequent
-/// milestone deliveries. Source provenance comes from the admitted program;
+/// Accepts the established monomorphic Pure subset and the closed owner-free
+/// scalar/void native Effect subset. Unsupported metadata remains explicit.
+/// Source provenance comes from the admitted program;
 /// preparation never reopens its Ash source paths.
 ///
 /// # Errors
@@ -252,20 +301,95 @@ pub fn prepare_program(
         return Err(BuildFailure(Failure::InvalidOutput));
     }
     compiler_profile()?;
-    let (core, provenance) = program
-        .pure_build_input()
-        .ok_or(BuildFailure(Failure::UnsupportedProgram))?;
+    let mut configuration = configuration;
     let mut work = TypeWorkBudget::default();
-    let image = image::encode(core, provenance, &mut work)
-        .map_err(|error| BuildFailure(Failure::Image(error)))?;
-    let generated_rust = emit::pure_host(&image, &super::runtime_fingerprint(), &mut work)
-        .map_err(|error| BuildFailure(Failure::Emission(error)))?;
+    // Native filesystem inputs are checked before emission/tool execution. This
+    // check grants no source contract authority and performs no Ash checking.
+    for (index, input) in configuration.native_inputs.iter_mut().enumerate() {
+        work.charge(
+            input
+                .path()
+                .as_os_str()
+                .as_encoded_bytes()
+                .len()
+                .checked_add(64)
+                .ok_or(BuildFailure(Failure::PreparationResource))?,
+        )
+        .map_err(|()| BuildFailure(Failure::PreparationResource))?;
+        let path = fs::canonicalize(input.path())?;
+        work.charge(path.as_os_str().as_encoded_bytes().len())
+            .map_err(|()| BuildFailure(Failure::PreparationResource))?;
+        input.replace_path(path);
+        validate_native_input(input, index)?;
+    }
+    let (generated_rust, native_payloads) =
+        if let Some((core, provenance)) = program.pure_build_input() {
+            // Keep the established Pure path unchanged, including its unsafe policy.
+            if !configuration.native_inputs.is_empty() {
+                return Err(BuildFailure(Failure::UnsupportedProgram));
+            }
+            let image = image::encode(core, provenance, &mut work)
+                .map_err(|error| BuildFailure(Failure::Image(error)))?;
+            (
+                emit::pure_host(&image, &super::runtime_fingerprint(), &mut work)
+                    .map_err(|error| BuildFailure(Failure::Emission(error)))?,
+                None,
+            )
+        } else if let Some((core, provenance)) = program.effect_build_input() {
+            let image =
+                image::encode_effect_for_build(core, provenance, &configuration.target, &mut work)
+                    .map_err(|error| {
+                        BuildFailure(match error {
+                            image::NativeImageFailure::Image(error) => Failure::Image(error),
+                            image::NativeImageFailure::Bridge(error) => Failure::Bridge(error),
+                        })
+                    })?;
+            let emission = emit::native_host(&image, &super::runtime_fingerprint(), &mut work)
+                .map_err(|error| BuildFailure(Failure::Emission(error)))?;
+            (emission.rust_source, Some(emission.payloads))
+        } else {
+            return Err(BuildFailure(Failure::UnsupportedProgram));
+        };
     Ok(PreparedProgramBuild {
         configuration,
         generated_rust,
+        native_payloads,
         preparation_work: work.used(),
         compilation_work: *program.compilation_work(),
     })
+}
+
+// Fixed-size binary-kind check only. It does not parse archive members or
+// supply ABI/contract facts; ordinary linker failures remain native-tool errors.
+fn validate_native_input(input: &NativeLinkInput, index: usize) -> Result<(), BuildFailure> {
+    let invalid = || BuildFailure(Failure::InvalidNativeInput(index));
+    let mut file = fs::File::open(input.path())?;
+    if !file.metadata()?.is_file() {
+        return Err(invalid());
+    }
+    match input {
+        NativeLinkInput::StaticArchive(_) => {
+            let mut header = [0; 8];
+            file.read_exact(&mut header).map_err(|_| invalid())?;
+            if &header != b"!<arch>\n" {
+                return Err(invalid());
+            }
+        }
+        NativeLinkInput::SharedLibrary(_) => {
+            let mut header = [0; 64];
+            file.read_exact(&mut header).map_err(|_| invalid())?;
+            if &header[..4] != b"\x7fELF"
+                || header[4] != 2
+                || header[5] != 1
+                || header[6] != 1
+                || u16::from_le_bytes([header[16], header[17]]) != 3
+                || u16::from_le_bytes([header[18], header[19]]) != 62
+            {
+                return Err(invalid());
+            }
+        }
+    }
+    Ok(())
 }
 
 static PROJECT_IDS: AtomicU64 = AtomicU64::new(0);
@@ -293,8 +417,9 @@ fn fresh_project(parent: &Path) -> Result<PathBuf, BuildFailure> {
 
 /// Compiles and links a prepared host with one Cargo job.
 ///
-/// Generated source and native logs remain beside the requested output in a
-/// fresh `.ash-build` project. Linking uses the matching Ash source/toolchain;
+/// Generated source, private compile-time payloads and native logs remain beside
+/// the requested output in a fresh `.ash-build` project. Linking uses the matching
+/// Ash source/toolchain;
 /// the resulting executable reconstructs and validates private Core at startup
 /// without invoking the Ash compiler or reading original source files.
 ///
@@ -302,6 +427,7 @@ fn fresh_project(parent: &Path) -> Result<PathBuf, BuildFailure> {
 /// Returns native-tool or filesystem failures. Failed linking preserves an
 /// existing destination executable and retains the generated project/log.
 pub fn build_prepared(prepared: PreparedProgramBuild) -> Result<BuiltProgram, BuildFailure> {
+    let native_host = prepared.native_payloads.is_some();
     let output = std::path::absolute(&prepared.configuration.output)?;
     let parent = output
         .parent()
@@ -314,6 +440,13 @@ pub fn build_prepared(prepared: PreparedProgramBuild) -> Result<BuiltProgram, Bu
         .and_then(|name| name.to_str())
         .expect("a generated project has an ASCII identity");
     fs::write(&generated_source, prepared.generated_rust)?;
+    if let Some(payloads) = prepared.native_payloads {
+        // Consume preparation's exact owned bytes once. include_bytes! embeds
+        // them at Rust compile time; the resulting host opens no payload files.
+        for (role, bytes) in payloads.into_files() {
+            fs::write(project.join("src").join(role.file_name()), bytes)?;
+        }
+    }
     let ash_path = serde_json::to_string(env!("CARGO_MANIFEST_DIR"))
         .expect("a UTF-8 compiler manifest path is representable");
     let features = if cfg!(feature = "resource-calibration") {
@@ -361,8 +494,10 @@ pub fn build_prepared(prepared: PreparedProgramBuild) -> Result<BuiltProgram, Bu
     let log = fs::File::create(&build_log)?;
     let error_log = log.try_clone()?;
     let mut command = Command::new("cargo");
+    // cargo rustc scopes native file arguments to this generated binary; no
+    // RUSTFLAGS, shell, loader or implicit library-name resolver participates.
     command.current_dir(&project).args([
-        "build",
+        if native_host { "rustc" } else { "build" },
         "--offline",
         "--jobs",
         "1",
@@ -372,9 +507,22 @@ pub fn build_prepared(prepared: PreparedProgramBuild) -> Result<BuiltProgram, Bu
     if profile == "release" {
         command.arg("--release");
     }
+    command.arg("--target-dir").arg(&target_directory);
+    if native_host {
+        command.arg("--bin").arg(package_name);
+        // Repeat only the fixed native-file-kind check immediately before tool
+        // invocation; no image/source preparation or bridge planning is repeated.
+        for (index, input) in prepared.configuration.native_inputs.iter().enumerate() {
+            validate_native_input(input, index)?;
+        }
+        command.arg("--");
+        for input in &prepared.configuration.native_inputs {
+            let mut argument = std::ffi::OsString::from("link-arg=");
+            argument.push(input.path().as_os_str());
+            command.arg("-C").arg(argument);
+        }
+    }
     let status = command
-        .arg("--target-dir")
-        .arg(&target_directory)
         .env("CARGO_BUILD_JOBS", "1")
         .env_remove("CARGO_BUILD_TARGET")
         .stdout(Stdio::from(log))

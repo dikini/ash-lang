@@ -3115,6 +3115,10 @@ impl CoreLoweringFamily for EffectOperationFamily {
         operation: EffectOperation,
     ) -> Result<NodeId, BuildError> {
         match operation {
+            EffectOperation::NativeInterpret(boundary) => {
+                let (body, interpretations) = boundary.into_parts();
+                builder.native_interpret(body, interpretations, ty, effects, origin)
+            }
             EffectOperation::ProviderStateAccess(access) => {
                 builder.provider_state_access(access, ty, effects, origin)
             }
@@ -22261,8 +22265,9 @@ pub(crate) fn link_modules_with_budgets(
         .iter()
         .find(|scheme| scheme.spelling == "main")
         .ok_or_else(invalid_state)?;
-    let Type::Function(domain, _) = &main.scheme.value_type else {
-        return Err(invalid_state());
+    let domain = match &main.scheme.value_type {
+        Type::Function(domain, _) | Type::EffectfulFunction(domain, _) => domain,
+        _ => return Err(invalid_state()),
     };
     if !main.scheme.type_parameters.is_empty()
         || !main.scheme.requirements.is_empty()
@@ -41305,5 +41310,56 @@ mod borrowed_owner_argument_tests {
         crate::types::discard_type_iteratively(clone_type_with_budget(ty, &mut removed).unwrap());
         drop(clone_effect_row_with_budget(&row, &mut removed).unwrap());
         assert_eq!(old_work.used() - new_work.used(), 3 * removed.used());
+    }
+}
+
+/// The driver retains source entry failures separately from compiler refusal.
+pub(crate) enum NativeEntryFinishFailure {
+    ResidualEffects,
+    Elaboration(ElaborationFailure),
+}
+
+impl CoreElaborator<EffectOperationFamily> {
+    /// Finalizes the admitted source root once, then installs its explicit
+    /// native interpretation through the ordinary bounded Core builder.
+    pub(crate) fn finish_with_owner_free_native_entry(
+        mut self,
+        root: NodeId,
+        origin: Span,
+    ) -> Result<(crate::core::UnvalidatedEffectProgram, usize), (NativeEntryFinishFailure, usize)>
+    {
+        use NativeEntryFinishFailure::{Elaboration, ResidualEffects};
+        if self.state == ElaboratorState::Poisoned
+            || self.purpose != ElaborationPurpose::FinalSynthesis
+            || self.final_root != Some(root)
+        {
+            return Err((
+                Elaboration(ElaborationFailure::InvalidState),
+                self.type_work.used(),
+            ));
+        }
+        self.zonk_builder_types()
+            .map_err(|failure| (Elaboration(failure), self.type_work.used()))?;
+        let root = self
+            .builder
+            .prepare_owner_free_native_entry(root, origin, &mut self.type_work)
+            .map_err(|failure| {
+                (
+                    match failure {
+                        crate::core::effect::NativeEntryBuildFailure::ResidualEffects => {
+                            ResidualEffects
+                        }
+                        crate::core::effect::NativeEntryBuildFailure::Build(failure) => {
+                            Elaboration(failure.into())
+                        }
+                    },
+                    self.type_work.used(),
+                )
+            })?;
+        let used = self.type_work.used();
+        self.builder
+            .finish(root)
+            .map(|program| (program, used))
+            .map_err(|failure| (Elaboration(failure.into()), used))
     }
 }
