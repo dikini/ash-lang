@@ -2391,6 +2391,7 @@ mod tests {
                 implementations: Vec::new(),
                 definitions: Vec::new(),
                 resources: Vec::new(),
+                source_resources: Vec::new(),
                 foreign_libraries: Vec::new(),
                 span,
             },

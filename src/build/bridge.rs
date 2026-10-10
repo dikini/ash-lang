@@ -11,7 +11,10 @@ use std::{
 use crate::{
     foreign::{
         checked_source::CheckedForeignSymbol,
-        source_contract::{PreparedAbiResult, PreparedOperandSource, PreparedScalarRepresentation},
+        source_contract::{
+            PreparedAbiResult, PreparedForeignCall, PreparedOperandSource, PreparedRepresentation,
+            PreparedScalarRepresentation,
+        },
     },
     source::{Origin, Span},
     types::{OperationId, TypeWorkBudget},
@@ -318,6 +321,11 @@ fn plan_target_bridge(
             .ok_or_else(|| fail(ForeignBridgeReason::Resource, span))?,
         span,
     )?;
+    if !symbol.prepared().owners().is_empty()
+        || !matches!(source.call(), PreparedForeignCall::Scalar { .. })
+    {
+        return Err(fail(ForeignBridgeReason::InvalidAuthority, span));
+    }
     let mut operands = Vec::new();
     operands
         .try_reserve_exact(source.operands().len())
@@ -326,12 +334,21 @@ fn plan_target_bridge(
         if matches!(operand.source(), PreparedOperandSource::Constant(_)) {
             return Err(fail(ForeignBridgeReason::UnsupportedConstant, span));
         }
-        operands.push(target_scalar(operand.representation(), span)?);
+        if !matches!(operand.source(), PreparedOperandSource::Source(_)) {
+            return Err(fail(ForeignBridgeReason::InvalidAuthority, span));
+        }
+        let PreparedRepresentation::Scalar(representation) = operand.representation() else {
+            return Err(fail(ForeignBridgeReason::UnsupportedRepresentation, span));
+        };
+        operands.push(target_scalar(representation, span)?);
     }
     let result = match source.result() {
         PreparedAbiResult::Void => TargetResult::Void,
         PreparedAbiResult::Scalar(representation) => {
             TargetResult::Scalar(target_scalar(representation, span)?)
+        }
+        PreparedAbiResult::Address(_) => {
+            return Err(fail(ForeignBridgeReason::UnsupportedRepresentation, span));
         }
     };
     let rust_function_name = operation_name(symbol.operation(), work, span)?;

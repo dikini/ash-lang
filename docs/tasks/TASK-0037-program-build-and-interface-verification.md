@@ -151,6 +151,13 @@ still decodes the original independent expectations and completes all Core,
 library, symbol, provider and required-binding checks. The diagnostic allowance
 does not change delivery acceptance or production limits.
 
+Scalar private images retain each original source member coordinate alongside
+its packed role-table coordinate. This preserves defining order when a library
+gains owner declarations; the wire format remains private to its matching
+compiler. The scalar encoder and reconstructed native boundary refuse owner,
+address and current-state facts rather than dropping them. Broader passive ABI
+preparation therefore supplies no new executable ownership authority.
+
 ## Deviations
 
 None authorized. Return concrete semantic gaps to CP-0022 instead of resolving

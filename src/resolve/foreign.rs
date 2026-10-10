@@ -214,15 +214,30 @@ impl Resolver {
             })?;
             // Publishing executable constants needs the ordinary term bridge;
             // do not silently omit a source member from this first admission slice.
-            if let Some(constant) = library.members.iter().find_map(|member| match member {
-                SurfaceForeignMember::Constant(constant) => Some(constant),
-                _ => None,
-            }) {
-                return Err(error(
-                    ResolveReason::ForeignContract,
+            if let Some((span, message)) = library.members.iter().find_map(|member| match member {
+                SurfaceForeignMember::Constant(constant) => Some((
                     constant.span,
                     "source foreign constant publication is not implemented yet",
-                ));
+                )),
+                SurfaceForeignMember::Owner(owner) => Some((
+                    owner.span,
+                    "source foreign owners require canonical owner admission",
+                )),
+                SurfaceForeignMember::Representation(representation)
+                    if matches!(
+                        representation.representation,
+                        crate::surface::SurfaceForeignRepresentation::Opaque(_)
+                            | crate::surface::SurfaceForeignRepresentation::Bytes(_)
+                    ) =>
+                {
+                    Some((
+                        representation.span,
+                        "source foreign addresses require canonical owner admission",
+                    ))
+                }
+                _ => None,
+            }) {
+                return Err(error(ResolveReason::ForeignContract, span, message));
             }
             let facts =
                 prepare_foreign_library_with_budget(self.module, library, &mut self.type_work)

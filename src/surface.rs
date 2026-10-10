@@ -35,6 +35,8 @@ pub struct SurfaceModule {
     pub implementations: Vec<SurfaceImplementation>,
     /// Experimental source resource assemblies in source order.
     pub resources: Vec<SurfaceResourceDefinition>,
+    /// Product source resource declarations, distinct from experimental assemblies.
+    pub source_resources: Vec<SurfaceSourceResourceDefinition>,
     /// Global definitions in source order.
     pub definitions: Vec<SurfaceDefinition>,
     /// The complete accepted source span.
@@ -48,6 +50,8 @@ pub enum SurfaceDeclarationIndex {
     ForeignLibrary(usize),
     /// An experimental source resource assembly.
     Resource(usize),
+    /// A product source resource declaration.
+    SourceResource(usize),
     /// A nominal type declaration.
     Type(usize),
     /// An interface declaration.
@@ -860,7 +864,7 @@ pub struct SurfaceResourceDefinition {
     pub input: SurfaceType,
     /// Controlled provider state type template.
     pub state: SurfaceType,
-    /// Scope result type template.
+    /// Report result type template.
     pub result: SurfaceType,
     /// Sole answer parameter scoped over the result template.
     pub answer: SurfaceTypeParameter,
@@ -909,15 +913,84 @@ pub struct SurfaceResourceFamily {
     pub span: Span,
 }
 
-/// An experimental source resource instance with later parameters inferred from input.
+/// One explicit product source resource declaration; checking supplies authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceSourceResourceDefinition {
+    /// Module export visibility.
+    pub public: bool,
+    /// Resource access-family name.
+    pub name: SurfaceName,
+    /// Complete ordered Type/Row formals.
+    pub parameters: Vec<SurfaceTypeParameter>,
+    /// Written selector for the fresh Type-kind identity position.
+    pub owned: SurfaceName,
+    /// Initializer type template.
+    pub input: SurfaceType,
+    /// Native state type template.
+    pub state: SurfaceType,
+    /// Private Ash data type template.
+    pub data: SurfaceType,
+    /// Written acquisition codec type.
+    pub acquisition: SurfaceType,
+    /// Written completion codec type.
+    pub completion: SurfaceType,
+    /// Scope result type template.
+    pub result: SurfaceType,
+    /// Complete written binders scoped over the result template.
+    pub result_parameters: Vec<SurfaceTypeParameter>,
+    /// Report assembly selection; exact nominal roles require checking.
+    pub codec: SurfaceResourceReportCodec,
+    /// Written provider type; checking authenticates the interface role.
+    pub provider: SurfaceType,
+    /// User-facing effect implemented by the handler templates.
+    pub provided: SurfaceEffectInstance,
+    /// Nonempty ordered native effect instances, retaining every written actual.
+    pub interpreted: Vec<SurfaceEffectInstance>,
+    /// Acquisition operand pattern.
+    pub acquire_pattern: SurfacePattern,
+    /// Acquisition expression template.
+    pub acquire: SurfaceExpr,
+    /// Completion operand pattern.
+    pub finish_pattern: SurfacePattern,
+    /// Completion expression template.
+    pub finish: SurfaceExpr,
+    /// State/data access pattern shared by handler clauses.
+    pub handlers_pattern: SurfacePattern,
+    /// Source handler templates.
+    pub handlers: Vec<SurfaceHandlerClause>,
+    /// Complete declaration span.
+    pub span: Span,
+}
+
+/// A written report-codec selection, without checked constructor authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SurfaceResourceReportCodec {
+    /// The selected assembly form.
+    pub kind: SurfaceResourceReportCodecKind,
+    /// The codec spelling's source span.
+    pub span: Span,
+}
+
+/// The two accepted report assembly spellings.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SurfaceResourceReportCodecKind {
+    /// The complete acquisition/completion report.
+    Scope,
+    /// The acquired-only Success/Failure report.
+    AcquiredOnly,
+}
+
+/// A resource instance retaining its complete written Type/Row vector.
+///
+/// Checking must choose the explicit source owned slot, or the legacy experiment's
+/// first slot and inference rule. Parsing grants neither identity authority.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SurfaceProviderResourceExpr {
     /// Defining opaque resource family reference.
     pub family: SurfaceReference,
-    /// Fresh body-local identity binder.
-    pub identity: SurfaceName,
-    /// Complete explicit remaining owner arguments, or deferred row-free inference.
-    pub arguments: Option<Vec<SurfaceType>>,
+    /// Complete ordered actuals; [`SurfaceTypeKind::RowArgument`] retains Row tags.
+    /// The fresh identity remains a written named Type argument until checking.
+    pub arguments: Vec<SurfaceType>,
     /// Body-local access binder.
     pub handle: SurfaceName,
     /// Initializer in the preceding scope.

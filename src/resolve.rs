@@ -1605,6 +1605,7 @@ fn resolve_module_names_with_budget(
 ) -> Result<ResolvedModuleAdmission, ResolveError> {
     let module = loaded.id();
     let surface = loaded.surface();
+    reject_unchecked_source_resources(surface)?;
     reject_duplicate_module_aliases(surface)?;
     if dependencies.len() != loaded.dependencies().len()
         || surface.imports.len() != loaded.dependencies().len()
@@ -1866,6 +1867,9 @@ fn retain_declaration_order(
                     "source foreign declarations require canonical contract admission",
                 ));
             }
+            SurfaceDeclarationIndex::SourceResource(_) => {
+                return Err(source_resource_admission_required(span));
+            }
             SurfaceDeclarationIndex::Resource(index) => {
                 crate::resolved::ResolvedDeclarationIndex::Resource(index)
             }
@@ -1888,6 +1892,23 @@ fn retain_declaration_order(
         retained.push(declaration);
     }
     Ok(retained)
+}
+
+// Temporary preparation refusal: product source-owner admission must replace
+// this gate before these declarations can publish provider authority.
+fn source_resource_admission_required(span: Span) -> ResolveError {
+    error(
+        ResolveReason::ForeignContract,
+        span,
+        "source resource declarations require canonical owner admission",
+    )
+}
+
+fn reject_unchecked_source_resources(surface: &SurfaceModule) -> Result<(), ResolveError> {
+    if let Some(resource) = surface.source_resources.first() {
+        return Err(source_resource_admission_required(resource.span));
+    }
+    Ok(())
 }
 
 fn reject_duplicate_module_aliases(surface: &SurfaceModule) -> Result<(), ResolveError> {
@@ -2732,6 +2753,9 @@ impl Resolver {
                             )?;
                         }
                     }
+                }
+                SurfaceDeclarationIndex::SourceResource(_) => {
+                    return Err(source_resource_admission_required(surface.span));
                 }
                 SurfaceDeclarationIndex::Resource(index) => {
                     let resource = &surface.resources[index];
@@ -7277,6 +7301,7 @@ impl Resolver {
         &mut self,
         surface: &SurfaceModule,
     ) -> Result<PreparedDeclarationSetup, ResolveError> {
+        reject_unchecked_source_resources(surface)?;
         let nominal_identities = self.install_nominal_identities(&surface.type_declarations)?;
         self.type_work
             .charge(surface.resources.len().saturating_mul(4))
@@ -7468,6 +7493,9 @@ impl Resolver {
                         }
                     }
                     next_foreign_library += 1;
+                }
+                SurfaceDeclarationIndex::SourceResource(_) => {
+                    return Err(source_resource_admission_required(surface.span));
                 }
                 SurfaceDeclarationIndex::Resource(_) => {}
                 SurfaceDeclarationIndex::Type(index) => {
@@ -7866,6 +7894,9 @@ impl Resolver {
                         group.binder =
                             Some(self.allocate_binder(&first.name.text, first.name.span)?);
                     }
+                }
+                SurfaceDeclarationIndex::SourceResource(_) => {
+                    return Err(source_resource_admission_required(surface.span));
                 }
                 SurfaceDeclarationIndex::ForeignLibrary(_)
                 | SurfaceDeclarationIndex::Resource(_)
@@ -10571,11 +10602,11 @@ impl Resolver {
 
     fn resolve_provider_resource_arguments(
         &mut self,
-        source: &crate::surface::SurfaceProviderResourceExpr,
+        written: &[SurfaceType],
         family: NominalTypeId,
         span: Span,
     ) -> Result<Option<ResolvedOwnerOccurrenceBuffer>, ResolveError> {
-        let Some(written) = source.arguments.as_ref() else {
+        if written.is_empty() {
             if self.row_resource_families.contains(&family) {
                 return Err(error(
                     ResolveReason::TypeKind,
@@ -10584,7 +10615,7 @@ impl Resolver {
                 ));
             }
             return Ok(None);
-        };
+        }
         let count = self
             .nominal_parameter_counts
             .get(&family)
@@ -10640,7 +10671,23 @@ impl Resolver {
                 "provider initializer is missing",
             )
         })?;
-        let arguments = self.resolve_provider_resource_arguments(source, family, span)?;
+        let (identity_argument, written) = source.arguments.split_first().ok_or_else(|| {
+            error(
+                ResolveReason::TypeKind,
+                span,
+                "an experimental resource instance requires a fresh identity in its first slot",
+            )
+        })?;
+        let SurfaceTypeKind::Named(SurfaceReference::Unqualified(identity_source)) =
+            &identity_argument.kind
+        else {
+            return Err(error(
+                ResolveReason::TypeKind,
+                identity_argument.span,
+                "an experimental resource instance requires a fresh unqualified identity in its first slot",
+            ));
+        };
+        let arguments = self.resolve_provider_resource_arguments(written, family, span)?;
         let (provider, forwarding) = self.reserve_resource_forwarding(family, span)?;
         let family_provider = if self.handler_family_resources.contains(&family) {
             self.type_work.charge(1).map_err(|()| {
@@ -10664,7 +10711,7 @@ impl Resolver {
         } else {
             None
         };
-        let identity = self.allocate_type_variable(&source.identity, None, Kind::Type)?;
+        let identity = self.allocate_type_variable(identity_source, None, Kind::Type)?;
         let handle = self.allocate_binder(&source.handle.text, source.handle.span)?;
         self.type_work.charge(6).map_err(|()| {
             error(
@@ -17440,6 +17487,30 @@ mod tests {
             .expect("the late-resolution thread should start")
             .join()
             .expect("late resolver errors must dismantle all completed work iteratively");
+    }
+
+    #[test]
+    fn source_resource_preparation_refuses_before_allocation_even_without_declaration_order() {
+        let text = "type Earlier = Earlier(Unit)\nresource Pending<R> {\n    owned R\n    input Unit\n    state Native.State<R>\n    data Unit\n    acquisition Acquire<Native.State<R>, Unit, Unit>\n    completion Finish<Native.State<R>, Unit>\n    result Scope<Unit, Unit, T> for <T>\n    codec scope\n    provider Provider<R>\n    effect Ops<R>\n    interpret Native.Allocate<R>, Native.Free<R>\n    acquire () => Acquired\n    finish state => Consumed\n    handlers state {\n        use () => resume ()\n    }\n}\n";
+        for omit_order in [false, true] {
+            let mut surface = declaration_fixture("pending-resource.ash", text);
+            if omit_order {
+                surface.declaration_order.clear();
+            }
+            let mut resolver = Resolver::with_budgets(
+                ModuleId::new(0),
+                TypeWorkBudget::with_limit(0),
+                InterfaceConstraintBudget::default(),
+            );
+            let Err(failure) = resolver.prepare_declaration_setup(&surface) else {
+                panic!("product owner admission is not connected");
+            };
+            assert_eq!(failure.reason, ResolveReason::ForeignContract);
+            assert_eq!(failure.primary.span(), surface.source_resources[0].span);
+            assert_eq!(resolver.type_work.used(), 0);
+            assert_eq!(resolver.next_type_variable, 0);
+            assert!(resolver.resource_families.is_empty());
+        }
     }
 
     const DEEP_DECLARATION_TYPE_WIDTH: usize = 32_768;
