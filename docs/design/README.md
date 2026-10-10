@@ -78,6 +78,10 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 
 ### Compiler transformations and backends
 
+- [DN-0044: No Default Runtime](DN-0044-no-default-runtime.md)
+  — working exploration of library-supplied services, compiler defaults,
+  ordinary construction and storage lowering, constrained targets, and foreign
+  callers; no ready design or accepted backend.
 - [DN-0030: Typed Compiler Macros and Declarative Hooks](DN-0030-typed-compiler-macros-and-hooks.md)
   — work-in-progress exploration of typed compiler transformations,
   declarative phase hooks, registration scopes, unresolved selection policy,
