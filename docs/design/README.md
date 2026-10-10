@@ -92,6 +92,9 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 
 ### Effects and dynamic composition
 
+- [DN-0043: Shorter Surface Alternatives](DN-0043-shorter-surface-alternatives.md)
+  — requests and mutable-resource access; a catalogue of scope, handler,
+  function, evidence and type-notation alternatives with checked authority.
 - [DN-0033: Direct Effects and Continuation Capabilities](DN-0033-direct-effects-and-continuation-capabilities.md)
   — direct operational calculus, ordered interpretation frames, ownership and
   continuation checks, mixed-handler derivations, and scoped async exploration.
