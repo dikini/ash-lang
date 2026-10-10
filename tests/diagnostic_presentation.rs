@@ -33,12 +33,6 @@ fn lexical_messages_localize_restrictions_but_preserve_source_facts() {
             "Ash не поддържа коментари.",
         ),
         (
-            "-1",
-            LexReason::NegativeLiteral,
-            "Ash does not support negative integer literals.",
-            "Ash не поддържа отрицателни целочислени литерали.",
-        ),
-        (
             "01",
             LexReason::InvalidIntegerLiteral,
             "An integer literal must be 0 or a sequence of ASCII digits without a leading zero.",

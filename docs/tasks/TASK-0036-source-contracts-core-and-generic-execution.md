@@ -53,6 +53,54 @@ Rust-authored manifests/adapters are experimental comparison evidence. They
 cannot become the source authoring API. Private replaceable payloads and finite
 window contracts are new obligations in CP-0022.
 
+A zero-argument `void` call exposed a nonempty-outcome grammar gap: no output
+or owner exists to justify a fact. CP-0022 now permits empty outcome fact lists
+with mandatory semantic coverage, accepted on 2026-10-10. Ash still reports
+Unit after the call; no native result is read.
+
+ABI preparation must price string comparisons and NUL scans by inspected bytes
+before scanning. A single borrowed mapping table decodes each authored ABI
+position once, rejects repeated positions and projects each mapped source path
+once. Preparation alone has no resolved type or operation authority; binding
+must still authenticate the canonical result codec and complete owner arguments.
+
+Imported opaque result errors retain defining identity, kind and provenance,
+without exposing hidden constructor bodies. Canonical codec authentication must
+use those retained facts rather than requiring source access to the constructor.
+Native descriptors follow selected or signature-referenced effect facts through
+imports; copying every descriptor from a dependency would introduce authority
+without its declaring effect. Module effect copies, canonical registry effects
+and the exact operation table retain the same immutable descriptor allocation.
+
+Failure after resolving an earlier effect needs iterative guards around staged
+operations and declarations, before their final owner exists. Retained spelling
+bytes and origin chains require priced, fallible copying. The registry's existing
+exact-ID table supplies duplicate rejection; a second linear scan per effect
+adds quadratic preparation without a separate validation obligation.
+
+Independent export-summary admission must authenticate its native operation
+table before selected imports can reconstruct local tables. Otherwise a missing
+summary entry can be silently recreated from an effect tag. The same charged
+effect walk now checks exact table/tag correspondence, retained signatures and
+ordered parameter identities/kinds, including facade publication.
+
+Retained native signatures also need exact operation, annotation and binder
+provenance. Summary and registry authentication borrow the original spans,
+guarded origins and shared annotation arena; equivalent type shapes alone
+cannot authorize a substituted defining occurrence.
+
+Foreign declaration setup increased the live debug-build resolver frame enough
+to overflow an existing 256 KiB nested-cleanup witness before evaluation.
+Separate completed declaration preparation from body resolution so setup
+temporaries leave the stack first. The unchanged witness passes without raising
+stack or work limits; retained setup fields use existing iterative owners.
+
+Separating reusable compilation from execution adds a containing compilation
+timer. The calibration consumer must recognize it without making it another
+charged-work owner or requiring it in historical traces. Public Pure and Effect
+observer cases now pass their actual logs through the consumer; both retain the
+same six work owners, and containing timers must not be summed with child phases.
+
 ## Deviations
 
 None authorized. Return concrete semantic gaps to CP-0022 instead of resolving

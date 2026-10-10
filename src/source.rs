@@ -304,7 +304,62 @@ pub struct SourceFile {
     line_starts: Vec<u32>,
 }
 
+#[derive(Debug)]
+pub(crate) enum SourceBuildFailure {
+    Representation(SourceError),
+    Resource,
+}
+
+impl std::fmt::Display for SourceBuildFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Representation(error) => std::fmt::Display::fmt(error, formatter),
+            Self::Resource => formatter
+                .write_str("embedded source indexing exceeded its work or storage allowance"),
+        }
+    }
+}
+
 impl SourceFile {
+    /// Restores embedded provenance with fresh identity and bounded line indexing.
+    /// The caller has already admitted owned UTF-8 strings; this reads no path.
+    pub(crate) fn new_with_budget(
+        display_path: String,
+        text: String,
+        work: &mut crate::types::TypeWorkBudget,
+    ) -> Result<Self, SourceBuildFailure> {
+        use SourceBuildFailure::{Representation, Resource};
+        u32::try_from(display_path.len())
+            .map_err(|_| Representation(SourceError::DisplayPathTooLarge))?;
+        u32::try_from(text.len()).map_err(|_| Representation(SourceError::TextTooLarge))?;
+        work.charge(text.len().checked_add(1).ok_or(Resource)?)
+            .map_err(|()| Resource)?;
+        let mut line_starts = Vec::new();
+        line_starts.try_reserve(1).map_err(|_| Resource)?;
+        line_starts.push(0);
+        for (offset, character) in text.char_indices() {
+            if character == '\n' {
+                work.charge(1).map_err(|()| Resource)?;
+                let next_line = offset
+                    .checked_add(character.len_utf8())
+                    .and_then(|offset| u32::try_from(offset).ok())
+                    .ok_or(Representation(SourceError::TextTooLarge))?;
+                if line_starts.len() == line_starts.capacity() {
+                    line_starts.try_reserve(1).map_err(|_| Resource)?;
+                }
+                line_starts.push(next_line);
+            }
+        }
+        u32::try_from(line_starts.len()).map_err(|_| Representation(SourceError::TooManyLines))?;
+        let id = SOURCE_IDS.allocate().map_err(Representation)?;
+        Ok(Self {
+            id,
+            display_path,
+            text,
+            line_starts,
+        })
+    }
+
     pub(crate) fn snapshot_work(&self) -> Result<usize, ()> {
         self.display_path
             .len()

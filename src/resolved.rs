@@ -637,6 +637,19 @@ impl ResolvedModule {
             budget,
         )?;
         for effect in &self.effects {
+            budget
+                .charge(1)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            let canonical = self
+                .registry
+                .effect(effect.id)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            match (&effect.native_contract, &canonical.native_contract) {
+                (None, None) => {}
+                (Some(local), Some(original))
+                    if Arc::ptr_eq(local, original) && local.effect() == effect.id => {}
+                _ => return Err(ResolvedBuildFailure::InvalidState),
+            }
             self.registry.authenticate_owner_signature(
                 OwnerId::Effect(effect.id),
                 None,
@@ -4570,6 +4583,29 @@ impl Drop for ResolvedModuleProgram {
     }
 }
 
+fn retain_native_symbols(
+    target: &mut HashMap<OperationId, Arc<crate::foreign::checked_source::CheckedForeignSymbol>>,
+    source: &HashMap<OperationId, Arc<crate::foreign::checked_source::CheckedForeignSymbol>>,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ResolvedBuildFailure> {
+    work.charge(source.len())
+        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+    target
+        .try_reserve(source.len())
+        .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+    for (id, symbol) in source {
+        match target.entry(*id) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(Arc::clone(symbol));
+            }
+            std::collections::hash_map::Entry::Occupied(entry)
+                if Arc::ptr_eq(entry.get(), symbol) => {}
+            _ => return Err(ResolvedBuildFailure::InvalidState),
+        }
+    }
+    Ok(())
+}
+
 /// Body-free dependency facts retained by one resolved module.
 #[derive(Debug, Default, Eq, PartialEq)]
 pub struct ImportedFacts {
@@ -4581,6 +4617,7 @@ pub struct ImportedFacts {
     /// imported nominal facts intentionally do not expose these templates.
     canonical_representations: HashMap<NominalTypeId, CanonicalRepresentationFact>,
     foreign_modules: std::collections::BTreeMap<ModuleId, Arc<crate::foreign::ForeignModuleFact>>,
+    native_symbols: HashMap<OperationId, Arc<crate::foreign::checked_source::CheckedForeignSymbol>>,
     provider_groups: std::collections::BTreeMap<
         ModuleId,
         Arc<crate::elaborate::provider::CheckedProviderContracts>,
@@ -4657,13 +4694,19 @@ impl ImportedFacts {
         Ok(())
     }
 
-    pub(crate) fn retain_foreign(&mut self, summary: &ExportSummary) -> Result<(), ()> {
+    pub(crate) fn retain_foreign(
+        &mut self,
+        summary: &ExportSummary,
+        _work: &mut TypeWorkBudget,
+    ) -> Result<(), ResolvedBuildFailure> {
+        // Native descriptors follow selected effect facts in insert_effect, rather
+        // than bringing every unselected public operation into the importing registry.
         for (id, fact) in &summary.foreign_modules {
             if let Some(existing) = self.foreign_modules.get(id)
                 && !Arc::ptr_eq(existing, fact)
                 && existing != fact
             {
-                return Err(());
+                return Err(ResolvedBuildFailure::InvalidState);
             }
             self.foreign_modules.insert(*id, Arc::clone(fact));
         }
@@ -4805,14 +4848,61 @@ impl ImportedFacts {
         fact: ResolvedEffectDeclaration,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), ()> {
-        if let Some(position) = self.effect_positions.get(&fact.id).copied() {
-            let slot = self.effects.get_mut(position).ok_or(())?;
-            discard_resolved_effect_iteratively(std::mem::replace(slot, fact));
+        let position = self.effect_positions.get(&fact.id).copied();
+        let admission = (|| {
+            budget.charge(1)?;
+            if let Some(position) = position {
+                let existing = self.effects.get(position).ok_or(())?;
+                match (&existing.native_contract, &fact.native_contract) {
+                    (None, None) => {}
+                    (Some(original), Some(incoming)) if Arc::ptr_eq(original, incoming) => {}
+                    _ => return Err(()),
+                }
+            } else {
+                budget.charge(2)?;
+                self.effects.try_reserve(1).map_err(|_| ())?;
+                self.effect_positions.try_reserve(1).map_err(|_| ())?;
+            }
+            if let Some(symbol) = &fact.native_contract {
+                if symbol.effect() != fact.id {
+                    return Err(());
+                }
+                budget.charge(1)?;
+                self.native_symbols.try_reserve(1).map_err(|_| ())?;
+                if self
+                    .native_symbols
+                    .get(&symbol.operation())
+                    .is_some_and(|original| !Arc::ptr_eq(original, symbol))
+                {
+                    return Err(());
+                }
+            } else if self
+                .native_symbols
+                .contains_key(&OperationId::new(fact.id, 0))
+            {
+                return Err(());
+            }
+            Ok(())
+        })();
+        if admission.is_err() {
+            discard_resolved_effect_iteratively(fact);
+            return Err(());
+        }
+        if let Some(symbol) = &fact.native_contract
+            && let std::collections::hash_map::Entry::Vacant(entry) =
+                self.native_symbols.entry(symbol.operation())
+        {
+            entry.insert(Arc::clone(symbol));
+        }
+        if let Some(position) = position {
+            let existing = self
+                .effects
+                .get_mut(position)
+                .expect("effect replacement position was admitted before publication");
+            let displaced = std::mem::replace(existing, fact);
+            discard_resolved_effect_iteratively(displaced);
             return Ok(());
         }
-        budget.charge(2)?;
-        self.effects.try_reserve(1).map_err(|_| ())?;
-        self.effect_positions.try_reserve(1).map_err(|_| ())?;
         let position = self.effects.len();
         self.effect_positions.insert(fact.id, position);
         self.effects.push(fact);
@@ -7599,6 +7689,7 @@ pub struct ExportSummary {
     /// Canonical representations retained for opaque public nominal linkage.
     canonical_representations: HashMap<NominalTypeId, CanonicalRepresentationFact>,
     foreign_modules: std::collections::BTreeMap<ModuleId, Arc<crate::foreign::ForeignModuleFact>>,
+    native_symbols: HashMap<OperationId, Arc<crate::foreign::checked_source::CheckedForeignSymbol>>,
     provider_groups: std::collections::BTreeMap<
         ModuleId,
         Arc<crate::elaborate::provider::CheckedProviderContracts>,
@@ -8702,16 +8793,29 @@ fn same_resolved_type_provenance_with_constraint_budget(
     right: &ResolvedTypeProvenance,
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
 ) -> Result<bool, ResolvedBuildFailure> {
-    constraint_work
-        .charge(1)
-        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    same_resolved_type_provenance_with_charge(left, right, |units| constraint_work.charge(units))
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)
+}
+
+pub(crate) fn same_resolved_type_provenance_with_budget(
+    left: &ResolvedTypeProvenance,
+    right: &ResolvedTypeProvenance,
+    work: &mut TypeWorkBudget,
+) -> Result<bool, ()> {
+    same_resolved_type_provenance_with_charge(left, right, |units| work.charge(units))
+}
+
+fn same_resolved_type_provenance_with_charge(
+    left: &ResolvedTypeProvenance,
+    right: &ResolvedTypeProvenance,
+    mut charge: impl FnMut(usize) -> Result<(), ()>,
+) -> Result<bool, ()> {
+    charge(1)?;
     if left.root != right.root || left.nodes.len() != right.nodes.len() {
         return Ok(false);
     }
     for (left, right) in left.nodes.iter().zip(right.nodes.iter()) {
-        constraint_work
-            .charge(1)
-            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+        charge(1)?;
         match (left, right) {
             (ResolvedTypeProvenanceNode::Fact(left), ResolvedTypeProvenanceNode::Fact(right)) => {
                 if left != right {
@@ -8728,9 +8832,7 @@ fn same_resolved_type_provenance_with_constraint_budget(
                     elements: right_elements,
                 },
             ) => {
-                constraint_work
-                    .charge(left_elements.len())
-                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                charge(left_elements.len())?;
                 if left_span != right_span || left_elements != right_elements {
                     return Ok(false);
                 }
@@ -8749,9 +8851,7 @@ fn same_resolved_type_provenance_with_constraint_budget(
                     effect_arguments: right_effect_arguments,
                 },
             ) => {
-                constraint_work
-                    .charge(left_effect_arguments.len())
-                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                charge(left_effect_arguments.len())?;
                 if left_span != right_span
                     || left_domain != right_domain
                     || left_codomain != right_codomain
@@ -8794,9 +8894,7 @@ fn same_resolved_type_provenance_with_constraint_budget(
                     arguments: right_arguments,
                 },
             ) => {
-                constraint_work
-                    .charge(left_arguments.len())
-                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                charge(left_arguments.len())?;
                 if left_span != right_span
                     || left_resource != right_resource
                     || left_arguments != right_arguments
@@ -8814,9 +8912,7 @@ fn same_resolved_type_provenance_with_constraint_budget(
                     argument_roots: right_arguments,
                 },
             ) => {
-                constraint_work
-                    .charge(left_arguments.len())
-                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                charge(left_arguments.len())?;
                 if left_span != right_span || left_arguments != right_arguments {
                     return Ok(false);
                 }
@@ -10065,6 +10161,10 @@ impl ExportSummary {
         Ok(())
     }
 
+    pub(crate) fn defining_sources(&self) -> &[(ModuleId, Arc<crate::source::SourceFile>)] {
+        &self.defining_sources
+    }
+
     /// Returns identity-authenticated, body-free foreign registration facts.
     pub fn foreign_modules(&self) -> impl Iterator<Item = &Arc<crate::foreign::ForeignModuleFact>> {
         self.foreign_modules.values()
@@ -10442,6 +10542,7 @@ impl ExportSummary {
             }
             named_effects.insert(*identity);
         }
+        let mut native_effect_count = 0;
         for (position, effect) in self.effects.iter().enumerate() {
             if let Some(api) = ResourceApi::for_module(effect.id.module())
                 && (!api.effect(effect) || !self.has_resource_nominals(api))
@@ -10457,6 +10558,10 @@ impl ExportSummary {
                 {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
+            }
+            if let Some(symbol) = &effect.native_contract {
+                self.authenticate_source_native_effect(effect, symbol, type_work)?;
+                native_effect_count += 1;
             }
             register_summary_parameters(
                 &effect.parameters,
@@ -10483,6 +10588,12 @@ impl ExportSummary {
                     type_work,
                 )?;
             }
+        }
+        // The charged effect walk establishes unique declaring identities.
+        // Each native tag authenticates its canonical table entry below, so
+        // equal cardinality proves full coverage without another table walk.
+        if native_effect_count != self.native_symbols.len() {
+            return Err(ResolvedBuildFailure::InvalidState);
         }
         let mut canonical_nominals = HashMap::<
             NominalTypeId,
@@ -11751,6 +11862,7 @@ impl ExportSummary {
             hidden_nominal_order: Vec::new(),
             canonical_representations: HashMap::new(),
             foreign_modules: std::collections::BTreeMap::new(),
+            native_symbols: HashMap::new(),
             provider_groups: std::collections::BTreeMap::new(),
             resource_types: HashMap::new(),
             resource_type_order: Vec::new(),
@@ -11874,6 +11986,7 @@ impl ExportSummary {
             hidden_nominal_order: Vec::new(),
             canonical_representations: HashMap::new(),
             foreign_modules: std::collections::BTreeMap::new(),
+            native_symbols: HashMap::new(),
             provider_groups: std::collections::BTreeMap::new(),
             resource_types: HashMap::new(),
             resource_type_order: Vec::new(),
@@ -13680,12 +13793,105 @@ impl ExportSummary {
             summary.hidden_nominal_order.push(imported.id);
         }
 
+        type_work
+            .charge(summary.effects.len())
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        for effect in &summary.effects {
+            if let Some(symbol) = &effect.native_contract {
+                type_work
+                    .charge(1)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                summary
+                    .native_symbols
+                    .try_reserve(1)
+                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                let original = resolved
+                    .registry
+                    .native_symbols
+                    .get(&symbol.operation())
+                    .or_else(|| resolved.imported.native_symbols.get(&symbol.operation()))
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                if !Arc::ptr_eq(original, symbol) || symbol.effect() != effect.id {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                summary
+                    .native_symbols
+                    .insert(symbol.operation(), Arc::clone(symbol));
+            }
+        }
         summary.authenticate_with_provider_commit(false, type_work, constraint_work)?;
         Ok(summary)
     }
 
     pub(crate) fn term(&self, spelling: &str) -> Option<&ExportedGlobal> {
         self.terms.get(spelling)
+    }
+
+    fn authenticate_source_native_effect(
+        &self,
+        effect: &ResolvedEffectDeclaration,
+        symbol: &Arc<crate::foreign::checked_source::CheckedForeignSymbol>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ResolvedBuildFailure> {
+        // Native-only work covers the original lookup, fixed identity facts
+        // and each ordered parameter. Ordinary summaries retain their tariff.
+        work.charge(
+            effect
+                .parameters
+                .len()
+                .checked_add(2)
+                .ok_or(ResolvedBuildFailure::TypeResource)?,
+        )
+        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        let operation = OperationId::new(effect.id, 0);
+        let original = self
+            .native_symbols
+            .get(&operation)
+            .ok_or(ResolvedBuildFailure::InvalidState)?;
+        if !Arc::ptr_eq(original, symbol)
+            || symbol.operation() != operation
+            || symbol.effect() != effect.id
+            || symbol.library().module() != effect.id.module()
+            || effect.operations.len() != 1
+            || effect.operations[0].id != operation
+            || effect.parameters.len() != symbol.parameter_ids().len()
+            || effect.parameters.len() != symbol.symbol().parameters().len()
+        {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        for ((actual, identity), prepared) in effect
+            .parameters
+            .iter()
+            .zip(symbol.parameter_ids())
+            .zip(symbol.symbol().parameters())
+        {
+            // Source-native preparation admits only these flat parameter
+            // kinds. No recursive kind comparison or replacement is needed.
+            if actual.id != *identity
+                || !matches!(
+                    (&actual.kind, prepared.kind()),
+                    (Kind::Type, Kind::Type) | (Kind::EffectRow, Kind::EffectRow)
+                )
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+        }
+        if !crate::types::same_type_with_budget(
+            &effect.operations[0].annotation.ty,
+            symbol.source_signature(),
+            work,
+        )
+        .map_err(|()| ResolvedBuildFailure::TypeResource)?
+        {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        if !symbol
+            .same_source_provenance(effect, work)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?
+        {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        Ok(())
     }
 
     fn authenticate_foreign_facts(
@@ -14356,6 +14562,7 @@ impl ExportSummary {
             hidden_nominal_order: Vec::new(),
             canonical_representations: HashMap::new(),
             foreign_modules: std::collections::BTreeMap::new(),
+            native_symbols: HashMap::new(),
             provider_groups: std::collections::BTreeMap::new(),
             resource_types: HashMap::new(),
             resource_type_order: Vec::new(),
@@ -17511,6 +17718,7 @@ pub struct ResolvedRegistry {
         Arc<crate::elaborate::provider::CheckedProviderContracts>,
     >,
     foreign_modules: std::collections::BTreeMap<ModuleId, Arc<crate::foreign::ForeignModuleFact>>,
+    native_symbols: HashMap<OperationId, Arc<crate::foreign::checked_source::CheckedForeignSymbol>>,
 }
 
 /// Compiler-private parent identity for an independently retained owner signature.
@@ -18074,6 +18282,7 @@ impl CombinedRegistryBuilder {
             abstract_nominal_kinds: HashMap::new(),
             provider_contracts: std::collections::BTreeMap::new(),
             foreign_modules: std::collections::BTreeMap::new(),
+            native_symbols: HashMap::new(),
         }
     }
 }
@@ -19141,6 +19350,7 @@ impl ResolvedRegistry {
         &self,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), ResolvedBuildFailure> {
+        self.authenticate_native_contracts(budget)?;
         self.authenticate_owner_signature_coverage(
             self.owner_definitions
                 .iter()
@@ -19496,9 +19706,11 @@ impl ResolvedRegistry {
     /// Reports whether an effect is registered native authority.
     #[must_use]
     pub fn foreign_effect(&self, id: crate::types::EffectId) -> bool {
-        self.foreign_modules
-            .values()
-            .any(|module| module.effects.contains(&id))
+        self.native_symbols.contains_key(&OperationId::new(id, 0))
+            || self
+                .foreign_modules
+                .values()
+                .any(|module| module.effects.contains(&id))
     }
     /// Looks up the sealed state-access primitive by defining method identity.
     #[must_use]
@@ -19581,6 +19793,139 @@ impl ResolvedRegistry {
             .flat_map(|module| module.states.iter())
             .find(|state| state.id == id)
     }
+    pub(crate) fn retain_native_symbol(
+        &mut self,
+        symbol: Arc<crate::foreign::checked_source::CheckedForeignSymbol>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ResolvedBuildFailure> {
+        work.charge(1)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        self.native_symbols
+            .try_reserve(1)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        let position = *self
+            .effect_positions
+            .get(&symbol.effect())
+            .ok_or(ResolvedBuildFailure::InvalidState)?;
+        let effect = self
+            .effects
+            .get_mut(position)
+            .ok_or(ResolvedBuildFailure::InvalidState)?;
+        if effect.id != symbol.effect()
+            || effect
+                .native_contract
+                .as_ref()
+                .is_some_and(|original| !Arc::ptr_eq(original, &symbol))
+        {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        effect.native_contract = Some(Arc::clone(&symbol));
+        match self.native_symbols.entry(symbol.operation()) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(symbol);
+            }
+            std::collections::hash_map::Entry::Occupied(entry)
+                if Arc::ptr_eq(entry.get(), &symbol) => {}
+            _ => return Err(ResolvedBuildFailure::InvalidState),
+        }
+        Ok(())
+    }
+
+    /// Borrows the sealed contract for one exact source-native operation.
+    pub(crate) fn native_symbol(
+        &self,
+        operation: OperationId,
+    ) -> Option<&Arc<crate::foreign::checked_source::CheckedForeignSymbol>> {
+        self.native_symbols.get(&operation)
+    }
+
+    /// Reconstructs source-native correspondence once in an independent registry pass.
+    fn authenticate_native_contracts(
+        &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ResolvedBuildFailure> {
+        use crate::foreign::checked_source::{ForeignBindingContext, authenticate_foreign_symbol};
+        if self.native_symbols.is_empty() {
+            work.charge(self.effects.len())
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            return if self
+                .effects
+                .iter()
+                .all(|effect| effect.native_contract.is_none())
+            {
+                Ok(())
+            } else {
+                Err(ResolvedBuildFailure::InvalidState)
+            };
+        }
+        let count = self
+            .effects
+            .len()
+            .checked_add(self.native_symbols.len())
+            .ok_or(ResolvedBuildFailure::TypeResource)?;
+        work.charge(count)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        let mut tagged = 0;
+        for effect in &self.effects {
+            match &effect.native_contract {
+                Some(symbol) => {
+                    let original = self
+                        .native_symbols
+                        .get(&symbol.operation())
+                        .ok_or(ResolvedBuildFailure::InvalidState)?;
+                    if !Arc::ptr_eq(symbol, original) || symbol.effect() != effect.id {
+                        return Err(ResolvedBuildFailure::InvalidState);
+                    }
+                    tagged += 1;
+                }
+                None if self
+                    .native_symbols
+                    .contains_key(&OperationId::new(effect.id, 0)) =>
+                {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                None => {}
+            }
+        }
+        if tagged != self.native_symbols.len() {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        let mut contexts = HashMap::new();
+        contexts
+            .try_reserve(self.native_symbols.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        let map_failure = |failure: crate::foreign::checked_source::ForeignAdmissionError| {
+            if failure.is_resource_exhaustion() {
+                ResolvedBuildFailure::TypeResource
+            } else {
+                ResolvedBuildFailure::InvalidState
+            }
+        };
+        for (operation, symbol) in &self.native_symbols {
+            if *operation != symbol.operation()
+                || operation.owner().module() != symbol.library().module()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            let codec = symbol.call_codec();
+            let context = match contexts.entry(codec.module()) {
+                std::collections::hash_map::Entry::Vacant(entry) => entry.insert(
+                    ForeignBindingContext::new(
+                        self,
+                        codec.module(),
+                        codec.source(),
+                        codec.ids(),
+                        work,
+                    )
+                    .map_err(map_failure)?,
+                ),
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            };
+            authenticate_foreign_symbol(symbol, self, context, work).map_err(map_failure)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn retain_foreign(&mut self, fact: Arc<crate::foreign::ForeignModuleFact>) {
         self.foreign_modules.insert(fact.admission.module_id, fact);
     }
@@ -19640,7 +19985,86 @@ impl ResolvedRegistry {
             abstract_nominal_kinds: HashMap::new(),
             provider_contracts: std::collections::BTreeMap::new(),
             foreign_modules: std::collections::BTreeMap::new(),
+            native_symbols: HashMap::new(),
         }
+    }
+
+    /// Reconstructs an unchecked image registry with guarded payload ownership.
+    pub(crate) fn new_with_budget(
+        nominals: Vec<ResolvedNominalType>,
+        constructors: Vec<ResolvedConstructor>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, ResolvedBuildFailure> {
+        let nominals = ResolvedNominalBuffer(nominals);
+        let constructors = ResolvedConstructorBuffer(constructors);
+        let count = nominals
+            .0
+            .len()
+            .checked_add(constructors.0.len())
+            .ok_or(ResolvedBuildFailure::TypeResource)?;
+        work.charge(count)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        let mut nominal_positions = HashMap::new();
+        let mut constructor_positions = HashMap::new();
+        nominal_positions
+            .try_reserve(nominals.0.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        constructor_positions
+            .try_reserve(constructors.0.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for (index, nominal) in nominals.0.iter().enumerate() {
+            if nominal_positions.insert(nominal.id, index).is_some() {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+        }
+        for (index, constructor) in constructors.0.iter().enumerate() {
+            if constructor_positions
+                .insert(constructor.id, index)
+                .is_some()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+        }
+        let mut registry = Self::default();
+        registry.nominals = nominals.into_vec().into_boxed_slice();
+        registry.constructors = constructors.into_vec().into_boxed_slice();
+        registry.nominal_positions = nominal_positions;
+        registry.constructor_positions = constructor_positions;
+        Ok(registry)
+    }
+
+    /// Refuses metadata that the initial monomorphic Pure image cannot retain.
+    pub(crate) fn monomorphic_image_subset(
+        &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ResolvedBuildFailure> {
+        work.charge(
+            20usize
+                .checked_add(self.nominal_parameters.len())
+                .ok_or(ResolvedBuildFailure::TypeResource)?,
+        )
+        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        Ok(self.lexical_nominals.is_empty()
+            && self.lexical_constructors.is_empty()
+            && self.lexical_nominal_positions.is_empty()
+            && self.lexical_constructor_positions.is_empty()
+            && self.effects.is_empty()
+            && self.owner_definitions.is_empty()
+            && self.owner_definition_positions.is_empty()
+            && self.owner_signatures == OwnerSignatures::default()
+            && self.effect_positions.is_empty()
+            && self.type_variables.is_empty()
+            && self.global_parameter_rows.is_empty()
+            && self.global_parameter_positions.is_empty()
+            && self
+                .nominal_parameters
+                .values()
+                .all(|parameters| parameters.is_empty())
+            && self.abstract_nominal_names.is_empty()
+            && self.abstract_nominal_kinds.is_empty()
+            && self.provider_contracts.is_empty()
+            && self.foreign_modules.is_empty()
+            && self.native_symbols.is_empty())
     }
 
     /// Builds the semantic registry view needed while checking one module.
@@ -19984,24 +20408,23 @@ impl ResolvedRegistry {
             )
             .map_err(|()| ResolvedBuildFailure::TypeResource)?
             .with_abstract_nominal_facts(abstract_nominal_names, abstract_nominal_kinds);
-        let effect_count = self.effects.len().saturating_add(imported.effects.len());
-        let mut effects = Vec::new();
+        let effect_count = self
+            .effects
+            .len()
+            .checked_add(imported.effects.len())
+            .ok_or(ResolvedBuildFailure::TypeResource)?;
+        let mut effects = ResolvedEffectBuffer(Vec::new());
         effects
+            .0
             .try_reserve_exact(effect_count)
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
         for effect in self.effects.iter().chain(imported.effects()) {
-            if effects
-                .iter()
-                .any(|existing: &ResolvedEffectDeclaration| existing.id == effect.id)
-            {
-                return Err(ResolvedBuildFailure::InvalidState);
-            }
-            effects.push(
+            effects.0.push(
                 clone_resolved_effect_with_budget(effect, budget)
                     .map_err(|()| ResolvedBuildFailure::TypeResource)?,
             );
         }
-        registry = registry.with_effects_with_budget(effects, budget)?;
+        registry = registry.with_effects_with_budget(effects.into_vec(), budget)?;
         for nominal in self.nominals.iter().chain(self.lexical_nominals.iter()) {
             let parameters = self
                 .nominal_parameters
@@ -20107,6 +20530,12 @@ impl ResolvedRegistry {
                     .saturating_add(imported.foreign_modules.len()),
             )
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        retain_native_symbols(&mut registry.native_symbols, &self.native_symbols, budget)?;
+        retain_native_symbols(
+            &mut registry.native_symbols,
+            &imported.native_symbols,
+            budget,
+        )?;
         for source in [&self.foreign_modules, &imported.foreign_modules] {
             for (id, fact) in source {
                 if let Some(existing) = registry.foreign_modules.get(id)
@@ -20376,6 +20805,11 @@ impl ResolvedRegistry {
             }
         }
         for module in modules {
+            retain_native_symbols(
+                &mut registry.native_symbols,
+                &module.registry().native_symbols,
+                type_work,
+            )?;
             for (id, fact) in &module.registry().foreign_modules {
                 constraint_work
                     .charge(1)
@@ -21805,37 +22239,155 @@ fn clone_resolved_type_variable_buffer_with_budget(
     Ok(cloned)
 }
 
+pub(crate) struct ResolvedEffectBuffer(pub(crate) Vec<ResolvedEffectDeclaration>);
+
+impl ResolvedEffectBuffer {
+    pub(crate) fn into_vec(mut self) -> Vec<ResolvedEffectDeclaration> {
+        std::mem::take(&mut self.0)
+    }
+}
+
+impl Drop for ResolvedEffectBuffer {
+    fn drop(&mut self) {
+        for effect in self.0.drain(..) {
+            discard_resolved_effect_iteratively(effect);
+        }
+    }
+}
+
+pub(crate) struct ResolvedEffectOperationBuffer(pub(crate) Vec<ResolvedEffectOperation>);
+
+impl ResolvedEffectOperationBuffer {
+    pub(crate) fn into_boxed_slice(mut self) -> Box<[ResolvedEffectOperation]> {
+        std::mem::take(&mut self.0).into_boxed_slice()
+    }
+}
+
+impl Drop for ResolvedEffectOperationBuffer {
+    fn drop(&mut self) {
+        for operation in self.0.drain(..) {
+            operation.annotation.discard_iteratively();
+            discard_origin_iteratively(operation.origin);
+        }
+    }
+}
+
+pub(crate) fn clone_effect_origin_with_budget(
+    origin: &Origin,
+    budget: &mut TypeWorkBudget,
+) -> Result<Origin, ()> {
+    if let Origin::Source(span) = origin {
+        // Inline source provenance is covered by the retained record charge.
+        return Ok(Origin::Source(*span));
+    }
+    enum Frame<'a> {
+        Generated(crate::source::GeneratedReason),
+        Related(&'a [Span]),
+    }
+    struct Owner(Option<Origin>);
+    impl Owner {
+        fn into_inner(mut self) -> Origin {
+            self.0.take().expect("a cloned origin transfers once")
+        }
+    }
+    impl Drop for Owner {
+        fn drop(&mut self) {
+            if let Some(origin) = self.0.take() {
+                discard_origin_iteratively(origin);
+            }
+        }
+    }
+
+    charge_retained_origin(origin, budget)?;
+    let mut frames = Vec::new();
+    let mut current = origin;
+    let source = loop {
+        match current {
+            Origin::Source(span) => break *span,
+            Origin::Generated { cause, reason } => {
+                frames.try_reserve(1).map_err(|_| ())?;
+                frames.push(Frame::Generated(*reason));
+                current = cause;
+            }
+            Origin::Related { primary, related } => {
+                frames.try_reserve(1).map_err(|_| ())?;
+                frames.push(Frame::Related(related));
+                current = primary;
+            }
+        }
+    };
+    let mut cloned = Owner(Some(Origin::Source(source)));
+    for frame in frames.into_iter().rev() {
+        let related = match frame {
+            Frame::Related(spans) => {
+                let mut related = Vec::new();
+                related.try_reserve_exact(spans.len()).map_err(|_| ())?;
+                related.extend_from_slice(spans);
+                Some(related)
+            }
+            Frame::Generated(_) => None,
+        };
+        let primary = cloned.into_inner();
+        cloned = Owner(Some(match frame {
+            Frame::Generated(reason) => Origin::Generated {
+                cause: Box::new(primary),
+                reason,
+            },
+            Frame::Related(_) => Origin::Related {
+                primary: Box::new(primary),
+                related: related.expect("a related origin retains its spans"),
+            },
+        }));
+    }
+    Ok(cloned.into_inner())
+}
+
 pub(crate) fn clone_resolved_effect_with_budget(
     effect: &ResolvedEffectDeclaration,
     budget: &mut TypeWorkBudget,
 ) -> Result<ResolvedEffectDeclaration, ()> {
-    budget.charge(effect.operations.len().saturating_add(1))?;
+    budget.charge(effect.operations.len().checked_add(1).ok_or(())?)?;
+    budget.charge(effect.spelling.len())?;
+    let spelling = try_clone_string(&effect.spelling).map_err(|_| ())?;
     let parameters = clone_resolved_type_variable_buffer_with_budget(&effect.parameters, budget)?;
-    let mut operations = Vec::new();
+    let mut operations = ResolvedEffectOperationBuffer(Vec::new());
     operations
+        .0
         .try_reserve_exact(effect.operations.len())
         .map_err(|_| ())?;
     for operation in &effect.operations {
-        operations.push(ResolvedEffectOperation {
+        budget.charge(operation.spelling.len())?;
+        let spelling = try_clone_string(&operation.spelling).map_err(|_| ())?;
+        // Stage cloned origins in an operation guard before cloning its Type,
+        // so any later refusal dismantles both earlier operations and origins.
+        operations.0.push(ResolvedEffectOperation {
             id: operation.id,
-            spelling: operation.spelling.clone(),
+            spelling,
             annotation: ResolvedType {
-                ty: clone_type_with_budget(&operation.annotation.ty, budget)?,
+                ty: Type::Unit,
                 provenance: operation.annotation.provenance.clone(),
-                origin: operation.annotation.origin.clone(),
+                origin: clone_effect_origin_with_budget(&operation.annotation.origin, budget)?,
                 span: operation.annotation.span,
             },
-            origin: operation.origin.clone(),
+            origin: Origin::Source(operation.span),
             span: operation.span,
         });
+        let cloned = operations
+            .0
+            .last_mut()
+            .expect("a cloned operation is staged");
+        cloned.origin = clone_effect_origin_with_budget(&operation.origin, budget)?;
+        cloned.annotation.ty = clone_type_with_budget(&operation.annotation.ty, budget)?;
     }
+    let origin = clone_effect_origin_with_budget(&effect.origin, budget)?;
     Ok(ResolvedEffectDeclaration {
+        native_contract: effect.native_contract.as_ref().map(Arc::clone),
         id: effect.id,
         public: effect.public,
-        spelling: effect.spelling.clone(),
+        spelling,
         parameters: parameters.into_boxed_slice(),
         operations: operations.into_boxed_slice(),
-        origin: effect.origin.clone(),
+        origin,
         span: effect.span,
     })
 }
@@ -22084,6 +22636,9 @@ pub struct ResolvedInterfaceDeclaration {
 /// One module-owned effect API after name resolution.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedEffectDeclaration {
+    /// Original source-native contract, shared with the exact registry table.
+    /// Ordinary effects and the retained manifest experiment carry no source contract.
+    pub native_contract: Option<Arc<crate::foreign::checked_source::CheckedForeignSymbol>>,
     /// Stable module-qualified effect identity.
     pub id: EffectId,
     /// Whether the complete API may be exported.
@@ -23522,6 +24077,94 @@ pub(crate) fn discard_resolved_local_declaration_iteratively(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn effect_clone_refusal_prices_text_and_discards_retained_deep_operations() {
+        std::thread::Builder::new()
+            .stack_size(96 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("effect-clone.ash", "effect").unwrap();
+                let span = source.span(ByteRange::new(0, 6).unwrap()).unwrap();
+                let effect_id = EffectId::new(ModuleId::from(source.id()), 0);
+                let operation = |index| {
+                    let mut ty = Type::Int;
+                    let mut origin = Origin::Source(span);
+                    for _ in 0..4096 {
+                        ty = Type::Application(Box::new(ty), Box::new(Type::Unit));
+                        origin = Origin::Generated {
+                            cause: Box::new(origin),
+                            reason: crate::source::GeneratedReason::TypeChecking,
+                        };
+                    }
+                    ResolvedEffectOperation {
+                        id: OperationId::new(effect_id, index),
+                        spelling: "operation".repeat(256),
+                        annotation: ResolvedType {
+                            ty: Type::Function(Box::new(Type::Unit), Box::new(ty)),
+                            provenance: ResolvedTypeProvenance::new(
+                                vec![ResolvedTypeProvenanceNode::Fact(span)],
+                                0,
+                            ),
+                            origin,
+                            span,
+                        },
+                        origin: Origin::Source(span),
+                        span,
+                    }
+                };
+                let mut originals = ResolvedEffectBuffer(vec![ResolvedEffectDeclaration {
+                    native_contract: None,
+                    id: effect_id,
+                    public: false,
+                    spelling: "effect".repeat(1024),
+                    parameters: Box::new([]),
+                    operations: vec![operation(0)].into_boxed_slice(),
+                    origin: Origin::Source(span),
+                    span,
+                }]);
+                let mut first_work = TypeWorkBudget::unbounded();
+                let first =
+                    clone_resolved_effect_with_budget(&originals.0[0], &mut first_work).unwrap();
+                discard_resolved_effect_iteratively(first);
+                let mut short_name_work = TypeWorkBudget::unbounded();
+                let spelling = std::mem::replace(&mut originals.0[0].spelling, "E".into());
+                let short_name =
+                    clone_resolved_effect_with_budget(&originals.0[0], &mut short_name_work)
+                        .unwrap();
+                discard_resolved_effect_iteratively(short_name);
+                assert_eq!(
+                    first_work.used() - short_name_work.used(),
+                    spelling.len() - 1
+                );
+                originals.0[0].spelling = spelling;
+                let mut operations = ResolvedEffectOperationBuffer(
+                    std::mem::take(&mut originals.0[0].operations).into_vec(),
+                );
+                operations.0.push(operation(1));
+                originals.0[0].operations = operations.into_boxed_slice();
+                let mut measured = TypeWorkBudget::unbounded();
+                let complete =
+                    clone_resolved_effect_with_budget(&originals.0[0], &mut measured).unwrap();
+                discard_resolved_effect_iteratively(complete);
+                // The first deep operation has been retained when the later
+                // spelling precharge refuses this partial preparation.
+                for limit in [0, first_work.used(), measured.used() - 1] {
+                    let mut refused = TypeWorkBudget::with_limit(limit);
+                    assert!(
+                        clone_resolved_effect_with_budget(&originals.0[0], &mut refused).is_err()
+                    );
+                    assert!(refused.used() <= limit);
+                }
+                let mut retry = TypeWorkBudget::with_limit(measured.used());
+                let retried =
+                    clone_resolved_effect_with_budget(&originals.0[0], &mut retry).unwrap();
+                assert_eq!(retry.used(), measured.used());
+                discard_resolved_effect_iteratively(retried);
+            })
+            .unwrap()
+            .join()
+            .expect("deep partial effect clones must dismantle iteratively");
+    }
+
     #[test]
     fn packed_builtin_type_diagnostics_preserve_their_spellings() {
         let registry = ResolvedRegistry::new(Vec::new(), Vec::new());
@@ -27409,6 +28052,7 @@ mod tests {
                 abstract_nominal_kinds,
                 provider_contracts,
                 foreign_modules,
+                native_symbols,
                 owner_definitions,
                 owner_definition_positions,
             } = registry;
@@ -27443,6 +28087,7 @@ mod tests {
                 abstract_nominal_kinds,
                 provider_contracts,
                 foreign_modules,
+                native_symbols,
                 owner_definitions,
                 owner_definition_positions,
             );
@@ -27502,6 +28147,7 @@ mod tests {
         )
         .with_type_parameters(vec![(nominal, vec![parameter])])
         .with_effects(vec![ResolvedEffectDeclaration {
+            native_contract: None,
             id: effect,
             public: false,
             spelling: "DeepEffect".into(),
@@ -33828,6 +34474,7 @@ mod tests {
             hidden_nominal_order: Vec::new(),
             canonical_representations: HashMap::new(),
             foreign_modules: std::collections::BTreeMap::new(),
+            native_symbols: HashMap::new(),
             provider_groups: std::collections::BTreeMap::new(),
             resource_types: HashMap::new(),
             resource_type_order: Vec::new(),
@@ -34253,6 +34900,7 @@ mod tests {
                     owner_definition_positions: HashMap::new(),
                     provider_contracts: std::collections::BTreeMap::new(),
                     foreign_modules: std::collections::BTreeMap::new(),
+                    native_symbols: HashMap::new(),
                 };
                 let binder = BinderId::resolved(module, 0);
                 let mut export_candidate = ResolvedExportCandidate::default();
@@ -36985,6 +37633,339 @@ pub struct ResourceForwardingBinder {
     pub binder: Binder,
     /// Generated unary operand binder.
     pub parameter: Binder,
+}
+
+#[cfg(test)]
+mod source_native_summary_tests {
+    use super::*;
+    use crate::{
+        interface::InterfaceConstraintBudget,
+        module::{ModuleRoots, load_module_graph},
+        resolve::{DependencyExports, resolve_module},
+    };
+
+    const NATIVE: &str = r#"import @builtin.foreign as Foreign
+pub foreign library C {
+    profile "x86_64-unknown-linux-gnu"
+    repr CInt = signed(32)
+    symbol Abs<Before : EffectRow, T, After : EffectRow> : Int -> Foreign.Call<Int> {
+        name "abs"
+        abi (CInt) -> CInt
+        operand 0 from 0 scalar
+        output result as scalar
+        outcome otherwise { readable result }
+    }
+    symbol Stop : Unit -> Foreign.Call<Unit> {
+        name "stop"
+        abi () -> void
+        outcome otherwise {}
+    }
+}
+"#;
+
+    fn checked_summary(facade: bool) -> ExportSummary {
+        checked_summary_and_donor(facade, false).0
+    }
+
+    fn checked_summary_and_donor(
+        facade: bool,
+        create_donor: bool,
+    ) -> (
+        ExportSummary,
+        Option<Arc<crate::foreign::checked_source::CheckedForeignSymbol>>,
+    ) {
+        static IDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        struct Directory(std::path::PathBuf);
+        impl Drop for Directory {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let directory = loop {
+            let id = IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "ash-source-native-summary-{}-{id}",
+                std::process::id()
+            ));
+            match std::fs::create_dir(&path) {
+                Ok(()) => break Directory(path),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("source-native summary fixture: {error}"),
+            }
+        };
+        let entry = directory.0.join("entry.ash");
+        if facade {
+            std::fs::write(directory.0.join("native.ash"), NATIVE).unwrap();
+            std::fs::write(&entry, "pub import native (Abs as Absolute, Stop)\n").unwrap();
+        } else {
+            std::fs::write(&entry, NATIVE).unwrap();
+        }
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+        let mut checked: Vec<CheckedModule> = Vec::new();
+        for loaded in graph.modules() {
+            let dependencies: Vec<_> = loaded
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    let dependency = checked
+                        .iter()
+                        .find(|module| module.module() == edge.target())
+                        .expect("dependency-first graph retains checked originals");
+                    DependencyExports::new(edge, dependency.exports()).unwrap()
+                })
+                .collect();
+            let resolved = resolve_module(loaded, &dependencies).unwrap();
+            checked.push(crate::elaborate::check_module(resolved).unwrap());
+        }
+        let index = checked
+            .iter()
+            .position(|module| module.module() == graph.entry())
+            .unwrap();
+        let donor = create_donor.then(|| {
+            use crate::foreign::checked_source::{ForeignBindingContext, bind_foreign_symbol};
+            let mut work = TypeWorkBudget::default();
+            let registry = ResolvedRegistry::combine_checked(
+                &checked,
+                &mut work,
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .unwrap();
+            let absolute = checked[index]
+                .exports()
+                .effect(if facade { "Absolute" } else { "Abs" })
+                .unwrap();
+            let original = absolute.native_contract.as_ref().unwrap();
+            let codec = original.call_codec();
+            let context = ForeignBindingContext::new(
+                &registry,
+                codec.module(),
+                codec.source(),
+                codec.ids(),
+                &mut work,
+            )
+            .unwrap();
+            let donor = Arc::new(
+                bind_foreign_symbol(
+                    original.library(),
+                    Arc::clone(original.prepared()),
+                    original.symbol_index(),
+                    registry.effect(absolute.id).unwrap(),
+                    &context,
+                    &mut work,
+                )
+                .unwrap(),
+            );
+            assert_eq!(original.operation(), donor.operation());
+            assert!(!Arc::ptr_eq(original, &donor));
+            donor
+        });
+        (checked.swap_remove(index).into_exports(), donor)
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum Mutation {
+        MissingTable,
+        MissingTag,
+        WrongKey,
+        ExtraEntry,
+        DonorTag,
+        DonorAllocation,
+        Signature,
+        ParameterOrder,
+        ParameterKind,
+        ParameterCount,
+        EffectSpan,
+        EffectOrigin,
+        OperationSpan,
+        OperationOrigin,
+        AnnotationSpan,
+        AnnotationOrigin,
+        AnnotationProvenance,
+        ParameterOrigin,
+        ParameterSpelling,
+    }
+
+    #[test]
+    fn checked_source_native_summaries_reject_changed_original_correspondence() {
+        for facade in [false, true] {
+            for mutation in [
+                Mutation::MissingTable,
+                Mutation::MissingTag,
+                Mutation::WrongKey,
+                Mutation::ExtraEntry,
+                Mutation::DonorTag,
+                Mutation::DonorAllocation,
+                Mutation::Signature,
+                Mutation::ParameterOrder,
+                Mutation::ParameterKind,
+                Mutation::ParameterCount,
+                Mutation::EffectSpan,
+                Mutation::EffectOrigin,
+                Mutation::OperationSpan,
+                Mutation::OperationOrigin,
+                Mutation::AnnotationSpan,
+                Mutation::AnnotationOrigin,
+                Mutation::AnnotationProvenance,
+                Mutation::ParameterOrigin,
+                Mutation::ParameterSpelling,
+            ] {
+                let (mut summary, donor) = checked_summary_and_donor(
+                    facade,
+                    matches!(mutation, Mutation::DonorAllocation),
+                );
+                summary
+                    .authenticate(
+                        &mut TypeWorkBudget::default(),
+                        &mut InterfaceConstraintBudget::default(),
+                    )
+                    .unwrap();
+                let absolute = summary
+                    .effect(if facade { "Absolute" } else { "Abs" })
+                    .unwrap()
+                    .id;
+                let stop = summary.effect("Stop").unwrap().id;
+                let position = summary.effect_positions[&absolute];
+                let operation = OperationId::new(absolute, 0);
+                match mutation {
+                    Mutation::MissingTable => summary.native_symbols.clear(),
+                    Mutation::MissingTag => summary.effects[position].native_contract = None,
+                    Mutation::WrongKey => {
+                        let symbol = summary.native_symbols.remove(&operation).unwrap();
+                        summary
+                            .native_symbols
+                            .insert(OperationId::new(absolute, 1), symbol);
+                    }
+                    Mutation::ExtraEntry => {
+                        let symbol = Arc::clone(&summary.native_symbols[&operation]);
+                        summary
+                            .native_symbols
+                            .insert(OperationId::new(absolute, 1), symbol);
+                    }
+                    Mutation::DonorTag => {
+                        summary.effects[position].native_contract = Some(Arc::clone(
+                            &summary.native_symbols[&OperationId::new(stop, 0)],
+                        ));
+                    }
+                    Mutation::DonorAllocation => {
+                        summary.effects[position].native_contract = Some(donor.unwrap());
+                    }
+                    Mutation::Signature => discard_type_iteratively(std::mem::replace(
+                        &mut summary.effects[position].operations[0].annotation.ty,
+                        Type::Function(Box::new(Type::Int), Box::new(Type::Int)),
+                    )),
+                    Mutation::ParameterOrder => summary.effects[position].parameters.swap(0, 2),
+                    Mutation::ParameterKind => {
+                        summary.effects[position].parameters[0].kind = Kind::Type
+                    }
+                    Mutation::ParameterCount => {
+                        let parameters = std::mem::take(&mut summary.effects[position].parameters);
+                        let mut parameters = parameters.into_vec();
+                        discard_resolved_type_variable(parameters.pop().unwrap());
+                        summary.effects[position].parameters = parameters.into_boxed_slice();
+                    }
+                    Mutation::EffectSpan => {
+                        summary.effects[position].span =
+                            summary.effects[position].operations[0].annotation.span;
+                    }
+                    Mutation::EffectOrigin => {
+                        let replacement =
+                            Origin::Source(summary.effects[position].operations[0].annotation.span);
+                        discard_origin_iteratively(std::mem::replace(
+                            &mut summary.effects[position].origin,
+                            replacement,
+                        ));
+                    }
+                    Mutation::OperationSpan => {
+                        summary.effects[position].operations[0].span =
+                            summary.effects[position].operations[0].annotation.span;
+                    }
+                    Mutation::OperationOrigin => {
+                        let replacement =
+                            Origin::Source(summary.effects[position].operations[0].annotation.span);
+                        discard_origin_iteratively(std::mem::replace(
+                            &mut summary.effects[position].operations[0].origin,
+                            replacement,
+                        ));
+                    }
+                    Mutation::AnnotationSpan => {
+                        summary.effects[position].operations[0].annotation.span =
+                            summary.effects[position].span;
+                    }
+                    Mutation::AnnotationOrigin => {
+                        let replacement = Origin::Source(summary.effects[position].span);
+                        discard_origin_iteratively(std::mem::replace(
+                            &mut summary.effects[position].operations[0].annotation.origin,
+                            replacement,
+                        ));
+                    }
+                    Mutation::AnnotationProvenance => {
+                        let annotation = &mut summary.effects[position].operations[0].annotation;
+                        annotation.provenance = ResolvedTypeProvenance::new(
+                            vec![ResolvedTypeProvenanceNode::Fact(annotation.span)],
+                            0,
+                        );
+                    }
+                    Mutation::ParameterOrigin => {
+                        let replacement = Origin::Source(summary.effects[position].span);
+                        discard_origin_iteratively(std::mem::replace(
+                            &mut summary.effects[position].parameters[0].origin,
+                            replacement,
+                        ));
+                    }
+                    Mutation::ParameterSpelling => {
+                        summary.effects[position].parameters[0].spelling = "Changed".to_owned();
+                    }
+                }
+                assert!(
+                    matches!(
+                        summary.authenticate(
+                            &mut TypeWorkBudget::default(),
+                            &mut InterfaceConstraintBudget::default(),
+                        ),
+                        Err(ResolvedBuildFailure::InvalidState)
+                    ),
+                    "{mutation:?}, facade={facade} must reject before import retention"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn checked_source_native_summary_authentication_has_exact_retryable_work() {
+        let summary = checked_summary(true);
+        let absolute = summary.effect("Absolute").unwrap();
+        assert_ne!(absolute.id.module(), summary.module());
+        let original = Arc::clone(absolute.native_contract.as_ref().unwrap());
+        let mut measured = TypeWorkBudget::default();
+        summary
+            .authenticate(&mut measured, &mut InterfaceConstraintBudget::default())
+            .unwrap();
+        let exact = measured.used();
+        for limit in [0, exact - 1] {
+            let mut short = TypeWorkBudget::with_limit(limit);
+            assert!(matches!(
+                summary.authenticate(&mut short, &mut InterfaceConstraintBudget::default(),),
+                Err(ResolvedBuildFailure::TypeResource)
+            ));
+            assert!(short.used() <= limit);
+        }
+        for _ in 0..2 {
+            let mut fresh = TypeWorkBudget::with_limit(exact);
+            summary
+                .authenticate(&mut fresh, &mut InterfaceConstraintBudget::default())
+                .unwrap();
+            assert_eq!(fresh.used(), exact);
+            assert!(Arc::ptr_eq(
+                summary
+                    .effect("Absolute")
+                    .unwrap()
+                    .native_contract
+                    .as_ref()
+                    .unwrap(),
+                &original,
+            ));
+        }
+    }
 }
 
 #[cfg(test)]

@@ -1348,10 +1348,10 @@ fn canonical_registered_effect_and_state_lookups_charge_empty_and_wide_inventori
     };
     let mut measured = TypeWorkBudget::unbounded();
     assert!(!run(&empty, ordinary, &mut measured).unwrap());
-    assert_eq!(measured.used(), 0);
+    assert_eq!(measured.used(), 1); // Exact source-native operation lookup.
     assert!(!run(&narrow_registry, ordinary, &mut measured).unwrap());
-    assert_eq!(measured.used(), 3); // One canonical SQLite module, two effects.
-    let expected = MODULES * (1 + EFFECTS) + 3;
+    assert_eq!(measured.used(), 5); // Two lookups; one SQLite module, two effects.
+    let expected = 1 + MODULES * (1 + EFFECTS) + 3;
     for (target, membership) in [(ordinary, false), (last_native, true)] {
         let mut measured = TypeWorkBudget::unbounded();
         assert_eq!(
@@ -1469,7 +1469,7 @@ fn canonical_registered_effect_and_state_lookups_charge_empty_and_wide_inventori
         }
     }
     eprintln!(
-        "registered effect lookup empty=0 narrow=3 wide={expected}; state lookup empty=0 narrow=3 wide={state_expected}; wide actual entry={cost}"
+        "registered effect lookup empty=1 narrow=4 wide={expected}; state lookup empty=0 narrow=3 wide={state_expected}; wide actual entry={cost}"
     );
 }
 

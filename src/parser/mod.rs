@@ -44,6 +44,38 @@ pub enum NodeKind {
     ModulePath,
     /// One selected public spelling and its optional local alias.
     ImportItem,
+    /// One passive source-authored foreign library.
+    ForeignLibrary,
+    /// One structured foreign member.
+    ForeignMember,
+    /// One admitted representation spelling before semantic checking.
+    ForeignRepresentation,
+    /// One local or module-qualified foreign member reference.
+    ForeignReference,
+    /// An optionally signed arbitrary-precision foreign literal.
+    ForeignInteger,
+    /// One dotted source operand path.
+    ForeignSourcePosition,
+    /// An ABI argument position or result.
+    ForeignNativePosition,
+    /// One native operand, including a private output slot.
+    ForeignAbiOperand,
+    /// A member, void result, or pointer representation.
+    ForeignAbiRepresentation,
+    /// One explicit call-contract clause.
+    ForeignCallContract,
+    /// One source-to-ABI operand role.
+    ForeignOperandRole,
+    /// One native output role.
+    ForeignOutputRole,
+    /// One total-outcome alternative test.
+    ForeignOutcomeTest,
+    /// One raw status or nullness predicate.
+    ForeignOutcomeAtom,
+    /// One initialization or ownership outcome fact.
+    ForeignOutcomeFact,
+    /// One temporary input discipline.
+    ForeignInputDiscipline,
     /// A nominal type declaration.
     TypeDeclaration,
     /// A representation-preserving nominal declaration.
@@ -937,6 +969,7 @@ fn retained_token(kind: &TokenKind) -> FoundToken {
         TokenKind::Equal => FoundToken::Spelling("="),
         TokenKind::EqualEqual => FoundToken::Spelling("=="),
         TokenKind::Plus => FoundToken::Spelling("+"),
+        TokenKind::Minus => FoundToken::Spelling("-"),
         TokenKind::Star => FoundToken::Spelling("*"),
         TokenKind::Arrow => FoundToken::Spelling("->"),
         TokenKind::FatArrow => FoundToken::Spelling("=>"),

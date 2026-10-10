@@ -127,7 +127,7 @@ call_contract ::= "operand" native_position "from" source_position operand_role
   | "operand" native_position "from" "constant" member_reference
   | "operand" native_position "from" "null"
   | "output" native_position "as" output_role
-  | "outcome" outcome_test "{" outcome_fact { "," outcome_fact } "}"
+  | "outcome" outcome_test "{" [ outcome_fact { "," outcome_fact } ] "}"
   | "retained_dependents" "block" ;
 operand_role ::= "scalar" | "current" | "enclosing" | "view"
   | "bytes" "(" source_position ")" input_discipline
@@ -409,6 +409,12 @@ finish or client access. A consumed reply invalidates every same-owner view
 and alias immediately. Still-live enclosing dependencies remain available for
 diagnostics after statement consumption. A blocked-dependent result permits
 no native access to the blocked owner; source maps its own independent error.
+
+A zero-argument `void` call has no native output or ownership facts. Its total
+rule is `outcome otherwise {}`; after return the bridge constructs Ash `Unit`
+without reading a native result. Empty fact lists are permitted syntactically,
+but checking still requires every fact needed by an output or owner transition.
+This grammar correction was accepted on 2026-10-10; it adds no value type.
 
 Output slots are initialized to zero/null before the call and never exposed as
 Ash addresses. The callee's outcome contract authorizes reading each result.

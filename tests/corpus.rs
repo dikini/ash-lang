@@ -300,10 +300,10 @@ const INVALID_CASES: &[InvalidCase] = &[
     InvalidCase {
         id: "excluded-negative-literal",
         path: "tests/fixtures/first-stratum/parse/excluded-negative-literal.ash",
-        stage: Stage::Lexical,
-        reason: ExpectedReason::Lexical {
-            lexical: &[LexReason::NegativeLiteral],
-            parser: &[],
+        stage: Stage::Parser,
+        reason: ExpectedReason::Parser {
+            parser: &[ParseReason::UnexpectedToken],
+            lexical: &[],
         },
     },
     InvalidCase {
@@ -919,7 +919,6 @@ fn a_complete_module_retains_an_independent_lexical_failure() {
 #[test]
 fn a_lexically_rejected_line_after_complete_declarations_has_only_its_lexical_reason() {
     for (line, expected) in [
-        ("-1\n", LexReason::NegativeLiteral),
         ("café\n", LexReason::UnicodeIdentifier),
         ("01\n", LexReason::InvalidIntegerLiteral),
     ] {
@@ -972,7 +971,6 @@ fn a_lexically_rejected_tail_does_not_create_a_parser_diagnostic() {
 #[test]
 fn a_lexically_rejected_definition_tail_does_not_create_a_parser_diagnostic() {
     for (tail, expected) in [
-        ("-1", LexReason::NegativeLiteral),
         ("café", LexReason::UnicodeIdentifier),
         ("01", LexReason::InvalidIntegerLiteral),
     ] {
@@ -992,5 +990,35 @@ fn a_lexically_rejected_definition_tail_does_not_create_a_parser_diagnostic() {
             vec![expected]
         );
         assert!(actual.parser.is_empty(), "tail: {tail:?}");
+    }
+}
+
+#[test]
+fn ordinary_negative_literal_signs_fail_at_the_parser_boundary() {
+    for (text, expected) in [
+        (
+            "identity : Int -> Int\nidentity value = value\n\n-1\n",
+            ParseReason::UnexpectedToken,
+        ),
+        (
+            "identity : Int -> Int\nidentity value = value -1\n",
+            ParseReason::ExpectedForm,
+        ),
+    ] {
+        let source = TempSource::write(text);
+        let failure =
+            run(source.0.clone()).expect_err("ordinary negative literals must not execute");
+        let Some(LoadGraphError::Syntax(actual)) = failure.graph_failure() else {
+            panic!("the negative literal should fail in the syntax pipeline");
+        };
+        assert!(actual.lexical.is_empty());
+        assert_eq!(
+            actual
+                .parser
+                .iter()
+                .map(|item| item.reason)
+                .collect::<Vec<_>>(),
+            vec![expected]
+        );
     }
 }

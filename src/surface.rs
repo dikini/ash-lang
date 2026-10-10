@@ -2,6 +2,20 @@
 
 use crate::{integer::Integer, source::Span};
 
+mod foreign;
+pub use foreign::{
+    SurfaceForeignAbiOperand, SurfaceForeignAbiRepresentation, SurfaceForeignAccess,
+    SurfaceForeignConstant, SurfaceForeignContract, SurfaceForeignExtent,
+    SurfaceForeignInputDiscipline, SurfaceForeignInteger, SurfaceForeignLibrary,
+    SurfaceForeignMember, SurfaceForeignNativePosition, SurfaceForeignOperandRole,
+    SurfaceForeignOperandRoleKind, SurfaceForeignOperandSource, SurfaceForeignOutcomeAtom,
+    SurfaceForeignOutcomeCondition, SurfaceForeignOutcomeFact, SurfaceForeignOutcomeFactKind,
+    SurfaceForeignOutcomeTest, SurfaceForeignOutputRole, SurfaceForeignOutputRoleKind,
+    SurfaceForeignOwner, SurfaceForeignProfile, SurfaceForeignReference,
+    SurfaceForeignRepresentation, SurfaceForeignRepresentationDeclaration, SurfaceForeignSentinel,
+    SurfaceForeignSourcePosition, SurfaceForeignString, SurfaceForeignSymbol,
+};
+
 /// One parsed Ash module source.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SurfaceModule {
@@ -9,6 +23,8 @@ pub struct SurfaceModule {
     pub imports: Vec<SurfaceImport>,
     /// Cross-family declaration order using category-local indices.
     pub declaration_order: Vec<SurfaceDeclarationIndex>,
+    /// Passive source-authored foreign libraries in source order.
+    pub foreign_libraries: Vec<SurfaceForeignLibrary>,
     /// Nominal type declarations in source order.
     pub type_declarations: Vec<SurfaceTypeDeclaration>,
     /// Interface declarations in source order.
@@ -28,6 +44,8 @@ pub struct SurfaceModule {
 /// One source declaration's category and category-local position.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SurfaceDeclarationIndex {
+    /// A passive foreign-library declaration.
+    ForeignLibrary(usize),
     /// An experimental source resource assembly.
     Resource(usize),
     /// A nominal type declaration.

@@ -7,6 +7,7 @@ use std::{
 };
 
 use ash::{
+    build::{BuildConfiguration, build_path},
     driver::{FileFailure, Observation, PipelineFailure, RunConfiguration, run_path},
     module::{LoadGraphError, ModuleRoots},
     render,
@@ -70,7 +71,7 @@ where
         );
         return 2;
     }
-    let configuration = match configuration(selected.program_arguments) {
+    let invocation = match invocation(selected.program_arguments) {
         Ok(configuration) => configuration,
         Err(ConfigurationFailure::Usage) => {
             let _ = presentation::write_compile_diagnostic(
@@ -85,6 +86,19 @@ where
             let failure = FileFailure::Graph(LoadGraphError::Module(failure).into());
             let _ = report_selected_failure(stderr, &failure, format, catalogue.as_ref(), None);
             return 2;
+        }
+    };
+    let configuration = match invocation {
+        Invocation::Run(configuration) => configuration,
+        Invocation::Build(source, configuration) => {
+            return execute_build(
+                source,
+                configuration,
+                stdout,
+                stderr,
+                format,
+                catalogue.as_ref(),
+            );
         }
     };
     let runtime_messages = catalogue
@@ -123,6 +137,52 @@ where
             } else {
                 2
             }
+        }
+    }
+}
+
+fn execute_build(
+    source: RunConfiguration,
+    configuration: BuildConfiguration,
+    stdout: &mut impl Write,
+    stderr: &mut impl Write,
+    format: ash::diagnostic_options::MessageFormat,
+    catalogue: Option<&ash::message::Catalogue>,
+) -> u8 {
+    match build_path(source, configuration) {
+        Ok(built) => {
+            if writeln!(stdout, "{}", built.executable().display())
+                .and_then(|()| stdout.flush())
+                .is_ok()
+            {
+                0
+            } else {
+                let _ = ash::presentation::write_compile_diagnostic(
+                    stderr,
+                    &ash::presentation::compile_output_write_diagnostic(),
+                    format,
+                    catalogue,
+                );
+                2
+            }
+        }
+        Err(failure) => {
+            if let Some(source) = failure.source_failure() {
+                let status = if source.is_source_rejection() { 1 } else { 2 };
+                return if report_selected_failure(stderr, source, format, catalogue, None).is_ok() {
+                    status
+                } else {
+                    2
+                };
+            }
+            let detail = failure.to_string();
+            let _ = ash::presentation::write_compile_diagnostic(
+                stderr,
+                &ash::presentation::compile_build_diagnostic(&failure, &detail),
+                format,
+                catalogue,
+            );
+            2
         }
     }
 }
@@ -170,6 +230,69 @@ fn write_output(writer: &mut impl Write, output: &[u8]) -> io::Result<()> {
 enum ConfigurationFailure {
     Usage,
     Roots(ash::module::ModuleFailure),
+}
+
+enum Invocation {
+    Run(RunConfiguration),
+    Build(RunConfiguration, BuildConfiguration),
+}
+
+fn invocation(arguments: Vec<OsString>) -> Result<Invocation, ConfigurationFailure> {
+    if arguments.first().is_none_or(|argument| argument != "build") {
+        return configuration(arguments).map(Invocation::Run);
+    }
+    let mut arguments = arguments.into_iter().skip(1);
+    let mut source_arguments = Vec::new();
+    let mut output = None;
+    let mut target = None;
+    let mut cache = None;
+    let mut entry_seen = false;
+    while let Some(argument) = arguments.next() {
+        if entry_seen {
+            return Err(ConfigurationFailure::Usage);
+        }
+        match argument.to_str() {
+            Some("--output") => {
+                let path = arguments.next().ok_or(ConfigurationFailure::Usage)?;
+                if output.replace(PathBuf::from(path)).is_some() {
+                    return Err(ConfigurationFailure::Usage);
+                }
+            }
+            Some("--target") => {
+                let value = arguments.next().ok_or(ConfigurationFailure::Usage)?;
+                let value = value
+                    .into_string()
+                    .map_err(|_| ConfigurationFailure::Usage)?;
+                if target.replace(value).is_some() {
+                    return Err(ConfigurationFailure::Usage);
+                }
+            }
+            Some("--cargo-target-dir") => {
+                let path = arguments.next().ok_or(ConfigurationFailure::Usage)?;
+                if cache.replace(PathBuf::from(path)).is_some() {
+                    return Err(ConfigurationFailure::Usage);
+                }
+            }
+            Some("--root") => {
+                source_arguments.push(argument);
+                source_arguments.push(arguments.next().ok_or(ConfigurationFailure::Usage)?);
+            }
+            _ if argument.as_encoded_bytes().starts_with(b"--") => {
+                return Err(ConfigurationFailure::Usage);
+            }
+            _ => {
+                source_arguments.push(argument);
+                entry_seen = true;
+            }
+        }
+    }
+    let source = configuration(source_arguments)?;
+    let mut build = BuildConfiguration::new(output.ok_or(ConfigurationFailure::Usage)?);
+    if let Some(target) = target {
+        build.target = target;
+    }
+    build.cargo_target_directory = cache;
+    Ok(Invocation::Build(source, build))
 }
 
 fn configuration<I>(arguments: I) -> Result<RunConfiguration, ConfigurationFailure>

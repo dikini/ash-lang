@@ -51,6 +51,39 @@ The evaluator and private Core stay the execution engine. Bridge generation
 replaces the experiment's handwritten executable adapters; header verification
 is optional and cannot repair missing source contracts.
 
+Standalone Core reconstruction needs original source provenance, registry and
+method catalogs in addition to nodes. Capture those inputs while the canonical
+compiler owns the admitted graph; reopening source paths after compilation can
+read changed files. Reconstruction must preserve shared original contract
+allocations and then invoke the existing independent modular validator. Recursive
+serialization of Core alone would lose authority and safe traversal properties.
+
+The initial private construction carrier explicitly refuses unsupported registry
+and method facts instead of dropping them. Flat records reconstruct unchecked
+Core with fresh identities, then invoke the existing modular validator. Decode,
+reconstruction and independent validation share one cumulative bounded meter;
+generated startup performs no source checking. The matching-runtime identity
+includes compiler/runtime sources, package dependencies, target, enabled features
+and Rust toolchain inputs. Generated hosts must preserve dependency versions and
+features as well as the admitted program data.
+
+Program preparation owns its generated host inputs and native configuration.
+Linking consumes that completed phase, rather than encoding or checking the
+source graph again. Generated source and tool logs remain reviewable; executable
+publication follows successful linking. The first carrier is a bounded Pure
+subset, not completion of Effect/foreign builds or the library deliveries.
+
+Core builder payload admission is part of reconstruction work. Lending the
+same cumulative meter to builder operations preserves both prior charges and
+failed-operation charges; a fresh builder allowance would hide that work.
+The image path also reserves its exact node and materialized-binder storage
+fallibly before construction, rather than relying on vector/set growth.
+
+Generated Cargo profiles must preserve compiler feature, optimization, panic and
+assertion settings. The emitted host checks its baked runtime identity in a Rust
+constant assertion as well as at startup. This prevents successful linking from
+publishing a host whose dependency configuration rejects the admitted image.
+
 ## Deviations
 
 None authorized. Return concrete semantic gaps to CP-0022 instead of resolving

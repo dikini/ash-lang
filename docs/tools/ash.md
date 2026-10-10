@@ -10,6 +10,47 @@ The invocation requires exactly one entry path. Every `--root` option must
 precede that path. The executable reads UTF-8 Ash source files and does not read
 a program from standard input.
 
+## Building an executable
+
+The initial program-build path supports monomorphic Pure Core on Linux x86-64
+GNU. It compiles the source graph once and generates a Rust host containing
+private Core construction data and the existing evaluator:
+
+```text
+ash build --output ./program [--target TARGET] [--cargo-target-dir PATH] entry.ash
+./program
+```
+
+The target is `x86_64-unknown-linux-gnu`. Repeatable `--root name=path` options
+configure imports as in ordinary execution. Diagnostic options may precede
+`build` or follow it, before the entry path.
+Build options must precede the entry path; `--output` is required exactly once.
+Success prints the executable's absolute path. The resulting program prints its
+result value on one line. It can run after the original Ash source files are
+removed. Startup reconstructs fresh Core identities, independently validates
+the construction data, and invokes the evaluator without source compilation.
+
+Building requires the matching Ash checkout, Rust toolchain and cached Cargo
+dependencies. Native tools run offline with one build job. `--cargo-target-dir`
+selects a reusable build cache; otherwise the tool uses `CARGO_TARGET_DIR` or a
+cache inside the generated project. Generated Rust, its manifest and the native
+tool log remain in a fresh `.ash-build` directory beside the requested output.
+Failed linking preserves an existing output executable. A compiler/runtime
+configuration mismatch rejects during Rust compilation, before publication;
+startup checks compatibility again.
+
+This first carrier refuses Effect programs, foreign execution, method evidence,
+polymorphic or lexical type declarations, newtype conversion, intrinsics and
+integer literal payloads outside signed 64-bit range. Evaluated Ash integer
+arithmetic retains its existing semantics. These are build-path limitations;
+they do not change ordinary `ash entry.ash` execution. Native bridge linking and
+the three library migrations remain work in the `ffi-ash` milestone.
+
+The Rust API separates `driver::compile_path`, `build::prepare_program` and
+`build::build_prepared`. The prepared phase owns generated inputs and is
+consumed by linking. Reusable compiled programs retain their original source
+provenance; preparation does not reopen those source paths.
+
 ## Diagnostic formats and locales
 
 Diagnostics use human-readable explanations by default. Explicit options select
@@ -56,8 +97,8 @@ once.
 `import @builtin.cell as Cell` loads the compiler-owned cell API without a
 `--root` option or filesystem lookup. `builtin` cannot be configured as a root:
 `--root builtin=path` reports `invocation.reserved-root` before inspecting
-configured paths. `@builtin.cell` and `@builtin.native_buffer` are the fixed
-modules beneath this root; another path
+configured paths. `@builtin.cell`, `@builtin.native_buffer` and
+`@builtin.foreign` are the fixed modules beneath this root; another path
 reports `module.unknown-builtin`. Ordinary aliases, targeted imports and
 facade re-exports preserve the API's identity, but a module that acquires a
 resource must directly import its selected builtin module.
@@ -450,7 +491,7 @@ global that uses it at two unrelated instantiations:
 
 ```ash
 pub interface Functor<F : Type -> Type> {
-map<A, B> : (A -> B, F<A>) -> F<B>
+    map<A, B> : (A -> B, F<A>) -> F<B>
 }
 
 to_bool : Int -> Bool
@@ -472,7 +513,7 @@ pub import api (Functor, map)
 pub type Box<A> = Box(A)
 
 pub impl Functor<Box> {
-map (function, Box(value)) = Box(function(value))
+    map (function, Box(value)) = Box(function(value))
 }
 ```
 

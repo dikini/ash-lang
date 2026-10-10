@@ -1133,7 +1133,8 @@ runtime-label-requested = Requested additional units
 runtime-label-available = Available additional units
 runtime-label-teardown = First teardown failure
 runtime-label-cleanup = Cleanup status
-invocation-usage = Expected: ash [--message-format human|short|json] [--locale NAME] [--root name=path]... <entry-file>. Options must precede the entry file; format and locale may each be supplied only once.
+invocation-usage = Expected: ash [--message-format human|short|json] [--locale NAME] [--root name=path]... <entry-file>, or ash build --output FILE [--target TARGET] [--cargo-target-dir PATH] [--root name=path]... <entry-file>. Options must precede the entry file and may be supplied only once, except roots.
+build-failure = Ash could not build the native program: { $detail }.
 output-write = Ash could not write the program result to standard output.
 resolve-dependency-summary-mismatch = The compiler received incomplete or mismatched checked information for this module's imports.
 resolve-dependency-summary-invalid = The compiler could not validate the checked information for this imported module.

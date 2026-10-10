@@ -106,6 +106,8 @@ pub enum TokenKind {
     EqualEqual,
     /// `+`.
     Plus,
+    /// `-`, admitted only as a foreign literal sign by the parser.
+    Minus,
     /// `*`.
     Star,
     /// `->`.

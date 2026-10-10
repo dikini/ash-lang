@@ -1,7 +1,11 @@
 //! Process-level regression coverage for the experimental observer's limits.
 #![cfg(feature = "resource-calibration")]
 
-use std::{path::Path, process::Command};
+use std::{
+    io::Write,
+    path::Path,
+    process::{Command, Stdio},
+};
 
 use ash::compiler_work::CompilationPhase;
 use serde_json::Value;
@@ -24,6 +28,51 @@ fn records(output: &std::process::Output) -> Vec<Value> {
         .filter_map(|line| line.strip_prefix("ASH_CALIBRATION "))
         .map(|json| serde_json::from_str(json).unwrap())
         .collect()
+}
+
+fn consume_calibration_logs(output: &std::process::Output) -> Value {
+    let mut child = Command::new("python3")
+        .arg("-B")
+        .arg("-c")
+        .arg(
+            r#"
+import json, pathlib, sys, tempfile
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]) / 'tools'))
+import resource_calibration as calibration
+logs = json.load(sys.stdin)
+with tempfile.TemporaryDirectory() as directory:
+    stdout, stderr = (pathlib.Path(directory) / name for name in ('stdout', 'stderr'))
+    stdout.write_text(logs['stdout'])
+    stderr.write_text(logs['stderr'])
+    current = calibration.records_from_logs(stdout, stderr, True, calibration.PHASES)
+    legacy_lines = []
+    for line in logs['stderr'].splitlines():
+        position = line.find(calibration.PREFIX)
+        if position >= 0:
+            record = json.loads(line[position + len(calibration.PREFIX):])
+            if record.get('phase') == 'compilation':
+                continue
+        legacy_lines.append(line)
+    stderr.write_text('\n'.join(legacy_lines))
+    legacy = calibration.records_from_logs(stdout, stderr, True, calibration.PHASES)
+    print(json.dumps({'current': current, 'legacy': legacy}))
+"#,
+        )
+        .arg(env!("CARGO_MANIFEST_DIR"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the calibration consumer requires Python 3");
+    let input = serde_json::to_vec(&serde_json::json!({
+        "stdout": String::from_utf8_lossy(&output.stdout),
+        "stderr": String::from_utf8_lossy(&output.stderr),
+    }))
+    .unwrap();
+    child.stdin.take().unwrap().write_all(&input).unwrap();
+    let result = child.wait_with_output().unwrap();
+    assert!(result.status.success(), "{:?}", result.stderr);
+    serde_json::from_slice(&result.stdout).unwrap()
 }
 
 #[test]
@@ -84,6 +133,7 @@ fn pure_and_effect_observation_preserve_results_and_report_selected_capacities_o
                 "linked-interface",
                 "final-elaboration",
                 "independent-effect-core",
+                "compilation",
                 "evaluation",
                 "pipeline",
             ] {
@@ -101,6 +151,21 @@ fn pure_and_effect_observation_preserve_results_and_report_selected_capacities_o
                     .iter()
                     .all(|record| { record["event"] != "phase" || record["completed"] == true })
             );
+            if base.is_none() {
+                let consumed = consume_calibration_logs(&on);
+                let current = &consumed["current"];
+                assert_eq!(current["complete"], true, "{}", current["errors"]);
+                assert_eq!(current["phases"]["compilation"]["endpoint_count"], 1);
+                assert_eq!(current["phases"]["compilation"]["completed_count"], 1);
+                let work = current["work"].as_object().unwrap();
+                assert_eq!(work.len(), 6);
+                assert!(!work.contains_key("compilation"));
+                // Historical traces precede the containing compilation timer.
+                let legacy = &consumed["legacy"];
+                assert_eq!(legacy["complete"], true, "{}", legacy["errors"]);
+                assert!(legacy["phases"].get("compilation").is_none());
+                assert_eq!(legacy["work"], current["work"]);
+            }
         }
     }
 }

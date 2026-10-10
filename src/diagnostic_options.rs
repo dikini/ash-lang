@@ -54,6 +54,7 @@ impl DiagnosticOptions {
         let mut arguments = arguments.into_iter().peekable();
         let mut program_arguments = Vec::new();
         let mut entry_seen = false;
+        let mut build = false;
         let mut invalid_options = false;
         let mut format_count = 0_usize;
         let mut locale_count = 0_usize;
@@ -91,10 +92,20 @@ impl DiagnosticOptions {
                 } else {
                     explicit_locale = Some(value);
                 }
-            } else if argument == "--root" && !entry_seen {
+            } else if argument == "build" && !entry_seen && !build {
+                build = true;
                 program_arguments.push(argument);
-                // Preserve the existing root grammar: its next argument is a
-                // root specification, even if it resembles a diagnostic option.
+            } else if !entry_seen
+                && (argument == "--root"
+                    || build
+                        && matches!(
+                            argument.to_str(),
+                            Some("--output" | "--target" | "--cargo-target-dir")
+                        ))
+            {
+                program_arguments.push(argument);
+                // Program option values belong to their command parser, even
+                // when they resemble a diagnostic option.
                 if let Some(specification) = arguments.next() {
                     program_arguments.push(specification);
                 }
