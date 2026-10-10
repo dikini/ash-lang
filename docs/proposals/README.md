@@ -19,7 +19,9 @@ Use [the template](template.md) and allocate the next `CP-NNNN` ID.
 
 ## Proposed changes
 
-No proposed semantic transition is awaiting acceptance.
+- [CP-0022: Ash-authored foreign interfaces](CP-0022-ash-authored-foreign-interfaces.md)
+  proposes the bounded `ffi-ash` transition. Review and acceptance precede
+  implementation tasks.
 
 ## Accepted changes
 
