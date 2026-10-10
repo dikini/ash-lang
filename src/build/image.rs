@@ -1118,14 +1118,39 @@ struct Decoder<'a> {
 // embedded byte sequence nor its numeric tags promise compatibility.
 const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x04";
 
+enum WireOutput<'a> {
+    Encoded(Vec<u8>),
+    Expected { bytes: &'a [u8], offset: usize },
+}
+
 struct WireWriter<'a> {
-    bytes: Vec<u8>,
+    output: WireOutput<'a>,
     work: &'a mut TypeWorkBudget,
 }
 
 impl WireWriter<'_> {
     fn bytes(&mut self, bytes: &[u8]) -> Result<(), ImageFailure> {
-        append(&mut self.bytes, bytes, self.work)?;
+        match &mut self.output {
+            WireOutput::Encoded(encoded) => {
+                append(encoded, bytes, self.work)?;
+            }
+            WireOutput::Expected {
+                bytes: expected,
+                offset,
+            } => {
+                // Compare the same canonical wire chunks without allocating a
+                // duplicate encoding. Charge before inspecting their bytes.
+                charge(self.work, bytes.len())?;
+                let end = offset
+                    .checked_add(bytes.len())
+                    .ok_or(ImageFailure::Resource)?;
+                index(end)?;
+                if expected.get(*offset..end) != Some(bytes) {
+                    return Err(ImageFailure::InvalidRecord);
+                }
+                *offset = end;
+            }
+        }
         Ok(())
     }
 
@@ -1689,12 +1714,45 @@ impl PureImage {
         executable: bool,
     ) -> Result<Vec<u8>, ImageFailure> {
         let mut writer = WireWriter {
-            bytes: Vec::new(),
+            output: WireOutput::Encoded(Vec::new()),
             work,
         };
+        self.write_selected_tables(&mut writer, executable)?;
+        match writer.output {
+            WireOutput::Encoded(bytes) => Ok(bytes),
+            WireOutput::Expected { .. } => Err(ImageFailure::InvalidRecord),
+        }
+    }
+
+    fn compare_native_expectations(
+        &self,
+        expected: &[u8],
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ImageFailure> {
+        let mut writer = WireWriter {
+            output: WireOutput::Expected {
+                bytes: expected,
+                offset: 0,
+            },
+            work,
+        };
+        self.write_selected_tables(&mut writer, false)?;
+        // Matching every emitted chunk also requires no trailing expected data.
+        charge(writer.work, 1)?;
+        match writer.output {
+            WireOutput::Expected { bytes, offset } if offset == bytes.len() => Ok(()),
+            _ => Err(ImageFailure::InvalidRecord),
+        }
+    }
+
+    fn write_selected_tables(
+        &self,
+        writer: &mut WireWriter<'_>,
+        executable: bool,
+    ) -> Result<(), ImageFailure> {
         writer.bytes(PRIVATE_MAGIC)?;
-        self.effect_dialect.write(&mut writer)?;
-        index(self.bytes.len())?.write(&mut writer)?;
+        self.effect_dialect.write(writer)?;
+        index(self.bytes.len())?.write(writer)?;
         writer.bytes(&self.bytes)?;
         writer.table(&self.sources)?;
         writer.table(&self.spans)?;
@@ -1746,8 +1804,8 @@ impl PureImage {
         } else {
             &[]
         })?;
-        (if executable { self.root } else { 0 }).write(&mut writer)?;
-        Ok(writer.bytes)
+        (if executable { self.root } else { 0 }).write(writer)?;
+        Ok(())
     }
 
     pub(crate) fn decode_bytes(
@@ -2490,6 +2548,44 @@ mod tests {
             image.encode_bytes(&mut TypeWorkBudget::with_limit(wire_work.used() - 1)),
             Err(ImageFailure::Resource)
         ));
+        // Independent native facts use the same canonical wire traversal.
+        // Comparison pays each byte once, with no throwaway encoded allocation.
+        let expected = image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        let comparison_cost = expected.len() + 1;
+        let mut comparison = TypeWorkBudget::with_limit(comparison_cost);
+        image
+            .compare_native_expectations(&expected, &mut comparison)
+            .unwrap();
+        assert_eq!(comparison.used(), comparison_cost);
+        let mut prefixed = TypeWorkBudget::with_limit(comparison_cost + 37);
+        prefixed.charge(37).unwrap();
+        image
+            .compare_native_expectations(&expected, &mut prefixed)
+            .unwrap();
+        assert_eq!(prefixed.used(), comparison_cost + 37);
+        assert!(matches!(
+            image.compare_native_expectations(
+                &expected,
+                &mut TypeWorkBudget::with_limit(comparison_cost - 1)
+            ),
+            Err(ImageFailure::Resource)
+        ));
+        let mut trailing_expected = expected.clone();
+        trailing_expected.push(0);
+        let mut altered_expected = expected.clone();
+        *altered_expected.last_mut().unwrap() ^= 1;
+        for invalid in [
+            &expected[..expected.len() - 1],
+            trailing_expected.as_slice(),
+            altered_expected.as_slice(),
+        ] {
+            assert!(matches!(
+                image.compare_native_expectations(invalid, &mut TypeWorkBudget::default()),
+                Err(ImageFailure::InvalidRecord)
+            ));
+        }
         drop(image);
         let mut decode_work = TypeWorkBudget::default();
         let image = PureImage::decode_bytes(&bytes, &mut decode_work)
@@ -2603,6 +2699,220 @@ mod tests {
             corrupt.restore(&mut TypeWorkBudget::default()),
             Err(ImageFailure::Validation(_))
         ));
+    }
+
+    #[test]
+    fn private_structural_wire_preserves_type_depth_and_rejects_mixed_children() {
+        const LIMIT: usize = crate::core::CORE_PAYLOAD_DEPTH_LIMIT;
+        let source = SourceFile::new("structural-wire.ash", "()").unwrap();
+        let module = ModuleId::from(source.id());
+        let modules = [module];
+
+        // Only construction shape is under test. Final registry/kind/Core
+        // authentication remains mandatory before any image can execute.
+        fn record(image: &mut PureImage, tag: TypeTag, children: &[u32]) -> u32 {
+            let start = image.type_children.len();
+            image.type_children.extend_from_slice(children);
+            let slot = index(image.types.len()).unwrap();
+            image.types.push(TypeRecord {
+                tag,
+                children: Slice::of(&image.type_children, start).unwrap(),
+            });
+            slot
+        }
+        fn chain(image: &mut PureImage, tag: TypeTag, depth: usize, left_spine: bool) -> u32 {
+            let leaf = record(image, TypeTag::Unit, &[]);
+            let mut root = leaf;
+            for _ in 0..depth {
+                let children = if left_spine {
+                    [root, leaf]
+                } else {
+                    [leaf, root]
+                };
+                root = record(image, tag, &children);
+            }
+            root
+        }
+        fn row(image: &mut PureImage, ty: u32) -> u32 {
+            let argument = record(image, TypeTag::ArgumentType, &[ty]);
+            let instance = record(
+                image,
+                TypeTag::Instance(EffectIdentity {
+                    module: 0,
+                    local: 0,
+                }),
+                &[argument],
+            );
+            record(
+                image,
+                TypeTag::Row {
+                    known: 1,
+                    tail: None,
+                },
+                &[instance],
+            )
+        }
+        fn decode(image: &PureImage, root: u32, modules: &[ModuleId]) -> Result<(), ImageFailure> {
+            let mut work = TypeWorkBudget::default();
+            let bytes = image.encode_bytes(&mut work)?;
+            let wire = PureImage::decode_bytes(&bytes, &mut work)?;
+            let mut decoder = Decoder {
+                image: &wire,
+                sources: CoordinateStorage::Borrowed(&[]),
+                modules: CoordinateStorage::Borrowed(modules),
+                work: &mut work,
+            };
+            // Dropping either successful Types/Rows or partially accumulated
+            // heterogeneous results must retain the production iterative owners.
+            let result = decoder.structural(root).map(drop);
+            assert!(
+                work.remaining() > work.limit() / 2,
+                "depth refusal is not work exhaustion"
+            );
+            result
+        }
+        let image = || PureImage {
+            effect_dialect: true,
+            ..PureImage::default()
+        };
+
+        for depth in [LIMIT, LIMIT + 1] {
+            let mut carrier = image();
+            let ty = chain(&mut carrier, TypeTag::Function, depth, false);
+            let root = row(&mut carrier, ty);
+            let result = decode(&carrier, root, &modules);
+            if depth == LIMIT {
+                assert!(result.is_ok(), "row wrappers add no Type depth: {result:?}");
+            } else {
+                assert!(matches!(result, Err(ImageFailure::Resource)));
+            }
+        }
+        for depth in [LIMIT - 1, LIMIT] {
+            let mut carrier = image();
+            let ty = chain(&mut carrier, TypeTag::Function, depth, false);
+            let effects = row(&mut carrier, ty);
+            let unit = record(&mut carrier, TypeTag::Unit, &[]);
+            let root = record(
+                &mut carrier,
+                TypeTag::EffectfulFunction,
+                &[unit, unit, effects],
+            );
+            let result = decode(&carrier, root, &modules);
+            if depth == LIMIT - 1 {
+                assert!(result.is_ok(), "row Types inherit outer depth: {result:?}");
+            } else {
+                assert!(matches!(result, Err(ImageFailure::Resource)));
+            }
+        }
+        let mut carrier = image();
+        let root = chain(&mut carrier, TypeTag::Application, LIMIT + 17, true);
+        assert!(decode(&carrier, root, &modules).is_ok());
+        let root = chain(&mut carrier, TypeTag::Application, LIMIT + 1, false);
+        assert!(matches!(
+            decode(&carrier, root, &modules),
+            Err(ImageFailure::Resource)
+        ));
+
+        let mut carrier = image();
+        let deep = chain(&mut carrier, TypeTag::Function, LIMIT, false);
+        let valid_argument = record(&mut carrier, TypeTag::ArgumentType, &[deep]);
+        let unit = record(&mut carrier, TypeTag::Unit, &[]);
+        let mixed = record(
+            &mut carrier,
+            TypeTag::Instance(EffectIdentity {
+                module: 0,
+                local: 0,
+            }),
+            &[valid_argument, unit],
+        );
+        assert!(matches!(
+            decode(&carrier, mixed, &modules),
+            Err(ImageFailure::InvalidRecord)
+        ));
+        let forward = index(carrier.types.len()).unwrap();
+        let root = record(&mut carrier, TypeTag::Function, &[unit, forward]);
+        assert!(matches!(
+            decode(&carrier, root, &modules),
+            Err(ImageFailure::InvalidRecord)
+        ));
+        let bad_row = record(
+            &mut carrier,
+            TypeTag::Row {
+                known: 2,
+                tail: None,
+            },
+            &[mixed],
+        );
+        assert!(matches!(
+            decode(&carrier, bad_row, &modules),
+            Err(ImageFailure::InvalidRecord)
+        ));
+
+        // The trusted encoder must use the same boundary as the independently
+        // decoded private wire; no extra Core program or host build is needed.
+        fn function_type(depth: usize) -> IterativeTypeOwner {
+            let mut ty = Type::Unit;
+            for _ in 0..depth {
+                ty = Type::Function(Box::new(Type::Unit), Box::new(ty));
+            }
+            IterativeTypeOwner::new(ty)
+        }
+        fn encode(input: StructuralInput<'_>, module: ModuleId) -> Result<(), ImageFailure> {
+            let mut work = TypeWorkBudget::default();
+            let mut encoder = Encoder {
+                image: PureImage {
+                    effect_dialect: true,
+                    ..PureImage::default()
+                },
+                modules: HashMap::from([(module, 0)]),
+                sources: HashMap::new(),
+                binders: HashMap::new(),
+                remapped: Vec::new(),
+                prepared_libraries: HashMap::new(),
+                native_symbols: HashMap::new(),
+                call_codecs: HashMap::new(),
+                original_native_symbols: Vec::new(),
+                work: &mut work,
+            };
+            let result = encoder.encode_structural(input).map(|_| ());
+            assert!(
+                work.remaining() > work.limit() / 2,
+                "depth refusal is not work exhaustion"
+            );
+            result
+        }
+        let effect = crate::types::EffectId::new(module, 0);
+        for depth in [LIMIT - 1, LIMIT, LIMIT + 1] {
+            let ty = function_type(depth);
+            let effects = crate::types::EffectRow::closed(Box::new([
+                crate::types::EffectInstance::new_kinded(
+                    effect,
+                    Box::new([crate::types::KindedArgument::TypeArg(ty.into_inner())]),
+                ),
+            ]));
+            let result = encode(StructuralInput::Row(&effects), module);
+            if depth <= LIMIT {
+                assert!(
+                    result.is_ok(),
+                    "encoder row wrappers add no depth: {result:?}"
+                );
+            } else {
+                assert!(matches!(result, Err(ImageFailure::Resource)));
+            }
+            let root = IterativeTypeOwner::new(Type::EffectfulFunction(
+                Box::new(Type::Unit),
+                Box::new(crate::types::ComputationType::new(Type::Unit, effects)),
+            ));
+            let result = encode(StructuralInput::Type(&root), module);
+            if depth < LIMIT {
+                assert!(
+                    result.is_ok(),
+                    "encoder row Types inherit outer depth: {result:?}"
+                );
+            } else {
+                assert!(matches!(result, Err(ImageFailure::Resource)));
+            }
+        }
     }
 
     #[test]
@@ -3164,6 +3474,22 @@ enum StructuralInput<'a> {
     Argument(&'a crate::types::KindedArgument),
 }
 
+// Match Core's Type depth, not the number of private wire records. Row,
+// instance and argument wrappers are metadata; Types reached through them
+// inherit their enclosing depth. A unary application's function spine records
+// source width, while its argument adds one structural level. EffectfulFunction
+// adds one before both value children and Types nested anywhere in its row.
+fn structural_child_depth(tag: TypeTag, child: usize, depth: usize) -> usize {
+    match tag {
+        TypeTag::ArgumentType
+        | TypeTag::ArgumentRow
+        | TypeTag::Instance(_)
+        | TypeTag::Row { .. } => depth,
+        TypeTag::Application if child == 0 => depth,
+        _ => depth.saturating_add(1),
+    }
+}
+
 impl Encoder<'_> {
     fn type_variable(
         &mut self,
@@ -3348,36 +3674,54 @@ impl Encoder<'_> {
                             Type::Function(left, right) | Type::Application(left, right) => {
                                 push(
                                     &mut tasks,
-                                    Task::Visit(StructuralInput::Type(right), depth + 1),
+                                    Task::Visit(
+                                        StructuralInput::Type(right),
+                                        structural_child_depth(tag, 1, depth),
+                                    ),
                                     self.work,
                                 )?;
                                 push(
                                     &mut tasks,
-                                    Task::Visit(StructuralInput::Type(left), depth + 1),
+                                    Task::Visit(
+                                        StructuralInput::Type(left),
+                                        structural_child_depth(tag, 0, depth),
+                                    ),
                                     self.work,
                                 )?;
                             }
                             Type::EffectfulFunction(domain, result) => {
                                 push(
                                     &mut tasks,
-                                    Task::Visit(StructuralInput::Row(result.effects()), depth + 1),
+                                    Task::Visit(
+                                        StructuralInput::Row(result.effects()),
+                                        structural_child_depth(tag, 2, depth),
+                                    ),
                                     self.work,
                                 )?;
                                 push(
                                     &mut tasks,
-                                    Task::Visit(StructuralInput::Type(result.value()), depth + 1),
+                                    Task::Visit(
+                                        StructuralInput::Type(result.value()),
+                                        structural_child_depth(tag, 1, depth),
+                                    ),
                                     self.work,
                                 )?;
                                 push(
                                     &mut tasks,
-                                    Task::Visit(StructuralInput::Type(domain), depth + 1),
+                                    Task::Visit(
+                                        StructuralInput::Type(domain),
+                                        structural_child_depth(tag, 0, depth),
+                                    ),
                                     self.work,
                                 )?;
                             }
                             Type::Forall(_, body) => {
                                 push(
                                     &mut tasks,
-                                    Task::Visit(StructuralInput::Type(body), depth + 1),
+                                    Task::Visit(
+                                        StructuralInput::Type(body),
+                                        structural_child_depth(tag, 0, depth),
+                                    ),
                                     self.work,
                                 )?;
                             }
@@ -3385,7 +3729,10 @@ impl Encoder<'_> {
                                 for element in elements.iter().rev() {
                                     push(
                                         &mut tasks,
-                                        Task::Visit(StructuralInput::Type(element), depth + 1),
+                                        Task::Visit(
+                                            StructuralInput::Type(element),
+                                            structural_child_depth(tag, 0, depth),
+                                        ),
                                         self.work,
                                     )?;
                                 }
@@ -3401,13 +3748,20 @@ impl Encoder<'_> {
                                     StructuralInput::Row(row)
                                 }
                             };
-                            push(&mut tasks, Task::Visit(child, depth + 1), self.work)?;
+                            push(
+                                &mut tasks,
+                                Task::Visit(child, structural_child_depth(tag, 0, depth)),
+                                self.work,
+                            )?;
                         }
                         StructuralInput::Instance(instance) => {
                             for argument in instance.arguments().iter().rev() {
                                 push(
                                     &mut tasks,
-                                    Task::Visit(StructuralInput::Argument(argument), depth + 1),
+                                    Task::Visit(
+                                        StructuralInput::Argument(argument),
+                                        structural_child_depth(tag, 0, depth),
+                                    ),
                                     self.work,
                                 )?;
                             }
@@ -3417,7 +3771,10 @@ impl Encoder<'_> {
                                 for instance in tail.lacks().iter().rev() {
                                     push(
                                         &mut tasks,
-                                        Task::Visit(StructuralInput::Instance(instance), depth + 1),
+                                        Task::Visit(
+                                            StructuralInput::Instance(instance),
+                                            structural_child_depth(tag, 0, depth),
+                                        ),
                                         self.work,
                                     )?;
                                 }
@@ -3425,7 +3782,10 @@ impl Encoder<'_> {
                             for instance in row.known().iter().rev() {
                                 push(
                                     &mut tasks,
-                                    Task::Visit(StructuralInput::Instance(instance), depth + 1),
+                                    Task::Visit(
+                                        StructuralInput::Instance(instance),
+                                        structural_child_depth(tag, 0, depth),
+                                    ),
                                     self.work,
                                 )?;
                             }
@@ -3633,11 +3993,18 @@ impl Decoder<'_> {
                     }
                     push(&mut tasks, Task::Finish(record.tag, count), self.work)?;
                     charge(self.work, count)?;
-                    for child in children.iter().rev() {
+                    for (position, child) in children.iter().enumerate().rev() {
                         if *child >= slot {
                             return Err(ImageFailure::InvalidRecord);
                         }
-                        push(&mut tasks, Task::Visit(*child, depth + 1), self.work)?;
+                        push(
+                            &mut tasks,
+                            Task::Visit(
+                                *child,
+                                structural_child_depth(record.tag, position, depth),
+                            ),
+                            self.work,
+                        )?;
                     }
                 }
                 Task::Finish(tag, count) => {
@@ -4485,13 +4852,11 @@ fn admit_closed_native_instance(
     for argument in instance.arguments() {
         let open =
             crate::types::visit_argument_structure_with_budget(argument, work, |component, _| {
-                Ok(match component {
-                    crate::types::TypeStructureNode::Type(
-                        Type::Variable(_) | Type::Inference(_),
-                    )
-                    | crate::types::TypeStructureNode::Tail(_) => true,
-                    _ => false,
-                })
+                Ok(matches!(
+                    component,
+                    crate::types::TypeStructureNode::Type(Type::Variable(_) | Type::Inference(_))
+                        | crate::types::TypeStructureNode::Tail(_)
+                ))
             })
             .map_err(|()| ImageFailure::Resource)?;
         if open {
@@ -5073,16 +5438,16 @@ impl Decoder<'_> {
             }
             // A library coordinate may have many symbols, but all must share
             // its one original allocation, not independently restored twins.
-            if let Some(old) = libraries.insert(library, record.prepared_library) {
-                if old != record.prepared_library {
-                    return Err(ImageFailure::InvalidRecord);
-                }
+            if let Some(old) = libraries.insert(library, record.prepared_library)
+                && old != record.prepared_library
+            {
+                return Err(ImageFailure::InvalidRecord);
             }
             charge(self.work, 1)?;
-            if let Some(old) = library_allocations.insert(record.prepared_library, library) {
-                if old != library {
-                    return Err(ImageFailure::InvalidRecord);
-                }
+            if let Some(old) = library_allocations.insert(record.prepared_library, library)
+                && old != library
+            {
+                return Err(ImageFailure::InvalidRecord);
             }
             let symbol = restore_foreign_symbol(
                 library,
@@ -5549,18 +5914,7 @@ impl PureImage {
         expected: &[u8],
         work: &mut TypeWorkBudget,
     ) -> Result<ExpectedNativeFacts, ImageFailure> {
-        let actual = self.encode_native_expectations(work)?;
-        charge(
-            work,
-            expected
-                .len()
-                .checked_add(1)
-                .ok_or(ImageFailure::Resource)?,
-        )?;
-        if actual.as_slice() != expected {
-            return Err(ImageFailure::InvalidRecord);
-        }
-        drop(actual);
+        self.compare_native_expectations(expected, work)?;
         // Decode ORIGINAL emitted facts; their byte-exact correspondence above
         // authenticates use of the already restored source/provenance coordinates.
         // No SourceFile or origin/provenance arena is reconstructed here.

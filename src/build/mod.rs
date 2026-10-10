@@ -328,8 +328,8 @@ pub fn __run_private_effect_image(
 #[path = "source_scalar_post_record_tests.rs"]
 mod source_scalar_post_record_tests;
 
+#[cfg(test)]
 #[cfg(all(
-    test,
     target_arch = "x86_64",
     target_os = "linux",
     target_env = "gnu",

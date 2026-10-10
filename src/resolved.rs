@@ -19955,13 +19955,17 @@ impl ResolvedRegistry {
                 return Err(invalid());
             }
             self.abstract_nominal_names.insert(id, spelling);
-            self.abstract_nominal_kinds.insert(
-                id,
-                NonMaterializedNominalKindFact {
-                    kind: NonMaterializedNominalKind::Ordinary(kind),
-                    origin,
-                },
-            );
+            match self.abstract_nominal_kinds.entry(id) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(NonMaterializedNominalKindFact {
+                        kind: NonMaterializedNominalKind::Ordinary(kind),
+                        origin,
+                    });
+                }
+                std::collections::hash_map::Entry::Occupied(_) => {
+                    return Err(invalid());
+                }
+            }
         }
         // Keep unvisited records guarded even on correspondence failure.
         while let Some(parameter) = pending.pop() {
@@ -20094,8 +20098,8 @@ impl ResolvedRegistry {
             || self.global_parameter_rows.len() != self.global_parameter_positions.len()
             || !self.provider_contracts.is_empty()
             || !self.foreign_modules.is_empty()
-            || self.owner_signatures.interfaces.len() != 0
-            || self.owner_signatures.resources.len() != 0
+            || !self.owner_signatures.interfaces.is_empty()
+            || !self.owner_signatures.resources.is_empty()
             || self.abstract_nominal_names.len() != self.abstract_nominal_kinds.len()
             || self.owner_definitions.len() != self.effects.len()
             || self.owner_definition_positions.len() != self.effects.len()

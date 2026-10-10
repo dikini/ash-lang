@@ -81,6 +81,12 @@ This builds the executable; run `./program` separately. The C linkage integratio
 fixture in `tests/program_build_native.rs` constructs both supported input kinds
 and uses the separate compile, prepare and build phases.
 
+Native preparation retains the exact encoded Core and expected-contract bytes
+once. The build writes them to fixed files in its generated project and embeds
+them at Rust compile time. The executable reads neither these files nor the
+original Ash sources at startup. Failed linking retains the generated project
+and its diagnostics without replacing an existing output executable.
+
 Each link input names an existing whole-program native file. Preparation
 canonicalizes the paths and checks the supported file kind: a regular static
 archive or an ELF64 little-endian x86-64 shared library. It preserves input

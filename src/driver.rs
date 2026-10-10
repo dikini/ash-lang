@@ -3093,10 +3093,9 @@ fn refuse_unbound_source_native_entry(core: &CompiledCore) -> Result<(), Runtime
         if let crate::core::EffectExprKind::Operation(
             crate::core::EffectOperation::NativeInterpret(boundary),
         ) = &root.kind
+            && !boundary.interpretations().is_empty()
         {
-            if !boundary.interpretations().is_empty() {
-                return Err(RuntimeFailure::ForeignBinding);
-            }
+            return Err(RuntimeFailure::ForeignBinding);
         }
     }
     Ok(())

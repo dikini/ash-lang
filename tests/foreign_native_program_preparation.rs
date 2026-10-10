@@ -1,6 +1,7 @@
 //! Public evidence for compilation versus source-native execution binding.
 
 use ash::{
+    build::{BuildConfiguration, prepare_program},
     driver::{EntryReason, PipelineFailure, RunConfiguration, compile_path, execute, run_path},
     eval::RuntimeFailure,
     module::ModuleRoots,
@@ -118,4 +119,27 @@ fn passive_native_declarations_keep_default_execution_available() {
         run_path(fixture.configuration()).unwrap().value_display(),
         "42"
     );
+}
+
+#[test]
+fn native_preparation_preserves_core_row_metadata_depth() {
+    for nesting in [42, 43] {
+        let mut row = "{}".to_owned();
+        for _ in 0..nesting {
+            row = format!("{{Nest<{row}>}}");
+        }
+        let fixture = Fixture::new(&format!(
+            "{CONTRACT}effect Nest<Rows : EffectRow> {{\n    tick : Unit -> Unit\n}}\nmain : Unit -> Foreign.Call<Int> ! {{Abs<{row}, Int, {{}}>}}\nmain () = perform Abs<{row}, Int, {{}}>.call 42\n"
+        ));
+        let compiled = compile_path(fixture.configuration()).unwrap();
+        let compilation_work = *compiled.compilation_work();
+        fs::remove_file(fixture.0.join("entry.ash")).unwrap();
+        let prepared = prepare_program(
+            &compiled,
+            BuildConfiguration::new(fixture.0.join("program")),
+        )
+        .unwrap_or_else(|failure| panic!("{nesting} admitted nested rows: {failure}"));
+        assert!(prepared.preparation_work() > 0);
+        assert_eq!(*compiled.compilation_work(), compilation_work);
+    }
 }

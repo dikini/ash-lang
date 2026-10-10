@@ -120,6 +120,37 @@ table coverage and the independent Core checks still authenticate each row
 against its actual lexical type abstraction. The private matching-runtime
 format changes with this carrier; it promises no cross-version compatibility.
 
+Writing binary image/fact payloads as hexadecimal Rust arrays inflated each
+encoded byte into five text bytes plus indentation, then charged reserve and
+write for that expanded text. The imported-helper C program exhausted the
+unchanged preparation allowance at emission. Native preparation now owns the
+two exact encoded byte vectors; the consuming tool stage writes fixed payload
+roles for compile-time inclusion. Counting and copying charge actual generated
+Rust text. Independent expected-fact authentication remains mandatory, and the
+executable must run after the generated source and payload files are removed.
+Pure emission retains its existing path.
+
+Private wire records must preserve Core's structural Type depth rather than
+counting serialization wrappers. Row, instance and argument records retain
+the surrounding depth; unary application function spines represent width.
+Function, tuple, quantifier body and application argument edges add depth, as
+does entry into an effectful function's children. One shared rule now governs
+encoding and reconstruction. The public 42/43 nested-row regression exposed
+the old artificial cutoff; the existing linked hosts also exercise 43 nested
+phantom rows. Work charges, backward-reference checks and the original depth
+allowance remain unchanged.
+
+The deeper row witness also exposed a separate startup cost: correspondence
+serialized the construction image's facts into an owned buffer solely to
+compare and discard it. A diagnostic measurement reached 384,923 units through
+Core reconstruction, exceeding the unchanged 327,680 startup allowance. The
+68,722-byte expected payload accounts for one avoidable copy and allocation.
+Owned emission and streaming comparison now share the same canonical wire
+traversal. Comparison pays each byte once and checks exact length; startup
+still decodes the original independent expectations and completes all Core,
+library, symbol, provider and required-binding checks. The diagnostic allowance
+does not change delivery acceptance or production limits.
+
 ## Deviations
 
 None authorized. Return concrete semantic gaps to CP-0022 instead of resolving

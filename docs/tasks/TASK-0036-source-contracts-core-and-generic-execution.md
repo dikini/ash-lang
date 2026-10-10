@@ -153,6 +153,12 @@ without a metadata prepass over Pure types or a copied effect inventory. Runtime
 request admission checks the Type-only projection in the complete tag scan,
 without a second row walk or an increased allowance.
 
+Native entry construction must lend its Core builder the caller's cumulative
+final-elaboration meter. A builder's separate default allowance omitted paid
+interpreter payload admission from that caller's ledger. The phase boundary now
+restores the builder meter after both success and refusal; exact and one-short
+cuts retain the caller's prior charges and fresh retries use a fresh caller.
+
 ## Deviations
 
 None authorized. Return concrete semantic gaps to CP-0022 instead of resolving

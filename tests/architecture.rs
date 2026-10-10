@@ -307,6 +307,8 @@ define_kind_site_profiles! {
     FieldBuildTypeBorrow => (Field, Borrowed, Canonical, CarrierRetention, PreservedCarrier, CoreAdmission, Type, TypeTree),
     FieldBuildCoreOwned => (Field, Owned, Core, CarrierRetention, PreservedCarrier, CoreAdmission, Type, CoreTree),
     FieldBuildRegistryOwned => (Field, Owned, Registry, CarrierRetention, PreservedCarrier, CoreAdmission, Type, RegistryTree),
+    // Restored registries own canonical trees and share original native facts.
+    FieldBuildRegistryMixed => (Field, Mixed, Registry, CarrierRetention, PreservedCarrier, CoreAdmission, Type, RegistryTree),
     FieldForeignTypesOwned => (Field, Owned, Resolved, CarrierRetention, PreservedCarrier, Resolution, ResolutionType, TypeTree),
     FieldForeignFactsShared => (Field, Shared, Summary, CarrierRetention, PreservedCarrier, Resolution, ResolutionType, TypeTreeAndResolvedTreeAndRegistryTree),
     FieldResourceFactsShared => (Field, Shared, Summary, CarrierRetention, PreservedCarrier, Resolution, ResolutionType, ResolvedTree),
@@ -494,7 +496,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/build/image.rs::ParameterBuffer.0", FieldBuildRegistryOwned),
     kind_site!("src/build/image.rs::NominalParameterBuffer.0", FieldBuildRegistryOwned),
     kind_site!("src/build/image.rs::GlobalParameterBuffer.0", FieldBuildRegistryOwned),
-    kind_site!("src/build/image.rs::RestoredNativeRegistry.registry", FieldBuildRegistryOwned),
+    kind_site!("src/build/image.rs::RestoredNativeRegistry.registry", FieldBuildRegistryMixed),
     kind_site!("src/build/image.rs::TypeBuffer.0", FieldBuildTypeOwned),
     kind_site!("src/build/image.rs::ArgumentOwner.0", FieldBuildTypeOwned),
     kind_site!("src/build/image.rs::StructuralOwner.Type.0", FieldBuildTypeOwned),

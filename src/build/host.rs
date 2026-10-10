@@ -71,7 +71,8 @@ impl NativeLinkInput {
     }
 }
 
-/// Completed private Core preparation and generated Rust, ready for native linking.
+/// Completed private Core preparation, generated Rust and any exact encoded
+/// compile-time payloads, ready for native linking.
 ///
 /// Preparation performs no Ash evaluation. This phase is consumed by
 /// [`build_prepared`]; linking does not repeat Core encoding or source checking.
@@ -79,9 +80,9 @@ impl NativeLinkInput {
 pub struct PreparedProgramBuild {
     configuration: BuildConfiguration,
     generated_rust: String,
+    native_payloads: Option<emit::NativePayloads>,
     preparation_work: usize,
     compilation_work: CompilationWork,
-    native_host: bool,
 }
 
 impl PreparedProgramBuild {
@@ -321,42 +322,40 @@ pub fn prepare_program(
         input.replace_path(path);
         validate_native_input(input, index)?;
     }
-    let (generated_rust, native_host) = if let Some((core, provenance)) = program.pure_build_input()
-    {
-        // Keep the established Pure path unchanged, including its unsafe policy.
-        if !configuration.native_inputs.is_empty() {
+    let (generated_rust, native_payloads) =
+        if let Some((core, provenance)) = program.pure_build_input() {
+            // Keep the established Pure path unchanged, including its unsafe policy.
+            if !configuration.native_inputs.is_empty() {
+                return Err(BuildFailure(Failure::UnsupportedProgram));
+            }
+            let image = image::encode(core, provenance, &mut work)
+                .map_err(|error| BuildFailure(Failure::Image(error)))?;
+            (
+                emit::pure_host(&image, &super::runtime_fingerprint(), &mut work)
+                    .map_err(|error| BuildFailure(Failure::Emission(error)))?,
+                None,
+            )
+        } else if let Some((core, provenance)) = program.effect_build_input() {
+            let image =
+                image::encode_effect_for_build(core, provenance, &configuration.target, &mut work)
+                    .map_err(|error| {
+                        BuildFailure(match error {
+                            image::NativeImageFailure::Image(error) => Failure::Image(error),
+                            image::NativeImageFailure::Bridge(error) => Failure::Bridge(error),
+                        })
+                    })?;
+            let emission = emit::native_host(&image, &super::runtime_fingerprint(), &mut work)
+                .map_err(|error| BuildFailure(Failure::Emission(error)))?;
+            (emission.rust_source, Some(emission.payloads))
+        } else {
             return Err(BuildFailure(Failure::UnsupportedProgram));
-        }
-        let image = image::encode(core, provenance, &mut work)
-            .map_err(|error| BuildFailure(Failure::Image(error)))?;
-        (
-            emit::pure_host(&image, &super::runtime_fingerprint(), &mut work)
-                .map_err(|error| BuildFailure(Failure::Emission(error)))?,
-            false,
-        )
-    } else if let Some((core, provenance)) = program.effect_build_input() {
-        let image =
-            image::encode_effect_for_build(core, provenance, &configuration.target, &mut work)
-                .map_err(|error| {
-                    BuildFailure(match error {
-                        image::NativeImageFailure::Image(error) => Failure::Image(error),
-                        image::NativeImageFailure::Bridge(error) => Failure::Bridge(error),
-                    })
-                })?;
-        (
-            emit::native_host(&image, &super::runtime_fingerprint(), &mut work)
-                .map_err(|error| BuildFailure(Failure::Emission(error)))?,
-            true,
-        )
-    } else {
-        return Err(BuildFailure(Failure::UnsupportedProgram));
-    };
+        };
     Ok(PreparedProgramBuild {
         configuration,
         generated_rust,
+        native_payloads,
         preparation_work: work.used(),
         compilation_work: *program.compilation_work(),
-        native_host,
     })
 }
 
@@ -418,8 +417,9 @@ fn fresh_project(parent: &Path) -> Result<PathBuf, BuildFailure> {
 
 /// Compiles and links a prepared host with one Cargo job.
 ///
-/// Generated source and native logs remain beside the requested output in a
-/// fresh `.ash-build` project. Linking uses the matching Ash source/toolchain;
+/// Generated source, private compile-time payloads and native logs remain beside
+/// the requested output in a fresh `.ash-build` project. Linking uses the matching
+/// Ash source/toolchain;
 /// the resulting executable reconstructs and validates private Core at startup
 /// without invoking the Ash compiler or reading original source files.
 ///
@@ -427,6 +427,7 @@ fn fresh_project(parent: &Path) -> Result<PathBuf, BuildFailure> {
 /// Returns native-tool or filesystem failures. Failed linking preserves an
 /// existing destination executable and retains the generated project/log.
 pub fn build_prepared(prepared: PreparedProgramBuild) -> Result<BuiltProgram, BuildFailure> {
+    let native_host = prepared.native_payloads.is_some();
     let output = std::path::absolute(&prepared.configuration.output)?;
     let parent = output
         .parent()
@@ -439,6 +440,13 @@ pub fn build_prepared(prepared: PreparedProgramBuild) -> Result<BuiltProgram, Bu
         .and_then(|name| name.to_str())
         .expect("a generated project has an ASCII identity");
     fs::write(&generated_source, prepared.generated_rust)?;
+    if let Some(payloads) = prepared.native_payloads {
+        // Consume preparation's exact owned bytes once. include_bytes! embeds
+        // them at Rust compile time; the resulting host opens no payload files.
+        for (role, bytes) in payloads.into_files() {
+            fs::write(project.join("src").join(role.file_name()), bytes)?;
+        }
+    }
     let ash_path = serde_json::to_string(env!("CARGO_MANIFEST_DIR"))
         .expect("a UTF-8 compiler manifest path is representable");
     let features = if cfg!(feature = "resource-calibration") {
@@ -489,11 +497,7 @@ pub fn build_prepared(prepared: PreparedProgramBuild) -> Result<BuiltProgram, Bu
     // cargo rustc scopes native file arguments to this generated binary; no
     // RUSTFLAGS, shell, loader or implicit library-name resolver participates.
     command.current_dir(&project).args([
-        if prepared.native_host {
-            "rustc"
-        } else {
-            "build"
-        },
+        if native_host { "rustc" } else { "build" },
         "--offline",
         "--jobs",
         "1",
@@ -504,7 +508,7 @@ pub fn build_prepared(prepared: PreparedProgramBuild) -> Result<BuiltProgram, Bu
         command.arg("--release");
     }
     command.arg("--target-dir").arg(&target_directory);
-    if prepared.native_host {
+    if native_host {
         command.arg("--bin").arg(package_name);
         // Repeat only the fixed native-file-kind check immediately before tool
         // invocation; no image/source preparation or bridge planning is repeated.

@@ -184,6 +184,26 @@ fn build_case(fixture: &Fixture, name: &str, source: &str, native: NativeLinkInp
     });
     assert_eq!(built.compilation_work(), compilation_work);
     assert_eq!(built.preparation_work(), preparation_work);
+    let generated = built.generated_source();
+    let generated_text = fs::read_to_string(generated).unwrap();
+    assert!(generated_text.contains("include_bytes!(\"program-image.bin\")"));
+    assert!(generated_text.contains("include_bytes!(\"expected-facts.bin\")"));
+    let image = generated.parent().unwrap().join("program-image.bin");
+    let facts = generated.parent().unwrap().join("expected-facts.bin");
+    let image_bytes = fs::metadata(&image).unwrap().len();
+    let facts_bytes = fs::metadata(&facts).unwrap().len();
+    let old_literal_work = 2
+        * (5 * (image_bytes + facts_bytes)
+            + 5 * (image_bytes.div_ceil(16) + facts_bytes.div_ceil(16)));
+    eprintln!(
+        "native packaging: Rust={} bytes, image={image_bytes}, facts={facts_bytes}, preparation={preparation_work}, former literal payload reserve/write={old_literal_work}",
+        generated_text.len()
+    );
+    // Run from embedded bytes after the successful build inputs disappear.
+    // The separate failed-link project retains its source and diagnostics.
+    fs::remove_file(generated).unwrap();
+    fs::remove_file(image).unwrap();
+    fs::remove_file(facts).unwrap();
     built.executable().to_path_buf()
 }
 
@@ -227,14 +247,28 @@ fn run_host(executable: &Path, fixture: &Fixture, supply_loader_path: bool) -> (
 fn generated_scalar_hosts_preserve_real_native_counts_and_exact_results_with_both_linkages() {
     let fixture = Fixture::new();
     let inputs = fixture.native_inputs();
+    let mut row = "{}".to_owned();
+    for _ in 0..43 {
+        row = format!("{{Nest<{row}>}}");
+    }
+    // Exercise independent startup reconstruction past the former row-wire
+    // depth cutoff using the existing two hosts and their real native calls.
+    let template = include_str!("fixtures/source-native/cases/combined.ash");
+    assert_eq!(template.matches("Echo<{}, Int, {}>").count(), 3);
+    assert_eq!(template.matches("effect Left<T>").count(), 1);
+    let source = template
+        .replace("Echo<{}, Int, {}>", &format!("Echo<{row}, Int, {{}}>"))
+        .replace(
+            "effect Left<T>",
+            "effect Nest<Rows : EffectRow> {\n    tick : Unit -> Unit\n}\n\neffect Left<T>",
+        );
     // Keep the whole build matrix sequential: a single root Cargo window owns
     // connected verification. These are real C calls, not corrupted callbacks.
     for (linkage, input) in ["static", "shared"].into_iter().zip(inputs) {
         let name = "combined";
-        let source = include_str!("fixtures/source-native/cases/combined.ash");
         let result = "(127, 900, 18446744073709551615, (), 83)\n";
         let trace = b"iuvii";
-        let executable = build_case(&fixture, &format!("{linkage}-{name}"), source, input);
+        let executable = build_case(&fixture, &format!("{linkage}-{name}"), &source, input);
         if linkage == "shared" {
             let (output, calls) = run_host(&executable, &fixture, false);
             assert!(
