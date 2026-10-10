@@ -17,7 +17,7 @@ selects `x86_64-unknown-linux-gnu`, generated Rust runtime bridges, optional
 separate C/header checks, whole-program checked-Core embedding, and native-buffer
 and minimal-arena source libraries alongside SQLite. [AD-0013](../../decisions/AD-0013-generated-native-bridges-and-program-builds.md)
 records the converged build boundary. [CP-0022](../../proposals/CP-0022-ash-authored-foreign-interfaces.md)
-proposes the semantic transition; it remains unaccepted. The historical evidence
+records the accepted semantic transition, still awaiting product delivery. The historical evidence
 below keeps its original pins and limitations.
 
 ## Two library cases, one common boundary

@@ -18,8 +18,8 @@
 > governing contract and the product workflow in the
 > [artifact guide](../project/artifacts.md).
 
-The selected build boundary is recorded separately in AD-0013. CP-0022 is a
-proposed semantic contract; this note and milestone approval do not accept it.
+The selected build boundary is recorded separately in AD-0013. CP-0022 is the
+accepted semantic transition. This informative note does not define current Ash.
 
 ## Agreed ffi-ash milestone
 
@@ -67,8 +67,9 @@ not close the overall checkpoint, authorize proposal/worktree cleanup or make
 partial milestone behavior current on Main. Final checkpoint cleanup follows
 AD-0011 and the artifact policy.
 
-After semantic acceptance, each implementation issue receives one active
-repository TASK, beginning with the next unused ID (currently TASK-0036).
+The accepted contract authorizes one active repository TASK per implementation
+issue, allocated as TASK-0036 through TASK-0041 in the
+[task index](../tasks/README.md).
 Tasks link their governing proposal/decision and issue, and contain bounded work,
 dependencies, required verification and durable discoveries/deviations. Ordered
 steps go in the existing Work section; add a task-owned plan only when needed.
@@ -144,8 +145,8 @@ the verified Main capabilities, outstanding and worktree evidence, and the
 selected first authoring target: a copying SQLite binding on one host ABI.
 The selected execution direction generates Rust bridges and links a host using
 the existing evaluator; AD-0013 records that non-language boundary. CP-0022
-proposes source and operational contracts. SQLite remains the first complete
-foreign-library authoring case; native buffer and minimal arena acquisition,
+records the accepted source and operational transition. SQLite remains the first
+complete foreign-library authoring case; native buffer and minimal arena acquisition,
 usage and release test the same mechanism before its final SQLite delivery.
 Unfinished general borrowing and wider Arena work are not prerequisites.
 Native storage interfaces and region validity contracts remain distinct.

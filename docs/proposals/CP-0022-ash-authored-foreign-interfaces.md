@@ -1,14 +1,18 @@
 # CP-0022: Ash-authored foreign interfaces
 
 - ID: `CP-0022`
-- Status: proposed
+- Status: accepted
 - Related: [DN-0037](../design/DN-0037-ash-authored-foreign-library-interfaces.md),
   [DN-0042](../design/DN-0042-native-interaction-and-efficient-data.md),
   [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md),
   [GitHub issue #1](https://github.com/dikini/ash-lang/issues/1)
 
-> This proposal is not current Ash. Milestone approval authorizes its preparation
-> and review; acceptance of this semantic contract precedes implementation tasks.
+> This accepted proposal authorizes the bounded implementation tasks. It is not
+> current Ash before the complete verified transition is integrated into Main.
+
+The semantic contract was accepted on 2026-10-10 after frontend/operational and
+build-boundary review. Acceptance includes the private state payload, both report
+codecs, finite copy-window restrictions and blocked-dependent retention rule.
 
 ## Current behavior
 

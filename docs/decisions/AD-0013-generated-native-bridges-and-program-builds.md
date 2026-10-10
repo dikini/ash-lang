@@ -14,8 +14,9 @@
 Build whole Ash programs as native executables containing compiler-private
 checked-Core construction data/code, the existing evaluator and generated Rust
 bridges for the program's checked foreign declarations. Libraries remain passive
-Ash source dependencies. This accepts the converged build boundary; it does not
-accept CP-0022's proposed language semantics or claim implemented tools.
+Ash source dependencies. This records the converged build boundary. The separately
+accepted CP-0022 authorizes the semantic transition; neither artifact claims
+implemented tools.
 
 The initial target is `x86_64-unknown-linux-gnu`. Link static archives and ordinary
 shared dependencies through the native linker. Generate typed Rust call sites

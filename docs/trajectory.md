@@ -12,9 +12,10 @@ bridges and runnable evaluator hosts. Its durable scope and sequence live in
 DN-0037; [DN-0042](design/DN-0042-native-interaction-and-efficient-data.md) supplies
 the broader context. [GitHub](https://github.com/dikini/ash-lang/milestone/1)
 owns live progress and PR status. [CP-0022](proposals/CP-0022-ash-authored-foreign-interfaces.md)
-is proposed; [AD-0013](decisions/AD-0013-generated-native-bridges-and-program-builds.md)
-records the agreed build boundary. Product implementation awaits semantic
-acceptance; the separate milestone gate controls integration into Main.
+is accepted; [AD-0013](decisions/AD-0013-generated-native-bridges-and-program-builds.md)
+records the agreed build boundary. The [implementation tasks](tasks/README.md)
+carry the authorized scope; the separate milestone gate controls integration
+into Main.
 
 The Mini-Ash milestone is retained historically at the `mini-ash` tag, whose
 peeled commit is `d62d3ba`. Its
