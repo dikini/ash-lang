@@ -191,7 +191,19 @@ impl Resolver {
                     "foreign library preparation storage could not be reserved",
                 )
             })?;
-        let mut next_effect = surface.effects.len();
+        // Ordinary effects and whole library symbol groups share one source-order
+        // identity inventory. This additional walk applies only to foreign graphs.
+        if !surface.foreign_libraries.is_empty() {
+            self.type_work.charge(surface.effects.len()).map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    surface.span,
+                    "foreign effect ordering exceeded its work budget",
+                )
+            })?;
+        }
+        let mut ordinary = surface.effects.iter().peekable();
+        let mut next_effect = 0_usize;
         for library in &surface.foreign_libraries {
             self.type_work.charge(library.members.len()).map_err(|()| {
                 error(
@@ -225,6 +237,19 @@ impl Resolver {
                             &failure.to_string(),
                         )
                     })?;
+            while ordinary
+                .peek()
+                .is_some_and(|effect| effect.span.range().start() < library.span.range().start())
+            {
+                ordinary.next();
+                next_effect = next_effect.checked_add(1).ok_or_else(|| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        library.span,
+                        "foreign effect inventory exceeded its bound",
+                    )
+                })?;
+            }
             let end = next_effect
                 .checked_add(facts.symbols().len())
                 .ok_or_else(|| {
@@ -427,8 +452,27 @@ impl Resolver {
                 "effect source view storage could not be reserved",
             )
         })?;
-        sources.extend(surface.effects.iter().map(EffectSource::Ordinary));
+        if surface.foreign_libraries.is_empty() {
+            sources.extend(surface.effects.iter().map(EffectSource::Ordinary));
+            return Ok(sources);
+        }
+        let mut next_ordinary = 0;
         for library in &surface.foreign_libraries {
+            while surface
+                .effects
+                .get(next_ordinary)
+                .is_some_and(|effect| effect.span.range().start() < library.span.range().start())
+            {
+                sources.try_reserve(1).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        surface.span,
+                        "effect source view storage could not be reserved",
+                    )
+                })?;
+                sources.push(EffectSource::Ordinary(&surface.effects[next_ordinary]));
+                next_ordinary += 1;
+            }
             for member in &library.members {
                 self.type_work.charge(1).map_err(|()| {
                     error(
@@ -452,6 +496,15 @@ impl Resolver {
                 }
             }
         }
+        let remaining = &surface.effects[next_ordinary..];
+        sources.try_reserve(remaining.len()).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                surface.span,
+                "effect source view storage could not be reserved",
+            )
+        })?;
+        sources.extend(remaining.iter().map(EffectSource::Ordinary));
         Ok(sources)
     }
 }
@@ -492,6 +545,8 @@ pub(super) fn retain_module_declaration_order(
     }
     let mut result = Vec::new();
     let mut next_library = 0;
+    let mut next_ordinary = 0;
+    let mut next_effect = 0;
     for declaration in &surface.declaration_order {
         if let SurfaceDeclarationIndex::ForeignLibrary(index) = *declaration {
             work.charge(1).map_err(|()| {
@@ -515,6 +570,13 @@ pub(super) fn retain_module_declaration_order(
                     "foreign declaration index is invalid",
                 )
             })?;
+            if library.effects.start != next_effect {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    surface.span,
+                    "foreign effect range disagrees with source declaration order",
+                ));
+            }
             work.charge(library.effects.len()).map_err(|()| {
                 error(
                     ResolveReason::TypeResourceExhausted,
@@ -535,10 +597,25 @@ pub(super) fn retain_module_declaration_order(
                     .clone()
                     .map(crate::resolved::ResolvedDeclarationIndex::Effect),
             );
+            next_effect = library.effects.end;
             next_library += 1;
         } else {
-            let ordinary =
+            // Reuse the charged ordinary retention walk before inspecting and
+            // remapping its source-vector index into the combined inventory.
+            let mut ordinary =
                 retain_declaration_order(std::slice::from_ref(declaration), surface.span, work)?;
+            if let SurfaceDeclarationIndex::Effect(index) = *declaration {
+                if index != next_ordinary || index >= surface.effects.len() {
+                    return Err(error(
+                        ResolveReason::InternalState,
+                        surface.span,
+                        "ordinary effect order repeats, skips or reorders a declaration",
+                    ));
+                }
+                ordinary[0] = crate::resolved::ResolvedDeclarationIndex::Effect(next_effect);
+                next_ordinary += 1;
+                next_effect += 1;
+            }
             result.try_reserve(1).map_err(|_| {
                 error(
                     ResolveReason::TypeResourceExhausted,
@@ -548,6 +625,13 @@ pub(super) fn retain_module_declaration_order(
             })?;
             result.extend(ordinary);
         }
+    }
+    if next_ordinary != surface.effects.len() {
+        return Err(error(
+            ResolveReason::InternalState,
+            surface.span,
+            "foreign declaration order omits an ordinary effect",
+        ));
     }
     if next_library != prepared.len() {
         return Err(error(

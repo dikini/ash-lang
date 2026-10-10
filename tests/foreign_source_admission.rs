@@ -202,3 +202,122 @@ fn libraries_require_disjoint_member_spellings_including_abi_only_members() {
         "{failure:?}"
     );
 }
+
+#[test]
+fn interleaved_foreign_libraries_and_ordinary_effects_preserve_source_declaration_order() {
+    let fixture = Fixture::new(
+        r#"import @builtin.foreign as Foreign
+pub effect Before<T> {
+    request : T -> T
+}
+pub foreign library First {
+    profile "x86_64-unknown-linux-gnu"
+    symbol FirstStop<Delta : EffectRow, T> : Unit -> Foreign.Call<Unit> {
+        name "first_stop"
+        abi () -> void
+        outcome otherwise {}
+    }
+    symbol NextStop : Unit -> Foreign.Call<Unit> {
+        name "next_stop"
+        abi () -> void
+        outcome otherwise {}
+    }
+}
+pub effect Between<T> {
+    request : T -> T
+}
+pub foreign library Second {
+    profile "x86_64-unknown-linux-gnu"
+    symbol LastStop : Unit -> Foreign.Call<Unit> {
+        name "last_stop"
+        abi () -> void
+        outcome otherwise {}
+    }
+}
+pub effect After {
+    request : Unit -> Unit
+}
+probe : Unit -> Unit ! {Before<Int>, FirstStop<{}, Int>, NextStop, Between<Bool>, LastStop, After}
+probe () = ()
+main : Unit -> Int
+main () = 42
+"#,
+    );
+    assert_eq!(
+        run_path(fixture.configuration()).unwrap().value_display(),
+        "42",
+        "passive declarations must survive independent linked validation in source order"
+    );
+}
+
+fn marker_contract(marker: &str, source_position: usize) -> String {
+    format!(
+        r#"pub foreign library C {{
+    profile "x86_64-unknown-linux-gnu"
+    repr CInt = signed(32)
+    symbol Pick : (Int, {marker}) -> Foreign.Call<Int> {{
+        name "abs"
+        abi (CInt) -> CInt
+        operand 0 from {source_position} scalar
+        output result as scalar
+        outcome otherwise {{ readable result }}
+    }}
+}}
+"#
+    )
+}
+
+#[test]
+fn opaque_non_abi_domain_leaves_keep_their_canonical_kinds_through_imports() {
+    const MARKER: &str = "pub opaque type Marker = Hidden\n";
+    const MAIN: &str = "main : Unit -> Int\nmain () = 42\n";
+    for (declarations, marker, dependency, facade) in [
+        (MARKER, "Marker", None, None),
+        (
+            "import marker as Markers\n",
+            "Markers.Marker",
+            Some(MARKER),
+            None,
+        ),
+        (
+            "import facade (Token)\n",
+            "Token",
+            Some(MARKER),
+            Some("pub import marker (Marker as Token)\n"),
+        ),
+        ("", "Foreign.ConversionError", None, None),
+    ] {
+        let fixture = Fixture::new(&format!(
+            "import @builtin.foreign as Foreign\n{declarations}{}{MAIN}",
+            marker_contract(marker, 0)
+        ));
+        if let Some(dependency) = dependency {
+            fs::write(fixture.0.join("marker.ash"), dependency).unwrap();
+        }
+        if let Some(facade) = facade {
+            fs::write(fixture.0.join("facade.ash"), facade).unwrap();
+        }
+        assert_eq!(
+            run_path(fixture.configuration()).unwrap().value_display(),
+            "42",
+            "{marker} is a value-kinded ordinary domain leaf, not an ABI operand"
+        );
+    }
+
+    // Opaque value-kind admission grants no scalar ABI representation. A bare
+    // generic nominal also remains unsaturated, even outside the ABI projection.
+    for (dependency, source_position) in [(MARKER, 1), ("pub opaque type Marker<T> = Hidden\n", 0)]
+    {
+        let fixture = Fixture::new(&format!(
+            "import @builtin.foreign as Foreign\nimport marker as Markers\n{}{MAIN}",
+            marker_contract("Markers.Marker", source_position)
+        ));
+        fs::write(fixture.0.join("marker.ash"), dependency).unwrap();
+        let failure = run_path(fixture.configuration()).unwrap_err();
+        assert!(
+            matches!(failure.pipeline_failure(), Some(PipelineFailure::Resolution(error))
+                if error.reason == ResolveReason::ForeignContract),
+            "an actual opaque ABI leaf or unsaturated domain must still reject: {failure:?}"
+        );
+    }
+}
