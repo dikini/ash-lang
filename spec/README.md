@@ -99,11 +99,12 @@ An owner-free scalar `foreign library` declaration supplies passive ABI facts
 and exact native effects with one `call` operation each. Complete ordered
 `Type` and `EffectRow` parameters and original contracts survive publication
 and imports. `@builtin.foreign` supplies ordinary common result types, including
-`Call<T>` and opaque `ConversionError`. This checkpoint admits declarations but
-provides no source-native execution or native-effect discharge. Ordinary source
-handlers cannot install a native symbol's interpreter, and entry admission
-still requires an empty outward row. Constants, foreign ownership/access and
-copy windows remain outside the admitted subset.
+`Call<T>` and opaque `ConversionError`. Compilation installs an explicit checked
+Core interpretation for admitted owner-free native entry instances, leaving an
+empty outward row. Ordinary source handlers cannot install a native symbol's
+interpreter. Source contracts and checked Core supply no executable binding;
+default execution refuses missing bindings before Ash runs. Constants, foreign
+ownership/access and copy windows remain outside the admitted subset.
 
 `resource cell<R> c = initializer { body }` acquires one scoped mutable integer
 cell through the compiler-owned `@builtin.cell` API. The scope owns release;

@@ -1,4 +1,4 @@
-//! Native tool invocation for the initial matching-compiler Pure host.
+//! Native tool invocation for matching-compiler evaluator hosts.
 
 use std::{
     error::Error,

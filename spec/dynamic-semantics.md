@@ -3,7 +3,8 @@
 Ash evaluation is defined by one deterministic small-step relation over
 configurations `CONFIG(heap, environment, control, continuation)`. The heap is
 fresh for one evaluation and maps numeric locations to tuples, completed
-constructors, uninitialized recursive data slots, or aliases. Tuple elements
+constructors, uninitialized slots for recursive data or native reports, or
+aliases. Tuple elements
 and constructor payloads are runtime values. The environment maps resolved term
 identities to runtime values. Effect execution also retains lexical type/row
 instantiation in the environment, separately from term bindings. This metadata
@@ -32,14 +33,16 @@ static operations rather than values.
 
 Elaboration produces one validated linked Core expression: dependency-ordered
 recursive global groups around the generated application of the entry module's
-local `main` to unit. Static checking has already established an empty entry
-effect row. Evaluation starts with that expression as control, a fresh empty
-heap and environment, and an empty continuation:
+local `main` to unit. The final linked expression has an empty outward effect
+row after any mandatory owner-free native interpretation. Evaluation starts
+with that expression as control, a fresh empty heap and environment, and an
+empty continuation:
 
 ```sequent
 E-Program-Start :=
   elaborate(modules, entry) = linked_program
   validate(linked_program) = success
+  required_source_native_bindings(linked_program) are admitted
   ===>
   INITIAL(modules, entry) = CONFIG(empty_heap, empty_environment, linked_program, empty_continuation)
 ```
@@ -50,6 +53,14 @@ whole-program validation before evaluation. Neither premise performs module
 loading at runtime. The ordinary recursive-binding and application rules enter
 the linked groups and call `main`. Imports have no initialization step, and
 modules are not runtime values.
+
+For a program with owner-free source-native effects, the linked expression
+includes the mandatory native interpretation described below. Its executable
+bindings must be admitted before any Ash expression runs. The binding premise
+is vacuous for a program requiring none. Binding admission retains the exact
+original checked symbol and bridge authority, independently checked against
+the validated program; a missing or changed binding is an internal failure.
+It performs no Ash evaluation or implicit native compilation/linkage.
 
 ## Type instantiation and erasure
 
@@ -480,6 +491,93 @@ over Boolean values. The left rules propagate a step in the left operand. The
 right rules apply only after the left operand is an integer value. The value
 rules compute the primitive result.
 
+## Owner-free scalar native execution
+
+This section describes source-native scalar operands/results and zero-operand
+`void` calls in the admitted Linux x86-64 GNU profile. Supported integer
+representations are signed/unsigned 8-, 32- and 64-bit scalars and 64-bit
+`size_t`. These calls create no resource activation or owning source value.
+The ordinary scoped `native_buffer` behavior remains described separately.
+
+`NativeInterpret(S, body)` is a checked Core boundary installed for the program's
+required owner-free native effects. It is not a source expression. Independent
+validation checks its exact symbol identities, complete ordered Type/EffectRow
+instances and row discharge; it removes only the listed native instances.
+Ordinary outward effects still require their own interpretation.
+
+Entering this boundary evaluates `body` with a continuation boundary retaining
+`S` and the current lexical instantiation. Ordinary return removes that boundary
+and passes the value outward. A source-native request evaluates its operand once,
+then authenticates its original operation and checked symbol against the admitted
+binding. Its complete actual vector must match a listed instance under the
+request's and boundary's saved lexical instantiations. Every argument retains
+its declared kind and position, including unused row arguments. The native
+Type-only projection does not replace this complete source authority.
+A source-native request never selects an ordinary source handler or a legacy
+manifest binding. The native boundary and remaining continuation stay in place
+through the synchronous call and its report.
+
+Before calling native code, the machine traverses the checked operand paths,
+charges mathematical-integer magnitude work, and narrows each borrowed `Int`
+exactly into its declared representation. A value outside that representation's
+range produces canonical `Foreign.ConversionFailed(error)` before invocation.
+The error belongs to the original opaque `Foreign.ConversionError` type.
+Constructing this refusal report also requires work and storage admission; an
+internal refusal terminates without invoking native code.
+
+Successful preparation retains stable native operands in ABI order. It prepays
+bounded reply conversion and recording work and reserves the ordinary
+`Foreign.Returned` constructor slot before publishing `CallReady`. Binding,
+conversion, work or storage refusal before readiness invokes no native function.
+These checks do not establish that the external binary obeys its authored
+signature or foreign assumptions.
+
+The following three steps separate invocation, recording and reporting.
+`d` retains the exact admitted symbol/bridge and complete instantiated source
+arguments. `p` retains the prepaid recording/report allowance and reserved
+constructor slot. `native` denotes one synchronous external invocation under the
+contract's assumptions; `raw` is a native scalar or a void reply. `report`
+authenticates its expected representation, widens a scalar exactly to
+mathematical `Int`, or supplies `Unit` for void, and initializes the reserved
+constructor with canonical `Foreign.Returned`.
+
+```sequent
+family scalar-native-call-steps:
+  E-Scalar-Native-Call :=
+    native(d, operands) = raw
+    ===>
+    CONFIG(heap, environment, CallReady(d, operands, p), continuation) -> CONFIG(heap, environment, CallReturned(d, raw, p), continuation)
+
+  E-Scalar-Native-Record :=
+    ===>
+    CONFIG(heap, environment, CallReturned(d, raw, p), continuation) -> CONFIG(heap, environment, CallRecorded(d, raw, p), continuation)
+
+  E-Scalar-Native-Report :=
+    report(heap, d, raw, p) = heap_1, value
+    ===>
+    CONFIG(heap, environment, CallRecorded(d, raw, p), continuation) -> CONFIG(heap_1, environment, value, continuation)
+```
+
+Only `CallReady` can invoke the function, and that step consumes readiness.
+`CallReturned` retains no invocation capability. Recording is the next machine
+step: it retains the raw reply and its admitted report slot without charging
+work, allocating an Ash result, or performing a fallible check. No disposal,
+reporting or continuation failure can precede this recording step.
+
+Reporting consumes the allowance already deducted before invocation; it does
+not charge the caller's ledger again. Unsigned 64-bit replies preserve their
+full mathematical value. A `void` call reads no native result and reports
+`Foreign.Returned(())`. Integer construction retains the runtime's existing
+internal allocation limitations; a reserved constructor slot does not reserve
+all physical storage inside mathematical integers.
+
+A detectable internal failure after recording terminates evaluation without
+returning to readiness, publishing a final result or retrying the external call.
+This applies to report construction and later ordinary continuation work.
+Already performed native side effects remain performed. A new evaluation has
+fresh machine state and may make its own calls. Internal work/storage failures
+are not `Foreign.ConversionFailed` outcomes.
+
 ## Effect handlers and completion
 
 `HANDLER(handler, instance, clauses, environment)` is an ordered lexical
@@ -509,8 +607,8 @@ The static handler identity determines `handler`. Its clauses are exhaustive
 for `instance`, so ordinary body return and operation selection are the only
 reachable ways to leave the boundary.
 
-A request first evaluates its one operand. Once that operand is a value,
-`select_nearest` searches outward for the innermost accepting source-handler
+A request first evaluates its one operand. For a non-source-native operation,
+once that operand is a value, `select_nearest` searches outward for the innermost accepting source-handler
 or cell boundary. The source-handler branch below requires its exact effect
 identity and instantiated type arguments to equal the operation's instance,
 with no nearer accepting cell boundary. The request saves its lexical instantiation
@@ -526,6 +624,7 @@ family request-steps:
     CONFIG(heap, environment, perform operation operand, continuation) -> CONFIG(heap, environment, operand, REQUEST(operation, instantiation(environment)) :: continuation)
 
   E-Request-Select :=
+    operation is not a source-native symbol
     requested = instantiate(instance(operation), request_instantiation)
     select_nearest(continuation, requested) = clause, handler_environment, handler, owner, captured, outer
     no nearer cell boundary accepts requested

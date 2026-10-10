@@ -112,6 +112,47 @@ ABI operand. Its exact retained nullary `Type` fact authenticates this use witho
 materializing private constructors. Scalar source-path checks still require `Int`;
 unsaturated nominal constructors and resource roles remain inadmissible here.
 
+Source-native execution needs a mandatory exact Core interpreter distinct from
+ordinary handler selection. Program binding admission precedes every Ash step;
+request admission retains the same canonical symbol allocation and complete
+ordered actual vector under the saved lexical instantiations. Row arguments
+remain part of identity even when the native ABI projects only Type arguments.
+The final linked expression's outward row is empty after that interpretation;
+a source `main` may still name the admitted native requirements.
+
+Scalar calls narrow borrowed mathematical integers after charging magnitude
+work. Readiness prepays bounded reporting and recording work and reserves the
+Returned constructor slot. The consuming return receipt removes callback
+capability; the next step records fixed-size raw facts before disposal, result
+construction or continuation work can refuse. A focused Machine witness injects
+only ledger exhaustion after a valid Rust callback returns, then observes
+recording and prepaid reporting before ordinary String work refuses. One call
+and a successful fresh activation distinguish no replay from a ban on later calls.
+This is injected resource evidence, not a failure from the external library.
+Mathematical Integer storage still allocates internally after recording.
+
+Runtime conversion refusal needs the original nullary private error-constructor
+role from the combined builtin module. Imported source checking continues to
+use only the opaque nominal's retained kind and origin; runtime admission does
+not require that constructor to become a public source export.
+
+Generic helpers use implicit ordinary term instantiation. An EffectRow parameter
+in a native effect's complete vector is supplied as a row, such as `{| Before}`;
+using the bare parameter there does not supply a tagged row argument. Concrete
+helper annotations can constrain independent closed instances without dropping
+unused row parameters or adding explicit source term type application.
+
+Latent effect arguments must report their authenticated binder uses to the same
+scheme-coverage observer as value types. A separate unrestricted observer lost
+uses present only in nested row arguments and incorrectly rejected an imported
+generic helper. Registry-backed environments also lacked that latent argument
+traversal. They now borrow original facts and check encountered latent rows on
+demand. An internal ADT assigns nested obligations to the iterative effect queue;
+it supplies no validation certificate. This adds the missing paid latent work
+without a metadata prepass over Pure types or a copied effect inventory. Runtime
+request admission checks the Type-only projection in the complete tag scan,
+without a second row walk or an increased allowance.
+
 ## Deviations
 
 None authorized. Return concrete semantic gaps to CP-0022 instead of resolving

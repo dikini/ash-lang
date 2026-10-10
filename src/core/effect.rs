@@ -3156,8 +3156,8 @@ pub(crate) enum NativeEntryBuildFailure {
 
 /// Classifies already checked entry metadata without cloning ABI or actuals.
 /// The original source registry still receives independent final validation.
-pub(crate) fn owner_free_native_entry_row(
-    registry: &ResolvedRegistry,
+pub(crate) fn owner_free_native_entry_row<'registry>(
+    registry_for: impl Fn(crate::types::EffectId) -> Option<&'registry ResolvedRegistry>,
     row: &EffectRow,
     work: &mut TypeWorkBudget,
 ) -> Result<bool, ()> {
@@ -3170,7 +3170,10 @@ pub(crate) fn owner_free_native_entry_row(
     }
     work.charge(row.known().len())?;
     for instance in row.known() {
-        work.charge(2)?;
+        work.charge(3)?;
+        let Some(registry) = registry_for(instance.effect()) else {
+            return Ok(false);
+        };
         let operation = OperationId::new(instance.effect(), 0);
         let Some(symbol) = registry.native_symbol(operation) else {
             return Ok(false);
@@ -3212,7 +3215,7 @@ impl CoreBuilder<EffectOperationFamily> {
         if stored.effects.is_empty() {
             return Ok(body);
         }
-        if !owner_free_native_entry_row(self.provider_registry(), &stored.effects, work)
+        if !owner_free_native_entry_row(|_| Some(self.provider_registry()), &stored.effects, work)
             .map_err(|()| Build(super::BuildError::TypeWorkExceeded))?
         {
             return Err(ResidualEffects);
@@ -3241,13 +3244,15 @@ impl CoreBuilder<EffectOperationFamily> {
         );
         // Every known member was retained and the source row was closed.
         // Independent Core validation reconstructs this exact subtraction.
-        self.native_interpret(
-            body,
-            interpretations.into_boxed_slice(),
-            ty.into_inner(),
-            EffectRow::empty(),
-            Origin::Source(origin),
-        )
+        self.with_caller_type_work(work, |builder| {
+            builder.native_interpret(
+                body,
+                interpretations.into_boxed_slice(),
+                ty.into_inner(),
+                EffectRow::empty(),
+                Origin::Source(origin),
+            )
+        })
         .map_err(Build)
     }
 }

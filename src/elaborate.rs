@@ -22265,8 +22265,9 @@ pub(crate) fn link_modules_with_budgets(
         .iter()
         .find(|scheme| scheme.spelling == "main")
         .ok_or_else(invalid_state)?;
-    let Type::Function(domain, _) = &main.scheme.value_type else {
-        return Err(invalid_state());
+    let domain = match &main.scheme.value_type {
+        Type::Function(domain, _) | Type::EffectfulFunction(domain, _) => domain,
+        _ => return Err(invalid_state()),
     };
     if !main.scheme.type_parameters.is_empty()
         || !main.scheme.requirements.is_empty()

@@ -1,5 +1,4 @@
-//! Unapplied public evidence for the next connected scalar-native build batch.
-//! Requires NativeLinkInput and the authenticated Effect-image build path.
+//! Public C observations through authenticated generated scalar-native hosts.
 
 use std::{
     fs,
@@ -83,6 +82,55 @@ fn checked_tool(command: &mut Command) {
     );
 }
 
+// Reuse the first matrix program: no additional Ash compilation or successful
+// native host is needed to observe public preparation and linker refusals.
+fn verify_build_refusals(
+    compiled: &ash::driver::CompiledProgram,
+    directory: &Path,
+    non_library: &Path,
+    cache: &Path,
+) {
+    let output = directory.join("program");
+    let mut unsupported = BuildConfiguration::new(output.clone());
+    unsupported.target = "unsupported-profile".to_owned();
+    assert_eq!(
+        prepare_program(compiled, unsupported).unwrap_err().reason(),
+        "build.unsupported-target"
+    );
+    for invalid in [
+        NativeLinkInput::StaticArchive(non_library.to_path_buf()),
+        NativeLinkInput::SharedLibrary(non_library.to_path_buf()),
+    ] {
+        let mut configuration = BuildConfiguration::new(output.clone());
+        configuration.native_inputs = vec![invalid];
+        let failure = prepare_program(compiled, configuration).unwrap_err();
+        assert_eq!(failure.reason(), "build.native-input");
+        assert_eq!(failure.responsibility(), "input");
+    }
+    assert!(!directory.join(".ash-build").exists());
+    assert!(!output.exists());
+
+    // The valid checked program requires unique ash_counter_* symbols, but no
+    // linker input supplies them. Linking must refuse and retain its evidence;
+    // it cannot replace an existing executable destination or invoke native code.
+    let previous = b"preserved destination\n";
+    fs::write(&output, previous).unwrap();
+    let mut missing = BuildConfiguration::new(output.clone());
+    missing.cargo_target_directory = Some(cache.to_path_buf());
+    let prepared = prepare_program(compiled, missing).unwrap();
+    let failure = build_prepared(prepared).unwrap_err();
+    assert_eq!(failure.reason(), "build.native-tool");
+    let log = failure.build_log().expect("link refusal retains its log");
+    let diagnostic = fs::read_to_string(log).unwrap();
+    assert!(diagnostic.contains("ash_counter_echo_i8"), "{diagnostic}");
+    assert!(
+        diagnostic.contains("undefined symbol") || diagnostic.contains("undefined reference"),
+        "missing native symbol must be the linker failure: {diagnostic}"
+    );
+    assert!(log.parent().unwrap().join("src/main.rs").is_file());
+    assert_eq!(fs::read(&output).unwrap(), previous);
+}
+
 // The test uses the public build phase, with no private image/descriptor edits or
 // hand-installed callbacks. Sources disappear before host preparation/linkage.
 fn build_case(fixture: &Fixture, name: &str, source: &str, native: NativeLinkInput) -> PathBuf {
@@ -111,6 +159,17 @@ fn build_case(fixture: &Fixture, name: &str, source: &str, native: NativeLinkInp
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
     configuration.cargo_target_directory = Some(cache.join("ffi-native-hosts"));
+    if matches!(
+        configuration.native_inputs.as_slice(),
+        [NativeLinkInput::StaticArchive(_)]
+    ) {
+        verify_build_refusals(
+            &compiled,
+            &directory,
+            &fixture.0.join("native_counter.c"),
+            configuration.cargo_target_directory.as_deref().unwrap(),
+        );
+    }
     let prepared = prepare_program(&compiled, configuration).unwrap();
     assert_eq!(*compiled.compilation_work(), compilation_work);
     assert!(!prepared.generated_rust().contains("compile_path"));
@@ -171,73 +230,39 @@ fn generated_scalar_hosts_preserve_real_native_counts_and_exact_results_with_bot
     // Keep the whole build matrix sequential: a single root Cargo window owns
     // connected verification. These are real C calls, not corrupted callbacks.
     for (linkage, input) in ["static", "shared"].into_iter().zip(inputs) {
-        for (name, source, result, trace) in [
-            (
-                "success",
-                include_str!("fixtures/source-native/cases/success.ash"),
-                "127\n",
-                b"i".as_slice(),
-            ),
-            (
-                "range-refusal",
-                include_str!("fixtures/source-native/cases/range_refusal.ash"),
-                "900\n",
-                b"".as_slice(),
-            ),
-            (
-                "u64-max",
-                include_str!("fixtures/source-native/cases/u64_max.ash"),
-                "18446744073709551615\n",
-                b"u".as_slice(),
-            ),
-            (
-                "void",
-                include_str!("fixtures/source-native/cases/void.ash"),
-                "()\n",
-                b"v".as_slice(),
-            ),
-            (
-                "imported-repeated",
-                include_str!("fixtures/source-native/cases/imported_repeated.ash"),
-                "83\n",
-                b"ii".as_slice(),
-            ),
-        ] {
-            let executable = build_case(
-                &fixture,
-                &format!("{linkage}-{name}"),
-                source,
-                input.clone(),
+        let name = "combined";
+        let source = include_str!("fixtures/source-native/cases/combined.ash");
+        let result = "(127, 900, 18446744073709551615, (), 83)\n";
+        let trace = b"iuvii";
+        let executable = build_case(&fixture, &format!("{linkage}-{name}"), source, input);
+        if linkage == "shared" {
+            let (output, calls) = run_host(&executable, &fixture, false);
+            assert!(
+                !output.status.success(),
+                "automatic rpath must not be emitted"
             );
-            if linkage == "shared" && name == "success" {
-                let (output, calls) = run_host(&executable, &fixture, false);
-                assert!(
-                    !output.status.success(),
-                    "automatic rpath must not be emitted"
-                );
-                assert!(output.stdout.is_empty());
-                assert!(
-                    calls.is_empty(),
-                    "loader refusal precedes every native call"
-                );
-                let diagnostic = String::from_utf8_lossy(&output.stderr);
-                assert!(
-                    diagnostic.contains("libash_counter_fixture.so"),
-                    "{diagnostic}"
-                );
-                assert!(
-                    diagnostic.contains("error while loading shared libraries"),
-                    "{diagnostic}"
-                );
-            }
-            // Repeat an independently restored host activation after source loss.
-            for _ in 0..2 {
-                let (output, calls) = run_host(&executable, &fixture, true);
-                assert!(output.status.success(), "{linkage}/{name}: {output:?}");
-                assert_eq!(output.stdout, result.as_bytes(), "{linkage}/{name}");
-                assert!(output.stderr.is_empty(), "{linkage}/{name}: {output:?}");
-                assert_eq!(calls, trace, "{linkage}/{name}: native call count/order");
-            }
+            assert!(output.stdout.is_empty());
+            assert!(
+                calls.is_empty(),
+                "loader refusal precedes every native call"
+            );
+            let diagnostic = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                diagnostic.contains("libash_counter_fixture.so"),
+                "{diagnostic}"
+            );
+            assert!(
+                diagnostic.contains("error while loading shared libraries"),
+                "{diagnostic}"
+            );
+        }
+        // Repeat an independently restored host activation after source loss.
+        for _ in 0..2 {
+            let (output, calls) = run_host(&executable, &fixture, true);
+            assert!(output.status.success(), "{linkage}/{name}: {output:?}");
+            assert_eq!(output.stdout, result.as_bytes(), "{linkage}/{name}");
+            assert!(output.stderr.is_empty(), "{linkage}/{name}: {output:?}");
+            assert_eq!(calls, trace, "{linkage}/{name}: native call count/order");
         }
     }
 }

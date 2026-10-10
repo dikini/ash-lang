@@ -1333,9 +1333,18 @@ where
         let Type::EffectfulFunction(_, computation) = &main.scheme.value_type else {
             return Err(internal_file_failure());
         };
+        // Reuse the checked graph's defining-module index. The entry's local
+        // registry excludes imported symbols; rebuilding a checker view would
+        // repeat completed preparation and copy its immutable contracts.
         let native_entry = select_effect_core
             && crate::core::effect::owner_free_native_entry_row(
-                entry.registry(),
+                |effect| {
+                    checked_by_module
+                        .get(&effect.module())
+                        .and_then(|index| checked.get(*index))
+                        .filter(|module| module.module() == effect.module())
+                        .map(|module| module.registry().as_ref())
+                },
                 computation.effects(),
                 &mut checking_type_work,
             )
@@ -3097,9 +3106,13 @@ fn refuse_unbound_source_native_entry(core: &CompiledCore) -> Result<(), Runtime
 /// bindings. It performs no source loading, host compilation or library linking.
 /// Binding admission and observation preparation both precede Ash execution.
 ///
-/// Draft dependency: SourceNativeBindings and its private admission capability
-/// must be implemented by the connected source-runtime/bridge gate. This call
-/// site neither constructs that capability nor chooses a callback by name.
+/// The generated linked host supplies bindings through sealed bridge admission.
+/// Public empty binding construction grants no native invocation authority;
+/// this function neither registers callbacks nor selects them by source name.
+///
+/// # Errors
+/// Refuses missing or changed bindings before Ash execution and retains runtime
+/// failures without retrying a returned external call.
 pub fn execute_with_source_native_bindings(
     program: &CompiledProgram,
     bindings: &mut crate::foreign::source_runtime::SourceNativeBindings,

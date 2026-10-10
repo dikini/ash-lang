@@ -1,4 +1,4 @@
-//! Draft public evidence for compilation versus source-native execution binding.
+//! Public evidence for compilation versus source-native execution binding.
 
 use ash::{
     driver::{EntryReason, PipelineFailure, RunConfiguration, compile_path, execute, run_path},

@@ -1,4 +1,4 @@
-//! Uncompiled draft regressions for the connected owner-free Core boundary.
+//! Independent admission regressions for the owner-free Core boundary.
 
 use std::{
     path::PathBuf,
@@ -462,6 +462,74 @@ fn native_interpret_independently_rejects_malformed_sets_actuals_and_rows() {
 #[test]
 fn native_interpret_full_validation_has_exact_one_short_and_fresh_work_cuts() {
     let fixture = Fixture::new();
+    // Finalizer payload admission must debit the same phase ledger as its
+    // staging, including failed operations, rather than the builder allowance.
+    let entry = || {
+        let span = fixture
+            .graph
+            .module(fixture.graph.entry())
+            .unwrap()
+            .source()
+            .span(crate::source::ByteRange::new(0, 1).unwrap())
+            .unwrap();
+        let origin = Origin::Source(span);
+        let report = Type::Application(
+            Box::new(Type::Nominal(fixture.stop.call_codec().ids().call)),
+            Box::new(Type::Unit),
+        );
+        let mut builder = EffectCoreBuilder::with_effect_registry(Arc::clone(&fixture.registry));
+        let operand = builder.unit(Type::Unit, origin.clone()).unwrap();
+        let request = builder
+            .request(
+                fixture.instance(true),
+                fixture.stop.operation(),
+                operand,
+                report,
+                EffectRow::singleton(fixture.instance(true)),
+                origin,
+            )
+            .unwrap();
+        (builder, request, span)
+    };
+    let (mut builder, body, span) = entry();
+    let builder_work = builder.type_work.used();
+    let mut measured_entry = TypeWorkBudget::default();
+    assert!(
+        builder
+            .prepare_owner_free_native_entry(body, span, &mut measured_entry)
+            .is_ok()
+    );
+    assert_eq!(
+        builder.type_work.used(),
+        builder_work,
+        "finalization must borrow the caller ledger"
+    );
+    let entry_cost = measured_entry.used();
+    assert!(entry_cost > 0);
+    for limit in [entry_cost - 1, entry_cost] {
+        for _ in 0..2 {
+            let (mut builder, body, span) = entry();
+            let builder_work = builder.type_work.used();
+            let mut work = TypeWorkBudget::with_limit(limit);
+            let result = builder.prepare_owner_free_native_entry(body, span, &mut work);
+            assert_eq!(
+                builder.type_work.used(),
+                builder_work,
+                "success and failure must return the caller ledger"
+            );
+            if limit == entry_cost {
+                assert!(result.is_ok());
+                assert_eq!(work.used(), entry_cost);
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(crate::core::effect::NativeEntryBuildFailure::Build(
+                        crate::core::BuildError::TypeWorkExceeded
+                    ))
+                ));
+            }
+        }
+    }
     let sources: Vec<_> = fixture
         .graph
         .modules()

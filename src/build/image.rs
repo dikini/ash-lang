@@ -310,6 +310,7 @@ pub(crate) struct PureImage {
     parameters: Vec<ParameterRecord>,
     quantifiers: Vec<QuantifierRecord>,
     nominal_parameters: Vec<NominalParameterRecord>,
+    global_parameters: Vec<GlobalParameterRowRecord>,
     abstract_nominals: Vec<AbstractNominalRecord>,
     provenance: Vec<ProvenanceRecord>,
     provenance_children: Vec<u32>,
@@ -1115,7 +1116,7 @@ struct Decoder<'a> {
 
 // A private layout marker for the matching compiler/runtime only. Neither the
 // embedded byte sequence nor its numeric tags promise compatibility.
-const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x03";
+const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x04";
 
 struct WireWriter<'a> {
     bytes: Vec<u8>,
@@ -1722,6 +1723,7 @@ impl PureImage {
         writer.table(&self.parameters)?;
         writer.table(&self.quantifiers)?;
         writer.table(&self.nominal_parameters)?;
+        writer.table(&self.global_parameters)?;
         writer.table(&self.abstract_nominals)?;
         writer.table(&self.provenance)?;
         writer.table(&self.provenance_children)?;
@@ -1783,6 +1785,7 @@ impl PureImage {
             parameters: reader.table()?,
             quantifiers: reader.table()?,
             nominal_parameters: reader.table()?,
+            global_parameters: reader.table()?,
             abstract_nominals: reader.table()?,
             provenance: reader.table()?,
             provenance_children: reader.table()?,
@@ -1826,6 +1829,7 @@ impl PureImage {
             || !self.parameters.is_empty()
             || !self.quantifiers.is_empty()
             || !self.nominal_parameters.is_empty()
+            || !self.global_parameters.is_empty()
             || !self.abstract_nominals.is_empty()
             || !self.provenance.is_empty()
             || !self.provenance_children.is_empty()
@@ -2736,6 +2740,12 @@ struct ResolvedTypeRecord {
 }
 
 #[derive(Clone, Copy, Debug)]
+struct GlobalParameterRowRecord {
+    owner: BinderIdentity,
+    parameters: Slice,
+}
+
+#[derive(Clone, Copy, Debug)]
 struct EffectDeclarationRecord {
     id: EffectIdentity,
     public: bool,
@@ -2884,6 +2894,7 @@ wire_struct!(OperationIdentity, 12, owner, local);
 wire_struct!(ParameterRecord, 21, id, spelling, kind, origin);
 wire_struct!(QuantifierRecord, 9, id, kind);
 wire_struct!(NominalParameterRecord, 16, owner, parameters);
+wire_struct!(GlobalParameterRowRecord, 13, owner, parameters);
 wire_struct!(AbstractNominalRecord, 32, id, spelling, kind, origin);
 wire_struct!(ResolvedTypeRecord, 24, ty, provenance, origin, span);
 wire_struct!(
@@ -4146,6 +4157,15 @@ impl Encoder<'_> {
         if !matches!(original.origin, Origin::Source(_)) {
             return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
         }
+        self.encode_parameter_data(original)
+    }
+
+    // Global records are consumed by their owning registry helper, so recursive
+    // origins can use the existing paid flat Origin codec without cloning.
+    fn encode_parameter_data(
+        &mut self,
+        original: &crate::resolved::ResolvedTypeVariable,
+    ) -> Result<u32, ImageFailure> {
         let id = self.type_variable(original.id)?;
         let spelling = append(
             &mut self.image.bytes,
@@ -4273,6 +4293,32 @@ impl Encoder<'_> {
             push(
                 &mut self.image.nominal_parameters,
                 NominalParameterRecord {
+                    owner,
+                    parameters: Slice::of(&self.image.parameters, start)?,
+                },
+                self.work,
+            )?;
+        }
+        for row in registry.global_parameter_rows() {
+            charge(self.work, 1)?;
+            let owner = self.binder_id(row.owner())?;
+            if !matches!(owner, BinderIdentity::Resolved { .. }) || row.parameters().is_empty() {
+                return Err(ImageFailure::InvalidRecord);
+            }
+            let start = self.image.parameters.len();
+            for identity in row.parameters() {
+                charge(self.work, 1)?;
+                let parameter = registry
+                    .type_variable(*identity)
+                    .ok_or(ImageFailure::InvalidRecord)?;
+                if parameter.id != *identity {
+                    return Err(ImageFailure::InvalidRecord);
+                }
+                self.encode_parameter_data(parameter)?;
+            }
+            push(
+                &mut self.image.global_parameters,
+                GlobalParameterRowRecord {
                     owner,
                     parameters: Slice::of(&self.image.parameters, start)?,
                 },
@@ -4485,6 +4531,19 @@ impl Drop for NominalParameterBuffer {
         }
     }
 }
+struct GlobalParameterBuffer(Vec<(BinderId, Vec<crate::resolved::ResolvedTypeVariable>)>);
+impl GlobalParameterBuffer {
+    fn into_vec(mut self) -> Vec<(BinderId, Vec<crate::resolved::ResolvedTypeVariable>)> {
+        std::mem::take(&mut self.0)
+    }
+}
+impl Drop for GlobalParameterBuffer {
+    fn drop(&mut self) {
+        for (_, parameters) in self.0.drain(..) {
+            drop(ParameterBuffer(parameters));
+        }
+    }
+}
 struct TypeBuffer(Vec<Type>);
 impl TypeBuffer {
     fn into_vec(mut self) -> Vec<Type> {
@@ -4521,6 +4580,13 @@ impl Decoder<'_> {
         ) {
             return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
         }
+        self.parameter_data(record)
+    }
+
+    fn parameter_data(
+        &mut self,
+        record: ParameterRecord,
+    ) -> Result<crate::resolved::ResolvedTypeVariable, ImageFailure> {
         let id = self.type_variable(record.id)?;
         let spelling = self.text(record.spelling)?;
         let kind = self.kind(record.kind)?;
@@ -4543,6 +4609,22 @@ impl Decoder<'_> {
             .map_err(|_| ImageFailure::Resource)?;
         for record in records {
             let parameter = self.parameter(*record)?;
+            parameters.0.push(parameter);
+        }
+        Ok(parameters)
+    }
+
+    fn global_parameters(&mut self, records: Slice) -> Result<ParameterBuffer, ImageFailure> {
+        let records = records.get(&self.image.parameters)?;
+        let mut parameters = ParameterBuffer(Vec::new());
+        charge(self.work, records.len())?;
+        parameters
+            .0
+            .try_reserve_exact(records.len())
+            .map_err(|_| ImageFailure::Resource)?;
+        for record in records {
+            charge(self.work, 1)?;
+            let parameter = self.parameter_data(*record)?;
             parameters.0.push(parameter);
         }
         Ok(parameters)
@@ -4830,6 +4912,25 @@ impl Decoder<'_> {
                 }
             }
         }
+        for record in &self.image.global_parameters {
+            charge(self.work, 1)?;
+            let owner = self.binder_id(record.owner)?;
+            let Some(module) = owner.module() else {
+                return Err(ImageFailure::InvalidRecord);
+            };
+            if !matches!(record.owner, BinderIdentity::Resolved { .. })
+                || record.parameters.len == 0
+            {
+                return Err(ImageFailure::InvalidRecord);
+            }
+            for parameter in record.parameters.get(&self.image.parameters)? {
+                charge(self.work, 1)?;
+                let id = self.type_variable(parameter.id)?;
+                if id.module() != Some(module) || parameter_ids.insert(id, ()).is_some() {
+                    return Err(ImageFailure::InvalidRecord);
+                }
+            }
+        }
         charge(self.work, 1)?;
         if parameter_ids.len() != self.image.parameters.len() {
             return Err(ImageFailure::InvalidRecord);
@@ -4884,6 +4985,20 @@ impl Decoder<'_> {
         }
         registry = registry
             .with_image_kind_facts(canonical_parameters.into_vec(), abstracts, self.work)
+            .map_err(|_| ImageFailure::RegistryAdmission)?;
+        let mut globals = GlobalParameterBuffer(Vec::new());
+        charge(self.work, self.image.global_parameters.len())?;
+        globals
+            .0
+            .try_reserve_exact(self.image.global_parameters.len())
+            .map_err(|_| ImageFailure::Resource)?;
+        for record in &self.image.global_parameters {
+            let owner = self.binder_id(record.owner)?;
+            let parameters = self.global_parameters(record.parameters)?;
+            globals.0.push((owner, parameters.into_vec()));
+        }
+        registry = registry
+            .with_image_global_parameters(globals.into_vec(), self.work)
             .map_err(|_| ImageFailure::RegistryAdmission)?;
         let mut prepared = Vec::new();
         for record in &self.image.prepared_libraries {

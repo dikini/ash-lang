@@ -1005,13 +1005,18 @@ retained once per defining library, then bound to the original effect and
 operation facts. Summaries preserve those immutable contracts and reject
 changed table coverage, signature or parameter correspondence.
 
-This checkpoint provides declaration admission, not source-native execution.
-Native calls retain their exact effect instances, and ordinary `handle` clauses
-cannot install a native symbol's interpreter. No foreign interpreter removes
-those effects at program entry; the existing empty-row entry rule remains in
-force. Constants, qualified ABI references, pointer/output-slot contracts,
-foreign ownership/access and copy windows reject rather than granting partial
-authority.
+Owner-free native calls retain their exact effect instances in ordinary function
+rows. Ordinary `handle` clauses cannot install a native symbol's interpreter.
+Program compilation installs an explicit checked Core interpretation for the
+entry's admitted owner-free native instances. Only those exact instances are
+removed; the resulting entry row must be empty. An ordinary effect or unresolved
+row tail cannot be discharged through this boundary.
+
+Source contracts and checked Core confer no executable bridge binding. Execution
+requires separately admitted bindings before Ash runs; ordinary execution with
+missing bindings refuses without compiling or linking a host implicitly.
+Constants, qualified ABI references, pointer/output-slot contracts, foreign
+ownership/access and copy windows remain excluded from this scalar/void slice.
 
 ## Effects
 
@@ -2337,7 +2342,8 @@ family module-and-program-typing:
       summaries(direct_dependencies_i) |-module module_i ⇒ checked_module_i, summary_i
     checked_program = checked_modules in dependency order
     main is a local checked scheme in entry
-    main is monomorphic Function(Unit, result_type ! {}) with no requirements
+    main is monomorphic Function(Unit, result_type ! effects) with no requirements
+    effects is empty or a closed row of admitted owner-free native instances
     closed(result_type)
     ===>
     |-program checked_program, entry ⇒ result_type
@@ -2396,15 +2402,18 @@ neither validation nor synthesis selects implementations again.
 `T-Program` checks each module after all its dependencies. The entry must
 declare exactly one local `main`; an imported `main` cannot satisfy the
 premise. Its checked scheme must have no type parameters, domain `Unit`, a
-closed result, no requirements, and an empty latent effect row. The linked
-entry must preserve that empty row. Entry failures have this order: missing
-local `main`, polymorphic scheme, wrong domain, nonempty row, open result, then
-constrained scheme. A nonempty row is `entry.main-effects`; no later boundary
-reclassifies it. This insertion preserves the relative order of the predecessor
-entry-shape failures. The closed `result_type` is the type observed for the
-whole program, and `main` need not be public. Every evidence obligation in a
-well-shaped `main` body must therefore select concrete or scoped exact evidence
-at its occurrence; `main` supplies no abstract requirements.
+closed result and no requirements. Its latent effect row must be empty or a
+closed row containing only admitted owner-free native instances. The linked
+entry is wrapped by the explicit native Core interpretation when needed; its
+outward row after exact subtraction must be empty. Entry failures have this
+order: missing local `main`, polymorphic scheme, wrong domain, inadmissible effect
+row, open result, then constrained scheme. An ordinary outward effect, unresolved
+row tail or unsupported effect requirement is `entry.main-effects`. This preserves
+the relative order of the predecessor entry-shape failures. The closed
+`result_type` is the type observed for the whole program, and `main` need not be
+public. Every evidence obligation in a well-shaped `main` body must therefore
+select concrete or scoped exact evidence at its occurrence; `main` supplies no
+abstract requirements.
 
 Semicolons in these judgments separate semantic fields and are not source
 punctuation. Resolution has already ensured global-name freshness and

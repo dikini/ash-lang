@@ -103,7 +103,12 @@ impl SourceNativeBindings {
         // Final independent Core validation and Instantiation::effect already
         // check kind formation/substitution. Retain and recheck ALL ordered tags;
         // unsupported higher-kinded source-native parameters remain explicit.
-        for (parameter, actual) in parameters.iter().zip(instance.arguments()) {
+        let projection = symbol.symbol().native_type_projection();
+        let mut native = 0;
+        // The parameter-count precharge pays this complete ordered scan. Check
+        // the derived Type-only projection here without rescanning phantom rows.
+        for (index, (parameter, actual)) in parameters.iter().zip(instance.arguments()).enumerate()
+        {
             if !matches!(
                 (parameter.kind(), actual),
                 (Kind::Type, KindedArgument::TypeArg(_))
@@ -111,11 +116,7 @@ impl SourceNativeBindings {
             ) {
                 return Err(RuntimeFailure::ForeignBinding);
             }
-        }
-        let projection = symbol.symbol().native_type_projection();
-        let mut native = 0;
-        for (index, argument) in instance.arguments().iter().enumerate() {
-            if matches!(argument, KindedArgument::TypeArg(_)) {
+            if matches!(actual, KindedArgument::TypeArg(_)) {
                 paid(work, 1)?;
                 if projection.get(native) != Some(&index) {
                     return Err(RuntimeFailure::ForeignBinding);
