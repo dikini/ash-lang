@@ -2416,6 +2416,11 @@ impl<F: CoreOperationFamily> ValidatedCoreProgram<F> {
         self.0.node_count()
     }
 
+    /// Borrows every independently validated node for paid admission scans.
+    pub(crate) fn nodes(&self) -> &[CoreTypedExpr<F>] {
+        &self.0.nodes
+    }
+
     /// Returns the immutable nominal and constructor registry.
     #[must_use]
     pub fn registry(&self) -> &Arc<ResolvedRegistry> {

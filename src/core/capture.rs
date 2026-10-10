@@ -281,35 +281,31 @@ impl CaptureValueSummary {
                 .extend_types(&mut types, budget)
                 .map_err(|_| ())?;
             types.extend(graph.types.0.iter());
-            for request in graph.code.iter().filter_map(|code| match code {
-                Control::Request(request)
-                | Control::Handler {
-                    effect: request, ..
+            for code in &graph.code {
+                if let Control::NativeInterpret { effects, .. } = code {
+                    budget.charge(effects.len())?;
                 }
-                | Control::Resource {
-                    effect: request, ..
-                } => Some(request),
-                _ => None,
-            }) {
-                if let Some(effect) = &request.effect {
-                    crate::types::extend_owner_type_children_with_charge(
-                        effect.arguments(),
-                        &mut types,
-                        budget,
-                    )?;
-                }
-                budget.charge(request.members.len())?;
-                for member in &request.members {
-                    crate::types::extend_owner_type_children_with_charge(
-                        member.provided.arguments(),
-                        &mut types,
-                        budget,
-                    )?;
-                    crate::types::extend_owner_type_children_with_charge(
-                        member.native.arguments(),
-                        &mut types,
-                        budget,
-                    )?;
+                for request in code.requests() {
+                    if let Some(effect) = &request.effect {
+                        crate::types::extend_owner_type_children_with_charge(
+                            effect.arguments(),
+                            &mut types,
+                            budget,
+                        )?;
+                    }
+                    budget.charge(request.members.len())?;
+                    for member in &request.members {
+                        crate::types::extend_owner_type_children_with_charge(
+                            member.provided.arguments(),
+                            &mut types,
+                            budget,
+                        )?;
+                        crate::types::extend_owner_type_children_with_charge(
+                            member.native.arguments(),
+                            &mut types,
+                            budget,
+                        )?;
+                    }
                 }
             }
         }
@@ -327,16 +323,7 @@ impl CaptureValueSummary {
         let mut identities = Vec::new();
         let mut pending = Vec::new();
         if let Some(graph) = &self.graph {
-            for request in graph.code.iter().filter_map(|code| match code {
-                Control::Request(request)
-                | Control::Handler {
-                    effect: request, ..
-                }
-                | Control::Resource {
-                    effect: request, ..
-                } => Some(request),
-                _ => None,
-            }) {
+            for request in graph.code.iter().flat_map(Control::requests) {
                 if let Some(effect) = &request.effect {
                     budget.charge(1 + effect.arguments().len())?;
                     identities.try_reserve(1).map_err(|_| ())?;
@@ -2711,6 +2698,22 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
     budget: &mut TypeWorkBudget,
 ) -> Result<Control, Failure> {
     Ok(match operation {
+        Some(EffectOperation::NativeInterpret(boundary)) => {
+            charge(budget, boundary.interpretations().len())?;
+            let mut effects = Vec::new();
+            effects
+                .try_reserve_exact(boundary.interpretations().len())
+                .map_err(|_| Failure::Resource)?;
+            for interpretation in boundary.interpretations() {
+                let mut request = Request::effect(interpretation.effect(), source, budget)?;
+                request.operation = Some(interpretation.symbol().operation());
+                effects.push(request);
+            }
+            Control::NativeInterpret {
+                body: index(boundary.body()) + 1,
+                effects,
+            }
+        }
         Some(EffectOperation::ProviderStateAccess(_)) if provider_query => Control::Unavailable,
         Some(EffectOperation::ProviderStateAccess(access)) => {
             Control::Sequence(copy_slice(&[index(access.operand()) + 1], budget)?)
@@ -4528,14 +4531,10 @@ pub(in crate::core) fn reconstruct_actual_provider_captures(
     };
     for code in &source.code {
         let mut code = code.copy(code_offset, target_offset, type_offset, budget)?;
-        if let Control::Request(request)
-        | Control::Handler {
-            effect: request, ..
+        if let Control::NativeInterpret { effects, .. } = &code {
+            charge(budget, effects.len())?;
         }
-        | Control::Resource {
-            effect: request, ..
-        } = &mut code
-        {
+        for request in code.requests_mut() {
             instantiate_capture_request(request, &substitutions.0, rows, budget)?;
         }
         actual.graph.code.push(code);
@@ -5351,6 +5350,9 @@ fn solve_capture_values<F: CoreOperationFamily>(
                     }
                     Some(EffectOperation::Registration(scope)) => {
                         value = values[index(scope.body)].copy(budget)?;
+                    }
+                    Some(EffectOperation::NativeInterpret(boundary)) => {
+                        value = values[index(boundary.body())].copy(budget)?;
                     }
                     Some(EffectOperation::Resource(resource)) => {
                         value = values[index(resource.body)].copy(budget)?;

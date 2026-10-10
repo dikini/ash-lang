@@ -10,15 +10,19 @@ use std::{
 
 use crate::{
     foreign::{
-        checked_source::{
-            CheckedForeignSymbol, ForeignBindingContext, NativeLibraryId,
-            authenticate_foreign_symbol,
-        },
+        checked_source::CheckedForeignSymbol,
         source_contract::{PreparedAbiResult, PreparedOperandSource, PreparedScalarRepresentation},
     },
-    resolved::ResolvedRegistry,
     source::{Origin, Span},
     types::{OperationId, TypeWorkBudget},
+};
+
+#[cfg(test)]
+use crate::{
+    foreign::checked_source::{
+        ForeignBindingContext, NativeLibraryId, authenticate_foreign_symbol,
+    },
+    resolved::ResolvedRegistry,
 };
 
 const TARGET: &str = "x86_64-unknown-linux-gnu";
@@ -32,6 +36,7 @@ pub(crate) enum ForeignBridgeTarget {
 }
 
 impl ForeignBridgeTarget {
+    #[cfg(test)]
     pub(crate) const fn triple(self) -> &'static str {
         match self {
             Self::X86_64LinuxGnu => TARGET,
@@ -100,9 +105,11 @@ pub(crate) struct ForeignBridgeFailure {
 }
 
 impl ForeignBridgeFailure {
+    #[cfg(test)]
     pub(crate) const fn reason(self) -> ForeignBridgeReason {
         self.reason
     }
+    #[cfg(test)]
     pub(crate) const fn span(self) -> Span {
         self.span
     }
@@ -176,24 +183,30 @@ impl fmt::Debug for TargetResolvedForeignBridge {
 }
 
 impl TargetResolvedForeignBridge {
+    #[cfg(test)]
     pub(crate) fn symbol(&self) -> &Arc<CheckedForeignSymbol> {
         &self.symbol
     }
+    #[cfg(test)]
     pub(crate) fn library(&self) -> NativeLibraryId {
         self.symbol.library()
     }
     pub(crate) fn operation(&self) -> OperationId {
         self.symbol.operation()
     }
+    #[cfg(test)]
     pub(crate) const fn target(&self) -> ForeignBridgeTarget {
         self.target
     }
+    #[cfg(test)]
     pub(crate) fn operands(&self) -> &[TargetScalar] {
         &self.operands
     }
+    #[cfg(test)]
     pub(crate) const fn result(&self) -> TargetResult {
         self.result
     }
+    #[cfg(test)]
     pub(crate) fn native_type_projection(&self) -> &[usize] {
         self.symbol.symbol().native_type_projection()
     }
@@ -205,8 +218,9 @@ impl TargetResolvedForeignBridge {
 /// Resolves only the admitted scalar/void subset, with no host-width fallback.
 ///
 /// Exact registry/tag allocation and independent source correspondence precede
-/// planning. A native link input must later be associated with library(), and
+/// planning. Whole-program native inputs supply linker dependencies, and
 /// executable registration must retain this same original symbol allocation.
+#[cfg(test)]
 pub(crate) fn plan_foreign_bridge(
     symbol: Arc<CheckedForeignSymbol>,
     target: &str,
@@ -249,6 +263,51 @@ pub(crate) fn plan_foreign_bridge(
             error.span(),
         )
     })?;
+    plan_target_bridge(symbol, work, span)
+}
+
+/// A completed independent Core validation supplies source authentication.
+/// Exact original table/tag allocation is still checked and charged here.
+pub(crate) fn plan_foreign_bridge_in_program(
+    symbol: Arc<CheckedForeignSymbol>,
+    target: &str,
+    program: &crate::core::ValidatedEffectProgram,
+    work: &mut TypeWorkBudget,
+) -> Result<TargetResolvedForeignBridge, ForeignBridgeFailure> {
+    let span = prepared_span(&symbol, work)?;
+    charge(
+        work,
+        target
+            .len()
+            .checked_add(3)
+            .ok_or_else(|| fail(ForeignBridgeReason::Resource, span))?,
+        span,
+    )?;
+    if target != TARGET {
+        return Err(fail(ForeignBridgeReason::UnsupportedTarget, span));
+    }
+    if symbol.prepared().profile() != TARGET {
+        return Err(fail(ForeignBridgeReason::UnsupportedProfile, span));
+    }
+    let registry = program.registry();
+    if !registry
+        .native_symbol(symbol.operation())
+        .is_some_and(|original| Arc::ptr_eq(original, &symbol))
+        || !registry
+            .effect(symbol.effect())
+            .and_then(|effect| effect.native_contract.as_ref())
+            .is_some_and(|original| Arc::ptr_eq(original, &symbol))
+    {
+        return Err(fail(ForeignBridgeReason::InvalidAuthority, span));
+    }
+    plan_target_bridge(symbol, work, span)
+}
+
+fn plan_target_bridge(
+    symbol: Arc<CheckedForeignSymbol>,
+    work: &mut TypeWorkBudget,
+    span: Span,
+) -> Result<TargetResolvedForeignBridge, ForeignBridgeFailure> {
     let source = symbol.symbol();
     charge(
         work,

@@ -1219,3 +1219,601 @@ mod tests {
         );
     }
 }
+
+// Insert before the existing source-contract tests. This is compiler-private
+// normalized construction data, not a checked source-contract capability.
+// Every origin in this initial image subset is an original Source span; the
+// encoder must refuse Generated/Related prepared origins rather than flattening.
+pub(crate) struct PrivatePreparedLibraryParts {
+    pub(crate) module: ModuleId,
+    pub(crate) name: String,
+    pub(crate) public: bool,
+    pub(crate) representations: Vec<PrivatePreparedRepresentationParts>,
+    pub(crate) constants: Vec<PrivatePreparedConstantParts>,
+    pub(crate) symbols: Vec<PrivatePreparedSymbolParts>,
+    pub(crate) span: Span,
+}
+
+pub(crate) struct PrivatePreparedRepresentationParts {
+    pub(crate) name: String,
+    pub(crate) representation: PreparedScalarRepresentation,
+    pub(crate) span: Span,
+}
+
+pub(crate) struct PrivatePreparedConstantParts {
+    pub(crate) name: String,
+    pub(crate) representation: PreparedScalarRepresentation,
+    pub(crate) value: PreparedScalarValue,
+    pub(crate) span: Span,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum PrivatePreparedParameterKind {
+    Type,
+    EffectRow,
+}
+
+pub(crate) struct PrivatePreparedParameterParts {
+    pub(crate) name: String,
+    pub(crate) kind: PrivatePreparedParameterKind,
+    pub(crate) span: Span,
+}
+
+pub(crate) struct PrivatePreparedOperandParts {
+    pub(crate) representation: PreparedScalarRepresentation,
+    pub(crate) source: PreparedOperandSource,
+    pub(crate) span: Span,
+}
+
+pub(crate) struct PrivatePreparedOutcomeParts {
+    pub(crate) predicates: Vec<PreparedOutcomePredicate>,
+    pub(crate) span: Span,
+}
+
+pub(crate) struct PrivatePreparedSymbolParts {
+    pub(crate) name: String,
+    pub(crate) native_name: String,
+    pub(crate) parameters: Vec<PrivatePreparedParameterParts>,
+    pub(crate) native_type_projection: Vec<usize>,
+    pub(crate) operands: Vec<PrivatePreparedOperandParts>,
+    pub(crate) result: PreparedAbiResult,
+    pub(crate) outcomes: Vec<PrivatePreparedOutcomeParts>,
+    pub(crate) span: Span,
+}
+
+fn private_span_within(outer: Span, inner: Span) -> bool {
+    outer.source() == inner.source()
+        && outer.range().start() <= inner.range().start()
+        && inner.range().end() <= outer.range().end()
+}
+
+fn private_scalar_representation(
+    value: PreparedScalarRepresentation,
+    span: Span,
+) -> Result<(), ForeignContractError> {
+    match value {
+        PreparedScalarRepresentation::Signed(8 | 32 | 64)
+        | PreparedScalarRepresentation::Unsigned(8 | 32 | 64)
+        | PreparedScalarRepresentation::SizeT => Ok(()),
+        _ => Err(failure(
+            ForeignContractReason::UnsupportedRepresentation,
+            span,
+        )),
+    }
+}
+
+fn private_scalar_value(
+    value: PreparedScalarValue,
+    representation: PreparedScalarRepresentation,
+    span: Span,
+) -> Result<(), ForeignContractError> {
+    private_scalar_representation(representation, span)?;
+    // Source preparation canonicalizes negative zero. Keep its exact normalized
+    // identity rather than admitting two encodings of the same scalar.
+    let admitted = !(value.negative && value.magnitude == 0)
+        && match representation {
+            PreparedScalarRepresentation::Signed(bits) => {
+                let boundary = 1_u64 << (bits - 1);
+                if value.negative {
+                    value.magnitude <= boundary
+                } else {
+                    value.magnitude < boundary
+                }
+            }
+            PreparedScalarRepresentation::Unsigned(bits) => {
+                !value.negative && (bits == 64 || value.magnitude < (1_u64 << bits))
+            }
+            PreparedScalarRepresentation::SizeT => !value.negative,
+        };
+    if admitted {
+        Ok(())
+    } else {
+        Err(failure(ForeignContractReason::ConstantRange, span))
+    }
+}
+
+/// Rehydrates complete, normalized scalar ABI facts under the caller's meter.
+/// This does not load source, create a manifest, resolve a name or install an
+/// interpreter. Resolved binding and independent Core admission remain required.
+pub(crate) fn restore_prepared_library(
+    parts: PrivatePreparedLibraryParts,
+    work: &mut TypeWorkBudget,
+) -> Result<PreparedForeignLibrary, ForeignContractError> {
+    let span = parts.span;
+    let count = parts
+        .representations
+        .len()
+        .checked_add(parts.constants.len())
+        .and_then(|count| count.checked_add(parts.symbols.len()))
+        .ok_or_else(|| failure(ForeignContractReason::WorkExhausted, span))?;
+    charge(
+        work,
+        count
+            .checked_add(1)
+            .ok_or_else(|| failure(ForeignContractReason::WorkExhausted, span))?,
+        span,
+    )?;
+    let mut names: Vec<&str> = Vec::new();
+    reserve(&mut names, count, span)?;
+    for (name, member_span) in parts
+        .representations
+        .iter()
+        .map(|value| (value.name.as_str(), value.span))
+        .chain(
+            parts
+                .constants
+                .iter()
+                .map(|value| (value.name.as_str(), value.span)),
+        )
+        .chain(
+            parts
+                .symbols
+                .iter()
+                .map(|value| (value.name.as_str(), value.span)),
+        )
+    {
+        charge(work, 1, member_span)?;
+        if name.is_empty() || !private_span_within(span, member_span) {
+            return Err(failure(ForeignContractReason::DuplicateMember, member_span));
+        }
+        for previous in &names {
+            if names_equal(previous, name, member_span, work)? {
+                return Err(failure(ForeignContractReason::DuplicateMember, member_span));
+            }
+        }
+        names.push(name);
+    }
+    for representation in &parts.representations {
+        charge(work, 1, representation.span)?;
+        private_scalar_representation(representation.representation, representation.span)?;
+    }
+    for constant in &parts.constants {
+        charge(
+            work,
+            parts
+                .representations
+                .len()
+                .checked_add(1)
+                .ok_or_else(|| failure(ForeignContractReason::WorkExhausted, constant.span))?,
+            constant.span,
+        )?;
+        private_scalar_value(constant.value, constant.representation, constant.span)?;
+        if !parts
+            .representations
+            .iter()
+            .any(|value| value.representation == constant.representation)
+        {
+            return Err(failure(ForeignContractReason::UnknownMember, constant.span));
+        }
+    }
+    for symbol in &parts.symbols {
+        charge(
+            work,
+            symbol
+                .native_name
+                .len()
+                .checked_add(1)
+                .ok_or_else(|| failure(ForeignContractReason::WorkExhausted, symbol.span))?,
+            symbol.span,
+        )?;
+        if symbol.native_name.is_empty() || symbol.native_name.as_bytes().contains(&0) {
+            return Err(failure(
+                ForeignContractReason::InvalidNativeName,
+                symbol.span,
+            ));
+        }
+        charge(
+            work,
+            symbol
+                .parameters
+                .len()
+                .checked_add(symbol.native_type_projection.len())
+                .ok_or_else(|| failure(ForeignContractReason::WorkExhausted, symbol.span))?,
+            symbol.span,
+        )?;
+        let mut type_index = 0;
+        for (index, parameter) in symbol.parameters.iter().enumerate() {
+            charge(work, 1, parameter.span)?;
+            if parameter.name.is_empty() || !private_span_within(symbol.span, parameter.span) {
+                return Err(failure(
+                    ForeignContractReason::InvalidParameters,
+                    parameter.span,
+                ));
+            }
+            for previous in &symbol.parameters[..index] {
+                if names_equal(&previous.name, &parameter.name, parameter.span, work)? {
+                    return Err(failure(
+                        ForeignContractReason::InvalidParameters,
+                        parameter.span,
+                    ));
+                }
+            }
+            if matches!(parameter.kind, PrivatePreparedParameterKind::Type) {
+                if symbol.native_type_projection.get(type_index) != Some(&index) {
+                    return Err(failure(
+                        ForeignContractReason::InvalidParameters,
+                        parameter.span,
+                    ));
+                }
+                type_index += 1;
+            }
+        }
+        if type_index != symbol.native_type_projection.len() {
+            return Err(failure(
+                ForeignContractReason::InvalidParameters,
+                symbol.span,
+            ));
+        }
+        for operand in &symbol.operands {
+            charge(
+                work,
+                parts
+                    .representations
+                    .len()
+                    .checked_add(1)
+                    .ok_or_else(|| failure(ForeignContractReason::WorkExhausted, operand.span))?,
+                operand.span,
+            )?;
+            private_scalar_representation(operand.representation, operand.span)?;
+            if !private_span_within(symbol.span, operand.span)
+                || !parts
+                    .representations
+                    .iter()
+                    .any(|value| value.representation == operand.representation)
+            {
+                return Err(failure(ForeignContractReason::OperandRole, operand.span));
+            }
+            match &operand.source {
+                PreparedOperandSource::Constant(index) => {
+                    let constant = parts.constants.get(*index).ok_or_else(|| {
+                        failure(ForeignContractReason::UnknownMember, operand.span)
+                    })?;
+                    if constant.representation != operand.representation {
+                        return Err(failure(ForeignContractReason::OperandRole, operand.span));
+                    }
+                }
+                PreparedOperandSource::Source(path) => {
+                    // The existing resolved binding pass checks each complete
+                    // path against the retained source signature, including Int.
+                    charge(
+                        work,
+                        path.len().checked_add(1).ok_or_else(|| {
+                            failure(ForeignContractReason::WorkExhausted, operand.span)
+                        })?,
+                        operand.span,
+                    )?;
+                    if path.is_empty() {
+                        return Err(failure(ForeignContractReason::SourcePosition, operand.span));
+                    }
+                }
+            }
+        }
+        if let PreparedAbiResult::Scalar(representation) = symbol.result {
+            charge(
+                work,
+                parts
+                    .representations
+                    .len()
+                    .checked_add(1)
+                    .ok_or_else(|| failure(ForeignContractReason::WorkExhausted, symbol.span))?,
+                symbol.span,
+            )?;
+            private_scalar_representation(representation, symbol.span)?;
+            if !parts
+                .representations
+                .iter()
+                .any(|value| value.representation == representation)
+            {
+                return Err(failure(ForeignContractReason::UnknownMember, symbol.span));
+            }
+        }
+        charge(work, symbol.outcomes.len(), symbol.span)?;
+        let Some(last) = symbol.outcomes.last() else {
+            return Err(failure(ForeignContractReason::OutcomeCoverage, symbol.span));
+        };
+        if !last.predicates.is_empty() {
+            return Err(failure(ForeignContractReason::OutcomeCoverage, last.span));
+        }
+        for (index, outcome) in symbol.outcomes.iter().enumerate() {
+            charge(
+                work,
+                outcome
+                    .predicates
+                    .len()
+                    .checked_add(1)
+                    .ok_or_else(|| failure(ForeignContractReason::WorkExhausted, outcome.span))?,
+                outcome.span,
+            )?;
+            if !private_span_within(symbol.span, outcome.span)
+                || (index + 1 != symbol.outcomes.len() && outcome.predicates.is_empty())
+            {
+                return Err(failure(
+                    ForeignContractReason::OutcomeCoverage,
+                    outcome.span,
+                ));
+            }
+            for (position, predicate) in outcome.predicates.iter().enumerate() {
+                let PreparedAbiResult::Scalar(representation) = symbol.result else {
+                    return Err(failure(
+                        ForeignContractReason::OutcomeCoverage,
+                        outcome.span,
+                    ));
+                };
+                if predicate.position != PreparedNativePosition::Result {
+                    return Err(failure(
+                        ForeignContractReason::OutcomeCoverage,
+                        outcome.span,
+                    ));
+                }
+                private_scalar_value(predicate.value, representation, outcome.span)?;
+                charge(work, parts.constants.len(), outcome.span)?;
+                if !parts.constants.iter().any(|constant| {
+                    constant.representation == representation && constant.value == predicate.value
+                }) {
+                    return Err(failure(ForeignContractReason::UnknownMember, outcome.span));
+                }
+                charge(work, position, outcome.span)?;
+                if outcome.predicates[..position]
+                    .iter()
+                    .any(|previous| previous.position == predicate.position)
+                {
+                    return Err(failure(
+                        ForeignContractReason::OverlappingOutcomes,
+                        outcome.span,
+                    ));
+                }
+            }
+            if !outcome.predicates.is_empty() {
+                for previous in &symbol.outcomes[..index] {
+                    let comparisons = previous
+                        .predicates
+                        .len()
+                        .checked_mul(outcome.predicates.len())
+                        .ok_or_else(|| {
+                            failure(ForeignContractReason::WorkExhausted, outcome.span)
+                        })?;
+                    charge(work, comparisons, outcome.span)?;
+                    if !previous.predicates.iter().any(|left| {
+                        outcome.predicates.iter().any(|right| {
+                            left.position == right.position && left.value != right.value
+                        })
+                    }) {
+                        return Err(failure(
+                            ForeignContractReason::OverlappingOutcomes,
+                            outcome.span,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    drop(names);
+    // Conversion moves decoded strings/vectors; it performs no new byte copy.
+    // Reserve every owned staging row before moving any of its records.
+    let mut result = PreparedForeignLibrary {
+        module: parts.module,
+        name: parts.name,
+        public: parts.public,
+        representations: Vec::new(),
+        constants: Vec::new(),
+        symbols: Vec::new(),
+        origin: Origin::Source(span),
+    };
+    charge(work, count, span)?;
+    reserve(
+        &mut result.representations,
+        parts.representations.len(),
+        span,
+    )?;
+    reserve(&mut result.constants, parts.constants.len(), span)?;
+    reserve(&mut result.symbols, parts.symbols.len(), span)?;
+    for value in parts.representations {
+        result.representations.push(PreparedForeignRepresentation {
+            name: value.name,
+            representation: value.representation,
+            origin: Origin::Source(value.span),
+        });
+    }
+    for value in parts.constants {
+        result.constants.push(PreparedForeignConstant {
+            name: value.name,
+            representation: value.representation,
+            value: value.value,
+            origin: Origin::Source(value.span),
+        });
+    }
+    for value in parts.symbols {
+        let count = value
+            .parameters
+            .len()
+            .checked_add(value.operands.len())
+            .and_then(|count| count.checked_add(value.outcomes.len()))
+            .ok_or_else(|| failure(ForeignContractReason::WorkExhausted, value.span))?;
+        charge(work, count, value.span)?;
+        let mut parameters = Vec::new();
+        let mut operands = Vec::new();
+        let mut outcomes = Vec::new();
+        reserve(&mut parameters, value.parameters.len(), value.span)?;
+        reserve(&mut operands, value.operands.len(), value.span)?;
+        reserve(&mut outcomes, value.outcomes.len(), value.span)?;
+        for parameter in value.parameters {
+            parameters.push(PreparedForeignParameter {
+                name: parameter.name,
+                kind: match parameter.kind {
+                    PrivatePreparedParameterKind::Type => Kind::Type,
+                    PrivatePreparedParameterKind::EffectRow => Kind::EffectRow,
+                },
+                origin: Origin::Source(parameter.span),
+            });
+        }
+        for operand in value.operands {
+            operands.push(PreparedForeignOperand {
+                representation: operand.representation,
+                source: operand.source,
+                origin: Origin::Source(operand.span),
+            });
+        }
+        for outcome in value.outcomes {
+            outcomes.push(PreparedForeignOutcome {
+                predicates: outcome.predicates,
+                origin: Origin::Source(outcome.span),
+            });
+        }
+        result.symbols.push(PreparedForeignSymbol {
+            name: value.name,
+            native_name: value.native_name,
+            parameters,
+            native_type_projection: value.native_type_projection,
+            operands,
+            result: value.result,
+            outcomes,
+            origin: Origin::Source(value.span),
+        });
+    }
+    Ok(result)
+}
+
+// Insert in source_contract.rs beside the restoration helper. Generated bridge
+// facts are untrusted construction data: compare the complete normalized
+// library, not only the symbol's linker spelling or apparent C signature.
+fn private_same_source_origin(
+    origin: &Origin,
+    span: Span,
+    work: &mut TypeWorkBudget,
+) -> Result<bool, ForeignContractError> {
+    charge(work, 1, span)?;
+    Ok(matches!(origin, Origin::Source(original) if *original == span))
+}
+
+pub(crate) fn same_prepared_library_parts(
+    original: &PreparedForeignLibrary,
+    candidate: &PrivatePreparedLibraryParts,
+    work: &mut TypeWorkBudget,
+) -> Result<bool, ForeignContractError> {
+    let span = candidate.span;
+    charge(work, 5, span)?;
+    if original.module != candidate.module
+        || original.public != candidate.public
+        || original.representations.len() != candidate.representations.len()
+        || original.constants.len() != candidate.constants.len()
+        || original.symbols.len() != candidate.symbols.len()
+        || !names_equal(&original.name, &candidate.name, span, work)?
+        || !private_same_source_origin(&original.origin, span, work)?
+    {
+        return Ok(false);
+    }
+    for (left, right) in original
+        .representations
+        .iter()
+        .zip(&candidate.representations)
+    {
+        charge(work, 1, right.span)?;
+        if left.representation != right.representation
+            || !names_equal(&left.name, &right.name, right.span, work)?
+            || !private_same_source_origin(&left.origin, right.span, work)?
+        {
+            return Ok(false);
+        }
+    }
+    for (left, right) in original.constants.iter().zip(&candidate.constants) {
+        charge(work, 2, right.span)?;
+        if left.representation != right.representation
+            || left.value != right.value
+            || !names_equal(&left.name, &right.name, right.span, work)?
+            || !private_same_source_origin(&left.origin, right.span, work)?
+        {
+            return Ok(false);
+        }
+    }
+    for (left, right) in original.symbols.iter().zip(&candidate.symbols) {
+        charge(work, 5, right.span)?;
+        if left.result != right.result
+            || left.parameters.len() != right.parameters.len()
+            || left.native_type_projection.len() != right.native_type_projection.len()
+            || left.operands.len() != right.operands.len()
+            || left.outcomes.len() != right.outcomes.len()
+            || !names_equal(&left.name, &right.name, right.span, work)?
+            || !names_equal(&left.native_name, &right.native_name, right.span, work)?
+            || !private_same_source_origin(&left.origin, right.span, work)?
+        {
+            return Ok(false);
+        }
+        charge(work, right.native_type_projection.len(), right.span)?;
+        if left.native_type_projection != right.native_type_projection {
+            return Ok(false);
+        }
+        for (left, right) in left.parameters.iter().zip(&right.parameters) {
+            charge(work, 1, right.span)?;
+            let kinds_match = matches!(
+                (&left.kind, right.kind),
+                (Kind::Type, PrivatePreparedParameterKind::Type)
+                    | (Kind::EffectRow, PrivatePreparedParameterKind::EffectRow)
+            );
+            if !kinds_match
+                || !names_equal(&left.name, &right.name, right.span, work)?
+                || !private_same_source_origin(&left.origin, right.span, work)?
+            {
+                return Ok(false);
+            }
+        }
+        for (left, right) in left.operands.iter().zip(&right.operands) {
+            charge(work, 2, right.span)?;
+            if left.representation != right.representation
+                || !private_same_source_origin(&left.origin, right.span, work)?
+            {
+                return Ok(false);
+            }
+            let operand_span = right.span;
+            let matches = match (&left.source, &right.source) {
+                (PreparedOperandSource::Constant(left), PreparedOperandSource::Constant(right)) => {
+                    left == right
+                }
+                (PreparedOperandSource::Source(left), PreparedOperandSource::Source(right)) => {
+                    if left.len() != right.len() {
+                        false
+                    } else {
+                        charge(work, left.len(), operand_span)?;
+                        left == right
+                    }
+                }
+                _ => false,
+            };
+            if !matches {
+                return Ok(false);
+            }
+        }
+        for (left, right) in left.outcomes.iter().zip(&right.outcomes) {
+            charge(work, 1, right.span)?;
+            if left.predicates.len() != right.predicates.len()
+                || !private_same_source_origin(&left.origin, right.span, work)?
+            {
+                return Ok(false);
+            }
+            charge(work, right.predicates.len(), right.span)?;
+            if left.predicates != right.predicates {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}

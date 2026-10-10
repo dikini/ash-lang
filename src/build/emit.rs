@@ -12,6 +12,7 @@ use crate::types::TypeWorkBudget;
 #[derive(Debug)]
 pub(crate) enum EmissionFailure {
     Image(ImageFailure),
+    Bridge(super::bridge::ForeignBridgeFailure),
     Resource,
 }
 
@@ -19,6 +20,7 @@ impl fmt::Display for EmissionFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Image(error) => fmt::Display::fmt(error, formatter),
+            Self::Bridge(error) => fmt::Display::fmt(error, formatter),
             Self::Resource => {
                 formatter.write_str("Rust host emission work or storage admission refused")
             }
@@ -161,4 +163,169 @@ mod tests {
             Err(EmissionFailure::Resource)
         ));
     }
+}
+
+const NATIVE_HOST_START: &str = "#![deny(unsafe_code)]\nconst RUNTIME_FINGERPRINT: [u8; 32] = [\n";
+const NATIVE_HOST_MAIN: &str = concat!(
+    "];\n",
+    "fn main() -> std::process::ExitCode {\n",
+    "    match ash::build::__run_private_effect_image(&RUNTIME_FINGERPRINT, IMAGE, EXPECTED_FACTS, LIBRARIES) {\n",
+    "        Ok(value) => { println!(\"{value}\"); std::process::ExitCode::SUCCESS }\n",
+    "        Err(error) => { eprintln!(\"{error}\"); std::process::ExitCode::FAILURE }\n",
+    "    }\n",
+    "}\n",
+);
+
+fn render_coordinates(
+    output: &mut impl fmt::Write,
+    library: &super::image::NativeLibraryEmission,
+    member: &super::image::NativeBridgeEmission,
+) -> fmt::Result {
+    write!(
+        output,
+        "ash::build::PrivateNativeCoordinates {{ image_library: {}, library_module: {}, library_ordinal: {}, image_symbol: {}, symbol_index: {}, operation_module: {}, operation_effect: {}, operation_local: {} }}",
+        library.image_library,
+        library.module,
+        library.ordinal,
+        member.image_symbol,
+        member.symbol_index,
+        member.operation_module,
+        member.operation_effect,
+        member.operation_local,
+    )
+}
+fn render_native_suffix(
+    output: &mut impl fmt::Write,
+    build: &super::image::NativeBuildImage,
+    wrappers: &[String],
+) -> fmt::Result {
+    output.write_str("];\n#[allow(unsafe_code)]\nmod native_bridges {\n")?;
+    for (library_index, library) in build.libraries.iter().enumerate() {
+        for &member_index in &library.members {
+            let member = &build.bridges[member_index];
+            let name = member.plan.rust_function_name();
+            // The ONLY unsafe text is the existing typed extern wrapper module.
+            // Providers merely pair their own fixed literals with that wrapper.
+            output.write_str(&wrappers[member_index])?;
+            write!(
+                output,
+                "pub fn {name}__provide() -> ash::build::PrivateNativeBridge {{\n    ash::build::__private_native_bridge("
+            )?;
+            render_coordinates(output, library, member)?;
+            writeln!(output, ", super::EXPECTED_FACTS, {name})\n}}")?;
+        }
+        write!(
+            output,
+            "pub const MEMBERS_{library_index}: &[ash::build::PrivateNativeMember] = &[\n"
+        )?;
+        for &member_index in &library.members {
+            let member = &build.bridges[member_index];
+            output.write_str("    ash::build::PrivateNativeMember { coordinates: ")?;
+            render_coordinates(output, library, member)?;
+            writeln!(
+                output,
+                ", provider: {}__provide }},",
+                member.plan.rust_function_name()
+            )?;
+        }
+        output.write_str("];\n")?;
+    }
+    output.write_str("}\nconst LIBRARIES: &[ash::build::PrivateNativeLibrary<'static>] = &[\n")?;
+    for (slot, library) in build.libraries.iter().enumerate() {
+        writeln!(
+            output,
+            "    ash::build::PrivateNativeLibrary {{ image_library: {}, module: {}, ordinal: {}, members: native_bridges::MEMBERS_{slot} }},",
+            library.image_library, library.module, library.ordinal
+        )?;
+    }
+    output.write_str(NATIVE_HOST_MAIN)
+}
+
+/// One paid preparation pass emits exact image data, independent expectations,
+/// typed wrappers and separately selected provider coordinates. No source reads.
+pub(crate) fn native_host(
+    build: &super::image::NativeBuildImage,
+    runtime_fingerprint: &[u8; 32],
+    work: &mut TypeWorkBudget,
+) -> Result<String, EmissionFailure> {
+    let bytes = build
+        .image
+        .encode_bytes(work)
+        .map_err(EmissionFailure::Image)?;
+    let facts = build
+        .image
+        .encode_native_expectations(work)
+        .map_err(EmissionFailure::Image)?;
+    work.charge(build.bridges.len())
+        .map_err(|()| EmissionFailure::Resource)?;
+    let mut wrappers = Vec::new();
+    wrappers
+        .try_reserve_exact(build.bridges.len())
+        .map_err(|_| EmissionFailure::Resource)?;
+    for bridge in &build.bridges {
+        wrappers.push(
+            super::bridge::emit_rust_bridge(&bridge.plan, work).map_err(EmissionFailure::Bridge)?,
+        );
+    }
+    // Fixed-width image coordinates bound each format conversion; charge the
+    // counting traversal before it runs, then precharge reserve+copy exactly.
+    let count_work = build
+        .libraries
+        .len()
+        .checked_add(build.bridges.len())
+        .and_then(|count| count.checked_mul(256))
+        .and_then(|count| {
+            wrappers
+                .iter()
+                .try_fold(count, |count, text| count.checked_add(text.len()))
+        })
+        .ok_or(EmissionFailure::Resource)?;
+    work.charge(count_work)
+        .map_err(|()| EmissionFailure::Resource)?;
+    struct Length(usize);
+    impl fmt::Write for Length {
+        fn write_str(&mut self, text: &str) -> fmt::Result {
+            self.0 = self.0.checked_add(text.len()).ok_or(fmt::Error)?;
+            Ok(())
+        }
+    }
+    let mut suffix = Length(0);
+    render_native_suffix(&mut suffix, build, &wrappers).map_err(|_| EmissionFailure::Resource)?;
+    const BETWEEN_FACTS: &str = "];\nstatic EXPECTED_FACTS: &[u8] = &[\n";
+    let length = NATIVE_HOST_START
+        .len()
+        .checked_add(BETWEEN_ARRAYS.len())
+        .and_then(|length| length.checked_add(BETWEEN_FACTS.len()))
+        .and_then(|length| length.checked_add(suffix.0))
+        .and_then(|length| {
+            array_length(runtime_fingerprint.len())
+                .ok()
+                .and_then(|extra| length.checked_add(extra))
+        })
+        .and_then(|length| {
+            array_length(bytes.len())
+                .ok()
+                .and_then(|extra| length.checked_add(extra))
+        })
+        .and_then(|length| {
+            array_length(facts.len())
+                .ok()
+                .and_then(|extra| length.checked_add(extra))
+        })
+        .ok_or(EmissionFailure::Resource)?;
+    work.charge(length.checked_mul(2).ok_or(EmissionFailure::Resource)?)
+        .map_err(|()| EmissionFailure::Resource)?;
+    let mut output = String::new();
+    output
+        .try_reserve_exact(length)
+        .map_err(|_| EmissionFailure::Resource)?;
+    output.push_str(NATIVE_HOST_START);
+    emit_array(&mut output, runtime_fingerprint);
+    output.push_str(BETWEEN_ARRAYS);
+    emit_array(&mut output, &bytes);
+    output.push_str(BETWEEN_FACTS);
+    emit_array(&mut output, &facts);
+    render_native_suffix(&mut output, build, &wrappers).map_err(|_| EmissionFailure::Resource)?;
+    debug_assert_eq!(output.len(), length);
+    Ok(output)
 }

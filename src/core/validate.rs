@@ -3781,6 +3781,114 @@ impl AuthenticatedCaptureLayouts<'_> {
     }
 }
 
+/// Borrowed admission for one independent Effect validation phase. The only
+/// construction site follows complete registry and native correspondence checks.
+struct AuthenticatedNativeRegistry<'registry> {
+    registry: &'registry crate::resolved::ResolvedRegistry,
+}
+
+impl AuthenticatedNativeRegistry<'_> {
+    fn authenticates(
+        &self,
+        registry: &crate::resolved::ResolvedRegistry,
+        interpretation: &super::effect::NativeInterpretation,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ()> {
+        work.charge(4)?;
+        if !std::ptr::eq(self.registry, registry) {
+            return Ok(false);
+        }
+        let symbol = interpretation.symbol();
+        let instance = interpretation.effect();
+        let Some(registered) = self.registry.native_symbol(symbol.operation()) else {
+            return Ok(false);
+        };
+        let Some(declaration) = self.registry.effect(instance.effect()) else {
+            return Ok(false);
+        };
+        let [operation] = declaration.operations.as_ref() else {
+            return Ok(false);
+        };
+        Ok(std::sync::Arc::ptr_eq(registered, symbol)
+            && declaration
+                .native_contract
+                .as_ref()
+                .is_some_and(|original| std::sync::Arc::ptr_eq(original, symbol))
+            && instance.effect() == symbol.effect()
+            && operation.id == symbol.operation()
+            && symbol.operation() == OperationId::new(instance.effect(), 0))
+    }
+}
+
+// Reuse the registry source-order merge pattern with a fallible complete-effect
+// comparator. Only scalar indices move; the retained metadata keeps source order.
+fn native_interpretations_are_unique(
+    interpretations: &[super::effect::NativeInterpretation],
+    work: &mut TypeWorkBudget,
+) -> Result<bool, ()> {
+    let count = interpretations.len();
+    if count < 2 {
+        return Ok(true);
+    }
+    work.charge(count)?;
+    let mut order = Vec::new();
+    order.try_reserve_exact(count).map_err(|_| ())?;
+    order.extend(0..count);
+    work.charge(count)?;
+    let mut scratch = Vec::new();
+    scratch.try_reserve_exact(count).map_err(|_| ())?;
+    scratch.resize(count, 0usize);
+    let mut width = 1usize;
+    while width < count {
+        work.charge(1)?;
+        let mut start = 0usize;
+        while start < count {
+            work.charge(3)?;
+            let middle = start.saturating_add(width).min(count);
+            let end = middle.saturating_add(width).min(count);
+            let (mut left, mut right) = (start, middle);
+            for target in &mut scratch[start..end] {
+                work.charge(1)?;
+                let take_left = if left == middle {
+                    false
+                } else if right == end {
+                    true
+                } else {
+                    crate::types::compare_effect_instances_with_budget(
+                        interpretations[order[left]].effect(),
+                        interpretations[order[right]].effect(),
+                        work,
+                    )? != std::cmp::Ordering::Greater
+                };
+                *target = if take_left {
+                    let index = order[left];
+                    left += 1;
+                    index
+                } else {
+                    let index = order[right];
+                    right += 1;
+                    index
+                };
+            }
+            start = end;
+        }
+        std::mem::swap(&mut order, &mut scratch);
+        width = width.saturating_mul(2);
+    }
+    for pair in order.windows(2) {
+        work.charge(1)?;
+        if crate::types::compare_effect_instances_with_budget(
+            interpretations[pair[0]].effect(),
+            interpretations[pair[1]].effect(),
+            work,
+        )? == std::cmp::Ordering::Equal
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily> {
     program: &'program UnvalidatedCoreProgram<F>,
     sources: HashMap<SourceId, &'source SourceFile>,
@@ -14278,9 +14386,17 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         Ok(())
     }
 
-    fn run_effect(&mut self) -> Result<(), ValidationError> {
-        let mut nominal_parameter_owners = self.validate_registry()?;
-        self.validate_effect_registry(self.module_sources.as_ref(), &mut nominal_parameter_owners)?;
+    fn authenticate_effect_registry_phase(
+        &self,
+    ) -> Result<
+        (
+            RegistryParameterOwners,
+            AuthenticatedNativeRegistry<'program>,
+        ),
+        ValidationError,
+    > {
+        let mut owners = self.validate_registry()?;
+        self.validate_effect_registry(self.module_sources.as_ref(), &mut owners)?;
         let empty_type_binders = CoreTypeBinders::new();
         for nominal in self
             .program
@@ -14311,6 +14427,17 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 )?;
             }
         }
+        Ok((
+            owners,
+            AuthenticatedNativeRegistry {
+                registry: &self.program.registry,
+            },
+        ))
+    }
+
+    fn run_effect(&mut self) -> Result<(), ValidationError> {
+        let (nominal_parameter_owners, native_registry) =
+            self.authenticate_effect_registry_phase()?;
         let authenticated_method_evidence = self.validate_method_evidence_authority()?;
         self.validate_envelopes(&authenticated_method_evidence)?;
         self.validate_graph()?;
@@ -14323,7 +14450,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             &type_binders,
             &authenticated_method_evidence,
         )?;
-        let has_discard = self.validate_effect_nodes(&type_binders)?;
+        let has_discard = self.validate_effect_nodes(&type_binders, &native_registry)?;
         self.validate_registration_edges()?;
         self.validate_effect_abstraction_shapes(&authenticated_method_evidence)?;
         self.validate_scopes()?;
@@ -14907,6 +15034,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         id: NodeId,
         node: &StoredNode<super::effect::EffectOperationFamily>,
         type_binders: &CoreTypeBinders<'_>,
+        native_registry: &AuthenticatedNativeRegistry<'_>,
         handler_ids: &mut HashSet<super::effect::HandlerId>,
         clause_contracts: &mut HashMap<
             (super::effect::HandlerId, crate::resolved::ResumeId),
@@ -14959,6 +15087,9 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     handler_ids,
                     clause_contracts,
                 )?;
+            }
+            EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) => {
+                self.validate_native_interpret(id, node, boundary, type_binders, native_registry)?;
             }
             EffectExprKind::Operation(EffectOperation::Request(request)) => {
                 self.validate_effect_instance(&request.effect, type_binders, id)?;
@@ -15027,6 +15158,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
     fn validate_effect_nodes(
         &mut self,
         type_binders: &CoreTypeBinders<'_>,
+        native_registry: &AuthenticatedNativeRegistry<'_>,
     ) -> Result<bool, ValidationError> {
         use super::effect::{EffectExprKind, EffectOperation};
 
@@ -15048,6 +15180,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 id,
                 node,
                 type_binders,
+                native_registry,
                 &mut handler_ids,
                 &mut clause_contracts,
             )?;
@@ -15408,6 +15541,72 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         Ok(false)
     }
 
+    fn native_interpret_row(
+        &self,
+        row: &EffectRow,
+        interpretations: &[super::effect::NativeInterpretation],
+        id: NodeId,
+    ) -> Result<EffectRow, ValidationError> {
+        let mut budget =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let result = super::effect::native_interpret_outward_row(row, interpretations, &mut budget);
+        self.charge_type_work(budget.used())?;
+        result.map_err(|error| {
+            ValidationError::new(
+                match error {
+                    super::BuildError::TypeWorkExceeded => ValidationReason::Resource,
+                    _ => ValidationReason::EffectRow,
+                },
+                Some(id),
+            )
+        })
+    }
+
+    fn validate_native_interpret(
+        &self,
+        id: NodeId,
+        node: &StoredNode<super::effect::EffectOperationFamily>,
+        boundary: &super::effect::NativeInterpretNode,
+        type_binders: &CoreTypeBinders<'_>,
+        native_registry: &AuthenticatedNativeRegistry<'_>,
+    ) -> Result<(), ValidationError> {
+        let invalid = || ValidationError::new(ValidationReason::Registry, Some(id));
+        let resource = || ValidationError::new(ValidationReason::Resource, Some(id));
+        self.charge_type_work(boundary.interpretations().len())?;
+        for interpretation in boundary.interpretations() {
+            let mut budget = TypeWorkBudget::with_limit(
+                self.type_work_limit.saturating_sub(self.type_work.get()),
+            );
+            let admitted =
+                native_registry.authenticates(&self.program.registry, interpretation, &mut budget);
+            self.charge_type_work(budget.used())?;
+            if !admitted.map_err(|()| resource())? {
+                return Err(invalid());
+            }
+            // Ordered original parameters, signature and provenance were
+            // reconstructed once by this phase's independent registry gate.
+            // Complete actuals still require node-local kinds and lexical scope.
+            self.validate_effect_instance(interpretation.effect(), type_binders, id)?;
+        }
+        let mut budget =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let unique = native_interpretations_are_unique(boundary.interpretations(), &mut budget);
+        self.charge_type_work(budget.used())?;
+        if !unique.map_err(|()| resource())? {
+            return Err(invalid());
+        }
+        let body = self.node(boundary.body())?;
+        self.validate_effect_row(&body.effects, type_binders, id)?;
+        if !self.same_type_charged(&node.ty, &body.ty)? {
+            return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+        }
+        let expected = self.native_interpret_row(&body.effects, boundary.interpretations(), id)?;
+        if !self.same_effect_row_charged(&node.effects, &expected, id)? {
+            return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
+        }
+        Ok(())
+    }
+
     fn remove_provider_native_row(
         &self,
         row: &EffectRow,
@@ -15713,6 +15912,13 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                                 child_row(scope.body)?,
                                 id,
                             )?,
+                        EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) => {
+                            self.native_interpret_row(
+                                child_row(boundary.body())?,
+                                boundary.interpretations(),
+                                id,
+                            )?
+                        }
                         EffectExprKind::Operation(EffectOperation::Request(request)) => {
                             let requested =
                                 self.singleton_effect_row_charged(request.effect(), id)?;
@@ -34462,3 +34668,7 @@ pub(crate) fn owned_handler_links_for_test(
     );
     links
 }
+
+#[cfg(test)]
+#[path = "native_interpret_tests.rs"]
+mod native_interpret_tests;

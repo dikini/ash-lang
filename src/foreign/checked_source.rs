@@ -1575,3 +1575,250 @@ mod tests {
         assert_eq!(first, second);
     }
 }
+
+// Insert before the existing checked-source tests. These restore a checked
+// member only through the existing canonical binding and independent checks.
+pub(crate) fn restore_foreign_symbol(
+    library: NativeLibraryId,
+    prepared: Arc<PreparedForeignLibrary>,
+    symbol_index: usize,
+    effect: crate::types::EffectId,
+    context: &ForeignBindingContext<'_>,
+    work: &mut TypeWorkBudget,
+) -> Result<Arc<CheckedForeignSymbol>, ForeignAdmissionError> {
+    let span = context.codec.source();
+    charge(work, 1, span)?;
+    let original = context
+        .registry
+        .effect(effect)
+        .ok_or_else(|| failure(ForeignAdmissionReason::InvalidOperation, span))?;
+    let symbol = bind_foreign_symbol(library, prepared, symbol_index, original, context, work)?;
+    // Binding establishes the complete immutable source correspondence. Final
+    // reconstructed Core validation remains the independent crossed-boundary gate.
+    charge(work, 1, span)?;
+    // This one new original allocation must be retained by all registry tags,
+    // NativeInterpretation records and generated bridge members. Restoring an
+    // equivalent descriptor separately for the bridge is not permitted.
+    Ok(Arc::new(symbol))
+}
+
+/// One generated library correspondence check, bound to an immutable registry
+/// context and the exact original prepared allocation. This compiler-private
+/// brand proves matching normalized construction facts, not external C behavior.
+/// It intentionally implements neither Clone nor an unchecked constructor.
+pub(crate) struct CheckedExecutableForeignLibrary<'program> {
+    proof: ValidatedExecutableRegistry<'program>,
+    library: NativeLibraryId,
+    prepared: Arc<PreparedForeignLibrary>,
+    target: &'static str,
+}
+
+// No constructor accepts an arbitrary registry for the validated variant.
+// Borrowing ValidatedEffectProgram is the sole origin of this private proof.
+struct ValidatedExecutableRegistry<'program> {
+    registry: &'program ResolvedRegistry,
+}
+
+/// Exact source member admitted from a generated-library correspondence brand.
+/// The evaluator's full actual-instance matching is still an independent gate.
+pub(crate) struct CheckedExecutableForeignSymbol {
+    original: Arc<CheckedForeignSymbol>,
+    target: &'static str,
+}
+
+impl CheckedExecutableForeignSymbol {
+    pub(crate) const fn target(&self) -> &'static str {
+        self.target
+    }
+    pub(crate) fn into_source(self) -> Arc<CheckedForeignSymbol> {
+        self.original
+    }
+}
+
+pub(crate) fn admit_executable_foreign_symbol(
+    library: &CheckedExecutableForeignLibrary<'_>,
+    original: &Arc<CheckedForeignSymbol>,
+    expected_symbol_index: usize,
+    expected_operation: OperationId,
+    work: &mut TypeWorkBudget,
+) -> Result<CheckedExecutableForeignSymbol, ForeignAdmissionError> {
+    let span = match library.prepared.origin() {
+        Origin::Source(span) => *span,
+        _ => {
+            return Err(failure(
+                ForeignAdmissionReason::InvalidLibrary,
+                original.call_codec().source(),
+            ));
+        }
+    };
+    charge(work, 6, span)?;
+    let registry = library.proof.registry;
+    if original.library() != library.library
+        || original.symbol_index() != expected_symbol_index
+        || original.operation() != expected_operation
+        || !Arc::ptr_eq(original.prepared(), &library.prepared)
+        || !registry
+            .native_symbol(expected_operation)
+            .is_some_and(|sealed| Arc::ptr_eq(sealed, original))
+        || !registry
+            .effect(original.effect())
+            .and_then(|effect| effect.native_contract.as_ref())
+            .is_some_and(|sealed| Arc::ptr_eq(sealed, original))
+    {
+        return Err(failure(ForeignAdmissionReason::InvalidOperation, span));
+    }
+    // The validated path's inaccessible proof carries the completed independent
+    // registry/contract/Core phase; reuse it rather than rewalking signatures.
+    charge(work, 1, span)?;
+    Ok(CheckedExecutableForeignSymbol {
+        original: Arc::clone(original),
+        target: library.target,
+    })
+}
+
+/// Reuses completed independent Effect Core admission for generated dispatch.
+/// The caller supplies the validated capability itself, never a raw registry or
+/// a boolean declaring that validation happened. All table/tag/Arc membership
+/// and expected normalized library facts remain paid checks below this phase.
+pub(crate) fn check_executable_foreign_library_in_program<'program>(
+    library: NativeLibraryId,
+    original: Arc<PreparedForeignLibrary>,
+    expected: &PrivateExecutableForeignLibraryParts,
+    target: &str,
+    program: &'program crate::core::ValidatedEffectProgram,
+    work: &mut TypeWorkBudget,
+) -> Result<CheckedExecutableForeignLibrary<'program>, ForeignAdmissionError> {
+    let span = expected.abi.span;
+    charge(work, 4, span)?;
+    if library.module() != original.module() || library.module() != expected.abi.module {
+        return Err(failure(ForeignAdmissionReason::InvalidLibrary, span));
+    }
+    charge(
+        work,
+        target
+            .len()
+            .checked_add(1)
+            .ok_or_else(|| failure(ForeignAdmissionReason::WorkExhausted, span))?,
+        span,
+    )?;
+    if target != original.profile() {
+        return Err(failure(ForeignAdmissionReason::InvalidLibrary, span));
+    }
+    let matches =
+        super::source_contract::same_prepared_library_parts(&original, &expected.abi, work)
+            .map_err(|error| {
+                failure(
+                    if error.is_resource_exhaustion() {
+                        ForeignAdmissionReason::WorkExhausted
+                    } else {
+                        ForeignAdmissionReason::InvalidLibrary
+                    },
+                    error.span(),
+                )
+            })?;
+    if !matches {
+        return Err(failure(ForeignAdmissionReason::InvalidLibrary, span));
+    }
+    compare_executable_library_sources(library, &original, expected, program.registry(), work)?;
+    let target = original.profile();
+    Ok(CheckedExecutableForeignLibrary {
+        proof: ValidatedExecutableRegistry {
+            registry: program.registry(),
+        },
+        library,
+        prepared: original,
+        target,
+    })
+}
+
+/// Emitter-selected expected library facts decoded through the existing private
+/// image coordinates. These records remain untrusted; the owning gate compares
+/// the complete library once. The members are ordered by original symbol index.
+pub(crate) struct PrivateExecutableForeignLibraryParts {
+    pub(crate) abi: super::source_contract::PrivatePreparedLibraryParts,
+    pub(crate) members: crate::resolved::ResolvedEffectBuffer,
+}
+
+fn compare_executable_library_sources(
+    library: NativeLibraryId,
+    original: &Arc<PreparedForeignLibrary>,
+    expected: &PrivateExecutableForeignLibraryParts,
+    registry: &ResolvedRegistry,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ForeignAdmissionError> {
+    let span = expected.abi.span;
+    charge(
+        work,
+        expected
+            .members
+            .0
+            .len()
+            .checked_add(1)
+            .ok_or_else(|| failure(ForeignAdmissionReason::WorkExhausted, span))?,
+        span,
+    )?;
+    if expected.members.0.len() != original.symbols().len() {
+        return Err(failure(ForeignAdmissionReason::InvalidLibrary, span));
+    }
+    for (index, effect) in expected.members.0.iter().enumerate() {
+        charge(work, 7, effect.span)?;
+        let [operation] = effect.operations.as_ref() else {
+            return Err(failure(
+                ForeignAdmissionReason::InvalidOperation,
+                effect.span,
+            ));
+        };
+        let symbol = registry
+            .native_symbol(operation.id)
+            .ok_or_else(|| failure(ForeignAdmissionReason::InvalidOperation, effect.span))?;
+        if effect.native_contract.is_some()
+            || operation.id != OperationId::new(effect.id, 0)
+            || symbol.library() != library
+            || symbol.effect() != effect.id
+            || symbol.symbol_index() != index
+            || !Arc::ptr_eq(symbol.prepared(), original)
+            || !registry
+                .effect(effect.id)
+                .and_then(|effect| effect.native_contract.as_ref())
+                .is_some_and(|tag| Arc::ptr_eq(tag, symbol))
+            || symbol.parameter_ids().len() != effect.parameters.len()
+            || original.symbols()[index].parameters().len() != effect.parameters.len()
+            || !symbol
+                .same_source_provenance(effect, work)
+                .map_err(|()| failure(ForeignAdmissionReason::WorkExhausted, effect.span))?
+            || !same_type_with_budget(symbol.source_signature(), &operation.annotation.ty, work)
+                .map_err(|()| {
+                    failure(
+                        ForeignAdmissionReason::WorkExhausted,
+                        operation.annotation.span,
+                    )
+                })?
+        {
+            return Err(failure(
+                ForeignAdmissionReason::InvalidOperation,
+                effect.span,
+            ));
+        }
+        for ((expected, id), prepared) in effect
+            .parameters
+            .iter()
+            .zip(symbol.parameter_ids())
+            .zip(original.symbols()[index].parameters())
+        {
+            charge(work, 1, effect.span)?;
+            if expected.id != *id
+                || expected.id.module() != Some(library.module())
+                || !matches!(
+                    (&expected.kind, prepared.kind()),
+                    (Kind::Type, Kind::Type) | (Kind::EffectRow, Kind::EffectRow)
+                )
+            {
+                return Err(failure(
+                    ForeignAdmissionReason::InvalidParameters,
+                    effect.span,
+                ));
+            }
+        }
+    }
+    Ok(())
+}

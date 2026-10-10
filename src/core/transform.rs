@@ -423,6 +423,33 @@ impl TransformFamily for EffectOperationFamily {
                     origin,
                 )
             }
+            EffectOperation::NativeInterpret(boundary) => {
+                let copied = (|| -> Result<_, TransformError> {
+                    builder.charge_effect_metadata(boundary.interpretations().len())?;
+                    let mut interpretations = Vec::new();
+                    interpretations
+                        .try_reserve_exact(boundary.interpretations().len())
+                        .map_err(|_| BuildError::TypeWorkExceeded)?;
+                    for interpretation in boundary.interpretations() {
+                        let effect =
+                            copy_effect_instance(builder, interpretation.effect(), context)?;
+                        interpretations.push(super::effect::NativeInterpretation::new(
+                            effect,
+                            Arc::clone(interpretation.symbol()),
+                        ));
+                    }
+                    let body = remap(remapped, boundary.body())?;
+                    Ok((body, interpretations.into_boxed_slice()))
+                })();
+                let (body, interpretations) = match copied {
+                    Ok(copied) => copied,
+                    Err(error) => {
+                        crate::source::discard_origin_iteratively(origin);
+                        return Err(error);
+                    }
+                };
+                builder.native_interpret(body, interpretations, ty.into_inner(), effects, origin)
+            }
             EffectOperation::Request(node) => {
                 let effect = copy_effect_instance(builder, node.effect(), context)?;
                 builder.request(

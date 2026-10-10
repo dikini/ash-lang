@@ -11,6 +11,7 @@ use super::{
     validate::{ValidationError, validate_effect_family, validate_effect_modules_family},
 };
 use crate::{
+    foreign::checked_source::CheckedForeignSymbol,
     interface::MethodId,
     resolved::{ResolvedRegistry, ResourceDefinitionId, ResumeId},
     source::{Origin, discard_origin_iteratively},
@@ -45,6 +46,62 @@ impl HandlerId {
 pub enum ResumeUse {
     Available,
     Consumed,
+}
+
+/// An exact native instance and its original checked source authority.
+/// This metadata grants no bridge linkage or evaluator binding by itself.
+#[derive(Clone, Debug)]
+pub struct NativeInterpretation {
+    pub(super) effect: EffectInstance,
+    pub(super) symbol: Arc<CheckedForeignSymbol>,
+}
+
+impl NativeInterpretation {
+    pub(crate) fn new(effect: EffectInstance, symbol: Arc<CheckedForeignSymbol>) -> Self {
+        Self { effect, symbol }
+    }
+    #[must_use]
+    pub const fn effect(&self) -> &EffectInstance {
+        &self.effect
+    }
+    #[must_use]
+    pub const fn symbol(&self) -> &Arc<CheckedForeignSymbol> {
+        &self.symbol
+    }
+}
+
+impl PartialEq for NativeInterpretation {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.symbol, &other.symbol) && self.effect == other.effect
+    }
+}
+impl Eq for NativeInterpretation {}
+
+/// The explicit owner-free `interpret S in body` Core boundary.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NativeInterpretNode {
+    pub(super) body: NodeId,
+    pub(super) interpretations: Box<[NativeInterpretation]>,
+}
+
+impl NativeInterpretNode {
+    pub(crate) fn new(body: NodeId, interpretations: Box<[NativeInterpretation]>) -> Self {
+        Self {
+            body,
+            interpretations,
+        }
+    }
+    #[must_use]
+    pub const fn body(&self) -> NodeId {
+        self.body
+    }
+    #[must_use]
+    pub fn interpretations(&self) -> &[NativeInterpretation] {
+        &self.interpretations
+    }
+    pub(crate) fn into_parts(self) -> (NodeId, Box<[NativeInterpretation]>) {
+        (self.body, self.interpretations)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -433,6 +490,7 @@ impl Drop for ProviderStateAccessNode {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EffectOperation {
+    NativeInterpret(NativeInterpretNode),
     Cleanup(CleanupScopeNode),
     Registration(RegistrationScopeNode),
     Resource(Box<ResourceScopeNode>),
@@ -538,6 +596,14 @@ impl CoreOperationFamily for EffectOperationFamily {
             return;
         };
         let instance = match operation {
+            EffectOperation::NativeInterpret(boundary) => {
+                for interpretation in &boundary.interpretations {
+                    for argument in interpretation.effect.arguments() {
+                        visit(super::dialect::OperationTypeMetadata::Argument(argument));
+                    }
+                }
+                None
+            }
             EffectOperation::ProviderStateAccess(access) => {
                 for argument in access.arguments() {
                     visit(super::dialect::OperationTypeMetadata::Argument(argument));
@@ -634,6 +700,13 @@ impl CoreOperationFamily for EffectOperationFamily {
         charge: &mut dyn FnMut(usize) -> Result<(), super::BuildError>,
     ) -> Result<(), super::BuildError> {
         let instance = match kind {
+            EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) => {
+                charge(boundary.interpretations.len())?;
+                for interpretation in &mut boundary.interpretations {
+                    rewrite_effect_instance(&mut interpretation.effect, rewrite, charge)?;
+                }
+                return Ok(());
+            }
             EffectExprKind::Operation(EffectOperation::ProviderStateAccess(access)) => {
                 return rewrite_kinded_arguments(&mut access.arguments, rewrite, charge);
             }
@@ -718,7 +791,8 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => scope.child_count(),
             EffectExprKind::Operation(EffectOperation::Discard(_)) => 0,
             EffectExprKind::Operation(
-                EffectOperation::Request(_)
+                EffectOperation::NativeInterpret(_)
+                | EffectOperation::Request(_)
                 | EffectOperation::Resume(_)
                 | EffectOperation::ProviderStateAccess(_),
             ) => 1,
@@ -745,6 +819,7 @@ impl CoreOperationFamily for EffectOperationFamily {
                     .unwrap_or(usize::MAX)
             }
             EffectExprKind::Pure(_)
+            | EffectExprKind::Operation(EffectOperation::NativeInterpret(_))
             | EffectExprKind::Operation(EffectOperation::Cleanup(_))
             | EffectExprKind::Operation(EffectOperation::Registration(_))
             | EffectExprKind::Operation(EffectOperation::Resource(_))
@@ -775,6 +850,9 @@ impl CoreOperationFamily for EffectOperationFamily {
                 _ => None,
             },
             EffectExprKind::Operation(EffectOperation::Discard(_)) => None,
+            EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) => {
+                (index == 0).then_some(boundary.body)
+            }
             EffectExprKind::Operation(EffectOperation::Request(node)) => {
                 (index == 0).then_some(node.operand)
             }
@@ -796,6 +874,9 @@ impl CoreOperationFamily for EffectOperationFamily {
     fn discard_metadata(kind: Self::Kind) {
         match kind {
             EffectExprKind::Pure(kind) => discard_pure_expr_kind_metadata(kind),
+            // Each EffectInstance owns iterative argument disposal. The shared
+            // descriptor contains no copied recursive source/type structure.
+            EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) => drop(boundary),
             EffectExprKind::Operation(
                 EffectOperation::Registration(_) | EffectOperation::Cleanup(_),
             ) => {}
@@ -1132,6 +1213,7 @@ impl CoreBuilder<EffectOperationFamily> {
             Pure,
             Replace,
             Request(NodeId, EffectInstance),
+            NativeInterpret(NodeId, Box<[NativeInterpretation]>),
             Handler(EffectInstance, usize, bool),
             Resource(crate::resolved::ResourceAcquisition, NodeId, NodeId),
             ProviderGroup,
@@ -1205,6 +1287,15 @@ impl CoreBuilder<EffectOperationFamily> {
                     EffectExprKind::Operation(
                         EffectOperation::Resume(_) | EffectOperation::Discard(_),
                     ) => Equation::Keep,
+                    EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) => {
+                        Equation::NativeInterpret(
+                            boundary.body,
+                            copy_native_interpretations_with_budget(
+                                &boundary.interpretations,
+                                &mut self.type_work,
+                            )?,
+                        )
+                    }
                     EffectExprKind::Operation(EffectOperation::Request(request)) => {
                         Equation::Request(
                             request.operand,
@@ -1410,6 +1501,14 @@ impl CoreBuilder<EffectOperationFamily> {
                             .union_with_budget(&EffectRow::singleton(effect), &mut self.type_work)
                             .map_err(|()| super::BuildError::TypeWorkExceeded)?
                             .map_err(|_| super::BuildError::InvalidPayload)?
+                    }
+                    Equation::NativeInterpret(body, interpretations) => {
+                        let body = &self
+                            .nodes
+                            .get(body.index()?)
+                            .ok_or(super::BuildError::InvalidNodeId)?
+                            .effects;
+                        native_interpret_outward_row(body, &interpretations, &mut self.type_work)?
                     }
                     Equation::Handler(effect, clause_count, hook_root) => {
                         self.charge_effect_metadata(clause_count)?;
@@ -1630,6 +1729,37 @@ impl CoreBuilder<EffectOperationFamily> {
             }
         }
         result
+    }
+
+    pub fn native_interpret(
+        &mut self,
+        body: NodeId,
+        mut interpretations: Box<[NativeInterpretation]>,
+        result_type: Type,
+        effects: EffectRow,
+        origin: Origin,
+    ) -> Result<NodeId, super::BuildError> {
+        let admitted = (|| {
+            self.charge_effect_metadata(interpretations.len())?;
+            for interpretation in &mut interpretations {
+                let placeholder = EffectInstance::new(interpretation.effect.effect(), Box::new([]));
+                let instance = std::mem::replace(&mut interpretation.effect, placeholder);
+                interpretation.effect = self.admit_effect_instance(instance)?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = admitted {
+            discard_type_iteratively(result_type);
+            drop(effects);
+            discard_origin_iteratively(origin);
+            return Err(error);
+        }
+        self.push_operation(
+            result_type,
+            effects,
+            origin,
+            EffectOperation::NativeInterpret(NativeInterpretNode::new(body, interpretations)),
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2970,5 +3100,154 @@ mod rewrite_tests {
             .unwrap()
             .join()
             .unwrap();
+    }
+}
+
+/// Copies only actual arguments; checked ABI/source preparation stays shared.
+pub(crate) fn copy_native_interpretations_with_budget(
+    source: &[NativeInterpretation],
+    work: &mut TypeWorkBudget,
+) -> Result<Box<[NativeInterpretation]>, super::BuildError> {
+    work.charge(source.len())
+        .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+    let mut result = Vec::new();
+    result
+        .try_reserve_exact(source.len())
+        .map_err(|_| super::BuildError::TypeWorkExceeded)?;
+    for interpretation in source {
+        let effect = clone_effect_instance_with_budget(&interpretation.effect, work)?;
+        result.push(NativeInterpretation::new(
+            effect,
+            Arc::clone(&interpretation.symbol),
+        ));
+    }
+    Ok(result.into_boxed_slice())
+}
+
+/// Exact set subtraction never masks another actual vector of the same API.
+pub(crate) fn native_interpret_outward_row(
+    body: &EffectRow,
+    interpretations: &[NativeInterpretation],
+    work: &mut TypeWorkBudget,
+) -> Result<EffectRow, super::BuildError> {
+    work.charge(interpretations.len())
+        .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+    let mut row = clone_effect_row_with_budget(body, work)
+        .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+    for interpretation in interpretations {
+        match row
+            .remove_exact_with_budget(&interpretation.effect, work)
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?
+        {
+            Ok(remaining) => row = remaining,
+            Err(crate::types::EffectRowError::Missing) => {}
+            Err(_) => return Err(super::BuildError::InvalidPayload),
+        }
+    }
+    Ok(row)
+}
+
+/// Entry preparation distinguishes a residual source requirement from refusal
+/// while representing checked metadata. Neither variant grants execution.
+pub(crate) enum NativeEntryBuildFailure {
+    ResidualEffects,
+    Build(super::BuildError),
+}
+
+/// Classifies already checked entry metadata without cloning ABI or actuals.
+/// The original source registry still receives independent final validation.
+pub(crate) fn owner_free_native_entry_row(
+    registry: &ResolvedRegistry,
+    row: &EffectRow,
+    work: &mut TypeWorkBudget,
+) -> Result<bool, ()> {
+    if row.is_empty() {
+        return Ok(true);
+    }
+    work.charge(1)?;
+    if row.tail().is_some() {
+        return Ok(false);
+    }
+    work.charge(row.known().len())?;
+    for instance in row.known() {
+        work.charge(2)?;
+        let operation = OperationId::new(instance.effect(), 0);
+        let Some(symbol) = registry.native_symbol(operation) else {
+            return Ok(false);
+        };
+        let Some(declaration) = registry.effect(instance.effect()) else {
+            return Ok(false);
+        };
+        if symbol.effect() != instance.effect()
+            || symbol.operation() != operation
+            || !declaration
+                .native_contract
+                .as_ref()
+                .is_some_and(|original| Arc::ptr_eq(original, symbol))
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+impl CoreBuilder<EffectOperationFamily> {
+    /// Wraps only the authorized finalizer's already zonked entry body.
+    /// The caller retains the phase meter; unchecked Core remains unchecked.
+    pub(crate) fn prepare_owner_free_native_entry(
+        &mut self,
+        body: NodeId,
+        origin: crate::source::Span,
+        work: &mut TypeWorkBudget,
+    ) -> Result<NodeId, NativeEntryBuildFailure> {
+        use NativeEntryBuildFailure::{Build, ResidualEffects};
+        work.charge(1)
+            .map_err(|()| Build(super::BuildError::TypeWorkExceeded))?;
+        let index = body.index().map_err(Build)?;
+        self.provider_node_at_ordinal(body, index).map_err(Build)?;
+        let stored = self
+            .nodes
+            .get(index)
+            .ok_or(Build(super::BuildError::InvalidNodeId))?;
+        if stored.effects.is_empty() {
+            return Ok(body);
+        }
+        if !owner_free_native_entry_row(self.provider_registry(), &stored.effects, work)
+            .map_err(|()| Build(super::BuildError::TypeWorkExceeded))?
+        {
+            return Err(ResidualEffects);
+        }
+        work.charge(stored.effects.known().len())
+            .map_err(|()| Build(super::BuildError::TypeWorkExceeded))?;
+        let mut interpretations = Vec::new();
+        interpretations
+            .try_reserve_exact(stored.effects.known().len())
+            .map_err(|_| Build(super::BuildError::TypeWorkExceeded))?;
+        for instance in stored.effects.known() {
+            work.charge(1)
+                .map_err(|()| Build(super::BuildError::TypeWorkExceeded))?;
+            let symbol = self
+                .provider_registry()
+                .native_symbol(OperationId::new(instance.effect(), 0))
+                .ok_or(Build(super::BuildError::InvalidPayload))?;
+            interpretations.push(NativeInterpretation::new(
+                clone_effect_instance_with_budget(instance, work).map_err(Build)?,
+                Arc::clone(symbol),
+            ));
+        }
+        let ty = crate::types::IterativeTypeOwner::new(
+            crate::types::clone_type_with_budget(&stored.ty, work)
+                .map_err(|()| Build(super::BuildError::TypeWorkExceeded))?,
+        );
+        // Every known member was retained and the source row was closed.
+        // Independent Core validation reconstructs this exact subtraction.
+        self.native_interpret(
+            body,
+            interpretations.into_boxed_slice(),
+            ty.into_inner(),
+            EffectRow::empty(),
+            Origin::Source(origin),
+        )
+        .map_err(Build)
     }
 }

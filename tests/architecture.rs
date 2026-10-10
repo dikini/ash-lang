@@ -140,6 +140,7 @@ enum DisposalOwner {
     TransientWork,
     Observation,
     CoreTreeAndRegistryTree,
+    ResolvedTreeAndRegistryTree,
     CoreTreeAndRegistryTreeAndSummaryTree,
     CoreTreeAndResolvedTreeAndRegistryTreeAndSummaryTree,
     ResolvedTreeAndRegistryTreeAndSummaryTree,
@@ -154,6 +155,8 @@ enum DisposalOwner {
     TypeTreeAndResolvedTreeAndRegistryTree,
     SummaryTreeAndTransientWork,
     CoreTreeAndResolvedTreeAndRegistryTreeAndSummaryTreeAndTransientWork,
+    CoreTreeAndResolvedTreeAndRegistryTreeAndTransientWork,
+    EvaluatorStateAndTypeTreeAndResolvedTreeAndRegistryTree,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -224,6 +227,30 @@ macro_rules! define_kind_site_profiles {
 }
 
 define_kind_site_profiles! {
+    // Build/image work uses the cumulative TypeWorkBudget. Borrowed encoder
+    // trees and identity indices retain original owners; restored buffers guard
+    // canonical trees until final independent Core admission transfers them.
+    FieldBuildKindBorrow => (Field, Borrowed, Canonical, CarrierRetention, PreservedCarrier, CoreAdmission, Type, KindTree),
+    FieldBuildTypeOwned => (Field, Owned, Canonical, CarrierRetention, PreservedCarrier, CoreAdmission, Type, TypeTree),
+    FieldBuildPreparedShared => (Field, Shared, Surface, CarrierRetention, PreservedCarrier, CoreAdmission, Type, KindTree),
+    FieldBuildPreparedBorrow => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, CoreAdmission, Type, KindTree),
+    FieldBuildNativeFactsShared => (Field, Shared, Core, CarrierRetention, PreservedCarrier, CoreAdmission, Type, TypeTreeAndResolvedTreeAndRegistryTree),
+    FieldBuildNativeFactsBorrow => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, CoreAdmission, Type, TypeTreeAndResolvedTreeAndRegistryTree),
+    FieldBuildProgramShared => (Field, Shared, Core, CarrierRetention, PreservedCarrier, CoreAdmission, Type, CoreTreeAndResolvedTreeAndRegistryTree),
+    FieldBuildExpectedSourcesMixed => (Field, Mixed, Resolved, CarrierRetention, PreservedCarrier, CoreAdmission, Type, ResolvedTreeAndRegistryTree),
+    // Native Core stores complete actuals separately from shared original facts.
+    // Replay owns a fallible metadata copy; the independently authenticated
+    // registry brand only borrows its existing canonical owner.
+    FieldNativeCoreFactsShared => (Field, Shared, Core, CarrierRetention, PreservedCarrier, CoreAdmission, CoreType, TypeTreeAndResolvedTreeAndRegistryTree),
+    FieldNativeCoreMixed => (Field, Mixed, Core, CarrierRetention, PreservedCarrier, CoreAdmission, CoreType, CoreTreeAndResolvedTreeAndRegistryTree),
+    FieldNativeReplayMixed => (Field, Mixed, Transient, CarrierRetention, PreservedCarrier, CoreAdmission, CoreType, CoreTreeAndResolvedTreeAndRegistryTreeAndTransientWork),
+    // Binding storage shares original prepared facts. Admission and request
+    // brands borrow that frozen owner; consuming call phases additionally own
+    // the full instantiated Type/Row vector until report publication.
+    FieldNativeBindingsShared => (Field, Shared, Registry, CarrierRetention, PreservedCarrier, Evaluation, Evaluation, TypeTreeAndResolvedTreeAndRegistryTree),
+    FieldNativeBindingBorrow => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, Evaluation, Evaluation, TypeTreeAndResolvedTreeAndRegistryTree),
+    FieldNativeCallMixed => (Field, Mixed, Transient, CarrierRetention, PreservedCarrier, Evaluation, Evaluation, EvaluatorStateAndTypeTreeAndResolvedTreeAndRegistryTree),
+    FieldNativeProgramBorrow => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, Evaluation, Evaluation, CoreTreeAndResolvedTreeAndRegistryTree),
     // Actual module publication: summaries share only defining certificates;
     // checked code owners separately retain Core, canonical context and facts.
     FieldProviderContractShared => (Field, Shared, Summary, CarrierRetention, PreservedCarrier, CoreValidation, CoreType, ResolvedTreeAndRegistryTreeAndSummaryTree),
@@ -447,6 +474,68 @@ const TASK_4_PHASE_CONSTRAINT: &str = "kind inference is intentionally absent on
 
 #[rustfmt::skip]
 const KIND_SITES: &[KindSite] = &[
+    // Connected native image reconstruction, exact original brands and bridge plans.
+    kind_site!("src/build/bridge.rs::TargetResolvedForeignBridge.symbol", FieldBuildNativeFactsShared),
+    kind_site!("src/build/image.rs::NativeBridgeEmission.plan", FieldBuildNativeFactsShared),
+    kind_site!("src/build/image.rs::NativeBuildImage.bridges", FieldBuildNativeFactsShared),
+    kind_site!("src/build/image.rs::Encoder.original_native_symbols", FieldBuildNativeFactsShared),
+    kind_site!("src/build/image.rs::RestoredEffectImage.symbols", FieldBuildNativeFactsShared),
+    kind_site!("src/build/image.rs::RestoredNativeRegistry.symbols", FieldBuildNativeFactsShared),
+    kind_site!("src/foreign/checked_source.rs::CheckedExecutableForeignSymbol.original", FieldBuildNativeFactsShared),
+    kind_site!("src/build/image.rs::Encoder.native_symbols", FieldBuildNativeFactsBorrow),
+    kind_site!("src/build/image.rs::Encoder.prepared_libraries", FieldBuildPreparedBorrow),
+    kind_site!("src/build/image.rs::RestoredEffectImage.prepared", FieldBuildPreparedShared),
+    kind_site!("src/build/image.rs::RestoredNativeRegistry.prepared", FieldBuildPreparedShared),
+    kind_site!("src/foreign/checked_source.rs::CheckedExecutableForeignLibrary.prepared", FieldBuildPreparedShared),
+    kind_site!("src/build/image.rs::RestoredEffectImage.program", FieldBuildProgramShared),
+    kind_site!("src/foreign/checked_source.rs::CheckedExecutableForeignLibrary.proof", FieldBuildRegistryOwned, Borrowed),
+    kind_site!("src/foreign/checked_source.rs::ValidatedExecutableRegistry.registry", FieldBuildRegistryOwned, Borrowed),
+    kind_site!("src/foreign/checked_source.rs::PrivateExecutableForeignLibraryParts.members", FieldBuildExpectedSourcesMixed),
+    kind_site!("src/build/image.rs::ParameterBuffer.0", FieldBuildRegistryOwned),
+    kind_site!("src/build/image.rs::NominalParameterBuffer.0", FieldBuildRegistryOwned),
+    kind_site!("src/build/image.rs::RestoredNativeRegistry.registry", FieldBuildRegistryOwned),
+    kind_site!("src/build/image.rs::TypeBuffer.0", FieldBuildTypeOwned),
+    kind_site!("src/build/image.rs::ArgumentOwner.0", FieldBuildTypeOwned),
+    kind_site!("src/build/image.rs::StructuralOwner.Type.0", FieldBuildTypeOwned),
+    kind_site!("src/build/image.rs::StructuralOwner.Row.0", FieldBuildTypeOwned),
+    kind_site!("src/build/image.rs::StructuralOwner.Instance.0", FieldBuildTypeOwned),
+    kind_site!("src/build/image.rs::StructuralOwner.Argument.0", FieldBuildTypeOwned),
+    kind_site!("src/build/image.rs::StructuralInput.Type.0", FieldBuildTypeBorrow),
+    kind_site!("src/build/image.rs::StructuralInput.Row.0", FieldBuildTypeBorrow),
+    kind_site!("src/build/image.rs::StructuralInput.Instance.0", FieldBuildTypeBorrow),
+    kind_site!("src/build/image.rs::StructuralInput.Argument.0", FieldBuildTypeBorrow),
+    kind_site!("src/build/image.rs::$impl_Encoder::$fn_encode_structural::Task.Visit.0", FieldBuildTypeBorrow),
+    kind_site!("src/build/image.rs::$impl_Encoder::$fn_encode_kind::Task.Visit.0", FieldBuildKindBorrow),
+    // Connected source-native Core boundary, captured environments and consuming phases.
+    kind_site!("src/core/effect.rs::NativeInterpretation.effect", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/effect.rs::NativeInterpretation.symbol", FieldNativeCoreFactsShared),
+    kind_site!("src/core/effect.rs::NativeInterpretNode.interpretations", FieldNativeCoreMixed),
+    kind_site!("src/core/effect.rs::EffectOperation.NativeInterpret.0", FieldNativeCoreMixed),
+    kind_site!("src/core/mod.rs::NativeInterpretNode.$alias", FieldNativeCoreMixed),
+    kind_site!("src/core/mod.rs::NativeInterpretation.$alias", FieldNativeCoreMixed),
+    kind_site!("src/core/effect.rs::$impl_CoreBuilder::$fn_replay_effect_rows_in_range::Equation.NativeInterpret.1", FieldNativeReplayMixed),
+    kind_site!("src/core/validate.rs::AuthenticatedNativeRegistry.registry", FieldProviderRegistryBorrow),
+    kind_site!("src/core/capture/control.rs::Control.NativeInterpret.effects", FieldSummaryCarrierRetentionPreservedCarrierElaborationInferenceTypeSummaryTree, Shared),
+    kind_site!("src/eval/machine.rs::Frame.NativeInterpretBoundary.environment", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Machine.source_bindings", FieldNativeBindingBorrow),
+    kind_site!("src/eval/machine.rs::Machine.pending_source_call", FieldNativeCallMixed),
+    kind_site!("src/foreign/source_bindings.rs::SourceScalarBinding.symbol", FieldNativeBindingsShared),
+    kind_site!("src/foreign/source_bindings.rs::SourceNativeBindings.entries", FieldNativeBindingsShared),
+    kind_site!("src/foreign/source_runtime.rs::SourceNativeBindings.$alias", FieldNativeBindingsShared),
+    kind_site!("src/foreign/source_bindings.rs::AdmittedSourceScalarInvocation.binding", FieldNativeBindingBorrow),
+    kind_site!("src/foreign/source_bindings.rs::SourceScalarReturnedAuthority._binding", FieldNativeBindingBorrow),
+    kind_site!("src/foreign/source_bindings.rs::AdmittedSourceNativeProgram.bindings", FieldNativeBindingBorrow),
+    kind_site!("src/foreign/source_bindings.rs::AdmittedSourceScalarInvocation._instance", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState),
+    kind_site!("src/foreign/source_bindings.rs::SourceScalarReturnedAuthority._instance", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState),
+    kind_site!("src/foreign/source_bindings.rs::AdmittedSourceNativeProgram.program", FieldNativeProgramBorrow),
+    kind_site!("src/foreign/source_runtime.rs::AdmittedSourceNativeProgram.$alias", FieldNativeProgramBorrow),
+    kind_site!("src/eval/source_scalar_phases.rs::ScalarCallReady.invocation", FieldNativeCallMixed),
+    kind_site!("src/eval/source_scalar_phases.rs::ScalarCallReturned.authority", FieldNativeCallMixed),
+    kind_site!("src/eval/source_scalar_phases.rs::ScalarCallRecorded._authority", FieldNativeCallMixed),
+    kind_site!("src/eval/source_scalar_phases.rs::ScalarCallProgress.Ready.0", FieldNativeCallMixed),
+    kind_site!("src/eval/source_scalar_phases.rs::ScalarCallProgress.Returned.0", FieldNativeCallMixed),
+    kind_site!("src/eval/source_scalar_phases.rs::ScalarCallProgress.Recorded.0", FieldNativeCallMixed),
+    kind_site!("src/eval/source_scalar_phases.rs::ScalarCallReported.value", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
     // Connected source-native, compiled-program and private build carriers.
     // Native tables share original descriptors; declaration/phase guards retain
     // owned records alongside shared facts and dismantle partial work iteratively.
@@ -454,7 +543,6 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/build/host.rs::Failure.Source.0", FieldTransientCarrierRetentionPreservedCarrierPipelineObservationPipelineTypeObservation),
     kind_site!("src/build/image.rs::$impl_Encoder::$fn_encode_pattern::Task.Finish.0", FieldBuildCoreBorrow),
     kind_site!("src/build/image.rs::$impl_Encoder::$fn_encode_pattern::Task.Visit.0", FieldBuildCoreBorrow),
-    kind_site!("src/build/image.rs::$impl_Encoder::$fn_encode_type::Task.Visit.0", FieldBuildTypeBorrow),
     kind_site!("src/build/image.rs::ConstructorBuffer.0", FieldBuildRegistryOwned),
     kind_site!("src/build/image.rs::NominalBuffer.0", FieldBuildRegistryOwned),
     kind_site!("src/build/image.rs::PatternOwner.0", FieldBuildCoreOwned),

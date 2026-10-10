@@ -40,12 +40,13 @@ pub struct RunConfiguration {
 
 type SourceProvenance = [(ModuleId, Arc<SourceFile>)];
 
-/// An immutable, independently validated whole program ready for evaluation.
+/// An immutable, independently validated whole program prepared for evaluation.
 ///
 /// This owner retains compiler-private Pure or Effect Core, its result type and
 /// completed compilation ledger, together with the original admitted sources.
 /// It contains no evaluator heap, resource owner or
-/// runtime activation. Only [`compile_path`] constructs this capability; repeated
+/// runtime activation. Source-native interpretation requires a separate admitted
+/// executable binding table. Only [`compile_path`] constructs this capability; repeated
 /// [`execute`] calls use fresh evaluator state without reading source files.
 ///
 /// This is an in-process compiler/runtime capability, not a stable Core format
@@ -76,9 +77,39 @@ struct ObservationMetadata {
 }
 
 impl CompiledProgram {
+    /// Borrows the independently checked outer interpreter, never a second
+    /// copied requirements vector or native executable authority.
+    pub(crate) fn source_native_entry(
+        &self,
+    ) -> Option<(&ValidatedEffectProgram, &crate::core::NativeInterpretNode)> {
+        match &self.core {
+            CompiledCore::Effect(program) => {
+                let crate::core::EffectExprKind::Operation(
+                    crate::core::EffectOperation::NativeInterpret(boundary),
+                ) = &program.node(program.root())?.kind
+                else {
+                    return None;
+                };
+                Some((program, boundary))
+            }
+            CompiledCore::Pure(_) => None,
+        }
+    }
+
     pub(crate) fn pure_build_input(&self) -> Option<(&ValidatedProgram, &SourceProvenance)> {
         match &self.core {
             CompiledCore::Pure(program) if !self.provenance.is_empty() => {
+                Some((program, &self.provenance))
+            }
+            CompiledCore::Pure(_) | CompiledCore::Effect(_) => None,
+        }
+    }
+
+    pub(crate) fn effect_build_input(
+        &self,
+    ) -> Option<(&ValidatedEffectProgram, &SourceProvenance)> {
+        match &self.core {
+            CompiledCore::Effect(program) if !self.provenance.is_empty() => {
                 Some((program, &self.provenance))
             }
             CompiledCore::Pure(_) | CompiledCore::Effect(_) => None,
@@ -924,6 +955,9 @@ fn execute_prepared<E>(
 where
     E: FnOnce(&ValidatedProgram) -> Result<Evaluation, RuntimeFailure>,
 {
+    refuse_unbound_source_native_entry(core).map_err(|failure| {
+        FileFailure::from(PipelineFailure::Runtime(failure)).with_compilation_work(compilation_work)
+    })?;
     let evaluation_phase = crate::calibration::Phase::start("evaluation");
     let evaluation = match core {
         CompiledCore::Pure(core) => evaluator(core),
@@ -1296,7 +1330,28 @@ where
         }
     };
     if main_has_effects {
-        return Err(entry_failure(EntryReason::MainEffects, main_span));
+        let Type::EffectfulFunction(_, computation) = &main.scheme.value_type else {
+            return Err(internal_file_failure());
+        };
+        let native_entry = select_effect_core
+            && crate::core::effect::owner_free_native_entry_row(
+                entry.registry(),
+                computation.effects(),
+                &mut checking_type_work,
+            )
+            .map_err(|()| {
+                FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+                    crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+                )))
+                .with_phase_work(
+                    crate::compiler_work::CompilationPhase::SourceChecking
+                        .assess(checking_type_work.used())
+                        .incomplete(),
+                )
+            })?;
+        if !native_entry {
+            return Err(entry_failure(EntryReason::MainEffects, main_span));
+        }
     }
     let closed_result =
         closed_entry_result(result_type, &mut checking_type_work).map_err(|()| {
@@ -1372,9 +1427,13 @@ where
                 .map_err(FileFailure::from)?;
         let registry = Arc::clone(validated_interfaces.registry());
         if select_effect_core
-            && checked_program_contains_effect_syntax(&validated_interfaces, &mut linked_type_work)
+            && (main_has_effects
+                || checked_program_contains_effect_syntax(
+                    &validated_interfaces,
+                    &mut linked_type_work,
+                )
                 .map_err(PipelineFailure::Typing)
-                .map_err(FileFailure::from)?
+                .map_err(FileFailure::from)?)
         {
             interface_phase.finish(
                 Some(linked_type_work.used()),
@@ -1393,6 +1452,7 @@ where
                 &sources,
                 &module_sources,
                 compilation_work,
+                main_has_effects.then_some(main_span),
             )
             .map(|mut compiled| {
                 compiled.provenance = provenance;
@@ -1552,6 +1612,7 @@ fn finish_effect_compilation(
     sources: &[&SourceFile],
     module_sources: &[(ModuleId, SourceId)],
     compilation_work: &mut crate::compiler_work::CompilationWork,
+    native_entry_span: Option<Span>,
 ) -> Result<CompiledProgram, FileFailure> {
     let elaboration_phase = crate::calibration::Phase::start("final-elaboration");
     let final_budget = modular_phase_work(crate::compiler_work::CompilationPhase::FinalElaboration);
@@ -1577,17 +1638,33 @@ fn finish_effect_compilation(
         })?;
     let ty = IterativeTypeOwner::new(typed.ty);
     let type_display = validated_interfaces.registry().display_type(&ty);
-    let (unchecked, final_work) =
-        elaborator
+    let finished = match native_entry_span {
+        Some(span) => elaborator.finish_with_owner_free_native_entry(typed.node, span),
+        None => elaborator
             .finish_with_work(typed.node)
             .map_err(|(failure, used)| {
+                (
+                    crate::elaborate::NativeEntryFinishFailure::Elaboration(failure),
+                    used,
+                )
+            }),
+    };
+    let (unchecked, final_work) = finished.map_err(|(failure, used)| {
+        let failure = match failure {
+            crate::elaborate::NativeEntryFinishFailure::ResidualEffects => entry_failure(
+                EntryReason::MainEffects,
+                native_entry_span.expect("native finalizer has an entry span"),
+            ),
+            crate::elaborate::NativeEntryFinishFailure::Elaboration(failure) => {
                 FileFailure::from(PipelineFailure::Typing(TypeError::Internal(failure)))
-                    .with_phase_work(
-                        crate::compiler_work::CompilationPhase::FinalElaboration
-                            .assess(used)
-                            .incomplete(),
-                    )
-            })?;
+            }
+        };
+        failure.with_phase_work(
+            crate::compiler_work::CompilationPhase::FinalElaboration
+                .assess(used)
+                .incomplete(),
+        )
+    })?;
     compilation_work.final_elaboration =
         Some(crate::compiler_work::CompilationPhase::FinalElaboration.assess(final_work));
     crate::calibration::work(
@@ -2997,4 +3074,61 @@ mod tests {
             .join()
             .expect("consuming accessors must preserve selected parts and dismantle safely");
     }
+}
+
+fn refuse_unbound_source_native_entry(core: &CompiledCore) -> Result<(), RuntimeFailure> {
+    if let CompiledCore::Effect(program) = core {
+        let root = program
+            .node(program.root())
+            .ok_or(RuntimeFailure::MissingNode)?;
+        if let crate::core::EffectExprKind::Operation(
+            crate::core::EffectOperation::NativeInterpret(boundary),
+        ) = &root.kind
+        {
+            if !boundary.interpretations().is_empty() {
+                return Err(RuntimeFailure::ForeignBinding);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Evaluates a prepared source-native program with already supplied generated
+/// bindings. It performs no source loading, host compilation or library linking.
+/// Binding admission and observation preparation both precede Ash execution.
+///
+/// Draft dependency: SourceNativeBindings and its private admission capability
+/// must be implemented by the connected source-runtime/bridge gate. This call
+/// site neither constructs that capability nor chooses a callback by name.
+pub fn execute_with_source_native_bindings(
+    program: &CompiledProgram,
+    bindings: &mut crate::foreign::source_runtime::SourceNativeBindings,
+) -> Result<Observation, FileFailure> {
+    let Some((core, boundary)) = program.source_native_entry() else {
+        return execute(program);
+    };
+    if boundary.interpretations().is_empty() {
+        return execute(program);
+    }
+    let preparation_failure = |failure| {
+        FileFailure::from(PipelineFailure::Runtime(failure))
+            .with_compilation_work(program.compilation_work)
+    };
+    let mut work = TypeWorkBudget::default();
+    let admitted =
+        crate::foreign::source_runtime::admit_source_native_program(core, bindings, &mut work)
+            .map_err(preparation_failure)?;
+    let metadata = prepare_observation_metadata(program).map_err(preparation_failure)?;
+    let phase = crate::calibration::Phase::start("evaluation");
+    let evaluation = crate::eval::evaluate_effect_with_source_native_program(admitted)
+        .map_err(preparation_failure)?;
+    phase.finish(None, 0, 0);
+    let (value, heap) = evaluation.into_observation_parts();
+    Ok(Observation {
+        value,
+        ty: metadata.ty.into_inner(),
+        type_display: Some(metadata.type_display),
+        _heap: heap,
+        compilation_work: program.compilation_work,
+    })
 }

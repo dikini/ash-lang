@@ -482,7 +482,9 @@ pub(in crate::core) fn project_with<F: crate::core::dialect::CoreOperationFamily
             }
             // Nested scopes carry independently admitted proof projections.
             // They cannot enter an original-template certificate implicitly.
-            EffectOperation::ProviderScope(_) => return Err(invalid()),
+            EffectOperation::ProviderScope(_) | EffectOperation::NativeInterpret(_) => {
+                return Err(invalid());
+            }
         },
     }
     Ok(result)
