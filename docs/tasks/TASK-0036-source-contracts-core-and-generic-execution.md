@@ -101,6 +101,17 @@ charged-work owner or requiring it in historical traces. Public Pure and Effect
 observer cases now pass their actual logs through the consumer; both retain the
 same six work owners, and containing timers must not be summed with child phases.
 
+Ordinary effects and native symbol groups need one source-ordered identity
+inventory. Library ranges, retained declaration indices and complete parameter
+vectors must follow that inventory together; appending native parameters after
+ordinary parameters breaks interleaved declarations. Preparation now uses paid
+linear walks and crosschecks each retained library range against declaration order.
+
+An imported opaque nominal can be an ordinary domain leaf without becoming an
+ABI operand. Its exact retained nullary `Type` fact authenticates this use without
+materializing private constructors. Scalar source-path checks still require `Int`;
+unsaturated nominal constructors and resource roles remain inadmissible here.
+
 ## Deviations
 
 None authorized. Return concrete semantic gaps to CP-0022 instead of resolving

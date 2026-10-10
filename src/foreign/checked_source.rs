@@ -802,11 +802,27 @@ fn check_domain(
         match ty {
             Type::Int | Type::Unit | Type::Bool | Type::Bytes | Type::String => {}
             Type::Nominal(id) => {
-                let nominal_parameters = registry
-                    .nominal_parameters(*id)
-                    .ok_or_else(|| failure(ForeignAdmissionReason::InvalidSignature, span))?;
-                if !nominal_parameters.is_empty() {
-                    return Err(failure(ForeignAdmissionReason::UnsupportedDomain, span));
+                if let Some(parameters) = registry.nominal_parameters(*id) {
+                    // Preserve the ordinary materialized path without traversing
+                    // an origin merely to ask for this leaf's kind/arity.
+                    if !parameters.is_empty() {
+                        return Err(failure(ForeignAdmissionReason::UnsupportedDomain, span));
+                    }
+                } else {
+                    // Opaque imports retain canonical kind/identity without a
+                    // declaration or source constructor/representation authority.
+                    charge(work, 1, span)?;
+                    match registry.nominal_kind(*id) {
+                        Some(CanonicalNominalKind::Frozen {
+                            kind: Kind::Type, ..
+                        }) => {}
+                        Some(_) => {
+                            return Err(failure(ForeignAdmissionReason::UnsupportedDomain, span));
+                        }
+                        None => {
+                            return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
+                        }
+                    }
                 }
             }
             Type::Variable(id) => {
