@@ -151,6 +151,10 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 
 ### Downstream type-system and resource exploration
 
+- [DN-0042: Native Interaction and Efficient Data](DN-0042-native-interaction-and-efficient-data.md)
+  — a summary connecting FFI, resources, regions, native use cases, numeric
+  representations and data processing, with missing collection and SIMD
+  concerns for planning and tracking.
 - [DN-0041: Typed Serialization and Data Pipelines](DN-0041-typed-serialization-and-data-pipelines.md)
   — an Ash adaptation of Serde's architecture, first-class JSON/YAML/CSV/TOML/BSON
   contracts, owned and incremental processing, scoped storage and attributable
