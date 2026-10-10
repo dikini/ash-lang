@@ -49,6 +49,16 @@ operations with their exact effect, operation, handler, and resume-owner
 identities. A row tail
 or effect argument is zonked before a checked summary or Core node is retained.
 
+Admitted scalar foreign symbols retain their original immutable contracts with
+the declaring native effects and exact operation table. Selected imports and
+hidden signature closure preserve those same allocations. Summary and final
+Core validation reconstruct table/tag correspondence, defining identities,
+complete ordered parameter kinds and the canonical source signature. Display
+aliases grant no replacement contract or result-codec authority. An ordinary
+Core handler cannot target an admitted native symbol. This checkpoint installs
+no owner-free native interpretation boundary and provides no source-native
+execution; the entry application still has an empty outward row.
+
 A resource expression lowers to one Effect `Resource` carrier with an
 initializer and body. It retains the acquisition's identity binder, handle
 binder, exact builtin API relation, generated provider methods and causal

@@ -40,8 +40,9 @@ select the first reported failure deterministically.
 `@builtin.cell` denotes one compiler-owned module, without a configured root
 or filesystem source. `builtin` is a reserved root name: configuring it as a
 filesystem root fails with `invocation.reserved-root` before filesystem
-inspection. The only modules beneath that root are `@builtin.cell` and
-`@builtin.native_buffer`. Other paths, including `@builtin.cell.extra`, fail
+inspection. The modules specified beneath that root are `@builtin.cell`,
+`@builtin.native_buffer` and `@builtin.foreign`. Unknown paths, including
+`@builtin.cell.extra`, fail
 with `module.unknown-builtin`.
 
 The module exports exactly `Handle`, `Provider`, `Ops`, `read` and `write`.
@@ -74,6 +75,41 @@ A `resource native_buffer` expression requires a direct complete or targeted
 import of this module. A cell import, facade-only import, source file or copied
 API cannot authorize native acquisition. Helpers may forward the exact API
 through ordinary imports without themselves acquiring a buffer.
+
+### Compiler-owned foreign result module
+
+`@builtin.foreign` is admitted once per compilation graph and has no runtime
+initialization. Its public `ConversionError` is an opaque ordinary nominal
+type with no source-accessible constructors. Its other public declarations
+are ordinary transparent data types with one kind-`Type` parameter each:
+
+| Type | Constructors |
+| --- | --- |
+| `Call<T>` | `Returned(T)` and `ConversionFailed(ConversionError)` |
+| `Output<T>` | `Unreadable` and `Readable(T)` |
+| `Nullable<T>` | `Null` and `NonNull(T)` |
+| `Disposition<T>` | `Consumed(T)`, `Retained(T)` and `BlockedDependent` |
+
+Complete and targeted imports, aliases and re-exports preserve those nominal
+and constructor identities. Ordinary same-spelled declarations do not supply
+the canonical native result codec. Constructing an ordinary result grants no
+native interpreter, ownership or access permission.
+
+### Source foreign-library identities
+
+A foreign library introduces a defining native-library identity without a
+nested source namespace. Each admitted symbol introduces a module-owned native
+effect with one `call` operation. Symbols share the ordinary effect spelling
+namespace and inherit the library's publication mode. Scalar representations
+occupy an ABI namespace and introduce no ordinary Ash type. Libraries in one
+module require disjoint member spellings.
+
+Imports and re-exports preserve the original effect, operation, library and
+contract identities. Summaries retain descriptors only with selected or
+signature-referenced effect facts. A private native effect referenced by a
+public signature remains a hidden checking fact; it does not become an
+exported source spelling. Display aliases do not replace defining provenance
+or result-codec authority.
 
 ## Imports and namespaces
 

@@ -30076,6 +30076,7 @@ mod tests {
                 let operation = crate::types::OperationId::new(effect, 0);
                 let registry = Arc::new(ResolvedRegistry::default().with_effects(vec![
                     crate::resolved::ResolvedEffectDeclaration {
+                        native_contract: None,
                         id: effect,
                         public: false,
                         spelling: "E".into(),

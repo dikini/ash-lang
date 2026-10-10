@@ -12,7 +12,14 @@ use std::{error::Error, fmt};
 use crate::{
     module::ModuleId,
     source::{Origin, Span},
-    surface::*,
+    surface::{
+        SurfaceForeignAbiRepresentation, SurfaceForeignContract, SurfaceForeignInteger,
+        SurfaceForeignLibrary, SurfaceForeignMember, SurfaceForeignNativePosition,
+        SurfaceForeignOperandRoleKind, SurfaceForeignOperandSource, SurfaceForeignOutcomeCondition,
+        SurfaceForeignOutcomeFactKind, SurfaceForeignOutcomeTest, SurfaceForeignOutputRoleKind,
+        SurfaceForeignReference, SurfaceForeignRepresentation, SurfaceForeignSourcePosition,
+        SurfaceForeignSymbol, SurfaceKindKind, SurfaceType, SurfaceTypeKind,
+    },
     types::{Kind, TypeWorkBudget},
 };
 
@@ -1070,6 +1077,7 @@ fn prepare_symbol(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::surface::SurfaceModule;
 
     const SCALAR: &str = "foreign library C {\nprofile \"x86_64-unknown-linux-gnu\"\nrepr I32 = signed(32)\nconst Ok : I32 = 0\nsymbol Abs<T, Delta : EffectRow> : Int -> Foreign.Call<Int> {\nname \"abs\"\nabi (I32) -> I32\noperand 0 from 0 scalar\noutput result as scalar\noutcome result == Ok { readable result }\noutcome otherwise { readable result }\n}\n}\n";
 

@@ -6901,13 +6901,37 @@ mod tests {
             EffectExprKind, binding::BindingNode, effect::DiscardNode, validate_effect,
             variable::TypedBinder,
         };
+        const ORIGINAL_CLAUSE: &str = concat!(
+            "        ask ignored => handle ({\n",
+            "            let _ = resume ()\n",
+            "            perform D.ask ()\n",
+            "        }) with D {\n",
+            "            ask ignored => discard\n",
+            "        }",
+        );
+        const RESUME_ONLY_CLAUSE: &str = concat!(
+            "        ask ignored => {\n",
+            "            let _ = handle ({\n",
+            "                let _ = resume ()\n",
+            "                perform D.ask ()\n",
+            "            }) with D {\n",
+            "                ask ignored => discard\n",
+            "            }\n",
+            "            perform D.ask ()\n",
+            "        }",
+        );
         for fixture in [
             include_str!("../../tests/fixtures/effects/capture-prefix-before.ash"),
             include_str!("../../tests/fixtures/effects/capture-prefix-after.ash"),
         ] {
             // Publish only a resume-only program, then introduce discard in
             // actual Core. No source capture claim can authorize this check.
-            let fixture = fixture.replace("ask ignored => handle ({\nlet _ = resume ()\nperform D.ask ()\n}) with D {\nask ignored => discard\n}", "ask ignored => {\nlet _ = handle ({\nlet _ = resume ()\nperform D.ask ()\n}) with D {\nask ignored => discard\n}\nperform D.ask ()\n}");
+            assert_eq!(
+                fixture.matches(ORIGINAL_CLAUSE).count(),
+                1,
+                "the fixture must contain exactly one clause for the prerequisite rewrite",
+            );
+            let fixture = fixture.replace(ORIGINAL_CLAUSE, RESUME_ONLY_CLAUSE);
             let discard_start = fixture.find("discard").unwrap();
             let text = format!(
                 "{}\ngood : Unit -> Unit\ngood () = ()\nbad : Unit -> Unit\nbad () = ()\n",

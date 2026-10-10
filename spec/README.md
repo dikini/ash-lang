@@ -9,7 +9,8 @@ Ash is a rank-1 language whose programs are acyclic graphs of passive source
 modules. Each `.ash` source file defines one unnamed module containing
 imports followed by nominal data or `newtype` declarations, method-only
 interface declarations, effect declarations, anonymous implementation
-declarations, and global function definitions. Global signatures may state
+declarations, scalar foreign-library declarations, and global function
+definitions. Global signatures may state
 explicit interface constraints and latent effect rows, and implementation
 heads may state explicit prerequisite constraints. A module has no result
 expression, runtime module value, or initialization.
@@ -93,6 +94,16 @@ checked `discard`. Discard closes the selected capture and recursively owned
 live captures in structural order, then continues the clause with `Unit`.
 Inference proves safe closure without skipping outside or running completion
 owners. Its effect row includes invoked cleanup actions.
+
+An owner-free scalar `foreign library` declaration supplies passive ABI facts
+and exact native effects with one `call` operation each. Complete ordered
+`Type` and `EffectRow` parameters and original contracts survive publication
+and imports. `@builtin.foreign` supplies ordinary common result types, including
+`Call<T>` and opaque `ConversionError`. This checkpoint admits declarations but
+provides no source-native execution or native-effect discharge. Ordinary source
+handlers cannot install a native symbol's interpreter, and entry admission
+still requires an empty outward row. Constants, foreign ownership/access and
+copy windows remain outside the admitted subset.
 
 `resource cell<R> c = initializer { body }` acquires one scoped mutable integer
 cell through the compiler-owned `@builtin.cell` API. The scope owns release;
@@ -210,15 +221,15 @@ bare `Option` constructor, and a global whose explicit parameter has kind
 
 ```ash
 pub type Option<A> =
-None
-| Some(A)
+    None
+    | Some(A)
 
 pub interface Observe<F : Type -> Type> {
-observe : F<Int> -> Int
+    observe : F<Int> -> Int
 }
 
 pub impl Observe<Option> {
-observe value = 40 + 2
+    observe value = 40 + 2
 }
 
 pub relay<F : Type -> Type> : F<Int> -> F<Int>
@@ -413,7 +424,7 @@ and once from `Bool` to `Int`:
 
 ```ash
 pub interface Functor<F : Type -> Type> {
-map<A, B> : (A -> B, F<A>) -> F<B>
+    map<A, B> : (A -> B, F<A>) -> F<B>
 }
 
 to_bool : Int -> Bool
@@ -436,7 +447,7 @@ pub import api (Functor, map)
 pub type Box<A> = Box(A)
 
 pub impl Functor<Box> {
-map (function, Box(value)) = Box(function(value))
+    map (function, Box(value)) = Box(function(value))
 }
 ```
 

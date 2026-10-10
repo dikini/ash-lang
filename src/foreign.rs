@@ -1,10 +1,13 @@
-//! Immutable host registration and identity-bound foreign declaration metadata.
+//! Checked source contracts and retained experimental host registrations.
 //!
-//! Registrations generate passive declarations for the ordinary frontend. They
-//! carry no dynamic symbol names and do not initialize or execute an adapter.
+//! Source declarations and registrations are passive. Checked source contracts
+//! retain defining operation identities for generated native bridges; retained
+//! DN-0036 registrations use their separate manifest/adapter execution boundary.
 mod arena;
+pub mod checked_source;
 pub mod runtime;
 pub mod source_contract;
+pub mod source_runtime;
 pub use arena::{arena_manifest, typed_arena_manifest};
 
 use crate::{

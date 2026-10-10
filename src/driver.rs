@@ -38,10 +38,13 @@ pub struct RunConfiguration {
     pub roots: ModuleRoots,
 }
 
+type SourceProvenance = [(ModuleId, Arc<SourceFile>)];
+
 /// An immutable, independently validated whole program ready for evaluation.
 ///
 /// This owner retains compiler-private Pure or Effect Core, its result type and
-/// completed compilation ledger. It contains no evaluator heap, resource owner or
+/// completed compilation ledger, together with the original admitted sources.
+/// It contains no evaluator heap, resource owner or
 /// runtime activation. Only [`compile_path`] constructs this capability; repeated
 /// [`execute`] calls use fresh evaluator state without reading source files.
 ///
@@ -53,6 +56,13 @@ pub struct CompiledProgram {
     ty: IterativeTypeOwner,
     type_display: String,
     compilation_work: crate::compiler_work::CompilationWork,
+    provenance: Vec<(ModuleId, Arc<SourceFile>)>,
+}
+
+#[derive(Clone, Copy)]
+enum ProvenanceRetention {
+    Retain,
+    Discard,
 }
 
 enum CompiledCore {
@@ -66,6 +76,15 @@ struct ObservationMetadata {
 }
 
 impl CompiledProgram {
+    pub(crate) fn pure_build_input(&self) -> Option<(&ValidatedProgram, &SourceProvenance)> {
+        match &self.core {
+            CompiledCore::Pure(program) if !self.provenance.is_empty() => {
+                Some((program, &self.provenance))
+            }
+            CompiledCore::Pure(_) | CompiledCore::Effect(_) => None,
+        }
+    }
+
     /// Borrows the structural type of the checked entry result.
     #[must_use]
     pub fn ty(&self) -> &Type {
@@ -91,6 +110,7 @@ impl fmt::Debug for CompiledProgram {
             .debug_struct("CompiledProgram")
             .field("type_display", &self.type_display)
             .field("compilation_work", &self.compilation_work)
+            .field("source_count", &self.provenance.len())
             .finish_non_exhaustive()
     }
 }
@@ -735,7 +755,7 @@ impl Error for FileFailure {}
 /// runtime failure.
 pub fn run_path(configuration: RunConfiguration) -> Result<Observation, FileFailure> {
     let pipeline_phase = crate::calibration::Phase::start("pipeline");
-    let compiled = compile_path(configuration)?;
+    let compiled = compile_path_for_execution(configuration)?;
     let observation = execute_owned_with_consumer(compiled, evaluate, None)?;
     pipeline_phase.finish(None, 0, 0);
     Ok(observation)
@@ -746,6 +766,9 @@ pub fn run_path(configuration: RunConfiguration) -> Result<Observation, FileFail
 /// Compilation performs no Ash evaluation or native resource acquisition. The
 /// resulting private Core can be executed repeatedly after its sources change
 /// or disappear. This does not generate or link a native program.
+/// Original sources are retained through shared handles for later build
+/// preparation. Retention charges two source-checking units per admitted module:
+/// one provenance record reservation and one shared source handle copy.
 ///
 /// # Errors
 /// Returns the structured input and compiler-stage failures of [`run_path`],
@@ -757,6 +780,20 @@ pub fn compile_path(configuration: RunConfiguration) -> Result<CompiledProgram, 
         validate_interface_evidence_with_budget,
         validate_modular_core,
         true,
+        ProvenanceRetention::Retain,
+    )
+}
+
+fn compile_path_for_execution(
+    configuration: RunConfiguration,
+) -> Result<CompiledProgram, FileFailure> {
+    compile_path_with_consumers_internal(
+        configuration,
+        &mut InterfaceConstraintBudget::default(),
+        validate_interface_evidence_with_budget,
+        validate_modular_core,
+        true,
+        ProvenanceRetention::Discard,
     )
 }
 
@@ -865,7 +902,9 @@ where
         ty,
         type_display,
         compilation_work,
+        provenance,
     } = program;
+    drop(provenance);
     execute_prepared(
         &core,
         ObservationMetadata { ty, type_display },
@@ -921,7 +960,7 @@ pub fn run_path_with_foreign_runtime(
     runtime: &mut crate::foreign::runtime::ForeignRuntime,
 ) -> Result<Observation, FileFailure> {
     let pipeline_phase = crate::calibration::Phase::start("pipeline");
-    let compiled = compile_path(configuration)?;
+    let compiled = compile_path_for_execution(configuration)?;
     let observation = execute_owned_with_consumer(compiled, evaluate, Some(runtime))?;
     pipeline_phase.finish(None, 0, 0);
     Ok(observation)
@@ -1024,6 +1063,7 @@ where
         interface_validator,
         validator,
         select_effect_core,
+        ProvenanceRetention::Discard,
     )?;
     let observation = execute_owned_with_consumer(compiled, evaluator, runtime)?;
     pipeline_phase.finish(None, 0, 0);
@@ -1036,6 +1076,7 @@ fn compile_path_with_consumers_internal<I, V>(
     interface_validator: I,
     validator: V,
     select_effect_core: bool,
+    retention: ProvenanceRetention,
 ) -> Result<CompiledProgram, FileFailure>
 where
     I: FnOnce(
@@ -1062,6 +1103,7 @@ where
         interface_validator,
         validator,
         select_effect_core,
+        retention,
     );
     if result.is_ok() {
         compilation_phase.finish(None, 0, 0);
@@ -1083,6 +1125,7 @@ fn compile_graph_with_consumers<I, V>(
     interface_validator: I,
     validator: V,
     select_effect_core: bool,
+    retention: ProvenanceRetention,
 ) -> Result<CompiledProgram, FileFailure>
 where
     I: FnOnce(
@@ -1099,6 +1142,7 @@ where
         interface_validator,
         validator,
         select_effect_core,
+        retention,
         &mut compilation_work,
     )
     .map_err(|failure| failure.with_compilation_work(compilation_work))
@@ -1110,6 +1154,7 @@ fn compile_graph_with_report<I, V>(
     interface_validator: I,
     validator: V,
     select_effect_core: bool,
+    retention: ProvenanceRetention,
     compilation_work: &mut crate::compiler_work::CompilationWork,
 ) -> Result<CompiledProgram, FileFailure>
 where
@@ -1275,6 +1320,17 @@ where
     if !main.scheme.requirements.is_empty() {
         return Err(entry_failure(EntryReason::MainConstrained, main_span));
     }
+    let provenance =
+        retain_source_provenance(graph, retention, &mut checking_type_work).map_err(|()| {
+            FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+                crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+            )))
+            .with_phase_work(
+                crate::compiler_work::CompilationPhase::SourceChecking
+                    .assess(checking_type_work.used())
+                    .incomplete(),
+            )
+        })?;
     compilation_work.source_checking = Some(
         crate::compiler_work::CompilationPhase::SourceChecking.assess(checking_type_work.used()),
     );
@@ -1337,7 +1393,11 @@ where
                 &sources,
                 &module_sources,
                 compilation_work,
-            );
+            )
+            .map(|mut compiled| {
+                compiled.provenance = provenance;
+                compiled
+            });
         }
         interface_phase.finish(
             Some(linked_type_work.used()),
@@ -1416,6 +1476,31 @@ where
         validator,
         compilation_work,
     )
+    .map(|mut compiled| {
+        compiled.provenance = provenance;
+        compiled
+    })
+}
+
+fn retain_source_provenance(
+    graph: &ModuleGraph,
+    retention: ProvenanceRetention,
+    work: &mut TypeWorkBudget,
+) -> Result<Vec<(ModuleId, Arc<SourceFile>)>, ()> {
+    let mut provenance = Vec::new();
+    if matches!(retention, ProvenanceRetention::Discard) {
+        return Ok(provenance);
+    }
+    // Charge record storage and shared-handle copies before allocating or
+    // inspecting the admitted modules. Source bytes themselves remain shared.
+    work.charge(graph.modules().len().checked_mul(2).ok_or(())?)?;
+    provenance
+        .try_reserve_exact(graph.modules().len())
+        .map_err(|_| ())?;
+    for module in graph.modules() {
+        provenance.push((module.id(), Arc::clone(module.retained_source())));
+    }
+    Ok(provenance)
 }
 
 // Select experimental overrides only for complete public phase owners. Exact
@@ -1551,6 +1636,7 @@ fn finish_effect_compilation(
         ty,
         type_display,
         compilation_work: *compilation_work,
+        provenance: Vec::new(),
     })
 }
 
@@ -1581,6 +1667,7 @@ where
         ty,
         type_display,
         compilation_work: *compilation_work,
+        provenance: Vec::new(),
     })
 }
 
@@ -1860,6 +1947,84 @@ mod tests {
         );
         assert!(failure.sources().is_empty());
         assert!(!failure.is_source_rejection());
+    }
+
+    #[test]
+    fn compilation_retains_original_source_handles_only_for_reusable_programs() {
+        let entry = concat!(
+            "import @builtin.cell as Cell\n",
+            "import helper (advance)\n",
+            "main : Unit -> Int\n",
+            "main () = resource cell<R> value = 41 {\n    advance value\n}\n",
+        );
+        let source = TestSource::write(entry);
+        source.write_sibling(
+            "helper.ash",
+            concat!(
+                "import @builtin.cell as Cell\n",
+                "pub advance<R> : Cell.Handle<R> -> Int ! {Cell.Ops<R>} where Cell.Provider<R>\n",
+                "advance value = {\n",
+                "    let previous = Cell.read value\n",
+                "    let _ = Cell.write (value, previous + 1)\n",
+                "    Cell.read value\n",
+                "}\n",
+            ),
+        );
+        let graph = load_module_graph(&source.0, &ModuleRoots::empty())
+            .expect("imported cell source graph loads");
+        let original_handle_count = Arc::strong_count(graph.modules()[0].retained_source());
+        let mut refused_work = TypeWorkBudget::with_limit(2 * graph.modules().len() - 1);
+        assert!(
+            retain_source_provenance(&graph, ProvenanceRetention::Retain, &mut refused_work)
+                .is_err()
+        );
+        assert_eq!(refused_work.used(), 0);
+        assert_eq!(
+            Arc::strong_count(graph.modules()[0].retained_source()),
+            original_handle_count,
+            "refusal precedes all shared-handle copies",
+        );
+        let compile = |retention| {
+            compile_graph_with_consumers(
+                &graph,
+                &mut InterfaceConstraintBudget::default(),
+                validate_interface_evidence_with_budget,
+                validate_modular_core,
+                true,
+                retention,
+            )
+            .expect("imported cell graph compiles")
+        };
+        let retained = compile(ProvenanceRetention::Retain);
+        let transient = compile(ProvenanceRetention::Discard);
+        assert_eq!(retained.provenance.len(), graph.modules().len());
+        assert!(transient.provenance.is_empty());
+        for ((module_id, retained_source), module) in
+            retained.provenance.iter().zip(graph.modules())
+        {
+            assert_eq!(*module_id, module.id());
+            assert!(Arc::ptr_eq(retained_source, module.retained_source()));
+            assert_eq!(retained_source.id(), module.source().id());
+        }
+        let mut expected_work = *transient.compilation_work();
+        expected_work.source_checking.as_mut().unwrap().used += 2 * graph.modules().len();
+        assert_eq!(retained.compilation_work(), &expected_work);
+        let entry_module = graph.entry();
+        fs::write(&source.0, "invalid replacement\n").expect("replace original entry");
+        drop(graph);
+        drop(source);
+        assert_eq!(
+            retained
+                .provenance
+                .iter()
+                .find(|(module_id, _)| *module_id == entry_module)
+                .expect("original entry provenance survives")
+                .1
+                .text(),
+            entry,
+        );
+        assert_eq!(execute(&retained).unwrap().value_display(), "42");
+        assert_eq!(execute(&transient).unwrap().value_display(), "42");
     }
 
     #[test]

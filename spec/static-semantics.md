@@ -975,10 +975,48 @@ main : Unit -> Int
 main () = true + 1
 ```
 
+## Source foreign declarations
+
+The admitted foreign-library subset is passive and owner-free. Each library
+has exactly one profile, `"x86_64-unknown-linux-gnu"`. Scalar representations
+are signed or unsigned 8-, 32- or 64-bit integers, or `size_t`. These ABI
+representations introduce no ordinary fixed-width Ash integer type.
+
+Each symbol has one outer pure source arrow and a complete ordered parameter
+vector containing only `Type` and `EffectRow` parameters. Omitted kinds are
+`Type`. Parameters are retained even when they contribute no ABI operand.
+Native symbol names are nonempty strings without NUL. Every ABI input maps
+exactly once to a source position whose selected type is mathematical `Int`;
+negative or out-of-range source positions and missing or repeated ABI input
+mappings reject. The source domain may contain a product, and dotted positions
+select its nested leaves.
+
+A scalar ABI result requires `output result as scalar` and an `otherwise`
+outcome declaring `readable result`. Its source codomain is the exact canonical
+`@builtin.foreign` type `Call<Int>`. A `void` result has no output role or
+readability fact and has codomain `Call<Unit>`; `outcome otherwise {}` provides
+its total empty outcome. `void` is not an ABI input. A zero-argument C function
+has zero ABI operands, as in `abi () -> void`.
+
+Declaration checking authenticates the canonical result nominal and constructor
+identities, complete parameter kinds and defining origins. A same-spelled or
+same-shaped client type does not replace the common codec. ABI preparation is
+retained once per defining library, then bound to the original effect and
+operation facts. Summaries preserve those immutable contracts and reject
+changed table coverage, signature or parameter correspondence.
+
+This checkpoint provides declaration admission, not source-native execution.
+Native calls retain their exact effect instances, and ordinary `handle` clauses
+cannot install a native symbol's interpreter. No foreign interpreter removes
+those effects at program entry; the existing empty-row entry rule remains in
+force. Constants, qualified ABI references, pointer/output-slot contracts,
+foreign ownership/access and copy windows reject rather than granting partial
+authority.
+
 ## Effects
 
-An effect declaration has a possibly empty ordered parameter vector and a
-nonempty ordered operation vector. Its parameters have the ordinary fixed
+An ordinary effect declaration has a possibly empty ordered parameter vector
+and a nonempty ordered operation vector. Its parameters have the ordinary fixed
 kinds already admitted for nominal declarations; none has kind `EffectRow`.
 Operation spellings are unique within the declaration. Each operation type has
 exactly one outer pure function arrow `P -> Q`, where `P` and `Q` are value

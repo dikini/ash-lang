@@ -2688,6 +2688,47 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         )
     }
 
+    /// Runs one payload-construction operation on the caller's actual ledger.
+    ///
+    /// Private image reconstruction uses this seam between its own admission
+    /// steps. The meter returns to the caller after both success and failure;
+    /// no separate allowance or replayed charge is introduced.
+    pub(crate) fn with_caller_type_work<T>(
+        &mut self,
+        work: &mut TypeWorkBudget,
+        operation: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        std::mem::swap(&mut self.type_work, work);
+        let result = operation(self);
+        std::mem::swap(&mut self.type_work, work);
+        result
+    }
+
+    /// Admits backing storage for a private reconstruction before payloads move.
+    ///
+    /// The image supplies complete node and binder counts. Ordinary public
+    /// builders keep their existing allocation behavior.
+    pub(crate) fn reserve_image_reconstruction_storage(
+        &mut self,
+        nodes: usize,
+        binders: usize,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), BuildError> {
+        work.charge(
+            nodes
+                .checked_add(binders)
+                .ok_or(BuildError::TypeWorkExceeded)?,
+        )
+        .map_err(|()| BuildError::TypeWorkExceeded)?;
+        self.nodes
+            .try_reserve_exact(nodes)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        self.materialized_resolved
+            .try_reserve(binders)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        Ok(())
+    }
+
     pub(crate) fn with_registry_and_method_evidence(
         registry: Arc<ResolvedRegistry>,
         method_evidence: Arc<MethodEvidenceCatalog>,

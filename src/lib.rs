@@ -9,6 +9,7 @@
 //! interfaces and their implementation do not define additional language
 //! behavior.
 
+pub mod build;
 mod calibration;
 #[cfg(feature = "resource-calibration")]
 mod calibration_features;

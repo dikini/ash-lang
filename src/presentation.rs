@@ -1296,6 +1296,35 @@ pub fn compile_usage_diagnostic() -> CompileDiagnostic<'static> {
     }
 }
 
+/// Presents native build failures while retaining their stage and tool-log path.
+/// Source-pipeline failures use their original source diagnostic instead.
+#[must_use]
+pub fn compile_build_diagnostic<'a>(
+    failure: &'a crate::build::BuildFailure,
+    detail: &'a str,
+) -> CompileDiagnostic<'a> {
+    let mut facts = vec![Fact {
+        name: "detail",
+        kind: "build-detail",
+        value: FactValue::Text(detail),
+    }];
+    if let Some(log) = failure.build_log() {
+        facts.push(Fact {
+            name: "build_log",
+            kind: "path",
+            value: FactValue::Path(log),
+        });
+    }
+    CompileDiagnostic {
+        reason: failure.reason().into(),
+        responsibility: failure.responsibility(),
+        message: Message::build_failure(detail),
+        primary: None,
+        related: Vec::new(),
+        facts,
+    }
+}
+
 /// Presents the executable's failed standard-output write.
 #[must_use]
 pub fn compile_output_write_diagnostic() -> CompileDiagnostic<'static> {

@@ -23,6 +23,7 @@ module_declaration ::=
   | interface_declaration
   | implementation_declaration
   | effect_declaration
+  | foreign_library_declaration
   | global_definition ;
 
 import_declaration ::=
@@ -61,6 +62,32 @@ effect_declaration ::=
   effect_operation { line_end effect_operation } [ line_end ]
   "}" ;
 effect_operation ::= identifier ":" type ;
+
+foreign_library_declaration ::=
+  [ "pub" ] "foreign" "library" upper_identifier
+  "{" line_end foreign_scalar_member
+  { line_end foreign_scalar_member } [ line_end ] "}" ;
+foreign_scalar_member ::=
+    "profile" string_literal
+  | "repr" upper_identifier "=" scalar_representation
+  | foreign_scalar_symbol ;
+scalar_representation ::=
+    "signed" "(" integer ")"
+  | "unsigned" "(" integer ")"
+  | "size_t" ;
+foreign_scalar_symbol ::=
+  "symbol" upper_identifier [ type_parameters ] ":" type
+  "{" line_end "name" string_literal line_end
+  "abi" "(" [ upper_identifier { "," upper_identifier } ] ")"
+  "->" (upper_identifier | "void") line_end
+  foreign_scalar_contract { line_end foreign_scalar_contract }
+  [ line_end ] "}" ;
+foreign_scalar_contract ::=
+    "operand" integer "from" source_position "scalar"
+  | "output" "result" "as" "scalar"
+  | "outcome" "otherwise" "{" [ "readable" "result" ] "}" ;
+source_position ::= integer { "." integer } ;
+string_literal ::= /double-quoted-UTF-8-with-defined-escapes/ ;
 
 interface_declaration ::=
   [ "pub" ] "interface" upper_identifier interface_parameters
@@ -172,7 +199,7 @@ primary_expression ::=
 unqualified_term_reference ::= identifier | upper_identifier ;
 qualified_term_reference ::= upper_identifier "." import_name ;
 perform_expression ::= "perform" operation_reference primary_expression ;
-operation_reference ::= effect_reference [ type_arguments ] "." identifier ;
+operation_reference ::= effect_reference [ effect_arguments ] "." identifier ;
 parenthesized_expression ::=
   "(" expression [ "," expression { "," expression } ] ")" ;
 
@@ -209,7 +236,9 @@ effect_row ::=
     [ effect_instance { "," effect_instance } [ "|" row_variable ]
     | "|" row_variable ]
   "}" ;
-effect_instance ::= effect_reference [ type_arguments ] ;
+effect_instance ::= effect_reference [ effect_arguments ] ;
+effect_arguments ::= "<" effect_argument { "," effect_argument } ">" ;
+effect_argument ::= type | effect_row ;
 effect_reference ::=
   upper_identifier | upper_identifier "." upper_identifier ;
 row_variable ::= upper_identifier ;
@@ -228,6 +257,16 @@ precede every module declaration. Both import lists and declaration lists may
 be empty. A private import may be complete or targeted. A public import must be
 targeted. A targeted import list contains at least one item. Neither a module
 nor a block uses a trailing semicolon.
+
+The foreign productions describe the admitted owner-free scalar declaration
+subset. `source_position` selects a zero-based leaf of the source argument
+product. Quoted declaration strings follow [lexical
+structure](lexical-structure.md#tokens). [Static
+semantics](static-semantics.md#source-foreign-declarations) requires exact ABI
+coverage and result shape. Constants, pointers, output slots, owner/access
+members and copy windows are not admitted in this checkpoint. Effect arguments
+retain their written order; the declaring effect determines each argument's
+required kind.
 
 A relative module path contains one or more lowercase path segments. An
 absolute path starts with `@`, contains a lowercase root name, and has at least

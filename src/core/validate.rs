@@ -75,13 +75,20 @@ fn same_provider_family_application(
     Ok(true)
 }
 
-/// Membership in canonical foreign registrations requires visiting their
-/// module inventory and exact effect identities. Pay before each traversal.
+/// Checks the exact source-native operation table, then legacy registrations.
+/// Pay before the lookup and each legacy inventory traversal.
 pub(crate) fn registered_foreign_effect_with_charge<E>(
     registry: &crate::resolved::ResolvedRegistry,
     effect: crate::types::EffectId,
     mut charge: impl FnMut(usize) -> Result<(), E>,
 ) -> Result<bool, E> {
+    charge(1)?;
+    if registry
+        .native_symbol(OperationId::new(effect, 0))
+        .is_some()
+    {
+        return Ok(true);
+    }
     for module in registry.foreign_modules() {
         charge(1)?;
         charge(module.effects.len())?;
@@ -18114,6 +18121,7 @@ mod tests {
         let effect = crate::types::EffectId::new(module, 0);
         let registry = crate::resolved::ResolvedRegistry::default().with_effects(vec![
             ResolvedEffectDeclaration {
+                native_contract: None,
                 id: effect,
                 public: false,
                 spelling: "Ask".into(),
@@ -30141,6 +30149,7 @@ mod tests {
                 Mutation::DuplicateEffectOwner | Mutation::NominalCrossOwner => {}
             }
             let mut effects = vec![ResolvedEffectDeclaration {
+                native_contract: None,
                 id: effect,
                 public: false,
                 spelling: "Build".into(),
@@ -30154,6 +30163,7 @@ mod tests {
                 operation.id = OperationId::new(second, 0);
                 operation.spelling = "more".into();
                 effects.push(ResolvedEffectDeclaration {
+                    native_contract: None,
                     id: second,
                     public: false,
                     spelling: "More".into(),

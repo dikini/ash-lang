@@ -56,7 +56,11 @@ fn compiled_pure_program_runs_after_source_replacement_without_new_compilation_w
     let compiled = compile_path(tree.configuration()).expect("source compiles");
     assert_eq!(compiled.ty(), &Type::Int);
     assert_eq!(compiled.type_display(), original.type_display());
-    assert_eq!(compiled.compilation_work(), original.compilation_work());
+    let mut retained_work = *original.compilation_work();
+    // Reusable compilation retains one record and one shared source handle for
+    // this single-module graph; ordinary run_path retains neither.
+    retained_work.source_checking.as_mut().unwrap().used += 2;
+    assert_eq!(compiled.compilation_work(), &retained_work);
 
     tree.write("entry.ash", "this replacement is not an Ash program\n");
     for _ in 0..3 {
