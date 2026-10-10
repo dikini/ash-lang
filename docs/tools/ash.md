@@ -65,7 +65,7 @@ use ash::driver::RunConfiguration;
 use ash::module::ModuleRoots;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut build = BuildConfiguration::new("./program");
+    let mut build = BuildConfiguration::new("./program".into());
     build.native_inputs.push(NativeLinkInput::StaticArchive("./libcounter.a".into()));
     let source = RunConfiguration {
         entry: "entry.ash".into(),
