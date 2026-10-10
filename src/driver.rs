@@ -1823,6 +1823,66 @@ const fn projection_reason(error: ProjectionError) -> &'static str {
     }
 }
 
+fn refuse_unbound_source_native_entry(core: &CompiledCore) -> Result<(), RuntimeFailure> {
+    if let CompiledCore::Effect(program) = core {
+        let root = program
+            .node(program.root())
+            .ok_or(RuntimeFailure::MissingNode)?;
+        if let crate::core::EffectExprKind::Operation(
+            crate::core::EffectOperation::NativeInterpret(boundary),
+        ) = &root.kind
+            && !boundary.interpretations().is_empty()
+        {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+    }
+    Ok(())
+}
+
+/// Evaluates a prepared source-native program with already supplied generated
+/// bindings. It performs no source loading, host compilation or library linking.
+/// Binding admission and observation preparation both precede Ash execution.
+///
+/// The generated linked host supplies bindings through sealed bridge admission.
+/// Public empty binding construction grants no native invocation authority;
+/// this function neither registers callbacks nor selects them by source name.
+///
+/// # Errors
+/// Refuses missing or changed bindings before Ash execution and retains runtime
+/// failures without retrying a returned external call.
+pub fn execute_with_source_native_bindings(
+    program: &CompiledProgram,
+    bindings: &mut crate::foreign::source_runtime::SourceNativeBindings,
+) -> Result<Observation, FileFailure> {
+    let Some((core, boundary)) = program.source_native_entry() else {
+        return execute(program);
+    };
+    if boundary.interpretations().is_empty() {
+        return execute(program);
+    }
+    let preparation_failure = |failure| {
+        FileFailure::from(PipelineFailure::Runtime(failure))
+            .with_compilation_work(program.compilation_work)
+    };
+    let mut work = TypeWorkBudget::default();
+    let admitted =
+        crate::foreign::source_runtime::admit_source_native_program(core, bindings, &mut work)
+            .map_err(preparation_failure)?;
+    let metadata = prepare_observation_metadata(program).map_err(preparation_failure)?;
+    let phase = crate::calibration::Phase::start("evaluation");
+    let evaluation = crate::eval::evaluate_effect_with_source_native_program(admitted)
+        .map_err(preparation_failure)?;
+    phase.finish(None, 0, 0);
+    let (value, heap) = evaluation.into_observation_parts();
+    Ok(Observation {
+        value,
+        ty: metadata.ty.into_inner(),
+        type_display: Some(metadata.type_display),
+        _heap: heap,
+        compilation_work: program.compilation_work,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use crate::core::validate_modules;
@@ -3083,64 +3143,4 @@ mod tests {
             .join()
             .expect("consuming accessors must preserve selected parts and dismantle safely");
     }
-}
-
-fn refuse_unbound_source_native_entry(core: &CompiledCore) -> Result<(), RuntimeFailure> {
-    if let CompiledCore::Effect(program) = core {
-        let root = program
-            .node(program.root())
-            .ok_or(RuntimeFailure::MissingNode)?;
-        if let crate::core::EffectExprKind::Operation(
-            crate::core::EffectOperation::NativeInterpret(boundary),
-        ) = &root.kind
-            && !boundary.interpretations().is_empty()
-        {
-            return Err(RuntimeFailure::ForeignBinding);
-        }
-    }
-    Ok(())
-}
-
-/// Evaluates a prepared source-native program with already supplied generated
-/// bindings. It performs no source loading, host compilation or library linking.
-/// Binding admission and observation preparation both precede Ash execution.
-///
-/// The generated linked host supplies bindings through sealed bridge admission.
-/// Public empty binding construction grants no native invocation authority;
-/// this function neither registers callbacks nor selects them by source name.
-///
-/// # Errors
-/// Refuses missing or changed bindings before Ash execution and retains runtime
-/// failures without retrying a returned external call.
-pub fn execute_with_source_native_bindings(
-    program: &CompiledProgram,
-    bindings: &mut crate::foreign::source_runtime::SourceNativeBindings,
-) -> Result<Observation, FileFailure> {
-    let Some((core, boundary)) = program.source_native_entry() else {
-        return execute(program);
-    };
-    if boundary.interpretations().is_empty() {
-        return execute(program);
-    }
-    let preparation_failure = |failure| {
-        FileFailure::from(PipelineFailure::Runtime(failure))
-            .with_compilation_work(program.compilation_work)
-    };
-    let mut work = TypeWorkBudget::default();
-    let admitted =
-        crate::foreign::source_runtime::admit_source_native_program(core, bindings, &mut work)
-            .map_err(preparation_failure)?;
-    let metadata = prepare_observation_metadata(program).map_err(preparation_failure)?;
-    let phase = crate::calibration::Phase::start("evaluation");
-    let evaluation = crate::eval::evaluate_effect_with_source_native_program(admitted)
-        .map_err(preparation_failure)?;
-    phase.finish(None, 0, 0);
-    let (value, heap) = evaluation.into_observation_parts();
-    Ok(Observation {
-        value,
-        ty: metadata.ty.into_inner(),
-        type_display: Some(metadata.type_display),
-        _heap: heap,
-        compilation_work: program.compilation_work,
-    })
 }
