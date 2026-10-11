@@ -1,4 +1,4 @@
-//! Unique native storage for the dependency-free opaque-owner bridge profile.
+//! Unique native storage for dependency-free opaque and initialized byte owners.
 //!
 //! Checked resource admission supplies the exact owner and teardown callback.
 //! Generated code contains the unsafe native call; this module never dereferences
@@ -66,11 +66,17 @@ impl Drop for RawOwnerGuard {
 pub(crate) struct NativeOwnerGuard {
     raw: RawOwnerGuard,
     owner: Arc<CheckedForeignOwner>,
+    initialized_bytes: Option<usize>,
 }
 
 impl NativeOwnerGuard {
     pub(crate) fn owner(&self) -> &Arc<CheckedForeignOwner> {
         &self.owner
+    }
+
+    #[cfg(test)]
+    pub(crate) fn initialized_bytes(&self) -> Option<usize> {
+        self.initialized_bytes
     }
 
     /// Consumes native state once and returns original authority without a call
@@ -79,6 +85,7 @@ impl NativeOwnerGuard {
         let receipt = NativeOwnerConsumed {
             owner: Arc::clone(&self.owner),
         };
+        let _ = self.initialized_bytes.take();
         self.raw.consume();
         receipt
     }
@@ -102,6 +109,7 @@ impl NativeOwnerConsumed {
 #[derive(Debug)]
 pub struct NativeOwnerGuardReady {
     guard: NativeOwnerGuard,
+    prepared_initialized_bytes: Option<usize>,
 }
 
 impl NativeOwnerGuardReady {
@@ -113,8 +121,16 @@ impl NativeOwnerGuardReady {
             guard: NativeOwnerGuard {
                 raw: RawOwnerGuard::empty(teardown),
                 owner,
+                initialized_bytes: None,
             },
+            prepared_initialized_bytes: None,
         }
+    }
+
+    /// Retains the already checked original source extent before native entry.
+    /// This is preparation only; a null reply establishes no initialized region.
+    pub(crate) fn prepare_initialized_bytes(&mut self, extent: Option<usize>) {
+        self.prepared_initialized_bytes = extent;
     }
 
     /// Called immediately by the generated typed wrapper after native return.
@@ -124,7 +140,10 @@ impl NativeOwnerGuardReady {
     #[doc(hidden)]
     pub fn returned(mut self, address: *mut core::ffi::c_void) -> NativeOwnerCallReturned {
         self.guard.raw.address = NonNull::new(address);
-        NativeOwnerCallReturned { guard: self.guard }
+        NativeOwnerCallReturned {
+            guard: self.guard,
+            prepared_initialized_bytes: self.prepared_initialized_bytes,
+        }
     }
 }
 
@@ -133,11 +152,15 @@ impl NativeOwnerGuardReady {
 #[derive(Debug)]
 pub struct NativeOwnerCallReturned {
     guard: NativeOwnerGuard,
+    prepared_initialized_bytes: Option<usize>,
 }
 
 impl NativeOwnerCallReturned {
     /// The first post-return transition records ownership without refusal.
-    pub(crate) fn record(self) -> NativeOwnerCallRecorded {
+    pub(crate) fn record(mut self) -> NativeOwnerCallRecorded {
+        if self.guard.raw.address.is_some() {
+            self.guard.initialized_bytes = self.prepared_initialized_bytes;
+        }
         NativeOwnerCallRecorded { guard: self.guard }
     }
 }

@@ -1,4 +1,4 @@
-//! Target resolution and typed Rust calls for checked scalar and opaque owners.
+//! Target resolution and typed Rust calls for checked scalar and native owners.
 //!
 //! Plans retain original source authority. They do not link a library, discharge
 //! an effect, convert Ash values or validate an external binary's assumptions.
@@ -348,16 +348,16 @@ fn plan_target_bridge(
             let owner = symbol
                 .owner()
                 .ok_or_else(|| fail(ForeignBridgeReason::InvalidAuthority, span))?;
-            if owner.owner().representation() != PreparedAddressRepresentation::Opaque {
-                return Err(fail(ForeignBridgeReason::UnsupportedRepresentation, span));
-            }
             match role {
                 PreparedOwnerCall::Acquire {
                     initialized_bytes, ..
                 } => {
-                    if initialized_bytes.is_some()
-                        || source.result()
-                            != PreparedAbiResult::Address(PreparedAddressRepresentation::Opaque)
+                    if !matches!(
+                        (owner.owner().representation(), initialized_bytes),
+                        (PreparedAddressRepresentation::Opaque, None)
+                            | (PreparedAddressRepresentation::Bytes, Some(_))
+                    ) || source.result()
+                        != PreparedAbiResult::Address(owner.owner().representation())
                     {
                         return Err(fail(ForeignBridgeReason::UnsupportedRepresentation, span));
                     }
@@ -367,7 +367,7 @@ fn plan_target_bridge(
                     current_operand, ..
                 } => {
                     // Safe host destruction must need no new scalar preparation.
-                    // This bounded profile has exactly one current opaque address.
+                    // This bounded profile has exactly one current owner address.
                     if *current_operand != 0
                         || source.operands().len() != 1
                         || source.result() != PreparedAbiResult::Void
@@ -376,9 +376,7 @@ fn plan_target_bridge(
                             PreparedOperandSource::Current(_)
                         )
                         || source.operands()[0].representation()
-                            != PreparedRepresentation::Address(
-                                PreparedAddressRepresentation::Opaque,
-                            )
+                            != PreparedRepresentation::Address(owner.owner().representation())
                     {
                         return Err(fail(ForeignBridgeReason::UnsupportedRepresentation, span));
                     }
@@ -411,9 +409,7 @@ fn plan_target_bridge(
         PreparedAbiResult::Scalar(representation) => {
             TargetResult::Scalar(target_scalar(representation, span)?)
         }
-        PreparedAbiResult::Address(PreparedAddressRepresentation::Opaque)
-            if call == TargetBridgeCall::OwnerAcquire =>
-        {
+        PreparedAbiResult::Address(_) if call == TargetBridgeCall::OwnerAcquire => {
             TargetResult::OwnerAddress
         }
         PreparedAbiResult::Address(_) => {
@@ -887,7 +883,7 @@ main () = 42
     }
 
     #[test]
-    fn byte_owner_contract_cannot_select_the_opaque_executable_bridge() {
+    fn initialized_byte_owner_bridges_retain_original_extent_and_owner_authority() {
         let source = OWNER_SOURCE
             .replace("repr Address = opaque", "repr Address = bytes")
             .replace(
@@ -895,18 +891,28 @@ main () = 42
                 "outcome result nonnull { readable result, initialized_bytes result from 0 }",
             );
         let fixture = Fixture::with_source(&source);
-        for name in ["Allocate", "Free"] {
-            let failure = plan_target_bridge(
-                fixture.symbol(name),
+        for (name, role) in [
+            ("Allocate", TargetBridgeCall::OwnerAcquire),
+            ("Free", TargetBridgeCall::OwnerTeardown),
+        ] {
+            let symbol = fixture.symbol(name);
+            let plan = plan_target_bridge(
+                Arc::clone(&symbol),
                 &mut TypeWorkBudget::default(),
                 fixture.common_span,
             )
-            .unwrap_err();
-            assert_eq!(
-                failure.reason(),
-                ForeignBridgeReason::UnsupportedRepresentation
-            );
+            .unwrap();
+            assert_eq!(plan.call(), role);
+            assert!(Arc::ptr_eq(plan.symbol(), &symbol));
+            let emitted = emit_rust_bridge(&plan, &mut TypeWorkBudget::default()).unwrap();
+            assert!(emitted.contains("*mut core::ffi::c_void"));
+            assert!(!emitted.contains("NativeScalarReply"));
         }
+        assert!(matches!(
+            fixture.symbol("Allocate").owner_role(),
+            Some(PreparedOwnerCall::Acquire { initialized_bytes: Some(extent), .. })
+                if extent.extent() == [0]
+        ));
     }
 
     #[test]

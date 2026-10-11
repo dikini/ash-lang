@@ -127,10 +127,7 @@ impl SourceNativeBindings {
         let target = sealed.target();
         let symbol = sealed.into_source();
         let owner = symbol.owner().ok_or(RuntimeFailure::ForeignBinding)?;
-        if target != "x86_64-unknown-linux-gnu"
-            || owner.owner().representation() != PreparedAddressRepresentation::Opaque
-            || symbol.owner_codec().is_none()
-        {
+        if target != "x86_64-unknown-linux-gnu" || symbol.owner_codec().is_none() {
             return Err(RuntimeFailure::ForeignBinding);
         }
         paid(work, symbol.symbol().operands().len())?;
@@ -138,12 +135,15 @@ impl SourceNativeBindings {
             (
                 SourceOwnerCallback::Acquire(_),
                 Some(PreparedOwnerCall::Acquire {
-                    initialized_bytes: None,
-                    ..
+                    initialized_bytes, ..
                 }),
             ) => {
-                symbol.symbol().result()
-                    == PreparedAbiResult::Address(PreparedAddressRepresentation::Opaque)
+                matches!(
+                    (owner.owner().representation(), initialized_bytes),
+                    (PreparedAddressRepresentation::Opaque, None)
+                        | (PreparedAddressRepresentation::Bytes, Some(_))
+                ) && symbol.symbol().result()
+                    == PreparedAbiResult::Address(owner.owner().representation())
                     && symbol.symbol().operands().iter().all(|operand| {
                         matches!(operand.source(), PreparedOperandSource::Source(_))
                             && matches!(operand.representation(), PreparedRepresentation::Scalar(_))
@@ -162,7 +162,7 @@ impl SourceNativeBindings {
                         PreparedOperandSource::Current(_)
                     )
                     && symbol.symbol().operands()[0].representation()
-                        == PreparedRepresentation::Address(PreparedAddressRepresentation::Opaque)
+                        == PreparedRepresentation::Address(owner.owner().representation())
             }
             _ => false,
         };
@@ -465,6 +465,29 @@ pub(crate) struct SourceOwnerReturnedAuthority<'bindings> {
 }
 
 impl<'bindings> AdmittedSourceOwnerAcquireInvocation<'bindings> {
+    /// Accepts only the extent shape required by this exact acquisition contract.
+    /// The evaluator projects and narrows its original source leaf beforehand.
+    pub(crate) fn prepare_initialized_bytes(
+        mut self,
+        extent: Option<usize>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, RuntimeFailure> {
+        let Some(super::source_contract::PreparedOwnerCall::Acquire {
+            initialized_bytes, ..
+        }) = self.binding.symbol.owner_role()
+        else {
+            return Err(RuntimeFailure::ForeignBinding);
+        };
+        if extent.is_some() || initialized_bytes.is_some() {
+            paid(work, 1)?;
+        }
+        if extent.is_some() != initialized_bytes.is_some() {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+        self.readiness.prepare_initialized_bytes(extent);
+        Ok(self)
+    }
+
     pub(crate) fn symbol(&self) -> &Arc<CheckedForeignSymbol> {
         &self.binding.symbol
     }

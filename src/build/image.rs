@@ -1272,7 +1272,7 @@ struct Decoder<'a> {
 
 // A private layout marker for the matching compiler/runtime only. Neither the
 // embedded byte sequence nor its numeric tags promise compatibility.
-const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x08";
+const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x09";
 
 enum WireOutput<'a> {
     Encoded(Vec<u8>),
@@ -3503,6 +3503,163 @@ main () = match perform Measure.call 42 {
     }
 
     #[test]
+    fn initialized_byte_owner_image_preserves_extent_and_rejects_changed_original_facts() {
+        let tree = SourceTree::new();
+        let owner = include_str!("../../tests/fixtures/source-owner/owner.ash")
+            .replace("repr Address = opaque", "repr Address = bytes")
+            .replace(
+                ": Int -> Foreign.Call<Foreign.Output<Foreign.Nullable<State<R>>>>",
+                ": (Int, Int) -> Foreign.Call<Foreign.Output<Foreign.Nullable<State<R>>>>",
+            )
+            .replace(
+                "outcome result nonnull { readable result }",
+                "outcome result nonnull { readable result, initialized_bytes result from 1 }",
+            )
+            .replace(".call size {", ".call (size, 7) {");
+        tree.write("owner.ash", &owner);
+        tree.write("entry.ash", "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Unit, Int>\nmain () = resource Owner.Probe<{}, R, {}> owner = 42 {\n    perform Owner.ProbeOps<R>.read ()\n}\n");
+        let compiled = compile_path(tree.configuration()).unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let mut work = TypeWorkBudget::default();
+        let build =
+            encode_effect_for_build(program, provenance, "x86_64-unknown-linux-gnu", &mut work)
+                .unwrap();
+        let bytes = build.image.encode_bytes(&mut work).unwrap();
+        let expected = build.image.encode_native_expectations(&mut work).unwrap();
+        let library = &build.libraries[0];
+        let library_metadata = (library.image_library, library.module, library.ordinal);
+        let coordinates = build
+            .bridges
+            .iter()
+            .map(|bridge| super::super::PrivateNativeCoordinates {
+                image_library: library.image_library,
+                library_module: library.module,
+                library_ordinal: library.ordinal,
+                image_symbol: bridge.image_symbol,
+                symbol_index: bridge.symbol_index,
+                operation_module: bridge.operation_module,
+                operation_effect: bridge.operation_effect,
+                operation_local: bridge.operation_local,
+            })
+            .collect::<Vec<_>>();
+        drop(build);
+        drop(compiled);
+        drop(tree);
+        let mut work = TypeWorkBudget::default();
+        let image = PureImage::decode_bytes(&bytes, &mut work).unwrap();
+        image
+            .compare_native_expectations(&expected, &mut work)
+            .unwrap();
+        let restored = image.restore_effect(&mut work).unwrap();
+        let acquire = restored
+            .symbols
+            .iter()
+            .find(|symbol| symbol.symbol().name() == "Allocate")
+            .unwrap();
+        assert_eq!(
+            acquire.owner().unwrap().owner().representation(),
+            crate::foreign::source_contract::PreparedAddressRepresentation::Bytes
+        );
+        assert!(matches!(
+            acquire.owner_role(),
+            Some(crate::foreign::source_contract::PreparedOwnerCall::Acquire {
+                initialized_bytes: Some(initialized), ..
+            }) if initialized.extent() == [1]
+        ));
+        let restore = |work: &mut TypeWorkBudget| {
+            let image = PureImage::decode_bytes(&bytes, work)?;
+            image.compare_native_expectations(&expected, work)?;
+            image.restore_effect(work)
+        };
+        let mut measured = TypeWorkBudget::unbounded();
+        restore(&mut measured).unwrap();
+        let cost = measured.used();
+        let mut short = TypeWorkBudget::with_limit(cost - 1);
+        assert!(matches!(restore(&mut short), Err(ImageFailure::Resource)));
+        for _ in 0..2 {
+            let mut exact = TypeWorkBudget::with_limit(cost);
+            restore(&mut exact).unwrap();
+            assert_eq!(exact.used(), cost);
+        }
+        println!(
+            "initialized byte image: image_bytes={}, fact_bytes={}, restore_work={cost}",
+            bytes.len(),
+            expected.len()
+        );
+        // Models the generated host's separate immutable EXPECTED_FACTS bytes.
+        // Raw reconstruction alone can admit another self-consistent contract;
+        // it cannot authenticate correspondence to that generated call site.
+        let static_expected: &'static [u8] = Box::leak(expected.clone().into_boxed_slice());
+        fn forbidden_provider() -> super::super::PrivateNativeBridge {
+            panic!("changed original facts must fail before selecting native providers")
+        }
+        let members = coordinates
+            .into_iter()
+            .map(|coordinates| super::super::PrivateNativeMember {
+                coordinates,
+                provider: forbidden_provider,
+            })
+            .collect::<Vec<_>>();
+        let libraries = [super::super::PrivateNativeLibrary {
+            image_library: library_metadata.0,
+            module: library_metadata.1,
+            ordinal: library_metadata.2,
+            members: &members,
+        }];
+        for change in 0..3 {
+            let mut corrupt =
+                PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+            let call = corrupt
+                .prepared_symbols
+                .iter_mut()
+                .find_map(|symbol| match symbol.owner_call.as_mut() {
+                    Some(PreparedOwnerCallRecord::Acquire {
+                        initialized_bytes, ..
+                    }) => Some(initialized_bytes),
+                    _ => None,
+                })
+                .unwrap();
+            match change {
+                0 => *call = None,
+                1 => {
+                    let record = call.as_ref().unwrap();
+                    corrupt.prepared_paths[record.extent.start as usize] = 0;
+                }
+                _ => corrupt.prepared_owners[0].bytes = false,
+            }
+            assert!(
+                corrupt
+                    .compare_native_expectations(&expected, &mut TypeWorkBudget::default())
+                    .is_err()
+            );
+            let forged_bytes = corrupt
+                .encode_bytes(&mut TypeWorkBudget::default())
+                .unwrap();
+            assert!(
+                matches!(
+                    super::super::__run_private_effect_image(
+                        &super::super::runtime_fingerprint(),
+                        &forged_bytes,
+                        static_expected,
+                        &libraries,
+                    ),
+                    Err(super::super::PrivateProgramFailure(
+                        super::super::PrivateFailure::Image(ImageFailure::InvalidRecord)
+                    ))
+                ),
+                "changed byte-owner fact {change} must fail the original generated-facts gate before binding or execution"
+            );
+            if change == 0 {
+                assert!(
+                    corrupt
+                        .restore_effect(&mut TypeWorkBudget::default())
+                        .is_err()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn scalar_preflight_image_reconstructs_authority_and_refuses_forged_records() {
         use crate::foreign::scalar_preflight::ForeignScalarPreflightRole as Role;
         let tree = SourceTree::new();
@@ -3762,6 +3919,7 @@ struct ScalarValueRecord {
 enum RepresentationRecord {
     Scalar(ScalarRepresentationRecord),
     Opaque,
+    Bytes,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -3794,10 +3952,17 @@ struct PreparedOwnerRecord {
     name: Slice,
     parameters: Slice,
     owned_parameter: u32,
+    bytes: bool,
     teardown_member: u32,
     representation_span: SpanRecord,
     owned_span: SpanRecord,
     teardown_span: SpanRecord,
+    span: SpanRecord,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PreparedInitializedBytesRecord {
+    extent: Slice,
     span: SpanRecord,
 }
 
@@ -3822,6 +3987,7 @@ enum PreparedOwnerCallRecord {
         condition_span: SpanRecord,
         outcome_spans: [SpanRecord; 2],
         readable_spans: [SpanRecord; 2],
+        initialized_bytes: Option<PreparedInitializedBytesRecord>,
     },
     Teardown {
         application: PreparedOwnerApplicationRecord,
@@ -3994,17 +4160,19 @@ wire_struct!(
 wire_struct!(PreparedParameterRecord, 21, name, row, span);
 wire_struct!(
     PreparedOwnerRecord,
-    76,
+    77,
     member_index,
     name,
     parameters,
     owned_parameter,
+    bytes,
     teardown_member,
     representation_span,
     owned_span,
     teardown_span,
     span
 );
+wire_struct!(PreparedInitializedBytesRecord, 20, extent, span);
 wire_struct!(PreparedOwnerArgumentRecord, 5, row, parameter);
 wire_struct!(PreparedOwnerApplicationRecord, 24, owner, arguments, span);
 wire_struct!(PreparedOperandRecord, 18, representation, source, span);
@@ -4212,12 +4380,14 @@ impl Wire for RepresentationRecord {
                 value.write(writer)
             }
             Self::Opaque => 1u8.write(writer),
+            Self::Bytes => 2u8.write(writer),
         }
     }
     fn read(reader: &mut WireReader<'_>) -> Result<Self, ImageFailure> {
         match u8::read(reader)? {
             0 => Ok(Self::Scalar(Wire::read(reader)?)),
             1 => Ok(Self::Opaque),
+            2 => Ok(Self::Bytes),
             _ => Err(ImageFailure::InvalidEncoding),
         }
     }
@@ -4233,6 +4403,7 @@ impl Wire for PreparedOwnerCallRecord {
                 condition_span,
                 outcome_spans,
                 readable_spans,
+                initialized_bytes,
             } => {
                 0u8.write(writer)?;
                 application.write(writer)?;
@@ -4241,7 +4412,7 @@ impl Wire for PreparedOwnerCallRecord {
                 for span in outcome_spans.iter().chain(readable_spans) {
                     span.write(writer)?;
                 }
-                Ok(())
+                initialized_bytes.write(writer)
             }
             Self::Teardown {
                 application,
@@ -4267,6 +4438,7 @@ impl Wire for PreparedOwnerCallRecord {
                 condition_span: Wire::read(reader)?,
                 outcome_spans: [Wire::read(reader)?, Wire::read(reader)?],
                 readable_spans: [Wire::read(reader)?, Wire::read(reader)?],
+                initialized_bytes: Wire::read(reader)?,
             }),
             1 => Ok(Self::Teardown {
                 application: Wire::read(reader)?,
@@ -5236,7 +5408,7 @@ impl Encoder<'_> {
                 value,
             ))),
             R::Address(A::Opaque) => Ok(RepresentationRecord::Opaque),
-            R::Address(A::Bytes) => Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata)),
+            R::Address(A::Bytes) => Ok(RepresentationRecord::Bytes),
         }
     }
 
@@ -5310,15 +5482,30 @@ impl Encoder<'_> {
                 readable_spans,
                 initialized_bytes,
             } => {
-                if initialized_bytes.is_some() {
-                    return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
-                }
+                let initialized_bytes = initialized_bytes
+                    .as_ref()
+                    .map(|initialized| -> Result<_, ImageFailure> {
+                        let start = self.image.prepared_paths.len();
+                        for component in initialized.extent() {
+                            push(
+                                &mut self.image.prepared_paths,
+                                index(*component)?,
+                                self.work,
+                            )?;
+                        }
+                        Ok(PreparedInitializedBytesRecord {
+                            extent: Slice::of(&self.image.prepared_paths, start)?,
+                            span: self.span(initialized.span())?,
+                        })
+                    })
+                    .transpose()?;
                 Ok(PreparedOwnerCallRecord::Acquire {
                     application: self.encode_prepared_owner_application(application)?,
                     first_nonnull: *first_nonnull,
                     condition_span: self.span(*condition_span)?,
                     outcome_spans: [self.span(outcome_spans[0])?, self.span(outcome_spans[1])?],
                     readable_spans: [self.span(readable_spans[0])?, self.span(readable_spans[1])?],
+                    initialized_bytes,
                 })
             }
             PreparedOwnerCall::Teardown {
@@ -5402,11 +5589,6 @@ impl Encoder<'_> {
         let start = self.image.prepared_owners.len();
         for owner in original.owners() {
             charge(self.work, 1)?;
-            if owner.representation()
-                != crate::foreign::source_contract::PreparedAddressRepresentation::Opaque
-            {
-                return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
-            }
             let name = append(&mut self.image.bytes, owner.name().as_bytes(), self.work)?;
             let parameters = self.encode_prepared_parameters(owner.parameters())?;
             let record = PreparedOwnerRecord {
@@ -5414,6 +5596,8 @@ impl Encoder<'_> {
                 name,
                 parameters,
                 owned_parameter: index(owner.owned_parameter())?,
+                bytes: owner.representation()
+                    == crate::foreign::source_contract::PreparedAddressRepresentation::Bytes,
                 teardown_member: index(owner.teardown_member())?,
                 representation_span: self.span(owner.representation_span())?,
                 owned_span: self.span(owner.owned_span())?,
@@ -5506,12 +5690,11 @@ impl Encoder<'_> {
             }
             let outcomes = Slice::of(&self.image.prepared_outcomes, outcome_start)?;
             let result = match symbol.result() {
-                PreparedAbiResult::Address(
-                    crate::foreign::source_contract::PreparedAddressRepresentation::Opaque,
-                ) => Some(RepresentationRecord::Opaque),
-                PreparedAbiResult::Address(_) => {
-                    return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
-                }
+                PreparedAbiResult::Address(representation) => Some(Self::representation(
+                    crate::foreign::source_contract::PreparedRepresentation::Address(
+                        representation,
+                    ),
+                )?),
                 PreparedAbiResult::Void => None,
                 PreparedAbiResult::Scalar(representation) => Some(RepresentationRecord::Scalar(
                     Self::scalar_representation(representation),
@@ -6353,6 +6536,7 @@ impl Decoder<'_> {
         Ok(match record {
             RepresentationRecord::Scalar(value) => R::Scalar(Self::scalar_representation(value)?),
             RepresentationRecord::Opaque => R::Address(A::Opaque),
+            RepresentationRecord::Bytes => R::Address(A::Bytes),
         })
     }
 
@@ -6417,13 +6601,30 @@ impl Decoder<'_> {
                 condition_span,
                 outcome_spans,
                 readable_spans,
+                initialized_bytes,
             } => PreparedOwnerCall::Acquire {
                 application: self.prepared_owner_application(application)?,
                 first_nonnull,
                 condition_span: self.span(condition_span)?,
                 outcome_spans: [self.span(outcome_spans[0])?, self.span(outcome_spans[1])?],
                 readable_spans: [self.span(readable_spans[0])?, self.span(readable_spans[1])?],
-                initialized_bytes: None,
+                initialized_bytes: initialized_bytes
+                    .map(|record| -> Result<_, ImageFailure> {
+                        let mut extent = Vec::new();
+                        for component in record.extent.get(&self.image.prepared_paths)? {
+                            push(
+                                &mut extent,
+                                usize::try_from(*component)
+                                    .map_err(|_| ImageFailure::InvalidRecord)?,
+                                self.work,
+                            )?;
+                        }
+                        Ok(crate::foreign::source_contract::PreparedInitializedBytes {
+                            extent,
+                            span: self.span(record.span)?,
+                        })
+                    })
+                    .transpose()?,
             },
             PreparedOwnerCallRecord::Teardown {
                 application,
@@ -6489,7 +6690,11 @@ impl Decoder<'_> {
                 parameters: self.prepared_parameters(record.parameters)?,
                 owned_parameter: usize::try_from(record.owned_parameter)
                     .map_err(|_| ImageFailure::InvalidRecord)?,
-                representation: PreparedAddressRepresentation::Opaque,
+                representation: if record.bytes {
+                    PreparedAddressRepresentation::Bytes
+                } else {
+                    PreparedAddressRepresentation::Opaque
+                },
                 teardown_member: usize::try_from(record.teardown_member)
                     .map_err(|_| ImageFailure::InvalidRecord)?,
                 representation_span: self.span(record.representation_span)?,

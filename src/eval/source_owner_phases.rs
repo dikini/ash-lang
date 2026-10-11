@@ -170,11 +170,21 @@ impl<'binding> OwnerAcquireReady<'binding> {
     pub(super) fn admit(
         invocation: AdmittedSourceOwnerAcquireInvocation<'binding>,
         operands: Vec<NativeScalarValue>,
+        initialized_bytes: Option<usize>,
         activation: ActivationKey,
         boundary: usize,
         heap: &mut Vec<HeapCell>,
         work: &mut TypeWorkBudget,
     ) -> Result<Self, OwnerPhaseFailure> {
+        let invocation = invocation
+            .prepare_initialized_bytes(initialized_bytes, work)
+            .map_err(|error| {
+                if matches!(error, super::RuntimeFailure::Report(_)) {
+                    OwnerPhaseFailure::WorkReservation
+                } else {
+                    OwnerPhaseFailure::Authority
+                }
+            })?;
         let nullable = invocation.nullable_constructors();
         let readable = invocation.readable_constructor();
         let returned_constructor = invocation.returned_constructor();
@@ -469,7 +479,10 @@ impl<'runtime> super::Machine<'runtime> {
     ) -> Result<(), super::RuntimeFailure> {
         use crate::foreign::{
             source_bindings::{AdmittedSourceOwnerInvocation, SourceOwnerPhase},
-            source_contract::{PreparedOperandSource, PreparedOwnerCall, PreparedRepresentation},
+            source_contract::{
+                PreparedOperandSource, PreparedOwnerCall, PreparedRepresentation,
+                PreparedScalarRepresentation,
+            },
             source_runtime::{NativeScalarConversionError, narrow_gnu_scalar},
         };
         if self.pending_source_owner_call.is_some()
@@ -558,6 +571,50 @@ impl<'runtime> super::Machine<'runtime> {
         match invocation {
             AdmittedSourceOwnerInvocation::Acquire(invocation) => {
                 let source = invocation.symbol().symbol();
+                let Some(PreparedOwnerCall::Acquire {
+                    initialized_bytes, ..
+                }) = invocation.symbol().owner_role()
+                else {
+                    return Err(super::RuntimeFailure::ForeignBinding);
+                };
+                // This path is the original authored source leaf. It need not
+                // be an ABI operand, and private resource data grants no extent.
+                let initialized_bytes = if let Some(initialized) = initialized_bytes {
+                    #[cfg(test)]
+                    post_record_test::initialized_extent_preflight(&mut self.instantiation_work);
+                    let integer = super::source_scalar_phases::source_integer_leaf(
+                        &self.heap,
+                        &value,
+                        initialized.extent(),
+                        &mut self.instantiation_work,
+                    )?;
+                    match narrow_gnu_scalar(
+                        integer,
+                        PreparedScalarRepresentation::SizeT,
+                        &mut self.instantiation_work,
+                    ) {
+                        Ok(NativeScalarValue::USize(extent)) => Some(extent),
+                        Err(NativeScalarConversionError::OutOfRange) => {
+                            self.control =
+                                Some(super::Control::Return(prepare_conversion_refusal(
+                                    &mut self.heap,
+                                    &invocation,
+                                    &mut self.instantiation_work,
+                                )?));
+                            return Ok(());
+                        }
+                        Err(NativeScalarConversionError::WorkExhausted) => {
+                            return Err(super::effect_work_failure(
+                                &self.instantiation_work,
+                                None,
+                                super::RuntimePhase::Access,
+                            ));
+                        }
+                        _ => return Err(super::RuntimeFailure::ForeignBinding),
+                    }
+                } else {
+                    None
+                };
                 let mut operands = Vec::new();
                 super::charge_effect_work(
                     &mut self.instantiation_work,
@@ -605,6 +662,7 @@ impl<'runtime> super::Machine<'runtime> {
                 let ready = OwnerAcquireReady::admit(
                     invocation,
                     operands,
+                    initialized_bytes,
                     key,
                     index,
                     &mut self.heap,
@@ -844,9 +902,9 @@ fn operand_storage(units: usize) -> super::RuntimeFailure {
 #[cfg(test)]
 pub(crate) mod post_record_test {
     use super::{
-        HeapCell, OwnerAcquireRecorded, OwnerAcquireReported, OwnerAcquireReturned,
-        OwnerPhaseFailure, OwnerTeardownRecorded, OwnerTeardownReported, OwnerTeardownReturned,
-        TypeWorkBudget, Value, empty_slots,
+        HeapCell, NativeOwnerGuard, OwnerAcquireRecorded, OwnerAcquireReported,
+        OwnerAcquireReturned, OwnerPhaseFailure, OwnerTeardownRecorded, OwnerTeardownReported,
+        OwnerTeardownReturned, TypeWorkBudget, Value, empty_slots,
     };
     use std::cell::Cell;
 
@@ -857,6 +915,7 @@ pub(crate) mod post_record_test {
         pub(crate) reported: usize,
         pub(crate) recorded_with_zero_shared_work: bool,
         pub(crate) recorded_live_owner: bool,
+        pub(crate) initialized_bytes: Option<usize>,
         pub(crate) report_slot_published: bool,
         pub(crate) teardown_returned: usize,
         pub(crate) teardown_recorded: usize,
@@ -868,7 +927,7 @@ pub(crate) mod post_record_test {
     #[derive(Clone, Copy)]
     struct State {
         inject: bool,
-        teardown: bool,
+        phase: Phase,
         slot: Option<usize>,
         teardown_slots: Option<(usize, usize, crate::types::ConstructorId)>,
         observation: Observation,
@@ -877,15 +936,35 @@ pub(crate) mod post_record_test {
         static STATE: Cell<Option<State>> = const { Cell::new(None) };
     }
 
+    #[derive(Clone, Copy, Eq, PartialEq)]
+    enum Phase {
+        AcquireReturn,
+        TeardownReturn,
+        InitializedExtentPreflight,
+    }
+
     pub(crate) fn observe<T>(inject: bool, run: impl FnOnce() -> T) -> (T, Observation) {
-        observe_phase(inject, false, run)
+        observe_phase(inject, Phase::AcquireReturn, run)
     }
 
     pub(crate) fn observe_teardown<T>(inject: bool, run: impl FnOnce() -> T) -> (T, Observation) {
-        observe_phase(inject, true, run)
+        observe_phase(inject, Phase::TeardownReturn, run)
     }
 
-    fn observe_phase<T>(inject: bool, teardown: bool, run: impl FnOnce() -> T) -> (T, Observation) {
+    pub(crate) fn observe_extent_preflight<T>(run: impl FnOnce() -> T) -> (T, Observation) {
+        observe_phase(true, Phase::InitializedExtentPreflight, run)
+    }
+
+    pub(super) fn initialized_extent_preflight(work: &mut TypeWorkBudget) {
+        if STATE
+            .get()
+            .is_some_and(|state| state.inject && state.phase == Phase::InitializedExtentPreflight)
+        {
+            *work = TypeWorkBudget::with_limit(0);
+        }
+    }
+
+    fn observe_phase<T>(inject: bool, phase: Phase, run: impl FnOnce() -> T) -> (T, Observation) {
         struct Scope;
         impl Drop for Scope {
             fn drop(&mut self) {
@@ -898,7 +977,7 @@ pub(crate) mod post_record_test {
         );
         STATE.set(Some(State {
             inject,
-            teardown,
+            phase,
             slot: None,
             teardown_slots: None,
             observation: Observation::default(),
@@ -917,7 +996,7 @@ pub(crate) mod post_record_test {
         if let Some(mut state) = STATE.get() {
             state.observation.returned += 1;
             state.slot = Some(returned.slots.returned);
-            if state.inject && !state.teardown {
+            if state.inject && state.phase == Phase::AcquireReturn {
                 *work = TypeWorkBudget::with_limit(0);
             }
             STATE.set(Some(state));
@@ -937,6 +1016,10 @@ pub(crate) mod post_record_test {
             state.observation.recorded += 1;
             state.observation.recorded_with_zero_shared_work = work.remaining() == 0;
             state.observation.recorded_live_owner = recorded.guard.is_some();
+            state.observation.initialized_bytes = recorded
+                .guard
+                .as_ref()
+                .and_then(NativeOwnerGuard::initialized_bytes);
             STATE.set(Some(state));
         }
     }
@@ -972,7 +1055,7 @@ pub(crate) mod post_record_test {
                 returned.slots.disposition,
                 returned.slots.consumed,
             ));
-            if state.inject && state.teardown {
+            if state.inject && state.phase == Phase::TeardownReturn {
                 *work = TypeWorkBudget::with_limit(0);
             }
             STATE.set(Some(state));

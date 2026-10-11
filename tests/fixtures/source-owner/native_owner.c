@@ -6,6 +6,10 @@ struct ash_owner {
     size_t size;
 };
 
+int64_t ash_owner_negative_input(void) {
+    return -1;
+}
+
 static void record(const char *event, size_t size) {
     const char *path = getenv("ASH_OWNER_TRACE");
     if (path == NULL) {

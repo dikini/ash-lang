@@ -58,7 +58,96 @@ fn source_resource_lifecycle_compiles_from_original_checked_templates() {
 
 #[test]
 fn generated_owner_host_acquires_publishes_private_payload_and_releases_once() {
+    generated_owner_case(include_str!("fixtures/source-owner/owner.ash"));
+}
+
+#[test]
+fn generated_initialized_byte_owner_host_preserves_native_acquisition_and_release() {
+    // The native fixture initializes one eight-byte size_t object. Seven bytes
+    // therefore form a valid promised region, independent of its stored value.
+    let owner = include_str!("fixtures/source-owner/owner.ash")
+        .replace("repr Address = opaque", "repr Address = bytes")
+        .replace(
+            ": Int -> Foreign.Call<Foreign.Output<Foreign.Nullable<State<R>>>>",
+            ": (Int, Int) -> Foreign.Call<Foreign.Output<Foreign.Nullable<State<R>>>>",
+        )
+        .replace(
+            "outcome result nonnull { readable result }",
+            "outcome result nonnull { readable result, initialized_bytes result from 1 }",
+        )
+        .replace(".call size {", ".call (size, 7) {");
+    generated_owner_case(&owner);
+    // A zero initialized extent still owns a non-null native allocation.
+    generated_owner_case(&owner.replace(".call (size, 7) {", ".call (size, 0) {"));
+}
+
+#[test]
+fn initialized_byte_resource_without_initialization_fact_is_rejected() {
     let fixture = Fixture::new(include_str!("fixtures/source-owner/entry.ash"));
+    let owner = include_str!("fixtures/source-owner/owner.ash")
+        .replace("repr Address = opaque", "repr Address = bytes");
+    fs::write(fixture.0.join("owner.ash"), owner).unwrap();
+    let failure = compile_path(fixture.configuration()).unwrap_err();
+    assert_eq!(failure.reason_code(), "foreign.contract");
+}
+
+#[test]
+fn generated_initialized_byte_extents_refuse_before_native_owner_entry() {
+    let owner = include_str!("fixtures/source-owner/owner.ash")
+        .replace("repr Address = opaque", "repr Address = bytes")
+        .replace(
+            ": Int -> Foreign.Call<Foreign.Output<Foreign.Nullable<State<R>>>>",
+            ": (Int, Int) -> Foreign.Call<Foreign.Output<Foreign.Nullable<State<R>>>>",
+        )
+        .replace(
+            "outcome result nonnull { readable result }",
+            "outcome result nonnull { readable result, initialized_bytes result from 1 }",
+        )
+        .replace("input Int", "input (Int, Int)")
+        .replace("acquire size =>", "acquire (size, extent) =>")
+        .replace(".call size {", ".call (size, extent) {");
+    let entry = r#"import @builtin.foreign as Foreign
+import owner as Owner
+foreign library Inputs {
+    profile "x86_64-unknown-linux-gnu"
+    repr Signed = signed(64)
+    symbol NegativeInput : Unit -> Foreign.Call<Int> {
+        name "ash_owner_negative_input"
+        abi () -> Signed
+        output result as scalar
+        outcome otherwise { readable result }
+    }
+}
+unreachable : Unit -> Int
+unreachable () = unreachable ()
+probe : Int -> Owner.Scope<Unit, Unit, Int>
+probe extent = resource Owner.Probe<{}, Fresh, {}> owner = (42, extent) {
+    unreachable ()
+}
+main : Unit -> (Owner.Scope<Unit, Unit, Int>, Owner.Scope<Unit, Unit, Int>) ! {NegativeInput}
+main () = {
+    let negative = match perform NegativeInput.call () {
+        Foreign.Returned(value) => value
+        Foreign.ConversionFailed(_) => 0
+    }
+    (probe negative, probe ((9223372036854775807 + 1) * 2))
+}
+"#;
+    generated_owner_program(&owner, entry, "(NotAcquired(()), NotAcquired(()))", "");
+}
+
+fn generated_owner_case(owner: &str) {
+    generated_owner_program(
+        owner,
+        include_str!("fixtures/source-owner/entry.ash"),
+        "(Completed(42, Closed), Completed(8, Closed), NotAcquired(()), NotAcquired(()), Completed(Completed(4, Closed), Closed), Completed(84, Closed), NotAcquired(()))",
+        "acquire:42\nrelease:42\nacquire:8\nrelease:8\nacquire:0\nacquire:9\nrelease:9\nacquire:64\nacquire:4\nrelease:4\nrelease:64\nacquire:7\nrelease:7\n",
+    );
+}
+
+fn generated_owner_program(owner: &str, entry: &str, expected_result: &str, expected_trace: &str) {
+    let fixture = Fixture::new(entry);
+    fs::write(fixture.0.join("owner.ash"), owner).unwrap();
     let compiled = compile_path(fixture.configuration()).unwrap();
     let native = fixture.0.join("native_owner.c");
     let object = fixture.0.join("native_owner.o");
@@ -126,10 +215,14 @@ fn generated_owner_host_acquires_publishes_private_payload_and_releases_once() {
     );
     assert_eq!(
         String::from_utf8(output.stdout).unwrap().trim(),
-        "(Completed(42, Closed), Completed(8, Closed), NotAcquired(()), NotAcquired(()), Completed(Completed(4, Closed), Closed), Completed(84, Closed), NotAcquired(()))"
+        expected_result
     );
-    assert_eq!(
-        fs::read_to_string(trace).unwrap(),
-        "acquire:42\nrelease:42\nacquire:8\nrelease:8\nacquire:0\nacquire:9\nrelease:9\nacquire:64\nacquire:4\nrelease:4\nrelease:64\nacquire:7\nrelease:7\n"
-    );
+    if expected_trace.is_empty() {
+        assert!(
+            !trace.exists(),
+            "refused extents must not enter native owner code"
+        );
+    } else {
+        assert_eq!(fs::read_to_string(trace).unwrap(), expected_trace);
+    }
 }
