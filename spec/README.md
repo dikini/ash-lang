@@ -194,11 +194,11 @@ patterns, exhaustive matches and equations, sequential bindings, method-only
 interfaces, explicit constraints, anonymous implementations, and pure and
 effectful expressions with single-use, non-escaping handler continuations.
 
-Beyond the fixed sealed cell provider and acquisition form, the effect kernel
-adds no general provider or resource declarations, first-class registration
-tokens, arbitrary removal or priorities, general destructor declarations,
-foreign resources, escaping or multi-shot resume, asynchronous execution, or
-dynamic loading.
+Beyond the fixed builtin providers and the bounded source-resource forms
+described above, the effect kernel adds no general provider or resource
+declarations, first-class registration tokens, arbitrary removal or priorities,
+general destructor declarations, escaping or multi-shot resume, asynchronous
+execution, or dynamic loading.
 A linked nonempty effect row is a source rejection rather than an
 unhandled-operation runtime result.
 
