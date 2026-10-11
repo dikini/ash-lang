@@ -41,7 +41,7 @@ pub(crate) use specialization::{
     ProviderFreshening, ProviderOccurrenceRelocation, ProviderOriginalTemplate,
     ProviderPreparedFamilyOriginal, ProviderScopeAdmission, ProviderSpecializationDictionaryEntry,
     ProviderSpecializationEntries, ProviderSpecializationFamilyEntries,
-    ProviderTemplateSubstitution,
+    ProviderTemplateSubstitution, source_resource_local_identities,
 };
 pub(in crate::core) use specialization::{
     AuthenticatedProviderSourceCapture, authenticate_admitted_provider_capture,

@@ -7,6 +7,7 @@ pub(crate) use provider_code::ProviderCodeAvailability;
 mod module_bodies;
 pub(crate) mod provider_globals;
 mod provider_instance;
+mod source_resource;
 pub(crate) use provider_instance::PreparedProviderInstance;
 pub(crate) use provider_instance::final_preparation::{
     FinalProviderPreparation, prepare_final_provider_program,
@@ -3125,6 +3126,9 @@ impl CoreLoweringFamily for EffectOperationFamily {
             EffectOperation::ProviderScope(scope) => {
                 builder.provider_scope(scope, ty, effects, origin)
             }
+            EffectOperation::SourceResourceScope(scope) => {
+                builder.source_resource_scope(scope, ty, effects, origin)
+            }
             EffectOperation::Cleanup(scope) => builder.cleanup_scope(scope, ty, effects, origin),
             EffectOperation::Registration(scope) => {
                 builder.registration_scope(scope, ty, effects, origin)
@@ -3366,6 +3370,16 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         builder
             .reserve_resolved_binders(binders)
             .map_err(TypeError::from)?;
+        Self::for_module_with_prepared_builder(module, registry, type_work, coverage_work, builder)
+    }
+
+    fn for_module_with_prepared_builder(
+        module: &ResolvedModule,
+        registry: Arc<ResolvedRegistry>,
+        type_work: &mut TypeWorkBudget,
+        coverage_work: UsefulnessBudget,
+        builder: CoreBuilder<F>,
+    ) -> Result<Self, TypeError> {
         let mut base_context = TypeContext::new();
         for imported in module.imported_facts().globals() {
             let quantified = clone_kinded_type_parameters_with_budget(
@@ -4779,6 +4793,23 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         checking: &mut ModuleBodyChecking,
     ) -> Result<(), TypeError> {
         match declaration {
+            ResolvedDeclarationIndex::SourceResource(index) if F::EFFECTS => {
+                let code = self
+                    .provider_codes
+                    .source_code(module.module(), &mut self.type_work)?
+                    .ok_or_else(invalid_state)?;
+                let original = code.resource(index).ok_or_else(invalid_state)?.header();
+                let definition = module
+                    .source_resources()
+                    .get(index)
+                    .ok_or_else(invalid_state)?;
+                if !Arc::ptr_eq(&original.original, &definition.header) {
+                    return Err(invalid_state());
+                }
+            }
+            ResolvedDeclarationIndex::SourceResource(_) => {
+                return Err(unsupported_provider_resource());
+            }
             ResolvedDeclarationIndex::Resource(_) if F::EFFECTS => {}
             ResolvedDeclarationIndex::Resource(_) => {
                 return Err(unsupported_provider_resource());
@@ -10692,6 +10723,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 self.provider_codes
                     .retain(group.module(), code, &mut self.type_work)?;
             }
+            if let Some(code) = group.source_resource_code() {
+                self.provider_codes
+                    .retain_source(group.module(), code, &mut self.type_work)?;
+            }
         }
         let mut context = TypeContext::new();
         let mut groups = ElaboratedGroupBuffer(Vec::new());
@@ -10756,6 +10791,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let mut next_global = 0usize;
         let mut next_implementation = 0usize;
         let mut next_resource = 0usize;
+        let mut next_source_resource = 0usize;
         for declaration in group.declaration_order() {
             match *declaration {
                 ResolvedDeclarationIndex::Resource(index)
@@ -10777,6 +10813,27 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     next_resource = next_resource.checked_add(1).ok_or_else(type_resource)?;
                 }
                 ResolvedDeclarationIndex::Resource(_) => {
+                    return Err(unsupported_provider_resource());
+                }
+                ResolvedDeclarationIndex::SourceResource(index)
+                    if index == next_source_resource =>
+                {
+                    let code = group.source_resource_code().ok_or_else(invalid_state)?;
+                    let header = code.resource(index).ok_or_else(invalid_state)?.header();
+                    let fact = self
+                        .registry
+                        .source_resource_fact(header.original.id)
+                        .ok_or_else(invalid_state)?;
+                    if header.original.id.module() != group.module()
+                        || !Arc::ptr_eq(fact, &header.original)
+                    {
+                        return Err(invalid_state());
+                    }
+                    next_source_resource = next_source_resource
+                        .checked_add(1)
+                        .ok_or_else(type_resource)?;
+                }
+                ResolvedDeclarationIndex::SourceResource(_) => {
                     return Err(unsupported_provider_resource());
                 }
                 ResolvedDeclarationIndex::Global(index) if index == next_global => {
@@ -10803,6 +10860,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }
         if next_global != group.definitions().len()
             || next_implementation != group.implementations().len()
+            || next_source_resource != group.source_resource_code().map_or(0, |code| code.len())
             || next_resource
                 != group
                     .provider_code()
@@ -12097,7 +12155,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         span: Span,
         tasks: &mut ElaborationTaskBuffer<'a>,
     ) -> Result<(), TypeError> {
-        if self.registry.foreign_operation(request.operation).is_some() {
+        if self.registry.foreign_operation(request.operation).is_some()
+            || self
+                .registry
+                .native_symbol(request.operation)
+                .is_some_and(|symbol| symbol.owner().is_some())
+        {
             self.check_provider_native_request(request)?;
         }
         let (domain, result) = self.operation_signature(
@@ -14869,6 +14932,45 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(())
     }
 
+    // Keep source phase payloads and return-value storage outside the ordinary
+    // dispatcher frame, including when unrelated cleanup checks call unification.
+    #[inline(never)]
+    #[expect(
+        clippy::boxed_local,
+        reason = "unboxing in the caller enlarges the shared expression dispatcher's stack frame"
+    )]
+    fn step_source_resource_body<'a>(
+        &mut self,
+        prepared: Box<source_resource::PreparedSourceResource<'a>>,
+        context: &mut TypeContext,
+        tasks: &mut ElaborationTaskBuffer<'a>,
+        values: &mut TypedNodeBuffer,
+    ) -> Result<(), TypeError> {
+        let initializer = values.pop().ok_or_else(invalid_state)?;
+        let resource = prepared.resource;
+        let progress = self.enter_source_resource_body(*prepared, initializer, context)?;
+        self.type_work.charge(2).map_err(|_| type_resource())?;
+        tasks.0.try_reserve(2).map_err(|_| type_resource())?;
+        tasks.push(ElaborationTask::FinishSourceResource(Box::new(progress)));
+        tasks.push(ElaborationTask::Synthesize {
+            expression: &resource.body,
+            cause: None,
+        });
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn step_source_resource_completion<'a>(
+        &mut self,
+        progress: Box<source_resource::SourceResourceProgress<'a>>,
+        context: &mut TypeContext,
+        values: &mut TypedNodeBuffer,
+    ) -> Result<(), TypeError> {
+        let body = values.pop().ok_or_else(invalid_state)?;
+        values.push(self.finish_source_resource_instance(*progress, body, context)?);
+        Ok(())
+    }
+
     // Handler completion can check a clause using this same worklist. Keep
     // that reentry outside the large ordinary expression-dispatch frame.
     fn step_expression_task<'a>(
@@ -14882,6 +14984,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         match task {
             ElaborationTask::ProviderInstanceBody { resource, span } => {
                 self.step_provider_instance_body(resource, span, context, tasks, values)?;
+            }
+            ElaborationTask::SourceResourceBody(prepared) => {
+                self.step_source_resource_body(prepared, context, tasks, values)?;
+            }
+            ElaborationTask::FinishSourceResource(progress) => {
+                self.step_source_resource_completion(progress, context, values)?;
             }
             ElaborationTask::FinishProviderInstance(progress) => {
                 self.step_provider_instance_completion(progress, context, values)?;
@@ -14908,7 +15016,15 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 cause,
             } => match &current.kind {
                 ResolvedExprKind::ProviderResource(resource) => {
-                    self.schedule_provider_instance(resource, current.span, tasks)?;
+                    if self
+                        .registry
+                        .source_resource_fact(resource.definition)
+                        .is_some()
+                    {
+                        self.schedule_source_resource_instance(resource, current.span, tasks)?;
+                    } else {
+                        self.schedule_provider_instance(resource, current.span, tasks)?;
+                    }
                 }
                 ResolvedExprKind::String(value) => {
                     let node = self.builder.string(
@@ -18530,6 +18646,11 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let presentation = OriginOwner::new(presentation);
         let mut function_type = ProvenancedTypeOwner::new(function_type);
         let ambient_rows = self.qualify_checking_type(&mut function_type, original_signature)?;
+        if self.provider_context.is_none() && self.contains_provider_state(&function_type.ty)? {
+            return Err(provider::ordinary_state_unavailable(
+                presentation.as_ref().primary_span(),
+            ));
+        }
         let Some(first) = equations.first() else {
             return Err(invalid_state());
         };
@@ -19344,7 +19465,8 @@ fn preflight_application_arities(
     for declaration in module.declaration_order() {
         budget.charge(1).map_err(|()| constraint_resource())?;
         match *declaration {
-            ResolvedDeclarationIndex::Resource(_) => {}
+            ResolvedDeclarationIndex::Resource(_) | ResolvedDeclarationIndex::SourceResource(_) => {
+            }
             ResolvedDeclarationIndex::Type(_)
             | ResolvedDeclarationIndex::Interface(_)
             | ResolvedDeclarationIndex::Effect(_) => {}
@@ -21686,6 +21808,7 @@ pub(crate) fn check_module_with_budget_and_provider_codes(
     constraint_work: &mut InterfaceConstraintBudget,
 ) -> Result<CheckedModule, TypeError> {
     let mut effects = !resolved.resources().is_empty()
+        || !resolved.source_resources().is_empty()
         || !resolved.effects().is_empty()
         || !resolved.registry().effects().is_empty()
         || resolved.imported_facts().effects().next().is_some();
@@ -21860,6 +21983,21 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
             &mut elaborator.type_work,
             constraint_work,
         )?);
+        let source_resources = source_resource::compile(
+            &resolved,
+            &elaborator.registry,
+            &interface_facts,
+            &mut elaborator.type_work,
+            &mut elaborator.coverage_work,
+            constraint_work,
+        )?;
+        if let Some(code) = &source_resources {
+            elaborator.provider_codes.retain_source(
+                resolved.module(),
+                code,
+                &mut elaborator.type_work,
+            )?;
+        }
         let (implementation_facts, mut publication) = elaborator.check_module_bodies(
             &resolved,
             &mut schemes,
@@ -21936,6 +22074,7 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
             exports,
             publication,
             providers,
+            source_resources,
         ))
     })();
     let result = result.and_then(|checked| {
@@ -21958,6 +22097,7 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
         exports,
         publication,
         providers,
+        source_resources,
     ) = result?;
     let imported_implementation_count = resolved.imported_facts().implementations().count();
     let local_implementation_count = resolved.implementations().len();
@@ -22032,6 +22172,7 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
             implementation_facts,
             exports,
             providers,
+            source_resources,
         },
     ))
 }
@@ -22456,6 +22597,8 @@ enum ElaborationTask<'a> {
         span: Span,
     },
     FinishProviderInstance(Box<provider_instance::ProviderInstanceProgress<'a>>),
+    SourceResourceBody(Box<source_resource::PreparedSourceResource<'a>>),
+    FinishSourceResource(Box<source_resource::SourceResourceProgress<'a>>),
     FinishCleanupAction(Box<CleanupActionProgress>),
     FinishCleanup {
         cleanup: &'a crate::resolved::ResolvedCleanupExpr,
@@ -23835,6 +23978,8 @@ fn discard_elaboration_task(task: ElaborationTask<'_>) {
         ElaborationTask::Equation(_) => {}
         ElaborationTask::FinishCleanupAction(_) => {}
         ElaborationTask::ResourceBody { .. }
+        | ElaborationTask::SourceResourceBody(_)
+        | ElaborationTask::FinishSourceResource(_)
         | ElaborationTask::ProviderInstanceBody { .. }
         | ElaborationTask::FinishProviderInstance(_)
         | ElaborationTask::FinishCleanup { .. }
@@ -28026,6 +28171,24 @@ fn resolved_module_binders(
                 collect_family_pattern_binders(&clause.pattern, &mut binders, &mut charge)?;
                 expressions.push(&clause.body);
             }
+        }
+    }
+    for resource in module.source_resources() {
+        charge(resource.handlers.len().saturating_add(2))?;
+        expressions
+            .try_reserve(resource.handlers.len().saturating_add(2))
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        for pattern in [
+            &resource.acquire_pattern,
+            &resource.finish_pattern,
+            &resource.handlers_pattern,
+        ] {
+            collect_family_pattern_binders(pattern, &mut binders, &mut charge)?;
+        }
+        expressions.extend([&resource.acquire, &resource.finish]);
+        for clause in &resource.handlers {
+            collect_family_pattern_binders(&clause.pattern, &mut binders, &mut charge)?;
+            expressions.push(&clause.body);
         }
     }
     collect_definition_binders(module.definitions(), &mut binders, &mut expressions);
@@ -32729,6 +32892,7 @@ mod tests {
                     Type::Tuple(vec![Type::Variable(parameter_id), nested_tail].into_boxed_slice());
                 let module = ResolvedModule::new(ResolvedModuleParts {
                     resources: Vec::new(),
+                    source_resources: Vec::new(),
                     module: module_id,
                     registry: Arc::new(ResolvedRegistry::new(Vec::new(), Vec::new())),
                     imported: ImportedFacts::default(),

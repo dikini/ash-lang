@@ -295,6 +295,9 @@ impl HandlerNode {
     pub const fn hook_root(&self) -> Option<&crate::resolved::HookRootContract> {
         self.hook_root.as_ref()
     }
+    pub(crate) fn has_hook_contracts(&self) -> bool {
+        self.hook_root.is_some() || self.hook_registration.is_some()
+    }
     pub(crate) fn with_hook_root(
         mut self,
         root: Option<crate::resolved::HookRootContract>,
@@ -495,6 +498,7 @@ pub enum EffectOperation {
     Registration(RegistrationScopeNode),
     Resource(Box<ResourceScopeNode>),
     ProviderScope(Box<super::provider::ProviderScopeNode>),
+    SourceResourceScope(Box<super::source_resource::SourceResourceScopeNode>),
     ProviderStateAccess(ProviderStateAccessNode),
     Request(RequestNode),
     Handler(HandlerNode),
@@ -568,6 +572,20 @@ impl CoreOperationFamily for EffectOperationFamily {
                 }
                 &scope.handler
             }
+            EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
+                for binder in [
+                    &scope.acquire.parameter,
+                    &scope.finish.parameter,
+                    &scope.handler_state,
+                    &scope.handle,
+                ] {
+                    visit(binder);
+                }
+                for binder in scope.handler_pattern.binder_iter() {
+                    visit(binder);
+                }
+                &scope.handler
+            }
             EffectExprKind::Operation(EffectOperation::Handler(handler)) => handler,
             _ => return,
         };
@@ -625,6 +643,39 @@ impl CoreOperationFamily for EffectOperationFamily {
                 ] {
                     visit(super::dialect::OperationTypeMetadata::Type(binder.ty()));
                 }
+                visit(super::dialect::OperationTypeMetadata::Type(
+                    scope.handler_output.value(),
+                ));
+                visit(super::dialect::OperationTypeMetadata::Row(
+                    scope.handler_output.effects(),
+                ));
+                for clause in &scope.handler.clauses {
+                    visit(super::dialect::OperationTypeMetadata::Pattern(
+                        clause.pattern(),
+                    ));
+                }
+                Some(&scope.handler.effect)
+            }
+            EffectOperation::SourceResourceScope(scope) => {
+                for argument in scope.arguments() {
+                    visit(super::dialect::OperationTypeMetadata::Argument(argument));
+                }
+                for interpretation in scope.native_interpretations() {
+                    for argument in interpretation.effect().arguments() {
+                        visit(super::dialect::OperationTypeMetadata::Argument(argument));
+                    }
+                }
+                for binder in [
+                    &scope.acquire.parameter,
+                    &scope.finish.parameter,
+                    &scope.handler_state,
+                    &scope.handle,
+                ] {
+                    visit(super::dialect::OperationTypeMetadata::Type(binder.ty()));
+                }
+                visit(super::dialect::OperationTypeMetadata::Pattern(
+                    &scope.handler_pattern,
+                ));
                 visit(super::dialect::OperationTypeMetadata::Type(
                     scope.handler_output.value(),
                 ));
@@ -710,6 +761,9 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(EffectOperation::ProviderStateAccess(access)) => {
                 return rewrite_kinded_arguments(&mut access.arguments, rewrite, charge);
             }
+            EffectExprKind::Operation(EffectOperation::SourceResourceScope(_)) => {
+                return Err(super::BuildError::InvalidPayload);
+            }
             EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
                 charge(4)?;
                 for binder in [
@@ -789,6 +843,9 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(EffectOperation::Registration(_)) => 1,
             EffectExprKind::Operation(EffectOperation::Resource(_)) => 2,
             EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => scope.child_count(),
+            EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
+                scope.child_count()
+            }
             EffectExprKind::Operation(EffectOperation::Discard(_)) => 0,
             EffectExprKind::Operation(
                 EffectOperation::NativeInterpret(_)
@@ -802,6 +859,9 @@ impl CoreOperationFamily for EffectOperationFamily {
     fn operation_extra_edge_count(kind: &Self::Kind) -> usize {
         match kind {
             EffectExprKind::Operation(EffectOperation::Handler(node)) => node.clauses.len(),
+            EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
+                scope.handler.clauses.len()
+            }
             EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
                 if scope.attached.is_empty() {
                     return scope.handler.clauses.len();
@@ -844,6 +904,9 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
                 scope.child_at(index)
             }
+            EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
+                scope.child_at(index)
+            }
             EffectExprKind::Operation(EffectOperation::Resource(resource)) => match index {
                 0 => Some(resource.initializer),
                 1 => Some(resource.body),
@@ -882,6 +945,7 @@ impl CoreOperationFamily for EffectOperationFamily {
             ) => {}
             EffectExprKind::Operation(EffectOperation::Resource(resource)) => drop(resource),
             EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => drop(scope),
+            EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => drop(scope),
             EffectExprKind::Operation(EffectOperation::ProviderStateAccess(access)) => drop(access),
             EffectExprKind::Operation(EffectOperation::Request(mut node)) => {
                 let placeholder = EffectInstance::new(node.effect.effect(), Box::new([]));
@@ -1016,6 +1080,42 @@ impl CoreBuilder<EffectOperationFamily> {
             effects,
             origin,
             EffectOperation::ProviderScope(scope),
+        )
+    }
+
+    pub(crate) fn source_resource_scope(
+        &mut self,
+        mut scope: Box<super::source_resource::SourceResourceScopeNode>,
+        ty: Type,
+        effects: EffectRow,
+        origin: Origin,
+    ) -> Result<NodeId, super::BuildError> {
+        self.charge_effect_metadata(
+            scope
+                .handler
+                .clauses
+                .len()
+                .checked_add(1)
+                .ok_or(super::BuildError::TypeWorkExceeded)?,
+        )?;
+        let mut clauses = Vec::new();
+        clauses
+            .try_reserve_exact(scope.handler.clauses.len())
+            .map_err(|_| super::BuildError::TypeWorkExceeded)?;
+        for clause in std::mem::take(&mut scope.handler.clauses).into_vec() {
+            let (operation, resume, arm) = clause.into_parts();
+            clauses.push(EffectClause::new(
+                operation,
+                resume,
+                self.admit_effect_clause_arm(arm)?,
+            ));
+        }
+        scope.handler.clauses = clauses.into_boxed_slice();
+        self.push_operation(
+            ty,
+            effects,
+            origin,
+            EffectOperation::SourceResourceScope(scope),
         )
     }
 
@@ -1240,6 +1340,9 @@ impl CoreBuilder<EffectOperationFamily> {
             for index in range {
                 self.charge_effect_metadata(1)?;
                 let equation = match &self.nodes[index].kind {
+                    EffectExprKind::Operation(EffectOperation::SourceResourceScope(_)) => {
+                        Equation::Keep
+                    }
                     EffectExprKind::Operation(EffectOperation::ProviderStateAccess(access)) => {
                         Equation::StateAccess(access.operand())
                     }
@@ -3178,6 +3281,15 @@ pub(crate) fn owner_free_native_entry_row<'registry>(
         let Some(symbol) = registry.native_symbol(operation) else {
             return Ok(false);
         };
+        // A source-native symbol's registration is not lifecycle permission.
+        // Resource calls must be interpreted by their admitted scope, even when
+        // their native row otherwise has the same shape as a scalar entry row.
+        if !matches!(
+            symbol.symbol().call(),
+            crate::foreign::source_contract::PreparedForeignCall::Scalar { .. }
+        ) {
+            return Ok(false);
+        }
         let Some(declaration) = registry.effect(instance.effect()) else {
             return Ok(false);
         };

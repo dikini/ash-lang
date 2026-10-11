@@ -62,6 +62,7 @@ enum Expr {
     Resource {
         success: Option<ConstructorId>,
         failure: Option<ConstructorId>,
+        failure_payload: Option<usize>,
         handle: usize,
         identity: usize,
         initializer: usize,
@@ -197,6 +198,7 @@ impl Expr {
             Self::Resource {
                 success,
                 failure,
+                failure_payload,
                 handle,
                 identity,
                 initializer,
@@ -205,6 +207,7 @@ impl Expr {
             } => Self::Resource {
                 success: *success,
                 failure: *failure,
+                failure_payload: failure_payload.map(|value| value + offset),
                 handle: handle + offset,
                 identity: identity + offset,
                 initializer: initializer + offset,
@@ -801,6 +804,15 @@ impl Graph {
                 } => {
                     bindings = copy_slice(&[*handle, *identity], budget)?;
                     children = copy_slice(&[*initializer, *body], budget)?;
+                    if let Expr::Resource {
+                        failure_payload: Some(value),
+                        ..
+                    } = &self.expressions[id]
+                    {
+                        charge(budget, 1)?;
+                        children.try_reserve(1).map_err(|_| Failure::Resource)?;
+                        children.push(*value);
+                    }
                 }
                 Expr::Request { operand, .. } | Expr::Resume { operand } => {
                     children = copy_slice(&[*operand], budget)?
@@ -1769,6 +1781,7 @@ impl Graph {
                     .ok_or(Failure::Invalid)?
                     .outcome()
                     .map(|outcome| ConstructorId::new(outcome, 1)),
+                failure_payload: None,
                 handle: self.symbol(symbols, resource.handle.id(), source, budget)?,
                 identity: self.symbol(types, resource.acquisition.identity, source, budget)?,
                 initializer: index(resource.initializer),
@@ -1900,6 +1913,7 @@ impl Graph {
                     Expr::Resource {
                         success: Some(scope.descriptor.protocol().scope[1]),
                         failure: Some(scope.descriptor.protocol().scope[0]),
+                        failure_payload: None,
                         handle,
                         identity,
                         initializer: acquired,
@@ -1910,6 +1924,9 @@ impl Graph {
                     handler
                 }
             }
+            Some(EffectOperation::SourceResourceScope(scope)) => self.build_source_resource_scope(
+                scope, source, nodes, symbols, types, methods, adapters, headers, budget,
+            )?,
             Some(EffectOperation::Request(request)) => Expr::Request {
                 operand: index(request.operand()),
                 scalar: scalar(&node.ty),
@@ -1918,6 +1935,224 @@ impl Graph {
                 operand: index(resume.value()),
             },
             _ => Expr::Scalar,
+        })
+    }
+
+    // Source-only conversion storage must not enlarge the ordinary capture frame.
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)] // Borrowed phase inputs preserve exact construction order.
+    fn build_source_resource_scope<F: CoreOperationFamily>(
+        &mut self,
+        scope: &crate::core::source_resource::SourceResourceScopeNode,
+        source: Span,
+        nodes: &[StoredNode<F>],
+        symbols: &mut HashMap<BinderId, usize>,
+        types: &mut HashMap<crate::types::TypeVariableId, usize>,
+        methods: &super::MethodUses<'_>,
+        adapters: &[super::MethodAdapter],
+        headers: &mut FunctionMetadataPreparation<'_, F>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Expr, Failure> {
+        Ok({
+            // The final source scope certificate has authenticated this exact
+            // codec, handler and copied phase forests. Preserve actual values
+            // here; matching authority grants no native execution permission.
+            let codec = scope.header().codec;
+            let mut clauses = Vec::new();
+            charge(budget, scope.handler.clauses().len())?;
+            clauses
+                .try_reserve_exact(scope.handler.clauses().len())
+                .map_err(|_| Failure::Resource)?;
+            for clause in scope.handler.clauses() {
+                clauses.push(self.clause_data(
+                    clause.pattern(),
+                    index(clause.body()),
+                    source,
+                    nodes,
+                    symbols,
+                    types,
+                    methods,
+                    adapters,
+                    headers,
+                    budget,
+                )?);
+            }
+            let handler = self.push(
+                Expr::Handler {
+                    body: index(scope.handler.body()),
+                    clauses,
+                },
+                source,
+                budget,
+            )?;
+            let handle = self.symbol(symbols, scope.handle.id(), source, budget)?;
+            let identity = self.symbol(types, scope.identity(), source, budget)?;
+            let acquire_parameter =
+                self.symbol(symbols, scope.acquire.parameter.id(), source, budget)?;
+            let acquired = self.push(
+                Expr::Bind {
+                    binder: acquire_parameter,
+                    initializer: index(scope.initializer),
+                    body: index(scope.acquire.body),
+                },
+                source,
+                budget,
+            )?;
+            let acquired_pair = self.push(
+                Expr::Project {
+                    value: acquired,
+                    field: 0,
+                    constructor: Some(codec.acquire[0]),
+                },
+                source,
+                budget,
+            )?;
+            let data = self.push(
+                Expr::Project {
+                    value: acquired_pair,
+                    field: 1,
+                    constructor: None,
+                },
+                source,
+                budget,
+            )?;
+            let failure_payload = self.push(
+                Expr::Project {
+                    value: acquired,
+                    field: 0,
+                    constructor: Some(codec.acquire[1]),
+                },
+                source,
+                budget,
+            )?;
+            let state_data = self.push(
+                Expr::Tuple(copy_slice(&[handle, data], budget)?),
+                source,
+                budget,
+            )?;
+            let completed = self.push(
+                Expr::Cleanup {
+                    body: handler,
+                    action: index(scope.finish.body),
+                },
+                source,
+                budget,
+            )?;
+            let finish_parameter =
+                self.symbol(symbols, scope.finish.parameter.id(), source, budget)?;
+            let completed = self.push(
+                Expr::Bind {
+                    binder: finish_parameter,
+                    initializer: state_data,
+                    body: completed,
+                },
+                source,
+                budget,
+            )?;
+            let bindings = self.pattern(&scope.handler_pattern, state_data, symbols, budget)?;
+            let mut arms = Vec::new();
+            charge(budget, 1)?;
+            arms.try_reserve_exact(1).map_err(|_| Failure::Resource)?;
+            arms.push((bindings, completed));
+            let completed = self.push(
+                Expr::Match {
+                    scrutinee: state_data,
+                    arms,
+                },
+                source,
+                budget,
+            )?;
+            let state_parameter = self.symbol(symbols, scope.handler_state.id(), source, budget)?;
+            let completed = self.push(
+                Expr::Bind {
+                    binder: state_parameter,
+                    initializer: state_data,
+                    body: completed,
+                },
+                source,
+                budget,
+            )?;
+            let finished = self.push(
+                Expr::Bind {
+                    binder: finish_parameter,
+                    initializer: state_data,
+                    body: index(scope.finish.body),
+                },
+                source,
+                budget,
+            )?;
+            let closed = self.push(Expr::Constructor(codec.completion[0]), source, budget)?;
+            let consumed_error = self.push(
+                Expr::Project {
+                    value: finished,
+                    field: 0,
+                    constructor: Some(codec.finish[1]),
+                },
+                source,
+                budget,
+            )?;
+            let consumed_constructor =
+                self.push(Expr::Constructor(codec.completion[1]), source, budget)?;
+            let consumed = self.push(
+                Expr::Call {
+                    function: consumed_constructor,
+                    arguments: copy_slice(&[consumed_error], budget)?,
+                    scalar: false,
+                    type_application: false,
+                },
+                source,
+                budget,
+            )?;
+            let retained_pair = self.push(
+                Expr::Project {
+                    value: finished,
+                    field: 0,
+                    constructor: Some(codec.finish[2]),
+                },
+                source,
+                budget,
+            )?;
+            let retained_error = self.push(
+                Expr::Project {
+                    value: retained_pair,
+                    field: 1,
+                    constructor: None,
+                },
+                source,
+                budget,
+            )?;
+            let retained_constructor =
+                self.push(Expr::Constructor(codec.completion[2]), source, budget)?;
+            let retained = self.push(
+                Expr::Call {
+                    function: retained_constructor,
+                    arguments: copy_slice(&[retained_error], budget)?,
+                    scalar: false,
+                    type_application: false,
+                },
+                source,
+                budget,
+            )?;
+            let completion = self.push(
+                Expr::Merge(copy_slice(&[closed, consumed, retained], budget)?),
+                source,
+                budget,
+            )?;
+            let result = self.push(
+                Expr::Tuple(copy_slice(&[completed, completion], budget)?),
+                source,
+                budget,
+            )?;
+            Expr::Resource {
+                success: Some(codec.scope[1]),
+                failure: Some(codec.scope[0]),
+                failure_payload: Some(failure_payload),
+                handle,
+                identity,
+                initializer: acquired,
+                body: result,
+                source,
+            }
         })
     }
 
@@ -2335,7 +2570,7 @@ impl Graph {
         Ok(())
     }
 
-    /// A provider's control handler corresponds to the exact handler equation
+    /// A resource's control handler corresponds to the exact handler equation
     /// inside its resource result, rather than the enclosing Scope equation.
     pub(super) fn position_provider_handler(
         &mut self,
@@ -2362,6 +2597,7 @@ impl Graph {
             charge(budget, 1)?;
             match self.expressions.get(expression).ok_or(Failure::Invalid)? {
                 Expr::Bind { body, .. } => expression = *body,
+                Expr::Match { arms, .. } if arms.len() == 1 => expression = arms[0].1,
                 Expr::Cleanup { .. } => break,
                 _ => return Err(Failure::Invalid),
             }
@@ -5043,10 +5279,20 @@ impl<'a> Analysis<'a> {
                                         P::link(self, slot, *value, creation, budget)?;
                                     }
                                 }
-                                Expr::Call { arguments, .. }
-                                    if constructor.is_some() && *field == 0 =>
-                                {
-                                    if let Some(value) = arguments.first() {
+                                Expr::Call {
+                                    function,
+                                    arguments,
+                                    ..
+                                } if constructor.is_some() && *field == 0 => {
+                                    // A merged result can contain several variants.
+                                    // Watch the original callable identity so later
+                                    // matching constructors still expose their payload.
+                                    let function = self.slot(*function, creation, budget)?;
+                                    charge(budget, self.slots[function].atoms.len())?;
+                                    let matches = self.slots[function].atoms.iter().any(|atom| {
+                                        matches!(atom, Atom::Constructor(actual) if Some(*actual) == *constructor)
+                                    });
+                                    if matches && let Some(value) = arguments.first() {
                                         P::link(self, slot, *value, creation, budget)?;
                                     }
                                 }
@@ -5059,9 +5305,14 @@ impl<'a> Analysis<'a> {
                                 }
                                 Expr::Resource {
                                     failure: Some(failure),
+                                    failure_payload,
                                     ..
                                 } if *constructor == Some(*failure) && *field == 0 => {
-                                    self.atom(slot, Atom::Free, budget)?;
+                                    if let Some(value) = failure_payload {
+                                        P::link(self, slot, *value, creation, budget)?;
+                                    } else {
+                                        self.atom(slot, Atom::Free, budget)?;
+                                    }
                                 }
                                 _ => {}
                             }
@@ -5151,8 +5402,12 @@ impl<'a> Analysis<'a> {
                 identity,
                 initializer,
                 body,
+                failure_payload,
                 ..
             } => {
+                if let Some(value) = failure_payload {
+                    self.slot(*value, context, budget)?;
+                }
                 let initializer = self.slot(*initializer, context, budget)?;
                 if self.slots[initializer].atoms.is_empty() {
                     return Ok(SetupOutcome::NeedsInputsOrDynamic);
@@ -5519,8 +5774,18 @@ impl<'a> Analysis<'a> {
                         Expr::Resource {
                             body,
                             success: Some(_),
+                            failure_payload,
                             ..
-                        } => Some((std::slice::from_ref(body), context)),
+                        } => {
+                            if let Some(value) = failure_payload {
+                                charge(budget, 1)?;
+                                pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+                                if let Some(slot) = self.indices.get(&(*value, context)) {
+                                    pending.push(*slot);
+                                }
+                            }
+                            Some((std::slice::from_ref(body), context))
+                        }
                         _ => return Err(Failure::Invalid),
                     },
                     _ => None,
@@ -5722,6 +5987,7 @@ mod tests {
         fixture.expressions.push(Expr::Resource {
             success: None,
             failure: None,
+            failure_payload: None,
             handle: 0,
             identity: 0,
             initializer: 1,
@@ -6048,6 +6314,7 @@ mod tests {
         original.expressions[3] = Expr::Resource {
             success: None,
             failure: None,
+            failure_payload: None,
             handle: 0,
             identity: 1,
             initializer: 2,
@@ -6192,6 +6459,7 @@ mod tests {
             graph.expressions[5] = Expr::Resource {
                 success: None,
                 failure: None,
+                failure_payload: None,
                 handle: 0,
                 identity: 3,
                 initializer: 1,
@@ -6271,6 +6539,7 @@ mod tests {
             graph.expressions.push(Expr::Resource {
                 success: None,
                 failure: None,
+                failure_payload: None,
                 handle: 0,
                 identity: 1,
                 initializer: 4,
@@ -6529,6 +6798,7 @@ mod tests {
                 5 => Expr::Resource {
                     success: None,
                     failure: None,
+                    failure_payload: None,
                     handle: 4,
                     identity: 5,
                     initializer: 0,
@@ -6650,6 +6920,7 @@ mod tests {
         graph.expressions.push(Expr::Resource {
             success: None,
             failure: None,
+            failure_payload: None,
             handle: 2,
             identity: 3,
             initializer: 8,
@@ -6687,6 +6958,7 @@ mod tests {
         graph.expressions.push(Expr::Resource {
             success: None,
             failure: None,
+            failure_payload: None,
             handle: 2,
             identity: 3,
             initializer: 4,
@@ -8115,6 +8387,7 @@ mod tests {
         graph.expressions.push(Expr::Resource {
             success: None,
             failure: None,
+            failure_payload: None,
             handle: 0,
             identity: 2,
             initializer: 4,
@@ -8582,6 +8855,7 @@ mod tests {
         original.expressions.push(Expr::Resource {
             success: None,
             failure: None,
+            failure_payload: None,
             handle: 2,
             identity: 3,
             initializer: 4,
@@ -9399,6 +9673,7 @@ mod tests {
             graph.expressions[3] = Expr::Resource {
                 success: None,
                 failure: None,
+                failure_payload: None,
                 handle: 0,
                 identity: 1,
                 initializer: 0,
@@ -9708,6 +9983,63 @@ mod tests {
     }
 
     #[test]
+    fn constructor_projection_keeps_variants_distinct_and_wakes_on_late_identity() {
+        let family = crate::types::NominalTypeId::new(crate::module::ModuleId::new(77), 1);
+        let consumed = ConstructorId::new(family, 1);
+        let retained = ConstructorId::new(family, 2);
+        let graph = graph(vec![
+            Expr::Slot,
+            Expr::Constructor(retained),
+            Expr::Call {
+                function: 1,
+                arguments: vec![0],
+                scalar: false,
+                type_application: false,
+            },
+            Expr::Project {
+                value: 2,
+                field: 0,
+                constructor: Some(consumed),
+            },
+            Expr::Project {
+                value: 2,
+                field: 0,
+                constructor: Some(retained),
+            },
+        ]);
+        let run = |budget: &mut TypeWorkBudget| {
+            let mut analysis = Analysis::new(&graph, budget)?;
+            let payload = analysis.slot(0, 0, budget)?;
+            let owner = Atom::Resource(99, 0);
+            analysis.atom(payload, owner, budget)?;
+            let consumed_payload = analysis.slot(3, 0, budget)?;
+            let retained_payload = analysis.slot(4, 0, budget)?;
+            analysis.close(budget)?;
+            assert!(analysis.dependencies(consumed_payload, budget)?.is_empty());
+            assert_eq!(
+                analysis.dependencies(retained_payload, budget)?,
+                vec![owner]
+            );
+            let function = analysis.slot(1, 0, budget)?;
+            analysis.atom(function, Atom::Constructor(consumed), budget)?;
+            analysis.close(budget)?;
+            assert_eq!(
+                analysis.dependencies(consumed_payload, budget)?,
+                vec![owner]
+            );
+            Ok::<(), Failure>(())
+        };
+        let mut measured = TypeWorkBudget::unbounded();
+        run(&mut measured).unwrap();
+        run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+        assert!(matches!(
+            run(&mut TypeWorkBudget::with_limit(measured.used() - 1)),
+            Err(Failure::Resource)
+        ));
+        run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+    }
+
+    #[test]
     fn completed_match_setup_keeps_late_constructor_payload_ownership() {
         let family = crate::types::NominalTypeId::new(crate::module::ModuleId::new(77), 1);
         let first = ConstructorId::new(family, 0);
@@ -9815,6 +10147,7 @@ mod tests {
                 4 => Expr::Resource {
                     success: None,
                     failure: None,
+                    failure_payload: None,
                     handle: 7,
                     identity: 8,
                     initializer: 0,
@@ -10174,6 +10507,7 @@ mod tests {
         graph.expressions.push(Expr::Resource {
             success: None,
             failure: None,
+            failure_payload: None,
             handle: 1,
             identity: 2,
             initializer: 0,
@@ -10350,6 +10684,7 @@ mod tests {
             Expr::Resource {
                 success: Some(completed),
                 failure: Some(refused),
+                failure_payload: None,
                 handle: 9,
                 identity: 10,
                 initializer: 0,
@@ -10416,6 +10751,7 @@ mod tests {
         graph.expressions.push(Expr::Resource {
             success: Some(success),
             failure: Some(ConstructorId::new(success.owner(), 1)),
+            failure_payload: None,
             handle: 2,
             identity: 3,
             initializer: 0,
@@ -10526,6 +10862,7 @@ mod tests {
         graph.expressions.push(Expr::Resource {
             success: None,
             failure: None,
+            failure_payload: None,
             handle: 1,
             identity: 2,
             initializer: 3,

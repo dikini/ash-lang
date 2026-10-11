@@ -14,7 +14,7 @@ use ash::{
     lexer::lex,
     module::{ModuleId, ModuleRoots, load_module_graph},
     parser::{parse, project_module},
-    resolve::{ResolveModuleError, ResolveReason, resolve_module},
+    resolve::{DependencyExports, ResolveModuleError, ResolveReason, resolve_module},
     source::{SourceFile, Span},
     types::Kind,
 };
@@ -295,7 +295,7 @@ fn malformed_owner_applications_teardowns_and_outcomes_publish_no_preparation() 
 }
 
 #[test]
-fn public_source_resolution_refuses_prepared_owner_and_address_libraries() {
+fn public_source_resolution_refuses_row_bearing_owners_and_unowned_addresses() {
     let with_scalar = BYTES.replace(
         "    owner State",
         &format!("{SCALAR_SYMBOL}    owner State"),
@@ -308,19 +308,63 @@ fn public_source_resolution_refuses_prepared_owner_and_address_libraries() {
     assert_eq!(prepared.owners().len(), 1);
     assert!(prepare(ADDRESS_ONLY).unwrap().symbols().is_empty());
 
-    for text in [BYTES, ADDRESS_ONLY, with_scalar.as_str()] {
-        let source = Source::new(text);
+    for (text, expected) in [
+        (BYTES, ResolveReason::TypeKind),
+        (ADDRESS_ONLY, ResolveReason::ForeignContract),
+        (with_scalar.as_str(), ResolveReason::TypeKind),
+    ] {
+        let source_text = format!("import @builtin.foreign as Foreign\n{text}");
+        let source = Source::new(&source_text);
         let graph = load_module_graph(&source.0, &ModuleRoots::empty()).unwrap();
+        let mut checked: Vec<ash::resolved::CheckedModule> = Vec::new();
+        for dependency in &graph.modules()[..graph.modules().len() - 1] {
+            let dependencies = dependency
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    DependencyExports::new(
+                        edge,
+                        checked
+                            .iter()
+                            .find(|module| module.module() == edge.target())
+                            .unwrap()
+                            .exports(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let resolved = resolve_module(dependency, &dependencies).unwrap();
+            checked.push(ash::elaborate::check_module(resolved).unwrap());
+        }
         let loaded = graph.modules().last().unwrap();
-        // Preparation has no defining owner or codec authority. The public
-        // source path must refuse instead of omitting unpublishable members.
-        let Err(ResolveModuleError::Resolution(failure)) = resolve_module(loaded, &[]) else {
-            panic!("unadmitted owner facts must fail at source resolution");
+        let dependencies = loaded
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                DependencyExports::new(
+                    edge,
+                    checked
+                        .iter()
+                        .find(|module| module.module() == edge.target())
+                        .unwrap()
+                        .exports(),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        // Passive preparation admits these written facts; source resolution
+        // still rejects rows in ordinary State applications and unowned bytes.
+        let Err(ResolveModuleError::Resolution(failure)) = resolve_module(loaded, &dependencies)
+        else {
+            panic!("unsupported owner/address facts must fail at source resolution");
         };
-        assert_eq!(failure.reason, ResolveReason::ForeignContract, "{text}");
+        assert_eq!(failure.reason, expected, "{text}: {failure:?}");
         assert_eq!(
             failure.primary.span().source(),
             loaded.surface().foreign_libraries[0].span.source()
         );
+        if expected == ResolveReason::TypeKind {
+            assert_eq!(written(&source_text, failure.primary.span()), "{| Before}");
+        }
     }
 }

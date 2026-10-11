@@ -7,6 +7,7 @@ mod arena;
 pub mod checked_source;
 pub mod runtime;
 pub mod source_contract;
+pub mod source_owner;
 pub mod source_runtime;
 pub use arena::{arena_manifest, typed_arena_manifest};
 

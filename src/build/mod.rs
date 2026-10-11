@@ -157,7 +157,13 @@ pub struct PrivateNativeCoordinates {
 pub struct PrivateNativeBridge {
     coordinates: PrivateNativeCoordinates,
     expected_facts: &'static [u8],
-    callback: PrivateNativeScalarCallback,
+    callback: PrivateNativeCallback,
+}
+
+enum PrivateNativeCallback {
+    Scalar(PrivateNativeScalarCallback),
+    OwnerAcquire(crate::foreign::source_runtime::NativeOwnerAcquireCallback),
+    OwnerTeardown(crate::foreign::source_runtime::NativeOwnerTeardownCallback),
 }
 
 /// Constructs passive generated data, never a checked registry/symbol or binding.
@@ -174,7 +180,36 @@ pub fn __private_native_bridge(
     PrivateNativeBridge {
         coordinates,
         expected_facts,
-        callback,
+        callback: PrivateNativeCallback::Scalar(callback),
+    }
+}
+
+/// Passive generated owner acquisition member; only checked scope admission can
+/// grant its callback an executable lifecycle request.
+#[doc(hidden)]
+pub fn __private_native_owner_acquire_bridge(
+    coordinates: PrivateNativeCoordinates,
+    expected_facts: &'static [u8],
+    callback: crate::foreign::source_runtime::NativeOwnerAcquireCallback,
+) -> PrivateNativeBridge {
+    PrivateNativeBridge {
+        coordinates,
+        expected_facts,
+        callback: PrivateNativeCallback::OwnerAcquire(callback),
+    }
+}
+
+/// Passive generated unconditional owner teardown member.
+#[doc(hidden)]
+pub fn __private_native_owner_teardown_bridge(
+    coordinates: PrivateNativeCoordinates,
+    expected_facts: &'static [u8],
+    callback: crate::foreign::source_runtime::NativeOwnerTeardownCallback,
+) -> PrivateNativeBridge {
+    PrivateNativeBridge {
+        coordinates,
+        expected_facts,
+        callback: PrivateNativeCallback::OwnerTeardown(callback),
     }
 }
 
@@ -309,9 +344,22 @@ pub fn __run_private_effect_image(
                     .map_err(foreign_error)?;
             // Consume the private callback only after original fact/identity
             // checks; it cannot be replaced through a public member field.
-            bindings
-                .insert_checked(checked_symbol, bridge.callback, &mut work)
-                .map_err(runtime_error)?;
+            match bridge.callback {
+                PrivateNativeCallback::Scalar(callback) => {
+                    bindings.insert_checked(checked_symbol, callback, &mut work)
+                }
+                PrivateNativeCallback::OwnerAcquire(callback) => bindings.insert_owner_checked(
+                    checked_symbol,
+                    crate::foreign::source_bindings::SourceOwnerCallback::Acquire(callback),
+                    &mut work,
+                ),
+                PrivateNativeCallback::OwnerTeardown(callback) => bindings.insert_owner_checked(
+                    checked_symbol,
+                    crate::foreign::source_bindings::SourceOwnerCallback::Teardown(callback),
+                    &mut work,
+                ),
+            }
+            .map_err(runtime_error)?;
         }
     }
     drop(facts);
@@ -336,3 +384,13 @@ mod source_scalar_post_record_tests;
     target_pointer_width = "64"
 ))]
 mod native_image_tests;
+
+#[cfg(all(
+    test,
+    target_arch = "x86_64",
+    target_os = "linux",
+    target_env = "gnu",
+    target_pointer_width = "64"
+))]
+#[path = "source_owner_post_record_tests.rs"]
+mod source_owner_post_record_tests;

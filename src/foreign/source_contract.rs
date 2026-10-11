@@ -2018,13 +2018,6 @@ pub(crate) enum PrivatePreparedCall {
     Scalar {
         outcomes: Vec<PrivatePreparedOutcomeParts>,
     },
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "The scalar image refuses owners; owner restoration is verified before resolved-owner admission is connected."
-        )
-    )]
     Owner(PreparedOwnerCall),
 }
 impl PrivatePreparedCall {

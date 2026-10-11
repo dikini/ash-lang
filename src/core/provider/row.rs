@@ -470,6 +470,9 @@ impl HandlerRowRecipeDraft {
                 recipe.edges.push(equation);
             }
             let operation = match &stored.kind {
+                EffectExprKind::Operation(EffectOperation::SourceResourceScope(_)) => {
+                    return Err(invalid(id));
+                }
                 EffectExprKind::Pure(PureExprKind::Value(_) | PureExprKind::Variable(_)) => {
                     RowEquationOperation::Empty
                 }

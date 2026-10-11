@@ -24,7 +24,7 @@ use crate::{
 };
 
 pub(super) struct PreparedLibrarySource {
-    prepared: Arc<PreparedForeignLibrary>,
+    pub(super) prepared: Arc<PreparedForeignLibrary>,
     effects: Range<usize>,
 }
 
@@ -212,6 +212,17 @@ impl Resolver {
                     "foreign publication classification exceeded its work budget",
                 )
             })?;
+            self.type_work.charge(library.members.len()).map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    library.span,
+                    "foreign owner classification exceeded its work budget",
+                )
+            })?;
+            let has_owner = library
+                .members
+                .iter()
+                .any(|member| matches!(member, SurfaceForeignMember::Owner(_)));
             // Publishing executable constants needs the ordinary term bridge;
             // do not silently omit a source member from this first admission slice.
             if let Some((span, message)) = library.members.iter().find_map(|member| match member {
@@ -219,16 +230,13 @@ impl Resolver {
                     constant.span,
                     "source foreign constant publication is not implemented yet",
                 )),
-                SurfaceForeignMember::Owner(owner) => Some((
-                    owner.span,
-                    "source foreign owners require canonical owner admission",
-                )),
                 SurfaceForeignMember::Representation(representation)
-                    if matches!(
-                        representation.representation,
-                        crate::surface::SurfaceForeignRepresentation::Opaque(_)
-                            | crate::surface::SurfaceForeignRepresentation::Bytes(_)
-                    ) =>
+                    if !has_owner
+                        && matches!(
+                            representation.representation,
+                            crate::surface::SurfaceForeignRepresentation::Opaque(_)
+                                | crate::surface::SurfaceForeignRepresentation::Bytes(_)
+                        ) =>
                 {
                     Some((
                         representation.span,
@@ -364,6 +372,66 @@ impl Resolver {
             conversion_failed: ConstructorId::new(call, 1),
             conversion_error: NominalTypeId::new(common_module, 0),
         };
+        let mut owners = Vec::new();
+        for (ordinal, library) in prepared.iter().enumerate() {
+            let ordinal = u32::try_from(ordinal).map_err(|_| {
+                error(
+                    ResolveReason::InternalState,
+                    surface.span,
+                    "foreign library identity exhausted",
+                )
+            })?;
+            self.type_work
+                .charge(library.prepared.owners().len())
+                .map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        surface.span,
+                        "foreign owner binding exceeded its work budget",
+                    )
+                })?;
+            owners
+                .try_reserve(library.prepared.owners().len())
+                .map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        surface.span,
+                        "foreign owner binding storage could not be reserved",
+                    )
+                })?;
+            for index in 0..library.prepared.owners().len() {
+                self.type_work
+                    .charge(registry.source_owner_candidate_count())
+                    .map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            surface.span,
+                            "foreign owner candidate lookup exceeded its work budget",
+                        )
+                    })?;
+                let (nominal, parameters) = registry
+                    .source_owner_candidate(&library.prepared, index)
+                    .ok_or_else(|| {
+                        error(
+                            ResolveReason::ForeignContract,
+                            surface.span,
+                            "foreign owner has no original canonical nominal",
+                        )
+                    })?;
+                owners.push(Arc::new(
+                    crate::foreign::source_owner::bind_foreign_owner(
+                        NativeLibraryId::new(self.module, ordinal),
+                        Arc::clone(&library.prepared),
+                        index,
+                        nominal,
+                        parameters,
+                        &registry,
+                        &mut self.type_work,
+                    )
+                    .map_err(source_admission_failure)?,
+                ));
+            }
+        }
         let context = ForeignBindingContext::new(
             &registry,
             common_module,
@@ -371,6 +439,8 @@ impl Resolver {
             ids,
             &mut self.type_work,
         )
+        .map_err(source_admission_failure)?
+        .with_owners(&owners, &mut self.type_work)
         .map_err(source_admission_failure)?;
         let mut symbols = Vec::new();
         for (ordinal, library) in prepared.iter().enumerate() {
@@ -562,6 +632,7 @@ pub(super) fn retain_module_declaration_order(
     let mut next_library = 0;
     let mut next_ordinary = 0;
     let mut next_effect = 0;
+    let mut next_owner = surface.type_declarations.len();
     for declaration in &surface.declaration_order {
         if let SurfaceDeclarationIndex::ForeignLibrary(index) = *declaration {
             work.charge(1).map_err(|()| {
@@ -599,19 +670,61 @@ pub(super) fn retain_module_declaration_order(
                     "foreign declaration order exceeded its work budget",
                 )
             })?;
-            result.try_reserve(library.effects.len()).map_err(|_| {
+            let added = library
+                .effects
+                .len()
+                .checked_add(library.prepared.owners().len())
+                .ok_or_else(|| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        surface.span,
+                        "foreign declaration order exceeded its bound",
+                    )
+                })?;
+            result.try_reserve(added).map_err(|_| {
                 error(
                     ResolveReason::TypeResourceExhausted,
                     surface.span,
                     "foreign declaration order storage could not be reserved",
                 )
             })?;
-            result.extend(
-                library
-                    .effects
-                    .clone()
-                    .map(crate::resolved::ResolvedDeclarationIndex::Effect),
-            );
+            let written = &surface.foreign_libraries[index];
+            work.charge(written.members.len()).map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    written.span,
+                    "foreign member order exceeded its work budget",
+                )
+            })?;
+            let mut effect = library.effects.start;
+            let mut owners = 0;
+            for member in &written.members {
+                match member {
+                    SurfaceForeignMember::Owner(_) => {
+                        result.push(crate::resolved::ResolvedDeclarationIndex::Type(next_owner));
+                        next_owner = next_owner.checked_add(1).ok_or_else(|| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                written.span,
+                                "foreign owner order exceeded its bound",
+                            )
+                        })?;
+                        owners += 1;
+                    }
+                    SurfaceForeignMember::Symbol(_) => {
+                        result.push(crate::resolved::ResolvedDeclarationIndex::Effect(effect));
+                        effect += 1;
+                    }
+                    _ => {}
+                }
+            }
+            if effect != library.effects.end || owners != library.prepared.owners().len() {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    written.span,
+                    "foreign member order disagrees with canonical preparation",
+                ));
+            }
             next_effect = library.effects.end;
             next_library += 1;
         } else {

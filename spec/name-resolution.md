@@ -100,9 +100,12 @@ native interpreter, ownership or access permission.
 A foreign library introduces a defining native-library identity without a
 nested source namespace. Each admitted symbol introduces a module-owned native
 effect with one `call` operation. Symbols share the ordinary effect spelling
-namespace and inherit the library's publication mode. Scalar representations
-occupy an ABI namespace and introduce no ordinary Ash type. Libraries in one
-module require disjoint member spellings.
+namespace and inherit the library's publication mode. Foreign representations
+occupy an ABI namespace and introduce no ordinary Ash type. An owner member
+introduces a constructor-free nominal state family in the ordinary type
+namespace. Its original ordered formal records, explicit owned position,
+representation and teardown reference remain associated with the defining
+library. Libraries in one module require disjoint member spellings.
 
 Imports and re-exports preserve the original effect, operation, library and
 contract identities. Summaries retain descriptors only with selected or
@@ -111,11 +114,36 @@ public signature remains a hidden checking fact; it does not become an
 exported source spelling. Display aliases do not replace defining provenance
 or result-codec authority.
 
+### Source resource families
+
+A source resource declaration introduces a family in the type namespace. Its
+identity is distinct from every instance identity and from a foreign owner
+state family. The complete written parameter vector scopes over the header,
+acquire and finish clauses, and handler clauses. `owned` must select one of
+those parameters with kind `Type`; its position need not be first. The single
+parameter introduced by `result ... for <Answer>` scopes over that result type
+only. Lifecycle and handler patterns retain their ordinary binding behavior.
+
+Public imports and targeted re-exports retain the original family identity,
+complete parameter vector and body-free header, including all exact native
+interpretations and defining provenance. A display alias cannot change the
+owned position, argument tags or native symbol identity. Source resource code
+travels as the original checked defining code through compiler preparation;
+an export summary neither contains that code nor grants execution permission.
+Private header dependencies retain checking identity without becoming public
+source names.
+
+The current publication checkpoint requires a provider interface declared
+beside a public source resource to be public. Its shared-interface closure can
+retain imported hidden interface facts, but cannot yet retain a same-module
+private provider interface. This is an implementation limitation, not a new
+visibility rule for resource declarations.
+
 ## Imports and namespaces
 
 A complete import binds the dependency's public namespaces under its uppercase
 alias. It does not copy declarations or change their identities. Public globals,
-nominal types, interfaces, effects, methods, operations, and constructors are
+nominal types, resource families, interfaces, effects, methods, operations, and constructors are
 available through qualified occurrences such as `List.map`, `List.Option`,
 `List.Equal`, `List.State`, `List.State.get`, `List.equal`, and `List.Some`. A
 qualified occurrence must use an alias bound by an import in the same module. A
@@ -402,11 +430,17 @@ type-variable sequence after resolving its initializer. The binder has kind
 `Type` and scopes over the resource body only. It is distinct from enclosing
 type parameters and other acquisition binders, regardless of spelling.
 
-Nominal and effect parameters use their written set and order and may be
+Nominal and ordinary effect parameters use their written set and order and may be
 phantom. Effect parameters scope over all operation signatures in their
 declaration and cannot have kind `EffectRow`. An interface has a nonempty
 ordered written parameter vector. A kind annotation fixes its binder's kind;
 an omitted annotation fixes it at `Type`.
+
+Native symbol and source resource parameters retain their complete written
+Type/Row vector, including parameters with no ABI operand. An owner state
+family retains its own ordered nominal parameters; the current canonical owner
+checkpoint admits only `Type` formals. These distinct inventories are not
+collapsed into a Type-only vector for source effect identity.
 
 For an interface declaration, binder encounter order starts with the interface
 parameters in written order, then visits methods in declaration order and each
@@ -738,6 +772,10 @@ acquisition's identity and handle binders then enter scope together for its
 body block and may shadow earlier names. Neither binder is visible in its own
 initializer or after the resource expression. Closing the body restores the
 preceding scopes. The handle is an ordinary term binder, not a release owner.
+For a source family, resolution checks the complete written argument vector
+against the retained header and identifies the fresh binder at the explicit
+owned position. Every other Type or Row actual resolves in the preceding type
+scope. The fresh identity cannot occur in those actuals or in its initializer.
 
 The target of `hook` or `register` resolves as an exact effect instance in the
 preceding type scope. A registration's transformer resolves in the preceding

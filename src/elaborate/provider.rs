@@ -47,6 +47,44 @@ pub(super) struct CheckingContext {
     phase: Phase,
     operations: Box<[OperationId]>,
     state_associations: Vec<HeaderStateAssociation>,
+    source: Option<Arc<crate::core::source_resource::CheckedSourceResourceHeader>>,
+}
+
+impl CheckingContext {
+    pub(super) fn source(
+        header: Arc<crate::core::source_resource::CheckedSourceResourceHeader>,
+        phase: Phase,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, TypeError> {
+        let operation = match phase {
+            Phase::Acquire => header.acquire.operation(),
+            Phase::Finish => header.teardown.operation(),
+            Phase::Handler => header.acquire.operation(),
+        };
+        let native = header
+            .original
+            .interpreted
+            .iter()
+            .find(|effect| effect.instance.effect() == operation.owner())
+            .ok_or_else(invalid_state)?;
+        work.charge(header.original.interpreted.len().saturating_add(1))
+            .map_err(|()| type_resource())?;
+        let mut operations = Vec::new();
+        operations
+            .try_reserve_exact(1)
+            .map_err(|_| type_resource())?;
+        if phase != Phase::Handler {
+            operations.push(operation);
+        }
+        Ok(Self {
+            native: clone_effect_instance_with_budget(&native.instance, work)
+                .map_err(|_| type_resource())?,
+            phase,
+            operations: operations.into_boxed_slice(),
+            state_associations: Vec::new(),
+            source: Some(header),
+        })
+    }
 }
 
 /// Header association for unpublished local drafts only. It cannot authorize
@@ -228,14 +266,32 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     }
 
     pub(super) fn contains_provider_state(&mut self, root: &Type) -> Result<bool, TypeError> {
-        if self.registry.foreign_modules().next().is_none() {
+        if self.registry.foreign_modules().next().is_none()
+            && self.registry.source_owner_candidate_count() == 0
+        {
             return Ok(false);
         }
-        crate::types::visit_type_structure_with_budget(root, &mut self.type_work, |node, _| {
-            Ok(
-                matches!(node, crate::types::TypeStructureNode::Type(Type::Nominal(id))
-                if self.registry.foreign_state(*id).is_some()),
-            )
+        // Both category lookups scan retained tables. Price the upper bound
+        // once per nominal visit, including foreign modules with no states.
+        let mut foreign_scan_work = 0usize;
+        for module in self.registry.foreign_modules() {
+            self.type_work.charge(1).map_err(|()| type_resource())?;
+            foreign_scan_work = foreign_scan_work
+                .checked_add(1)
+                .and_then(|count| count.checked_add(module.states.len()))
+                .ok_or_else(type_resource)?;
+        }
+        let source_scan_work = self.registry.source_owner_candidate_count();
+        crate::types::visit_type_structure_with_budget(root, &mut self.type_work, |node, work| {
+            let crate::types::TypeStructureNode::Type(Type::Nominal(id)) = node else {
+                return Ok(false);
+            };
+            work.charge(foreign_scan_work)?;
+            if self.registry.foreign_state(*id).is_some() {
+                return Ok(true);
+            }
+            work.charge(source_scan_work)?;
+            Ok(self.registry.source_owner_nominal(*id))
         })
         .map_err(|()| type_resource())
     }
@@ -262,17 +318,25 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         self.type_work
             .charge(context.operations.len())
             .map_err(|()| type_resource())?;
-        let allowed = context.operations.iter().any(|operation| {
-            self.registry
-                .foreign_operation(*operation)
-                .is_some_and(|fact| match (&context.phase, &fact.result) {
-                    (Phase::Acquire, ForeignResultFact::Acquire { constructors, .. })
-                    | (Phase::Finish, ForeignResultFact::Finish { constructors, .. }) => {
-                        constructors.contains(&constructor)
-                    }
-                    _ => false,
-                })
-        });
+        let allowed = if let Some(header) = &context.source {
+            match context.phase {
+                Phase::Acquire => header.codec.acquire.contains(&constructor),
+                Phase::Finish => header.codec.finish.contains(&constructor),
+                Phase::Handler => false,
+            }
+        } else {
+            context.operations.iter().any(|operation| {
+                self.registry
+                    .foreign_operation(*operation)
+                    .is_some_and(|fact| match (&context.phase, &fact.result) {
+                        (Phase::Acquire, ForeignResultFact::Acquire { constructors, .. })
+                        | (Phase::Finish, ForeignResultFact::Finish { constructors, .. }) => {
+                            constructors.contains(&constructor)
+                        }
+                        _ => false,
+                    })
+            })
+        };
         if !allowed {
             return Err(contract_error(
                 span,
@@ -288,10 +352,47 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         &mut self,
         request: &crate::resolved::ResolvedPerformExpr,
     ) -> Result<(), TypeError> {
-        let context = self
-            .provider_context
-            .as_ref()
-            .ok_or_else(foreign_privilege_unavailable)?;
+        let context = self.provider_context.as_ref().ok_or_else(|| {
+            if self
+                .registry
+                .native_symbol(request.operation)
+                .is_some_and(|symbol| symbol.owner().is_some())
+            {
+                contract_error(
+                    request.effect.span,
+                    "source owner operation requires its exact checked lifecycle phase",
+                )
+            } else {
+                foreign_privilege_unavailable()
+            }
+        })?;
+        if let Some(header) = &context.source {
+            let symbol = self
+                .registry
+                .native_symbol(request.operation)
+                .ok_or_else(invalid_state)?;
+            let exact = match context.phase {
+                Phase::Acquire => Arc::ptr_eq(symbol, &header.acquire),
+                Phase::Finish => Arc::ptr_eq(symbol, &header.teardown),
+                Phase::Handler => false,
+            };
+            if !exact
+                || !context.operations.contains(&request.operation)
+                || compare_effect_instances_with_budget(
+                    &context.native,
+                    &request.effect.instance,
+                    &mut self.type_work,
+                )
+                .map_err(|_| type_resource())?
+                    != std::cmp::Ordering::Equal
+            {
+                return Err(contract_error(
+                    request.effect.span,
+                    "source owner operation requires its exact checked lifecycle phase",
+                ));
+            }
+            return Ok(());
+        }
         let fact = self
             .registry
             .foreign_operation(request.operation)
@@ -3461,6 +3562,7 @@ impl CoreElaborator<EffectOperationFamily> {
             phase: Phase::Handler,
             operations: operations.into_boxed_slice(),
             state_associations: associations,
+            source: None,
         });
         let marker = self.evidence_marker()?;
         let mut context = self.base_context.clone();
@@ -3788,6 +3890,7 @@ impl CoreElaborator<EffectOperationFamily> {
             phase,
             operations: operations.into_boxed_slice(),
             state_associations,
+            source: None,
         });
         let evidence_marker = imported.map(|_| self.evidence_marker()).transpose()?;
         let mut context = self.base_context.clone();

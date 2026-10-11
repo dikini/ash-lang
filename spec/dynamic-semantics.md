@@ -34,7 +34,8 @@ static operations rather than values.
 Elaboration produces one validated linked Core expression: dependency-ordered
 recursive global groups around the generated application of the entry module's
 local `main` to unit. The final linked expression has an empty outward effect
-row after any mandatory owner-free native interpretation. Evaluation starts
+row after mandatory owner-free native interpretation and exact discharge by
+admitted source resource scopes. Evaluation starts
 with that expression as control, a fresh empty heap and environment, and an
 empty continuation:
 
@@ -55,10 +56,11 @@ the linked groups and call `main`. Imports have no initialization step, and
 modules are not runtime values.
 
 For a program with owner-free source-native effects, the linked expression
-includes the mandatory native interpretation described below. Its executable
-bindings must be admitted before any Ash expression runs. The binding premise
-is vacuous for a program requiring none. Binding admission retains the exact
-original checked symbol and bridge authority, independently checked against
+includes the mandatory native interpretation described below. A source resource
+scope instead retains its exact acquisition and teardown interpretations. Both
+forms require their executable bindings before any Ash expression runs. The
+binding premise is vacuous for a program requiring none. Binding admission
+retains the exact original checked symbol and bridge authority, independently checked against
 the validated program; a missing or changed binding is an internal failure.
 It performs no Ash evaluation or implicit native compilation/linkage.
 
@@ -577,6 +579,115 @@ This applies to report construction and later ordinary continuation work.
 Already performed native side effects remain performed. A new evaluation has
 fresh machine state and may make its own calls. Internal work/storage failures
 are not `Foreign.ConversionFailed` outcomes.
+
+## Source resource execution with opaque owners
+
+The admitted product source resource scope combines an Ash initializer, acquire
+and finish functions, private data `D`, and an associated ordinary effect handler.
+This checkpoint supports dependency-free opaque foreign owners with Type-kind
+owner formals, scalar acquisition operands, one pointer acquisition result, and
+an unconditional consuming `void` teardown whose sole operand is the exact
+Current state. Each foreign symbol still retains its complete ordered Type and
+EffectRow arguments; the native Type-only projection does not replace them.
+Byte owners, dependent owners, additional teardown operands and native
+retained-status outcomes are unsupported executable shapes in this checkpoint.
+
+Before any Ash expression runs, program admission checks both acquisition and
+teardown bindings for every source resource scope against their exact original
+checked symbols. Reconstructed executable images must independently admit the
+original headers and defining acquire, finish and handler forests, then validate
+each final scope's copied occurrences, substitutions and fresh identities.
+Ordinary `NativeInterpret` grants no owner-call permission. An owner request
+requires the matching validated source scope, its current acquire or finish
+phase, exact copied request membership, and the complete effect instance under
+that scope's saved lexical instantiation.
+
+The initializer evaluates once in the preceding environment. Before native
+acquisition, the machine authenticates the unconditional destructor, reserves
+scope and guard storage, checks each scalar conversion, and reserves the native
+report slots and recording/report work. A representable operand supplies its
+stable ABI scalar; a conversion refusal produces canonical
+`Foreign.ConversionFailed(error)` without invoking the native function. Missing
+bindings, malformed authority, unsupported representations and internal work or
+storage refusal cannot invoke acquisition.
+
+For acquisition, `d` retains the exact symbol, complete instance and sealed
+destructor. `p` retains the admitted inline guard and prepaid report storage.
+`g` is a unique guarded native address or the absence of an owner for a null
+reply. The generated typed bridge arms `g` immediately when the native call
+returns, before constructing an Ash result. The pointer remains inside that
+guard and is never an ordinary Ash value. The following steps consume readiness,
+record ownership, and publish the prepared report:
+
+```sequent
+family opaque-owner-native-call-steps:
+  E-Opaque-Owner-Call :=
+    native(d, operands) = raw
+    arm(p, raw) = g
+    ===>
+    CONFIG(heap, environment, CallReady(d, operands, p), continuation) -> CONFIG(heap, environment, CallReturned(d, g, p), continuation)
+
+  E-Opaque-Owner-Record :=
+    ===>
+    CONFIG(heap, environment, CallReturned(d, g, p), continuation) -> CONFIG(heap, environment, CallRecorded(d, g, p), continuation)
+
+  E-Opaque-Owner-Report :=
+    report_and_place(heap, continuation, d, g, p) = heap_1, continuation_1, value
+    ===>
+    CONFIG(heap, environment, CallRecorded(d, g, p), continuation) -> CONFIG(heap_1, environment, CallReported(value), continuation_1)
+```
+
+Only `CallReady` invokes the native function. Its return retains no invocation
+capability. Recording is infallible, allocates no Ash result, and charges no
+additional work; it precedes disposal, reporting and continuation failure.
+Reporting uses the prepaid allowance and reserved constructor slots. For this
+opaque result it produces the checked roles corresponding to
+`Foreign.Returned(Foreign.Readable(Foreign.Null))` or
+`Foreign.Returned(Foreign.Readable(Foreign.NonNull(state)))`. A non-null state
+contains the scope's activation key, not its address. The scope receives the
+unique guard before the state report becomes available to Ash evaluation.
+
+Ash acquisition policy then selects the resource codec's `Acquired(state, data)`
+or `Refused(error)` role. Publication requires the recorded owner of this exact
+activation; ordinary constructor creation cannot create ownership authority.
+A successful publication binds a non-owning access handle for the body and
+retains `D` in the scope. The body receives neither an owning value nor direct
+access to `D`; the admitted Ash handler uses its saved state and private data.
+Acquisition refusal executes no body. If native acquisition already returned a
+non-null owner, refusal destroys that unpublished owner once before delivering
+`NotAcquired(error)`. Null acquisition creates no destructor obligation.
+
+Associated ordinary operations preserve the nearest exact handler rule. A nearer
+ordinary source handler takes precedence over the resource handler. The admitted
+resource clause uses its lexical state/data and ordinary clause-owned `resume`;
+resumption continues the same activation without repeating acquisition. Nested
+source resource scopes complete their own finish before their enclosing scope
+finishes. This checkpoint does not admit outward capture or owned discard of a
+source resource boundary, quarantine, dependency teardown or byte access.
+
+Normal body return saves its value and invokes the admitted Ash finish once.
+Before the Current teardown, the machine authenticates the state token's exact
+live activation and reserves its report storage while the scope still owns the
+guard. Only successful preflight can detach that guard for consumption. The
+unconditional native `void` call destroys the address once and produces a
+non-owning consumed receipt with the original authority, before Ash report
+construction. Its returned-to-recorded transition is infallible. The prepaid
+report supplies `Foreign.Returned(Foreign.Consumed(()))`; source finish maps it
+to the resource codec's consumed completion. The scope records consumption
+before publishing its report. The source result remains
+`Completed(body_value, completion)` without flattening a nested body result.
+
+An internal failure after a native return never retries the call or recreates
+readiness. A live guard, including one not yet published to the body, invokes its
+sealed unconditional destructor once during host destruction. A consumed receipt
+has no destructor callback, so failure during finish reporting cannot repeat
+teardown. Host destruction allocates no Ash result and runs no source finish or
+handler. Foreign side effects remain performed; internal exhaustion is not a
+source conversion or completion outcome. A fresh evaluation has fresh machine
+state and may perform its own acquisition. These rules assume the authored
+foreign contract holds; linking and checked Core do not prove external binary
+validity, and divergence or external process termination provides no eventual
+release guarantee.
 
 ## Effect handlers and completion
 

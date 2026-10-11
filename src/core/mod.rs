@@ -11,6 +11,7 @@ pub mod packed;
 pub mod primitive;
 pub(crate) mod provider;
 pub mod recursion;
+pub(crate) mod source_resource;
 pub mod transform;
 pub mod type_ops;
 pub mod validate;
@@ -30,6 +31,7 @@ pub use effect::{
 };
 pub use primitive::Primitive;
 pub use recursion::{RecursiveBindingMember, RecursiveBindingNode};
+pub use source_resource::SourceResourceScopeNode;
 pub use type_ops::{
     LocalNominalScopeNode, NewtypeConversionDirection, NewtypeConversionNode, TypeAbstractionNode,
     TypeApplicationNode,

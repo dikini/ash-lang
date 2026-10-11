@@ -71,8 +71,11 @@ Program preparation owns its generated host inputs and native configuration.
 Linking consumes that completed phase, rather than encoding or checking the
 source graph again. Generated source and tool logs remain reviewable; executable
 publication follows successful linking. The private construction carrier has
-bounded Pure and owner-free scalar/void Effect profiles. These profiles do not
-complete foreign ownership/access execution or the library deliveries.
+bounded Pure, scalar/void Effect and dependency-free opaque source-resource
+profiles. The latter retains original defining forests once and exact per-scope
+copying claims. Restore first admits the original templates, then independently
+validates each specialized scope before binding. These profiles do not complete
+foreign access, retained owners or the library deliveries.
 
 Core builder payload admission is part of reconstruction work. Lending the
 same cumulative meter to builder operations preserves both prior charges and
@@ -120,6 +123,19 @@ table coverage and the independent Core checks still authenticate each row
 against its actual lexical type abstraction. The private matching-runtime
 format changes with this carrier; it promises no cross-version compatibility.
 
+Provider interface parameters also belong to the canonical type-variable table.
+Reconstruction installs their original parameter records before attaching the
+interface owner definitions; exclusive wire coverage and independent owner-row
+authentication remain separate checks. Omitting that installation refused a
+valid source-resource image before any native call.
+
+Generated binder IDs are local to each original lifecycle forest. Image encoding
+must keep a separate binder cache for each forest and the executable program.
+Sharing that cache reused an acquisition parameter's `Int` metadata for a finish
+parameter with the same local ID and type `(State, D)`; independent restored Core
+correctly rejected it. Wire records retain each forest's typed binders, and
+restoration checks them in their original lexical scope.
+
 Writing binary image/fact payloads as hexadecimal Rust arrays inflated each
 encoded byte into five text bytes plus indentation, then charged reserve and
 write for that expanded text. The imported-helper C program exhausted the
@@ -139,6 +155,20 @@ encoding and reconstruction. The public 42/43 nested-row regression exposed
 the old artificial cutoff; the existing linked hosts also exercise 43 nested
 phantom rows. Work charges, backward-reference checks and the original depth
 allowance remain unchanged.
+
+The complete source-owner witness exposed executable structural tables in the
+independently emitted declaration expectations. Seal shared-table prefix lengths
+after original registry and method-catalog encoding, before executable graph
+encoding. Expectations retain every original native, owner, resource, interface
+and global declaration fact while omitting subsequently appended Core records.
+The private wire carries checked prefix lengths; independent byte correspondence
+authenticates them. The construction image and final Core validation remain
+complete, and work limits remain unchanged. The measured expectation payload
+fell from 90,992 to 12,748 bytes. Cumulative decoding, correspondence,
+reconstruction and library admission fell from 439,090 to 273,893 work units,
+before member bindings and runtime program admission. These measurements precede
+the added fixed decode-bound checks; the existing full image witness now uses one
+default startup allowance across those phases.
 
 The deeper row witness also exposed a separate startup cost: correspondence
 serialized the construction image's facts into an owned buffer solely to
