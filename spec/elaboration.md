@@ -155,12 +155,16 @@ contracts, the complete interpreted instances and the original owner and symbol
 allocations. `scope` retains Scope/Completion roles; `acquired_only` checks the
 instantiated Success/Failure fields without a completion value. Capture-value
 analysis preserves the same report shape and keeps finish as a cleanup obligation.
-The current provider association has one method without local type
-parameters, whose domain is the resource handle, and one Unit-domain operation
-with the same result type. Both declarations retain their original interface
-and effect parameter identities and complete applications. This bounded
-association does not establish forwarding evidence for other method or
-operation shapes.
+The provider association matches each interface method to one associated effect
+operation by exact name, independent of declaration order. After substituting
+each declaration's complete Type/EffectRow arguments, each method has the
+operation's exact domain and result and the single associated effect instance as
+its effect row. Method-local type parameters remain unsupported. Both declarations
+retain their original interface and effect parameter identities and complete
+applications. Acquisition supplies checked lexical forwarding evidence for
+ordinary method calls and constrained helpers; independent Core checks the
+generated binders, unchanged operands, operation/effect identity and correspondence
+with the original scope.
 
 The original acquisition proof accepts publication only from a witnessed
 nonnull native acquisition. Its private payload and refusal result cannot carry

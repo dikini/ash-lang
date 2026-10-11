@@ -47,6 +47,21 @@ pins, commands and native observations; one Cargo job and final integrated gate.
 
 ## Discoveries
 
+The private image carries associated method spellings, lexical forwarding,
+complete applications, helper occurrence selections and original evidence
+anchors. Executable forwarding records are reconstructed and independently
+checked before provider binding; passive native facts are compared separately
+with the generated host's original EXPECTED_FACTS. A forwarding-only corruption
+can preserve that comparison and still fail independent Core admission. A
+changed original method name fails the fact comparison first. Neither boundary
+rechecks Ash source or selects an implementation at startup.
+
+Selective imports and facades retain provenance-bound source headers and a
+passive implemented-interface census even when the resource name or prior
+implementation is not exported. The census only rejects forbidden association;
+it carries no method body, implementation selection or executable permission.
+Explicit source import routes still govern available names.
+
 The evaluator and private Core stay the execution engine. Bridge generation
 replaces the experiment's handwritten executable adapters; header verification
 is optional and cannot repair missing source contracts.
@@ -71,9 +86,9 @@ Program preparation owns its generated host inputs and native configuration.
 Linking consumes that completed phase, rather than encoding or checking the
 source graph again. Generated source and tool logs remain reviewable; executable
 publication follows successful linking. The private construction carrier has
-bounded Pure, scalar/void Effect and dependency-free opaque source-resource
-profiles. The latter retains original defining forests once and exact per-scope
-copying claims. Restore first admits the original templates, then independently
+bounded Pure, scalar/void Effect and dependency-free opaque or initialized-byte
+source-resource profiles. The latter retains original defining forests once and
+exact per-scope copying claims. Restore first admits the original templates, then independently
 validates each specialized scope before binding. These profiles do not complete
 foreign access, retained owners or the library deliveries.
 

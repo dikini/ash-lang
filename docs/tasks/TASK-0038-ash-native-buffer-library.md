@@ -41,6 +41,13 @@ calls and connected regression evidence precede the retaining-branch merge.
 
 ## Discoveries
 
+Multiple source provider methods now have the associated operations' exact
+value types and effect row, with checked lexical forwarding and selected-handler
+access authentication. This supplies a common provider prerequisite for the
+buffer port. Byte read/write policy and primitives, outward owned discard,
+accounting parity and removal of builtin buffer authority remain unimplemented
+by this delivery.
+
 Preserving result shape requires the accepted acquired_only codec; wrapping
 builtin behavior in Scope would be an unintended semantic change.
 

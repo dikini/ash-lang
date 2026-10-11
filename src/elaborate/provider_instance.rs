@@ -3301,6 +3301,17 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         forwarding: &ProviderForwardings,
         context: &mut TypeContext,
     ) -> Result<(TypedBinder, Option<usize>), TypeError> {
+        let handle_type = IterativeTypeOwner::new(actuals.access_type(fact, &mut self.type_work)?);
+        self.enter_resource_forwarding_body(resource, handle_type, forwarding, context)
+    }
+
+    pub(super) fn enter_resource_forwarding_body(
+        &mut self,
+        resource: &ResolvedProviderResourceExpr,
+        handle_type: IterativeTypeOwner,
+        forwarding: &ProviderForwardings,
+        context: &mut TypeContext,
+    ) -> Result<(TypedBinder, Option<usize>), TypeError> {
         if !F::EFFECTS || forwarding.methods.len() != resource.forwarding.len() {
             return Err(invalid_state());
         }
@@ -3318,7 +3329,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     .map(|method| (resource.provider, method.method, method.binder)),
             );
         }
-        let handle_type = IterativeTypeOwner::new(actuals.access_type(fact, &mut self.type_work)?);
         self.type_work
             .charge(
                 forwarding

@@ -4725,7 +4725,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             ResolvedDeclarationIndex::Global(_) | ResolvedDeclarationIndex::Implementation(_)
         ) || !F::EFFECTS
             || (module.resources().is_empty()
-                && module.imported_facts().resource_facts().next().is_none())
+                && module.source_resources().is_empty()
+                && module.imported_facts().resource_facts().next().is_none()
+                && module
+                    .imported_facts()
+                    .source_resource_facts()
+                    .next()
+                    .is_none())
         {
             return self.step_module_body_checking_with_roots(
                 module,
@@ -24680,6 +24686,42 @@ fn candidate_kind_environment<'a>(
                 }
             }
             match node {
+                crate::types::TypeStructureNode::Type(Type::ResourceApply(resource, _)) => {
+                    budget.charge(1).map_err(|_| UnificationFailure::Resource)?;
+                    let family = registry
+                        .resource_signature_family(*resource)
+                        .ok_or(UnificationFailure::Invariant)?;
+                    if !environments.contains_nominal(family) {
+                        let owner = crate::resolved::OwnerId::Resource(*resource);
+                        let parameters = registry
+                            .defining_owner_parameters(owner)
+                            .ok_or(UnificationFailure::Invariant)?;
+                        registry
+                            .authenticate_owner_signature(owner, Some(family), parameters, budget)
+                            .map_err(|failure| {
+                                if failure.is_resource_exhaustion() {
+                                    UnificationFailure::Resource
+                                } else {
+                                    UnificationFailure::Invariant
+                                }
+                            })?;
+                        let origin = match registry
+                            .nominal_kind(family)
+                            .ok_or(UnificationFailure::Invariant)?
+                        {
+                            CanonicalNominalKind::RowBearingResource {
+                                resource: original,
+                                origin,
+                            } if original == *resource => origin,
+                            _ => return Err(UnificationFailure::Invariant),
+                        };
+                        environments
+                            .insert_row_resource_family(
+                                family, *resource, parameters, origin, budget,
+                            )
+                            .map_err(kind_failure_for_unification)?;
+                    }
+                }
                 crate::types::TypeStructureNode::Type(Type::Nominal(identity))
                     if !environments.contains_nominal(*identity) =>
                 {

@@ -762,7 +762,11 @@ impl CoreOperationFamily for EffectOperationFamily {
                 return rewrite_kinded_arguments(&mut access.arguments, rewrite, charge);
             }
             EffectExprKind::Operation(EffectOperation::SourceResourceScope(_)) => {
-                return Err(super::BuildError::InvalidPayload);
+                // Instance construction normalizes this metadata before freezing
+                // its original-forest certificate. Later enclosing normalization
+                // leaves it intact; independent admission compares the frozen
+                // payload against the exact original substitutions and copies.
+                return Ok(());
             }
             EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
                 charge(4)?;

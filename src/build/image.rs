@@ -446,6 +446,8 @@ pub(crate) struct PureImage {
     method_variables: Vec<TypeVariableIdentity>,
     inherited_parameters: Vec<InheritedParameterRecord>,
     main_method_catalog: Option<u32>,
+    source_method_evidence: Vec<u8>,
+    source_method_anchors: Option<Slice>,
 
     scalar_preflights: Vec<ScalarPreflightRecord>,
     call_codecs: Vec<CallCodecRecord>,
@@ -578,16 +580,11 @@ fn encode_program<'work, F: crate::core::dialect::CoreOperationFamily>(
 ) -> Result<Encoder<'work>, ImageFailure> {
     let registry = program.registry();
     let catalog = program.method_evidence();
-    if (!effect_dialect && !catalog.methods().is_empty())
-        || !catalog.lexical_owners().is_empty()
-        || !catalog.implementation_owners().is_empty()
-        || !catalog.domains().is_empty()
-        || !catalog.occurrences().is_empty()
-        || !catalog.final_occurrence_owners().is_empty()
-        || !catalog.adapters().is_empty()
-        || !catalog.concrete_sources().is_empty()
-        || !catalog.expectations().is_empty()
-        || !program.method_evidence_anchors().is_empty()
+    if !effect_dialect
+        && (!catalog.methods().is_empty()
+            || !catalog.lexical_owners().is_empty()
+            || !catalog.occurrences().is_empty()
+            || !program.method_evidence_anchors().is_empty())
     {
         return Err(ImageFailure::Unsupported(Unsupported::MethodEvidence));
     }
@@ -732,6 +729,10 @@ fn encode_program<'work, F: crate::core::dialect::CoreOperationFamily>(
         return Err(ImageFailure::InvalidRecord);
     }
     encoder.image.root = encoder.node(program.root())?;
+    if effect_dialect {
+        encoder.image.source_method_anchors =
+            Some(encoder.encode_source_method_anchors(catalog, program.method_evidence_anchors())?);
+    }
     Ok(encoder)
 }
 
@@ -1272,7 +1273,7 @@ struct Decoder<'a> {
 
 // A private layout marker for the matching compiler/runtime only. Neither the
 // embedded byte sequence nor its numeric tags promise compatibility.
-const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x09";
+const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x0a";
 
 enum WireOutput<'a> {
     Encoded(Vec<u8>),
@@ -1467,12 +1468,14 @@ macro_rules! wire_struct {
     };
 }
 
+#[path = "source_forwarding_image.rs"]
+mod source_forwarding_image;
 #[path = "source_resource_image.rs"]
 mod source_resource_image;
 use source_resource_image::{
     BinderPairRecord, ClauseRecord, EncodedSourceTemplate, FreshTypeRecord, HandlerRecord,
-    InheritedParameterRecord, InterfaceOwnerRecord, MethodCatalogRecord, MethodRecord,
-    NodePairRecord, PlainPairRecord, ResourceArgumentRecord, ResourceEffectRecord,
+    InheritedParameterRecord, InterfaceIdentity, InterfaceOwnerRecord, MethodCatalogRecord,
+    MethodRecord, NodePairRecord, PlainPairRecord, ResourceArgumentRecord, ResourceEffectRecord,
     ResourceHeaderRecord, ResourceIdentity, RestoredSourceTemplate, SourceCopyRecord,
     SourceScopeRecord, SourceSubstitutionRecord, SourceTemplateRecord, TemplateGraphRecord,
 };
@@ -2096,6 +2099,17 @@ impl PureImage {
         )?)?;
         self.main_method_catalog.write(writer)?;
         writer.table(if executable {
+            &self.source_method_evidence
+        } else {
+            &[]
+        })?;
+        (if executable {
+            self.source_method_anchors
+        } else {
+            None
+        })
+        .write(writer)?;
+        writer.table(if executable {
             &self.source_arguments
         } else {
             &[]
@@ -2231,6 +2245,8 @@ impl PureImage {
             method_variables: reader.table()?,
             inherited_parameters: reader.table()?,
             main_method_catalog: Wire::read(&mut reader)?,
+            source_method_evidence: reader.byte_table()?,
+            source_method_anchors: Wire::read(&mut reader)?,
             source_arguments: reader.table()?,
             source_handlers: reader.table()?,
             source_clauses: reader.table()?,
@@ -2304,6 +2320,8 @@ impl PureImage {
             || !self.method_variables.is_empty()
             || !self.inherited_parameters.is_empty()
             || self.main_method_catalog.is_some()
+            || !self.source_method_evidence.is_empty()
+            || self.source_method_anchors.is_some()
             || !self.source_arguments.is_empty()
             || !self.source_handlers.is_empty()
             || !self.source_clauses.is_empty()
@@ -3503,6 +3521,172 @@ main () = match perform Measure.call 42 {
     }
 
     #[test]
+    fn source_forwarding_image_restores_helper_evidence_and_rejects_executable_forgery() {
+        let tree = SourceTree::new();
+        tree.write(
+            "owner.ash",
+            include_str!("../../tests/fixtures/source-owner/forwarding_owner.ash"),
+        );
+        tree.write(
+            "helpers.ash",
+            include_str!("../../tests/fixtures/source-owner/forwarding_helpers.ash"),
+        );
+        tree.write(
+            "entry.ash",
+            include_str!("../../tests/fixtures/source-owner/forwarding_helper_entry.ash"),
+        );
+        let compiled = compile_path(tree.configuration()).unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let mut work = TypeWorkBudget::default();
+        let build =
+            encode_effect_for_build(program, provenance, "x86_64-unknown-linux-gnu", &mut work)
+                .unwrap();
+        let bytes = build.image.encode_bytes(&mut work).unwrap();
+        let expected = build.image.encode_native_expectations(&mut work).unwrap();
+        let library = &build.libraries[0];
+        let library_metadata = (library.image_library, library.module, library.ordinal);
+        let coordinates = build
+            .bridges
+            .iter()
+            .map(|bridge| super::super::PrivateNativeCoordinates {
+                image_library: library.image_library,
+                library_module: library.module,
+                library_ordinal: library.ordinal,
+                image_symbol: bridge.image_symbol,
+                symbol_index: bridge.symbol_index,
+                operation_module: bridge.operation_module,
+                operation_effect: bridge.operation_effect,
+                operation_local: bridge.operation_local,
+            })
+            .collect::<Vec<_>>();
+        drop(build);
+        drop(compiled);
+        drop(tree);
+        let restore = |work: &mut TypeWorkBudget| {
+            let image = PureImage::decode_bytes(&bytes, work)?;
+            image.compare_native_expectations(&expected, work)?;
+            image.restore_effect(work)
+        };
+        let mut normal = TypeWorkBudget::default();
+        restore(&mut normal)
+            .expect("source-free helper and forwarding records restore under normal limits");
+        let cost = normal.used();
+        assert!(cost < 327_680);
+        let mut short = TypeWorkBudget::with_limit(cost - 1);
+        assert!(matches!(restore(&mut short), Err(ImageFailure::Resource)));
+        for _ in 0..2 {
+            let mut exact = TypeWorkBudget::with_limit(cost);
+            restore(&mut exact).unwrap();
+            assert_eq!(exact.used(), cost);
+        }
+        println!(
+            "source forwarding image: image_bytes={}, fact_bytes={}, restore_work={cost}",
+            bytes.len(),
+            expected.len()
+        );
+        let static_expected: &'static [u8] = Box::leak(expected.clone().into_boxed_slice());
+        fn forbidden_provider() -> super::super::PrivateNativeBridge {
+            panic!("forged forwarding must fail before native provider selection");
+        }
+        let members = coordinates
+            .into_iter()
+            .map(|coordinates| super::super::PrivateNativeMember {
+                coordinates,
+                provider: forbidden_provider,
+            })
+            .collect::<Vec<_>>();
+        let libraries = [super::super::PrivateNativeLibrary {
+            image_library: library_metadata.0,
+            module: library_metadata.1,
+            ordinal: library_metadata.2,
+            members: &members,
+        }];
+        for change in 0..5 {
+            let mut corrupt =
+                PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+            let forwarding = corrupt.source_scopes[0].forwardings;
+            let start = forwarding.start as usize;
+            let data = &mut corrupt.source_method_evidence;
+            assert_eq!(
+                u32::from_le_bytes(data[start + 8..start + 12].try_into().unwrap()),
+                2
+            );
+            match change {
+                0 => data[start + 8..start + 12].copy_from_slice(&0u32.to_le_bytes()),
+                1 => {
+                    // Duplicate the exact first method and binder record.
+                    let first: [u8; 20] = data[start + 12..start + 32].try_into().unwrap();
+                    data[start + 32..start + 52].copy_from_slice(&first);
+                }
+                2 => {
+                    // Swap only method identities, preserving each binder.
+                    let first: [u8; 12] = data[start + 12..start + 24].try_into().unwrap();
+                    let second: [u8; 12] = data[start + 32..start + 44].try_into().unwrap();
+                    data[start + 12..start + 24].copy_from_slice(&second);
+                    data[start + 32..start + 44].copy_from_slice(&first);
+                }
+                3 => data[start + 4..start + 8].copy_from_slice(&u32::MAX.to_le_bytes()),
+                _ => corrupt.source_method_anchors = None,
+            }
+            // These are executable claims, deliberately outside EXPECTED_FACTS.
+            corrupt
+                .compare_native_expectations(&expected, &mut TypeWorkBudget::default())
+                .unwrap();
+            assert!(
+                corrupt
+                    .restore_effect(&mut TypeWorkBudget::default())
+                    .is_err(),
+                "executable forwarding claim {change}"
+            );
+            let forged = corrupt
+                .encode_bytes(&mut TypeWorkBudget::default())
+                .unwrap();
+            let result = super::super::__run_private_effect_image(
+                &super::super::runtime_fingerprint(),
+                &forged,
+                static_expected,
+                &libraries,
+            );
+            assert!(
+                matches!(
+                    result,
+                    Err(super::super::PrivateProgramFailure(
+                        super::super::PrivateFailure::Image(_)
+                    ))
+                ),
+                "claim {change}: {result:?}"
+            );
+        }
+        let mut corrupt = PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+        let method = corrupt
+            .source_methods
+            .iter()
+            .find(|method| method.spelling.get(&corrupt.bytes).unwrap() == b"read")
+            .unwrap();
+        corrupt.bytes[method.spelling.start as usize] = b'x';
+        // Original associated method spelling is protected native/header metadata.
+        assert!(
+            corrupt
+                .compare_native_expectations(&expected, &mut TypeWorkBudget::default())
+                .is_err()
+        );
+        let forged = corrupt
+            .encode_bytes(&mut TypeWorkBudget::default())
+            .unwrap();
+        assert!(matches!(
+            super::super::__run_private_effect_image(
+                &super::super::runtime_fingerprint(),
+                &forged,
+                static_expected,
+                &libraries,
+            ),
+            Err(super::super::PrivateProgramFailure(
+                super::super::PrivateFailure::Image(ImageFailure::InvalidRecord)
+            ))
+        ));
+    }
+
+    #[test]
     fn initialized_byte_owner_image_preserves_extent_and_rejects_changed_original_facts() {
         let tree = SourceTree::new();
         let owner = include_str!("../../tests/fixtures/source-owner/owner.ash")
@@ -3517,7 +3701,7 @@ main () = match perform Measure.call 42 {
             )
             .replace(".call size {", ".call (size, 7) {");
         tree.write("owner.ash", &owner);
-        tree.write("entry.ash", "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Unit, Int>\nmain () = resource Owner.Probe<{}, R, {}> owner = 42 {\n    perform Owner.ProbeOps<R>.read ()\n}\n");
+        tree.write("entry.ash", "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Unit, Int>\nmain () = resource Owner.Probe<{}, R, {}> owner = 42 {\n    Owner.read owner\n}\n");
         let compiled = compile_path(tree.configuration()).unwrap();
         let (program, provenance) = compiled.effect_build_input().unwrap();
         let mut work = TypeWorkBudget::default();
@@ -7328,8 +7512,10 @@ impl PureImage {
             self.main_method_catalog
                 .ok_or(ImageFailure::InvalidRecord)?,
         )?;
-        let mut builder =
-            crate::core::EffectCoreBuilder::with_registry_and_method_evidence(registry, catalog)?;
+        let mut builder = crate::core::EffectCoreBuilder::with_registry_and_method_evidence(
+            registry,
+            Arc::clone(&catalog),
+        )?;
         builder.reserve_image_reconstruction_storage(
             self.nodes.len(),
             self.binders.len(),
@@ -7360,6 +7546,13 @@ impl PureImage {
             )?;
             nodes.push(node);
         }
+        decoder.source_method_anchors(
+            &mut builder,
+            &nodes,
+            &catalog,
+            self.source_method_anchors
+                .ok_or(ImageFailure::InvalidRecord)?,
+        )?;
         let unchecked = builder.finish_provider_draft(*get(&nodes, self.root)?, decoder.work)?;
         let mut sources = Vec::new();
         let mut module_sources = Vec::new();

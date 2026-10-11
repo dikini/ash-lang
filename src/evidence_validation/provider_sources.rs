@@ -114,20 +114,26 @@ fn authenticate_source_resource<'a>(
         .interface(program, fact.provider.interface.id)
         .ok_or_else(|| unknown(span))?;
     charge(budget, source.forwarding.len(), span)?;
-    if interface.methods.len() != 1 || source.forwarding.len() != 1 {
+    if interface.methods.len() != source.forwarding.len() || interface.methods.is_empty() {
         return Err(invalid_root(span));
     }
-    let forwarding = &source.forwarding[0];
-    if forwarding.method != interface.methods[0].id
-        || forwarding.binder.id.module() != Some(source.provider.module())
-        || forwarding.parameter.id.module() != Some(source.provider.module())
-        || forwarding.binder.id == forwarding.parameter.id
-        || forwarding.binder.id == source.handle.id
-        || forwarding.parameter.id == source.handle.id
-        || forwarding.binder.origin.primary_span() != span
-        || forwarding.parameter.origin.primary_span() != span
-    {
-        return Err(invalid_root(span));
+    let mut binders = std::collections::HashSet::new();
+    charge(budget, 1 + source.forwarding.len() * 2, span)?;
+    binders
+        .try_reserve(1 + source.forwarding.len() * 2)
+        .map_err(|_| resource(span))?;
+    binders.insert(source.handle.id);
+    for (method, forwarding) in interface.methods.iter().zip(&source.forwarding) {
+        if forwarding.method != method.id
+            || forwarding.binder.id.module() != Some(source.provider.module())
+            || forwarding.parameter.id.module() != Some(source.provider.module())
+            || !binders.insert(forwarding.binder.id)
+            || !binders.insert(forwarding.parameter.id)
+            || forwarding.binder.origin.primary_span() != span
+            || forwarding.parameter.origin.primary_span() != span
+        {
+            return Err(invalid_root(span));
+        }
     }
     let expected = preceding_equation_row(
         program, registry, scope, locals, local_head, budget, work, span,
@@ -248,13 +254,17 @@ pub(super) enum LinkedLexicalSource<'a> {
         &'a crate::resolved::ResolvedLexicalEvidence,
         OriginalLexicalContext,
     ),
-    Provider(&'a ResolvedProviderResourceExpr),
+    Provider(
+        &'a ResolvedProviderResourceExpr,
+        OriginalLexicalContext,
+        Span,
+    ),
 }
 impl<'a> LinkedLexicalSource<'a> {
     pub(super) fn id(self) -> crate::interface::LexicalEvidenceId {
         match self {
             Self::Declared(source, _) => source.id,
-            Self::Provider(source) => source.provider,
+            Self::Provider(source, _, _) => source.provider,
         }
     }
     pub(super) fn application(
@@ -263,7 +273,7 @@ impl<'a> LinkedLexicalSource<'a> {
     ) -> Result<&'a InterfaceApplication, EvidenceValidationFailure> {
         match self {
             Self::Declared(source, _) => source.checked.get().map(|checked| &checked.application),
-            Self::Provider(source) => source
+            Self::Provider(source, _, _) => source
                 .prepared
                 .get()
                 .map(|plan| plan.forwarding_application()),
@@ -327,15 +337,52 @@ impl<'a> LinkedLexicalSource<'a> {
                 }
                 Ok(true)
             }
-            Self::Provider(_) => {
-                let actual = self.application(span)?;
-                same_application_parts_charged(
-                    actual,
-                    application.interface(),
-                    application.arguments(),
-                    budget,
-                    span,
-                )
+            Self::Provider(source, original, occurrence_span) => {
+                if program
+                    .registry()
+                    .source_resource_fact(source.definition)
+                    .is_some()
+                {
+                    let expected = preceding_equation_row(
+                        program,
+                        registry,
+                        EvidenceScope {
+                            expected_equation: original.equation,
+                            owner: original.owner,
+                            ..scope
+                        },
+                        scope.local_scopes,
+                        original.local_head,
+                        budget,
+                        work,
+                        span,
+                    )?;
+                    let (_, actual) = source_resource_application(
+                        program,
+                        source,
+                        expected.as_ref(),
+                        budget,
+                        work,
+                        occurrence_span,
+                        span,
+                    )?;
+                    same_application_parts_charged(
+                        &actual,
+                        application.interface(),
+                        application.arguments(),
+                        budget,
+                        span,
+                    )
+                } else {
+                    let actual = self.application(span)?;
+                    same_application_parts_charged(
+                        actual,
+                        application.interface(),
+                        application.arguments(),
+                        budget,
+                        span,
+                    )
+                }
             }
         }
     }
@@ -1086,6 +1133,177 @@ pub(super) fn lexical_context_rows(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub(super) fn source_resource_application(
+    program: &ResolvedModuleProgram,
+    source: &ResolvedProviderResourceExpr,
+    expected: Option<&crate::types::EffectRow>,
+    budget: &mut InterfaceConstraintBudget,
+    work: &mut TypeWorkBudget,
+    occurrence_span: Span,
+    span: Span,
+) -> Result<(Box<[KindedArgument]>, InterfaceApplication), EvidenceValidationFailure> {
+    // A method occurrence has a narrower diagnostic span than its supplying
+    // resource occurrence. Authenticate the exact original scope expression,
+    // then report a rejected lexical claim at the method use.
+    let header =
+        authenticate_source_resource_identity(program, source, budget, work, occurrence_span)
+            .map_err(|failure| match failure.reason {
+                super::EvidenceValidationReason::ConstraintResourceExhausted => resource(span),
+                super::EvidenceValidationReason::TypeResourceExhausted => type_resource(span),
+                _ => invalid_root(span),
+            })?;
+    let fact = &header.original;
+    let written = source
+        .arguments
+        .as_ref()
+        .ok_or_else(|| invalid_root(span))?;
+    if written.len().checked_add(1) != Some(fact.parameters.len()) {
+        return Err(invalid_root(span));
+    }
+    let mut replacements = OwnerReplacements {
+        types: HashMap::new(),
+        rows: HashMap::new(),
+    };
+    work.charge(fact.parameters.len())
+        .map_err(|_| type_resource(span))?;
+    replacements
+        .types
+        .try_reserve(fact.parameters.len())
+        .map_err(|_| type_resource(span))?;
+    replacements
+        .rows
+        .try_reserve(fact.parameters.len())
+        .map_err(|_| type_resource(span))?;
+    let mut actuals = Vec::new();
+    actuals
+        .try_reserve_exact(fact.parameters.len())
+        .map_err(|_| type_resource(span))?;
+    let mut written = written.iter();
+    for (position, formal) in fact.parameters.iter().enumerate() {
+        let argument = if position == fact.owned_position {
+            KindedArgument::TypeArg(Type::Variable(source.identity.id))
+        } else {
+            let source = written.next().ok_or_else(|| invalid_root(span))?;
+            crate::types::qualify_kinded_argument_with_expected_row_with_budget(
+                &source.ty, expected, work,
+            )
+            .map_err(|_| type_resource(span))?
+            .map_err(|_| invalid_root(span))?
+            .map_or_else(
+                || {
+                    clone_kinded_argument_with_budget(&source.ty, work)
+                        .map_err(|_| type_resource(span))
+                },
+                Ok,
+            )?
+        };
+        let argument = crate::types::IterativeArgumentOwner::new(argument);
+        if replacements.insert_discarding_previous(
+            formal.id,
+            clone_kinded_argument_with_budget(&argument, work).map_err(|_| type_resource(span))?,
+        ) {
+            return Err(invalid_root(span));
+        }
+        actuals.push(argument);
+    }
+    let mut arguments = Vec::new();
+    work.charge(fact.provider.arguments.len())
+        .map_err(|_| type_resource(span))?;
+    arguments
+        .try_reserve_exact(fact.provider.arguments.len())
+        .map_err(|_| type_resource(span))?;
+    for argument in &fact.provider.arguments {
+        let argument = crate::types::substitute_kinded_argument_with(
+            &argument.ty,
+            &replacements.types,
+            &replacements.rows,
+            |cells| work.charge(cells),
+        )
+        .map_err(|_| type_resource(span))?
+        .map_err(|_| invalid_root(span))?;
+        arguments.push(crate::types::IterativeArgumentOwner::new(argument));
+    }
+    let mut retained = Vec::new();
+    work.charge(actuals.len())
+        .map_err(|_| type_resource(span))?;
+    retained
+        .try_reserve_exact(actuals.len())
+        .map_err(|_| type_resource(span))?;
+    retained.extend(
+        actuals
+            .into_iter()
+            .map(crate::types::IterativeArgumentOwner::into_inner),
+    );
+    let mut application = Vec::new();
+    work.charge(arguments.len())
+        .map_err(|_| type_resource(span))?;
+    application
+        .try_reserve_exact(arguments.len())
+        .map_err(|_| type_resource(span))?;
+    application.extend(
+        arguments
+            .into_iter()
+            .map(crate::types::IterativeArgumentOwner::into_inner),
+    );
+    Ok((
+        retained.into_boxed_slice(),
+        InterfaceApplication::new_kinded(
+            fact.provider.interface.id,
+            application.into_boxed_slice(),
+        ),
+    ))
+}
+
+pub(super) fn retain_source_resource_lexical_owners(
+    program: &ResolvedModuleProgram,
+    source: &ResolvedProviderResourceExpr,
+    expected: Option<&crate::types::EffectRow>,
+    span: Span,
+    owners: &mut Vec<crate::core::dialect::MethodEvidenceLexicalOwner>,
+    budget: &mut InterfaceConstraintBudget,
+    work: &mut TypeWorkBudget,
+) -> Result<(), EvidenceValidationFailure> {
+    let (arguments, application) =
+        source_resource_application(program, source, expected, budget, work, span, span)?;
+    let arguments =
+        crate::types::IterativeTypeOwner::new(Type::ResourceApply(source.definition, arguments));
+    let Type::ResourceApply(_, arguments) = &*arguments else {
+        unreachable!()
+    };
+    charge(budget, owners.len() + source.forwarding.len(), span)?;
+    if owners.iter().any(|owner| owner.source == source.provider) {
+        return Err(invalid_root(span));
+    }
+    owners
+        .try_reserve(source.forwarding.len())
+        .map_err(|_| resource(span))?;
+    for forwarding in &source.forwarding {
+        owners.push(crate::core::dialect::MethodEvidenceLexicalOwner {
+            resource: Some(crate::core::dialect::MethodEvidenceResourceOwner::Provider(
+                crate::core::dialect::ProviderEvidenceOwner {
+                    definition: source.definition,
+                    family: source.family,
+                    identity: source.identity.id,
+                    arguments: crate::types::clone_kinded_arguments_with_budget(
+                        arguments.iter(),
+                        work,
+                    )
+                    .map_err(|_| type_resource(span))?,
+                },
+            )),
+            source_parameters: Box::new([]),
+            source: source.provider,
+            method: forwarding.method,
+            binder: forwarding.binder.id,
+            application: application
+                .clone_with_budget(work)
+                .map_err(|_| type_resource(span))?,
+            captures: Box::new([]),
+        });
+    }
+    Ok(())
+}
+
 pub(super) fn retain_provider_lexical_owners(
     program: &ResolvedModuleProgram,
     source: &ResolvedProviderResourceExpr,

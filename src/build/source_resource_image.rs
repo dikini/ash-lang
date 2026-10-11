@@ -162,6 +162,7 @@ pub(super) struct SourceScopeRecord {
     finish_copy: u32,
     handler_copy: u32,
     pub(super) interpretations: Slice,
+    pub(super) forwardings: Slice,
 }
 
 wire_struct!(ResourceIdentity, 8, module, local);
@@ -226,7 +227,7 @@ wire_struct!(
 );
 wire_struct!(
     SourceScopeRecord,
-    81,
+    89,
     template,
     arguments,
     identity,
@@ -244,12 +245,14 @@ wire_struct!(
     acquire_copy,
     finish_copy,
     handler_copy,
-    interpretations
+    interpretations,
+    forwardings
 );
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct MethodCatalogRecord {
     methods: Slice,
+    evidence: Slice,
 }
 #[derive(Clone, Copy, Debug)]
 pub(super) struct MethodRecord {
@@ -259,6 +262,7 @@ pub(super) struct MethodRecord {
     inherited_parameters: Slice,
     parameters: Slice,
     value_type: u32,
+    pub(super) spelling: Slice,
 }
 #[derive(Clone, Copy, Debug)]
 pub(super) enum OwnerIdentity {
@@ -272,16 +276,17 @@ pub(super) struct InheritedParameterRecord {
     slot: u32,
     binder: TypeVariableIdentity,
 }
-wire_struct!(MethodCatalogRecord, 8, methods);
+wire_struct!(MethodCatalogRecord, 16, methods, evidence);
 wire_struct!(
     MethodRecord,
-    40,
+    48,
     interface,
     local,
     interface_parameters,
     inherited_parameters,
     parameters,
-    value_type
+    value_type,
+    spelling
 );
 wire_struct!(InheritedParameterRecord, 18, owner, slot, binder);
 impl Wire for OwnerIdentity {
@@ -337,7 +342,7 @@ impl Encoder<'_> {
             local: id.ordinal(),
         })
     }
-    fn interface_identity(
+    pub(super) fn interface_identity(
         &mut self,
         id: crate::interface::InterfaceId,
     ) -> Result<InterfaceIdentity, ImageFailure> {
@@ -712,6 +717,7 @@ impl Encoder<'_> {
                 )?;
             }
             let interpretations = Slice::of(&self.image.interpretations, start)?;
+            let forwardings = self.encode_source_forwardings(scope.lexical, &scope.forwardings)?;
             let record = SourceScopeRecord {
                 template,
                 arguments,
@@ -732,6 +738,7 @@ impl Encoder<'_> {
                 finish_copy: copies[1],
                 handler_copy: copies[2],
                 interpretations,
+                forwardings,
             };
             push(&mut self.image.source_scopes, record, self.work)
         })();
@@ -855,7 +862,7 @@ impl Decoder<'_> {
             id.local,
         ))
     }
-    fn interface_identity(
+    pub(super) fn interface_identity(
         &mut self,
         id: InterfaceIdentity,
     ) -> Result<crate::interface::InterfaceId, ImageFailure> {
@@ -1334,6 +1341,7 @@ impl Decoder<'_> {
         for argument in guarded_arguments {
             arguments.push(argument.into_inner());
         }
+        let (lexical, forwardings) = self.source_forwardings(record.forwardings)?;
         let scope = SourceResourceScopeNode::new(
             Arc::clone(&template.template),
             arguments.into_boxed_slice(),
@@ -1346,6 +1354,8 @@ impl Decoder<'_> {
             handle,
             handler,
             crate::types::ComputationType::new(output_value.into_inner(), output_effects),
+            lexical,
+            forwardings,
             [
                 acquire_copy.claim(),
                 finish_copy.claim(),
@@ -1484,24 +1494,11 @@ fn same_instance(
     Ok(true)
 }
 
-fn methods_only(catalog: &crate::core::dialect::MethodEvidenceCatalog) -> bool {
-    catalog.lexical_owners().is_empty()
-        && catalog.implementation_owners().is_empty()
-        && catalog.domains().is_empty()
-        && catalog.occurrences().is_empty()
-        && catalog.final_occurrence_owners().is_empty()
-        && catalog.adapters().is_empty()
-        && catalog.concrete_sources().is_empty()
-        && catalog.expectations().is_empty()
-}
 impl Encoder<'_> {
     pub(super) fn encode_method_catalog(
         &mut self,
         catalog: &Arc<crate::core::dialect::MethodEvidenceCatalog>,
     ) -> Result<u32, ImageFailure> {
-        if !methods_only(catalog) {
-            return Err(ImageFailure::Unsupported(Unsupported::MethodEvidence));
-        }
         let start = self.image.source_methods.len();
         for method in catalog.methods() {
             let interface = self.interface_identity(method.id.interface())?;
@@ -1549,6 +1546,7 @@ impl Encoder<'_> {
             }
             let parameters = Slice::of(&self.image.quantifiers, quantifier_start)?;
             let value_type = self.encode_type(&method.value_type)?;
+            let spelling = append(&mut self.image.bytes, method.spelling.as_bytes(), self.work)?;
             push(
                 &mut self.image.source_methods,
                 MethodRecord {
@@ -1558,14 +1556,17 @@ impl Encoder<'_> {
                     inherited_parameters,
                     parameters,
                     value_type,
+                    spelling,
                 },
                 self.work,
             )?;
         }
+        let evidence = self.encode_source_method_evidence(catalog)?;
         push(
             &mut self.image.method_catalogs,
             MethodCatalogRecord {
                 methods: Slice::of(&self.image.source_methods, start)?,
+                evidence,
             },
             self.work,
         )
@@ -1631,19 +1632,20 @@ impl Decoder<'_> {
                 inherited_parameters: inherited_parameters.into_boxed_slice(),
                 parameters: parameters.into_boxed_slice(),
                 value_type: value_type.into_inner(),
+                spelling: {
+                    let text = self.text(record.spelling)?;
+                    charge(self.work, text.len())?;
+                    let mut spelling = String::new();
+                    spelling
+                        .try_reserve_exact(text.len())
+                        .map_err(|_| ImageFailure::Resource)?;
+                    spelling.push_str(&text);
+                    spelling.into_boxed_str()
+                },
             };
             push(&mut methods, method, self.work)?;
         }
-        charge(self.work, 1)?;
-        Ok(Arc::new(crate::core::dialect::MethodEvidenceCatalog::new(
-            methods,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-        )))
+        self.source_method_evidence(catalog.evidence, methods)
     }
 }
 

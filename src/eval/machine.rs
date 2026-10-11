@@ -2160,6 +2160,7 @@ impl<'runtime> Machine<'runtime> {
         let Some(selected) = selected else {
             return self.interpret_foreign(&effect, operation, value);
         };
+        self.authenticate_source_handler_access(selected, node, instantiation, &value)?;
         let registration = match &self.frames[selected] {
             Frame::HandlerBoundary {
                 node,
