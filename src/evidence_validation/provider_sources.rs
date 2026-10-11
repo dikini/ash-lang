@@ -4,7 +4,7 @@ use super::{
     EvidenceScope, EvidenceValidationFailure, ExpectedEquation, LinkedInterfaceRegistry,
     LinkedLocalScope, OwnerReplacements, charge, invalid_root, linked_selection_key_types,
     map_kind_constraint_failure, map_kind_type_failure, resource, same_application_parts_charged,
-    same_argument_charged, same_type_charged, type_resource, unknown,
+    same_argument_charged, same_binders_charged, same_type_charged, type_resource, unknown,
     validate_argument_with_policy,
 };
 use crate::resolved::{OwnerId, ResolvedProviderResourceExpr};
@@ -20,7 +20,211 @@ use crate::{
         clone_kinded_argument_with_budget, substitute_type_and_row_variables_with,
     },
 };
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
+
+/// Product resource occurrences retain original source code, but supply no
+/// experimental forwarding plan or lexical method selection authority.
+pub(super) fn authenticate_source_resource_identity<'a>(
+    program: &'a ResolvedModuleProgram,
+    source: &ResolvedProviderResourceExpr,
+    budget: &mut InterfaceConstraintBudget,
+    work: &mut TypeWorkBudget,
+    span: Span,
+) -> Result<&'a crate::core::source_resource::CheckedSourceResourceHeader, EvidenceValidationFailure>
+{
+    charge(budget, 1, span)?;
+    let fact = program
+        .registry()
+        .source_resource_fact(source.definition)
+        .ok_or_else(|| invalid_root(span))?;
+    let canonical = program
+        .registry()
+        .type_variable(source.identity.id)
+        .ok_or_else(|| invalid_root(span))?;
+    if source.prepared.get().is_some()
+        || source.family_provider.is_some()
+        || fact.family != source.family
+        || source.identity.kind != Kind::Type
+        || source.identity.id.module() != Some(source.provider.module())
+        || source.handle.id.module() != Some(source.provider.module())
+        || span.cover(source.identity.origin.primary_span()) != Some(span)
+        || span.cover(source.handle.origin.primary_span()) != Some(span)
+        || source.origin.primary_span() != fact.origin.primary_span()
+        || program
+            .registry()
+            .resource_signature_family(source.definition)
+            != Some(source.family)
+        || !same_binders_charged(
+            std::slice::from_ref(canonical),
+            std::slice::from_ref(&source.identity),
+            budget,
+            span,
+        )?
+    {
+        return Err(invalid_root(span));
+    }
+    work.charge(program.groups().len())
+        .map_err(|()| type_resource(span))?;
+    let code = program
+        .groups()
+        .iter()
+        .find(|group| group.module() == source.definition.module())
+        .and_then(|group| group.source_resource_code())
+        .ok_or_else(|| invalid_root(span))?;
+    for header in code.headers() {
+        work.charge(1).map_err(|()| type_resource(span))?;
+        if header.original.id == source.definition {
+            if !Arc::ptr_eq(&header.original, fact) {
+                return Err(invalid_root(span));
+            }
+            return Ok(header);
+        }
+    }
+    Err(invalid_root(span))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_source_resource<'a>(
+    program: &'a ResolvedModuleProgram,
+    registry: &LinkedInterfaceRegistry,
+    source: &ResolvedProviderResourceExpr,
+    scope: EvidenceScope<'_>,
+    locals: &[(LinkedLocalScope<'_>, Option<usize>)],
+    local_head: Option<usize>,
+    environments: &mut KindEnvironments<'a>,
+    budget: &mut InterfaceConstraintBudget,
+    work: &mut TypeWorkBudget,
+    span: Span,
+) -> Result<(), EvidenceValidationFailure> {
+    let header = authenticate_source_resource_identity(program, source, budget, work, span)?;
+    let fact = &header.original;
+    let remaining = source
+        .arguments
+        .as_ref()
+        .ok_or_else(|| invalid_root(span))?;
+    if remaining.len().checked_add(1) != Some(fact.parameters.len())
+        || fact
+            .parameters
+            .get(fact.owned_position)
+            .is_none_or(|owned| owned.kind != Kind::Type)
+    {
+        return Err(invalid_root(span));
+    }
+    let interface = registry
+        .interface(program, fact.provider.interface.id)
+        .ok_or_else(|| unknown(span))?;
+    charge(budget, source.forwarding.len(), span)?;
+    if interface.methods.len() != 1 || source.forwarding.len() != 1 {
+        return Err(invalid_root(span));
+    }
+    let forwarding = &source.forwarding[0];
+    if forwarding.method != interface.methods[0].id
+        || forwarding.binder.id.module() != Some(source.provider.module())
+        || forwarding.parameter.id.module() != Some(source.provider.module())
+        || forwarding.binder.id == forwarding.parameter.id
+        || forwarding.binder.id == source.handle.id
+        || forwarding.parameter.id == source.handle.id
+        || forwarding.binder.origin.primary_span() != span
+        || forwarding.parameter.origin.primary_span() != span
+    {
+        return Err(invalid_root(span));
+    }
+    let expected = preceding_equation_row(
+        program, registry, scope, locals, local_head, budget, work, span,
+    )?
+    .map(|row| crate::types::IterativeArgumentOwner::new(KindedArgument::RowArg(row)));
+    let expected_row = expected.as_ref().map(|owner| {
+        let KindedArgument::RowArg(row) = owner.as_ref() else {
+            unreachable!()
+        };
+        row
+    });
+    work.charge(fact.parameters.len())
+        .map_err(|()| type_resource(span))?;
+    let mut actuals = Vec::new();
+    actuals
+        .try_reserve_exact(fact.parameters.len())
+        .map_err(|_| type_resource(span))?;
+    let mut written = remaining.iter();
+    for (position, formal) in fact.parameters.iter().enumerate() {
+        let argument = if position == fact.owned_position {
+            KindedArgument::TypeArg(Type::Variable(source.identity.id))
+        } else {
+            let written = written.next().ok_or_else(|| invalid_root(span))?;
+            // Inherited actuals are authenticated against the preceding scope;
+            // the new identity cannot enter through another owner position.
+            validate_argument_with_policy(
+                &written.ty,
+                program.registry(),
+                scope.variables,
+                budget,
+                written.span,
+            )?;
+            crate::types::qualify_kinded_argument_with_expected_row_with_budget(
+                &written.ty,
+                expected_row,
+                work,
+            )
+            .map_err(|()| type_resource(span))?
+            .map_err(|_| invalid_root(span))?
+            .map_or_else(
+                || {
+                    clone_kinded_argument_with_budget(&written.ty, work)
+                        .map_err(|()| type_resource(span))
+                },
+                Ok,
+            )?
+        };
+        let argument = crate::types::IterativeArgumentOwner::new(argument);
+        if !matches!(
+            (&formal.kind, argument.as_ref()),
+            (Kind::Type, KindedArgument::TypeArg(_)) | (Kind::EffectRow, KindedArgument::RowArg(_))
+        ) {
+            return Err(invalid_root(span));
+        }
+        actuals.push(argument);
+    }
+    let count = scope
+        .variables
+        .len()
+        .checked_add(1)
+        .ok_or_else(|| resource(span))?;
+    charge(budget, count, span)?;
+    let mut variables = Vec::new();
+    variables
+        .try_reserve_exact(count)
+        .map_err(|_| resource(span))?;
+    variables.extend_from_slice(scope.variables);
+    if variables.contains(&source.identity.id) {
+        return Err(invalid_root(span));
+    }
+    variables.push(source.identity.id);
+    environments
+        .install_canonical_owner_ids(program.registry(), &variables, work, span)
+        .map_err(|failure| map_kind_type_failure(failure, span))?;
+    let arguments = IterativeTypeOwner::new(Type::ResourceApply(
+        source.definition,
+        crate::types::clone_kinded_arguments_with_budget(
+            actuals.iter().map(|argument| argument.as_ref()),
+            work,
+        )
+        .map_err(|()| type_resource(span))?,
+    ));
+    let Type::ResourceApply(_, arguments) = &*arguments else {
+        unreachable!()
+    };
+    let access =
+        IterativeTypeOwner::new(header.access_type(arguments, work).map_err(|failure| {
+            if failure.reason() == crate::core::ValidationReason::Resource {
+                type_resource(span)
+            } else {
+                invalid_root(span)
+            }
+        })?);
+    environments
+        .expect_body_free_exact_kind_with_ledger(&access, &Kind::Type, span, budget)
+        .map_err(|failure| map_kind_constraint_failure(failure, span))
+}
 
 /// Original declaration coordinates, never checker-retained application facts.
 #[derive(Clone, Copy)]
@@ -204,6 +408,24 @@ pub(super) fn authenticate_provider_source<'a>(
     type_work: &mut TypeWorkBudget,
     span: Span,
 ) -> Result<(), EvidenceValidationFailure> {
+    if program
+        .registry()
+        .source_resource_fact(source.definition)
+        .is_some()
+    {
+        return authenticate_source_resource(
+            program,
+            registry,
+            source,
+            scope,
+            locals,
+            local_head,
+            environments,
+            budget,
+            type_work,
+            span,
+        );
+    }
     let plan = source.prepared.get().ok_or_else(|| invalid_root(span))?;
     let definition = plan.definition();
     let canonical = program

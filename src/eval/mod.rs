@@ -21,4 +21,6 @@ pub(crate) use value::ObservedHeap;
 pub use value::{Closure, ExecutableNode, ExecutableProgram, ObservedValue, Value};
 
 #[cfg(test)]
+pub(crate) use machine::source_owner_post_record_test;
+#[cfg(test)]
 pub(crate) use machine::source_scalar_post_record_test;

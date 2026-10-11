@@ -2230,7 +2230,35 @@ impl UnvalidatedProgram {
     }
 }
 
+/// Passive fields borrowed for encoding one recorded Core node.
+type ImageNodeView<'a, F> = (
+    &'a Type,
+    &'a <F as CoreOperationFamily>::Effects,
+    &'a Option<Origin>,
+    &'a <F as CoreOperationFamily>::Kind,
+);
+
 impl<F: CoreOperationFamily> UnvalidatedCoreProgram<F> {
+    /// Passive borrowed records for image encoding. These do not admit execution.
+    pub(crate) fn image_root(&self) -> NodeId {
+        self.root
+    }
+    pub(crate) fn image_node_count(&self) -> usize {
+        self.nodes.len()
+    }
+    pub(crate) fn image_node_index(&self, id: NodeId) -> Option<usize> {
+        if id.arena != self.arena {
+            return None;
+        }
+        let index = id.index().ok()?;
+        (index < self.nodes.len()).then_some(index)
+    }
+    pub(crate) fn image_node(&self, index: usize) -> Option<ImageNodeView<'_, F>> {
+        self.nodes
+            .get(index)
+            .map(|node| (&node.ty, &node.effects, &node.origin, &node.kind))
+    }
+
     pub(crate) fn method_evidence(&self) -> &Arc<MethodEvidenceCatalog> {
         &self.method_evidence
     }

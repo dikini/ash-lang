@@ -325,7 +325,7 @@ fn prepare_conversion_refusal(
     Ok(Value::Location(report))
 }
 
-fn source_integer_leaf<'value>(
+pub(super) fn source_integer_leaf<'value>(
     heap: &'value [HeapCell],
     mut value: &'value Value,
     path: &[usize],

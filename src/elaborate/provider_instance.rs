@@ -28,7 +28,7 @@ use std::{ops::Deref, sync::Arc};
 mod copy;
 pub(crate) mod final_preparation;
 pub(super) use copy::{
-    PreparedScopeCopyPlan, lower_family_scope_copies, lower_final_scope_copies,
+    PreparedPhaseCopy, PreparedScopeCopyPlan, lower_family_scope_copies, lower_final_scope_copies,
     lower_prepared_scope_copies,
 };
 pub(crate) use final_preparation::FinalProviderPreparation;

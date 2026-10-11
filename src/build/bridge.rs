@@ -1,4 +1,4 @@
-//! Target resolution and typed Rust calls for checked owner-free scalar symbols.
+//! Target resolution and typed Rust calls for checked scalar and opaque owners.
 //!
 //! Plans retain original source authority. They do not link a library, discharge
 //! an effect, convert Ash values or validate an external binary's assumptions.
@@ -12,7 +12,8 @@ use crate::{
     foreign::{
         checked_source::CheckedForeignSymbol,
         source_contract::{
-            PreparedAbiResult, PreparedForeignCall, PreparedOperandSource, PreparedRepresentation,
+            PreparedAbiResult, PreparedAddressRepresentation, PreparedForeignCall,
+            PreparedOperandSource, PreparedOwnerCall, PreparedRepresentation,
             PreparedScalarRepresentation,
         },
     },
@@ -32,6 +33,8 @@ const TARGET: &str = "x86_64-unknown-linux-gnu";
 const VALUE: &str = "ash::foreign::source_runtime::NativeScalarValue";
 const REPLY: &str = "ash::foreign::source_runtime::NativeScalarReply";
 const ERROR: &str = "ash::foreign::source_runtime::NativeScalarCallError";
+const OWNER_READY: &str = "ash::foreign::source_runtime::NativeOwnerGuardReady";
+const OWNER_RETURNED: &str = "ash::foreign::source_runtime::NativeOwnerCallReturned";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ForeignBridgeTarget {
@@ -89,6 +92,15 @@ impl TargetScalar {
 pub(crate) enum TargetResult {
     Void,
     Scalar(TargetScalar),
+    OwnerAddress,
+}
+
+/// Distinct generated callback roles; pointers never enter scalar transport.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TargetBridgeCall {
+    Scalar,
+    OwnerAcquire,
+    OwnerTeardown,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -169,6 +181,7 @@ pub(crate) struct TargetResolvedForeignBridge {
     target: ForeignBridgeTarget,
     operands: Box<[TargetScalar]>,
     result: TargetResult,
+    call: TargetBridgeCall,
     rust_function_name: String,
     span: Span,
 }
@@ -186,6 +199,9 @@ impl fmt::Debug for TargetResolvedForeignBridge {
 }
 
 impl TargetResolvedForeignBridge {
+    pub(crate) const fn call(&self) -> TargetBridgeCall {
+        self.call
+    }
     #[cfg(test)]
     pub(crate) fn symbol(&self) -> &Arc<CheckedForeignSymbol> {
         &self.symbol
@@ -321,16 +337,64 @@ fn plan_target_bridge(
             .ok_or_else(|| fail(ForeignBridgeReason::Resource, span))?,
         span,
     )?;
-    if !symbol.prepared().owners().is_empty()
-        || !matches!(source.call(), PreparedForeignCall::Scalar { .. })
-    {
-        return Err(fail(ForeignBridgeReason::InvalidAuthority, span));
-    }
+    let call = match source.call() {
+        PreparedForeignCall::Scalar { .. } => {
+            if symbol.owner().is_some() {
+                return Err(fail(ForeignBridgeReason::InvalidAuthority, span));
+            }
+            TargetBridgeCall::Scalar
+        }
+        PreparedForeignCall::Owner(role) => {
+            let owner = symbol
+                .owner()
+                .ok_or_else(|| fail(ForeignBridgeReason::InvalidAuthority, span))?;
+            if owner.owner().representation() != PreparedAddressRepresentation::Opaque {
+                return Err(fail(ForeignBridgeReason::UnsupportedRepresentation, span));
+            }
+            match role {
+                PreparedOwnerCall::Acquire {
+                    initialized_bytes, ..
+                } => {
+                    if initialized_bytes.is_some()
+                        || source.result()
+                            != PreparedAbiResult::Address(PreparedAddressRepresentation::Opaque)
+                    {
+                        return Err(fail(ForeignBridgeReason::UnsupportedRepresentation, span));
+                    }
+                    TargetBridgeCall::OwnerAcquire
+                }
+                PreparedOwnerCall::Teardown {
+                    current_operand, ..
+                } => {
+                    // Safe host destruction must need no new scalar preparation.
+                    // This bounded profile has exactly one current opaque address.
+                    if *current_operand != 0
+                        || source.operands().len() != 1
+                        || source.result() != PreparedAbiResult::Void
+                        || !matches!(
+                            source.operands()[0].source(),
+                            PreparedOperandSource::Current(_)
+                        )
+                        || source.operands()[0].representation()
+                            != PreparedRepresentation::Address(
+                                PreparedAddressRepresentation::Opaque,
+                            )
+                    {
+                        return Err(fail(ForeignBridgeReason::UnsupportedRepresentation, span));
+                    }
+                    TargetBridgeCall::OwnerTeardown
+                }
+            }
+        }
+    };
     let mut operands = Vec::new();
     operands
         .try_reserve_exact(source.operands().len())
         .map_err(|_| fail(ForeignBridgeReason::Resource, span))?;
     for operand in source.operands() {
+        if call == TargetBridgeCall::OwnerTeardown {
+            continue;
+        }
         if matches!(operand.source(), PreparedOperandSource::Constant(_)) {
             return Err(fail(ForeignBridgeReason::UnsupportedConstant, span));
         }
@@ -347,6 +411,11 @@ fn plan_target_bridge(
         PreparedAbiResult::Scalar(representation) => {
             TargetResult::Scalar(target_scalar(representation, span)?)
         }
+        PreparedAbiResult::Address(PreparedAddressRepresentation::Opaque)
+            if call == TargetBridgeCall::OwnerAcquire =>
+        {
+            TargetResult::OwnerAddress
+        }
         PreparedAbiResult::Address(_) => {
             return Err(fail(ForeignBridgeReason::UnsupportedRepresentation, span));
         }
@@ -357,6 +426,7 @@ fn plan_target_bridge(
         target: ForeignBridgeTarget::X86_64LinuxGnu,
         operands: operands.into_boxed_slice(),
         result,
+        call,
         rust_function_name,
         span,
     })
@@ -462,6 +532,15 @@ fn render_bridge(output: &mut impl Write, plan: &TargetResolvedForeignBridge) ->
         }
     }
     write!(output, "\"]\n    fn {}__ffi(", plan.rust_function_name)?;
+    if plan.call == TargetBridgeCall::OwnerTeardown {
+        output.write_str("address: *mut core::ffi::c_void);\n}\n")?;
+        write!(
+            output,
+            "pub fn {}(address: *mut core::ffi::c_void) {{\n    // SAFETY: Only the admitted unique guard supplies this original owner.\n    // The authored teardown contract consumes it unconditionally.\n    unsafe {{ {}__ffi(address) }};\n}}\n",
+            plan.rust_function_name, plan.rust_function_name
+        )?;
+        return Ok(());
+    }
     for (index, scalar) in plan.operands.iter().enumerate() {
         if index > 0 {
             output.write_str(", ")?;
@@ -469,14 +548,24 @@ fn render_bridge(output: &mut impl Write, plan: &TargetResolvedForeignBridge) ->
         write!(output, "arg{index}: {}", scalar.rust_type())?;
     }
     output.write_str(")")?;
-    if let TargetResult::Scalar(scalar) = plan.result {
-        write!(output, " -> {}", scalar.rust_type())?;
+    match plan.result {
+        TargetResult::Scalar(scalar) => write!(output, " -> {}", scalar.rust_type())?,
+        TargetResult::OwnerAddress => output.write_str(" -> *mut core::ffi::c_void")?,
+        TargetResult::Void => {}
     }
-    write!(
-        output,
-        ";\n}}\npub fn {}(arguments: &[{VALUE}]) -> Result<{REPLY}, {ERROR}> {{\n    let [",
-        plan.rust_function_name
-    )?;
+    match plan.call {
+        TargetBridgeCall::Scalar => write!(
+            output,
+            ";\n}}\npub fn {}(arguments: &[{VALUE}]) -> Result<{REPLY}, {ERROR}> {{\n    let [",
+            plan.rust_function_name
+        )?,
+        TargetBridgeCall::OwnerAcquire => write!(
+            output,
+            ";\n}}\npub fn {}(arguments: &[{VALUE}], readiness: {OWNER_READY}) -> Result<{OWNER_RETURNED}, {ERROR}> {{\n    let [",
+            plan.rust_function_name
+        )?,
+        TargetBridgeCall::OwnerTeardown => return Err(fmt::Error),
+    }
     for (index, scalar) in plan.operands.iter().enumerate() {
         if index > 0 {
             output.write_str(", ")?;
@@ -501,6 +590,9 @@ fn render_bridge(output: &mut impl Write, plan: &TargetResolvedForeignBridge) ->
             output,
             "    Ok({REPLY}::Scalar({VALUE}::{}(value)))\n}}\n",
             scalar.value_variant()
+        ),
+        TargetResult::OwnerAddress => output.write_str(
+            "    // Arm pre-admitted destruction before any Ash reporting step.\n    Ok(readiness.returned(value))\n}\n",
         ),
     }
 }
@@ -618,6 +710,10 @@ main () = 42
 
     impl Fixture {
         fn new() -> Self {
+            Self::with_source(SOURCE)
+        }
+
+        fn with_source(source: &str) -> Self {
             let directory = loop {
                 let number = IDS.fetch_add(1, Ordering::Relaxed);
                 let directory = std::env::temp_dir()
@@ -628,7 +724,7 @@ main () = 42
                     Err(error) => panic!("bridge fixture directory: {error}"),
                 }
             };
-            fs::write(directory.join("entry.ash"), SOURCE).unwrap();
+            fs::write(directory.join("entry.ash"), source).unwrap();
             let graph =
                 load_module_graph(&directory.join("entry.ash"), &ModuleRoots::empty()).unwrap();
             let common = graph
@@ -695,6 +791,121 @@ main () = 42
                 .find(|effect| effect.spelling == name)
                 .unwrap();
             Arc::clone(effect.native_contract.as_ref().unwrap())
+        }
+    }
+
+    const OWNER_SOURCE: &str = r#"import @builtin.foreign as Foreign
+foreign library Memory {
+    profile "x86_64-unknown-linux-gnu"
+    repr Size = size_t
+    repr Address = opaque
+    owner State<T, R> {
+        representation Address
+        owned R
+        teardown Free
+    }
+    symbol Allocate<Delta : EffectRow, R, T> : Int -> Foreign.Call<Foreign.Output<Foreign.Nullable<State<T, R>>>> {
+        name "malloc"
+        abi (Size) -> pointer(Address)
+        operand 0 from 0 scalar
+        output result as owner(State<T, R>)
+        outcome result nonnull { readable result }
+        outcome otherwise { readable result }
+    }
+    symbol Free<T, Delta : EffectRow, R> : State<T, R> -> Foreign.Call<Foreign.Disposition<Unit>> {
+        name "free"
+        abi (pointer(Address)) -> void
+        operand 0 from 0 current
+        retained_dependents block
+        outcome otherwise { consumed 0 }
+    }
+}
+main : Unit -> Int
+main () = 42
+"#;
+
+    #[test]
+    fn opaque_owner_bridges_use_separate_readiness_and_consuming_callback_roles() {
+        let fixture = Fixture::with_source(OWNER_SOURCE);
+        let mut work = TypeWorkBudget::default();
+        let acquire =
+            plan_target_bridge(fixture.symbol("Allocate"), &mut work, fixture.common_span).unwrap();
+        assert_eq!(acquire.call(), TargetBridgeCall::OwnerAcquire);
+        assert_eq!(acquire.native_type_projection(), &[1, 2]);
+        assert_eq!(acquire.result(), TargetResult::OwnerAddress);
+        let emitted = emit_rust_bridge(&acquire, &mut work).unwrap();
+        assert!(emitted.contains("arg0: usize) -> *mut core::ffi::c_void"));
+        assert!(emitted.contains("NativeOwnerGuardReady"));
+        assert!(emitted.contains("NativeOwnerCallReturned"));
+        assert!(emitted.contains("Ok(readiness.returned(value))"));
+        assert!(
+            emitted.find("ArgumentContract").unwrap() < emitted.find("let value = unsafe").unwrap()
+        );
+        assert!(!emitted.contains("NativeScalarReply"));
+
+        let teardown =
+            plan_target_bridge(fixture.symbol("Free"), &mut work, fixture.common_span).unwrap();
+        assert_eq!(teardown.call(), TargetBridgeCall::OwnerTeardown);
+        assert_eq!(teardown.native_type_projection(), &[0, 2]);
+        let emitted = emit_rust_bridge(&teardown, &mut work).unwrap();
+        assert!(emitted.contains("address: *mut core::ffi::c_void);"));
+        assert!(emitted.contains("__ffi(address)"));
+        assert!(!emitted.contains("NativeScalarValue"));
+        assert!(!emitted.contains("NativeScalarReply"));
+    }
+
+    #[test]
+    fn opaque_teardown_with_extra_scalar_native_operands_refuses_target_planning() {
+        let source = OWNER_SOURCE
+            .replace(
+                "State<T, R> -> Foreign.Call<Foreign.Disposition<Unit>>",
+                "(Int, State<T, R>) -> Foreign.Call<Foreign.Disposition<Unit>>",
+            )
+            .replace(
+                "abi (pointer(Address)) -> void",
+                "abi (Size, pointer(Address)) -> void",
+            )
+            .replace(
+                "operand 0 from 0 current",
+                "operand 0 from 0 scalar\n        operand 1 from 1 current",
+            )
+            .replace(
+                "outcome otherwise { consumed 0 }",
+                "outcome otherwise { consumed 1 }",
+            );
+        let fixture = Fixture::with_source(&source);
+        let failure = plan_target_bridge(
+            fixture.symbol("Free"),
+            &mut TypeWorkBudget::default(),
+            fixture.common_span,
+        )
+        .unwrap_err();
+        assert_eq!(
+            failure.reason(),
+            ForeignBridgeReason::UnsupportedRepresentation
+        );
+    }
+
+    #[test]
+    fn byte_owner_contract_cannot_select_the_opaque_executable_bridge() {
+        let source = OWNER_SOURCE
+            .replace("repr Address = opaque", "repr Address = bytes")
+            .replace(
+                "outcome result nonnull { readable result }",
+                "outcome result nonnull { readable result, initialized_bytes result from 0 }",
+            );
+        let fixture = Fixture::with_source(&source);
+        for name in ["Allocate", "Free"] {
+            let failure = plan_target_bridge(
+                fixture.symbol(name),
+                &mut TypeWorkBudget::default(),
+                fixture.common_span,
+            )
+            .unwrap_err();
+            assert_eq!(
+                failure.reason(),
+                ForeignBridgeReason::UnsupportedRepresentation
+            );
         }
     }
 

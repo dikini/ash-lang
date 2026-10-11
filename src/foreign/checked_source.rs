@@ -1,4 +1,4 @@
-//! Canonical binding for the initial owner-free scalar native contract slice.
+//! Canonical binding for scalar and dependency-free source owner contracts.
 //!
 //! ABI preparation remains in one shared allocation. Binding adds the original
 //! resolved operation, its complete binder vector and signature, and the common
@@ -99,6 +99,8 @@ impl CheckedForeignCallCodec {
 pub(crate) struct ForeignBindingContext<'registry> {
     registry: &'registry ResolvedRegistry,
     codec: Arc<CheckedForeignCallCodec>,
+    owners: &'registry [Arc<super::source_owner::CheckedForeignOwner>],
+    owner_codec: Option<Arc<super::source_owner::CheckedForeignOwnerCodec>>,
 }
 
 impl<'registry> ForeignBindingContext<'registry> {
@@ -120,7 +122,29 @@ impl<'registry> ForeignBindingContext<'registry> {
         Ok(Self {
             registry,
             codec: Arc::new(codec),
+            owners: &[],
+            owner_codec: None,
         })
+    }
+
+    pub(crate) fn with_owners(
+        mut self,
+        owners: &'registry [Arc<super::source_owner::CheckedForeignOwner>],
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, ForeignAdmissionError> {
+        charge(work, owners.len(), self.codec.source())?;
+        if !owners.is_empty() {
+            self.owner_codec = Some(Arc::new(
+                super::source_owner::CheckedForeignOwnerCodec::authenticate(
+                    self.codec.module(),
+                    self.codec.source(),
+                    self.registry,
+                    work,
+                )?,
+            ));
+        }
+        self.owners = owners;
+        Ok(self)
     }
 }
 
@@ -137,6 +161,8 @@ pub struct CheckedForeignSymbol {
     source_signature: IterativeTypeOwner,
     source_provenance: CheckedForeignSourceProvenance,
     call_codec: Arc<CheckedForeignCallCodec>,
+    owner: Option<Arc<super::source_owner::CheckedForeignOwner>>,
+    owner_codec: Option<Arc<super::source_owner::CheckedForeignOwnerCodec>>,
 }
 
 // Retain only original provenance absent from the immutable prepared facts.
@@ -195,12 +221,28 @@ impl PartialEq for CheckedForeignSymbol {
             && self.operation == other.operation
             && Arc::ptr_eq(&self.prepared, &other.prepared)
             && Arc::ptr_eq(&self.call_codec, &other.call_codec)
+            && match (&self.owner, &other.owner) {
+                (None, None) => true,
+                (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+                _ => false,
+            }
     }
 }
 
 impl Eq for CheckedForeignSymbol {}
 
 impl CheckedForeignSymbol {
+    pub(crate) fn owner(&self) -> Option<&Arc<super::source_owner::CheckedForeignOwner>> {
+        self.owner.as_ref()
+    }
+
+    pub(crate) fn owner_role(&self) -> Option<&super::source_contract::PreparedOwnerCall> {
+        self.symbol().owner_call()
+    }
+
+    pub(crate) fn owner_codec(&self) -> Option<&super::source_owner::CheckedForeignOwnerCodec> {
+        self.owner_codec.as_deref()
+    }
     pub(crate) const fn library(&self) -> NativeLibraryId {
         self.library
     }
@@ -330,11 +372,11 @@ impl ForeignAdmissionError {
     }
 }
 
-fn failure(reason: ForeignAdmissionReason, span: Span) -> ForeignAdmissionError {
+pub(super) fn failure(reason: ForeignAdmissionReason, span: Span) -> ForeignAdmissionError {
     ForeignAdmissionError { reason, span }
 }
 
-fn charge(
+pub(super) fn charge(
     work: &mut TypeWorkBudget,
     count: usize,
     span: Span,
@@ -355,7 +397,7 @@ fn reserve<T>(
         .map_err(|_| failure(ForeignAdmissionReason::StorageRefused, span))
 }
 
-fn names_match(
+pub(super) fn names_match(
     left: &str,
     right: &str,
     work: &mut TypeWorkBudget,
@@ -369,7 +411,7 @@ fn names_match(
     Ok(left == right)
 }
 
-fn primary_span(
+pub(super) fn primary_span(
     mut origin: &Origin,
     work: &mut TypeWorkBudget,
     span: Span,
@@ -393,7 +435,7 @@ fn contains(outer: Span, inner: Span) -> bool {
         && inner.range().end() <= outer.range().end()
 }
 
-fn origin_within(
+pub(super) fn origin_within(
     outer: Span,
     origin: &Origin,
     work: &mut TypeWorkBudget,
@@ -495,9 +537,9 @@ fn authenticate_codec(
 
 /// Binds an original registry-owned effect after ordinary namespace/type work.
 ///
-/// Only a pure scalar source function is admitted here. Unsupported native
-/// forms remain preparation refusals; unsupported resolved domain forms remain
-/// explicit binding refusals. The result retains its canonical preparation.
+/// Scalar calls and the admitted acquire/void-teardown shapes retain their
+/// canonical preparation. Owner binding grants no provider phase or activation;
+/// unsupported ABI and resolved domain forms remain explicit refusals.
 pub(crate) fn bind_foreign_symbol(
     library: NativeLibraryId,
     prepared: Arc<PreparedForeignLibrary>,
@@ -506,8 +548,43 @@ pub(crate) fn bind_foreign_symbol(
     context: &ForeignBindingContext<'_>,
     work: &mut TypeWorkBudget,
 ) -> Result<CheckedForeignSymbol, ForeignAdmissionError> {
-    let operation =
-        validate_foreign_symbol_source(library, &prepared, symbol_index, effect, context, work)?;
+    let owner = match prepared
+        .symbols()
+        .get(symbol_index)
+        .and_then(|symbol| symbol.owner_call())
+    {
+        Some(call) => {
+            charge(work, context.owners.len(), effect.span)?;
+            let application = match call {
+                super::source_contract::PreparedOwnerCall::Acquire { application, .. }
+                | super::source_contract::PreparedOwnerCall::Teardown { application, .. } => {
+                    application
+                }
+            };
+            Some(
+                context
+                    .owners
+                    .iter()
+                    .find(|owner| {
+                        Arc::ptr_eq(owner.prepared(), &prepared)
+                            && owner.library() == library
+                            && owner.owner_index() == application.owner()
+                    })
+                    .ok_or_else(|| failure(ForeignAdmissionReason::InvalidLibrary, effect.span))?,
+            )
+        }
+        None => None,
+    };
+    let operation = validate_foreign_symbol_source(
+        library,
+        &prepared,
+        symbol_index,
+        effect,
+        context,
+        owner.map(Arc::as_ref),
+        owner.and(context.owner_codec.as_ref()).map(Arc::as_ref),
+        work,
+    )?;
     let span = operation.span;
     // The source origins are normally inline spans. The shared clone protocol
     // also bounds and safely disposes generated or related provenance.
@@ -548,6 +625,8 @@ pub(crate) fn bind_foreign_symbol(
             parameter_origins: parameter_origins.into_boxed_slice(),
         },
         call_codec: Arc::clone(&context.codec),
+        owner: owner.map(Arc::clone),
+        owner_codec: owner.and(context.owner_codec.as_ref()).map(Arc::clone),
     })
 }
 
@@ -580,6 +659,8 @@ pub(crate) fn authenticate_foreign_symbol(
         symbol.symbol_index(),
         effect,
         context,
+        symbol.owner().map(Arc::as_ref),
+        symbol.owner_codec(),
         work,
     )?;
     if operation.id != symbol.operation() {
@@ -626,22 +707,23 @@ pub(crate) fn authenticate_foreign_symbol(
     Ok(())
 }
 
+// Keep original symbol coordinates and optional owner authority explicit.
+#[allow(clippy::too_many_arguments)]
 fn validate_foreign_symbol_source<'effect>(
     library: NativeLibraryId,
     prepared: &PreparedForeignLibrary,
     symbol_index: usize,
     effect: &'effect ResolvedEffectDeclaration,
     context: &ForeignBindingContext<'_>,
+    owner: Option<&super::source_owner::CheckedForeignOwner>,
+    owner_codec: Option<&super::source_owner::CheckedForeignOwnerCodec>,
     work: &mut TypeWorkBudget,
 ) -> Result<&'effect ResolvedEffectOperation, ForeignAdmissionError> {
     let registry = context.registry;
     let codec = &context.codec;
     let library_span = primary_span(prepared.origin(), work, effect.span)?;
     charge(work, 5, library_span)?;
-    if library.module != prepared.module()
-        || effect.id.module() != library.module
-        || !prepared.owners().is_empty()
-    {
+    if library.module != prepared.module() || effect.id.module() != library.module {
         return Err(failure(
             ForeignAdmissionReason::InvalidLibrary,
             library_span,
@@ -652,9 +734,6 @@ fn validate_foreign_symbol_source<'effect>(
         .get(symbol_index)
         .ok_or_else(|| failure(ForeignAdmissionReason::InvalidLibrary, library_span))?;
     let span = primary_span(symbol.origin(), work, library_span)?;
-    if !matches!(symbol.call(), PreparedForeignCall::Scalar { .. }) {
-        return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
-    }
     if !contains(library_span, span)
         || effect.span != span
         || !same_origin_with_budget(&effect.origin, symbol.origin(), work)
@@ -747,6 +826,26 @@ fn validate_foreign_symbol_source<'effect>(
     if type_index != symbol.native_type_projection().len() {
         return Err(failure(ForeignAdmissionReason::InvalidParameters, span));
     }
+    if let PreparedForeignCall::Owner(_) = symbol.call() {
+        let owner = owner.ok_or_else(|| failure(ForeignAdmissionReason::InvalidLibrary, span))?;
+        let owner_codec =
+            owner_codec.ok_or_else(|| failure(ForeignAdmissionReason::InvalidCodec, span))?;
+        super::source_owner::validate_owner_symbol(
+            library,
+            prepared,
+            symbol,
+            effect,
+            owner,
+            owner_codec,
+            codec,
+            registry,
+            work,
+        )?;
+        return Ok(operation);
+    }
+    if owner.is_some() || owner_codec.is_some() {
+        return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
+    }
     charge(work, 3, span)?;
     let Type::Function(domain, codomain) = &operation.annotation.ty else {
         return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
@@ -799,7 +898,7 @@ fn charge_owner_names(
     Ok(())
 }
 
-fn check_domain(
+pub(super) fn check_domain(
     domain: &Type,
     parameters: &HashSet<TypeVariableId>,
     registry: &ResolvedRegistry,
@@ -867,7 +966,7 @@ fn check_domain(
     Ok(())
 }
 
-fn check_source_path(
+pub(super) fn check_source_path(
     domain: &Type,
     path: &[usize],
     work: &mut TypeWorkBudget,

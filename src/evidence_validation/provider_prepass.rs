@@ -29,10 +29,29 @@ pub(crate) fn source_provider_occurrences<'a>(
     program: &'a ResolvedModuleProgram,
     work: &mut TypeWorkBudget,
 ) -> Result<Vec<SourceProviderOccurrence<'a>>, EvidenceValidationFailure> {
+    resource_occurrences(program, work, false)
+}
+
+pub(super) fn source_resource_occurrences<'a>(
+    program: &'a ResolvedModuleProgram,
+    work: &mut TypeWorkBudget,
+) -> Result<Vec<SourceProviderOccurrence<'a>>, EvidenceValidationFailure> {
+    resource_occurrences(program, work, true)
+}
+
+fn resource_occurrences<'a>(
+    program: &'a ResolvedModuleProgram,
+    work: &mut TypeWorkBudget,
+    source_resource: bool,
+) -> Result<Vec<SourceProviderOccurrence<'a>>, EvidenceValidationFailure> {
     let span = program.result().span;
     // Without an admitted defining family no source provider instance can have
     // passed module checking. Keep the ordinary pipeline's prior work path.
-    if program.registry().provider_contract_count() == 0 {
+    if if source_resource {
+        program.registry().source_resource_facts().next().is_none()
+    } else {
+        program.registry().provider_contract_count() == 0
+    } {
         return Ok(Vec::new());
     }
     let mut pending = Vec::new();
@@ -133,23 +152,32 @@ pub(crate) fn source_provider_occurrences<'a>(
             SourceItem::Declaration(ResolvedLocalDeclaration::Newtype(_)) => {}
             SourceItem::Expression(expression) => match &expression.kind {
                 ResolvedExprKind::ProviderResource(resource) => {
-                    work.charge(2)
+                    work.charge(1)
                         .map_err(|()| type_resource(expression.span))?;
-                    if resource.prepared.get().is_none() || identities.contains(&resource.provider)
-                    {
-                        return Err(invalid_root(expression.span));
+                    let is_source = program
+                        .registry()
+                        .source_resource_fact(resource.definition)
+                        .is_some();
+                    if is_source == source_resource {
+                        work.charge(2)
+                            .map_err(|()| type_resource(expression.span))?;
+                        if resource.prepared.get().is_some() == is_source
+                            || identities.contains(&resource.provider)
+                        {
+                            return Err(invalid_root(expression.span));
+                        }
+                        output
+                            .try_reserve(1)
+                            .map_err(|_| type_resource(expression.span))?;
+                        identities
+                            .try_reserve(1)
+                            .map_err(|_| type_resource(expression.span))?;
+                        identities.insert(resource.provider);
+                        output.push(SourceProviderOccurrence {
+                            resource,
+                            span: expression.span,
+                        });
                     }
-                    output
-                        .try_reserve(1)
-                        .map_err(|_| type_resource(expression.span))?;
-                    identities
-                        .try_reserve(1)
-                        .map_err(|_| type_resource(expression.span))?;
-                    identities.insert(resource.provider);
-                    output.push(SourceProviderOccurrence {
-                        resource,
-                        span: expression.span,
-                    });
                     push(
                         &mut pending,
                         SourceItem::Expression(&resource.body),

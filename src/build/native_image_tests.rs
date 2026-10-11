@@ -184,6 +184,21 @@ fn plus_one_provider() -> PrivateNativeBridge {
     let emitted = emitted_fixture();
     __private_native_bridge(emitted.plus_one, emitted.expected, plus_one_callback)
 }
+fn wrong_owner_role_callback(
+    _arguments: &[NativeScalarValue],
+    _readiness: crate::foreign::source_runtime::NativeOwnerGuardReady,
+) -> Result<crate::foreign::source_runtime::NativeOwnerCallReturned, NativeScalarCallError> {
+    CALLBACKS.fetch_add(1, Ordering::SeqCst);
+    Err(NativeScalarCallError::ArgumentContract)
+}
+fn wrong_owner_role_provider() -> PrivateNativeBridge {
+    let emitted = emitted_fixture();
+    __private_native_owner_acquire_bridge(
+        emitted.plus_one,
+        emitted.expected,
+        wrong_owner_role_callback,
+    )
+}
 fn plus_two_provider() -> PrivateNativeBridge {
     let emitted = emitted_fixture();
     __private_native_bridge(emitted.plus_two, emitted.expected, plus_two_callback)
@@ -236,6 +251,21 @@ fn native_image_startup_rejects_swapped_providers_stale_facts_and_missing_bindin
             PrivateFailure::Image(image::ImageFailure::InvalidRecord)
         ),
         "wrong swapped-provider refusal: {error}"
+    );
+    assert_eq!(CALLBACKS.load(Ordering::SeqCst), 0);
+
+    // Exact original coordinates and ABI facts cannot grant a different
+    // generated callback role. This fails before readiness or native entry.
+    let mut wrong_role = members();
+    wrong_role[0].provider = wrong_owner_role_provider;
+    CALLBACKS.store(0, Ordering::SeqCst);
+    let error = run(emitted.expected, &wrong_role).unwrap_err();
+    assert!(
+        matches!(
+            &error.0,
+            PrivateFailure::Evaluation(crate::eval::RuntimeFailure::ForeignBinding)
+        ),
+        "wrong callback-role refusal: {error}"
     );
     assert_eq!(CALLBACKS.load(Ordering::SeqCst), 0);
 

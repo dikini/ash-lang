@@ -977,7 +977,8 @@ main () = true + 1
 
 ## Source foreign declarations
 
-The admitted foreign-library subset is passive and owner-free. Each library
+Foreign declarations are passive. The admitted subset contains owner-free
+scalar calls and dependency-free owner contracts. Each library
 has exactly one profile, `"x86_64-unknown-linux-gnu"`. Scalar representations
 are signed or unsigned 8-, 32- or 64-bit integers, or `size_t`. These ABI
 representations introduce no ordinary fixed-width Ash integer type.
@@ -985,11 +986,30 @@ representations introduce no ordinary fixed-width Ash integer type.
 Each symbol has one outer pure source arrow and a complete ordered parameter
 vector containing only `Type` and `EffectRow` parameters. Omitted kinds are
 `Type`. Parameters are retained even when they contribute no ABI operand.
-Native symbol names are nonempty strings without NUL. Every ABI input maps
+Native symbol names are nonempty strings without NUL. Every scalar ABI input maps
 exactly once to a source position whose selected type is mathematical `Int`;
 negative or out-of-range source positions and missing or repeated ABI input
 mappings reject. The source domain may contain a product, and dotted positions
 select its nested leaves.
+
+An owner declaration introduces an opaque nominal state family without source
+constructors. Its explicit owned position selects a `Type` formal. Canonical
+admission retains every original parameter identity, kind and defining origin;
+the current owner checkpoint rejects `EffectRow` and function-kind formals.
+An owner address uses an `opaque` or `bytes` representation and one authenticated
+teardown symbol from the same defining library. Dependency-bearing owners remain
+outside this checkpoint.
+
+An acquisition symbol maps its pointer result to the exact saturated state
+family and returns the canonical `Foreign.Call<Foreign.Output<Foreign.Nullable<State>>>`
+codec. A current-state operand must select the matching state application in
+the source product; its pointer ABI role does not accept an `Int` substitute.
+A teardown returns the canonical `Foreign.Call<Foreign.Disposition<T>>` for
+its independent result and records consumption or retention of the selected
+state. The executable resource checkpoint below admits `void` teardown with
+`T = Unit`. Byte-owner preparation also checks its initialized extent against
+the selected mathematical `Int` source leaf. This passive check supplies no
+byte access or executable owner activation.
 
 A scalar ABI result requires `output result as scalar` and an `otherwise`
 outcome declaring `readable result`. Its source codomain is the exact canonical
@@ -1015,8 +1035,83 @@ row tail cannot be discharged through this boundary.
 Source contracts and checked Core confer no executable bridge binding. Execution
 requires separately admitted bindings before Ash runs; ordinary execution with
 missing bindings refuses without compiling or linking a host implicitly.
-Constants, qualified ABI references, pointer/output-slot contracts, foreign
-ownership/access and copy windows remain excluded from this scalar/void slice.
+Owner acquisition and teardown requests are unavailable in ordinary callables,
+and controlled state cannot occur in their parameters, results or captures. An admitted
+source lifecycle phase authorizes only its exact original owner operations and
+complete Type/Row instances. The owner-free program interpretation cannot
+authorize these requests. Retained row arguments remain part of source identity
+even when an owner application's native projection contains only Type arguments.
+
+Constants, qualified ABI references, output slots, foreign access and copy
+windows remain outside this implementation checkpoint. Owner declarations and
+their parsed contracts alone grant no executable permission.
+
+## Source resource declarations
+
+A source resource declaration retains its explicit owned position, complete
+ordered Type/Row formals, input, native state, private data, acquisition,
+completion and body-result report types. Its provider application, provided
+effect, complete native interpretation list, codec and all lifecycle and handler
+patterns retain defining identities and provenance. The family is a declaration;
+it creates no activation. A foreign state family remains an ordinary opaque
+nominal application and is distinct from a resource instance's access family.
+
+The `owned` formal has kind `Type` and coincides with the foreign state family's
+declared owned argument. Input and private data cannot contain that identity or
+controlled native state. Every native interpretation must match the original
+state owner and its complete symbol arguments. The admitted list contains one
+acquisition and the same owner's teardown. A same-spelled symbol, swapped
+argument, ordinary state ADT or ordinary effect cannot replace those facts.
+Incorrect authored headers report `type.argument`.
+
+The `scope` codec authenticates ordinary library ADTs by their exact constructor
+order and field types. Acquisition has `Acquired(State, D)` then `Refused(I)`;
+completion has `Consumed`, `ConsumedFailure(E)` then `Retained(State, E)`.
+The report has `NotAcquired(I)` then `Completed(Answer, Completion<E>)`, where
+completion status has `Closed`, `ConsumedError(E)` then `RetainedError(E)`.
+Constructor spellings alone grant no authority. The single result binder
+`Answer` is replaced by the checked body type; independent `I` and `E` are
+ordinary source types rather than fixed `Unit` errors.
+
+Acquire checks from the declared input to acquisition type. Finish checks from
+`(State, D)` to completion type. Their patterns and the handlers' `(State, D)`
+pattern must cover every value. Successful acquisition returns its witnessed
+fresh native state and independent private payload. Refusal cannot publish that
+state. A returning finish path preserves the recorded native disposition:
+`Consumed` and `ConsumedFailure` require consumption; `Retained` requires an
+attempted teardown that retained the same current state. Bare `Retained` or an
+unconsumed `Consumed` does not authorize completion. Invalid authored lifecycle
+or handler flow reports `type.argument`.
+
+The compiler checks each original lifecycle and handler template once in its
+defining module. Instances specialize that immutable code with complete
+Type/Row substitutions and fresh local identities. Independent final Core
+checking reconstructs the original correspondence; parsing, export summaries
+and compiler copying claims cannot grant execution authority.
+
+For `resource Family<arguments> handle = initializer { body }`, the initializer
+checks in the preceding scope at the substituted input type. It runs once before
+the fresh identity enters scope. The complete argument vector replaces only the
+explicit owned position with that identity; all inherited positions keep their
+Type or Row tags. The handle is a non-owning access value available inside the
+body. The report type, outward effects, evidence and stored dependencies cannot
+expose the fresh identity; an escape reports `type.resource-escape`.
+
+This implementation checkpoint executes dependency-free opaque owners with
+Type-only state-family arguments, one Current operand for a consuming `void`
+teardown, the `scope` codec and direct requests for the declared provided effect.
+The association has exactly one Unit-domain operation and one provider method
+without local type parameters; their result types agree and the method's domain
+is the complete resource application. Resource and symbol arguments retain
+their complete Type/Row vectors. The lifecycle checker admits native requests,
+ordinary constructor and product assembly, sequential bindings and matches.
+Callable lifecycle helpers,
+source `given` forwarding, native access windows and lifecycle control capture
+remain unsupported. Client computations must have no residual outward row after
+removing the exact provided instance. These are checkpoint restrictions, not
+additional language rules for all resources; the broader obligations remain in
+[CP-0022](../docs/proposals/CP-0022-ash-authored-foreign-interfaces.md).
+Compiler-owned cell and native-buffer rules below remain unchanged.
 
 ## Effects
 

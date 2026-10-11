@@ -24,6 +24,7 @@ module_declaration ::=
   | implementation_declaration
   | effect_declaration
   | foreign_library_declaration
+  | resource_declaration
   | global_definition ;
 
 import_declaration ::=
@@ -65,29 +66,57 @@ effect_operation ::= identifier ":" type ;
 
 foreign_library_declaration ::=
   [ "pub" ] "foreign" "library" upper_identifier
-  "{" line_end foreign_scalar_member
-  { line_end foreign_scalar_member } [ line_end ] "}" ;
-foreign_scalar_member ::=
+  "{" line_end foreign_member
+  { line_end foreign_member } [ line_end ] "}" ;
+foreign_member ::=
     "profile" string_literal
-  | "repr" upper_identifier "=" scalar_representation
-  | foreign_scalar_symbol ;
-scalar_representation ::=
+  | "repr" upper_identifier "=" foreign_representation
+  | foreign_owner
+  | foreign_symbol ;
+foreign_representation ::=
     "signed" "(" integer ")"
   | "unsigned" "(" integer ")"
-  | "size_t" ;
-foreign_scalar_symbol ::=
+  | "size_t" | "opaque" | "bytes" ;
+foreign_owner ::=
+  "owner" upper_identifier type_parameters
+  "{" line_end "representation" upper_identifier line_end
+  "owned" upper_identifier line_end
+  "teardown" upper_identifier [ line_end ] "}" ;
+foreign_symbol ::=
   "symbol" upper_identifier [ type_parameters ] ":" type
   "{" line_end "name" string_literal line_end
-  "abi" "(" [ upper_identifier { "," upper_identifier } ] ")"
-  "->" (upper_identifier | "void") line_end
-  foreign_scalar_contract { line_end foreign_scalar_contract }
+  "abi" "(" [ abi_representation { "," abi_representation } ] ")"
+  "->" (abi_representation | "void") line_end
+  foreign_call_contract { line_end foreign_call_contract }
   [ line_end ] "}" ;
-foreign_scalar_contract ::=
-    "operand" integer "from" source_position "scalar"
-  | "output" "result" "as" "scalar"
-  | "outcome" "otherwise" "{" [ "readable" "result" ] "}" ;
+abi_representation ::= upper_identifier | "pointer" "(" upper_identifier ")" ;
+foreign_call_contract ::=
+    "operand" integer "from" source_position ("scalar" | "current")
+  | "output" "result" "as" ("scalar" | "owner" "(" type ")")
+  | "outcome" outcome_test "{" [ outcome_fact { "," outcome_fact } ] "}"
+  | "retained_dependents" "block" ;
+outcome_test ::= "result" ("null" | "nonnull") | "otherwise" ;
+outcome_fact ::=
+    ("readable" | "unreadable") "result"
+  | ("consumed" | "retained") source_position
+  | "initialized_bytes" "result" "from" source_position ;
 source_position ::= integer { "." integer } ;
 string_literal ::= /double-quoted-UTF-8-with-defined-escapes/ ;
+
+resource_declaration ::=
+  [ "pub" ] "resource" upper_identifier type_parameters
+  "{" line_end "owned" upper_identifier line_end
+  "input" type line_end "state" type line_end "data" type line_end
+  "acquisition" type line_end "completion" type line_end
+  "result" type "for" type_parameters line_end "codec" report_codec line_end
+  "provider" type line_end "effect" effect_instance line_end
+  "interpret" effect_instance { "," effect_instance } line_end
+  "acquire" pattern "=>" expression line_end
+  "finish" pattern "=>" expression line_end
+  "handlers" pattern "{" line_end
+  handler_clause { line_end handler_clause } [ line_end ] "}"
+  [ line_end ] "}" ;
+report_codec ::= "scope" | "acquired_only" ;
 
 interface_declaration ::=
   [ "pub" ] "interface" upper_identifier interface_parameters
@@ -163,8 +192,10 @@ handler_clause ::= identifier pattern "=>" expression ;
 resume_expression ::= "resume" expression ;
 discard_expression ::= "discard" ;
 resource_expression ::=
-  "resource" ("cell" | "native_buffer") "<" upper_identifier ">" identifier
-  "=" primary_expression block ;
+    "resource" ("cell" | "native_buffer") "<" upper_identifier ">" identifier
+      "=" primary_expression block
+  | "resource" nominal_type_reference type_arguments identifier
+      "=" primary_expression block ;
 hook_expression ::= "hook" effect_instance block ;
 registration_expression ::=
   "register" effect_instance primary_expression block ;
@@ -229,7 +260,8 @@ atomic_type ::=
   | parenthesized_type ;
 nominal_type_reference ::=
   upper_identifier | upper_identifier "." upper_identifier ;
-type_arguments ::= "<" type { "," type } ">" ;
+type_arguments ::= "<" type_argument { "," type_argument } ">" ;
+type_argument ::= type | effect_row ;
 parenthesized_type ::= "(" type [ "," type { "," type } ] ")" ;
 effect_row ::=
   "{"
@@ -258,13 +290,15 @@ be empty. A private import may be complete or targeted. A public import must be
 targeted. A targeted import list contains at least one item. Neither a module
 nor a block uses a trailing semicolon.
 
-The foreign productions describe the admitted owner-free scalar declaration
-subset. `source_position` selects a zero-based leaf of the source argument
+The foreign productions describe scalar declarations and the dependency-free
+owner contract subset. `source_position` selects a zero-based leaf of the source argument
 product. Quoted declaration strings follow [lexical
 structure](lexical-structure.md#tokens). [Static
 semantics](static-semantics.md#source-foreign-declarations) requires exact ABI
-coverage and result shape. Constants, pointers, output slots, owner/access
-members and copy windows are not admitted in this checkpoint. Effect arguments
+coverage, owner roles and result shape. Pointer representations are restricted
+to admitted owner addresses; constants, output slots, access members and copy
+windows remain outside this implementation checkpoint. Preparing a byte owner
+contract does not admit byte access or executable resource code. Effect arguments
 retain their written order; the declaring effect determines each argument's
 required kind.
 
@@ -306,7 +340,8 @@ members, as in `List.Option` and `List.Some`. Qualification has exactly these
 two components; it does not repeat the dependency's path.
 
 An unmodified declaration is private. On a declaration, `pub` marks a global,
-nominal data type, `newtype`, interface, effect, or implementation as public.
+nominal data type, `newtype`, interface, effect, foreign library, resource family,
+or implementation as public.
 On an import, `pub` re-exports the selected channels. `pub opaque type` exports
 the nominal name without exporting its constructors; `pub opaque newtype`
 applies the same access rule to the sole newtype constructor. `pub type` and
@@ -344,8 +379,9 @@ publish a partial method binder list.
 
 Every declaration-level type binder uses `type_parameter`. Its optional kind
 annotation contains `Type`, `EffectRow`, a function kind, or a parenthesized
-kind. Static semantics restricts `EffectRow` to complete global and eligible
-generalized-local binders and forbids it beneath a kind arrow. The spellings
+kind. Static semantics admits `EffectRow` in complete global, eligible
+generalized-local, native symbol and resource binders and forbids it beneath a
+kind arrow. Owner state families currently admit only `Type` parameters. The spellings
 `Type` and `EffectRow` are contextual: they denote kinds only inside a kind
 annotation and remain ordinary `upper_identifier` spellings elsewhere. For
 example, this complete entry module declares and uses a nominal type named
@@ -422,16 +458,24 @@ name, one pattern, and one expression body. `resume` consumes one expression;
 `discard` is a nullary primary expression. Name resolution and static semantics
 restrict both completion forms to their owning operation clause.
 
-A resource expression selects one fixed provider, `cell` or `native_buffer`.
-It writes exactly one uppercase identity binder, one ordinary value binder,
-one primary-expression initializer
-and a block body. Neither binder has a parameter list or annotation, and the
-value binder is not a pattern or wildcard. The designators remain ordinary
-identifiers outside this position. A non-primary initializer, such as `40 + 1`
-or `make ()`, must be parenthesized. The initializer precedes the binders' scope;
-both binders are
-visible only in the body. There is no resource declaration or first-class
-acquisition function.
+A builtin resource expression selects `cell` or `native_buffer` and writes one
+uppercase identity binder. A source resource expression names a declared family,
+possibly qualified by a module alias, and writes its complete argument vector.
+The family's explicit `owned` position contains the fresh uppercase binder;
+every other position contains an ordinary Type or Row actual. Both forms write
+one ordinary value binder, one primary-expression initializer and a block body.
+The value binder is not a pattern or wildcard. A non-primary initializer, such
+as `40 + 1` or `make ()`, must be parenthesized. The initializer precedes the
+identity and value binders' scope; both binders are visible only in the body.
+The builtin designators remain ordinary identifiers outside this position.
+
+A source resource declaration retains its complete header and the patterns for
+acquisition, completion and handlers. `result` introduces one body-result
+parameter for that type only. `codec` selects declared library ADT roles;
+[static semantics](static-semantics.md#source-resource-declarations) defines
+their admission. Declaration alone performs no acquisition and introduces no
+first-class acquisition function. This checkpoint executes the `scope` codec;
+`acquired_only` is retained syntax without executable admission.
 
 A hook expression names an exact effect instance followed by a block. A
 registration expression names an exact effect instance, one primary-expression

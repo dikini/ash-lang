@@ -1784,6 +1784,14 @@ impl<'a, F: CoreOperationFamily> FunctionMetadataPreparation<'a, F> {
                         .map_err(|_| Failure::Resource)?;
                     preparation.bound.push(scope.descriptor.identity());
                 }
+                Some(EffectOperation::SourceResourceScope(scope)) => {
+                    charge(budget, 1)?;
+                    preparation
+                        .bound
+                        .try_reserve(1)
+                        .map_err(|_| Failure::Resource)?;
+                    preparation.bound.push(scope.identity());
+                }
                 _ => {}
             }
             if let Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) =
@@ -1989,6 +1997,34 @@ impl<'a, F: CoreOperationFamily> FunctionMetadataPreparation<'a, F> {
                 retain_type_variables(&mut header, scope.handler_output.value(), budget)?;
                 retain_row_variables(&mut header, scope.handler_output.effects(), budget)?;
             }
+            Some(EffectOperation::SourceResourceScope(scope)) => {
+                for argument in scope
+                    .arguments()
+                    .iter()
+                    .chain(scope.handler.effect().arguments())
+                {
+                    retain_metadata_variables(&mut header, Metadata::Argument(argument), budget)?;
+                }
+                for interpretation in scope.native_interpretations() {
+                    for argument in interpretation.effect().arguments() {
+                        retain_metadata_variables(
+                            &mut header,
+                            Metadata::Argument(argument),
+                            budget,
+                        )?;
+                    }
+                }
+                for binder in [
+                    &scope.acquire.parameter,
+                    &scope.finish.parameter,
+                    &scope.handler_state,
+                    &scope.handle,
+                ] {
+                    retain_type_variables(&mut header, binder.ty(), budget)?;
+                }
+                retain_type_variables(&mut header, scope.handler_output.value(), budget)?;
+                retain_row_variables(&mut header, scope.handler_output.effects(), budget)?;
+            }
             Some(EffectOperation::Handler(handler)) => {
                 for argument in handler.effect().arguments() {
                     retain_metadata_variables(&mut header, Metadata::Argument(argument), budget)?;
@@ -2096,6 +2132,34 @@ impl NodeMetadataHeaders {
                 retain_type_variables(&mut header, scope.handler_output.value(), budget)?;
                 retain_row_variables(&mut header, scope.handler_output.effects(), budget)?;
             }
+            Some(EffectOperation::SourceResourceScope(scope)) => {
+                for argument in scope
+                    .arguments()
+                    .iter()
+                    .chain(scope.handler.effect().arguments())
+                {
+                    retain_metadata_variables(&mut header, Metadata::Argument(argument), budget)?;
+                }
+                for interpretation in scope.native_interpretations() {
+                    for argument in interpretation.effect().arguments() {
+                        retain_metadata_variables(
+                            &mut header,
+                            Metadata::Argument(argument),
+                            budget,
+                        )?;
+                    }
+                }
+                for binder in [
+                    &scope.acquire.parameter,
+                    &scope.finish.parameter,
+                    &scope.handler_state,
+                    &scope.handle,
+                ] {
+                    retain_type_variables(&mut header, binder.ty(), budget)?;
+                }
+                retain_type_variables(&mut header, scope.handler_output.value(), budget)?;
+                retain_row_variables(&mut header, scope.handler_output.effects(), budget)?;
+            }
             Some(EffectOperation::Handler(handler)) => {
                 for argument in handler.effect().arguments() {
                     retain_metadata_variables(&mut header, Metadata::Argument(argument), budget)?;
@@ -2169,6 +2233,11 @@ fn retain_function_metadata<F: CoreOperationFamily>(
                 charge(budget, 1)?;
                 bound.try_reserve(1).map_err(|_| Failure::Resource)?;
                 bound.push(scope.descriptor.identity());
+            }
+            Some(EffectOperation::SourceResourceScope(scope)) => {
+                charge(budget, 1)?;
+                bound.try_reserve(1).map_err(|_| Failure::Resource)?;
+                bound.push(scope.identity());
             }
             _ => {}
         }
@@ -2782,6 +2851,102 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
                 budget,
             )?)
         }
+        Some(EffectOperation::SourceResourceScope(scope)) => {
+            charge(
+                budget,
+                scope
+                    .handler
+                    .clauses()
+                    .len()
+                    .checked_add(8)
+                    .ok_or(Failure::Resource)?,
+            )?;
+            graph.code.try_reserve(7).map_err(|_| Failure::Resource)?;
+            let mut clauses = Vec::new();
+            clauses
+                .try_reserve_exact(scope.handler.clauses().len())
+                .map_err(|_| Failure::Resource)?;
+            for clause in scope.handler.clauses() {
+                clauses.push(Clause {
+                    operation: Some(clause.operation()),
+                    body: index(clause.body()) + 1,
+                    owner: *owners
+                        .get(&(scope.handler.id(), clause.resume()))
+                        .ok_or(Failure::Invalid)?,
+                    source: clause.origin().primary_span(),
+                });
+            }
+            let handler = graph.code.len();
+            data.position_provider_handler(handler, id, budget)?;
+            graph.code.push(Control::Handler {
+                body: index(scope.handler.body()) + 1,
+                effect: Request::effect(scope.handler.effect(), source, budget)?,
+                clauses,
+                owning_resource: None,
+            });
+            let mut phases = Vec::new();
+            phases.try_reserve_exact(2).map_err(|_| Failure::Resource)?;
+            for root in [scope.acquire.body, scope.finish.body] {
+                let mut effects = Vec::new();
+                charge(budget, scope.native_interpretations().len())?;
+                effects
+                    .try_reserve_exact(scope.native_interpretations().len())
+                    .map_err(|_| Failure::Resource)?;
+                for interpretation in scope.native_interpretations() {
+                    let mut effect = Request::effect(interpretation.effect(), source, budget)?;
+                    effect.operation = Some(interpretation.symbol().operation());
+                    effects.push(effect);
+                }
+                let position = graph.code.len();
+                data.position(position, id, budget)?;
+                graph.code.push(Control::NativeInterpret {
+                    body: index(root) + 1,
+                    effects,
+                });
+                phases.push(position);
+            }
+            let successful = graph.code.len();
+            data.position(successful, id, budget)?;
+            graph.code.push(Control::Sequence(copy_slice(
+                &[handler, phases[1]],
+                budget,
+            )?));
+            let outcome = graph.code.len();
+            data.position(outcome, id, budget)?;
+            graph
+                .code
+                .push(Control::Choice(copy_slice(&[0, successful], budget)?));
+            let acquisition = graph.code.len();
+            data.position(acquisition, id, budget)?;
+            graph.code.push(Control::Sequence(copy_slice(
+                &[phases[0], outcome],
+                budget,
+            )?));
+            let owner = graph.code.len();
+            data.position(owner, id, budget)?;
+            let mut native_owner = Request::effect(scope.handler.effect(), source, budget)?;
+            for interpretation in scope.native_interpretations() {
+                let other = Request::effect(interpretation.effect(), source, budget)?;
+                charge(budget, other.members.len())?;
+                native_owner
+                    .members
+                    .try_reserve(other.members.len())
+                    .map_err(|_| Failure::Resource)?;
+                native_owner.members.extend(other.members);
+            }
+            let Control::Handler {
+                owning_resource, ..
+            } = &mut graph.code[handler]
+            else {
+                return Err(Failure::Invalid);
+            };
+            *owning_resource = Some(owner);
+            graph.code.push(Control::Resource {
+                body: acquisition,
+                effect: native_owner,
+            });
+            Control::Sequence(copy_slice(&[index(scope.initializer) + 1, owner], budget)?)
+        }
         Some(EffectOperation::ProviderScope(_)) => return Err(Failure::Invalid),
         Some(EffectOperation::Request(request)) => {
             graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
@@ -3032,6 +3197,7 @@ fn compile_with_boundary<F: CoreOperationFamily>(
         }
         let (handler, scope) = match operation(&node.kind) {
             Some(EffectOperation::Handler(handler)) => (Some(handler), None),
+            Some(EffectOperation::SourceResourceScope(scope)) => (Some(&scope.handler), None),
             Some(EffectOperation::ProviderScope(scope)) => {
                 (Some(&scope.handler), Some(scope.as_ref()))
             }
@@ -5370,6 +5536,13 @@ fn solve_capture_values<F: CoreOperationFamily>(
                             for clause in handler.clauses() {
                                 value.join(&values[index(clause.body())], budget)?;
                             }
+                        }
+                    }
+                    Some(EffectOperation::SourceResourceScope(scope)) => {
+                        value.join(&values[index(scope.handler.body())], budget)?;
+                        charge(budget, scope.handler.clauses().len())?;
+                        for clause in scope.handler.clauses() {
+                            value.join(&values[index(clause.body())], budget)?;
                         }
                     }
                     Some(EffectOperation::Handler(handler)) => {

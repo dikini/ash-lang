@@ -1271,6 +1271,17 @@ where
                     )
                 })?;
         }
+        if let Some(code) = checked_module.source_resource_code() {
+            provider_codes
+                .retain_source(module.id(), code, &mut checking_type_work)
+                .map_err(|failure| {
+                    FileFailure::from(PipelineFailure::Typing(failure)).with_phase_work(
+                        crate::compiler_work::CompilationPhase::SourceChecking
+                            .assess(checking_type_work.used())
+                            .incomplete(),
+                    )
+                })?;
+        }
         checked_by_module.insert(module.id(), checked.len());
         checked.push(checked_module);
         source_phase.finish(

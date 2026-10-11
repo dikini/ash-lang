@@ -6,6 +6,16 @@
 
 use std::{error::Error, fmt};
 
+#[path = "source_owner_runtime.rs"]
+mod owner;
+
+#[doc(hidden)]
+pub use owner::{
+    NativeOwnerAcquireCallback, NativeOwnerCallReturned, NativeOwnerGuardReady,
+    NativeOwnerTeardownCallback,
+};
+pub(crate) use owner::{NativeOwnerConsumed, NativeOwnerGuard};
+
 use crate::{
     foreign::source_contract::{PreparedAbiResult, PreparedScalarRepresentation},
     integer::Integer,

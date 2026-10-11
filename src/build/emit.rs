@@ -265,9 +265,18 @@ fn render_native_suffix(
             // The ONLY unsafe text is the existing typed extern wrapper module.
             // Providers merely pair their own fixed literals with that wrapper.
             output.write_str(&wrappers[member_index])?;
+            let constructor = match member.plan.call() {
+                super::bridge::TargetBridgeCall::Scalar => "__private_native_bridge",
+                super::bridge::TargetBridgeCall::OwnerAcquire => {
+                    "__private_native_owner_acquire_bridge"
+                }
+                super::bridge::TargetBridgeCall::OwnerTeardown => {
+                    "__private_native_owner_teardown_bridge"
+                }
+            };
             write!(
                 output,
-                "pub fn {name}__provide() -> ash::build::PrivateNativeBridge {{\n    ash::build::__private_native_bridge("
+                "pub fn {name}__provide() -> ash::build::PrivateNativeBridge {{\n    ash::build::{constructor}("
             )?;
             render_coordinates(output, library, member)?;
             writeln!(output, ", super::EXPECTED_FACTS, {name})\n}}")?;

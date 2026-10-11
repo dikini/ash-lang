@@ -12,6 +12,14 @@ mod foreign;
 #[path = "source_scalar_phases.rs"]
 mod source_scalar_phases;
 
+#[path = "source_owner_phases.rs"]
+mod source_owner_phases;
+#[cfg(test)]
+pub(crate) use source_owner_phases::post_record_test as source_owner_post_record_test;
+
+#[path = "source_resource_phases.rs"]
+mod source_resource_phases;
+
 #[path = "native_buffer.rs"]
 mod native_buffer;
 
@@ -600,6 +608,11 @@ enum Frame {
         environment: Environment,
     },
     ProviderBoundary(Box<ProviderBoundary>),
+    SourceResourceInitializer {
+        node: NodeId,
+        environment: Environment,
+    },
+    SourceResourceBoundary(Box<SourceResourceBoundary>),
     ProviderStateAccess {
         node: NodeId,
         instantiation: Instantiation,
@@ -693,6 +706,20 @@ struct ProviderBoundary {
     discarded: bool,
 }
 
+/// One product source-resource activation. The source state and client handle
+/// carry only `key`; this slot is the sole owner of its native guard.
+#[derive(Debug)]
+struct SourceResourceBoundary {
+    node: NodeId,
+    key: ActivationKey,
+    environment: Environment,
+    owner: Option<crate::foreign::source_runtime::NativeOwnerGuard>,
+    phase: ProviderPhase,
+    payload: Option<Value>,
+    saved: Option<Value>,
+    consumed: bool,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ProviderPhase {
     Acquire,
@@ -740,6 +767,9 @@ fn selected_handler_for_discard(
     let actual = match program.node(*node) {
         Some(ExecutableNode::Effect(expression)) => match &expression.kind {
             EffectExprKind::Operation(EffectOperation::Handler(boundary)) => boundary.id(),
+            EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
+                scope.handler.id()
+            }
             EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
                 charge_effect_work(
                     work,
@@ -931,6 +961,7 @@ pub struct Machine<'runtime> {
     source_errors:
         Option<&'runtime std::collections::HashMap<crate::module::ModuleId, ConstructorId>>,
     pending_source_call: Option<source_scalar_phases::ScalarCallProgress<'runtime>>,
+    pending_source_owner_call: Option<source_owner_phases::SourceOwnerCallProgress<'runtime>>,
     cleanup_limit: usize,
     live_cleanups: usize,
     program: ExecutableProgram,
@@ -960,6 +991,7 @@ impl<'runtime> Machine<'runtime> {
             source_bindings: None,
             source_errors: None,
             pending_source_call: None,
+            pending_source_owner_call: None,
             program: ExecutableProgram::Pure(program.shared()),
             cleanup_limit: 0,
             live_cleanups: 0,
@@ -996,6 +1028,7 @@ impl<'runtime> Machine<'runtime> {
             source_bindings: None,
             source_errors: None,
             pending_source_call: None,
+            pending_source_owner_call: None,
             program: ExecutableProgram::Effect(program.shared()),
             cleanup_limit: MAX_CAPTURED_FRAME_CELLS,
             live_cleanups: 0,
@@ -1108,6 +1141,9 @@ impl<'runtime> Machine<'runtime> {
             // Recording is the first step after a native return. No generic
             // disposal/work/trace/report refusal may precede that receipt.
             if self.step_source_scalar()? {
+                continue;
+            }
+            if self.step_source_owner()? {
                 continue;
             }
             disposal::check()?;
@@ -1290,6 +1326,12 @@ impl<'runtime> Machine<'runtime> {
             }
             Frame::ProviderBoundary(boundary) => {
                 self.return_provider(boundary, value)?;
+            }
+            Frame::SourceResourceInitializer { node, environment } => {
+                self.enter_source_resource(node, environment, value)?;
+            }
+            Frame::SourceResourceBoundary(boundary) => {
+                self.return_source_resource(boundary, value)?;
             }
             Frame::ProviderStateAccess {
                 node,
@@ -1986,6 +2028,10 @@ impl<'runtime> Machine<'runtime> {
             .native_symbol(operation)
             .map(Arc::clone);
         if let Some(symbol) = source_symbol {
+            if symbol.owner().is_some() {
+                self.trace_effect(EffectTraceEvent::Request(operation));
+                return self.prepare_source_owner_request(node, operation, effect, value, &symbol);
+            }
             let native_program = self.program.clone();
             let mut admitted = false;
             for frame in self.frames.iter().rev() {
@@ -2062,6 +2108,9 @@ impl<'runtime> Machine<'runtime> {
                 Some(ExecutableNode::Effect(expression)) => match &expression.kind {
                     EffectExprKind::Operation(EffectOperation::Handler(handler)) => {
                         (Some(handler), None)
+                    }
+                    EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
+                        (Some(&scope.handler), None)
                     }
                     EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
                         (None, Some(scope))
@@ -2823,6 +2872,9 @@ impl<'runtime> Machine<'runtime> {
         };
         match &expression.kind {
             EffectExprKind::Operation(EffectOperation::Handler(handler)) => Some(handler),
+            EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
+                Some(&scope.handler)
+            }
             EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
                 Some(scope.handler())
             }
@@ -3014,6 +3066,10 @@ fn dispatch_entry(
                     EffectOperation::ProviderScope(scope) => Transition::suspend(
                         Control::Evaluate(scope.initializer(), environment.clone()),
                         Frame::ProviderInitializer { node, environment },
+                    ),
+                    EffectOperation::SourceResourceScope(scope) => Transition::suspend(
+                        Control::Evaluate(scope.initializer, environment.clone()),
+                        Frame::SourceResourceInitializer { node, environment },
                     ),
                     EffectOperation::Registration(_) => {
                         return Err(RuntimeFailure::InvalidControlState);
@@ -3389,6 +3445,8 @@ fn dispatch_return(
         | Frame::ResourceInitializer { .. }
         | Frame::ProviderInitializer { .. }
         | Frame::ProviderBoundary(_)
+        | Frame::SourceResourceInitializer { .. }
+        | Frame::SourceResourceBoundary(_)
         | Frame::ProviderStateAccess { .. }
         | Frame::ResourceBoundary { .. }
         | Frame::Request { .. }
@@ -3762,10 +3820,31 @@ fn matches_pattern(
     heap: &[HeapCell],
     bindings: &mut Vec<(BinderId, Value)>,
 ) -> Result<bool, RuntimeFailure> {
-    let mut work = vec![(pattern, value.clone())];
+    matches_pattern_with_work(pattern, value, heap, bindings, None)
+}
+
+fn matches_pattern_with_work(
+    pattern: &CorePattern,
+    value: &Value,
+    heap: &[HeapCell],
+    bindings: &mut Vec<(BinderId, Value)>,
+    mut meter: Option<(&mut TypeWorkBudget, RuntimePhase)>,
+) -> Result<bool, RuntimeFailure> {
+    let mut work = Vec::new();
+    work.try_reserve(1)
+        .map_err(|_| RuntimeFailure::ResourceCapacity)?;
+    work.push((pattern, value.clone()));
     while let Some((pattern, value)) = work.pop() {
+        if let Some((budget, phase)) = &mut meter {
+            charge_effect_work(budget, 1, *phase)?;
+        }
         match &pattern.kind {
-            CorePatternKind::Binder(binder) => bindings.push((binder.id(), value)),
+            CorePatternKind::Binder(binder) => {
+                bindings
+                    .try_reserve(1)
+                    .map_err(|_| RuntimeFailure::ResourceCapacity)?;
+                bindings.push((binder.id(), value));
+            }
             CorePatternKind::Wildcard => {}
             CorePatternKind::Boolean(expected) => {
                 if !matches!(value, Value::Boolean(found) if found == *expected) {
@@ -3781,13 +3860,22 @@ fn matches_pattern(
                 let Value::Location(location) = value else {
                     return Ok(false);
                 };
-                let location = resolve_location(heap, location)?;
+                let location = if let Some((budget, _)) = &mut meter {
+                    resolve_location_with_work(heap, location, budget)?
+                } else {
+                    resolve_location(heap, location)?
+                };
                 let Some(HeapCell::Tuple(elements)) = heap.get(location) else {
                     return Ok(false);
                 };
                 if patterns.len() != elements.len() {
                     return Ok(false);
                 }
+                if let Some((budget, phase)) = &mut meter {
+                    charge_effect_work(budget, patterns.len(), *phase)?;
+                }
+                work.try_reserve(patterns.len())
+                    .map_err(|_| RuntimeFailure::ResourceCapacity)?;
                 work.extend(
                     patterns
                         .iter()
@@ -3803,7 +3891,11 @@ fn matches_pattern(
                 let Value::Location(location) = value else {
                     return Ok(false);
                 };
-                let location = resolve_location(heap, location)?;
+                let location = if let Some((budget, _)) = &mut meter {
+                    resolve_location_with_work(heap, location, budget)?
+                } else {
+                    resolve_location(heap, location)?
+                };
                 let Some(HeapCell::Constructor(found, found_payload)) = heap.get(location) else {
                     return Ok(false);
                 };
@@ -3812,7 +3904,11 @@ fn matches_pattern(
                 }
                 match (payload.as_deref(), found_payload) {
                     (None, None) => {}
-                    (Some(pattern), Some(value)) => work.push((pattern, value.clone())),
+                    (Some(pattern), Some(value)) => {
+                        work.try_reserve(1)
+                            .map_err(|_| RuntimeFailure::ResourceCapacity)?;
+                        work.push((pattern, value.clone()));
+                    }
                     _ => return Ok(false),
                 }
             }
@@ -6648,6 +6744,18 @@ mod tests {
             returns: &["Machine::acquire_resource", "Machine::return_from"],
         },
         TransitionOwner {
+            feature: "source resource",
+            entry: "dispatch_entry",
+            frames: &[
+                "Frame::SourceResourceInitializer",
+                "Frame::SourceResourceBoundary",
+            ],
+            returns: &[
+                "Machine::enter_source_resource",
+                "Machine::return_source_resource",
+            ],
+        },
+        TransitionOwner {
             feature: "handler",
             entry: "dispatch_entry",
             frames: &["Frame::HandlerBoundary"],
@@ -6819,7 +6927,7 @@ mod tests {
     #[test]
     fn every_effect_operation_has_one_explicit_transition_owner() {
         assert_eq!(TRANSITION_OWNERSHIP.len(), 14);
-        assert_eq!(EFFECT_TRANSITION_OWNERSHIP.len(), 8);
+        assert_eq!(EFFECT_TRANSITION_OWNERSHIP.len(), 9);
         assert_eq!(
             EFFECT_TRANSITION_OWNERSHIP
                 .iter()
@@ -6829,6 +6937,7 @@ mod tests {
                 "cleanup",
                 "registration",
                 "resource",
+                "source resource",
                 "handler",
                 "request",
                 "resume",
@@ -6840,7 +6949,7 @@ mod tests {
             !owner.entry.is_empty()
                 && owner.frames.len()
                     == match owner.feature {
-                        "resource" | "cleanup" => 2,
+                        "resource" | "source resource" | "cleanup" => 2,
                         "discard" => 0,
                         _ => 1,
                     }

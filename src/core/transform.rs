@@ -166,6 +166,31 @@ impl TransformFamily for EffectOperationFamily {
                 }
                 return Ok(());
             }
+            EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
+                builder.charge_effect_metadata(4)?;
+                binders
+                    .try_reserve(4)
+                    .map_err(|_| BuildError::TypeWorkExceeded)?;
+                binders.extend([
+                    scope.acquire.parameter.id(),
+                    scope.finish.parameter.id(),
+                    scope.handler_state.id(),
+                    scope.handle.id(),
+                ]);
+                retain_provider_pattern_binders(
+                    &scope.handler_pattern,
+                    binders,
+                    &mut builder.type_work,
+                )?;
+                for clause in scope.handler.clauses() {
+                    retain_provider_pattern_binders(
+                        clause.pattern(),
+                        binders,
+                        &mut builder.type_work,
+                    )?;
+                }
+                return Ok(());
+            }
             EffectExprKind::Operation(EffectOperation::Handler(handler)) => handler,
             _ => return Ok(()),
         };
@@ -262,6 +287,120 @@ impl TransformFamily for EffectOperationFamily {
                     effects,
                     origin,
                 )
+            }
+            EffectOperation::SourceResourceScope(scope) => {
+                if context.is_some() {
+                    return Err(TransformError::InvalidValidatedInput);
+                }
+                let clone_binder = |builder: &mut CoreBuilder<Self>,
+                                    binder: &super::TypedBinder|
+                 -> Result<super::TypedBinder, TransformError> {
+                    let ty = IterativeTypeOwner::new(copy_type(builder, binder.ty(), None)?);
+                    let origin = copy_origin(builder, binder.origin(), None)?;
+                    Ok(builder.resolved_binder(binder.id(), ty.into_inner(), origin)?)
+                };
+                let acquire = super::source_resource::SourceResourceLifecycleEntry {
+                    parameter: clone_binder(builder, &scope.acquire.parameter)?,
+                    body: remap(remapped, scope.acquire.body)?,
+                };
+                let finish = super::source_resource::SourceResourceLifecycleEntry {
+                    parameter: clone_binder(builder, &scope.finish.parameter)?,
+                    body: remap(remapped, scope.finish.body)?,
+                };
+                let state = clone_binder(builder, &scope.handler_state)?;
+                let handle = clone_binder(builder, &scope.handle)?;
+                let pattern =
+                    rebuild_pattern_with_origin_work(builder, &scope.handler_pattern, false, None)?;
+                let mut clauses = Vec::new();
+                builder.charge_effect_metadata(scope.handler.clauses().len())?;
+                clauses
+                    .try_reserve_exact(scope.handler.clauses().len())
+                    .map_err(|_| BuildError::TypeWorkExceeded)?;
+                for clause in scope.handler.clauses() {
+                    clauses.push(EffectClause::new(
+                        clause.operation(),
+                        clause.resume(),
+                        CoreMatchArm::new(
+                            rebuild_pattern_with_origin_work(
+                                builder,
+                                clause.pattern(),
+                                false,
+                                None,
+                            )?,
+                            remap(remapped, clause.body())?,
+                            copy_origin(builder, clause.origin(), None)?,
+                        ),
+                    ));
+                }
+                let effect = copy_effect_instance(builder, scope.handler.effect(), None)?;
+                let handler = super::HandlerNode::new(
+                    scope.handler.id(),
+                    remap(remapped, scope.handler.body())?,
+                    effect,
+                    clauses,
+                );
+                let output = crate::types::ComputationType::new(
+                    copy_type(builder, scope.handler_output.value(), None)?,
+                    crate::types::clone_effect_row_with_budget(
+                        scope.handler_output.effects(),
+                        &mut builder.type_work,
+                    )
+                    .map_err(|_| BuildError::TypeWorkExceeded)?,
+                );
+                let arguments = crate::types::clone_kinded_arguments_with_budget(
+                    scope.arguments().iter(),
+                    &mut builder.type_work,
+                )
+                .map_err(|_| BuildError::TypeWorkExceeded)?;
+                let claims = scope.copy_claims();
+                let mut maps = [Vec::new(), Vec::new(), Vec::new()];
+                for (index, claim) in claims.iter().enumerate() {
+                    builder.charge_effect_metadata(claim.nodes.len())?;
+                    maps[index]
+                        .try_reserve_exact(claim.nodes.len())
+                        .map_err(|_| BuildError::TypeWorkExceeded)?;
+                    for (source, target) in claim.nodes {
+                        maps[index].push((*source, remap(remapped, *target)?));
+                    }
+                }
+                let [first, second, third] = claims;
+                let relocated = [
+                    super::source_resource::SourceResourceCopyClaim {
+                        nodes: &maps[0],
+                        ..first
+                    },
+                    super::source_resource::SourceResourceCopyClaim {
+                        nodes: &maps[1],
+                        ..second
+                    },
+                    super::source_resource::SourceResourceCopyClaim {
+                        nodes: &maps[2],
+                        ..third
+                    },
+                ];
+                let scope = super::source_resource::SourceResourceScopeNode::new(
+                    Arc::clone(scope.original()),
+                    arguments,
+                    scope.identity(),
+                    remap(remapped, scope.initializer)?,
+                    acquire,
+                    finish,
+                    state,
+                    pattern,
+                    handle,
+                    handler,
+                    output,
+                    relocated,
+                    &mut builder.type_work,
+                )
+                .map_err(|error| {
+                    if error.reason() == super::ValidationReason::Resource {
+                        TransformError::Build(BuildError::TypeWorkExceeded)
+                    } else {
+                        TransformError::InvalidValidatedInput
+                    }
+                })?;
+                builder.source_resource_scope(Box::new(scope), ty.into_inner(), effects, origin)
             }
             EffectOperation::ProviderScope(scope) => {
                 if context.is_some() {
@@ -1592,6 +1731,30 @@ pub(crate) fn prepare_provider_fragment_builder_with_catalog(
                                         )?;
                                     }
                                 }
+                            }
+                        }
+                        EffectOperation::SourceResourceScope(scope) => {
+                            budget.charge(4).map_err(|_| BuildError::TypeWorkExceeded)?;
+                            binders
+                                .try_reserve(4)
+                                .map_err(|_| BuildError::TypeWorkExceeded)?;
+                            binders.extend([
+                                scope.acquire.parameter.id(),
+                                scope.finish.parameter.id(),
+                                scope.handler_state.id(),
+                                scope.handle.id(),
+                            ]);
+                            retain_provider_pattern_binders(
+                                &scope.handler_pattern,
+                                &mut binders,
+                                budget,
+                            )?;
+                            for clause in scope.handler.clauses() {
+                                retain_provider_pattern_binders(
+                                    clause.pattern(),
+                                    &mut binders,
+                                    budget,
+                                )?;
                             }
                         }
                         EffectOperation::Handler(handler) => {

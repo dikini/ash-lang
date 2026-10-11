@@ -159,12 +159,12 @@ interpreter payload admission from that caller's ledger. The phase boundary now
 restores the builder meter after both success and refusal; exact and one-short
 cuts retain the caller's prior charges and fresh retries use a fresh caller.
 
-The product resource header has its own unresolved Surface carrier. It retains
+The product resource header has its own Surface and resolved carriers. They retain
 the explicit owned selector, complete Type/Row actuals, private data and lifecycle
 codecs, ordered native interpretations and lifecycle patterns. The experimental
-header remains a separate comparison carrier. Resolution refuses the product
-header before identity setup until canonical owner/resource admission is
-connected; parsing does not grant provider authority.
+header remains a separate comparison carrier. Body-free publication retains the
+original header allocation; parsing and a published header grant no executable
+resource permission.
 
 Dependency-free owner ABI preparation uses mutually exclusive scalar/acquire/
 teardown call variants and tagged owner arguments. Original library member
@@ -176,12 +176,103 @@ not a consequence of its address representation or non-nullness.
 
 Private owner restoration checks flat phase, coordinate, tag and span consistency.
 It cannot recheck a source path's leaf type without the original signature; exact
-correspondence authenticates the retained path, and future resolved binding must
-authenticate its type. The executable scalar path explicitly refuses owner,
-current-state and address facts. Whole source libraries with owner/address
-members also refuse before publication, including libraries with no symbols.
-Resource execution, guard publication, data/byte primitives and library ports
-remain separate required work.
+correspondence authenticates the retained path, and canonical source binding
+authenticates its leaf type. The executable scalar path explicitly refuses owner,
+current-state and address facts. Scalar members of a library containing owners
+use that same scalar path; the library's name supplies no ownership permission.
+
+Original resource acquisition, completion and handler forests are checked once
+per defining occurrence. A prepared instance owns its selected template, complete
+arguments and substitutions through initializer checking into body admission.
+This avoids computing those facts again after the initializer. Phase checking
+lends the caller's remaining work and restores setup and builder charges on both
+success and refusal; it also takes and restores one base context instead of
+cloning it for each forest.
+
+Source instance arguments retain the ordinary expected-row qualification before
+entering the complete substitution. Independent evidence checking derives the
+same preceding equation row; qualifying only its temporary validation copy would
+leave retained rigid-row exclusion facts inconsistent with the checked instance.
+
+Each original forest needs its own resolver-binder reservation before generated
+binders are allocated. Rewalking the whole module for each reservation introduced
+`1 + 3R` inventories for `R` resources, including an unused initial reservation.
+Source template preparation now pays for one iterative module inventory and
+reuses its immutable identities for each forest's fallible, collision-checked
+reservation. Independent final validation remains a separate obligation.
+
+The first executable resource checkpoint admits dependency-free opaque state,
+one acquisition and a single-Current-operand void teardown, the exact `scope`
+codec, private independent data and one Unit-domain associated operation. Client
+code requests that operation directly. The checkpoint refuses nonempty residual
+client rows, phase-local ordinary helper calls and provider `given` forwarding.
+Native bytes, windows, dependent owners, outward control, retained completion and
+library migrations remain required work. These are implementation boundaries,
+not amendments to CP-0022.
+
+A public source resource currently needs a public provider interface. Retaining
+an interface declared privately in the same module as a hidden resource-header
+dependency is not connected to the shared export closure yet. An imported hidden
+interface dependency has a different existing retention route; matching names
+cannot substitute for either route.
+
+Constructor-free native state needs its own authenticated nominal category at
+publication, import, linking and linked-evidence boundaries. State-only imports
+retain the exact original owner declaration and formals, without selecting native
+operations.
+Resource headers also contribute their provider interface to the existing hidden
+signature dependency closure; a facade does not need to export that interface's
+spelling. Source resource parameters and the result binder belong to the exact
+linked canonical-variable inventory.
+
+Defining experimental registries retain abstract family metadata before their
+separate checked provider certificates are attached during linking. Category
+coverage at that boundary must first authenticate the original code and defining
+export certificate, then count only their exact family identities alongside
+source resource and native owner categories. Closed registry validation still
+requires its attached certificates, complete canonical formals and linked native
+closure. Applying the closed check prematurely rejected existing SQLite, arena
+and provider-helper programs before independent Core validation.
+
+A defining registry omits imported nominal dependencies that its closed checking
+view retains. An imported opaque category can be reconstructed only in the view
+that actually contains it. Final linked and restored Core must still reconstruct
+every selected native codec independently; an immutable source receipt does not
+replace that consuming check.
+
+Capture projection must check the actual constructor identity before exposing
+its payload. Conflating `Finish.Retained(State, E)` with `ConsumedFailure(E)` made
+an independent completion error retain native state. Constructor identity changes
+must also wake the projection's existing dependency equation.
+
+Ordinary callable state restrictions apply to unused equational definitions as
+well as anonymous functions and call occurrences. Independent Core needs the same
+restriction, while admitting only the exact synthetic original lifecycle
+wrappers. A separate source-resource capture conversion frame also preserves the
+existing small-stack witness; its overflow occurred on the first ordinary node,
+before any deep traversal.
+
+The existing 256 KiB owned-cleanup witness also reached a larger source-checking
+dispatcher frame before the evaluator ran. Source-resource body and completion
+branches now pass their existing boxed phase carriers to separate non-inlined
+helpers, keeping their local values outside unrelated expression-dispatch calls.
+The branch order, guards, allocations and paid work remain the same; the witness
+retains its predecessor stack bound.
+
+Owned substitution maps must dispose displaced types iteratively. Temporary
+argument and handler buffers transfer their contents through consuming,
+infallible owner methods; exposing raw backing moves can leave a later error
+path responsible for recursive disposal. The architecture carrier inventory
+also covers named aliases introduced for shared checked-code maps and borrowed
+Core image views. These repairs preserve traversal charges and fallible reserves.
+
+Product resource instances use direct provided-effect requests in this slice;
+they do not carry the experiment's lexical forwarding certificate. Linked
+evidence must authenticate their exact original header and complete actuals,
+place the fresh identity only in the body scope, and retain nested experimental
+scopes without fabricating forwarding evidence. Passive source declarations
+also remain admissible when a program selects Pure Core; only executing a
+resource scope needs Effect Core.
 
 ## Deviations
 
