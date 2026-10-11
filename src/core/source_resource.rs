@@ -363,11 +363,13 @@ impl CheckedSourceResourceHeader {
             return Err(invalid());
         }
         let owned = header.parameters[header.owned_position].id;
+        let owner_candidates = registry.source_owner_candidate_count();
         for ty in [&header.input.ty, &header.data.ty] {
-            if crate::types::visit_type_structure_with_budget(ty, work, |node, _| {
+            if crate::types::visit_type_structure_with_budget(ty, work, |node, work| {
                 Ok(match node {
                     crate::types::TypeStructureNode::Type(Type::Variable(id)) => *id == owned,
                     crate::types::TypeStructureNode::Type(Type::Nominal(id)) => {
+                        work.charge(owner_candidates)?;
                         registry.source_owner_nominal(*id)
                     }
                     _ => false,
@@ -2652,6 +2654,109 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn ordinary_header_payloads_pay_for_all_passive_owner_candidates_and_retry_exactly() {
+        let original = include_str!("../../tests/fixtures/source-owner/owner.ash");
+        let library = &original[original.find("pub foreign library Memory").unwrap()
+            ..original.find("pub type Acquire").unwrap()];
+        let mut costs = Vec::new();
+        for extra_owners in [0, 7] {
+            let fixture = Fixture::new();
+            let mut owner = original
+                .replace(
+                    "pub type Acquire",
+                    "pub type Payload = Payload\npub type Acquire",
+                )
+                .replace("input Int", "input (Payload, Payload)")
+                .replace("data Int", "data (Payload, Payload)")
+                .replace(
+                    "Acquire<State<R>, Int, Unit>",
+                    "Acquire<State<R>, (Payload, Payload), Unit>",
+                )
+                .replace(".call size {", ".call 42 {")
+                .replace("match size == 9 {", "match false {")
+                .replace("read () => resume data", "read () => resume 42");
+            for index in 0..extra_owners {
+                // These contracts are independently admitted but unused by Probe.
+                // Native operation selection must not stand in for the owner table.
+                let passive = library
+                    .replace("Memory", &format!("Passive{index}"))
+                    .replace("Size", &format!("PassiveSize{index}"))
+                    .replace("Address", &format!("PassiveAddress{index}"))
+                    .replace("State", &format!("PassiveState{index}"))
+                    .replace("Allocate", &format!("PassiveAllocate{index}"))
+                    .replace("Free", &format!("PassiveFree{index}"));
+                owner.push_str(&passive);
+            }
+            fs::write(fixture.0.join("owner.ash"), owner).unwrap();
+            fs::write(
+                fixture.0.join("entry.ash"),
+                "import owner as Owner\nmain : Unit -> Int\nmain () = 42\n",
+            )
+            .unwrap();
+            let compiled = fixture.compile();
+            let (checked, _) = compiled
+                .pure_build_input()
+                .expect("unused passive headers leave the ordinary entry in Pure Core");
+            let registry = checked.registry();
+            assert_eq!(registry.source_owner_candidate_count(), extra_owners + 1);
+            let header = registry
+                .source_resource_facts()
+                .find(|fact| fact.spelling == "Probe")
+                .expect("the original checked source header is retained");
+            assert_eq!(header.interpreted.len(), 2);
+            for payload in [&header.input.ty, &header.data.ty] {
+                let Type::Tuple(fields) = payload else {
+                    panic!("the independent payload retains its ordinary nominal tuple")
+                };
+                assert_eq!(fields.len(), 2);
+                assert!(fields.iter().all(|field| matches!(
+                    field,
+                    Type::Nominal(nominal) if !registry.source_owner_nominal(*nominal)
+                )));
+            }
+            let mut measured = TypeWorkBudget::unbounded();
+            super::CheckedSourceResourceHeader::admit(header, registry, &mut measured)
+                .expect("independent nominal input and private data are admissible");
+            let cost = measured.used();
+            if let Some((_, smaller_cost)) = costs.first() {
+                let mut smaller_table_budget = TypeWorkBudget::with_limit(*smaller_cost);
+                let failure = super::CheckedSourceResourceHeader::admit(
+                    header,
+                    registry,
+                    &mut smaller_table_budget,
+                )
+                .expect_err("work sufficient for one owner cannot admit the wider passive table");
+                assert_eq!(failure.reason(), ValidationReason::Resource);
+            }
+            costs.push((registry.source_owner_candidate_count(), cost));
+            for prefix in [0, 19] {
+                let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+                short.charge(prefix).unwrap();
+                let failure =
+                    super::CheckedSourceResourceHeader::admit(header, registry, &mut short)
+                        .expect_err("one-short header work refuses without publishing authority");
+                assert_eq!(failure.reason(), ValidationReason::Resource);
+                for _ in 0..2 {
+                    let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                    exact.charge(prefix).unwrap();
+                    let admitted =
+                        super::CheckedSourceResourceHeader::admit(header, registry, &mut exact)
+                            .expect("the same immutable header retries at its exact work boundary");
+                    assert!(Arc::ptr_eq(&admitted.original, header));
+                    assert_eq!(exact.used(), prefix + cost);
+                }
+            }
+        }
+        let [(small_count, small_cost), (large_count, large_cost)] = costs.as_slice() else {
+            panic!("both passive owner table sizes were measured")
+        };
+        assert!(
+            *large_cost >= *small_cost + 4 * (*large_count - *small_count),
+            "four ordinary nominal payload occurrences must inspect every passive owner: {costs:?}"
+        );
     }
 
     #[test]

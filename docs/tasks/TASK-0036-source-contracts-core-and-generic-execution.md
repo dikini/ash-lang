@@ -274,6 +274,12 @@ scopes without fabricating forwarding evidence. Passive source declarations
 also remain admissible when a program selects Pure Core; only executing a
 resource scope needs Effect Core.
 
+Header input and private data walks must prepay owner-candidate lookup on the
+same cumulative validation meter. An ordinary nominal can require inspecting
+the entire passive owner table; charging only its type node omits work that
+grows with both payload width and owner count. Original and reconstructed
+headers use the same admission check and retain the existing work limit.
+
 ## Deviations
 
 None authorized. Return concrete semantic gaps to CP-0022 instead of resolving
