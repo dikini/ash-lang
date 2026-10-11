@@ -48,6 +48,17 @@ run the full architecture/workspace gate at integrated delivery.
 
 ## Discoveries
 
+The acquired_only delivery authenticates the instantiated nominal report fields
+in defining constructor order: body answer first, acquisition error second.
+It does not impose an extra report-parameter order, so a concrete-error
+`Outcome<T>` and an error-parameterized report share the same role check.
+Capture-value analysis must preserve that result shape while retaining finish
+as a cleanup obligation; reusing Scope/Completion assembly would fabricate a
+completion field. A source consumed-completion error becomes terminal after
+native consumption and cannot publish success or retry release. Native retained
+outcomes, bytes, broader provider shapes and outward control remain subsequent
+CP-0022 obligations.
+
 DN-0036 supplies reusable guarded scopes, owner arguments and validation, but
 Rust-authored manifests/adapters are experimental comparison evidence. They
 cannot become the source authoring API. Private replaceable payloads and finite

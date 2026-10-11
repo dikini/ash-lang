@@ -120,7 +120,7 @@ impl Machine<'_> {
                         .checked_sub(1)
                         .ok_or(RuntimeFailure::InvalidControlState)?;
                     let report = self.foreign_constructor(
-                        protocol.scope[0],
+                        protocol.report.refusal(),
                         Some(error),
                         RuntimePhase::Acquisition,
                     )?;
@@ -217,32 +217,53 @@ impl Machine<'_> {
                     return Err(RuntimeFailure::ForeignBinding);
                 }
                 let (constructor, payload) = self.foreign_report(&value, RuntimePhase::Cleanup)?;
-                let completion = if constructor == protocol.finish[0] && payload.is_none() {
-                    self.foreign_constructor(protocol.completion[0], None, RuntimePhase::Cleanup)?
-                } else if constructor == protocol.finish[1] {
-                    self.foreign_constructor(
-                        protocol.completion[1],
-                        Some(payload.ok_or(RuntimeFailure::ForeignBinding)?),
-                        RuntimePhase::Cleanup,
-                    )?
-                } else {
+                let consumed = constructor == protocol.finish[0] && payload.is_none();
+                let consumed_failure = constructor == protocol.finish[1] && payload.is_some();
+                if !consumed && !consumed_failure {
                     return Err(RuntimeFailure::ForeignBinding);
-                };
+                }
                 let body = boundary
                     .saved
                     .take()
                     .ok_or(RuntimeFailure::InvalidControlState)?;
-                let fields = self.foreign_tuple(&[body, completion], RuntimePhase::Cleanup)?;
-                let report = self.foreign_constructor(
-                    protocol.scope[1],
-                    Some(fields),
-                    RuntimePhase::Cleanup,
-                )?;
+                let report = match protocol.report {
+                    crate::core::source_resource::SourceResourceReportCodec::Scope {
+                        report,
+                        completion,
+                    } => {
+                        let completion = self.foreign_constructor(
+                            completion[usize::from(consumed_failure)],
+                            payload,
+                            RuntimePhase::Cleanup,
+                        )?;
+                        let fields =
+                            self.foreign_tuple(&[body, completion], RuntimePhase::Cleanup)?;
+                        Some(self.foreign_constructor(
+                            report[1],
+                            Some(fields),
+                            RuntimePhase::Cleanup,
+                        )?)
+                    }
+                    crate::core::source_resource::SourceResourceReportCodec::AcquiredOnly {
+                        report,
+                    } => {
+                        if consumed_failure {
+                            None
+                        } else {
+                            Some(self.foreign_constructor(
+                                report[0],
+                                Some(body),
+                                RuntimePhase::Cleanup,
+                            )?)
+                        }
+                    }
+                };
                 self.live_resources = self
                     .live_resources
                     .checked_sub(1)
                     .ok_or(RuntimeFailure::InvalidControlState)?;
                 self.trace_effect(EffectTraceEvent::ResourceReleased(key.0));
+                let report = report.ok_or(RuntimeFailure::ResourceCompletion)?;
                 self.control = Some(Control::Return(report));
             }
         }

@@ -21,6 +21,21 @@ release; every non-null allocation is released once.
 Resource and native applications retain row/type/row arguments, with the owned
 identity in the middle position. The state family itself has Type-only arguments.
 
+`acquired_only_owner.ash` and `acquired_only_entry.ash` use the same native fixture
+with a one-parameter `Outcome<T>` report. The public pipeline also checks renamed
+constructor roles, a generic error parameter, malformed report fields and forged
+completion claims. Run their generated-native evidence with:
+
+```sh
+CARGO_BUILD_JOBS=1 cargo test -p ash --all-features --test source_resource_acquired_only -- --test-threads=1
+```
+
+The trace establishes that refused acquisition executes no body, source refusal
+destroys a provisional owner, nested success remains nested and each allocation
+releases once. A source `ConsumedFailure` after the actual consuming native call
+terminates without a report or second release. This is source completion-error
+policy; the native fixture does not return a retained or failed destruction status.
+
 This fixture covers the bounded executable checkpoint under
 [CP-0022](../../../docs/proposals/CP-0022-ash-authored-foreign-interfaces.md) and
 [TASK-0036](../../../docs/tasks/TASK-0036-source-contracts-core-and-generic-execution.md).

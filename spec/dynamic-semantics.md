@@ -667,7 +667,8 @@ retains `D` in the scope. The body receives neither an owning value nor direct
 access to `D`; the admitted Ash handler uses its saved state and private data.
 Acquisition refusal executes no body. If native acquisition already returned a
 non-null owner, refusal destroys that unpublished owner once before delivering
-`NotAcquired(error)`. Null acquisition creates no destructor obligation.
+`NotAcquired(error)` under `scope` or `Failure(error)` under `acquired_only`.
+Null acquisition creates no destructor obligation.
 
 Associated ordinary operations preserve the nearest exact handler rule. A nearer
 ordinary source handler takes precedence over the resource handler. The admitted
@@ -686,8 +687,13 @@ non-owning consumed receipt with the original authority, before Ash report
 construction. Its returned-to-recorded transition is infallible. The prepaid
 report supplies `Foreign.Returned(Foreign.Consumed(()))`; source finish maps it
 to the resource codec's consumed completion. The scope records consumption
-before publishing its report. The source result remains
-`Completed(body_value, completion)` without flattening a nested body result.
+before publishing its report. Under `scope`, the source result remains
+`Completed(body_value, completion)`. Under `acquired_only`, normal consumed
+completion produces `Success(body_value)`; neither codec flattens a nested body
+result. A witnessed consumed completion mapped to `ConsumedFailure(error)` is
+terminal under `acquired_only`, reported as `runtime.resource-completion`, and
+publishes no success or acquisition failure. Recorded consumption still prevents
+a second native release. This slice admits no native retained disposition.
 
 An internal failure after a native return never retries the call or recreates
 readiness. A live guard, including one not yet published to the body, invokes its

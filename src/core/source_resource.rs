@@ -80,8 +80,28 @@ fn charge(work: &mut TypeWorkBudget, count: usize) -> Result<(), ValidationError
 pub(crate) struct SourceResourceCodec {
     pub(crate) acquire: [ConstructorId; 2],
     pub(crate) finish: [ConstructorId; 3],
-    pub(crate) scope: [ConstructorId; 2],
-    pub(crate) completion: [ConstructorId; 3],
+    pub(crate) report: SourceResourceReportCodec,
+}
+
+/// Checked report roles retain defining identities, including their field order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SourceResourceReportCodec {
+    Scope {
+        report: [ConstructorId; 2],
+        completion: [ConstructorId; 3],
+    },
+    AcquiredOnly {
+        report: [ConstructorId; 2],
+    },
+}
+
+impl SourceResourceReportCodec {
+    pub(crate) fn refusal(self) -> ConstructorId {
+        match self {
+            Self::Scope { report, .. } => report[0],
+            Self::AcquiredOnly { report } => report[1],
+        }
+    }
 }
 
 /// A completed header phase, retaining original immutable source authority.
@@ -247,6 +267,48 @@ fn report_codec(
     Ok((ids, completion_ids))
 }
 
+fn acquired_only_codec(
+    nominal: NominalTypeId,
+    arguments: &[&Type],
+    answer: crate::types::TypeVariableId,
+    refusal: &Type,
+    registry: &ResolvedRegistry,
+    work: &mut TypeWorkBudget,
+) -> Result<[ConstructorId; 2], ValidationError> {
+    let ids = constructors::<2>(nominal, arguments.len(), registry, work)?;
+    let parameters = registry.nominal_parameters(nominal).ok_or_else(invalid)?;
+    let mut replacements = HashMap::new();
+    charge(work, parameters.len())?;
+    replacements
+        .try_reserve(parameters.len())
+        .map_err(|_| resource())?;
+    for (parameter, argument) in parameters.iter().zip(arguments) {
+        replacements.insert(parameter.id, *argument);
+    }
+    // Authenticate instantiated payloads rather than inventing an arity or
+    // parameter order. Outcome<T> with a concrete error preserves builtin shape.
+    for (index, id) in ids.iter().enumerate() {
+        let ty = payload(*id, registry)?.ok_or_else(invalid)?;
+        let instantiated = crate::types::IterativeTypeOwner::new(
+            crate::types::substitute_type_variables_borrowed_with(
+                ty,
+                &replacements,
+                |cells| charge(work, cells),
+                resource,
+            )?,
+        );
+        let valid = if index == 0 {
+            variable(&instantiated, answer)
+        } else {
+            same(&instantiated, refusal, work)?
+        };
+        if !valid {
+            return Err(invalid());
+        }
+    }
+    Ok(ids)
+}
+
 impl CheckedSourceResourceHeader {
     pub(crate) fn admit(
         header: &Arc<SourceResourceTypeFact>,
@@ -257,7 +319,6 @@ impl CheckedSourceResourceHeader {
         if !registry
             .source_resource_fact(header.id)
             .is_some_and(|original| Arc::ptr_eq(original, header))
-            || header.codec.kind != SurfaceResourceReportCodecKind::Scope
             || header
                 .parameters
                 .get(header.owned_position)
@@ -279,19 +340,38 @@ impl CheckedSourceResourceHeader {
         let (scope, scope_arguments) = application(&header.result.ty, work)?;
         if acquisition_arguments.len() != 3
             || finish_arguments.len() != 2
-            || scope_arguments.len() != 3
             || !same(acquisition_arguments[0], &header.state.ty, work)?
             || !same(acquisition_arguments[1], &header.data.ty, work)?
             || !same(finish_arguments[0], &header.state.ty, work)?
-            || !same(acquisition_arguments[2], scope_arguments[0], work)?
-            || !same(finish_arguments[1], scope_arguments[1], work)?
-            || !variable(scope_arguments[2], header.answer.id)
         {
             return Err(invalid());
         }
         let acquire_codec = acquire_codec(acquisition, registry, work)?;
         let finish_codec = finish_codec(finish, registry, work)?;
-        let (scope_codec, completion_codec) = report_codec(scope, registry, work)?;
+        let report = match header.codec.kind {
+            SurfaceResourceReportCodecKind::Scope => {
+                if scope_arguments.len() != 3
+                    || !same(acquisition_arguments[2], scope_arguments[0], work)?
+                    || !same(finish_arguments[1], scope_arguments[1], work)?
+                    || !variable(scope_arguments[2], header.answer.id)
+                {
+                    return Err(invalid());
+                }
+                let (report, completion) = report_codec(scope, registry, work)?;
+                SourceResourceReportCodec::Scope { report, completion }
+            }
+            SurfaceResourceReportCodecKind::AcquiredOnly => {
+                let report = acquired_only_codec(
+                    scope,
+                    &scope_arguments,
+                    header.answer.id,
+                    acquisition_arguments[2],
+                    registry,
+                    work,
+                )?;
+                SourceResourceReportCodec::AcquiredOnly { report }
+            }
+        };
         let mut acquiring = None;
         let mut tearing_down = None;
         charge(work, header.interpreted.len())?;
@@ -389,8 +469,7 @@ impl CheckedSourceResourceHeader {
             codec: SourceResourceCodec {
                 acquire: acquire_codec,
                 finish: finish_codec,
-                scope: scope_codec,
-                completion: completion_codec,
+                report,
             },
         })
     }
@@ -2956,6 +3035,68 @@ mod tests {
     #[test]
     fn independently_revalidated_source_scope_rejects_incomplete_or_forged_claims() {
         let fixture = Fixture::new();
+        check_independent_source_scope(&fixture);
+    }
+
+    #[test]
+    fn independently_revalidated_acquired_only_scope_rejects_incomplete_or_forged_claims() {
+        let fixture = Fixture::new();
+        fs::write(
+            fixture.0.join("owner.ash"),
+            include_str!("../../tests/fixtures/source-owner/acquired_only_owner.ash"),
+        )
+        .unwrap();
+        fs::write(
+            fixture.0.join("entry.ash"),
+            include_str!("../../tests/fixtures/source-owner/acquired_only_entry.ash"),
+        )
+        .unwrap();
+        check_independent_source_scope(&fixture);
+    }
+
+    #[test]
+    fn acquired_only_header_admission_preserves_exact_budget_refusal_and_fresh_retry() {
+        let fixture = Fixture::new();
+        fs::write(
+            fixture.0.join("owner.ash"),
+            include_str!("../../tests/fixtures/source-owner/acquired_only_owner.ash"),
+        )
+        .unwrap();
+        fs::write(
+            fixture.0.join("entry.ash"),
+            include_str!("../../tests/fixtures/source-owner/acquired_only_entry.ash"),
+        )
+        .unwrap();
+        let compiled = fixture.compile();
+        let (checked, _) = compiled.effect_build_input().unwrap();
+        let registry = checked.registry();
+        let header = registry
+            .source_resource_facts()
+            .find(|header| header.spelling == "Probe")
+            .unwrap();
+        let mut measured = TypeWorkBudget::unbounded();
+        super::CheckedSourceResourceHeader::admit(header, registry, &mut measured).unwrap();
+        let cost = measured.used();
+        let mut short = TypeWorkBudget::with_limit(cost - 1);
+        assert_eq!(
+            super::CheckedSourceResourceHeader::admit(header, registry, &mut short)
+                .unwrap_err()
+                .reason(),
+            ValidationReason::Resource
+        );
+        for _ in 0..2 {
+            let mut exact = TypeWorkBudget::with_limit(cost);
+            let admitted =
+                super::CheckedSourceResourceHeader::admit(header, registry, &mut exact).unwrap();
+            assert!(matches!(
+                admitted.codec.report,
+                super::SourceResourceReportCodec::AcquiredOnly { .. }
+            ));
+            assert_eq!(exact.used(), cost);
+        }
+    }
+
+    fn check_independent_source_scope(fixture: &Fixture) {
         let compiled = fixture.compile();
         let (checked, provenance) = compiled.effect_build_input().unwrap();
         let sources = provenance

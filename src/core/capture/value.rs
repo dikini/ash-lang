@@ -2143,6 +2143,26 @@ impl Graph {
                 source,
                 budget,
             )?;
+            let (report, completion) = match codec.report {
+                crate::core::source_resource::SourceResourceReportCodec::Scope {
+                    report,
+                    completion,
+                } => (report, completion),
+                crate::core::source_resource::SourceResourceReportCodec::AcquiredOnly {
+                    report,
+                } => {
+                    return Ok(Expr::Resource {
+                        success: Some(report[0]),
+                        failure: Some(report[1]),
+                        failure_payload: Some(failure_payload),
+                        handle,
+                        identity,
+                        initializer: acquired,
+                        body: completed,
+                        source,
+                    });
+                }
+            };
             let finished = self.push(
                 Expr::Bind {
                     binder: finish_parameter,
@@ -2152,7 +2172,7 @@ impl Graph {
                 source,
                 budget,
             )?;
-            let closed = self.push(Expr::Constructor(codec.completion[0]), source, budget)?;
+            let closed = self.push(Expr::Constructor(completion[0]), source, budget)?;
             let consumed_error = self.push(
                 Expr::Project {
                     value: finished,
@@ -2163,7 +2183,7 @@ impl Graph {
                 budget,
             )?;
             let consumed_constructor =
-                self.push(Expr::Constructor(codec.completion[1]), source, budget)?;
+                self.push(Expr::Constructor(completion[1]), source, budget)?;
             let consumed = self.push(
                 Expr::Call {
                     function: consumed_constructor,
@@ -2193,7 +2213,7 @@ impl Graph {
                 budget,
             )?;
             let retained_constructor =
-                self.push(Expr::Constructor(codec.completion[2]), source, budget)?;
+                self.push(Expr::Constructor(completion[2]), source, budget)?;
             let retained = self.push(
                 Expr::Call {
                     function: retained_constructor,
@@ -2215,8 +2235,8 @@ impl Graph {
                 budget,
             )?;
             Expr::Resource {
-                success: Some(codec.scope[1]),
-                failure: Some(codec.scope[0]),
+                success: Some(report[1]),
+                failure: Some(report[0]),
                 failure_payload: Some(failure_payload),
                 handle,
                 identity,
@@ -2642,11 +2662,12 @@ impl Graph {
     }
 
     /// A resource's control handler corresponds to the exact handler equation
-    /// inside its resource result, rather than the enclosing Scope equation.
+    /// inside its resource result, rather than the enclosing report equation.
     pub(super) fn position_provider_handler(
         &mut self,
         code: usize,
         scope: usize,
+        has_completion: bool,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
         charge(budget, 1)?;
@@ -2655,13 +2676,17 @@ impl Graph {
             return Err(Failure::Invalid);
         };
         charge(budget, 1)?;
-        let Expr::Tuple(fields) = self.expressions.get(*body).ok_or(Failure::Invalid)? else {
-            return Err(Failure::Invalid);
+        let mut expression = if has_completion {
+            let Expr::Tuple(fields) = self.expressions.get(*body).ok_or(Failure::Invalid)? else {
+                return Err(Failure::Invalid);
+            };
+            let [body, _completion] = fields.as_slice() else {
+                return Err(Failure::Invalid);
+            };
+            *body
+        } else {
+            *body
         };
-        let [body, _completion] = fields.as_slice() else {
-            return Err(Failure::Invalid);
-        };
-        let mut expression = *body;
         // Every admitted member state and the finisher share one owner.
         // Walk the actual finite binding chain instead of assuming two binds.
         loop {

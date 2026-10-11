@@ -104,7 +104,13 @@ Core interpretation for admitted owner-free native entry instances, leaving an
 empty outward row. Ordinary source handlers cannot install a native symbol's
 interpreter. Source contracts and checked Core supply no executable binding;
 default execution refuses missing bindings before Ash runs. Constants, foreign
-ownership/access and copy windows remain outside the admitted subset.
+byte/access contracts, dependent ownership and copy windows remain outside the
+admitted subset. Source resource declarations additionally admit dependency-free
+opaque owners, private data and checked `scope` or `acquired_only` reports, with
+one acquisition and an unconditional consuming teardown. Exact constructor and
+native-call identities authenticate publication and completion; declarations
+alone confer no ownership. The [source-resource rules](static-semantics.md#source-resource-declarations)
+bound this lifecycle and its supported associated handler shape.
 
 `resource cell<R> c = initializer { body }` acquires one scoped mutable integer
 cell through the compiler-owned `@builtin.cell` API. The scope owns release;
