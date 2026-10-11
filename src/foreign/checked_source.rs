@@ -104,6 +104,9 @@ pub(crate) struct ForeignBindingContext<'registry> {
 }
 
 impl<'registry> ForeignBindingContext<'registry> {
+    pub(crate) fn codec(&self) -> &Arc<CheckedForeignCallCodec> {
+        &self.codec
+    }
     pub(crate) fn new(
         registry: &'registry ResolvedRegistry,
         common_module: ModuleId,

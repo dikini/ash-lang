@@ -1042,6 +1042,20 @@ complete Type/Row instances. The owner-free program interpretation cannot
 authorize these requests. Retained row arguments remain part of source identity
 even when an owner application's native projection contains only Type arguments.
 
+The common module also exports the pure functions
+`Foreign.checked_i64 : Int -> Foreign.Call<Int>` and
+`Foreign.checked_size_t : Int -> Foreign.Call<Int>`. Both have empty
+effect rows.
+For the GNU64 profile, the first accepts the inclusive range
+`[-2^63, 2^63 - 1]`; the second accepts `[0, 2^64 - 1]`. Success returns the
+unchanged mathematical `Int`; a range failure returns `ConversionFailed` with
+an opaque `ConversionError`. Their original builtin function identities, type
+annotations, provenance and result-codec allocation survive selected imports
+and facade publication. Same-spelled client functions grant no builtin
+authority.
+These checks grant no native-call, access or ownership permission and do not
+replace a later native call's exact operand conversion.
+
 Constants, qualified ABI references, output slots, foreign access and copy
 windows remain outside this implementation checkpoint. Owner declarations and
 their parsed contracts alone grant no executable permission.

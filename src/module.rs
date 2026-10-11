@@ -75,7 +75,38 @@ const FOREIGN_SOURCE: &str = concat!(
     "pub type Disposition<T> = Consumed(T)\n",
     "    | Retained(T)\n",
     "    | BlockedDependent\n",
+    "pub checked_i64 : Int -> Call<Int>\nchecked_i64 value = checked_i64 value\n",
+    "pub checked_size_t : Int -> Call<Int>\nchecked_size_t value = checked_size_t value\n",
 );
+
+/// Exact source coordinates for compiler-owned scalar preflight declarations.
+/// These roles follow the unchanged canonical foreign nominal inventory.
+pub(crate) fn foreign_scalar_preflight_ranges(
+    source: Span,
+    local: u32,
+) -> Option<(crate::source::ByteRange, crate::source::ByteRange)> {
+    const I64: &str = "pub checked_i64 : Int -> Call<Int>\nchecked_i64 value = checked_i64 value\n";
+    const SIZE: &str =
+        "pub checked_size_t : Int -> Call<Int>\nchecked_size_t value = checked_size_t value\n";
+    if source.range().start() != 0
+        || usize::try_from(source.range().end()).ok()? != FOREIGN_SOURCE.len()
+    {
+        return None;
+    }
+    let (start, name) = match local {
+        0 => (FOREIGN_SOURCE.len() - I64.len() - SIZE.len(), "checked_i64"),
+        1 => (FOREIGN_SOURCE.len() - SIZE.len(), "checked_size_t"),
+        _ => return None,
+    };
+    let name_start = u32::try_from(start + "pub ".len()).ok()?;
+    let name_end = name_start.checked_add(u32::try_from(name.len()).ok()?)?;
+    let annotation_start = name_end.checked_add(3)?;
+    let annotation_end = annotation_start.checked_add(16)?;
+    Some((
+        crate::source::ByteRange::new(name_start, name_end).ok()?,
+        crate::source::ByteRange::new(annotation_start, annotation_end).ok()?,
+    ))
+}
 
 /// A validated name for one configured module root.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]

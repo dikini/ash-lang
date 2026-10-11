@@ -753,6 +753,10 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/driver.rs::ObservationMetadata.ty", FieldTransientValueTypeValuePipelineObservationPipelineTypeObservation),
     kind_site!("src/foreign/checked_source.rs::CheckedForeignSymbol.prepared", FieldForeignPreparedKinds, Shared),
     kind_site!("src/foreign/checked_source.rs::CheckedForeignSymbol.source_signature", FieldForeignTypesOwned),
+    // Scalar preflights own their original resolved annotation under the
+    // iterative fact destructor; publication shares that same immutable fact.
+    // The codec and source origins contain no Type/Kind carrier edges.
+    kind_site!("src/foreign/scalar_preflight.rs::CheckedForeignScalarPreflight.annotation", FieldForeignTypesOwned),
     kind_site!("src/foreign/checked_source.rs::ForeignBindingContext.registry", FieldForeignBindingRegistryBorrow),
     kind_site!("src/foreign/source_contract.rs::PreparedForeignLibrary.symbols", FieldForeignPreparedKinds),
     kind_site!("src/foreign/source_contract.rs::PreparedForeignLibrary.owners", FieldForeignPreparedKinds),
@@ -778,6 +782,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::ResolvedEffectDeclaration.native_contract", FieldForeignFactsShared),
     kind_site!("src/resolved.rs::ResolvedEffectOperationBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolved.rs::ResolvedRegistry.native_symbols", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree, Shared),
+    kind_site!("src/resolved.rs::ResolvedRegistry.scalar_preflights", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree, Shared),
     kind_site!("src/surface.rs::SurfaceForeignAccess.$alias", FieldSurfaceProjectionOnlyDeferredProjectionProjectionProjectionSurfaceTree),
     kind_site!("src/surface.rs::SurfaceForeignContract.$alias", FieldSurfaceProjectionOnlyDeferredProjectionProjectionProjectionSurfaceTree),
     kind_site!("src/surface.rs::SurfaceForeignLibrary.$alias", FieldSurfaceProjectionOnlyDeferredProjectionProjectionProjectionSurfaceTree),
@@ -2643,6 +2648,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::ExportedConstructor.payload", FieldSummaryValueTypeValueResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ExportedConstructor.scheme", FieldSummarySchemeSchemeValueResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ExportedGlobal.scheme", FieldSummarySchemeSchemeValueResolutionResolutionTypeSummaryTree),
+    kind_site!("src/resolved.rs::ExportedGlobal.scalar_preflight", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree, Shared),
     kind_site!("src/resolved.rs::ExportedHiddenType.parameters", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ExportedHiddenType.representation", FieldSummaryValueTypeValueResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ExportedType.parameters", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
@@ -2657,6 +2663,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::ImportedFacts.interfaces", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree, Shared),
     kind_site!("src/resolved.rs::ImportedFacts.nominals", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ImportedGlobalScheme.scheme", FieldSummarySchemeSchemeValueResolutionResolutionTypeSummaryTree),
+    kind_site!("src/resolved.rs::ImportedGlobalScheme.scalar_preflight", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree, Shared),
     kind_site!("src/resolved.rs::ImportedImplementationFact.fact", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree, Mixed),
     kind_site!("src/resolved.rs::ImportedInterfaceFact.fact", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree, Shared),
     kind_site!("src/resolved.rs::ImportedNominalFact.parameters", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),

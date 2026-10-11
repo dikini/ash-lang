@@ -102,6 +102,83 @@ fn generated_executable_runs_imported_core_after_the_original_source_graph_disap
 }
 
 #[test]
+fn pure_generated_host_restores_reexported_scalar_checks_without_native_links() {
+    let fixture = Fixture::new(
+        r"import @builtin.foreign as Foreign
+import facade as Checks
+
+main : Unit -> Bool
+main () = match (
+    Checks.signed 0,
+    Checks.signed 9223372036854775807,
+    Checks.signed (9223372036854775807 + 1),
+    Checks.size 0,
+    Checks.size ((9223372036854775807 * 2) + 1),
+    Checks.size ((9223372036854775807 + 1) * 2)
+) {
+    (
+        Foreign.Returned(signed_zero),
+        Foreign.Returned(signed_high),
+        Foreign.ConversionFailed(_),
+        Foreign.Returned(size_zero),
+        Foreign.Returned(size_high),
+        Foreign.ConversionFailed(_)
+    ) => match (
+        signed_zero == 0,
+        signed_high == 9223372036854775807,
+        size_zero == 0,
+        size_high == ((9223372036854775807 * 2) + 1)
+    ) {
+        (true, true, true, true) => true
+        _ => false
+    }
+    _ => false
+}
+",
+    );
+    fs::write(
+        fixture.0.join("facade.ash"),
+        "pub import @builtin.foreign (checked_i64 as signed, checked_size_t as size)\n",
+    )
+    .unwrap();
+    let checked = compile_path(fixture.source()).expect("pure scalar check facade admission");
+    fs::remove_file(fixture.0.join("entry.ash")).unwrap();
+    fs::remove_file(fixture.0.join("facade.ash")).unwrap();
+    let mut configuration = BuildConfiguration::new(fixture.0.join("scalar-checks"));
+    let cache = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
+    configuration.cargo_target_directory = Some(cache.join("ffi-native-hosts"));
+    let prepared = prepare_program(&checked, configuration).expect("pure scalar image preparation");
+    assert!(
+        prepared
+            .generated_rust()
+            .contains("__run_private_pure_image")
+    );
+    assert!(!prepared.generated_rust().contains("compile_path"));
+    assert!(!prepared.generated_rust().contains("#[link_name"));
+    drop(checked);
+    let built = build_prepared(prepared).unwrap_or_else(|error| {
+        let log = error
+            .build_log()
+            .and_then(|path| fs::read_to_string(path).ok())
+            .unwrap_or_default();
+        panic!("{error}\n{log}");
+    });
+    let output = Command::new(built.executable())
+        .current_dir(&fixture.0)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"true\n");
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn build_preparation_rejects_unsupported_targets_and_metadata_without_native_tools() {
     let fixture = Fixture::new("type Generic<T> = Generic(T)\nmain : Unit -> Int\nmain () = 42\n");
     let checked = compile_path(fixture.source()).unwrap();

@@ -580,6 +580,18 @@ Already performed native side effects remain performed. A new evaluation has
 fresh machine state and may make its own calls. Internal work/storage failures
 are not `Foreign.ConversionFailed` outcomes.
 
+## Common scalar preflight
+
+The pure common scalar checks invoke no native symbol. On a supported GNU64
+host, a successful check reports `Foreign.Returned` containing the original
+mathematical integer; only an out-of-range input reports
+`Foreign.ConversionFailed` with the canonical opaque error. Work or storage
+exhaustion and an unsupported host are terminal evaluator failures. The machine
+prices the check and reserves its complete report before publishing any
+constructor cell. A terminal refusal publishes no partial result. These checks
+create no resource activation, state token, native readiness or destructor
+obligation.
+
 ## Source resource execution with opaque owners
 
 The admitted product source resource scope combines an Ash initializer, acquire

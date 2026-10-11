@@ -12,8 +12,9 @@ a program from standard input.
 
 ## Building an executable
 
-The program-build path supports the retained Pure subset and owner-free
-scalar/void foreign calls on Linux x86-64 GNU. It compiles the source graph once
+The program-build path supports the retained Pure subset, scalar/void foreign
+calls and dependency-free opaque resource scopes on Linux x86-64 GNU. It
+compiles the source graph once
 and generates a Rust host containing private Core construction data, the
 existing evaluator and any required typed native bridges:
 
@@ -120,16 +121,23 @@ ordinary continuation work can refuse; subsequent failure does not retry the
 call or undo its external effects.
 
 The Pure carrier retains its restrictions on polymorphic or lexical type
-operations. The Effect carrier admits generic helper abstraction/application
-and native requests, but refuses ordinary handler/resource operations, active
-constant operands, pointer/address transport, owners, access contracts, output
-slots and copy windows. Both carriers refuse unsupported method evidence,
-newtype conversion, intrinsics and integer literal payloads outside signed
-64-bit range. Evaluated integer arithmetic and widened native results retain
-their mathematical semantics. These are build-path limitations, not changes to
-ordinary non-foreign execution. SQLite, native buffer and minimal arena ports,
-complete ownership/access execution and the separate optional `ash check-ffi`
-authoring tool remain work in the `ffi-ash` milestone.
+operations. It admits the common side-effect-free `Foreign.checked_i64` and
+`Foreign.checked_size_t` checks, both returning `Foreign.Call<Int>` with the
+unchanged integer or a conversion failure. The Effect carrier also admits
+generic helper abstraction/application, native requests and dependency-free
+opaque source resource scopes with the admitted lifecycle codec. Ordinary
+handler precedence, local resumption and nested normal completion use the
+existing evaluator. Outward resource capture, discard, retained quarantine and
+byte-access windows remain outside this build profile.
+
+Both carriers refuse unsupported method evidence, newtype conversion, other
+intrinsics and integer literal payloads outside signed 64-bit range. Evaluated
+integer arithmetic and widened native results retain their mathematical
+semantics. These are build-path limitations, not changes to ordinary non-foreign
+execution. The source [arena library](../../libraries/README.md) provides the
+minimal allocation/usage/release lifecycle. SQLite and native-buffer ports,
+complete ownership/access execution, constant publication and the separate
+optional `ash check-ffi` authoring tool remain work in the `ffi-ash` milestone.
 
 ## Diagnostic formats and locales
 

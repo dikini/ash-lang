@@ -1451,6 +1451,7 @@ impl<'runtime> Machine<'runtime> {
                             value,
                             &mut self.heap,
                             &mut self.instantiation_work,
+                            self.program.registry(),
                         )?
                     };
                 self.control = Some(Control::Return(result));
@@ -3667,6 +3668,7 @@ fn apply_intrinsic(
     argument: Value,
     heap: &mut Vec<HeapCell>,
     work: &mut TypeWorkBudget,
+    registry: &crate::resolved::ResolvedRegistry,
 ) -> Result<Value, RuntimeFailure> {
     use crate::core::packed::Intrinsic;
     let operation = intrinsic.operation();
@@ -3674,6 +3676,10 @@ fn apply_intrinsic(
         return Err(RuntimeFailure::InvalidControlState);
     }
     let result = match (operation, argument) {
+        (
+            Intrinsic::ForeignCheckedI64 { .. } | Intrinsic::ForeignCheckedSizeT { .. },
+            Value::Integer(integer),
+        ) => return apply_scalar_preflight(intrinsic, integer, heap, work, registry),
         (Intrinsic::BytesEmpty, Value::Unit) => Value::Bytes(Arc::from([])),
         (Intrinsic::BytesLength, Value::Bytes(bytes)) => {
             Value::Integer(crate::integer::Integer::from_usize(bytes.len()))
@@ -3756,6 +3762,92 @@ fn apply_intrinsic(
         _ => return Err(RuntimeFailure::InvalidControlState),
     };
     Ok(result)
+}
+
+// Result preparation stays outside the shared evaluator dispatch frame.
+#[inline(never)]
+fn apply_scalar_preflight(
+    intrinsic: crate::core::packed::IntrinsicNode,
+    integer: crate::integer::Integer,
+    heap: &mut Vec<HeapCell>,
+    work: &mut TypeWorkBudget,
+    registry: &crate::resolved::ResolvedRegistry,
+) -> Result<Value, RuntimeFailure> {
+    use crate::{
+        core::packed::Intrinsic,
+        foreign::{
+            scalar_preflight::ForeignScalarPreflightRole,
+            source_contract::PreparedScalarRepresentation,
+            source_runtime::{NativeScalarConversionError, narrow_gnu_scalar},
+        },
+    };
+    let (function, role, representation) = match intrinsic.operation() {
+        Intrinsic::ForeignCheckedI64 { function } => (
+            function,
+            ForeignScalarPreflightRole::I64,
+            PreparedScalarRepresentation::Signed(64),
+        ),
+        Intrinsic::ForeignCheckedSizeT { function } => (
+            function,
+            ForeignScalarPreflightRole::SizeT,
+            PreparedScalarRepresentation::SizeT,
+        ),
+        _ => return Err(RuntimeFailure::InvalidControlState),
+    };
+    charge_runtime_work(work, 1, RuntimePhase::Evaluation)?;
+    let fact = registry
+        .scalar_preflight(function)
+        .ok_or(RuntimeFailure::InvalidControlState)?;
+    if fact.function() != function || fact.module() != intrinsic.module() || fact.role() != role {
+        return Err(RuntimeFailure::InvalidControlState);
+    }
+    let error = fact
+        .conversion_error_constructor()
+        .ok_or(RuntimeFailure::InvalidControlState)?;
+    let ids = fact.call_codec().ids();
+    let accepted = match narrow_gnu_scalar(&integer, representation, work) {
+        Ok(_) => true,
+        Err(NativeScalarConversionError::OutOfRange) => false,
+        Err(NativeScalarConversionError::WorkExhausted) => {
+            return Err(resource_failure(
+                ResourceFailureCause::WorkBudgetExhausted,
+                RuntimePhase::Evaluation,
+                RuntimeResource::WorkUnits,
+                None,
+                Some(work.remaining()),
+            ));
+        }
+        Err(
+            NativeScalarConversionError::InvalidRepresentation
+            | NativeScalarConversionError::UnsupportedHost,
+        ) => {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+    };
+    let cells = if accepted { 1 } else { 2 };
+    charge_runtime_work(work, cells, RuntimePhase::Evaluation)?;
+    heap.len()
+        .checked_add(cells)
+        .ok_or(RuntimeFailure::HeapCapacity)?;
+    heap.try_reserve(cells).map_err(|_| {
+        resource_failure(
+            ResourceFailureCause::StorageReservationFailed,
+            RuntimePhase::Evaluation,
+            RuntimeResource::ForeignCodecStorage,
+            Some(cells),
+            None,
+        )
+    })?;
+    let (constructor, payload) = if accepted {
+        (ids.returned, Value::Integer(integer))
+    } else {
+        let location = heap.len();
+        heap.push(HeapCell::Constructor(error, None));
+        (ids.conversion_failed, Value::Location(location))
+    };
+    let location = heap.len();
+    heap.push(HeapCell::Constructor(constructor, Some(payload)));
+    Ok(Value::Location(location))
 }
 
 fn allocate_heap(heap: &mut Vec<HeapCell>, cell: HeapCell) -> Result<Location, RuntimeFailure> {
@@ -4039,6 +4131,156 @@ mod tests {
         source::{ByteRange, Origin, SourceFile},
         types::{ConstructorId, NominalTypeId, Type, TypeVariableId},
     };
+
+    #[test]
+    fn scalar_preflight_ranges_and_reports_are_atomic_and_retryable() {
+        if !cfg!(all(
+            target_arch = "x86_64",
+            target_os = "linux",
+            target_env = "gnu",
+            target_pointer_width = "64"
+        )) {
+            return;
+        }
+        let identity = SourceFile::new("preflight-runtime-identity", "")
+            .unwrap()
+            .id()
+            .value();
+        let path = std::env::temp_dir().join(format!(
+            "ash-preflight-runtime-{}-{identity}.ash",
+            std::process::id()
+        ));
+        struct Fixture(std::path::PathBuf);
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let fixture = Fixture(path);
+        std::fs::write(&fixture.0, "import @builtin.foreign as Foreign\nmain : Unit -> (Foreign.Call<Int>, Foreign.Call<Int>)\nmain () = (Foreign.checked_i64 0, Foreign.checked_size_t 0)\n").unwrap();
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry: fixture.0.clone(),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap();
+        let (program, _) = compiled
+            .pure_build_input()
+            .expect("checks preserve Pure Core");
+        let intrinsics = [true, false].map(|signed| {
+            program
+                .nodes()
+                .iter()
+                .find_map(|node| match &node.kind {
+                    PureExprKind::Value(PureValue::Intrinsic(intrinsic))
+                        if matches!(
+                            intrinsic.operation(),
+                            crate::core::packed::Intrinsic::ForeignCheckedI64 { .. }
+                        ) == signed
+                            && matches!(
+                                intrinsic.operation(),
+                                crate::core::packed::Intrinsic::ForeignCheckedI64 { .. }
+                                    | crate::core::packed::Intrinsic::ForeignCheckedSizeT { .. }
+                            ) =>
+                    {
+                        Some(*intrinsic)
+                    }
+                    _ => None,
+                })
+                .unwrap()
+        });
+        let signed_max = Integer::from_i64(i64::MAX);
+        let unsigned_max = Integer::from_u64(u64::MAX);
+        let one = Integer::from_i64(1);
+        for (integer, accepted) in [
+            (Integer::from_i64(i64::MIN), [true, false]),
+            (Integer::from_i64(-1), [true, false]),
+            (Integer::from_i64(0), [true, true]),
+            (signed_max.clone(), [true, true]),
+            (&signed_max + &one, [false, true]),
+            (unsigned_max.clone(), [false, true]),
+            (&unsigned_max + &one, [false, false]),
+        ] {
+            for (intrinsic, accepted) in intrinsics.into_iter().zip(accepted) {
+                let mut measured = TypeWorkBudget::unbounded();
+                let mut heap = Vec::new();
+                apply_scalar_preflight(
+                    intrinsic,
+                    integer.clone(),
+                    &mut heap,
+                    &mut measured,
+                    program.registry(),
+                )
+                .unwrap();
+                let required = measured.used();
+                for prefix in [0, 17] {
+                    let mut short = TypeWorkBudget::with_limit(prefix + required - 1);
+                    short.charge(prefix).unwrap();
+                    let mut refused_heap = Vec::new();
+                    let failure = apply_scalar_preflight(
+                        intrinsic,
+                        integer.clone(),
+                        &mut refused_heap,
+                        &mut short,
+                        program.registry(),
+                    )
+                    .unwrap_err();
+                    assert!(matches!(failure, RuntimeFailure::Report(report)
+                        if report.primary.resource().is_some_and(|details|
+                            details.cause == ResourceFailureCause::WorkBudgetExhausted
+                                && details.phase == RuntimePhase::Evaluation
+                                && details.resource == RuntimeResource::WorkUnits)));
+                    assert!(
+                        refused_heap.is_empty(),
+                        "refusal cannot publish a partial result"
+                    );
+                    for _ in 0..2 {
+                        let mut exact = TypeWorkBudget::with_limit(prefix + required);
+                        exact.charge(prefix).unwrap();
+                        let mut heap = Vec::new();
+                        let Value::Location(location) = apply_scalar_preflight(
+                            intrinsic,
+                            integer.clone(),
+                            &mut heap,
+                            &mut exact,
+                            program.registry(),
+                        )
+                        .unwrap() else {
+                            panic!("constructor result")
+                        };
+                        let function = match intrinsic.operation() {
+                            crate::core::packed::Intrinsic::ForeignCheckedI64 { function }
+                            | crate::core::packed::Intrinsic::ForeignCheckedSizeT { function } => {
+                                function
+                            }
+                            _ => unreachable!(),
+                        };
+                        let fact = program.registry().scalar_preflight(function).unwrap();
+                        let ids = fact.call_codec().ids();
+                        if accepted {
+                            assert!(
+                                matches!(&heap[location], HeapCell::Constructor(constructor, Some(Value::Integer(value)))
+                                if *constructor == ids.returned && *value == integer)
+                            );
+                            assert_eq!(heap.len(), 1);
+                        } else {
+                            let HeapCell::Constructor(constructor, Some(Value::Location(error))) =
+                                &heap[location]
+                            else {
+                                panic!("conversion refusal")
+                            };
+                            assert_eq!(*constructor, ids.conversion_failed);
+                            assert!(
+                                matches!(&heap[*error], HeapCell::Constructor(constructor, None)
+                                if Some(*constructor) == fact.conversion_error_constructor())
+                            );
+                            assert_eq!(heap.len(), 2);
+                        }
+                        assert_eq!(exact.used(), prefix + required);
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn packed_literal_copy_reports_low_work_without_panicking() {

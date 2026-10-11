@@ -1390,6 +1390,13 @@ impl Graph {
                         nodes, id, &node.ty, producer, methods, adapters, budget,
                     );
                 }
+                if matches!(
+                    intrinsic.operation(),
+                    crate::core::packed::Intrinsic::ForeignCheckedI64 { .. }
+                        | crate::core::packed::Intrinsic::ForeignCheckedSizeT { .. }
+                ) {
+                    return self.build_scalar_preflight_result(id, *intrinsic, source, budget);
+                }
                 self.targets.try_reserve(1).map_err(|_| Failure::Resource)?;
                 self.targets.insert(id, id);
                 let parameter = self.push(Expr::Slot, source, budget)?;
@@ -1935,6 +1942,70 @@ impl Graph {
                 operand: index(resume.value()),
             },
             _ => Expr::Scalar,
+        })
+    }
+
+    // Keep constructor-result temporaries outside the shared capture frame.
+    #[inline(never)]
+    fn build_scalar_preflight_result(
+        &mut self,
+        id: usize,
+        intrinsic: crate::core::packed::IntrinsicNode,
+        source: Span,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Expr, Failure> {
+        self.targets.try_reserve(1).map_err(|_| Failure::Resource)?;
+        self.targets.insert(id, id);
+        let parameter = self.push(Expr::Slot, source, budget)?;
+        let scalar = self.push(Expr::Scalar, source, budget)?;
+        let call = crate::types::NominalTypeId::new(intrinsic.module(), 1);
+        let returned = self.push(
+            Expr::Constructor(ConstructorId::new(call, 0)),
+            source,
+            budget,
+        )?;
+        let success = self.push(
+            Expr::Call {
+                function: returned,
+                arguments: copy_slice(&[scalar], budget)?,
+                scalar: false,
+                type_application: false,
+            },
+            source,
+            budget,
+        )?;
+        let error = self.push(
+            Expr::Constructor(ConstructorId::new(
+                crate::types::NominalTypeId::new(intrinsic.module(), 0),
+                0,
+            )),
+            source,
+            budget,
+        )?;
+        let failed = self.push(
+            Expr::Constructor(ConstructorId::new(call, 1)),
+            source,
+            budget,
+        )?;
+        let refusal = self.push(
+            Expr::Call {
+                function: failed,
+                arguments: copy_slice(&[error], budget)?,
+                scalar: false,
+                type_application: false,
+            },
+            source,
+            budget,
+        )?;
+        let body = self.push(
+            Expr::Merge(copy_slice(&[success, refusal], budget)?),
+            source,
+            budget,
+        )?;
+        Ok(Expr::Function {
+            parameters: copy_slice(&[parameter], budget)?,
+            body,
+            captures: Vec::new(),
         })
     }
 

@@ -7342,12 +7342,14 @@ mod tests {
             },
         };
         let exported = ExportedGlobal {
+            scalar_preflight: None,
             binder: BinderId::new(0),
             scheme: ConstrainedScheme::from_rank1_type(Type::Unit),
             origin: origin.clone(),
             capture: capture.clone(),
         };
         let mut imported = ImportedGlobalScheme {
+            scalar_preflight: None,
             binder: exported.binder,
             scheme: ConstrainedScheme::from_rank1_type(Type::Unit),
             origin,
