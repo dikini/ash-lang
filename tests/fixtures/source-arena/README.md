@@ -34,6 +34,7 @@ CARGO_BUILD_JOBS=1 cargo test -p ash --all-features \
 ```
 
 This is the bounded lifecycle delivery in
-[TASK-0039](../../../docs/tasks/TASK-0039-ash-arena-lifecycle.md). It does not expose
+[TASK-0039](https://github.com/dikini/ash-lang/blob/f4a9a840153acf340685a415671adbb904748438/docs/tasks/TASK-0039-ash-arena-lifecycle.md),
+retained through [PR #14](https://github.com/dikini/ash-lang/pull/14). It does not expose
 initialized byte access, typed allocations, references, storage families,
 dependent owners or additional capture/discard behavior.

@@ -14,8 +14,9 @@
 ## Dependencies
 
 Verified TASK-0036/TASK-0037 common source/Core/runtime/build and contrasting
-TASK-0038/TASK-0039 library evidence. Native SQLite binaries/headers are explicit
-build/check inputs, not source authority.
+TASK-0038 library evidence. The [retained minimal arena](https://github.com/dikini/ash-lang/issues/5)
+supplies contrasting lifecycle evidence. Native SQLite binaries/headers are
+explicit build/check inputs, not source authority.
 
 ## Work
 
