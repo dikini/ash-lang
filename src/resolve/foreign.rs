@@ -113,6 +113,110 @@ impl EffectSource<'_> {
 }
 
 impl Resolver {
+    pub(super) fn bind_scalar_preflights(
+        &mut self,
+        loaded: &crate::module::LoadedModule,
+        declarations: &mut ResolvedDeclarations,
+    ) -> Result<(), ResolveError> {
+        if !self.module.is_builtin_foreign() {
+            return Ok(());
+        }
+        use crate::foreign::{
+            checked_source::CheckedForeignCallCodec,
+            scalar_preflight::{CheckedForeignScalarPreflight, ForeignScalarPreflightRole},
+        };
+        use crate::resolved::{BinderId, ResolvedDefinitionKind};
+        let source = loaded.source();
+        let range = u32::try_from(source.text().len())
+            .ok()
+            .and_then(|len| crate::source::ByteRange::new(0, len).ok())
+            .ok_or_else(|| {
+                error(
+                    ResolveReason::InternalState,
+                    loaded.surface().span,
+                    "builtin foreign source range is invalid",
+                )
+            })?;
+        let span = source.span(range).map_err(|_| {
+            error(
+                ResolveReason::InternalState,
+                loaded.surface().span,
+                "builtin foreign source provenance is invalid",
+            )
+        })?;
+        let registry = Arc::get_mut(&mut declarations.registry).ok_or_else(|| {
+            error(
+                ResolveReason::InternalState,
+                span,
+                "scalar preflight publication requires its original unique registry",
+            )
+        })?;
+        let call = NominalTypeId::new(self.module, 1);
+        let codec = CheckedForeignCallCodec::authenticate(
+            self.module,
+            span,
+            ForeignCallCodecIds {
+                call,
+                returned: ConstructorId::new(call, 0),
+                conversion_failed: ConstructorId::new(call, 1),
+                conversion_error: NominalTypeId::new(self.module, 0),
+            },
+            registry,
+            &mut self.type_work,
+        )
+        .map_err(source_admission_failure)?;
+        self.type_work.charge(3).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "scalar preflight facts exceeded their work budget",
+            )
+        })?;
+        let codec = Arc::new(codec);
+        if declarations.definitions.len() != 2 {
+            return Err(error(
+                ResolveReason::InternalState,
+                span,
+                "builtin scalar preflight declaration inventory is invalid",
+            ));
+        }
+        for (definition, role) in declarations.definitions.iter().zip([
+            ForeignScalarPreflightRole::I64,
+            ForeignScalarPreflightRole::SizeT,
+        ]) {
+            let ResolvedDefinitionKind::Equational(global) = &definition.kind else {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    span,
+                    "builtin scalar preflight header is invalid",
+                ));
+            };
+            if global.interface.name.id != BinderId::resolved(self.module, role.local())
+                || !global.interface.type_parameters.is_empty()
+                || !global.interface.requirements.is_empty()
+            {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    span,
+                    "builtin scalar preflight binder inventory is invalid",
+                ));
+            }
+            let fact = CheckedForeignScalarPreflight::from_original(
+                role,
+                span,
+                &global.interface.name.origin,
+                &global.interface.annotation,
+                Arc::clone(&codec),
+                &mut self.type_work,
+            )
+            .map_err(source_admission_failure)?;
+            registry
+                .retain_scalar_preflight(Arc::new(fact), &mut self.type_work)
+                .map_err(|failure| source_build_failure(failure, span))?;
+        }
+        Ok(())
+    }
+
     pub(super) fn validate_source_foreign_members(
         &mut self,
         surface: &SurfaceModule,

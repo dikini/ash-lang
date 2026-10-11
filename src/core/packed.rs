@@ -25,6 +25,16 @@ impl StringNode {
 /// Closed set of compiler-owned pure operations admitted by this experiment.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Intrinsic {
+    /// Checks the GNU64 signed range without invoking a native symbol.
+    ForeignCheckedI64 {
+        /// Claim of the original compiler-owned function identity.
+        function: crate::resolved::BinderId,
+    },
+    /// Checks the GNU64 size_t range without invoking a native symbol.
+    ForeignCheckedSizeT {
+        /// Claim of the original compiler-owned function identity.
+        function: crate::resolved::BinderId,
+    },
     /// Produces an opaque witness from one independently authenticated dictionary.
     ForeignLayoutWitness {
         /// Copied header; canonical dictionary validation is mandatory.
@@ -78,6 +88,16 @@ impl IntrinsicNode {
     #[must_use]
     pub fn expected_type(self) -> Type {
         let (input, output) = match self.operation {
+            Intrinsic::ForeignCheckedI64 { .. } | Intrinsic::ForeignCheckedSizeT { .. } => (
+                Type::Int,
+                Type::Application(
+                    Box::new(Type::Nominal(crate::types::NominalTypeId::new(
+                        self.module,
+                        1,
+                    ))),
+                    Box::new(Type::Int),
+                ),
+            ),
             Intrinsic::ForeignLayoutWitness { producer } => return producer.producer_type(),
             Intrinsic::BytesEmpty => (Type::Unit, Type::Bytes),
             Intrinsic::BytesAppendByte { appended, .. } => (
@@ -103,6 +123,9 @@ impl IntrinsicNode {
     }
     pub(crate) fn authentic_module(self) -> bool {
         match self.operation {
+            Intrinsic::ForeignCheckedI64 { .. } | Intrinsic::ForeignCheckedSizeT { .. } => {
+                self.module.is_builtin_foreign()
+            }
             Intrinsic::ForeignLayoutWitness { .. } => false,
             Intrinsic::BytesEmpty
             | Intrinsic::BytesAppendByte { .. }

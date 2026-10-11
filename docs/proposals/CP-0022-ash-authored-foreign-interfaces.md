@@ -284,6 +284,17 @@ They also provide the sealed acquisition/finish evidence consumed by the
 resource machine. The implementation exposes no raw pointer as an Ash `Int`,
 no ownership-cloning operation and no generic unchecked cast.
 
+The ordinary, side-effect-free scalar checks are
+`Foreign.checked_i64 : Int -> Foreign.Call<Int>` and
+`Foreign.checked_size_t : Int -> Foreign.Call<Int>`. Under the selected GNU64
+profile they admit, respectively, `-2^63 .. 2^63-1` and `0 .. 2^64-1`.
+Success returns the same mathematical integer in `Returned`; an out-of-range
+value returns `ConversionFailed(ConversionError)`. Unsupported hosts and
+work/storage exhaustion remain terminal. These checks invoke no native symbol,
+grant no access or ownership authority, and do not replace the exact conversion
+required by a subsequent native call. Library code combines their results when
+its configuration needs the intersection of those ranges.
+
 Primitives have explicit failure results and work/storage charges. Before a
 native call, prepare operand conversions, scratch, output storage and guard
 slots fallibly. Native side effects occur once and cannot in general be rolled
@@ -489,6 +500,8 @@ exact owner/family arguments:
 
 | Primitive | Source type role and permission |
 | --- | --- |
+| `checked_i64` | `Int -> Foreign.Call<Int>`; GNU64 signed 64-bit range check, ordinary independent result. |
+| `checked_size_t` | `Int -> Foreign.Call<Int>`; GNU64 nonnegative 64-bit range check, ordinary independent result. |
 | `copy_bytes` | `(View<W,...>, Extent<W,...>) -> Result<Bytes, ConversionError>`; evidence must originate from that view; direct provider window only. |
 | `copy_nul` | `(View<W,...>, Int) -> Result<Bytes, ConversionError>`; NUL family and checked scan bound; direct provider window only. |
 | `decode_utf8` | `Bytes -> Result<String, ConversionError>`; ordinary independent values, no native permission. |

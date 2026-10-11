@@ -201,3 +201,41 @@ fn conversion_error_type_is_nameable_but_its_constructors_are_withheld() {
         if error.reason == ResolveReason::OpaqueConstructor)
     );
 }
+
+#[test]
+fn pure_scalar_preflight_checks_preserve_values_and_refuse_outside_gnu64_ranges() {
+    let fixture = Fixture::new(
+        r#"import @builtin.foreign as Foreign
+main : Unit -> Bool
+main () = match (
+    Foreign.checked_i64 0,
+    Foreign.checked_i64 9223372036854775807,
+    Foreign.checked_i64 9223372036854775808,
+    Foreign.checked_size_t 0,
+    Foreign.checked_size_t 18446744073709551615,
+    Foreign.checked_size_t 18446744073709551616
+) {
+    (
+        Foreign.Returned(low),
+        Foreign.Returned(high),
+        Foreign.ConversionFailed(_),
+        Foreign.Returned(zero),
+        Foreign.Returned(unsigned_high),
+        Foreign.ConversionFailed(_)
+    ) => match (
+        low == 0,
+        high == 9223372036854775807,
+        unsigned_high == 18446744073709551615,
+        zero == 0
+    ) {
+        (true, true, true, true) => true
+        _ => false
+    }
+    _ => false
+}
+"#,
+    );
+    let observation = run_path(fixture.configuration()).expect("pure scalar preflight admission");
+    assert_eq!(observation.ty(), &Type::Bool);
+    assert_eq!(observation.value_display(), "true");
+}

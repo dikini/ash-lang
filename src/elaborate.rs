@@ -11548,7 +11548,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     }
 
     fn builtin_intrinsic(
-        &self,
+        &mut self,
         name: &crate::resolved::Binder,
         ty: &Type,
     ) -> Result<Option<crate::core::packed::Intrinsic>, TypeError> {
@@ -11556,6 +11556,25 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let Some(module) = name.id.module() else {
             return Ok(None);
         };
+        if module.is_builtin_foreign() {
+            self.type_work
+                .charge(1)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let Some(fact) = self.registry.scalar_preflight(name.id) else {
+                return Ok(None);
+            };
+            if fact.function() != name.id || fact.module() != module {
+                return Err(invalid_state());
+            }
+            return Ok(Some(match fact.role() {
+                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::I64 => {
+                    Intrinsic::ForeignCheckedI64 { function: name.id }
+                }
+                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::SizeT => {
+                    Intrinsic::ForeignCheckedSizeT { function: name.id }
+                }
+            }));
+        }
         if !module.is_builtin_bytes() && !module.is_builtin_string() {
             return Ok(None);
         }
