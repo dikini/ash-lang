@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ash orchestrator / PM"
+  short_description: "Coordinate Ash agents through delivery and acceptance"
+  default_prompt: "Use $ash-orchestrator to initiate and coordinate the next authorized Ash delivery through acceptance."

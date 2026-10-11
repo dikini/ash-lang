@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ash developer"
+  short_description: "Deliver Ash changes with evidence and acceptance records"
+  default_prompt: "Use $ash-developer to deliver the authorized Ash task and update its acceptance evidence."
