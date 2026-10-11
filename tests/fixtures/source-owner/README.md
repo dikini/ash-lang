@@ -1,4 +1,4 @@
-# Source-authored opaque owner fixture
+# Source-authored native owner fixture
 
 `owner.ash` defines the foreign signatures, owner, acquisition policy, private
 payload, handler and completion policy. `entry.ash` uses the public compiler and
@@ -35,6 +35,21 @@ destroys a provisional owner, nested success remains nested and each allocation
 releases once. A source `ConsumedFailure` after the actual consuming native call
 terminates without a report or second release. This is source completion-error
 policy; the native fixture does not return a retained or failed destruction status.
+
+The initialized-byte variant supplies an explicit source extent absent from the
+native ABI operands. The C fixture writes one eight-byte `size_t` object on this
+target; seven initialized bytes form its declared region while private data
+retains the independent size value. A zero extent still owns a non-null
+allocation. The same real trace checks null and source refusal, publication,
+nested release order and exact destruction. Negative extent input comes from an
+admitted signed native scalar reply; negative and oversized extents return
+without entering allocation or executing the body.
+
+Separate injected Rust callbacks check preflight work refusal with no acquisition
+or release, and infallible extent recording before terminal post-return refusal.
+They model ownership edges without allocating or reading native memory. The
+declared initialization and writability remain foreign assumptions; these tests
+do not establish byte read/write, copy windows or a native-buffer library port.
 
 This fixture covers the bounded executable checkpoint under
 [CP-0022](../../../docs/proposals/CP-0022-ash-authored-foreign-interfaces.md) and

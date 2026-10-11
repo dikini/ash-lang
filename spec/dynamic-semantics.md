@@ -592,16 +592,17 @@ constructor cell. A terminal refusal publishes no partial result. These checks
 create no resource activation, state token, native readiness or destructor
 obligation.
 
-## Source resource execution with opaque owners
+## Source resource execution with native owners
 
 The admitted product source resource scope combines an Ash initializer, acquire
 and finish functions, private data `D`, and an associated ordinary effect handler.
-This checkpoint supports dependency-free opaque foreign owners with Type-kind
+This checkpoint supports dependency-free opaque and initialized byte foreign
+owners with Type-kind
 owner formals, scalar acquisition operands, one pointer acquisition result, and
 an unconditional consuming `void` teardown whose sole operand is the exact
 Current state. Each foreign symbol still retains its complete ordered Type and
 EffectRow arguments; the native Type-only projection does not replace them.
-Byte owners, dependent owners, additional teardown operands and native
+Byte access, dependent owners, additional teardown operands and native
 retained-status outcomes are unsupported executable shapes in this checkpoint.
 
 Before any Ash expression runs, program admission checks both acquisition and
@@ -613,6 +614,16 @@ Ordinary `NativeInterpret` grants no owner-call permission. An owner request
 requires the matching validated source scope, its current acquire or finish
 phase, exact copied request membership, and the complete effect instance under
 that scope's saved lexical instantiation.
+
+For an initialized byte owner, preflight projects the exact source leaf selected
+by its original `initialized_bytes` fact and checks the mathematical value in
+the GNU64 nonnegative `size_t` range. The path need not select a native ABI
+operand. A negative or unrepresentable extent returns `Foreign.ConversionFailed`
+before acquisition; work or storage refusal remains terminal. Readiness retains
+the checked extent without creating memory access or an owner. Infallible
+recording attaches that extent to the unique non-null guard under the declared
+initialization and writability assumption. A null return establishes no region.
+The resource's private payload cannot replace or enlarge this recorded extent.
 
 The initializer evaluates once in the preceding environment. Before native
 acquisition, the machine authenticates the unconditional destructor, reserves
@@ -632,18 +643,18 @@ guard and is never an ordinary Ash value. The following steps consume readiness,
 record ownership, and publish the prepared report:
 
 ```sequent
-family opaque-owner-native-call-steps:
-  E-Opaque-Owner-Call :=
+family native-owner-native-call-steps:
+  E-Native-Owner-Call :=
     native(d, operands) = raw
     arm(p, raw) = g
     ===>
     CONFIG(heap, environment, CallReady(d, operands, p), continuation) -> CONFIG(heap, environment, CallReturned(d, g, p), continuation)
 
-  E-Opaque-Owner-Record :=
+  E-Native-Owner-Record :=
     ===>
     CONFIG(heap, environment, CallReturned(d, g, p), continuation) -> CONFIG(heap, environment, CallRecorded(d, g, p), continuation)
 
-  E-Opaque-Owner-Report :=
+  E-Native-Owner-Report :=
     report_and_place(heap, continuation, d, g, p) = heap_1, continuation_1, value
     ===>
     CONFIG(heap, environment, CallRecorded(d, g, p), continuation) -> CONFIG(heap_1, environment, CallReported(value), continuation_1)
@@ -653,7 +664,7 @@ Only `CallReady` invokes the native function. Its return retains no invocation
 capability. Recording is infallible, allocates no Ash result, and charges no
 additional work; it precedes disposal, reporting and continuation failure.
 Reporting uses the prepaid allowance and reserved constructor slots. For this
-opaque result it produces the checked roles corresponding to
+owner-address result it produces the checked roles corresponding to
 `Foreign.Returned(Foreign.Readable(Foreign.Null))` or
 `Foreign.Returned(Foreign.Readable(Foreign.NonNull(state)))`. A non-null state
 contains the scope's activation key, not its address. The scope receives the

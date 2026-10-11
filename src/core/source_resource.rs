@@ -434,10 +434,24 @@ impl CheckedSourceResourceHeader {
         {
             return Err(invalid());
         }
-        if owner.owner().representation()
-            != crate::foreign::source_contract::PreparedAddressRepresentation::Opaque
-            || teardown.symbol().result()
-                != crate::foreign::source_contract::PreparedAbiResult::Void
+        use crate::foreign::source_contract::PreparedAddressRepresentation;
+        if !matches!(
+            (owner.owner().representation(), acquire.owner_role()),
+            (
+                PreparedAddressRepresentation::Opaque,
+                Some(PreparedOwnerCall::Acquire {
+                    initialized_bytes: None,
+                    ..
+                })
+            ) | (
+                PreparedAddressRepresentation::Bytes,
+                Some(PreparedOwnerCall::Acquire {
+                    initialized_bytes: Some(_),
+                    ..
+                })
+            )
+        ) || teardown.symbol().result()
+            != crate::foreign::source_contract::PreparedAbiResult::Void
             || teardown.symbol().operands().len() != 1
         {
             return Err(invalid());
@@ -3052,6 +3066,74 @@ mod tests {
         )
         .unwrap();
         check_independent_source_scope(&fixture);
+    }
+
+    fn initialized_byte_fixture(acquired_only: bool) -> Fixture {
+        let fixture = Fixture::new();
+        let (owner, entry) = if acquired_only {
+            (
+                include_str!("../../tests/fixtures/source-owner/acquired_only_owner.ash"),
+                include_str!("../../tests/fixtures/source-owner/acquired_only_entry.ash"),
+            )
+        } else {
+            (
+                include_str!("../../tests/fixtures/source-owner/owner.ash"),
+                include_str!("../../tests/fixtures/source-owner/entry.ash"),
+            )
+        };
+        let owner = owner
+            .replace("repr Address = opaque", "repr Address = bytes")
+            .replace(
+                ": Int -> Foreign.Call<Foreign.Output<Foreign.Nullable<State<R>>>>",
+                ": (Int, Int) -> Foreign.Call<Foreign.Output<Foreign.Nullable<State<R>>>>",
+            )
+            .replace(
+                "outcome result nonnull { readable result }",
+                "outcome result nonnull { readable result, initialized_bytes result from 1 }",
+            )
+            .replace(".call size {", ".call (size, 7) {");
+        fs::write(fixture.0.join("owner.ash"), owner).unwrap();
+        fs::write(fixture.0.join("entry.ash"), entry).unwrap();
+        fixture
+    }
+
+    #[test]
+    fn initialized_byte_scope_revalidation_rejects_forged_claims_for_both_report_codecs() {
+        for acquired_only in [false, true] {
+            check_independent_source_scope(&initialized_byte_fixture(acquired_only));
+        }
+    }
+
+    #[test]
+    fn initialized_byte_header_admission_preserves_exact_budget_refusal_and_fresh_retry() {
+        for acquired_only in [false, true] {
+            let fixture = initialized_byte_fixture(acquired_only);
+            let compiled = fixture.compile();
+            let (checked, _) = compiled.effect_build_input().unwrap();
+            let registry = checked.registry();
+            let header = registry
+                .source_resource_facts()
+                .find(|header| header.spelling == "Probe")
+                .unwrap();
+            let mut measured = TypeWorkBudget::unbounded();
+            super::CheckedSourceResourceHeader::admit(header, registry, &mut measured).unwrap();
+            let cost = measured.used();
+            let mut short = TypeWorkBudget::with_limit(cost - 1);
+            assert_eq!(
+                super::CheckedSourceResourceHeader::admit(header, registry, &mut short)
+                    .unwrap_err()
+                    .reason(),
+                ValidationReason::Resource
+            );
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(cost);
+                super::CheckedSourceResourceHeader::admit(header, registry, &mut exact).unwrap();
+                assert_eq!(exact.used(), cost);
+            }
+            println!(
+                "initialized byte header admission: acquired_only={acquired_only}, work={cost}"
+            );
+        }
     }
 
     #[test]

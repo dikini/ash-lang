@@ -1009,7 +1009,8 @@ its independent result and records consumption or retention of the selected
 state. The executable resource checkpoint below admits `void` teardown with
 `T = Unit`. Byte-owner preparation also checks its initialized extent against
 the selected mathematical `Int` source leaf. This passive check supplies no
-byte access or executable owner activation.
+byte access or executable owner activation; an admitted resource scope supplies
+the separate controlled execution boundary.
 
 A scalar ABI result requires `output result as scalar` and an `otherwise`
 outcome declaring `readable result`. Its source codomain is the exact canonical
@@ -1120,7 +1121,8 @@ Type or Row tags. The handle is a non-owning access value available inside the
 body. The report type, outward effects, evidence and stored dependencies cannot
 expose the fresh identity; an escape reports `type.resource-escape`.
 
-This implementation checkpoint executes dependency-free opaque owners with
+This implementation checkpoint executes dependency-free opaque and initialized
+byte owners with
 Type-only state-family arguments, one Current operand for a consuming `void`
 teardown, either report codec and direct requests for the declared provided effect.
 The association has exactly one Unit-domain operation and one provider method

@@ -297,8 +297,9 @@ structure](lexical-structure.md#tokens). [Static
 semantics](static-semantics.md#source-foreign-declarations) requires exact ABI
 coverage, owner roles and result shape. Pointer representations are restricted
 to admitted owner addresses; constants, output slots, access members and copy
-windows remain outside this implementation checkpoint. Preparing a byte owner
-contract does not admit byte access or executable resource code. Effect arguments
+windows remain outside this implementation checkpoint. A byte owner requires an
+explicit `initialized_bytes` fact for execution through an admitted resource
+scope; preparing its contract alone grants no activation or byte access. Effect arguments
 retain their written order; the declaring effect determines each argument's
 required kind.
 

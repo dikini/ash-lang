@@ -56,8 +56,26 @@ Capture-value analysis must preserve that result shape while retaining finish
 as a cleanup obligation; reusing Scope/Completion assembly would fabricate a
 completion field. A source consumed-completion error becomes terminal after
 native consumption and cannot publish success or retry release. Native retained
-outcomes, bytes, broader provider shapes and outward control remain subsequent
+outcomes, byte access, broader provider shapes and outward control remain subsequent
 CP-0022 obligations.
+
+Initialized-byte acquisition projects the original declared source leaf before
+native entry, independently of ABI operands and private data. Readiness retains
+the checked nonnegative `size_t` extent; infallible recording attaches it only to
+the exact non-null unique guard. A zero extent preserves ownership. Missing facts
+are refused during canonical foreign resolution, before resource or bridge
+admission. Preflight work exhaustion follows the existing effect-work diagnostic
+and remains terminal; post-return cleanup does not replay acquisition or release.
+The image retains representation and original extent facts separately from the
+checked executable resource template. Byte access and broader control remain
+separate obligations.
+
+A self-consistent image can reconstruct a different valid integer source path;
+reconstruction alone does not prove correspondence to a generated call site.
+The private executable gate compares its original `EXPECTED_FACTS` before
+restoration or binding. Changed initialization paths or representations must
+fail that comparison; a missing required byte-initialization fact also fails
+structural reconstruction.
 
 DN-0036 supplies reusable guarded scopes, owner arguments and validation, but
 Rust-authored manifests/adapters are experimental comparison evidence. They

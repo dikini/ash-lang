@@ -13,7 +13,8 @@ a program from standard input.
 ## Building an executable
 
 The program-build path supports the retained Pure subset, scalar/void foreign
-calls and dependency-free opaque resource scopes on Linux x86-64 GNU. It
+calls and dependency-free opaque or initialized byte resource scopes on Linux
+x86-64 GNU. It
 compiles the source graph once
 and generates a Rust host containing private Core construction data, the
 existing evaluator and any required typed native bridges:
@@ -125,7 +126,8 @@ operations. It admits the common side-effect-free `Foreign.checked_i64` and
 `Foreign.checked_size_t` checks, both returning `Foreign.Call<Int>` with the
 unchanged integer or a conversion failure. The Effect carrier also admits
 generic helper abstraction/application, native requests and dependency-free
-opaque source resource scopes with the admitted lifecycle codec. Ordinary
+opaque or initialized byte source resource scopes with the admitted lifecycle
+codec. Ordinary
 handler precedence, local resumption and nested normal completion use the
 existing evaluator. Outward resource capture, discard, retained quarantine and
 byte-access windows remain outside this build profile.

@@ -127,7 +127,8 @@ signatures and source origins before the source resource proof checks its phases
 Dependency summaries retain body-free headers; linking retains the checked
 defining code rather than recompiling imported lifecycle bodies.
 
-The current executable source profile admits a dependency-free opaque owner
+The current executable source profile admits a dependency-free opaque or
+initialized byte owner
 with a Type-only state family, one interpreted acquisition and one consuming
 teardown of that same original owner. Teardown has one canonical current-owner
 operand and a void native result. Resource and native instances retain all
@@ -135,10 +136,17 @@ ordered Type/EffectRow arguments, including an owned slot that is not first.
 The resource handle's value type uses a saturated nominal application for a
 Type-only family and the resource application carrier for a row-bearing family;
 the scope retains the same complete tagged instance in either case.
-Higher-kinded resource formals, row-bearing owner state families, byte owners,
+Higher-kinded resource formals, row-bearing owner state families, byte access,
 dependent owners and nonempty outward handler rows remain unsupported by this
 profile. Passive foreign-owner declarations have a separate admission boundary
 and supply no execution permission.
+
+An initialized byte acquisition retains the original integer source path and
+outcome provenance in its canonical contract and matching-compiler image.
+Independent reconstruction preserves the byte representation and exact extent
+fact rather than replacing them with opaque metadata. Runtime preparation checks
+the selected mathematical value before native entry; private data does not grant
+an initialized extent.
 
 The header proof authenticates the exact `Acquire<State, D, I>`,
 `Finish<State, E>` and the selected report constructor roles and payloads through
