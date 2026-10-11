@@ -9,4 +9,4 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-No active tasks.
+- [TASK-0042: Rust verification performance](TASK-0042-rust-verification-performance.md)

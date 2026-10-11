@@ -30,6 +30,10 @@ later wakeups require an explicitly requested automation.
   Use one Cargo job, compatible caches and checks required by the task. Separate
   real native observations from injected failures and foreign assumptions.
   Preserve work/depth/stack limits.
+- Use the [Rust verification guide](verification.md) for selected checks and
+  explicit local receipt reuse. Partial evidence does not establish a full gate;
+  required integrated gates remain fresh unless their governing artifact permits
+  transfer.
 - Old full gates, fresh connected checks, no review findings, verified retention
   and complete acceptance are separate claims. Evidence transfers only within
   demonstrated input/configuration equality; required integration gates remain.
@@ -50,8 +54,9 @@ Remaining: missing obligations. Awaiting: review/integration/verification.
 Owner: next responsible agent/person.
 ```
 
-Until retained verification passes, say candidate/merged scope. The author prepares this record,
-the reviewer checks it, and the author applies and reads it back after verification,
+Until retained verification passes, say candidate/merged scope. The author
+prepares this record, the reviewer checks it, and the author applies and reads
+it back after verification,
 preserving concurrent edits. If another agent integrates, it supplies the
 retained commit/receipt. PM confirms the update before advancing or closing.
 Uncheck disproven criteria and record the cause; partial PRs do not auto-close issues.

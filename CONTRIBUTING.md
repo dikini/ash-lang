@@ -41,6 +41,8 @@ Ash uses Rust and Cargo as accepted by
 [AD-0001](docs/decisions/AD-0001-implementation-environment.md). Rustup reads
 `rust-toolchain.toml` automatically and selects the pinned toolchain. Run
 `cargo xtask verify` before submitting a change.
+The [Rust verification guide](docs/project/verification.md) documents partial
+checks, explicit receipt reuse, logs and required fresh integration gates.
 
 Whenever `Cargo.toml` or `Cargo.lock` changes, record the evidence required by
 the [dependency policy](docs/project/dependencies.md). Package trouble does not

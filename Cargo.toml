@@ -28,6 +28,11 @@ ash-foreign-adapter = { path = "foreign-adapter" }
 members = ["native-buffer", "foreign-adapter", "xtask"]
 resolver = "3"
 
+# Receipt hashing is verification tooling. Product gates keep the default profile.
+[profile.verification]
+inherits = "dev"
+opt-level = 2
+
 [lints]
 workspace = true
 
