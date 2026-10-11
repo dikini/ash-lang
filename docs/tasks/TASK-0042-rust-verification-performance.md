@@ -40,7 +40,8 @@ changed PATH native tools masked by overrides, and changed rustup components
 behind a fixed launcher. Each gained a failing regression before repair.
 File metadata and the actual delegated tools are now pinned. Failed executions
 also retain their timing and log in the run summary without a success receipt.
-Re-review and the full comparison remain pending the milestone repair/lease.
+The subsequent repairs were independently re-reviewed. The full comparison
+waited for the milestone repair and its assigned build window.
 
 Re-review exposed non-executable PATH shadows and dangling symlink retargeting.
 The runner now pins all existing PATH candidates conservatively and records
@@ -52,8 +53,29 @@ rejection after inherited Cargo configuration movement.
 The same PATH selection pinning now covers bare compiler overrides and both
 compiler wrappers. A changed executable behind a non-executable PATH shadow
 cannot reuse the wrapper's earlier success. All 17 focused regressions, strict
-xtask Clippy and xtask rustdoc pass; the complete product comparison is pending
-the milestone PM's build lease.
+xtask Clippy and xtask rustdoc pass. Independent review cleared tooling candidate
+`aadd4be` after adversarial probes of permissions, overrides, rustup delegation,
+PATH shadows, symlinks and both wrappers.
+
+[Draft PR #18](https://github.com/dikini/ash-lang/pull/18) contains the reviewed
+implementation. The milestone PM assigned the serial old-six, revised-seven
+and explicit-reuse comparison to its sole build owner on product candidate
+`dd3239e`, with the same seven-file tooling overlay in both fresh plans.
+Product target metadata is unchanged: 134 targets, with two overlaid xtask
+targets and 17 tooling tests accounted for separately. Real formatting/metadata
+smoke checks took 11.74 seconds fresh and 2.23 seconds reused; these are partial
+checks, not full-gate measurements.
+
+The first comparison attempt exhausted temporary storage during the old build.
+Its logs and cache were preserved and excluded. A second attempt completed the
+old default build in 906.59 seconds, then was stopped because the measured
+debug-artifact footprint made two retained caches unsafe on the project disk.
+That partial attempt is also excluded. The PM assigned a new serial comparison
+on a separate filesystem with enough capacity, fresh caches and new input
+records. Complete gate times, matching per-target test counts and the final
+handoff are pending. On that candidate, the altered root manifest/lockfile
+changes the runtime identity; original-configuration native/image evidence
+remains a separate requirement.
 
 ## Dependencies introduced to xtask
 
@@ -115,6 +137,15 @@ The old gate builds all targets with default features and tests all targets
 with all features. All-feature coverage cannot substitute for default-feature
 coverage. Existing milestone retention already transfers a successful gate
 through exact tree/input equality and adds fresh connected native observations.
+
+A bounded read-only audit of candidate `dd3239e` found later test-runtime
+opportunities: shared immutable source/token views and declaration/site indexes
+in `tests/architecture.rs`, and identical-byte linear input generation in
+`tests/data_and_adts.rs`. The few `Copy`/exhaustive-match assertions already
+enforced by Rust appear cheap. Distinct pipeline routes, resource-failure cases,
+small-stack behavior, traces and post-transform validation remain independent
+obligations. Historical target totals do not establish savings for any proposed
+optimization; those changes and measurements require a later delivery window.
 
 ## Deviations
 

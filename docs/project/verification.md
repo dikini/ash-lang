@@ -5,6 +5,9 @@ runner. Run commands from the Git repository root, with the pinned Rust toolchai
 and one Cargo job. The milestone PM assigns the heavy-build slot.
 The alias builds xtask with the optimized `verification` profile for receipt
 hashing. Its child product checks use their existing default profiles.
+For candidates whose matching-compiler fingerprint includes the root manifest
+and lockfile, a tooling overlay changes that identity. Retain required native
+and embedded-image evidence under the original configuration separately.
 
 ## Required stages
 

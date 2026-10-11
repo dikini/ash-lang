@@ -50,13 +50,21 @@ preserve those distinct obligations with less duplicate code generation.
 Conservative exact-input reuse initially addresses repeated pre-publication
 checks, unchanged retries and retaining-tree equality. Dependency-specific
 reuse after Markdown or test changes needs a demonstrated input model and is
-outside this delivery. Test removal, test concurrency, production compiler profiles,
-runtime fingerprint changes and production budget changes are also excluded.
+outside this delivery. Test removal, test concurrency, production compiler
+profiles, runtime fingerprint algorithm changes and production budget changes
+are also excluded.
 
 The xtask alias uses an optimized verification-only profile so hashing the
 whole checkout does not become another gate delay. The product commands keep
 their default profiles. Repeated references to one executable are hashed once
 per snapshot; snapshots still re-read their inputs across stage boundaries.
+
+Measured milestone candidate `dd3239e` includes the root manifest and lockfile
+in its matching-compiler fingerprint. The tooling overlay therefore changes
+that candidate's identity even though its fingerprint algorithm and product
+sources are unchanged. Measurements must record the overlaid
+source/configuration identity and retain required native and embedded-image
+proof under the original product configuration separately.
 
 ## Consequences
 
