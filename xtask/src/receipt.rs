@@ -15,11 +15,18 @@ pub(super) const SCHEMA: u32 = 1;
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(super) struct Inputs {
     root: PathBuf,
-    files: BTreeMap<PathBuf, String>,
-    configuration_files: BTreeMap<PathBuf, String>,
+    files: BTreeMap<PathBuf, Option<FilePin>>,
+    configuration_files: BTreeMap<PathBuf, Option<FilePin>>,
     environment_sha256: String,
     tools: BTreeMap<String, String>,
     runner_sha256: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+struct FilePin {
+    sha256: String,
+    mode: u32,
+    symlink: Option<PathBuf>,
 }
 
 pub(super) fn digest(bytes: &[u8]) -> String {
@@ -45,18 +52,79 @@ fn file_pin(path: &Path) -> Result<String, String> {
         .map_err(|error| format!("{}: {error}", path.display()))
 }
 
+fn input_file_pin(path: &Path) -> Result<FilePin, std::io::Error> {
+    let bytes = fs::read(path)?;
+    let metadata = fs::metadata(path)?;
+    #[cfg(unix)]
+    let mode = {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode()
+    };
+    #[cfg(not(unix))]
+    let mode = u32::from(metadata.permissions().readonly());
+    let symlink = if fs::symlink_metadata(path)?.file_type().is_symlink() {
+        Some(fs::read_link(path)?)
+    } else {
+        None
+    };
+    Ok(FilePin {
+        sha256: digest(&bytes),
+        mode,
+        symlink,
+    })
+}
+
+fn executable_pin(path: &Path, cache: &mut BTreeMap<PathBuf, String>) -> Result<String, String> {
+    if let Some(pin) = cache.get(path) {
+        return Ok(pin.clone());
+    }
+    let file = input_file_pin(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let pin = digest(&serde_json::to_vec(&file).map_err(|error| error.to_string())?);
+    cache.insert(path.to_owned(), pin.clone());
+    Ok(pin)
+}
+
+fn pin_tool(
+    root: &Path,
+    name: &str,
+    label: &str,
+    executable: &std::ffi::OsStr,
+    tools: &mut BTreeMap<String, String>,
+    cache: &mut BTreeMap<PathBuf, String>,
+) -> Result<(), String> {
+    let path = executable_path(root, executable)?;
+    tools.insert(format!("{label}-executable"), executable_pin(&path, cache)?);
+    let canonical = path.canonicalize().map_err(|error| error.to_string())?;
+    if canonical.file_name() == Some(std::ffi::OsStr::new("rustup")) {
+        let bytes = output(
+            Command::new(&canonical)
+                .current_dir(root)
+                .args(["which", name]),
+        )?;
+        let delegated = String::from_utf8(bytes).map_err(|error| error.to_string())?;
+        let delegated = Path::new(delegated.trim());
+        tools.insert(
+            format!("{label}-delegated-executable"),
+            executable_pin(delegated, cache)?,
+        );
+    }
+    Ok(())
+}
+
 fn executable_path(root: &Path, executable: &std::ffi::OsStr) -> Result<PathBuf, String> {
     let path = Path::new(executable);
     if path.components().count() > 1 || path.is_absolute() {
-        return root
-            .join(path)
-            .canonicalize()
-            .map_err(|error| error.to_string());
+        let path = root.join(path);
+        return if path.is_file() {
+            Ok(path)
+        } else {
+            Err(format!("executable not found: {}", path.display()))
+        };
     }
     for directory in env::split_paths(&env::var_os("PATH").unwrap_or_default()) {
         let candidate = root.join(directory).join(path);
         if candidate.is_file() {
-            return candidate.canonicalize().map_err(|error| error.to_string());
+            return Ok(candidate);
         }
     }
     Err(format!("executable not found: {}", path.display()))
@@ -111,16 +179,19 @@ pub(super) fn snapshot(root: &Path, external: &[PathBuf]) -> Result<Inputs, Stri
     }
     let mut files = BTreeMap::new();
     for path in paths {
-        let pin = match fs::read(&path) {
-            Ok(bytes) => digest(&bytes),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => "missing".into(),
+        let pin = match input_file_pin(&path) {
+            Ok(pin) => Some(pin),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
             Err(error) => return Err(format!("{}: {error}", path.display())),
         };
         files.insert(path, pin);
     }
     for path in external {
         let path = std::path::absolute(path).map_err(|error| error.to_string())?;
-        files.insert(path.clone(), file_pin(&path)?);
+        files.insert(
+            path.clone(),
+            Some(input_file_pin(&path).map_err(|error| error.to_string())?),
+        );
     }
 
     let mut configuration_paths = BTreeSet::new();
@@ -139,10 +210,10 @@ pub(super) fn snapshot(root: &Path, external: &[PathBuf]) -> Result<Inputs, Stri
     }
     let mut configuration_files = BTreeMap::new();
     for path in configuration_paths {
-        let pin = if path.exists() {
-            file_pin(&path)?
-        } else {
-            "missing".into()
+        let pin = match input_file_pin(&path) {
+            Ok(pin) => Some(pin),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(format!("{}: {error}", path.display())),
         };
         configuration_files.insert(path, pin);
     }
@@ -186,20 +257,41 @@ pub(super) fn snapshot(root: &Path, external: &[PathBuf]) -> Result<Inputs, Stri
         let executable = env::var_os(variable).unwrap_or_else(|| name.into());
         let bytes = output(Command::new(&executable).current_dir(&root).args(arguments))?;
         tools.insert(name.to_owned(), digest(&bytes));
-        let path = executable_path(&root, &executable)?;
-        let pin = match executable_pins.get(&path) {
-            Some(pin) => pin.clone(),
-            None => {
-                let pin = file_pin(&path)?;
-                executable_pins.insert(path, pin.clone());
-                pin
-            }
-        };
-        tools.insert(format!("{name}-executable"), pin);
+        pin_tool(
+            &root,
+            name,
+            name,
+            &executable,
+            &mut tools,
+            &mut executable_pins,
+        )?;
+        // Native build scripts invoke literal cc/ar; Cargo can delegate to PATH
+        // tools as well. Overrides do not replace those actual selections.
+        pin_tool(
+            &root,
+            name,
+            &format!("path-{name}"),
+            std::ffi::OsStr::new(name),
+            &mut tools,
+            &mut executable_pins,
+        )?;
+    }
+    for name in ["cargo-fmt", "cargo-clippy"] {
+        pin_tool(
+            &root,
+            name,
+            name,
+            std::ffi::OsStr::new(name),
+            &mut tools,
+            &mut executable_pins,
+        )?;
     }
     for variable in ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"] {
         if let Some(path) = env::var_os(variable).filter(|path| !path.is_empty()) {
-            tools.insert(variable.into(), file_pin(&executable_path(&root, &path)?)?);
+            tools.insert(
+                variable.into(),
+                executable_pin(&executable_path(&root, &path)?, &mut executable_pins)?,
+            );
         }
     }
     let runner_sha256 = file_pin(&env::current_exe().map_err(|error| error.to_string())?)?;

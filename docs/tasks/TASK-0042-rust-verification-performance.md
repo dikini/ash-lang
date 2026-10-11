@@ -35,6 +35,13 @@ The real-tool partial reuse smoke test initially took 26.47 seconds for two
 unchanged stages. Debug receipt hashing was avoidable overhead. The xtask alias
 now uses an optimized, tool-only profile; product gate profiles are unchanged.
 
+Independent review of candidate `777aec9` reproduced stale reuse after chmod,
+changed PATH native tools masked by overrides, and changed rustup components
+behind a fixed launcher. Each gained a failing regression before repair.
+File metadata and the actual delegated tools are now pinned. Failed executions
+also retain their timing and log in the run summary without a success receipt.
+Re-review and the full comparison remain pending the milestone repair/lease.
+
 ## Dependencies introduced to xtask
 
 These are development-tool dependencies already resolved and used by Ash.

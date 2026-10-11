@@ -84,6 +84,7 @@ const STEPS: &[VerificationStep] = &[
 
 #[derive(Debug, Default)]
 struct Options {
+    inputs_only: bool,
     stages: Vec<String>,
     reuse: bool,
     receipts: Option<PathBuf>,
@@ -92,14 +93,16 @@ struct Options {
 
 fn options() -> Result<Options, String> {
     let mut args = env::args_os().skip(1);
-    if args.next().as_deref() != Some(std::ffi::OsStr::new("verify")) {
-        return Err("expected verify".into());
-    }
     let mut result = Options::default();
+    match args.next().as_deref().and_then(|arg| arg.to_str()) {
+        Some("verify") => {}
+        Some("inputs") => result.inputs_only = true,
+        _ => return Err("expected verify or inputs".into()),
+    }
     while let Some(arg) = args.next() {
         match arg.to_str() {
-            Some("--reuse") if !result.reuse => result.reuse = true,
-            Some("--step") => {
+            Some("--reuse") if !result.inputs_only && !result.reuse => result.reuse = true,
+            Some("--step") if !result.inputs_only => {
                 let label = args
                     .next()
                     .and_then(|s| s.into_string().ok())
@@ -109,7 +112,7 @@ fn options() -> Result<Options, String> {
                 }
                 result.stages.push(label);
             }
-            Some("--receipt-dir") if result.receipts.is_none() => {
+            Some("--receipt-dir") if !result.inputs_only && result.receipts.is_none() => {
                 result.receipts = Some(args.next().ok_or("--receipt-dir requires a path")?.into());
             }
             Some("--input") => {
@@ -133,8 +136,10 @@ struct StageResult {
     label: &'static str,
     key: String,
     reused: bool,
+    success: bool,
     seconds: f64,
-    receipt: PathBuf,
+    receipt: Option<PathBuf>,
+    log: Option<PathBuf>,
 }
 
 #[derive(Serialize)]
@@ -172,7 +177,8 @@ fn execute_stage(
     directory: &Path,
     run_id: &str,
     initial: &Inputs,
-) -> Result<StageResult, String> {
+    stages: &mut Vec<StageResult>,
+) -> Result<(), String> {
     let before = snapshot(root, &options.external_inputs)?;
     if &before != initial {
         return Err("inputs changed between verification stages; no gate established".into());
@@ -194,13 +200,16 @@ fn execute_stage(
             "reused {} check ({:.2}s originally)",
             step.label, previous.seconds
         );
-        return Ok(StageResult {
+        stages.push(StageResult {
             label: step.label,
             key,
             reused: true,
+            success: true,
             seconds: 0.0,
-            receipt: receipt_path,
+            receipt: Some(receipt_path),
+            log: Some(previous.log),
         });
+        return Ok(());
     }
 
     // A fresh failure disproves an earlier success for these exact inputs.
@@ -229,10 +238,20 @@ fn execute_stage(
     if let Some(flags) = step.rustdoc_flags {
         command.env("RUSTDOCFLAGS", flags);
     }
-    let status = command
-        .status()
-        .map_err(|error| format!("could not run {}: {error}", step.label))?;
+    stages.push(StageResult {
+        label: step.label,
+        key: key.clone(),
+        reused: false,
+        success: false,
+        seconds: 0.0,
+        receipt: None,
+        log: Some(log_path.clone()),
+    });
+    let attempted = command.status();
     let seconds = started.elapsed().as_secs_f64();
+    let result = stages.last_mut().ok_or("missing stage report")?;
+    result.seconds = seconds;
+    let status = attempted.map_err(|error| format!("could not run {}: {error}", step.label))?;
     if !status.success() {
         if let Ok(log) = fs::read_to_string(&log_path) {
             eprint!("{log}");
@@ -264,13 +283,9 @@ fn execute_stage(
     };
     save_json(&receipt_path, &record)?;
     eprintln!("{} check passed in {seconds:.2}s", step.label);
-    Ok(StageResult {
-        label: step.label,
-        key,
-        reused: false,
-        seconds,
-        receipt: receipt_path,
-    })
+    result.success = true;
+    result.receipt = Some(receipt_path);
+    Ok(())
 }
 
 fn verify(options: &Options) -> Result<(), String> {
@@ -308,9 +323,15 @@ fn verify(options: &Options) -> Result<(), String> {
         let initial = snapshot(&root, &options.external_inputs)?;
         for step in STEPS {
             if options.stages.is_empty() || options.stages.iter().any(|label| label == step.label) {
-                summary.stages.push(execute_stage(
-                    step, options, &root, &directory, &run_id, &initial,
-                )?);
+                execute_stage(
+                    step,
+                    options,
+                    &root,
+                    &directory,
+                    &run_id,
+                    &initial,
+                    &mut summary.stages,
+                )?;
             }
         }
         if initial != snapshot(&root, &options.external_inputs)? {
@@ -322,7 +343,10 @@ fn verify(options: &Options) -> Result<(), String> {
                 .find(|step| step.label == result.label)
                 .ok_or("unknown recorded verification stage")?;
             if StageReceipt::load_matching(
-                &result.receipt,
+                result
+                    .receipt
+                    .as_deref()
+                    .ok_or("missing successful receipt")?,
                 &result.key,
                 &initial,
                 step.arguments,
@@ -363,12 +387,26 @@ fn main() -> ExitCode {
         Ok(options) => options,
         Err(error) => {
             eprintln!(
-                "{error}\nusage: cargo xtask verify [--step STAGE]... [--reuse] [--receipt-dir DIR] [--input FILE]..."
+                "{error}\nusage: cargo xtask verify [--step STAGE]... [--reuse] [--receipt-dir DIR] [--input FILE]...\n       cargo xtask inputs [--input FILE]..."
             );
             return ExitCode::from(2);
         }
     };
-    match verify(&options) {
+    let result = if options.inputs_only {
+        (|| {
+            let root = env::current_dir().map_err(|error| error.to_string())?;
+            receipt::require_repository_root(&root)?;
+            let pins = snapshot(&root, &options.external_inputs)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&pins).map_err(|error| error.to_string())?
+            );
+            Ok(())
+        })()
+    } else {
+        verify(&options)
+    };
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{error}");

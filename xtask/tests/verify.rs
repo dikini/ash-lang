@@ -37,6 +37,7 @@ impl Fixture {
             );
         }
         let stub = r#"#!/bin/sh
+set -e
 if [ "$1" = "--version" ] || [ "$1" = "-vV" ]; then
     printf 'fixture-tool-version\n'
     exit 0
@@ -49,6 +50,13 @@ fi
 if [ -f target/mutate ]; then
     printf 'changed during command\n' >> input.rs
 fi
+if [ "$1" = "clippy" ] && [ -f helper ]; then
+    ./helper
+fi
+if [ "$1" = "build" ] && [ -f target/use-native-tools ]; then
+    cc --fixture-compile
+    ar --fixture-archive
+fi
 printf 'fixture command succeeded\n'
 "#;
         for name in [
@@ -57,6 +65,8 @@ printf 'fixture command succeeded\n'
             "rustdoc",
             "rustfmt",
             "clippy-driver",
+            "cargo-fmt",
+            "cargo-clippy",
             "cc",
             "ar",
         ] {
@@ -280,6 +290,75 @@ fn reuse_refuses_an_unpinned_subdirectory_checkout() {
 }
 
 #[test]
+fn changed_executable_permissions_cannot_reuse_a_previous_success() {
+    let fixture = Fixture::new();
+    let helper = fixture.0.join("helper");
+    fs::write(&helper, "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(
+        Command::new("git")
+            .args(["add", "helper"])
+            .current_dir(&fixture.0)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let args = ["--step", "clippy", "--reuse"];
+    success(&fixture.run(&args));
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(!fixture.run(&args).status.success());
+    assert_eq!(fixture.calls().len(), 2);
+}
+
+#[test]
+fn native_path_tool_is_pinned_even_when_an_override_is_set() {
+    let fixture = Fixture::new();
+    let native = fixture.0.join("target/bin/cc");
+    let override_path = fixture.0.join("target/bin/alternate-cc");
+    fs::copy(&native, &override_path).unwrap();
+    fs::write(fixture.0.join("target/use-native-tools"), "").unwrap();
+    let args = ["--step", "build", "--reuse"];
+    success(
+        &fixture
+            .command(&args)
+            .env("CC", &override_path)
+            .output()
+            .unwrap(),
+    );
+    let mut bytes = fs::read(&native).unwrap();
+    bytes.extend_from_slice(b"\nexit 1\n");
+    fs::write(&native, bytes).unwrap();
+    assert!(
+        !fixture
+            .command(&args)
+            .env("CC", &override_path)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+}
+
+#[test]
+fn rustup_delegated_tool_changes_cannot_hide_behind_an_unchanged_launcher() {
+    let fixture = Fixture::new();
+    let delegate = fixture.0.join("target/bin/delegated-rustfmt");
+    fs::copy(fixture.0.join("target/bin/rustfmt"), &delegate).unwrap();
+    let shim = fixture.0.join("target/bin/rustup");
+    fs::write(&shim, "#!/bin/sh\nif [ \"$1\" = which ]; then printf '%s/target/bin/delegated-rustfmt\\n' \"$PWD\"; else exec \"$PWD/target/bin/delegated-rustfmt\" \"$@\"; fi\n").unwrap();
+    fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::remove_file(fixture.0.join("target/bin/rustfmt")).unwrap();
+    std::os::unix::fs::symlink(&shim, fixture.0.join("target/bin/rustfmt")).unwrap();
+    let args = ["--step", "clippy", "--reuse"];
+    success(&fixture.run(&args));
+    let mut bytes = fs::read(&delegate).unwrap();
+    bytes.extend_from_slice(b"\n# actual formatter changed; launcher/version unchanged\n");
+    fs::write(&delegate, bytes).unwrap();
+    success(&fixture.run(&args));
+    assert_eq!(fixture.calls().len(), 2);
+}
+
+#[test]
 fn unknown_duplicate_and_missing_stage_arguments_fail_before_running_tools() {
     let fixture = Fixture::new();
     for args in [
@@ -291,4 +370,40 @@ fn unknown_duplicate_and_missing_stage_arguments_fail_before_running_tools() {
         assert!(!fixture.run(&args).status.success());
     }
     assert!(fixture.calls().is_empty());
+}
+
+#[test]
+fn input_dump_is_read_only_and_failed_execution_remains_in_the_run_report() {
+    let fixture = Fixture::new();
+    let command = fixture.command(&[]);
+    let input = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .arg("inputs")
+        .current_dir(&fixture.0)
+        .envs(
+            command
+                .get_envs()
+                .filter_map(|(key, value)| value.map(|value| (key, value))),
+        )
+        .output()
+        .unwrap();
+    success(&input);
+    let pins: serde_json::Value = serde_json::from_slice(&input.stdout).unwrap();
+    assert!(
+        pins["files"]
+            .as_object()
+            .unwrap()
+            .contains_key(fixture.0.join("input.rs").to_str().unwrap())
+    );
+    assert!(fixture.calls().is_empty());
+    fs::write(fixture.0.join("target/fail"), "clippy").unwrap();
+    let failed = fixture.run(&["--step", "clippy"]);
+    assert!(!failed.status.success());
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("1 executed"));
+    let summary: serde_json::Value = serde_json::from_slice(
+        &fs::read(fixture.0.join("target/verification/latest.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(summary["stages"][0]["success"], false);
+    assert!(PathBuf::from(summary["stages"][0]["log"].as_str().unwrap()).is_file());
+    assert!(summary["stages"][0]["receipt"].is_null());
 }

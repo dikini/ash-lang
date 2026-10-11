@@ -43,8 +43,10 @@ successful stages explicitly:
 cargo xtask verify --reuse
 ```
 
-Reuse requires identical repository files, external inputs, tool versions and
-executable hashes, runner, environment, Cargo configuration and stage command.
+Reuse requires identical repository files (contents, permissions and symlinks),
+external inputs, tool versions and executable pins, runner, environment, Cargo
+configuration and stage command. Pins include literal PATH native tools and
+effective rustup components, including the Cargo formatting/Clippy commands.
 The saved receipt and its log must still match. A mismatch runs that stage
 fresh. A fresh failure retires the older success for those inputs. Input movement
 before, during or between checks prevents a successful gate. Reports show
@@ -71,13 +73,18 @@ Keep review, retention checks, real native observations and acceptance as
 separate obligations. Final integrated gates remain fresh unless the governing
 artifact explicitly permits evidence transfer.
 
+Custom wrappers can delegate to other tools; name those files with `--input`
+when they are not already pinned. Shared host libraries and other ambient host
+dependencies remain part of the trusted, unchanged local environment.
+
 ## Logs and handoff
 
 The default output is `target/verification/`. Use `--receipt-dir DIR` to choose
 another directory; output inside the checkout must be Git-ignored. Per-stage
 receipts retain input pins, exact arguments, log hashes and elapsed seconds.
 Per-run summaries and `latest.json` record success, complete or partial scope,
-executed/reused stages and wall time. Each stage prints its log path. Deleting
+executed/reused stages, failures and wall time. Each stage prints its log path.
+Deleting
 receipts or logs only removes the opportunity for reuse.
 
 A handoff includes the exact source and target commits, stage summary, receipt
@@ -85,3 +92,8 @@ and log paths, explicit external inputs, configuration and cache conditions,
 and the next owner. A successful partial run never satisfies a full gate.
 Markdown, relative links, artifact structure and authority review remain manual
 checks under the [documentation policy](documentation.md).
+
+For a before/after measurement, `cargo xtask inputs [--input FILE]...` prints
+the same input fingerprint as JSON without running verification stages or
+writing receipts. Capture and compare it across both plans. An input dump is
+provenance only; it establishes no verification result.
