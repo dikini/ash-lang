@@ -1564,6 +1564,18 @@ pub(crate) fn resolve_module_with_budget(
     let admission =
         resolve_module_names_with_budget(loaded, dependencies, type_work, constraint_work)
             .map_err(ResolveModuleError::Resolution)?;
+    finish_module_resolution(loaded, dependencies, type_work, admission)
+}
+
+// Kind checking and publication stage large owning results after name traversal.
+// Keep their temporaries off the name-resolution call chain on bounded stacks.
+#[inline(never)]
+fn finish_module_resolution(
+    loaded: &LoadedModule,
+    dependencies: &[DependencyExports<'_>],
+    type_work: &mut TypeWorkBudget,
+    admission: ResolvedModuleAdmission,
+) -> Result<ResolvedModule, ResolveModuleError> {
     crate::kind::check_resolved_module_with_budget(
         &admission.parts,
         &admission.constructor_payload_provenance,

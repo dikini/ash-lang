@@ -13610,7 +13610,9 @@ Memory.AllocationRefused(error) => 0
             }
         }
         assert_eq!(retained_kinds.used(), 6);
-        assert_eq!(type_work, precheck_types + 79 + 4 + 6 + 2);
+        // The original `use` spelling is retained once, after precharge.
+        let spelling_work = "use".len();
+        assert_eq!(type_work, precheck_types + 79 + 4 + 6 + 2 + spelling_work);
         drop(catalog);
 
         let mut constraint_short = InterfaceConstraintBudget::with_limit(constraint_work - 1);
@@ -13631,7 +13633,10 @@ Memory.AllocationRefused(error) => 0
                 .reason(),
             EvidenceValidationReason::TypeResourceExhausted,
         );
-        assert_eq!(type_short.used(), precheck_types + 75 + 4 + 6 + 2);
+        assert_eq!(
+            type_short.used(),
+            precheck_types + 75 + 4 + 6 + 2 + spelling_work
+        );
 
         for _ in 0..2 {
             let mut constraint_exact = InterfaceConstraintBudget::with_limit(constraint_work);
@@ -13978,7 +13983,9 @@ Memory.AllocationRefused(error) => 0
         // carrier cells each beyond their predecessor scalar form.
         // Each of the two domains also retains one admitted parameter record
         // and its Type-kind node.
-        let type_work = precheck_types + 38 + 2 * 2 + 2 * 2;
+        // Canonical `first` and `second` spellings are precharged before copies.
+        let spelling_work = "first".len() + "second".len();
+        let type_work = precheck_types + 38 + 2 * 2 + 2 * 2 + spelling_work;
         assert_eq!(measured_constraint.used(), constraint_work);
         assert_eq!(measured_type.used(), type_work);
         drop(catalog);
@@ -16266,7 +16273,9 @@ Memory.AllocationRefused(error) => 0
         // its duplicate one-node Kind comparison.
         const PUBLIC_WORK_OUTSIDE_RELATIONSHIP: usize = 371 + 29 - 4 - 1;
         const EXACT_CONSTRAINT_WORK: usize = PUBLIC_WORK_OUTSIDE_RELATIONSHIP + RELATIONSHIP_WORK;
-        const EXACT_TYPE_WORK: usize = 22 + 1 + 2 * 2; // defining-group code/contract scan
+        // Defining-group scan plus one precharged original `relate` spelling.
+        const METHOD_SPELLING_WORK: usize = "relate".len();
+        const EXACT_TYPE_WORK: usize = 22 + 1 + 2 * 2 + METHOD_SPELLING_WORK;
 
         let relationship_program = linked_determined_generic_decrease_program();
         let group = &relationship_program.groups()[0];
@@ -16558,7 +16567,9 @@ Memory.AllocationRefused(error) => 0
         // slots; the checked function root removes one duplicate Kind visit.
         const ORDINARY_CONSTRAINT_WORK: usize = 149 - 3 - 1;
         const DETERMINED_CONSTRAINT_WORK: usize = 165 - 3 - 1;
-        const EXACT_TYPE_WORK: usize = 16 + 1 + 2 * 3; // defining-group code/contract scan
+        // Defining-group scan plus one precharged original `relation` spelling.
+        const METHOD_SPELLING_WORK: usize = "relation".len();
+        const EXACT_TYPE_WORK: usize = 16 + 1 + 2 * 3 + METHOD_SPELLING_WORK;
         const PARAMETER_COUNT: usize = 3;
         const DETERMINANT_COUNT: usize = 2;
         const THREE_WAY_AUTH_DELTA: usize = 2 * PARAMETER_COUNT + 2 * DETERMINANT_COUNT;

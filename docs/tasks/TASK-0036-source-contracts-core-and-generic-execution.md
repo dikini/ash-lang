@@ -56,6 +56,25 @@ Copied binder, operation, operand, effect and resource-owner claims require thei
 original correspondence; a same-typed application alone supplies no activation
 authority.
 
+Expanded source-scope construction must not enlarge the fixed transform frame
+used by unrelated operations. The private source-scope rebuild routine retains
+the same charged fallible forwarding and copy-map reservations, guarded Type
+ownership and independent admission, without adding a heap allocation. The
+ordinary-handler exact/one-short/retry/deep-disposal witness keeps its established
+64 KiB stack and unchanged depth/work policies.
+
+Retaining passive implementation census facts enlarges owning resolved-module
+results. Kind checking and provenance publication run after name resolution in a
+separate routine, so their result temporaries do not burden the active source
+traversal. The same original-header census, sealing order, budgets and fallible
+retention remain in force. The predecessor 256 KiB cleanup witness resolves its
+source before evaluator execution; resolution preserves that established bound.
+
+Canonical method spelling retention charges the original UTF-8 byte length
+before fallible allocation. Independent ledger fixtures must count their actual
+names, including `use`, `first`/`second`, `relate` and `relation`; equal numeric
+deltas from different fixtures do not establish shared provenance.
+
 An inner source scope already owns normalized immutable descriptor metadata.
 Enclosing late normalization preserves that descriptor; final independent
 admission still rejects altered or unresolved actuals and changed original
