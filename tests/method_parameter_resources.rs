@@ -361,7 +361,7 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "linked catalog type ledger",
             EVIDENCE_VALIDATION_SOURCE,
             "fn linked_method_evidence_catalog_has_exact_independent_ledgers()",
-            "assert_eq!(type_work, precheck_types + 79 + 4 + 6 + 2);",
+            "assert_eq!(type_work, precheck_types + 79 + 4 + 6 + 2 + spelling_work);",
         ),
         (
             "abstract producer catalog",
@@ -373,7 +373,7 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "abstract producer type ledger",
             EVIDENCE_VALIDATION_SOURCE,
             "fn widened_abstract_producer_lookup_has_an_exact_retry_boundary()",
-            "let type_work = precheck_types + 38 + 2 * 2 + 2 * 2;",
+            "let type_work = precheck_types + 38 + 2 * 2 + 2 * 2 + spelling_work;",
         ),
         (
             "concrete source catalog",
@@ -391,7 +391,7 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "concrete source type ledger",
             EVIDENCE_VALIDATION_SOURCE,
             "fn concrete_adapter_source_catalog_has_an_exact_retry_boundary()",
-            "let type_work = precheck_types + 45 + 4;",
+            "let type_work = precheck_types + 45 + 4 + 4 + 7;",
         ),
         (
             "Core Builder carriers",
