@@ -24,7 +24,7 @@ pub(super) struct Inputs {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 struct FilePin {
-    sha256: String,
+    sha256: Option<String>,
     mode: u32,
     symlink: Option<PathBuf>,
 }
@@ -53,8 +53,22 @@ fn file_pin(path: &Path) -> Result<String, String> {
 }
 
 fn input_file_pin(path: &Path) -> Result<FilePin, std::io::Error> {
-    let bytes = fs::read(path)?;
-    let metadata = fs::metadata(path)?;
+    let link_metadata = fs::symlink_metadata(path)?;
+    let symlink = if link_metadata.file_type().is_symlink() {
+        Some(fs::read_link(path)?)
+    } else {
+        None
+    };
+    let sha256 = match fs::read(path) {
+        Ok(bytes) => Some(digest(&bytes)),
+        Err(error) if symlink.is_some() && error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+    let metadata = if sha256.is_some() {
+        fs::metadata(path)?
+    } else {
+        link_metadata
+    };
     #[cfg(unix)]
     let mode = {
         use std::os::unix::fs::PermissionsExt;
@@ -62,13 +76,8 @@ fn input_file_pin(path: &Path) -> Result<FilePin, std::io::Error> {
     };
     #[cfg(not(unix))]
     let mode = u32::from(metadata.permissions().readonly());
-    let symlink = if fs::symlink_metadata(path)?.file_type().is_symlink() {
-        Some(fs::read_link(path)?)
-    } else {
-        None
-    };
     Ok(FilePin {
-        sha256: digest(&bytes),
+        sha256,
         mode,
         symlink,
     })
@@ -188,10 +197,11 @@ pub(super) fn snapshot(root: &Path, external: &[PathBuf]) -> Result<Inputs, Stri
     }
     for path in external {
         let path = std::path::absolute(path).map_err(|error| error.to_string())?;
-        files.insert(
-            path.clone(),
-            Some(input_file_pin(&path).map_err(|error| error.to_string())?),
-        );
+        let pin = input_file_pin(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+        if pin.sha256.is_none() {
+            return Err(format!("named input has no readable referent: {}", path.display()));
+        }
+        files.insert(path, Some(pin));
     }
 
     let mut configuration_paths = BTreeSet::new();
@@ -265,26 +275,40 @@ pub(super) fn snapshot(root: &Path, external: &[PathBuf]) -> Result<Inputs, Stri
             &mut tools,
             &mut executable_pins,
         )?;
-        // Native build scripts invoke literal cc/ar; Cargo can delegate to PATH
-        // tools as well. Overrides do not replace those actual selections.
-        pin_tool(
-            &root,
-            name,
-            &format!("path-{name}"),
-            std::ffi::OsStr::new(name),
-            &mut tools,
-            &mut executable_pins,
-        )?;
     }
-    for name in ["cargo-fmt", "cargo-clippy"] {
-        pin_tool(
-            &root,
-            name,
-            name,
-            std::ffi::OsStr::new(name),
-            &mut tools,
-            &mut executable_pins,
-        )?;
+    // Pin every existing PATH candidate conservatively. Execution may skip a
+    // non-executable shadow; native builds can ignore CC/AR overrides.
+    for name in [
+        "cargo",
+        "rustc",
+        "rustdoc",
+        "rustfmt",
+        "clippy-driver",
+        "cargo-fmt",
+        "cargo-clippy",
+        "cc",
+        "ar",
+    ] {
+        let mut found = false;
+        for (index, directory) in
+            env::split_paths(&env::var_os("PATH").unwrap_or_default()).enumerate()
+        {
+            let path = root.join(directory).join(name);
+            if path.is_file() {
+                found = true;
+                pin_tool(
+                    &root,
+                    name,
+                    &format!("path-{name}-{index}"),
+                    path.as_os_str(),
+                    &mut tools,
+                    &mut executable_pins,
+                )?;
+            }
+        }
+        if !found {
+            return Err(format!("PATH tool not found: {name}"));
+        }
     }
     for variable in ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"] {
         if let Some(path) = env::var_os(variable).filter(|path| !path.is_empty()) {

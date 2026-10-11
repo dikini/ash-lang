@@ -53,6 +53,9 @@ fi
 if [ "$1" = "clippy" ] && [ -f helper ]; then
     ./helper
 fi
+if [ "$1" = "clippy" ] && [ -L input-link ]; then
+    [ "$(readlink input-link)" = missing-first ]
+fi
 if [ "$1" = "build" ] && [ -f target/use-native-tools ]; then
     cc --fixture-compile
     ar --fixture-archive
@@ -79,12 +82,9 @@ printf 'fixture command succeeded\n'
 
     fn command(&self, arguments: &[&str]) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
-        let path = std::env::join_paths(
-            [self.0.join("target/bin")]
-                .into_iter()
-                .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
-        )
-        .unwrap();
+        let path =
+            std::env::join_paths([self.0.join("target/bin"), "/usr/bin".into(), "/bin".into()])
+                .unwrap();
         command
             .arg("verify")
             .args(arguments)
@@ -207,6 +207,8 @@ fn declared_external_inputs_are_pinned_and_invalidated() {
     success(&fixture.run(&args));
     assert_eq!(fixture.calls().len(), 2);
     fs::remove_file(&external).unwrap();
+    assert!(!fixture.run(&args).status.success());
+    std::os::unix::fs::symlink("missing-archive", &external).unwrap();
     assert!(!fixture.run(&args).status.success());
 }
 
@@ -337,6 +339,68 @@ fn native_path_tool_is_pinned_even_when_an_override_is_set() {
             .status
             .success()
     );
+}
+
+#[test]
+fn a_nonexecutable_path_shadow_cannot_hide_the_compiler_actually_run() {
+    let fixture = Fixture::new();
+    let shadow = fixture.0.join("target/shadow");
+    fs::create_dir(&shadow).unwrap();
+    fs::write(shadow.join("cc"), "not executable\n").unwrap();
+    let override_path = fixture.0.join("target/bin/alternate-cc");
+    fs::copy(fixture.0.join("target/bin/cc"), &override_path).unwrap();
+    fs::write(fixture.0.join("target/use-native-tools"), "").unwrap();
+    let path = std::env::join_paths([
+        shadow,
+        fixture.0.join("target/bin"),
+        "/usr/bin".into(),
+        "/bin".into(),
+    ])
+    .unwrap();
+    let args = ["--step", "build", "--reuse"];
+    success(
+        &fixture
+            .command(&args)
+            .env("PATH", &path)
+            .env("CC", &override_path)
+            .output()
+            .unwrap(),
+    );
+    let native = fixture.0.join("target/bin/cc");
+    let mut bytes = fs::read(&native).unwrap();
+    bytes.extend_from_slice(b"\nexit 1\n");
+    fs::write(native, bytes).unwrap();
+    assert!(
+        !fixture
+            .command(&args)
+            .env("PATH", &path)
+            .env("CC", &override_path)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+}
+
+#[test]
+fn changed_dangling_symlink_identity_invalidates_reuse() {
+    let fixture = Fixture::new();
+    let link = fixture.0.join("input-link");
+    std::os::unix::fs::symlink("missing-first", &link).unwrap();
+    assert!(
+        Command::new("git")
+            .args(["add", "input-link"])
+            .current_dir(&fixture.0)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let args = ["--step", "clippy", "--reuse"];
+    success(&fixture.run(&args));
+    fs::remove_file(&link).unwrap();
+    std::os::unix::fs::symlink("missing-second", &link).unwrap();
+    assert!(!fixture.run(&args).status.success());
+    assert_eq!(fixture.calls().len(), 2);
 }
 
 #[test]

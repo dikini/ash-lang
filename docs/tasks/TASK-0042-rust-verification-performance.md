@@ -42,6 +42,13 @@ File metadata and the actual delegated tools are now pinned. Failed executions
 also retain their timing and log in the run summary without a success receipt.
 Re-review and the full comparison remain pending the milestone repair/lease.
 
+Re-review exposed non-executable PATH shadows and dangling symlink retargeting.
+The runner now pins all existing PATH candidates conservatively and records
+link identity even when the referent is absent. Named external file inputs
+still require readable contents. The comparison harness passed stub-based
+smoke checks for identical outer test counts, complete seven-stage reuse and
+rejection after inherited Cargo configuration movement.
+
 ## Dependencies introduced to xtask
 
 These are development-tool dependencies already resolved and used by Ash.

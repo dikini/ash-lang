@@ -45,7 +45,7 @@ cargo xtask verify --reuse
 
 Reuse requires identical repository files (contents, permissions and symlinks),
 external inputs, tool versions and executable pins, runner, environment, Cargo
-configuration and stage command. Pins include literal PATH native tools and
+configuration and stage command. Pins include all existing PATH candidates and
 effective rustup components, including the Cargo formatting/Clippy commands.
 The saved receipt and its log must still match. A mismatch runs that stage
 fresh. A fresh failure retires the older success for those inputs. Input movement
@@ -57,6 +57,7 @@ untracked file. It intentionally invalidates all stages even for a Markdown
 change. It also pins inherited Cargo configuration and the effective environment
 (values are hashed rather than exposed). Jobserver and shell bookkeeping are
 excluded; `CARGO_BUILD_JOBS` is normalized to the enforced value `1`.
+Use the same declared launch environment when sharing receipts across roles.
 
 Git-ignored fixtures and external headers, native archives or other files used
 by a check must be named explicitly for reuse:
