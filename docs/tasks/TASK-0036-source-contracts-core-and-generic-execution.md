@@ -292,6 +292,15 @@ both ordinary result variants for every independent field check.
 Original template structural validation borrows only those authenticated scalar
 global facts; final executable graphs still require ordinary binder closure.
 
+The full workspace gate exposed an unnecessary second scan of every published
+global while collecting scalar result-codec dependencies. It charged ordinary
+modules with no scalar facts and broke two exact freeze-budget regressions.
+The existing paid publication walk now stages only actual codec owner IDs with
+fallible storage. The later constructor closure consumes those IDs in source
+order, preserving original facts, hidden-family authentication and existing
+seed ordering. Ordinary globals incur no additional charge or allocation;
+neither work limits nor regression expectations changed.
+
 Matching an unknown scalar result beside current state exposed a skipped-arm
 owner-flow defect: the first possible arm could hide a later `Consumed` report
 without teardown. Symbolic patterns now distinguish possible from definite

@@ -12633,6 +12633,8 @@ impl ExportSummary {
             .terms
             .try_reserve(resolved.export_candidate.terms.len())
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        // Stage only actual codec dependencies during the existing global pass.
+        let mut preflight_constructor_owners = Vec::new();
         for spelling in &resolved.export_candidate.term_order {
             let candidate = resolved
                 .export_candidate
@@ -12674,37 +12676,52 @@ impl ExportSummary {
                     )
                 }
             };
-            if binder != candidate.binder
-                || summary
-                    .terms
-                    .insert(
-                        spelling.clone(),
-                        ExportedGlobal {
-                            scalar_preflight: resolved
-                                .registry
-                                .scalar_preflight(binder)
-                                .or_else(|| {
-                                    resolved
-                                        .imported
-                                        .global(binder)
-                                        .and_then(|global| global.scalar_preflight.as_ref())
-                                })
-                                .map(Arc::clone),
-                            capture: capture
-                                .clone_with_budget(type_work)
-                                .map_err(|()| ResolvedBuildFailure::TypeResource)?,
-                            binder,
-                            scheme: scheme
-                                .clone_with_budget(type_work)
-                                .map_err(|()| ResolvedBuildFailure::TypeResource)?,
-                            origin: origin.clone(),
-                        },
-                    )
-                    .is_some()
+            if binder != candidate.binder {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            let scalar_preflight = resolved
+                .registry
+                .scalar_preflight(binder)
+                .or_else(|| {
+                    resolved
+                        .imported
+                        .global(binder)
+                        .and_then(|global| global.scalar_preflight.as_ref())
+                })
+                .map(Arc::clone);
+            let preflight_owner = scalar_preflight
+                .as_ref()
+                .map(|fact| fact.call_codec().ids().call);
+            if summary
+                .terms
+                .insert(
+                    spelling.clone(),
+                    ExportedGlobal {
+                        scalar_preflight,
+                        capture: capture
+                            .clone_with_budget(type_work)
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                        binder,
+                        scheme: scheme
+                            .clone_with_budget(type_work)
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                        origin: origin.clone(),
+                    },
+                )
+                .is_some()
             {
                 {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
+            }
+            if let Some(owner) = preflight_owner {
+                type_work
+                    .charge(1)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                preflight_constructor_owners
+                    .try_reserve(1)
+                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                preflight_constructor_owners.push(owner);
             }
             summary.term_order.push(spelling.clone());
         }
@@ -13488,13 +13505,9 @@ impl ExportSummary {
         // A preflight's canonical result codec follows its selected function
         // through facades without publishing constructor spelling routes.
         type_work
-            .charge(summary.terms.len())
+            .charge(preflight_constructor_owners.len())
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-        for global in summary.terms.values() {
-            let Some(preflight) = &global.scalar_preflight else {
-                continue;
-            };
-            let call = preflight.call_codec().ids().call;
+        for call in preflight_constructor_owners {
             if constructor_owners.contains(&call) {
                 continue;
             }
