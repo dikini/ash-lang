@@ -45,6 +45,36 @@ boundaries require it, and run the governing delivery gate once the change is
 ready. Documentation-only work follows the documentation policy's manual
 checks unless its governing artifact requires code verification.
 
+Select the package and target as well as the test case. A test-name filter
+controls execution within the selected binaries; it does not by itself avoid
+compiling unrelated test targets. Changes to shared compiler code can affect
+unchanged tests, so coverage follows the changed behavior and its consumers,
+not just edited test files. Rustdoc generation is not needed for each test run;
+check affected API documentation when it changes and retain the rustdoc stage
+where the governing delivery gate requires it.
+
+### Checkouts and build caches
+
+Reuse a suitable active checkout before creating another. Keep a stable target
+directory and let Cargo reuse compatible artifacts. A fresh verification command
+does not require an empty cache. Do not clean or relocate a cache as a routine
+precondition for a gate. Cold builds belong to measurements that require them
+or to diagnosis of a demonstrated cache problem.
+
+The PM assigns a single writer to each product cache. Reviewers can inspect the
+same frozen source, receipts and logs without allocating another product cache.
+When isolation requires another checkout, coordinate access to an existing
+compatible cache; changed paths or configurations can still require Cargo to
+recompile affected artifacts. Receipt reuse remains bound to its recorded
+checkout and inputs.
+
+Estimate storage before a cold comparison. Retain required logs, input records
+and native evidence independently of disposable build output. Reclaim owned,
+superseded caches once no active owner needs them; preserve the active gate's
+cache and evidence.
+
+### Selecting gate stages
+
 At a verification boundary, select only the required gate stages:
 
 ```sh

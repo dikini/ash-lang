@@ -77,6 +77,42 @@ handoff are pending. On that candidate, the altered root manifest/lockfile
 changes the runtime identity; original-configuration native/image evidence
 remains a separate requirement.
 
+The third attempt completed the old default build in 731.34 seconds and Clippy
+in 135.52 seconds, then stopped on a failing source-formula owner guard in
+`method_parameter_resources`. Its three expected strings omit spelling charges
+retained by the owning unit probes. The test stage exited 101 after 1,482.94
+seconds; only 69 of 136 outer targets were reached. Independent review
+authenticated all five completed stage logs and unchanged input/tool pins.
+Documentation, revised fresh and reuse stages did not start. This failed
+partial attempt establishes no complete gate or before/after result. The PM
+assigned focused diagnosis using the existing cache.
+
+The subsequent three-string repair reused that same checkout and target path.
+Its affected test target compiled in 2.86 seconds (Cargo-reported), and the
+command passed all four tests in 4.29 seconds wall time. The three owning unit
+probes each passed in under one second command wall time. These are focused
+repair results, not a full-gate comparison; they demonstrate the edit loop with
+compatible cached artifacts rather than a new cold build.
+
+The edit-loop guide now selects packages, targets and cases explicitly and
+distinguishes fresh verification from cold compilation. Suitable checkouts and
+compatible caches are reused, with one writer per product cache. Superseded
+failed caches can be reclaimed after preserving evidence and confirming no
+active owner needs them. The user also requested measurement of the compilation
+cost itself. Reduced debug information is a later controlled experiment;
+existing gate profiles, limits and tests remain unchanged here.
+
+After the sole owner confirmed no remaining dependency and independent review
+checked the deletion scope, the two excluded storage-failed caches were retired.
+Their 78.43 GB allocated footprint was removed; measured free space increased
+by 78.42 GB (73.03 GiB). Interruption logs/receipts, file metadata inventories,
+Cargo fingerprints, dependency records and referenced build outputs were
+preserved outside the caches. The active comparison cache, product checkout,
+shared caches and other worktrees were untouched. The user accepted reuse of
+one sequential product checkout with target caches retained across branch
+switches; [AD-0011](../decisions/AD-0011-milestone-worktree-lifecycle.md) and the
+[agent guide](../project/agent-workflow.md) now record that workflow.
+
 ## Dependencies introduced to xtask
 
 These are development-tool dependencies already resolved and used by Ash.

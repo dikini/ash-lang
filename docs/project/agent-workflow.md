@@ -30,6 +30,11 @@ later wakeups require an explicitly requested automation.
   Use one Cargo job, compatible caches and checks required by the task. Separate
   real native observations from injected failures and foreign assumptions.
   Preserve work/depth/stack limits.
+- For sequential PR development, keep one product checkout and its target cache.
+  Switch branches only after the current frozen gate and handoff release the
+  checkout and the working tree is clean. Reviewers use that checkout and its
+  evidence. A fresh gate does not imply a cold build; separate caches require an
+  assigned comparison or isolation need under AD-0011.
 - Use the [Rust verification guide](verification.md) for selected checks and
   explicit local receipt reuse. Partial evidence does not establish a full gate;
   required integrated gates remain fresh unless their governing artifact permits
