@@ -188,6 +188,31 @@ compiler. The scalar encoder and reconstructed native boundary refuse owner,
 address and current-state facts rather than dropping them. Broader passive ABI
 preparation therefore supplies no new executable ownership authority.
 
+Pure scalar preflight images share the existing flat records and registry
+reconstruction path with native images, followed by the independent Pure subset
+check. The Pure boundary still rejects native symbols, effects, providers,
+resource scopes and generic user functions. Only the exact common codec's
+formal metadata and original scalar-check facts enter this profile; no Pure
+program is promoted to Effect Core. Image tests retain one original codec
+allocation for both checks and reject forged roles, binders, provenance,
+coverage and mixed dialect claims.
+
+The complete arena program exposed repeated structural type records in its
+private construction image. Exact flat tags and ordered canonical child slots
+now share records during encoding. Declaration identities, row tails, argument
+tags and occurrence-owned quantifier records remain distinct; original origins,
+certificates and evidence are not interned. Source traversal, depth checks,
+fallible storage and work charges still apply before reuse. Reconstruction
+expands each required owned type and independently checks final Core.
+
+The diagnostic arena image fell from 146,384 to 67,267 bytes. Its cumulative
+decode, expectation correspondence, reconstruction and final Core validation
+fell from 375,187 to 285,700 units, within the unchanged 327,680 startup allowance.
+The budget regression uses the complete public arena fixture and source removal,
+then checks default, exact, one-short, prefixed and fresh-retry allowances. These
+measurements describe reconstruction; actual library admission and native
+execution require the separate generated-host evidence.
+
 ## Deviations
 
 None authorized. Return concrete semantic gaps to CP-0022 instead of resolving

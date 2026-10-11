@@ -57,6 +57,15 @@ complete ordered parameter kinds and the canonical source signature. Display
 aliases grant no replacement contract or result-codec authority. An ordinary
 Core handler cannot target an admitted native symbol.
 
+The common scalar checks lower to pure intrinsic nodes in either Core dialect.
+Each node retains its exact original function identity, role and module, rather
+than selecting behavior by a source spelling. Independent validation checks the
+retained registry fact, empty row, exact `Int -> Call<Int>` signature and
+original provenance. Constructor-aware capture treats success as the original independent
+`Int` and failure as an opaque nullary error. The matching-compiler private
+image retains those facts and their shared codec once, reconstructs unchecked nodes,
+and independently validates them without reopening or checking source.
+
 An ordinary native entry lowers to an explicit Effect Core interpretation of
 the generated entry application and interprets only owner-free scalar or void
 members. Each listed member retains the complete ordered Type/EffectRow instance
@@ -150,7 +159,10 @@ native call; a retained result must return the exact current state after a
 witnessed pre-call refusal. Original handler clauses cannot request native
 owner operations or return owned state through `resume`. The supported phase
 bodies use ordinary matches, bindings, constructors, tuples and independent
-scalar primitives; handler clauses resume an independent payload. Additional
+scalar primitives and authenticated scalar preflight calls; handler clauses
+resume an independent payload. The phase proof checks every possible matching
+arm when an independent scalar choice is unknown, including when it is paired
+with owned state. Only a definite match excludes later arms. Additional
 handler requests, arbitrary helper calls and local control abstractions need
 further phase evidence. This phase proof has a separate bound of 64 nested
 expression or pattern steps and uses the shared work ledger; ordinary Core

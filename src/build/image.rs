@@ -88,7 +88,7 @@ impl fmt::Display for ImageFailure {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 struct Slice {
     start: u32,
     len: u32,
@@ -137,7 +137,7 @@ enum OriginRecord {
     Related { primary: u32, related: Slice },
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 struct NominalId {
     module: u32,
     local: u32,
@@ -155,7 +155,7 @@ enum BinderIdentity {
     Generated(u32),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 enum TypeTag {
     Resource(ResourceIdentity),
     Variable(TypeVariableIdentity),
@@ -240,6 +240,11 @@ enum NodeTag {
         available: bool,
     },
     SourceScope(u32),
+    ScalarPreflight {
+        function: BinderIdentity,
+        role: crate::foreign::scalar_preflight::ForeignScalarPreflightRole,
+        module: u32,
+    },
     Request {
         effect: u32,
         operation: OperationIdentity,
@@ -442,6 +447,7 @@ pub(crate) struct PureImage {
     inherited_parameters: Vec<InheritedParameterRecord>,
     main_method_catalog: Option<u32>,
 
+    scalar_preflights: Vec<ScalarPreflightRecord>,
     call_codecs: Vec<CallCodecRecord>,
     interpretations: Vec<NativeInterpretationRecord>,
     bytes: Vec<u8>,
@@ -511,6 +517,7 @@ fn get<T>(records: &[T], slot: u32) -> Result<&T, ImageFailure> {
 
 struct Encoder<'a> {
     image: PureImage,
+    structural: HashMap<(TypeTag, Box<[u32]>), u32>,
     modules: HashMap<ModuleId, u32>,
     sources: HashMap<SourceId, u32>,
     binders: HashMap<BinderId, u32>,
@@ -589,6 +596,7 @@ fn encode_program<'work, F: crate::core::dialect::CoreOperationFamily>(
             effect_dialect,
             ..PureImage::default()
         },
+        structural: HashMap::new(),
         modules: HashMap::new(),
         sources: HashMap::new(),
         binders: HashMap::new(),
@@ -623,7 +631,6 @@ fn encode_program<'work, F: crate::core::dialect::CoreOperationFamily>(
             || module.is_builtin_native_buffer()
             || module.is_builtin_bytes()
             || module.is_builtin_string()
-            || (module.is_builtin_foreign() && !effect_dialect)
         {
             return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
         }
@@ -660,8 +667,10 @@ fn encode_program<'work, F: crate::core::dialect::CoreOperationFamily>(
         return Err(ImageFailure::InvalidRecord);
     }
     encoder.encode_registry(registry)?;
-    if effect_dialect {
+    if effect_dialect || registry.scalar_preflights().next().is_some() {
         encoder.encode_extended_registry(registry)?;
+    }
+    if effect_dialect {
         encoder.image.main_method_catalog = Some(encoder.encode_method_catalog(catalog)?);
     }
     charge(encoder.work, 13)?;
@@ -1026,8 +1035,19 @@ impl Encoder<'_> {
                     parameter: self.encode_binder(function.parameter())?,
                     body: self.node(function.body())?,
                 },
-                PureValue::Intrinsic(_) => {
-                    return Err(ImageFailure::Unsupported(Unsupported::Intrinsic));
+                PureValue::Intrinsic(value) => {
+                    use crate::core::packed::Intrinsic;
+                    use crate::foreign::scalar_preflight::ForeignScalarPreflightRole as Role;
+                    let (function, role) = match value.operation() {
+                        Intrinsic::ForeignCheckedI64 { function } => (function, Role::I64),
+                        Intrinsic::ForeignCheckedSizeT { function } => (function, Role::SizeT),
+                        _ => return Err(ImageFailure::Unsupported(Unsupported::Intrinsic)),
+                    };
+                    NodeTag::ScalarPreflight {
+                        function: self.binder_id(function)?,
+                        role,
+                        module: self.module(value.module())?,
+                    }
                 }
             },
             PureExprKind::Variable(variable) => {
@@ -1252,7 +1272,7 @@ struct Decoder<'a> {
 
 // A private layout marker for the matching compiler/runtime only. Neither the
 // embedded byte sequence nor its numeric tags promise compatibility.
-const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x07";
+const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x08";
 
 enum WireOutput<'a> {
     Encoded(Vec<u8>),
@@ -1730,6 +1750,16 @@ impl Wire for NodeTag {
                 owner.write(writer)?;
                 available.write(writer)
             }
+            Self::ScalarPreflight {
+                function,
+                role,
+                module,
+            } => {
+                21u8.write(writer)?;
+                function.write(writer)?;
+                role.write(writer)?;
+                module.write(writer)
+            }
             Self::SourceScope(slot) => {
                 20u8.write(writer)?;
                 slot.write(writer)
@@ -1847,6 +1877,11 @@ impl Wire for NodeTag {
                 handler: Wire::read(reader)?,
                 owner: Wire::read(reader)?,
                 available: Wire::read(reader)?,
+            },
+            21 => Self::ScalarPreflight {
+                function: Wire::read(reader)?,
+                role: Wire::read(reader)?,
+                module: Wire::read(reader)?,
             },
             20 => Self::SourceScope(Wire::read(reader)?),
             0 => Self::Unit,
@@ -2114,6 +2149,7 @@ impl PureImage {
         })?;
         writer.table(if executable { &self.source_copies } else { &[] })?;
 
+        writer.table(&self.scalar_preflights)?;
         writer.table(native_fact_table(
             &self.call_codecs,
             prefixes.call_codecs,
@@ -2209,6 +2245,7 @@ impl PureImage {
             source_substitutions: reader.table()?,
             source_copies: reader.table()?,
 
+            scalar_preflights: reader.table()?,
             call_codecs: reader.table()?,
             interpretations: reader.table()?,
             root: u32::read(&mut reader)?,
@@ -2237,14 +2274,9 @@ impl PureImage {
         // has a separate validated-family entry, not a silent dialect conversion.
         charge(work, 1)?;
         if self.effect_dialect
-            || !self.kinds.is_empty()
-            || !self.parameters.is_empty()
             || !self.quantifiers.is_empty()
-            || !self.nominal_parameters.is_empty()
             || !self.global_parameters.is_empty()
             || !self.abstract_nominals.is_empty()
-            || !self.provenance.is_empty()
-            || !self.provenance_children.is_empty()
             || !self.effects.is_empty()
             || !self.operations.is_empty()
             || !self.prepared_representations.is_empty()
@@ -2285,7 +2317,6 @@ impl PureImage {
             || !self.source_plain_pairs.is_empty()
             || !self.source_substitutions.is_empty()
             || !self.source_copies.is_empty()
-            || !self.call_codecs.is_empty()
             || !self.interpretations.is_empty()
         {
             return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
@@ -2299,20 +2330,48 @@ impl PureImage {
         if self.sources.is_empty() {
             return Err(ImageFailure::InvalidRecord);
         }
-        for source in &self.sources {
+        let mut seen_common = false;
+        for record in &self.sources {
             charge(decoder.work, 1)?;
-            if !matches!(source.role, ModuleRoleRecord::Ordinary) {
-                return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
-            }
-            let path = decoder.text(source.path)?;
-            let text = decoder.text(source.text)?;
+            let path = decoder.text(record.path)?;
+            let text = decoder.text(record.text)?;
             let source = SourceFile::new_with_budget(path, text, decoder.work)
                 .map_err(|_| ImageFailure::SourceAdmission)?;
-            let module = ModuleId::from(source.id());
+            let role = match record.role {
+                ModuleRoleRecord::Ordinary => crate::module::ImageModuleRole::Ordinary,
+                ModuleRoleRecord::BuiltinForeign => {
+                    if std::mem::replace(&mut seen_common, true) {
+                        return Err(ImageFailure::InvalidRecord);
+                    }
+                    crate::module::ImageModuleRole::BuiltinForeign
+                }
+            };
+            let module = crate::module::restore_image_module(&source, role, decoder.work)
+                .map_err(|_| ImageFailure::SourceAdmission)?;
             decoder.sources.push(source, decoder.work)?;
             decoder.modules.push(module, decoder.work)?;
         }
-        let registry = decoder.registry()?;
+        let registry = if seen_common {
+            decoder.extended_registry()?.registry
+        } else {
+            if !self.kinds.is_empty()
+                || !self.parameters.is_empty()
+                || !self.nominal_parameters.is_empty()
+                || !self.provenance.is_empty()
+                || !self.provenance_children.is_empty()
+                || !self.call_codecs.is_empty()
+                || !self.scalar_preflights.is_empty()
+            {
+                return Err(ImageFailure::InvalidRecord);
+            }
+            decoder.registry()?
+        };
+        if !registry
+            .monomorphic_image_subset(decoder.work)
+            .map_err(|_| ImageFailure::RegistryAdmission)?
+        {
+            return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
+        }
         let mut builder = CoreBuilder::with_registry(Arc::new(registry));
         builder.reserve_image_reconstruction_storage(
             self.nodes.len(),
@@ -2638,6 +2697,23 @@ impl Decoder<'_> {
             | NodeTag::TypeAbstraction { .. }
             | NodeTag::TypeApplication { .. } => {
                 return Err(ImageFailure::Unsupported(Unsupported::ErasedTypeOperation));
+            }
+            NodeTag::ScalarPreflight {
+                function,
+                role,
+                module,
+            } => {
+                use crate::core::packed::Intrinsic;
+                use crate::foreign::scalar_preflight::ForeignScalarPreflightRole as Role;
+                let function = self.binder_id(function)?;
+                let module = *get(&self.modules, module)?;
+                let operation = match role {
+                    Role::I64 => Intrinsic::ForeignCheckedI64 { function },
+                    Role::SizeT => Intrinsic::ForeignCheckedSizeT { function },
+                };
+                builder.with_caller_type_work(self.work, |builder| {
+                    builder.intrinsic(operation, module, ty.into_inner(), origin.take())
+                })
             }
             NodeTag::Integer(value) => builder.with_caller_type_work(self.work, |builder| {
                 builder.integer(Integer::from_i64(value), ty.into_inner(), origin.take())
@@ -3262,6 +3338,7 @@ mod tests {
                     effect_dialect: true,
                     ..PureImage::default()
                 },
+                structural: HashMap::new(),
                 modules: HashMap::from([(module, 0)]),
                 sources: HashMap::new(),
                 binders: HashMap::new(),
@@ -3426,6 +3503,85 @@ main () = match perform Measure.call 42 {
     }
 
     #[test]
+    fn scalar_preflight_image_reconstructs_authority_and_refuses_forged_records() {
+        use crate::foreign::scalar_preflight::ForeignScalarPreflightRole as Role;
+        let tree = SourceTree::new();
+        tree.write("entry.ash", "import @builtin.foreign as Foreign\nmain : Unit -> Bool\nmain () = match Foreign.checked_i64 42 {\n    Foreign.Returned(value) => value == 42\n    Foreign.ConversionFailed(_) => false\n}\n");
+        let compiled = compile_path(tree.configuration()).unwrap();
+        let (program, provenance) = compiled.pure_build_input().unwrap();
+        let image = encode(program, provenance, &mut TypeWorkBudget::default()).unwrap();
+        assert_eq!(image.scalar_preflights.len(), 2);
+        assert_eq!(image.call_codecs.len(), 1);
+        assert_eq!(
+            image.scalar_preflights[0].codec,
+            image.scalar_preflights[1].codec
+        );
+        let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
+        drop(image);
+        drop(compiled);
+        drop(tree);
+        let decode = || PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+        let restored = decode().restore(&mut TypeWorkBudget::default()).unwrap();
+        assert_eq!(
+            crate::eval::evaluate(&restored).unwrap().value.to_string(),
+            "true"
+        );
+        let mutations: &[fn(&mut PureImage)] = &[
+            |image| image.scalar_preflights[0].function = BinderIdentity::Generated(0),
+            |image| {
+                image.scalar_preflights[0].role = match image.scalar_preflights[0].role {
+                    Role::I64 => Role::SizeT,
+                    Role::SizeT => Role::I64,
+                }
+            },
+            |image| image.scalar_preflights[0].annotation.provenance = u32::MAX,
+            |image| image.scalar_preflights[0].annotation.ty = u32::MAX,
+            |image| image.scalar_preflights[0].origin = u32::MAX,
+            |image| image.scalar_preflights[0].source.end = u32::MAX,
+            |image| image.scalar_preflights[0].codec = u32::MAX,
+            |image| {
+                image.scalar_preflights.pop();
+            },
+            |image| {
+                image.scalar_preflights.push(image.scalar_preflights[0]);
+            },
+            |image| {
+                image.call_codecs.push(image.call_codecs[0]);
+            },
+            |image| {
+                let builtin = image
+                    .sources
+                    .iter_mut()
+                    .find(|s| matches!(s.role, ModuleRoleRecord::BuiltinForeign))
+                    .unwrap();
+                builtin.role = ModuleRoleRecord::Ordinary;
+            },
+            |image| {
+                let node = image
+                    .nodes
+                    .iter_mut()
+                    .find(|n| matches!(n.tag, NodeTag::ScalarPreflight { .. }))
+                    .unwrap();
+                let NodeTag::ScalarPreflight { module, .. } = &mut node.tag else {
+                    unreachable!()
+                };
+                *module = u32::MAX;
+            },
+            |image| {
+                image.nodes[0].effects = Some(0);
+            },
+        ];
+        for (case, mutate) in mutations.iter().enumerate() {
+            let mut corrupted = decode();
+            mutate(&mut corrupted);
+            assert!(
+                corrupted.restore(&mut TypeWorkBudget::default()).is_err(),
+                "forged case {case}"
+            );
+        }
+    }
+
+    #[test]
     fn unsupported_registry_facts_are_refused_instead_of_dropped() {
         let tree = SourceTree::new();
         tree.write(
@@ -3457,7 +3613,7 @@ enum ModuleRoleRecord {
 // use the owning module helper and compare original bytes against FOREIGN_SOURCE
 // with a byte precharge; it cannot grant a role to arbitrary embedded contents.
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 struct EffectIdentity {
     module: u32,
     local: u32,
@@ -3469,7 +3625,7 @@ struct OperationIdentity {
     local: u32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 enum TypeVariableIdentity {
     Resolved { module: u32, local: u32 },
     Generated(u32),
@@ -3752,6 +3908,16 @@ struct SourceOwnerRecord {
 }
 
 #[derive(Clone, Copy, Debug)]
+struct ScalarPreflightRecord {
+    function: BinderIdentity,
+    role: crate::foreign::scalar_preflight::ForeignScalarPreflightRole,
+    source: SpanRecord,
+    origin: u32,
+    annotation: ResolvedTypeRecord,
+    codec: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
 struct CallCodecRecord {
     module: u32,
     source: SpanRecord,
@@ -3898,7 +4064,35 @@ wire_struct!(
     conversion_failed,
     conversion_error
 );
+wire_struct!(
+    ScalarPreflightRecord,
+    50,
+    function,
+    role,
+    source,
+    origin,
+    annotation,
+    codec
+);
 wire_struct!(NativeInterpretationRecord, 8, effect, symbol);
+
+impl Wire for crate::foreign::scalar_preflight::ForeignScalarPreflightRole {
+    const MINIMUM: usize = 1;
+    fn write(&self, writer: &mut WireWriter<'_>) -> Result<(), ImageFailure> {
+        match self {
+            Self::I64 => 0u8,
+            Self::SizeT => 1,
+        }
+        .write(writer)
+    }
+    fn read(reader: &mut WireReader<'_>) -> Result<Self, ImageFailure> {
+        match u8::read(reader)? {
+            0 => Ok(Self::I64),
+            1 => Ok(Self::SizeT),
+            _ => Err(ImageFailure::InvalidEncoding),
+        }
+    }
+}
 
 impl Wire for u64 {
     const MINIMUM: usize = 8;
@@ -4279,6 +4473,48 @@ impl Encoder<'_> {
             .ok_or(ImageFailure::InvalidRecord)
     }
 
+    // Keys contain only exact tags and canonical child slots. Hashing and
+    // comparison never traverse owned Type/row trees or source allocations.
+    fn intern_structural(&mut self, tag: TypeTag, children: &[u32]) -> Result<u32, ImageFailure> {
+        // Quantifier slices are occurrence records, retained in original order.
+        if matches!(tag, TypeTag::Forall { .. }) {
+            let children = append(&mut self.image.type_children, children, self.work)?;
+            return push(
+                &mut self.image.types,
+                TypeRecord { tag, children },
+                self.work,
+            );
+        }
+        charge(self.work, children.len())?;
+        let mut retained = Vec::new();
+        retained
+            .try_reserve_exact(children.len())
+            .map_err(|_| ImageFailure::Resource)?;
+        retained.extend_from_slice(children);
+        let key = (tag, retained.into_boxed_slice());
+        let key_work = children
+            .len()
+            .checked_mul(2)
+            .and_then(|count| count.checked_add(1))
+            .ok_or(ImageFailure::Resource)?;
+        charge(self.work, key_work)?;
+        if let Some(slot) = self.structural.get(&key) {
+            return Ok(*slot);
+        }
+        charge(self.work, key_work)?;
+        self.structural
+            .try_reserve(1)
+            .map_err(|_| ImageFailure::Resource)?;
+        let children = append(&mut self.image.type_children, &key.1, self.work)?;
+        let slot = push(
+            &mut self.image.types,
+            TypeRecord { tag, children },
+            self.work,
+        )?;
+        self.structural.insert(key, slot);
+        Ok(slot)
+    }
+
     fn encode_structural(&mut self, root: StructuralInput<'_>) -> Result<u32, ImageFailure> {
         enum Task<'a> {
             Visit(StructuralInput<'a>, usize),
@@ -4303,8 +4539,11 @@ impl Encoder<'_> {
                                     | Type::Nominal(_)
                                     | Type::Function(_, _)
                                     | Type::Tuple(_)
+                                    | Type::Application(_, _)
                             )
                         )
+                        && !matches!(input, StructuralInput::Type(Type::Variable(id))
+                            if id.module().is_some_and(|module| module.is_builtin_foreign()))
                     {
                         return Err(ImageFailure::Unsupported(Unsupported::Type));
                     }
@@ -4523,14 +4762,8 @@ impl Encoder<'_> {
                         .len()
                         .checked_sub(count)
                         .ok_or(ImageFailure::InvalidRecord)?;
-                    let children =
-                        append(&mut self.image.type_children, &results[start..], self.work)?;
+                    let slot = self.intern_structural(tag, &results[start..])?;
                     results.truncate(start);
-                    let slot = push(
-                        &mut self.image.types,
-                        TypeRecord { tag, children },
-                        self.work,
-                    )?;
                     push(&mut results, slot, self.work)?;
                 }
             }
@@ -4695,7 +4928,10 @@ impl Decoder<'_> {
                                 | TypeTag::Nominal(_)
                                 | TypeTag::Function
                                 | TypeTag::Tuple
+                                | TypeTag::Application
                         )
+                        && !matches!(record.tag, TypeTag::Variable(TypeVariableIdentity::Resolved { module, .. })
+                            if get(&self.modules, module).is_ok_and(|module| module.is_builtin_foreign()))
                     {
                         return Err(ImageFailure::Unsupported(Unsupported::Type));
                     }
@@ -5321,30 +5557,11 @@ impl Encoder<'_> {
         Ok(slot)
     }
 
-    fn encode_native_symbol(
+    // The codec allocation is prepared once, shared by pure checks and calls.
+    fn encode_call_codec(
         &mut self,
-        original: &Arc<crate::foreign::checked_source::CheckedForeignSymbol>,
+        codec: &Arc<crate::foreign::checked_source::CheckedForeignCallCodec>,
     ) -> Result<u32, ImageFailure> {
-        charge(self.work, 1)?;
-        let key = original.operation();
-        let pointer = Arc::as_ptr(original);
-        if let Some((original_pointer, slot)) = self.native_symbols.get(&key) {
-            return if *original_pointer == pointer {
-                Ok(*slot)
-            } else {
-                Err(ImageFailure::InvalidRecord)
-            };
-        }
-        charge(self.work, 1)?;
-        self.native_symbols
-            .try_reserve(1)
-            .map_err(|_| ImageFailure::Resource)?;
-        let prepared_library = self.encode_prepared_library(original.prepared())?;
-        let owner = original
-            .owner()
-            .map(|owner| self.encode_source_owner(owner, prepared_library))
-            .transpose()?;
-        let codec = original.call_codec();
         let codec_pointer = Arc::as_ptr(codec);
         charge(self.work, 1)?;
         let codec_slot = if let Some(slot) = self.call_codecs.get(&codec_pointer) {
@@ -5376,6 +5593,33 @@ impl Encoder<'_> {
             self.call_codecs.insert(codec_pointer, slot);
             slot
         };
+        Ok(codec_slot)
+    }
+
+    fn encode_native_symbol(
+        &mut self,
+        original: &Arc<crate::foreign::checked_source::CheckedForeignSymbol>,
+    ) -> Result<u32, ImageFailure> {
+        charge(self.work, 1)?;
+        let key = original.operation();
+        let pointer = Arc::as_ptr(original);
+        if let Some((original_pointer, slot)) = self.native_symbols.get(&key) {
+            return if *original_pointer == pointer {
+                Ok(*slot)
+            } else {
+                Err(ImageFailure::InvalidRecord)
+            };
+        }
+        charge(self.work, 1)?;
+        self.native_symbols
+            .try_reserve(1)
+            .map_err(|_| ImageFailure::Resource)?;
+        let prepared_library = self.encode_prepared_library(original.prepared())?;
+        let owner = original
+            .owner()
+            .map(|owner| self.encode_source_owner(owner, prepared_library))
+            .transpose()?;
+        let codec_slot = self.encode_call_codec(original.call_codec())?;
         let operation = self.operation_identity(original.operation())?;
         let slot = push(
             &mut self.image.native_symbols,
@@ -5585,6 +5829,35 @@ impl Encoder<'_> {
         &mut self,
         registry: &ResolvedRegistry,
     ) -> Result<(), ImageFailure> {
+        for (function, fact) in registry.scalar_preflights() {
+            charge(self.work, 1)?;
+            if function != fact.function() {
+                return Err(ImageFailure::InvalidRecord);
+            }
+            let function = self.binder_id(function)?;
+            let source = self.span(fact.source())?;
+            let origin = self.encode_origin(fact.origin())?;
+            let original = fact.annotation();
+            let annotation = ResolvedTypeRecord {
+                ty: self.encode_type(&original.ty)?,
+                provenance: self.encode_provenance(&original.provenance)?,
+                origin: self.encode_origin(&original.origin)?,
+                span: self.span(original.span)?,
+            };
+            let codec = self.encode_call_codec(fact.call_codec())?;
+            push(
+                &mut self.image.scalar_preflights,
+                ScalarPreflightRecord {
+                    function,
+                    role: fact.role(),
+                    source,
+                    origin,
+                    annotation,
+                    codec,
+                },
+                self.work,
+            )?;
+        }
         for (owner, parameters) in registry.nominal_parameter_entries() {
             charge(self.work, 1)?;
             let owner = self.nominal(owner)?;
@@ -6676,7 +6949,45 @@ impl Decoder<'_> {
                 [usize::try_from(record.codec).map_err(|_| ImageFailure::InvalidRecord)?] = true;
             push(&mut symbols, symbol, self.work)?;
         }
+        let mut scalar_preflights = Vec::new();
+        for record in &self.image.scalar_preflights {
+            charge(self.work, 2)?;
+            let context = get(&contexts, record.codec)?;
+            let function = self.binder_id(record.function)?;
+            let source = self.span(record.source)?;
+            let origin = self.origin(record.origin)?;
+            let ty = self.ty(record.annotation.ty)?;
+            let annotation_origin = self.origin(record.annotation.origin)?;
+            let span = self.span(record.annotation.span)?;
+            let provenance = arena
+                .as_ref()
+                .ok_or(ImageFailure::InvalidRecord)?
+                .image_view(
+                    usize::try_from(record.annotation.provenance)
+                        .map_err(|_| ImageFailure::InvalidRecord)?,
+                    self.work,
+                )
+                .map_err(|_| ImageFailure::InvalidRecord)?;
+            let annotation = crate::resolved::ResolvedType {
+                ty: ty.into_inner(),
+                provenance,
+                origin: annotation_origin.take(),
+                span,
+            };
+            let fact = crate::foreign::scalar_preflight::CheckedForeignScalarPreflight::from_image_records(
+                function, record.role, source, origin.take(), annotation,
+                Arc::clone(context.codec()), self.work,
+            ).map_err(|_| ImageFailure::RegistryAdmission)?;
+            used_codecs
+                [usize::try_from(record.codec).map_err(|_| ImageFailure::InvalidRecord)?] = true;
+            push(&mut scalar_preflights, Arc::new(fact), self.work)?;
+        }
         drop(contexts);
+        for fact in scalar_preflights {
+            registry
+                .retain_scalar_preflight(fact, self.work)
+                .map_err(|_| ImageFailure::RegistryAdmission)?;
+        }
         charge(
             self.work,
             self.image

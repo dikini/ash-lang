@@ -45,6 +45,22 @@ evidence rather than duplicating corpora; verify on the retaining branch.
 The bounded source library uses the host allocator directly. The experiment's
 Rust Arena backing and typed storage APIs are outside the product delivery.
 
+The source library checks both capacity and slots against signed i64 and
+`size_t` ranges before any native acquisition. Their intersection is zero
+through `2^63 - 1`; this is library configuration policy, outside compiler
+resource dispatch.
+Slots record logical object capacity and do not allocate typed object storage.
+A logical zero capacity requests one physical byte and retains zero in private
+source metadata.
+
+The native evidence wrappers replace only allocator symbol strings before source
+compilation, then invoke actual libc allocation and release. They track exact
+live pointer identities; injected NULL acquisition is a separate process
+scenario.
+The program reuses ordinary client helpers across repeated and nested scopes and
+obtains negative test inputs through existing scalar native calls. No typed
+allocation, references, layout codec or storage family is added.
+
 ## Deviations
 
 None authorized. Return concrete semantic gaps to CP-0022 instead of resolving

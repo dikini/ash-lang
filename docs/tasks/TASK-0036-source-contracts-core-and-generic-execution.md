@@ -280,6 +280,30 @@ the entire passive owner table; charging only its type node omits work that
 grows with both payload width and owner count. Original and reconstructed
 headers use the same admission check and retain the existing work limit.
 
+The accepted pure scalar preflight functions reuse `Foreign.Call<Int>` and
+preserve the input mathematical integer on success. Their canonical immutable
+facts travel on the existing selected-global publication route; a facade retains
+the hidden `Call` constructor family needed for independent checking without
+adding source name routes or exposing `ConversionError` constructors. Shared
+image annotation arenas require checking the five reachable provenance nodes
+from their root, rather than requiring a five-node whole arena. Lifecycle flow
+tracks these pure checks as identity-independent results; it does not enumerate
+both ordinary result variants for every independent field check.
+Original template structural validation borrows only those authenticated scalar
+global facts; final executable graphs still require ordinary binder closure.
+
+Matching an unknown scalar result beside current state exposed a skipped-arm
+owner-flow defect: the first possible arm could hide a later `Consumed` report
+without teardown. Symbolic patterns now distinguish possible from definite
+matches. Only a definite match stops the arm walk; the public pipeline rejects
+the mixed scalar/state counterexample without enumerating scalar variant products.
+
+Ordinary source does not currently spell negative numeric literals, and source
+foreign constants remain unimplemented. Boundary evidence obtains negative
+integers through the existing owner-free scalar reply path. Image fixtures use
+ordinary mathematical arithmetic on admitted i64 literal payloads for larger
+values, preserving the private image's existing literal limitation.
+
 ## Deviations
 
 None authorized. Return concrete semantic gaps to CP-0022 instead of resolving

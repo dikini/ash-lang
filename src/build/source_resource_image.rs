@@ -24,7 +24,7 @@ use crate::{
 };
 use std::{collections::HashMap, sync::Arc};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub(super) struct ResourceIdentity {
     pub(super) module: u32,
     pub(super) local: u32,
@@ -1662,6 +1662,69 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+    #[test]
+    fn arena_image_reconstruction_keeps_one_cumulative_allowance() {
+        let root = std::env::temp_dir().join(format!("ash-arena-cost-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        let fixture = Fixture(root);
+        fs::write(
+            fixture.0.join("arena.ash"),
+            include_str!("../../libraries/arena.ash"),
+        )
+        .unwrap();
+        fs::write(
+            fixture.0.join("entry.ash"),
+            include_str!("../../tests/fixtures/source-arena/entry.ash"),
+        )
+        .unwrap();
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry: fixture.0.join("entry.ash"),
+            roots: crate::module::ModuleRoots::empty(),
+        })
+        .unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let image = super::super::encode_effect_for_build(
+            program,
+            provenance,
+            super::super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap()
+        .image;
+        let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
+        let expected = image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        drop(compiled);
+        fs::remove_file(fixture.0.join("arena.ash")).unwrap();
+        fs::remove_file(fixture.0.join("entry.ash")).unwrap();
+        let restore = |work: &mut TypeWorkBudget| {
+            let decoded = PureImage::decode_bytes(&bytes, work)?;
+            decoded.admit_expected_native_facts(&expected, work)?;
+            decoded.restore_effect(work)
+        };
+        let mut measured = TypeWorkBudget::default();
+        drop(restore(&mut measured).expect("complete arena fits the unchanged startup allowance"));
+        let cost = measured.used();
+        assert!(cost < measured.limit());
+        for prefix in [0, 17] {
+            let mut exact = TypeWorkBudget::with_limit(cost + prefix);
+            exact.charge(prefix).unwrap();
+            drop(restore(&mut exact).expect("exact cumulative allowance succeeds"));
+            assert_eq!(exact.used(), cost + prefix);
+            let mut short = TypeWorkBudget::with_limit(cost + prefix - 1);
+            short.charge(prefix).unwrap();
+            assert!(
+                restore(&mut short).is_err(),
+                "one-short allowance refuses reconstruction"
+            );
+            assert!(
+                short.used() > prefix,
+                "completed work is retained on refusal"
+            );
+        }
+        drop(restore(&mut TypeWorkBudget::default()).expect("fresh retry remains independent"));
     }
     fn scope_image() -> PureImage {
         static IDS: AtomicU64 = AtomicU64::new(0);

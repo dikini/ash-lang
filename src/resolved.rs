@@ -4666,6 +4666,59 @@ fn retain_native_symbols(
     Ok(())
 }
 
+fn scalar_preflight_failure(
+    failure: crate::foreign::checked_source::ForeignAdmissionError,
+) -> ResolvedBuildFailure {
+    if failure.is_resource_exhaustion() {
+        ResolvedBuildFailure::TypeResource
+    } else {
+        ResolvedBuildFailure::InvalidState
+    }
+}
+
+fn same_scalar_preflight(
+    left: Option<&Arc<crate::foreign::scalar_preflight::CheckedForeignScalarPreflight>>,
+    right: Option<&Arc<crate::foreign::scalar_preflight::CheckedForeignScalarPreflight>>,
+) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+        _ => false,
+    }
+}
+
+fn retain_scalar_preflights(
+    target: &mut HashMap<
+        BinderId,
+        Arc<crate::foreign::scalar_preflight::CheckedForeignScalarPreflight>,
+    >,
+    source: &HashMap<
+        BinderId,
+        Arc<crate::foreign::scalar_preflight::CheckedForeignScalarPreflight>,
+    >,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ResolvedBuildFailure> {
+    work.charge(source.len())
+        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+    target
+        .try_reserve(source.len())
+        .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+    for (function, fact) in source {
+        if *function != fact.function() {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        match target.entry(*function) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(Arc::clone(fact));
+            }
+            std::collections::hash_map::Entry::Occupied(entry)
+                if Arc::ptr_eq(entry.get(), fact) => {}
+            _ => return Err(ResolvedBuildFailure::InvalidState),
+        }
+    }
+    Ok(())
+}
+
 fn retain_shared_source_owner(
     target: &mut HashMap<NominalTypeId, Arc<crate::foreign::source_owner::CheckedForeignOwner>>,
     owner: &Arc<crate::foreign::source_owner::CheckedForeignOwner>,
@@ -6885,6 +6938,8 @@ pub(crate) fn clone_checked_implementation_fact(
 /// One imported checked global scheme.
 #[derive(Debug, Eq, PartialEq)]
 pub struct ImportedGlobalScheme {
+    pub(crate) scalar_preflight:
+        Option<Arc<crate::foreign::scalar_preflight::CheckedForeignScalarPreflight>>,
     pub(crate) capture: crate::core::capture::CaptureValueSummary,
     /// Stable defining binder identity.
     pub binder: BinderId,
@@ -7696,6 +7751,8 @@ impl ImportedTypeAccess {
 /// One checked public global in an immutable export summary.
 #[derive(Debug, Eq, PartialEq)]
 pub struct ExportedGlobal {
+    pub(crate) scalar_preflight:
+        Option<Arc<crate::foreign::scalar_preflight::CheckedForeignScalarPreflight>>,
     pub(crate) capture: crate::core::capture::CaptureValueSummary,
     /// Stable binder identity from the defining module.
     pub binder: BinderId,
@@ -9310,7 +9367,16 @@ fn same_imported_global_fact_with_optional_nominal_observer(
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
     nominal_identities: Option<&mut MatchedNominalIdentities>,
 ) -> Result<bool, ResolvedBuildFailure> {
+    if left.scalar_preflight.is_some() || right.scalar_preflight.is_some() {
+        type_work
+            .charge(1)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+    }
     if left.binder != right.binder
+        || !same_scalar_preflight(
+            left.scalar_preflight.as_ref(),
+            right.scalar_preflight.as_ref(),
+        )
         || !left
             .capture
             .same_with_budget(&right.capture, type_work)
@@ -11460,6 +11526,37 @@ impl ExportSummary {
             .try_reserve(term_binder_count)
             .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
         for (_, global) in self.terms() {
+            match &global.scalar_preflight {
+                Some(fact) => {
+                    type_work
+                        .charge(1)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    fact.authenticate_original(type_work)
+                        .map_err(scalar_preflight_failure)?;
+                    if fact.function() != global.binder
+                        || !global.scheme.type_parameters.is_empty()
+                        || !global.scheme.requirements.is_empty()
+                        || !crate::types::same_type_with_budget(
+                            &global.scheme.value_type,
+                            fact.signature(),
+                            type_work,
+                        )
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                        || !same_origin_with_budget(&global.origin, fact.origin(), type_work)
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                    {
+                        return Err(ResolvedBuildFailure::InvalidState);
+                    }
+                }
+                None if global
+                    .binder
+                    .module()
+                    .is_some_and(ModuleId::is_builtin_foreign) =>
+                {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                None => {}
+            }
             if global.binder.module().is_none() {
                 {
                     return Err(ResolvedBuildFailure::InvalidState);
@@ -11470,7 +11567,10 @@ impl ExportSummary {
                     &existing.scheme,
                     &global.scheme,
                     constraint_work,
-                )? || !same_origin_with_constraint_budget(
+                )? || !same_scalar_preflight(
+                    existing.scalar_preflight.as_ref(),
+                    global.scalar_preflight.as_ref(),
+                ) || !same_origin_with_constraint_budget(
                     &existing.origin,
                     &global.origin,
                     constraint_work,
@@ -12580,6 +12680,16 @@ impl ExportSummary {
                     .insert(
                         spelling.clone(),
                         ExportedGlobal {
+                            scalar_preflight: resolved
+                                .registry
+                                .scalar_preflight(binder)
+                                .or_else(|| {
+                                    resolved
+                                        .imported
+                                        .global(binder)
+                                        .and_then(|global| global.scalar_preflight.as_ref())
+                                })
+                                .map(Arc::clone),
                             capture: capture
                                 .clone_with_budget(type_work)
                                 .map_err(|()| ResolvedBuildFailure::TypeResource)?,
@@ -13373,6 +13483,32 @@ impl ExportSummary {
                 constructor_owners.insert(owner);
                 constructor_owner_order.push(owner);
             }
+        }
+
+        // A preflight's canonical result codec follows its selected function
+        // through facades without publishing constructor spelling routes.
+        type_work
+            .charge(summary.terms.len())
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        for global in summary.terms.values() {
+            let Some(preflight) = &global.scalar_preflight else {
+                continue;
+            };
+            let call = preflight.call_codec().ids().call;
+            if constructor_owners.contains(&call) {
+                continue;
+            }
+            type_work
+                .charge(2)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            constructor_owners
+                .try_reserve(1)
+                .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+            constructor_owner_order
+                .try_reserve(1)
+                .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+            constructor_owners.insert(call);
+            constructor_owner_order.push(call);
         }
 
         // A resource report is a typed codec dependency even when its family
@@ -14936,6 +15072,7 @@ impl ExportSummary {
                     (
                         spelling.to_owned(),
                         ExportedGlobal {
+                            scalar_preflight: None,
                             capture: crate::core::capture::CaptureValueSummary::default(),
                             binder,
                             scheme: ConstrainedScheme::from_rank1_type(scheme),
@@ -17257,6 +17394,7 @@ impl ExportSummary {
         };
         discard_type_iteratively(std::mem::replace(&mut scheme.value_type, value_type));
         let exported = ExportedGlobal {
+            scalar_preflight: None,
             capture: source.capture.clone(),
             binder: source.binder,
             scheme,
@@ -18229,6 +18367,8 @@ fn authenticate_foreign_interfaces(
 /// Immutable resolved metadata for one source file.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ResolvedRegistry {
+    scalar_preflights:
+        HashMap<BinderId, Arc<crate::foreign::scalar_preflight::CheckedForeignScalarPreflight>>,
     nominals: Box<[ResolvedNominalType]>,
     constructors: Box<[ResolvedConstructor]>,
     nominal_positions: HashMap<NominalTypeId, usize>,
@@ -18864,6 +19004,7 @@ impl CombinedRegistryBuilder {
             provider_contracts: std::collections::BTreeMap::new(),
             foreign_modules: std::collections::BTreeMap::new(),
             native_symbols: HashMap::new(),
+            scalar_preflights: HashMap::new(),
             source_owner_candidates: Vec::new(),
             source_resource_facts: HashMap::new(),
         }
@@ -20010,6 +20151,7 @@ impl ResolvedRegistry {
         &self,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), ResolvedBuildFailure> {
+        self.authenticate_scalar_preflights(budget)?;
         self.authenticate_native_contracts(budget)?;
         self.authenticate_owner_signature_coverage(
             self.owner_definitions
@@ -20499,6 +20641,71 @@ impl ResolvedRegistry {
         self.native_symbols.get(&operation)
     }
 
+    pub(crate) fn scalar_preflight(
+        &self,
+        function: BinderId,
+    ) -> Option<&Arc<crate::foreign::scalar_preflight::CheckedForeignScalarPreflight>> {
+        self.scalar_preflights.get(&function)
+    }
+
+    pub(crate) fn scalar_preflights(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            BinderId,
+            &Arc<crate::foreign::scalar_preflight::CheckedForeignScalarPreflight>,
+        ),
+    > {
+        self.scalar_preflights
+            .iter()
+            .map(|(function, fact)| (*function, fact))
+    }
+
+    pub(crate) fn retain_scalar_preflight(
+        &mut self,
+        fact: Arc<crate::foreign::scalar_preflight::CheckedForeignScalarPreflight>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ResolvedBuildFailure> {
+        fact.authenticate(self, work)
+            .map_err(scalar_preflight_failure)?;
+        work.charge(1)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        self.scalar_preflights
+            .try_reserve(1)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        match self.scalar_preflights.entry(fact.function()) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(fact);
+            }
+            std::collections::hash_map::Entry::Occupied(entry)
+                if Arc::ptr_eq(entry.get(), &fact) => {}
+            _ => return Err(ResolvedBuildFailure::InvalidState),
+        }
+        Ok(())
+    }
+
+    pub(crate) fn authenticate_scalar_preflights(
+        &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ResolvedBuildFailure> {
+        work.charge(self.scalar_preflights.len())
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        for (function, fact) in &self.scalar_preflights {
+            if *function != fact.function() {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            fact.authenticate(self, work)
+                .map_err(scalar_preflight_failure)?;
+            let other = self
+                .scalar_preflights
+                .get(&BinderId::resolved(fact.module(), 1 - fact.role().local()));
+            if other.is_some_and(|other| !Arc::ptr_eq(other.call_codec(), fact.call_codec())) {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+        }
+        Ok(())
+    }
+
     // Insert in impl ResolvedRegistry. Call after new_with_budget,
     // with_type_parameters_with_budget and with_effects_with_budget, but before
     // binding/retaining source-native symbols. `parameters` holds only effect-owned
@@ -20828,6 +21035,7 @@ impl ResolvedRegistry {
         work: &mut TypeWorkBudget,
     ) -> Result<bool, ResolvedBuildFailure> {
         let resource = || ResolvedBuildFailure::TypeResource;
+        self.authenticate_scalar_preflights(work)?;
         work.charge(20).map_err(|()| resource())?;
         let definitions = self
             .effects
@@ -21159,6 +21367,7 @@ impl ResolvedRegistry {
             provider_contracts: std::collections::BTreeMap::new(),
             foreign_modules: std::collections::BTreeMap::new(),
             native_symbols: HashMap::new(),
+            scalar_preflights: HashMap::new(),
             source_owner_candidates: Vec::new(),
             source_resource_facts: HashMap::new(),
         }
@@ -21208,40 +21417,111 @@ impl ResolvedRegistry {
         Ok(registry)
     }
 
-    /// Refuses metadata that the initial monomorphic Pure image cannot retain.
+    /// Pure images retain monomorphic metadata or the exact builtin preflight codec.
     pub(crate) fn monomorphic_image_subset(
         &self,
         work: &mut TypeWorkBudget,
     ) -> Result<bool, ResolvedBuildFailure> {
+        let resource = || ResolvedBuildFailure::TypeResource;
         work.charge(
             20usize
                 .checked_add(self.nominal_parameters.len())
-                .ok_or(ResolvedBuildFailure::TypeResource)?,
+                .ok_or_else(resource)?,
         )
-        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-        Ok(self.lexical_nominals.is_empty()
-            && self.lexical_constructors.is_empty()
-            && self.lexical_nominal_positions.is_empty()
-            && self.lexical_constructor_positions.is_empty()
-            && self.effects.is_empty()
-            && self.owner_definitions.is_empty()
-            && self.owner_definition_positions.is_empty()
-            && self.owner_signatures == OwnerSignatures::default()
-            && self.effect_positions.is_empty()
-            && self.type_variables.is_empty()
-            && self.global_parameter_rows.is_empty()
-            && self.global_parameter_positions.is_empty()
-            && self
-                .nominal_parameters
-                .values()
-                .all(|parameters| parameters.is_empty())
-            && self.abstract_nominal_names.is_empty()
-            && self.abstract_nominal_kinds.is_empty()
-            && self.provider_contracts.is_empty()
-            && self.foreign_modules.is_empty()
-            && self.native_symbols.is_empty()
-            && self.source_owner_candidates.is_empty()
-            && self.source_resource_facts.is_empty())
+        .map_err(|()| resource())?;
+        if !self.lexical_nominals.is_empty()
+            || !self.lexical_constructors.is_empty()
+            || !self.lexical_nominal_positions.is_empty()
+            || !self.lexical_constructor_positions.is_empty()
+            || !self.effects.is_empty()
+            || !self.owner_definitions.is_empty()
+            || !self.owner_definition_positions.is_empty()
+            || self.owner_signatures != OwnerSignatures::default()
+            || !self.effect_positions.is_empty()
+            || !self.global_parameter_rows.is_empty()
+            || !self.global_parameter_positions.is_empty()
+            || !self.abstract_nominal_names.is_empty()
+            || !self.abstract_nominal_kinds.is_empty()
+            || !self.provider_contracts.is_empty()
+            || !self.foreign_modules.is_empty()
+            || !self.native_symbols.is_empty()
+            || !self.source_owner_candidates.is_empty()
+            || !self.source_resource_facts.is_empty()
+        {
+            return Ok(false);
+        }
+        if self.scalar_preflights.is_empty() {
+            return Ok(self.type_variables.is_empty()
+                && self
+                    .nominal_parameters
+                    .values()
+                    .all(|parameters| parameters.is_empty()));
+        }
+        self.authenticate_scalar_preflights(work)?;
+        work.charge(self.scalar_preflights.len())
+            .map_err(|()| resource())?;
+        let mut modules = HashMap::new();
+        modules
+            .try_reserve(self.scalar_preflights.len())
+            .map_err(|_| resource())?;
+        for fact in self.scalar_preflights.values() {
+            match modules.entry(fact.module()) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    crate::foreign::source_owner::CheckedForeignOwnerCodec::authenticate(
+                        fact.module(),
+                        fact.source(),
+                        self,
+                        work,
+                    )
+                    .map_err(scalar_preflight_failure)?;
+                    entry.insert(fact.source());
+                }
+                std::collections::hash_map::Entry::Occupied(entry)
+                    if *entry.get() == fact.source() => {}
+                _ => return Ok(false),
+            }
+        }
+        work.charge(self.nominals.len()).map_err(|()| resource())?;
+        if self.nominals.iter().any(|nominal| {
+            nominal.id.module().is_builtin_foreign()
+                && (!modules.contains_key(&nominal.id.module()) || nominal.id.declaration() > 4)
+        }) {
+            return Ok(false);
+        }
+        let count = modules.len().checked_mul(4).ok_or_else(resource)?;
+        work.charge(count).map_err(|()| resource())?;
+        let mut expected = HashSet::new();
+        expected.try_reserve(count).map_err(|_| resource())?;
+        for module in modules.keys() {
+            for ordinal in 1..=4 {
+                let Some([parameter]) =
+                    self.nominal_parameters(NominalTypeId::new(*module, ordinal))
+                else {
+                    return Ok(false);
+                };
+                let Some(canonical) = self.type_variable(parameter.id) else {
+                    return Ok(false);
+                };
+                if parameter.kind != Kind::Type
+                    || parameter.id.module() != Some(*module)
+                    || !expected.insert(parameter.id)
+                    || !same_checker_type_variable_with_budget(canonical, parameter, work)
+                        .map_err(|()| resource())?
+                {
+                    return Ok(false);
+                }
+            }
+        }
+        for (nominal, parameters) in &self.nominal_parameters {
+            if !parameters.is_empty()
+                && (!modules.contains_key(&nominal.module())
+                    || !(1..=4).contains(&nominal.declaration())
+                    || parameters.len() != 1)
+            {
+                return Ok(false);
+            }
+        }
+        Ok(self.type_variables.len() == expected.len())
     }
 
     /// Builds the semantic registry view needed while checking one module.
@@ -21783,6 +22063,19 @@ impl ResolvedRegistry {
                 .entry(*id)
                 .or_insert_with(|| Arc::clone(fact));
         }
+        retain_scalar_preflights(
+            &mut registry.scalar_preflights,
+            &self.scalar_preflights,
+            budget,
+        )?;
+        for global in imported.globals() {
+            budget
+                .charge(1)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            if let Some(fact) = &global.scalar_preflight {
+                registry.retain_scalar_preflight(Arc::clone(fact), budget)?;
+            }
+        }
         retain_native_symbols(&mut registry.native_symbols, &self.native_symbols, budget)?;
         retain_native_symbols(
             &mut registry.native_symbols,
@@ -22261,6 +22554,11 @@ impl ResolvedRegistry {
             }
         }
         for module in modules {
+            retain_scalar_preflights(
+                &mut registry.scalar_preflights,
+                &module.registry().scalar_preflights,
+                type_work,
+            )?;
             retain_native_symbols(
                 &mut registry.native_symbols,
                 &module.registry().native_symbols,
@@ -23518,14 +23816,19 @@ impl ResolvedRegistry {
         // Only the exact common opaque role carried by an independently
         // reconstructed native call codec belongs to this category. Other
         // ordinary frozen nominals require their own original authority.
-        work.charge(self.native_symbols.len())
+        let codec_count = self
+            .native_symbols
+            .len()
+            .checked_add(self.scalar_preflights.len())
+            .ok_or(ResolvedBuildFailure::TypeResource)?;
+        work.charge(codec_count)
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
         let mut codecs = HashMap::new();
         codecs
-            .try_reserve(self.native_symbols.len())
+            .try_reserve(codec_count)
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
         families
-            .try_reserve(self.native_symbols.len())
+            .try_reserve(codec_count)
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
         for (operation, symbol) in &self.native_symbols {
             if *operation != symbol.operation()
@@ -23533,7 +23836,26 @@ impl ResolvedRegistry {
             {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
-            let original = symbol.call_codec();
+        }
+        work.charge(self.scalar_preflights.len())
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        for (function, fact) in &self.scalar_preflights {
+            if *function != fact.function() {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            fact.authenticate_original(work)
+                .map_err(scalar_preflight_failure)?;
+        }
+        for original in self
+            .native_symbols
+            .values()
+            .map(|symbol| symbol.call_codec())
+            .chain(
+                self.scalar_preflights
+                    .values()
+                    .map(|fact| fact.call_codec()),
+            )
+        {
             let opaque = original.ids().conversion_error;
             if let Some(kind) = self.abstract_nominal_kinds.get(&opaque) {
                 if !self.abstract_nominal_names.contains_key(&opaque)
@@ -28903,6 +29225,7 @@ mod tests {
         summary.terms.insert(
             "duplicate".to_owned(),
             ExportedGlobal {
+                scalar_preflight: None,
                 capture: crate::core::capture::CaptureValueSummary::default(),
                 binder,
                 scheme: ConstrainedScheme {
@@ -29097,6 +29420,7 @@ mod tests {
                 summary.terms.insert(
                     "forged".to_owned(),
                     ExportedGlobal {
+                        scalar_preflight: None,
                         capture: crate::core::capture::CaptureValueSummary::default(),
                         binder,
                         scheme: ConstrainedScheme {
@@ -29792,6 +30116,7 @@ mod tests {
                     summary.terms.insert(
                         spelling,
                         ExportedGlobal {
+                            scalar_preflight: None,
                             capture: crate::core::capture::CaptureValueSummary::default(),
                             binder,
                             scheme: ConstrainedScheme {
@@ -30104,12 +30429,17 @@ mod tests {
                 provider_contracts,
                 foreign_modules,
                 native_symbols,
+                scalar_preflights,
                 owner_definitions,
                 owner_definition_positions,
                 source_owner_candidates,
                 source_resource_facts,
             } = registry;
-            let _ = (source_owner_candidates, source_resource_facts);
+            let _ = (
+                source_owner_candidates,
+                source_resource_facts,
+                scalar_preflights,
+            );
             let _ = (
                 lexical_nominals,
                 lexical_constructors,
@@ -30142,6 +30472,7 @@ mod tests {
                 provider_contracts,
                 foreign_modules,
                 native_symbols,
+                scalar_preflights,
                 owner_definitions,
                 owner_definition_positions,
             );
@@ -33205,12 +33536,14 @@ mod tests {
             value_type: value_type(),
         };
         let imported_global = ImportedGlobalScheme {
+            scalar_preflight: None,
             capture: crate::core::capture::CaptureValueSummary::default(),
             binder,
             scheme: global_scheme(),
             origin: Origin::Source(span),
         };
         let mut exported_global = ExportedGlobal {
+            scalar_preflight: None,
             capture: crate::core::capture::CaptureValueSummary::default(),
             binder,
             scheme: global_scheme(),
@@ -33436,12 +33769,14 @@ mod tests {
                     origin
                 };
                 let imported = ImportedGlobalScheme {
+                    scalar_preflight: None,
                     capture: crate::core::capture::CaptureValueSummary::default(),
                     binder: BinderId::resolved(module, 0),
                     scheme: ConstrainedScheme::from_rank1_type(Type::Unit),
                     origin: deep_origin(),
                 };
                 let exported = ExportedGlobal {
+                    scalar_preflight: None,
                     capture: crate::core::capture::CaptureValueSummary::default(),
                     binder: BinderId::resolved(module, 0),
                     scheme: ConstrainedScheme::from_rank1_type(Type::Unit),
@@ -33600,12 +33935,14 @@ mod tests {
                     value_type: public_value_type(),
                 };
                 let imported_global = ImportedGlobalScheme {
+                    scalar_preflight: None,
                     capture: crate::core::capture::CaptureValueSummary::default(),
                     binder: BinderId::resolved(module, 0),
                     scheme: global_scheme(),
                     origin: Origin::Source(span),
                 };
                 let exported_global = ExportedGlobal {
+                    scalar_preflight: None,
                     capture: crate::core::capture::CaptureValueSummary::default(),
                     binder: BinderId::resolved(module, 0),
                     scheme: global_scheme(),
@@ -33932,12 +34269,14 @@ mod tests {
                     value_type: function_type(),
                 };
                 let imported_global = ImportedGlobalScheme {
+                    scalar_preflight: None,
                     capture: crate::core::capture::CaptureValueSummary::default(),
                     binder,
                     scheme: global_scheme(),
                     origin: Origin::Source(span),
                 };
                 let mut exported_global = ExportedGlobal {
+                    scalar_preflight: None,
                     capture: crate::core::capture::CaptureValueSummary::default(),
                     binder,
                     scheme: global_scheme(),
@@ -34314,6 +34653,7 @@ mod tests {
                 imported
                     .insert_global(
                         ImportedGlobalScheme {
+                            scalar_preflight: None,
                             capture: crate::core::capture::CaptureValueSummary::default(),
                             binder,
                             scheme: ConstrainedScheme::from_rank1_type(application_type(DEPTH)),
@@ -34325,6 +34665,7 @@ mod tests {
                 imported
                     .insert_global(
                         ImportedGlobalScheme {
+                            scalar_preflight: None,
                             capture: crate::core::capture::CaptureValueSummary::default(),
                             binder,
                             scheme: ConstrainedScheme::from_rank1_type(Type::Unit),
@@ -34363,6 +34704,7 @@ mod tests {
                 assert_eq!(
                     imported.insert_global(
                         ImportedGlobalScheme {
+                            scalar_preflight: None,
                             capture: crate::core::capture::CaptureValueSummary::default(),
                             binder,
                             scheme: ConstrainedScheme::from_rank1_type(application_type(DEPTH)),
@@ -36968,6 +37310,7 @@ mod tests {
                     provider_contracts: std::collections::BTreeMap::new(),
                     foreign_modules: std::collections::BTreeMap::new(),
                     native_symbols: HashMap::new(),
+                    scalar_preflights: HashMap::new(),
                     source_owner_candidates: Vec::new(),
                     source_resource_facts: HashMap::new(),
                 };

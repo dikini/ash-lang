@@ -1771,6 +1771,7 @@ fn resolve_module_names_with_budget(
             &mut declarations,
             dependencies,
         )?;
+        resolver.bind_scalar_preflights(loaded, &mut declarations)?;
         let imported = std::mem::take(&mut resolver.imported);
         let export_candidate = build_export_candidate(
             resolver.module,
@@ -5682,6 +5683,7 @@ impl Resolver {
         self.imported
             .insert_global(
                 ImportedGlobalScheme {
+                    scalar_preflight: exported.scalar_preflight.as_ref().map(Arc::clone),
                     capture: exported
                         .capture
                         .clone_with_budget(&mut self.type_work)
@@ -5708,6 +5710,27 @@ impl Resolver {
         self.global_requirement_counts
             .insert(exported.binder, exported.scheme.requirements.len());
         self.retain_scheme_nominals(&exported.scheme, summary, span)?;
+        if let Some(preflight) = &exported.scalar_preflight {
+            self.type_work.charge(1).map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "scalar preflight codec retention exceeded its work budget",
+                )
+            })?;
+            let call = summary
+                .nominal_fact(preflight.call_codec().ids().call)
+                .ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "scalar preflight signature lost its original call codec",
+                    )
+                })?;
+            // Retain checking roles only. Source names still come exclusively
+            // from the selected import channels; the private error stays opaque.
+            self.retain_imported_constructor_family(call, summary, span)?;
+        }
         if capture_graph_visits
             .visit(&exported.capture, &mut self.type_work)
             .map_err(|()| {

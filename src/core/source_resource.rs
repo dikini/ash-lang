@@ -716,6 +716,7 @@ enum FlowFact {
     Tuple(Box<[usize]>),
     Constructor(ConstructorId, Option<usize>),
     Callable(ConstructorId),
+    ScalarPreflight,
 }
 #[derive(Default)]
 struct FlowFacts {
@@ -839,6 +840,24 @@ impl FlowPath {
         })
     }
 }
+/// Symbolic admission separates a compatible pattern from one which is certain
+/// to match. Independent values retain no constructor/boolean choice; an owner
+/// beside them does not make that choice known.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum PatternMatch {
+    Impossible,
+    Possible,
+    Certain,
+}
+impl PatternMatch {
+    fn and(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Impossible, _) | (_, Self::Impossible) => Self::Impossible,
+            (Self::Possible, _) | (_, Self::Possible) => Self::Possible,
+            _ => Self::Certain,
+        }
+    }
+}
 fn bind_pattern(
     pattern: &CorePattern,
     value: usize,
@@ -846,7 +865,8 @@ fn bind_pattern(
     facts: &FlowFacts,
     depth: usize,
     work: &mut TypeWorkBudget,
-) -> Result<bool, ValidationError> {
+) -> Result<PatternMatch, ValidationError> {
+    use PatternMatch::{Certain, Impossible, Possible};
     charge(work, 1)?;
     if depth > 64 {
         return Err(resource());
@@ -854,30 +874,51 @@ fn bind_pattern(
     Ok(match &pattern.kind {
         CorePatternKind::Binder(binder) => {
             path.bind(binder.id(), value, work)?;
-            true
+            Certain
         }
-        CorePatternKind::Wildcard => true,
-        CorePatternKind::Unit | CorePatternKind::Boolean(_) => facts.independent(value, work)?,
+        CorePatternKind::Wildcard => Certain,
+        CorePatternKind::Unit => {
+            if facts.independent(value, work)? {
+                Certain
+            } else {
+                Impossible
+            }
+        }
+        CorePatternKind::Boolean(_) => {
+            if facts.independent(value, work)? {
+                Possible
+            } else {
+                Impossible
+            }
+        }
         CorePatternKind::Tuple(patterns) => match facts.fact(value)? {
             FlowFact::Tuple(values) => {
                 if values.len() != patterns.len() {
-                    false
+                    Impossible
                 } else {
-                    let mut matches = true;
+                    let mut matches = Certain;
                     for (pattern, value) in patterns.iter().zip(values.iter()) {
-                        matches &= bind_pattern(pattern, *value, path, facts, depth + 1, work)?;
+                        matches = matches.and(bind_pattern(
+                            pattern,
+                            *value,
+                            path,
+                            facts,
+                            depth + 1,
+                            work,
+                        )?);
                     }
                     matches
                 }
             }
             FlowFact::Independent => {
-                let mut matches = true;
+                let mut matches = Certain;
                 for pattern in patterns {
-                    matches &= bind_pattern(pattern, value, path, facts, depth + 1, work)?;
+                    matches =
+                        matches.and(bind_pattern(pattern, value, path, facts, depth + 1, work)?);
                 }
                 matches
             }
-            _ => false,
+            _ => Impossible,
         },
         CorePatternKind::Constructor {
             constructor,
@@ -888,18 +929,18 @@ fn bind_pattern(
                     (Some(pattern), Some(value)) => {
                         bind_pattern(pattern, *value, path, facts, depth + 1, work)?
                     }
-                    (None, None) => true,
-                    _ => false,
+                    (None, None) => Certain,
+                    _ => Impossible,
                 }
             }
             FlowFact::Independent => {
                 if let Some(payload) = payload {
-                    bind_pattern(payload, value, path, facts, depth + 1, work)?
+                    Possible.and(bind_pattern(payload, value, path, facts, depth + 1, work)?)
                 } else {
-                    true
+                    Possible
                 }
             }
-            _ => false,
+            _ => Impossible,
         },
     })
 }
@@ -934,7 +975,22 @@ fn eval_flow(
     let stored = node(program, id)?;
     match &stored.kind {
         EffectExprKind::Pure(PureExprKind::Variable(local)) => {
-            let value = *path.locals.get(&local.binder()).ok_or_else(invalid)?;
+            charge(work, 1)?;
+            let value = if let Some(value) = path.locals.get(&local.binder()) {
+                *value
+            } else {
+                // A completed compiler-owned scalar fact admits only this pure
+                // callable. It does not open the ordinary helper barrier.
+                charge(work, 1)?;
+                let fact = program
+                    .registry
+                    .scalar_preflight(local.binder())
+                    .ok_or_else(invalid)?;
+                if !same(&stored.ty, fact.signature(), work)? {
+                    return Err(invalid());
+                }
+                facts.add(FlowFact::ScalarPreflight, work)?
+            };
             one((value, path), work)
         }
         EffectExprKind::Pure(PureExprKind::Value(value)) => match value {
@@ -952,6 +1008,33 @@ fn eval_flow(
                 one((value, path), work)
             }
             PureValue::Function(_) => Err(invalid()),
+            PureValue::Intrinsic(intrinsic) => {
+                use super::packed::Intrinsic;
+                use crate::foreign::scalar_preflight::ForeignScalarPreflightRole;
+                let (function, role) = match intrinsic.operation() {
+                    Intrinsic::ForeignCheckedI64 { function } => {
+                        (function, ForeignScalarPreflightRole::I64)
+                    }
+                    Intrinsic::ForeignCheckedSizeT { function } => {
+                        (function, ForeignScalarPreflightRole::SizeT)
+                    }
+                    _ => return Err(invalid()),
+                };
+                charge(work, 1)?;
+                let fact = program
+                    .registry
+                    .scalar_preflight(function)
+                    .ok_or_else(invalid)?;
+                if fact.function() != function
+                    || fact.role() != role
+                    || fact.module() != intrinsic.module()
+                    || !same(&stored.ty, fact.signature(), work)?
+                {
+                    return Err(invalid());
+                }
+                let value = facts.add(FlowFact::ScalarPreflight, work)?;
+                one((value, path), work)
+            }
             _ => one((0, path), work),
         },
         EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(binding))) => {
@@ -1027,10 +1110,11 @@ fn eval_flow(
                 depth + 1,
                 work,
             )? {
-                let FlowFact::Callable(constructor) = facts.fact(function)? else {
-                    return Err(invalid());
+                let constructor = match facts.fact(function)? {
+                    FlowFact::Callable(constructor) => Some(*constructor),
+                    FlowFact::ScalarPreflight => None,
+                    _ => return Err(invalid()),
                 };
-                let constructor = *constructor;
                 for (argument, path) in eval_flow(
                     program,
                     header,
@@ -1041,7 +1125,17 @@ fn eval_flow(
                     depth + 1,
                     work,
                 )? {
-                    let value = facts.wrapped(constructor, argument, work)?;
+                    let value = if let Some(constructor) = constructor {
+                        facts.wrapped(constructor, argument, work)?
+                    } else {
+                        if !facts.independent(argument, work)? {
+                            return Err(invalid());
+                        }
+                        // Both scalar-check alternatives contain independent
+                        // values and preserve the same ownership path. Keeping
+                        // that common fact avoids a Cartesian branch expansion.
+                        0
+                    };
                     push(&mut results, (value, path), work)?;
                 }
             }
@@ -1107,7 +1201,9 @@ fn eval_flow(
                 let mut matched = false;
                 for arm in matching.arms() {
                     let mut candidate = path.copy(work)?;
-                    if bind_pattern(arm.pattern(), value, &mut candidate, facts, 0, work)? {
+                    let certainty =
+                        bind_pattern(arm.pattern(), value, &mut candidate, facts, 0, work)?;
+                    if certainty != PatternMatch::Impossible {
                         matched = true;
                         let next = eval_flow(
                             program,
@@ -1120,7 +1216,7 @@ fn eval_flow(
                             work,
                         )?;
                         extend(&mut results, next, work)?;
-                        if !facts.independent(value, work)? {
+                        if certainty == PatternMatch::Certain {
                             break;
                         }
                     }
@@ -1376,7 +1472,7 @@ fn check_handler(
     }
     let (value, mut path) = values.into_iter().next().ok_or_else(invalid)?;
     let arm = &matching.arms()[0];
-    if !bind_pattern(arm.pattern(), value, &mut path, &facts, 0, work)? {
+    if bind_pattern(arm.pattern(), value, &mut path, &facts, 0, work)? == PatternMatch::Impossible {
         return Err(invalid());
     }
     let EffectExprKind::Operation(EffectOperation::Handler(handler)) =

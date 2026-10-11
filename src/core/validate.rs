@@ -8115,6 +8115,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     }
 
     fn validate_registry(&self) -> Result<RegistryParameterOwners, ValidationError> {
+        self.validate_scalar_preflight_registry()?;
         if let Some(canonical) = self.contextual_registry {
             let mut work = TypeWorkBudget::with_limit(
                 self.type_work_limit.saturating_sub(self.type_work.get()),
@@ -8378,6 +8379,40 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         }
         self.validate_lexical_registry(&mut parameter_owners, registry_source)?;
         Ok(parameter_owners)
+    }
+
+    fn validate_scalar_preflight_registry(&self) -> Result<(), ValidationError> {
+        let registry = &self.program.registry;
+        for (function, fact) in registry.scalar_preflights() {
+            self.charge_type_work(1)?;
+            if function != fact.function()
+                || registry
+                    .scalar_preflight(fact.function())
+                    .is_none_or(|indexed| !std::sync::Arc::ptr_eq(indexed, fact))
+                || fact.function().module() != Some(fact.module())
+                || self.module_sources.as_ref().is_some_and(|sources| {
+                    sources.get(&fact.module()).copied() != Some(fact.source().source())
+                })
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+            let mut work = TypeWorkBudget::with_limit(
+                self.type_work_limit.saturating_sub(self.type_work.get()),
+            );
+            let result = fact.authenticate(registry, &mut work);
+            self.charge_type_work(work.used())?;
+            result.map_err(|failure| {
+                ValidationError::new(
+                    if failure.is_resource_exhaustion() {
+                        ValidationReason::Resource
+                    } else {
+                        ValidationReason::Registry
+                    },
+                    None,
+                )
+            })?;
+        }
+        Ok(())
     }
 
     fn validate_global_parameter_rows(
@@ -11382,6 +11417,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         if self
             .provider_external_types
             .is_some_and(|types| types.contains_key(&binder.id()))
+            || self
+                .original_source_scalar_preflight(binder.id())?
+                .is_some()
         {
             return Err(ValidationError::new(ValidationReason::Registry, Some(node)));
         }
@@ -11625,6 +11663,29 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         Ok(definitions)
     }
 
+    // Original source forests borrow only these authenticated compiler-owned
+    // globals. Executable forests must bind their globals in the ordinary graph.
+    fn original_source_scalar_preflight(
+        &self,
+        function: BinderId,
+    ) -> Result<
+        Option<&crate::foreign::scalar_preflight::CheckedForeignScalarPreflight>,
+        ValidationError,
+    > {
+        if !matches!(
+            self.source_resource_context,
+            SourceResourceValidationContext::OriginalTemplate { .. }
+        ) {
+            return Ok(None);
+        }
+        self.charge_type_work(1)?;
+        Ok(self
+            .program
+            .registry
+            .scalar_preflight(function)
+            .map(std::convert::AsRef::as_ref))
+    }
+
     fn validate_node_types(
         &self,
         nominal_parameter_owners: &RegistryParameterOwners,
@@ -11658,6 +11719,13 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         .and_then(|types| types.get(&variable.binder()))
                     {
                         &**ty
+                    } else if let Some(fact) =
+                        self.original_source_scalar_preflight(variable.binder())?
+                    {
+                        if !F::effect_row(&node.effects).is_empty() {
+                            return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                        }
+                        fact.signature()
                     } else {
                         return Err(ValidationError::with_cause(
                             ValidationCause::UnknownVariableBinder,
@@ -11798,6 +11866,68 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         ))
     }
 
+    // Keep original-fact comparison temporaries out of the shared value frame.
+    #[inline(never)]
+    fn validate_scalar_preflight_intrinsic(
+        &self,
+        id: NodeId,
+        node: &StoredNode<F>,
+        intrinsic: super::packed::IntrinsicNode,
+        function: BinderId,
+    ) -> Result<(), ValidationError> {
+        use super::packed::Intrinsic;
+        use crate::foreign::scalar_preflight::ForeignScalarPreflightRole;
+        self.charge_type_work(1)?;
+        let fact = self
+            .program
+            .registry
+            .scalar_preflight(function)
+            .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
+        let role = match intrinsic.operation() {
+            Intrinsic::ForeignCheckedI64 { .. } => ForeignScalarPreflightRole::I64,
+            _ => ForeignScalarPreflightRole::SizeT,
+        };
+        if fact.function() != function
+            || fact.module() != intrinsic.module()
+            || fact.role() != role
+            || fact.conversion_error_constructor().is_none()
+            || !F::effect_row(&node.effects).is_empty()
+            || !self.same_type_charged(&node.ty, &fact.annotation().ty)?
+        {
+            return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+        }
+        self.charge_type_work(1)?;
+        let error = fact
+            .conversion_error_constructor()
+            .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
+        let error_constructor = self
+            .program
+            .registry
+            .constructor(error)
+            .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
+        if error_constructor.owner != fact.call_codec().ids().conversion_error
+            || error_constructor.payload.is_some()
+        {
+            return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+        }
+        let mut origin = node
+            .origin
+            .as_ref()
+            .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
+        while let Origin::Generated { cause, .. } = origin {
+            self.charge_type_work(1)?;
+            origin = cause;
+        }
+        let mut work =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let matches = crate::resolved::same_origin_with_budget(origin, fact.origin(), &mut work);
+        self.charge_type_work(work.used())?;
+        if !matches.map_err(|()| ValidationError::new(ValidationReason::Resource, Some(id)))? {
+            return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+        }
+        Ok(())
+    }
+
     fn validate_value(
         &self,
         id: NodeId,
@@ -11815,6 +11945,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             PureValue::Intrinsic(intrinsic) => {
                 use super::packed::Intrinsic;
                 match intrinsic.operation() {
+                    Intrinsic::ForeignCheckedI64 { function }
+                    | Intrinsic::ForeignCheckedSizeT { function } => {
+                        self.validate_scalar_preflight_intrinsic(id, node, *intrinsic, function)?;
+                    }
                     Intrinsic::ForeignLayoutWitness { producer } => {
                         let mut work = TypeWorkBudget::with_limit(
                             self.type_work_limit.saturating_sub(self.type_work.get()),
@@ -13012,12 +13146,23 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 None,
             ));
         }
-        if let Some((key, requirement)) = analysis
-            .root_requirements
-            .iter()
-            .filter(|(key, _)| !matches!(key, ScopeRequirementKey::Binder(binder) if self.provider_external_types.is_some_and(|types| types.contains_key(binder))))
-            .min_by_key(|(_, requirement)| requirement.occurrence.value())
-        {
+        let mut first = None;
+        for (key, requirement) in &analysis.root_requirements {
+            if let ScopeRequirementKey::Binder(binder) = key
+                && (self
+                    .provider_external_types
+                    .is_some_and(|types| types.contains_key(binder))
+                    || self.original_source_scalar_preflight(*binder)?.is_some())
+            {
+                continue;
+            }
+            if first.is_none_or(|(_, previous): (_, &ScopeRequirement)| {
+                requirement.occurrence.value() < previous.occurrence.value()
+            }) {
+                first = Some((key, requirement));
+            }
+        }
+        if let Some((key, requirement)) = first {
             return Err(match key {
                 ScopeRequirementKey::Resume(_, _) => ValidationError::with_cause(
                     ValidationCause::UnboundContinuation,

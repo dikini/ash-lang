@@ -6,6 +6,7 @@
 mod arena;
 pub mod checked_source;
 pub mod runtime;
+pub(crate) mod scalar_preflight;
 pub mod source_contract;
 pub mod source_owner;
 pub mod source_runtime;
