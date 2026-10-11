@@ -162,6 +162,7 @@ messages! {
     runtime_environment_capacity => "runtime-environment-capacity" {},
     runtime_invalid_control_state => "runtime-invalid-control-state" {},
     runtime_foreign_binding => "runtime-foreign-binding" {},
+    runtime_resource_completion => "runtime-resource-completion" {},
     runtime_heap_capacity => "runtime-heap-capacity" {},
     runtime_captured_control_capacity => "runtime-captured-control-capacity" {},
     runtime_resource_capacity => "runtime-resource-capacity" {},

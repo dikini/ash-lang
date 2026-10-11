@@ -1078,14 +1078,23 @@ acquisition and the same owner's teardown. A same-spelled symbol, swapped
 argument, ordinary state ADT or ordinary effect cannot replace those facts.
 Incorrect authored headers report `type.argument`.
 
-The `scope` codec authenticates ordinary library ADTs by their exact constructor
+Both report codecs authenticate ordinary library ADTs by their exact constructor
 order and field types. Acquisition has `Acquired(State, D)` then `Refused(I)`;
 completion has `Consumed`, `ConsumedFailure(E)` then `Retained(State, E)`.
-The report has `NotAcquired(I)` then `Completed(Answer, Completion<E>)`, where
+The `scope` report has `NotAcquired(I)` then `Completed(Answer, Completion<E>)`, where
 completion status has `Closed`, `ConsumedError(E)` then `RetainedError(E)`.
 Constructor spellings alone grant no authority. The single result binder
 `Answer` is replaced by the checked body type; independent `I` and `E` are
 ordinary source types rather than fixed `Unit` errors.
+
+The `acquired_only` report has `Success(Answer)` then `Failure(I)`, with no
+completion-status field. Checking substitutes the report's actual type arguments
+into its constructor payloads and compares those exact types. A one-parameter
+`Outcome<T> = Success(T) | Failure(Error)` can therefore use a concrete acquisition
+error; a generic error parameter follows the same check. Constructor names and
+parameter positions do not select this codec. A consumed completion failure is
+terminal rather than a successful report. This checkpoint's native teardown
+always consumes; retained native outcomes remain unsupported.
 
 Acquire checks from the declared input to acquisition type. Finish checks from
 `(State, D)` to completion type. Their patterns and the handlers' `(State, D)`
@@ -1113,7 +1122,7 @@ expose the fresh identity; an escape reports `type.resource-escape`.
 
 This implementation checkpoint executes dependency-free opaque owners with
 Type-only state-family arguments, one Current operand for a consuming `void`
-teardown, the `scope` codec and direct requests for the declared provided effect.
+teardown, either report codec and direct requests for the declared provided effect.
 The association has exactly one Unit-domain operation and one provider method
 without local type parameters; their result types agree and the method's domain
 is the complete resource application. Resource and symbol arguments retain

@@ -2665,7 +2665,7 @@ fn compile_provider_capture_control<'a, F: CoreOperationFamily>(
             }
         }
         let handler = graph.code.len();
-        data.position_provider_handler(handler, id, budget)?;
+        data.position_provider_handler(handler, id, true, budget)?;
         graph.code.push(Control::Handler {
             body: index(scope.handler.body()) + 1,
             effect: group,
@@ -2877,7 +2877,15 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
                 });
             }
             let handler = graph.code.len();
-            data.position_provider_handler(handler, id, budget)?;
+            data.position_provider_handler(
+                handler,
+                id,
+                matches!(
+                    scope.header().codec.report,
+                    super::source_resource::SourceResourceReportCodec::Scope { .. }
+                ),
+                budget,
+            )?;
             graph.code.push(Control::Handler {
                 body: index(scope.handler.body()) + 1,
                 effect: Request::effect(scope.handler.effect(), source, budget)?,

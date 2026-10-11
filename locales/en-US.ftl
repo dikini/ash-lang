@@ -1080,6 +1080,7 @@ runtime-unexpected-recursive-binding = A recursive binding does not have its val
 runtime-environment-capacity = The runtime cannot retain another lexical binding.
 runtime-invalid-control-state = The runtime reached an inconsistent control state.
 runtime-foreign-binding = An executable foreign binding or conversion contract failed.
+runtime-resource-completion = Source resource completion failed.
 runtime-heap-capacity = The runtime heap cannot hold another cell.
 runtime-captured-control-capacity = The runtime cannot retain another captured control frame.
 runtime-resource-capacity = The runtime cannot represent another live resource or fresh activation.

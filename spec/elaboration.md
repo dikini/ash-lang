@@ -141,10 +141,13 @@ profile. Passive foreign-owner declarations have a separate admission boundary
 and supply no execution permission.
 
 The header proof authenticates the exact `Acquire<State, D, I>`,
-`Finish<State, E>` and Scope/Completion constructor roles and payloads through
+`Finish<State, E>` and the selected report constructor roles and payloads through
 nominal and constructor identities. It checks the private data and input
 contracts, the complete interpreted instances and the original owner and symbol
-allocations. The current provider association has one method without local type
+allocations. `scope` retains Scope/Completion roles; `acquired_only` checks the
+instantiated Success/Failure fields without a completion value. Capture-value
+analysis preserves the same report shape and keeps finish as a cleanup obligation.
+The current provider association has one method without local type
 parameters, whose domain is the resource handle, and one Unit-domain operation
 with the same result type. Both declarations retain their original interface
 and effect parameter identities and complete applications. This bounded

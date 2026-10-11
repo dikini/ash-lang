@@ -430,6 +430,8 @@ pub enum RuntimeFailure {
     InvalidControlState,
     /// An executable foreign binding or codec violated its admitted contract.
     ForeignBinding,
+    /// A source resource completion failed in a codec without a completion field.
+    ResourceCompletion,
     /// The per-evaluation heap cannot represent another cell.
     HeapCapacity,
     /// A captured continuation cannot retain another control frame.
@@ -517,6 +519,7 @@ impl RuntimeFailure {
             Self::EnvironmentCapacity => "runtime.environment-capacity",
             Self::InvalidControlState => "runtime.invalid-control-state",
             Self::ForeignBinding => "runtime.foreign-binding",
+            Self::ResourceCompletion => "runtime.resource-completion",
             Self::HeapCapacity => "runtime.heap-capacity",
             Self::CapturedControlCapacity => "runtime.captured-control-capacity",
             Self::ResourceCapacity => "runtime.resource-capacity",
@@ -569,6 +572,7 @@ impl fmt::Display for RuntimeFailure {
             Self::EnvironmentCapacity => "runtime lexical environment capacity is exhausted",
             Self::InvalidControlState => "runtime machine control state is inconsistent",
             Self::ForeignBinding => "executable foreign binding or conversion contract failed",
+            Self::ResourceCompletion => "source resource completion failed",
             Self::HeapCapacity => "runtime heap capacity is exhausted",
             Self::CapturedControlCapacity => "runtime captured-control capacity is exhausted",
             Self::ResourceCapacity => "runtime resource capacity is exhausted",

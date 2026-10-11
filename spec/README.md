@@ -104,7 +104,13 @@ Core interpretation for admitted owner-free native entry instances, leaving an
 empty outward row. Ordinary source handlers cannot install a native symbol's
 interpreter. Source contracts and checked Core supply no executable binding;
 default execution refuses missing bindings before Ash runs. Constants, foreign
-ownership/access and copy windows remain outside the admitted subset.
+byte/access contracts, dependent ownership and copy windows remain outside the
+admitted subset. Source resource declarations additionally admit dependency-free
+opaque owners, private data and checked `scope` or `acquired_only` reports, with
+one acquisition and an unconditional consuming teardown. Exact constructor and
+native-call identities authenticate publication and completion; declarations
+alone confer no ownership. The [source-resource rules](static-semantics.md#source-resource-declarations)
+bound this lifecycle and its supported associated handler shape.
 
 `resource cell<R> c = initializer { body }` acquires one scoped mutable integer
 cell through the compiler-owned `@builtin.cell` API. The scope owns release;
@@ -188,11 +194,11 @@ patterns, exhaustive matches and equations, sequential bindings, method-only
 interfaces, explicit constraints, anonymous implementations, and pure and
 effectful expressions with single-use, non-escaping handler continuations.
 
-Beyond the fixed sealed cell provider and acquisition form, the effect kernel
-adds no general provider or resource declarations, first-class registration
-tokens, arbitrary removal or priorities, general destructor declarations,
-foreign resources, escaping or multi-shot resume, asynchronous execution, or
-dynamic loading.
+Beyond the fixed builtin providers and the bounded source-resource forms
+described above, the effect kernel adds no general provider or resource
+declarations, first-class registration tokens, arbitrary removal or priorities,
+general destructor declarations, escaping or multi-shot resume, asynchronous
+execution, or dynamic loading.
 A linked nonempty effect row is a source rejection rather than an
 unhandled-operation runtime result.
 

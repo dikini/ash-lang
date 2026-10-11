@@ -474,8 +474,8 @@ acquisition, completion and handlers. `result` introduces one body-result
 parameter for that type only. `codec` selects declared library ADT roles;
 [static semantics](static-semantics.md#source-resource-declarations) defines
 their admission. Declaration alone performs no acquisition and introduces no
-first-class acquisition function. This checkpoint executes the `scope` codec;
-`acquired_only` is retained syntax without executable admission.
+first-class acquisition function. This checkpoint executes both `scope` and
+`acquired_only` codecs for the admitted dependency-free owner lifecycle.
 
 A hook expression names an exact effect instance followed by a block. A
 registration expression names an exact effect instance, one primary-expression
