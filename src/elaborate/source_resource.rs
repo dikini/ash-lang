@@ -8,8 +8,7 @@ use super::{
     CorePatternBuffer, CorePatternMatrixBuffer, CorePatternOwner, ElaborationTask,
     ElaborationTaskBuffer, OwnerReplacementBuffer, ProvenancedType, TypeContext, TypeError,
     TypeReason, TypedNode, TypedNodeOwner, constraint_resource, inference_failure, invalid_state,
-    provider, provider_instance, reserve_context_entry, type_resource,
-    unsupported_provider_resource,
+    provider, provider_instance, type_resource, unsupported_provider_resource,
 };
 use crate::{
     core::{
@@ -58,6 +57,9 @@ pub(super) struct SourceResourceProgress<'a> {
     template: Arc<CheckedSourceResourceTemplate>,
     arguments: SourceArguments,
     replacements: OwnerReplacementBuffer,
+    forwarding: provider_instance::ProviderForwardings,
+    members: Vec<(TypedBinder, NodeId)>,
+    previous: Option<usize>,
 }
 
 pub(super) struct PreparedSourceResource<'a> {
@@ -193,6 +195,88 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(())
     }
 
+    fn prepare_source_forwardings(
+        &mut self,
+        resource: &crate::resolved::ResolvedProviderResourceExpr,
+        template: &CheckedSourceResourceTemplate,
+        replacements: &OwnerReplacementBuffer,
+    ) -> Result<provider_instance::ProviderForwardings, TypeError> {
+        let header = &template.header().original;
+        let mut arguments = SourceArguments(Vec::new());
+        self.type_work
+            .charge(header.provider.arguments.len())
+            .map_err(|_| type_resource())?;
+        arguments
+            .0
+            .try_reserve_exact(header.provider.arguments.len())
+            .map_err(|_| type_resource())?;
+        for argument in &header.provider.arguments {
+            arguments.0.push(
+                crate::types::substitute_kinded_argument_with(
+                    &argument.ty,
+                    replacements.types.as_map(),
+                    &replacements.rows,
+                    |cells| self.type_work.charge(cells),
+                )
+                .map_err(|_| type_resource())?
+                .map_err(|_| invalid_state())?,
+            );
+        }
+        let application = crate::interface::InterfaceApplication::new_kinded(
+            header.provider.interface.id,
+            arguments.into_boxed_slice(),
+        );
+        let row = replacements.substitute_row(
+            &EffectRow::singleton(
+                clone_effect_instance_with_budget(&header.provided.instance, &mut self.type_work)
+                    .map_err(|_| type_resource())?,
+            ),
+            &mut self.type_work,
+        )?;
+        if row.tail().is_some()
+            || row.known().len() != 1
+            || template.methods().len() != resource.forwarding.len()
+        {
+            return Err(invalid_state());
+        }
+        let effect = clone_effect_instance_with_budget(&row.known()[0], &mut self.type_work)
+            .map_err(|_| type_resource())?;
+        self.type_work
+            .charge(template.methods().len())
+            .map_err(|_| type_resource())?;
+        let mut methods = Vec::new();
+        methods
+            .try_reserve_exact(template.methods().len())
+            .map_err(|_| type_resource())?;
+        for ((method, operation), source) in template.methods().iter().zip(&resource.forwarding) {
+            if *method != source.method || operation.owner() != effect.effect() {
+                return Err(invalid_state());
+            }
+            let (domain, value) =
+                self.operation_signature(&effect, *operation, resource.origin.primary_span())?;
+            let domain = IterativeTypeOwner::new(domain);
+            let value = IterativeTypeOwner::new(value);
+            let effects = EffectRow::singleton(
+                clone_effect_instance_with_budget(&effect, &mut self.type_work)
+                    .map_err(|_| type_resource())?,
+            );
+            methods.push(provider_instance::ProviderForwarding {
+                method: *method,
+                operation: *operation,
+                binder: source.binder.id,
+                ty: IterativeTypeOwner::new(Type::function_computation(
+                    domain.into_inner(),
+                    ComputationType::new(value.into_inner(), effects),
+                )),
+            });
+        }
+        Ok(provider_instance::ProviderForwardings {
+            application,
+            effect,
+            methods,
+        })
+    }
+
     pub(super) fn enter_source_resource_body<'a>(
         &mut self,
         prepared: PreparedSourceResource<'a>,
@@ -212,23 +296,18 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 .access_type(&arguments.0, &mut self.type_work)
                 .map_err(validation)?,
         );
-        let provenance = self.at_span_provenance(&access, span)?;
-        reserve_context_entry(context, &mut self.type_work).map_err(|_| type_resource())?;
-        let context_type = self.clone_type(&access)?;
-        let handle_type = self.clone_type(&access)?;
-        let handle = self.builder.resolved_binder(
-            resource.handle.id,
-            handle_type,
-            resource.handle.origin.clone(),
-        )?;
-        if context.insert_with_provenance(resource.handle.id, context_type, provenance)? {
-            return Err(invalid_state());
-        }
+        let forwarding = self.prepare_source_forwardings(resource, &template, &replacements)?;
+        let members = self.lower_resource_forwardings(resource, &forwarding)?;
+        let (handle, previous) =
+            self.enter_resource_forwarding_body(resource, access, &forwarding, context)?;
         Ok(SourceResourceProgress {
             resource,
             span,
             initializer,
             handle: Some(handle),
+            forwarding,
+            members,
+            previous,
             template,
             arguments,
             replacements,
@@ -241,7 +320,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         body: TypedNodeOwner,
         context: &mut TypeContext,
     ) -> Result<TypedNode, TypeError> {
-        context.remove_and_discard(progress.resource.handle.id);
+        self.leave_provider_instance_body(progress.resource, progress.previous, context)?;
         let header = &progress.template.header().original;
         let mut associated = SourceArguments(Vec::new());
         self.type_work
@@ -276,6 +355,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 "source resource scope requires a synchronous client computation in this checkpoint",
             ));
         }
+        self.zonk_builder_types_since(None, false)
+            .map_err(TypeError::Internal)?;
         let body_type = IterativeTypeOwner::new(self.zonk(&body.ty)?);
         progress.replacements.insert_borrowed(
             header.answer.id,
@@ -313,12 +394,65 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 .unwrap_or(progress.resource.definition.module()),
             progress.span,
         )?;
+        let mut body_node = body.node;
+        while let Some((binder, function)) = progress.members.pop() {
+            let binder_id = binder.id();
+            let ty = self.clone_type(&body_type)?;
+            body_node = self.builder.binding(
+                binder,
+                function,
+                body_node,
+                ty,
+                Origin::Source(progress.span),
+            )?;
+            if self.purpose == super::ElaborationPurpose::FinalSynthesis {
+                self.type_work
+                    .charge(progress.forwarding.methods.len())
+                    .map_err(|_| type_resource())?;
+                let method = progress
+                    .forwarding
+                    .methods
+                    .iter()
+                    .find(|method| method.binder == binder_id)
+                    .ok_or_else(invalid_state)?;
+                let application = progress
+                    .forwarding
+                    .application
+                    .clone_with_budget(&mut self.type_work)
+                    .map_err(|_| type_resource())?;
+                self.builder.authenticate_method_evidence(
+                    body_node,
+                    None,
+                    None,
+                    method.method,
+                    application,
+                    crate::core::dialect::MethodEvidenceAnchorRole::LexicalOwner {
+                        source: progress.resource.provider,
+                        binder: binder_id,
+                    },
+                    None,
+                )?;
+            }
+        }
+        self.type_work
+            .charge(progress.forwarding.methods.len())
+            .map_err(|_| type_resource())?;
+        let mut forwardings = Vec::new();
+        forwardings
+            .try_reserve_exact(progress.forwarding.methods.len())
+            .map_err(|_| type_resource())?;
+        for method in &progress.forwarding.methods {
+            forwardings.push(crate::core::provider::ProviderForwardingMethod {
+                method: method.method,
+                binder: method.binder,
+            });
+        }
         let builder = F::effect_builder(&mut self.builder).ok_or_else(invalid_state)?;
         let copied = lower_source_copies(
             builder,
             &progress.template,
             &phases,
-            body.node,
+            body_node,
             &mut self.type_work,
         )?;
         let claims =
@@ -342,6 +476,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             handle,
             copied.handler,
             output,
+            progress.resource.provider,
+            forwardings.into_boxed_slice(),
             claims,
             &mut self.type_work,
         )

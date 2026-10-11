@@ -326,6 +326,13 @@ impl CheckedSourceResourceHeader {
         {
             return Err(invalid());
         }
+        for other in registry.source_resource_facts() {
+            charge(work, 1)?;
+            if other.id != header.id && other.provider.interface.id == header.provider.interface.id
+            {
+                return Err(invalid());
+            }
+        }
         charge(work, header.parameters.len())?;
         if header
             .parameters
@@ -541,6 +548,7 @@ pub(crate) struct CheckedSourceResourceTemplate {
     acquire_entry: (TypedBinder, NodeId),
     finish_entry: (TypedBinder, NodeId),
     handler_entry: (TypedBinder, NodeId),
+    methods: Box<[(crate::interface::MethodId, crate::types::OperationId)]>,
 }
 
 #[derive(Debug)]
@@ -589,6 +597,13 @@ fn node(
         .nodes
         .get(id.index().map_err(|_| invalid())?)
         .ok_or_else(invalid)
+}
+
+fn pure(node: &super::dialect::StoredNode<super::EffectOperationFamily>) -> Option<&PureExprKind> {
+    match &node.kind {
+        EffectExprKind::Pure(pure) => Some(pure),
+        _ => None,
+    }
 }
 
 fn entry(
@@ -661,7 +676,7 @@ impl CheckedSourceResourceTemplate {
         if !Arc::ptr_eq(&canonical.owner, &header.owner) || canonical.codec != header.codec {
             return Err(invalid());
         }
-        check_provider_association(&header, &handler, work)?;
+        let methods = check_provider_association(&header, &handler, work)?;
         let acquire_entry = entry(&acquire, &header.original, false, work)?;
         let finish_entry = entry(&finish, &header.original, false, work)?;
         let handler_entry = entry(&handler, &header.original, true, work)?;
@@ -741,10 +756,14 @@ impl CheckedSourceResourceTemplate {
             acquire_entry,
             finish_entry,
             handler_entry: (handler_entry.0, handler_body),
+            methods,
         })
     }
     pub(crate) fn header(&self) -> &Arc<CheckedSourceResourceHeader> {
         &self.header
+    }
+    pub(crate) fn methods(&self) -> &[(crate::interface::MethodId, crate::types::OperationId)] {
+        &self.methods
     }
     pub(crate) fn original_acquire(&self) -> &UnvalidatedEffectProgram {
         &self.acquire
@@ -1779,6 +1798,8 @@ pub struct SourceResourceScopeNode {
     pub(crate) handle: TypedBinder,
     pub(crate) handler: super::HandlerNode,
     pub(crate) handler_output: crate::types::ComputationType,
+    pub(crate) lexical: crate::interface::LexicalEvidenceId,
+    pub(crate) forwardings: Box<[super::provider::ProviderForwardingMethod]>,
 }
 impl Drop for SourceResourceScopeNode {
     fn drop(&mut self) {
@@ -1808,6 +1829,8 @@ impl SourceResourceScopeNode {
         handle: TypedBinder,
         handler: super::HandlerNode,
         mut handler_output: crate::types::ComputationType,
+        lexical: crate::interface::LexicalEvidenceId,
+        forwardings: Box<[super::provider::ProviderForwardingMethod]>,
         copies: [SourceResourceCopyClaim<'_>; 3],
         work: &mut TypeWorkBudget,
     ) -> Result<Self, ValidationError> {
@@ -1884,6 +1907,8 @@ impl SourceResourceScopeNode {
             handle,
             handler,
             handler_output,
+            lexical,
+            forwardings,
         })
     }
     pub(crate) fn original(&self) -> &Arc<CheckedSourceResourceTemplate> {
@@ -2512,6 +2537,185 @@ impl SourceResourceScopeNode {
             )?
             .map_err(|_| invalid())
         };
+        if self.lexical.module() != self.identity().module().ok_or_else(invalid)?
+            || self.forwardings.len() != template.methods().len()
+        {
+            return Err(invalid());
+        }
+        let mut current = self.handler.body();
+        let mut used = std::collections::HashSet::new();
+        charge(work, 1 + self.forwardings.len())?;
+        used.try_reserve(1 + self.forwardings.len())
+            .map_err(|_| resource())?;
+        used.insert(self.handle.id());
+        for ((method, operation), forwarding) in template.methods().iter().zip(&self.forwardings) {
+            if forwarding.method != *method || !used.insert(forwarding.binder) {
+                return Err(invalid());
+            }
+            let Some(PureExprKind::Computation(PureComputation::Bind(binding))) =
+                pure(node(program, current)?)
+            else {
+                return Err(invalid());
+            };
+            if binding.binder().id() != forwarding.binder {
+                return Err(invalid());
+            }
+            let Some(PureExprKind::Value(PureValue::Function(function))) =
+                pure(node(program, binding.initializer())?)
+            else {
+                return Err(invalid());
+            };
+            let EffectExprKind::Operation(EffectOperation::Request(request)) =
+                &node(program, function.body())?.kind
+            else {
+                return Err(invalid());
+            };
+            let Some(PureExprKind::Variable(operand)) = pure(node(program, request.operand())?)
+            else {
+                return Err(invalid());
+            };
+            if request.operation() != *operation
+                || operand.binder() != function.parameter().id()
+                || crate::types::compare_effect_instances_with_budget(
+                    request.effect(),
+                    self.handler.effect(),
+                    work,
+                )
+                .map_err(|_| resource())?
+                    != std::cmp::Ordering::Equal
+            {
+                return Err(invalid());
+            }
+            let effect_declaration = template
+                .original_handler()
+                .registry
+                .effect(operation.owner())
+                .ok_or_else(invalid)?;
+            let original = effect_declaration
+                .operations
+                .iter()
+                .find(|candidate| candidate.id == *operation)
+                .ok_or_else(invalid)?;
+            if effect_declaration.parameters.len() != self.handler.effect().arguments().len() {
+                return Err(invalid());
+            }
+            let mut operation_types = TypesGuard(HashMap::new());
+            let mut operation_rows = HashMap::new();
+            charge(work, effect_declaration.parameters.len().saturating_mul(2))?;
+            operation_types
+                .0
+                .try_reserve(effect_declaration.parameters.len())
+                .map_err(|_| resource())?;
+            operation_rows
+                .try_reserve(effect_declaration.parameters.len())
+                .map_err(|_| resource())?;
+            for (formal, actual) in effect_declaration
+                .parameters
+                .iter()
+                .zip(self.handler.effect().arguments())
+            {
+                match actual {
+                    KindedArgument::TypeArg(ty) => operation_types.insert(
+                        formal.id,
+                        crate::types::clone_type_with_budget(ty, work).map_err(|_| resource())?,
+                    ),
+                    KindedArgument::RowArg(row) => {
+                        operation_rows.insert(
+                            formal.id,
+                            crate::types::clone_effect_row_with_budget(row, work)
+                                .map_err(|_| resource())?,
+                        );
+                    }
+                }
+            }
+            let operation_type = crate::types::IterativeTypeOwner::new(
+                crate::types::substitute_type_for_template_with(
+                    &original.annotation.ty,
+                    &operation_types.0,
+                    &operation_rows,
+                    &empty,
+                    &rename,
+                    |cells| work.charge(cells).map_err(|_| resource()),
+                    resource,
+                )?
+                .map_err(|_| invalid())?,
+            );
+            let operation_type = operation_type.function_view().ok_or_else(invalid)?;
+            if !same(function.parameter().ty(), operation_type.domain(), work)? {
+                return Err(invalid());
+            }
+            let expected = crate::types::IterativeTypeOwner::new(Type::function_computation(
+                crate::types::clone_type_with_budget(operation_type.domain(), work)
+                    .map_err(|_| resource())?,
+                crate::types::ComputationType::new(
+                    crate::types::clone_type_with_budget(operation_type.value(), work)
+                        .map_err(|_| resource())?,
+                    crate::types::EffectRow::singleton(
+                        crate::types::clone_effect_instance_with_budget(
+                            self.handler.effect(),
+                            work,
+                        )
+                        .map_err(|_| resource())?,
+                    ),
+                ),
+            ));
+            if !same(binding.binder().ty(), &expected, work)?
+                || !same(&node(program, binding.initializer())?.ty, &expected, work)?
+            {
+                return Err(invalid());
+            }
+            let owner = program
+                .method_evidence
+                .lexical_owner(self.lexical, *method)
+                .ok_or_else(invalid)?;
+            if owner.binder != forwarding.binder
+                || owner.application.interface() != template.header.original.provider.interface.id
+                || owner.application.arguments().len()
+                    != template.header.original.provider.arguments.len()
+            {
+                return Err(invalid());
+            }
+            for (original, actual) in template
+                .header
+                .original
+                .provider
+                .arguments
+                .iter()
+                .zip(owner.application.arguments())
+            {
+                let expected = crate::types::IterativeArgumentOwner::new(
+                    crate::types::substitute_argument_for_template_with(
+                        &original.ty,
+                        &sigma.types,
+                        &sigma.rows,
+                        &empty,
+                        &rename,
+                        |cells| work.charge(cells).map_err(|_| resource()),
+                        resource,
+                    )?
+                    .map_err(|_| invalid())?,
+                );
+                if !crate::types::same_kinded_argument_with_budget(&expected, actual, work)
+                    .map_err(|_| resource())?
+                {
+                    return Err(invalid());
+                }
+            }
+            let mut definitions = 0usize;
+            charge(work, program.nodes.len())?;
+            for stored in &program.nodes {
+                if let Some(PureExprKind::Computation(PureComputation::Bind(candidate))) =
+                    pure(stored)
+                    && candidate.binder().id() == forwarding.binder
+                {
+                    definitions += 1;
+                }
+            }
+            if definitions != 1 {
+                return Err(invalid());
+            }
+            current = binding.body();
+        }
         let input = crate::types::IterativeTypeOwner::new(specialized(
             &template.header.original.input.ty,
             work,
@@ -2556,14 +2760,13 @@ impl SourceResourceScopeNode {
     }
 }
 
-/// The first executable source association has one Unit operation and one
-/// monomorphic access method. Multi-operation forwarding and non-Unit operand
-/// conventions need their own source-authenticated forwarding evidence.
+/// Authenticate the complete name/type/row relation independently of method
+/// and operation declaration order before generating lexical forwarding.
 fn check_provider_association(
     checked_header: &CheckedSourceResourceHeader,
     program: &UnvalidatedEffectProgram,
     work: &mut TypeWorkBudget,
-) -> Result<(), ValidationError> {
+) -> Result<Box<[(crate::interface::MethodId, crate::types::OperationId)]>, ValidationError> {
     use crate::resolved::OwnerId;
     let header = &checked_header.original;
     let interface = header.provider.interface.id;
@@ -2578,21 +2781,18 @@ fn check_provider_association(
         .registry
         .effect(header.provided.instance.effect())
         .ok_or_else(invalid)?;
-    if effect.operations.len() != 1
+    if effect.operations.is_empty()
         || effect.parameters.len() != header.provided.instance.arguments().len()
     {
         return Err(invalid());
     }
     let catalog = program.method_evidence.methods();
     charge(work, catalog.len())?;
-    let mut methods = catalog
+    let method_count = catalog
         .iter()
-        .filter(|method| method.id.interface() == interface);
-    let method = methods.next().ok_or_else(invalid)?;
-    if methods.next().is_some()
-        || !method.parameters.is_empty()
-        || method.interface_parameters.as_ref() != signature.parameters.as_ref()
-    {
+        .filter(|method| method.id.interface() == interface)
+        .count();
+    if method_count != effect.operations.len() {
         return Err(invalid());
     }
     let mut types = TypesGuard(HashMap::new());
@@ -2665,46 +2865,59 @@ fn check_provider_association(
         )?
         .map_err(|_| invalid())
     };
-    let method = crate::types::IterativeTypeOwner::new(specialized(&method.value_type, work)?);
-    let operation = crate::types::IterativeTypeOwner::new(specialized(
-        &effect.operations[0].annotation.ty,
-        work,
-    )?);
-    let Some(method) = method.function_view() else {
-        return Err(invalid());
-    };
-    let Some(operation) = operation.function_view() else {
-        return Err(invalid());
-    };
-    if operation.domain() != &Type::Unit
-        || operation.effects().is_some()
-        || method.effects().is_some()
-        || !same(method.value(), operation.value(), work)?
-    {
-        return Err(invalid());
-    }
-    let mut access = ArgumentsGuard(Vec::new());
-    charge(work, header.parameters.len())?;
-    access
-        .0
-        .try_reserve_exact(header.parameters.len())
+    let mut associations = Vec::new();
+    charge(work, method_count)?;
+    associations
+        .try_reserve_exact(method_count)
         .map_err(|_| resource())?;
-    for formal in &header.parameters {
-        access.0.push(match formal.kind {
-            Kind::Type => KindedArgument::TypeArg(Type::Variable(formal.id)),
-            Kind::EffectRow => KindedArgument::RowArg(crate::types::EffectRow::open(
-                crate::types::EffectRowVariable::Rigid(formal.id),
-                Box::new([]),
-            )),
-            _ => return Err(invalid()),
-        });
+    for method in catalog
+        .iter()
+        .filter(|method| method.id.interface() == interface)
+    {
+        if !method.parameters.is_empty()
+            || method.interface_parameters.as_ref() != signature.parameters.as_ref()
+        {
+            return Err(invalid());
+        }
+        let mut selected = None;
+        for operation in &effect.operations {
+            charge(work, 1 + method.spelling.len() + operation.spelling.len())?;
+            if method.spelling.as_ref() == operation.spelling
+                && selected.replace(operation).is_some()
+            {
+                return Err(invalid());
+            }
+        }
+        let operation = selected.ok_or_else(invalid)?;
+        charge(work, associations.len())?;
+        if associations.iter().any(|(_, id)| *id == operation.id) {
+            return Err(invalid());
+        }
+        let method_type =
+            crate::types::IterativeTypeOwner::new(specialized(&method.value_type, work)?);
+        let operation_type =
+            crate::types::IterativeTypeOwner::new(specialized(&operation.annotation.ty, work)?);
+        let method_function = method_type.function_view().ok_or_else(invalid)?;
+        let operation_function = operation_type.function_view().ok_or_else(invalid)?;
+        if operation_function.effects().is_some()
+            || !same(method_function.domain(), operation_function.domain(), work)?
+            || !same(method_function.value(), operation_function.value(), work)?
+        {
+            return Err(invalid());
+        }
+        let row = method_function.effects().ok_or_else(invalid)?;
+        let expected = crate::types::EffectRow::singleton(
+            crate::types::clone_effect_instance_with_budget(&header.provided.instance, work)
+                .map_err(|_| resource())?,
+        );
+        if !crate::types::same_effect_rows_with_budget(row, &expected, work)
+            .map_err(|_| resource())?
+        {
+            return Err(invalid());
+        }
+        associations.push((method.id, operation.id));
     }
-    let access =
-        crate::types::IterativeTypeOwner::new(checked_header.access_type(&access.0, work)?);
-    if !same(method.domain(), &access, work)? {
-        return Err(invalid());
-    }
-    Ok(())
+    Ok(associations.into_boxed_slice())
 }
 
 fn retain_set<T: Copy + Eq + std::hash::Hash>(
@@ -2866,7 +3079,7 @@ mod tests {
                 )
                 .replace(".call size {", ".call 42 {")
                 .replace("match size == 9 {", "match false {")
-                .replace("read () => resume data", "read () => resume 42");
+                .replace("read access => resume data", "read access => resume 42");
             for index in 0..extra_owners {
                 // These contracts are independently admitted but unused by Probe.
                 // Native operation selection must not stand in for the owner table.
@@ -2886,9 +3099,11 @@ mod tests {
             )
             .unwrap();
             let compiled = fixture.compile();
+            // The associated interface's exact effectful value types select
+            // the existing Effect dialect even when no resource is executed.
             let (checked, _) = compiled
-                .pure_build_input()
-                .expect("unused passive headers leave the ordinary entry in Pure Core");
+                .effect_build_input()
+                .expect("unused passive headers remain independently admitted");
             let registry = checked.registry();
             assert_eq!(registry.source_owner_candidate_count(), extra_owners + 1);
             let header = registry
@@ -3271,6 +3486,648 @@ mod tests {
                 )
                 .is_err(),
                 "scope claim mutation {mutation} must fail independent admission"
+            );
+        }
+    }
+
+    fn source_forwarding_fixture() -> Fixture {
+        let fixture = Fixture::new();
+        fs::write(
+            fixture.0.join("owner.ash"),
+            include_str!("../../tests/fixtures/source-owner/forwarding_owner.ash"),
+        )
+        .unwrap();
+        fs::write(
+            fixture.0.join("entry.ash"),
+            r#"import owner as Owner
+
+main : Unit -> Owner.Scope<Unit, Unit, (Int, Owner.Scope<Unit, Unit, (Int, Int)>, Int)>
+main () = resource Owner.Probe<{}, Outer, {}> outer = 64 {
+    let before = Owner.read outer
+    let child = resource Owner.Probe<{}, Inner, {}> inner = 4 {
+        (Owner.read inner, Owner.offset (inner, 3))
+    }
+    let after = Owner.read outer
+    (before, child, after)
+}
+"#,
+        )
+        .unwrap();
+        fixture
+    }
+
+    fn source_forwarding_scope_indices(program: &super::UnvalidatedEffectProgram) -> Vec<usize> {
+        program
+            .nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, stored)| {
+                matches!(
+                    &stored.kind,
+                    EffectExprKind::Operation(EffectOperation::SourceResourceScope(_))
+                )
+                .then_some(index)
+            })
+            .collect()
+    }
+
+    fn source_forwarding_request_ids(
+        program: &super::UnvalidatedEffectProgram,
+        scope_index: usize,
+    ) -> Vec<NodeId> {
+        let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+            &program.nodes[scope_index].kind
+        else {
+            panic!("selected source forwarding scope")
+        };
+        let mut current = scope.handler.body();
+        let mut requests = Vec::new();
+        for _ in &scope.forwardings {
+            let Some(super::PureExprKind::Computation(super::PureComputation::Bind(binding))) =
+                super::pure(super::node(program, current).unwrap())
+            else {
+                panic!("generated forwarding binding")
+            };
+            let Some(super::PureExprKind::Value(super::PureValue::Function(function))) =
+                super::pure(super::node(program, binding.initializer()).unwrap())
+            else {
+                panic!("generated forwarding function")
+            };
+            assert!(matches!(
+                &super::node(program, function.body()).unwrap().kind,
+                EffectExprKind::Operation(EffectOperation::Request(_))
+            ));
+            requests.push(function.body());
+            current = binding.body();
+        }
+        requests
+    }
+
+    #[test]
+    fn source_forwarding_independent_core_has_exact_budget_and_fresh_retry() {
+        let normal_limit = crate::compiler_work::CompilationPhase::IndependentCore.hard_limit();
+        for acquired_only in [false, true] {
+            let fixture = Fixture::new();
+            let mut owner =
+                include_str!("../../tests/fixtures/source-owner/forwarding_owner.ash").to_owned();
+            let mut entry =
+                include_str!("../../tests/fixtures/source-owner/forwarding_helper_entry.ash")
+                    .to_owned();
+            if acquired_only {
+                owner = owner
+                    .replace(
+                        "pub type Scope<I, E, T> = NotAcquired(I)
+    | Completed(T, Completion<E>)",
+                        "pub type Outcome<T> = Success(T)
+    | Failure(Unit)",
+                    )
+                    .replace(
+                        "result Scope<Unit, Unit, Answer> for <Answer>",
+                        "result Outcome<Answer> for <Answer>",
+                    )
+                    .replace("codec scope", "codec acquired_only");
+                entry = entry.replace(
+                    "Owner.Scope<Unit, Unit, (Int, Int)>",
+                    "Owner.Outcome<(Int, Int)>",
+                );
+            }
+            fs::write(fixture.0.join("owner.ash"), owner).unwrap();
+            fs::write(fixture.0.join("entry.ash"), entry).unwrap();
+            fs::write(
+                fixture.0.join("helpers.ash"),
+                include_str!("../../tests/fixtures/source-owner/forwarding_helpers.ash"),
+            )
+            .unwrap();
+            let compiled = fixture.compile();
+            let (checked, provenance) = compiled.effect_build_input().unwrap();
+            let sources = provenance
+                .iter()
+                .map(|(_, source)| source.as_ref())
+                .collect::<Vec<_>>();
+            let module_sources = provenance
+                .iter()
+                .map(|(module, source)| (*module, source.id()))
+                .collect::<Vec<_>>();
+            let mut measured = TypeWorkBudget::with_limit(normal_limit);
+            super::super::validate::validate_effect_modules_with_work(
+                super::super::transform::identity_effect_traversal(checked).unwrap(),
+                &sources,
+                &module_sources,
+                &mut measured,
+            )
+            .expect("independent Core uses the normal unchanged allowance");
+            let required = measured.used();
+            assert!(
+                required > 0
+                    && required < crate::compiler_work::CompilationPhase::IndependentCore.budget()
+            );
+            for prefix in [0, 5] {
+                for available in [0, required - 1] {
+                    let mut short = TypeWorkBudget::with_limit(prefix + available);
+                    short.charge(prefix).unwrap();
+                    assert_eq!(
+                        super::super::validate::validate_effect_modules_with_work(
+                            super::super::transform::identity_effect_traversal(checked).unwrap(),
+                            &sources,
+                            &module_sources,
+                            &mut short,
+                        )
+                        .unwrap_err()
+                        .reason(),
+                        ValidationReason::Resource
+                    );
+                    for _ in 0..2 {
+                        let mut exact = TypeWorkBudget::with_limit(prefix + required);
+                        exact.charge(prefix).unwrap();
+                        super::super::validate::validate_effect_modules_with_work(
+                            super::super::transform::identity_effect_traversal(checked).unwrap(),
+                            &sources,
+                            &module_sources,
+                            &mut exact,
+                        )
+                        .expect("a fresh exact allowance admits complete helper evidence");
+                        assert_eq!(exact.used(), prefix + required);
+                    }
+                }
+            }
+            println!(
+                "source forwarding independent Core: acquired_only={acquired_only}, work={required}"
+            );
+        }
+    }
+
+    #[test]
+    fn source_forwarding_complete_row_metadata_is_frozen_before_late_normalization() {
+        use super::super::dialect::CoreOperationFamily;
+        let fixture = Fixture::new();
+        fs::write(
+            fixture.0.join("owner.ash"),
+            include_str!("../../tests/fixtures/source-owner/forwarding_owner.ash"),
+        )
+        .unwrap();
+        fs::write(
+            fixture.0.join("entry.ash"),
+            include_str!("../../tests/fixtures/source-owner/forwarding_generic_rows_entry.ash"),
+        )
+        .unwrap();
+        let compiled = fixture.compile();
+        let (checked, provenance) = compiled.effect_build_input().unwrap();
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let module_sources = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let mut positive = super::super::transform::identity_effect_traversal(checked).unwrap();
+        let indices = source_forwarding_scope_indices(&positive);
+        assert_eq!(indices.len(), 2);
+        let index = *indices.iter().find(|index| match &positive.nodes[**index].kind {
+            EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
+                matches!(&scope.descriptor.arguments[0], KindedArgument::RowArg(row) if row.tail().is_some())
+            }
+            _ => false,
+        }).expect("generic helper's complete rigid Row argument");
+        let descriptor = match &positive.nodes[index].kind {
+            EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
+                Arc::clone(&scope.descriptor)
+            }
+            _ => unreachable!(),
+        };
+        assert!(matches!(descriptor.arguments[0], KindedArgument::RowArg(_)));
+        assert!(matches!(descriptor.arguments[2], KindedArgument::RowArg(_)));
+        // A SourceScope is already admitted against normalized original copies.
+        // An enclosing normalization must preserve this immutable certificate.
+        super::super::EffectOperationFamily::rewrite_operation_type_metadata(
+            &mut positive.nodes[index].kind,
+            &mut |_| panic!("late normalization cannot rewrite a frozen source descriptor"),
+            &mut |_| Ok(()),
+        )
+        .unwrap();
+        let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+            &positive.nodes[index].kind
+        else {
+            unreachable!()
+        };
+        assert!(Arc::ptr_eq(&descriptor, &scope.descriptor));
+        scope
+            .authenticate(
+                NodeId::new(positive.arena, index as u32),
+                &positive,
+                &mut TypeWorkBudget::default(),
+            )
+            .unwrap();
+        drop(descriptor);
+        super::super::validate::validate_effect_modules_family(positive, &sources, &module_sources)
+            .unwrap();
+        for unresolved in [false, true] {
+            let mut forged = super::super::transform::identity_effect_traversal(checked).unwrap();
+            let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+                &mut forged.nodes[index].kind
+            else {
+                unreachable!()
+            };
+            let descriptor = Arc::get_mut(&mut scope.descriptor).unwrap();
+            let slot = if unresolved { 1 } else { 0 };
+            let replacement = if unresolved {
+                KindedArgument::TypeArg(Type::Inference(crate::types::InferenceVariableId::new(
+                    u32::MAX,
+                )))
+            } else {
+                KindedArgument::RowArg(crate::types::EffectRow::empty())
+            };
+            crate::types::discard_kinded_argument_iteratively(std::mem::replace(
+                &mut descriptor.arguments[slot],
+                replacement,
+            ));
+            // Preserving a certificate never grants altered or unresolved actuals.
+            assert!(
+                super::super::validate::validate_effect_modules_family(
+                    forged,
+                    &sources,
+                    &module_sources
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn source_forwarding_scope_rejects_missing_duplicate_and_swapped_method_binder_claims() {
+        #[derive(Clone, Copy, Debug)]
+        enum Mutation {
+            Missing,
+            DuplicateMethod,
+            DuplicateBinder,
+            SwappedMethods,
+            SwappedBinders,
+        }
+
+        let fixture = source_forwarding_fixture();
+        // This also preserves the existing original-forest/freshening negatives
+        // for a public fixture whose method and operation declaration orders differ.
+        check_independent_source_scope(&fixture);
+        let compiled = fixture.compile();
+        let (checked, provenance) = compiled.effect_build_input().unwrap();
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let module_sources = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        for mutation in [
+            Mutation::Missing,
+            Mutation::DuplicateMethod,
+            Mutation::DuplicateBinder,
+            Mutation::SwappedMethods,
+            Mutation::SwappedBinders,
+        ] {
+            let mut transformed =
+                super::super::transform::identity_effect_traversal(checked).unwrap();
+            let indices = source_forwarding_scope_indices(&transformed);
+            assert_eq!(indices.len(), 2);
+            let scope_index = indices[0];
+            let scope_id = NodeId::new(transformed.arena, u32::try_from(scope_index).unwrap());
+            let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+                &mut transformed.nodes[scope_index].kind
+            else {
+                panic!("selected forwarding scope")
+            };
+            assert_eq!(scope.forwardings.len(), 2);
+            assert_ne!(scope.forwardings[0].method, scope.forwardings[1].method);
+            assert_ne!(scope.forwardings[0].binder, scope.forwardings[1].binder);
+            let first = scope.forwardings[0];
+            let second = scope.forwardings[1];
+            match mutation {
+                Mutation::Missing => {
+                    let mut methods = std::mem::take(&mut scope.forwardings).into_vec();
+                    methods.pop().unwrap();
+                    scope.forwardings = methods.into_boxed_slice();
+                }
+                Mutation::DuplicateMethod => scope.forwardings[1].method = first.method,
+                Mutation::DuplicateBinder => scope.forwardings[1].binder = first.binder,
+                Mutation::SwappedMethods => {
+                    scope.forwardings[0].method = second.method;
+                    scope.forwardings[1].method = first.method;
+                }
+                Mutation::SwappedBinders => {
+                    scope.forwardings[0].binder = second.binder;
+                    scope.forwardings[1].binder = first.binder;
+                }
+            }
+            let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+                &transformed.nodes[scope_index].kind
+            else {
+                panic!("selected mutated forwarding scope")
+            };
+            let failure = scope
+                .authenticate(scope_id, &transformed, &mut TypeWorkBudget::default())
+                .expect_err("forwarding claims must authenticate independently");
+            assert_eq!(failure.reason(), ValidationReason::Registry, "{mutation:?}");
+            assert!(
+                super::super::validate::validate_effect_modules_family(
+                    transformed,
+                    &sources,
+                    &module_sources,
+                )
+                .is_err(),
+                "{mutation:?} cannot publish independently checked Core"
+            );
+        }
+    }
+
+    #[test]
+    fn source_forwarding_same_typed_application_cannot_donate_other_activation_authority() {
+        let fixture = source_forwarding_fixture();
+        let compiled = fixture.compile();
+        let (checked, provenance) = compiled.effect_build_input().unwrap();
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let module_sources = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let mut forged = super::super::transform::identity_effect_traversal(checked).unwrap();
+        let indices = source_forwarding_scope_indices(&forged);
+        let lexical = |index: usize| match &forged.nodes[index].kind {
+            EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => scope.lexical,
+            _ => unreachable!(),
+        };
+        let recipient = lexical(indices[0]);
+        let donor = lexical(indices[1]);
+        let mut catalog = (*forged.method_evidence).clone();
+        let mut owners = catalog.lexical_owners().to_vec();
+        let original = owners.clone();
+        for owner in &mut owners {
+            if owner.source != recipient {
+                continue;
+            }
+            let donor = original
+                .iter()
+                .find(|row| row.source == donor && row.method == owner.method)
+                .unwrap();
+            let Some(crate::core::dialect::MethodEvidenceResourceOwner::Provider(recipient_owner)) =
+                &owner.resource
+            else {
+                unreachable!()
+            };
+            let Some(crate::core::dialect::MethodEvidenceResourceOwner::Provider(donor_owner)) =
+                &donor.resource
+            else {
+                unreachable!()
+            };
+            assert_ne!(recipient_owner.identity, donor_owner.identity);
+            // Preserve exact binder, method and application. Only original
+            // resource activation authority is taken from the other occurrence.
+            owner.resource = donor.resource.clone();
+        }
+        catalog.set_lexical_owners(owners);
+        forged.method_evidence = Arc::new(catalog);
+        let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+            &forged.nodes[indices[0]].kind
+        else {
+            unreachable!()
+        };
+        scope
+            .authenticate(
+                NodeId::new(forged.arena, indices[0] as u32),
+                &forged,
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("binder/application correspondence alone is unchanged");
+        assert!(
+            super::super::validate::validate_effect_modules_family(
+                forged,
+                &sources,
+                &module_sources
+            )
+            .is_err(),
+            "independent lexical resource-owner admission must reject donated activation authority"
+        );
+    }
+
+    #[test]
+    fn source_forwarding_scope_rejects_a_real_other_scope_lexical_source() {
+        let fixture = source_forwarding_fixture();
+        let compiled = fixture.compile();
+        let (checked, provenance) = compiled.effect_build_input().unwrap();
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let module_sources = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let positive = super::super::transform::identity_effect_traversal(checked).unwrap();
+        super::super::validate::validate_effect_modules_family(positive, &sources, &module_sources)
+            .expect("both real nested forwarding sources independently validate");
+
+        let mut transformed = super::super::transform::identity_effect_traversal(checked).unwrap();
+        let indices = source_forwarding_scope_indices(&transformed);
+        assert_eq!(indices.len(), 2);
+        let donor = match &transformed.nodes[indices[1]].kind {
+            EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => scope.lexical,
+            _ => unreachable!(),
+        };
+        let scope_index = indices[0];
+        let scope_id = NodeId::new(transformed.arena, u32::try_from(scope_index).unwrap());
+        let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+            &mut transformed.nodes[scope_index].kind
+        else {
+            panic!("selected recipient forwarding scope")
+        };
+        assert_ne!(scope.lexical, donor);
+        scope.lexical = donor;
+        let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+            &transformed.nodes[scope_index].kind
+        else {
+            unreachable!()
+        };
+        let failure = scope
+            .authenticate(scope_id, &transformed, &mut TypeWorkBudget::default())
+            .expect_err("another real source cannot authorize this forwarding binder");
+        assert_eq!(failure.reason(), ValidationReason::Registry);
+        assert!(
+            super::super::validate::validate_effect_modules_family(
+                transformed,
+                &sources,
+                &module_sources,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn source_forwarding_scope_rejects_changed_request_operand_effect_and_operation() {
+        #[derive(Clone, Copy, Debug)]
+        enum Mutation {
+            Operand,
+            Effect,
+            Operation,
+        }
+
+        let fixture = source_forwarding_fixture();
+        let owner = fs::read_to_string(fixture.0.join("owner.ash"))
+            .unwrap()
+            .replace("offset : (Access, Int) -> Int", "offset : Access -> Int")
+            .replace(
+                "offset (access, delta) => resume delta",
+                "offset access => resume 11",
+            );
+        let entry = fs::read_to_string(fixture.0.join("entry.ash"))
+            .unwrap()
+            .replace("Owner.offset (inner, 3)", "Owner.offset inner");
+        fs::write(fixture.0.join("owner.ash"), owner).unwrap();
+        fs::write(fixture.0.join("entry.ash"), entry).unwrap();
+        let compiled = fixture.compile();
+        let (checked, provenance) = compiled.effect_build_input().unwrap();
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let module_sources = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let positive = super::super::transform::identity_effect_traversal(checked).unwrap();
+        super::super::validate::validate_effect_modules_family(positive, &sources, &module_sources)
+            .expect("unchanged two-method forwarding requests independently validate");
+
+        for mutation in [Mutation::Operand, Mutation::Effect, Mutation::Operation] {
+            let mut transformed =
+                super::super::transform::identity_effect_traversal(checked).unwrap();
+            let indices = source_forwarding_scope_indices(&transformed);
+            assert_eq!(indices.len(), 2);
+            let scope_index = indices[0];
+            let scope_id = NodeId::new(transformed.arena, u32::try_from(scope_index).unwrap());
+            let requests = source_forwarding_request_ids(&transformed, scope_index);
+            assert_eq!(requests.len(), 2);
+            let request_id = requests[0];
+            let request_index = request_id.index().unwrap();
+            match mutation {
+                Mutation::Operand => {
+                    let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+                        &transformed.nodes[scope_index].kind
+                    else {
+                        unreachable!()
+                    };
+                    let handle = scope.handle.id();
+                    let EffectExprKind::Operation(EffectOperation::Request(request)) =
+                        &transformed.nodes[request_index].kind
+                    else {
+                        unreachable!()
+                    };
+                    let operand = request.operand();
+                    let replacement_index = transformed
+                        .nodes
+                        .iter()
+                        .position(|stored| {
+                            matches!(super::pure(stored), Some(super::PureExprKind::Variable(variable))
+                                if variable.binder() == handle)
+                                && stored.ty == super::node(&transformed, operand).unwrap().ty
+                        })
+                        .expect("the client body contains a real same-typed access variable");
+                    let replacement =
+                        NodeId::new(transformed.arena, u32::try_from(replacement_index).unwrap());
+                    assert_ne!(operand, replacement);
+                    let Some(super::PureExprKind::Variable(original)) =
+                        super::pure(super::node(&transformed, operand).unwrap())
+                    else {
+                        panic!("original forwarding operand is its parameter variable")
+                    };
+                    assert_ne!(original.binder(), handle);
+                    // Both nodes have the exact same Access type. This mutation
+                    // tests unchanged parameter transport, not a type mismatch.
+                    let EffectExprKind::Operation(EffectOperation::Request(request)) =
+                        &mut transformed.nodes[request_index].kind
+                    else {
+                        unreachable!()
+                    };
+                    request.operand = replacement;
+                }
+                Mutation::Effect => {
+                    let EffectExprKind::Operation(EffectOperation::SourceResourceScope(donor)) =
+                        &transformed.nodes[indices[1]].kind
+                    else {
+                        unreachable!()
+                    };
+                    let effect = crate::types::clone_effect_instance_with_budget(
+                        donor.handler.effect(),
+                        &mut TypeWorkBudget::default(),
+                    )
+                    .unwrap();
+                    let EffectExprKind::Operation(EffectOperation::Request(request)) =
+                        &mut transformed.nodes[request_index].kind
+                    else {
+                        unreachable!()
+                    };
+                    assert_eq!(request.effect.effect(), effect.effect());
+                    assert_ne!(request.effect.arguments(), effect.arguments());
+                    request.effect = effect;
+                }
+                Mutation::Operation => {
+                    let EffectExprKind::Operation(EffectOperation::Request(sibling)) =
+                        &super::node(&transformed, requests[1]).unwrap().kind
+                    else {
+                        unreachable!()
+                    };
+                    let operation = sibling.operation();
+                    let EffectExprKind::Operation(EffectOperation::Request(request)) =
+                        &transformed.nodes[request_index].kind
+                    else {
+                        unreachable!()
+                    };
+                    assert_ne!(request.operation(), operation);
+                    let sibling_operand =
+                        match &super::node(&transformed, requests[1]).unwrap().kind {
+                            EffectExprKind::Operation(EffectOperation::Request(sibling)) => {
+                                sibling.operand()
+                            }
+                            _ => unreachable!(),
+                        };
+                    let sibling_type = &super::node(&transformed, sibling_operand).unwrap().ty;
+                    let operand_type = &super::node(&transformed, request.operand()).unwrap().ty;
+                    assert!(
+                        crate::types::same_type_with_budget(
+                            sibling_type,
+                            operand_type,
+                            &mut TypeWorkBudget::default()
+                        )
+                        .unwrap()
+                    );
+                    // Same Access domain, Int result and provided effect. Only
+                    // the exact associated operation identity changes.
+                    let EffectExprKind::Operation(EffectOperation::Request(request)) =
+                        &mut transformed.nodes[request_index].kind
+                    else {
+                        unreachable!()
+                    };
+                    request.operation = operation;
+                }
+            }
+            let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+                &transformed.nodes[scope_index].kind
+            else {
+                unreachable!()
+            };
+            let failure = scope
+                .authenticate(scope_id, &transformed, &mut TypeWorkBudget::default())
+                .expect_err("generated forwarding requests retain exact original authority");
+            assert_eq!(failure.reason(), ValidationReason::Registry, "{mutation:?}");
+            assert!(
+                super::super::validate::validate_effect_modules_family(
+                    transformed,
+                    &sources,
+                    &module_sources,
+                )
+                .is_err(),
+                "{mutation:?} cannot publish independently checked Core"
             );
         }
     }

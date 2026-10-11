@@ -20,7 +20,7 @@ const ENTRY: &str = include_str!("fixtures/source-arena/entry.ash");
 const PRODUCTION_ENTRY: &str = r"import arena as Memory
 main : Unit -> Memory.Scope<Memory.ArenaInitError, Memory.ArenaFinishError, (Int, Int, Int, Int)>
 main () = resource Memory.Arena<Fresh> arena = (Memory.ArenaConfig (64, 4)) {
-    perform Memory.ArenaOps<Fresh>.usage ()
+    Memory.usage arena
 }
 ";
 

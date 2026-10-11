@@ -43,10 +43,10 @@ pub type Scope<I, E, T> = NotAcquired(I)
     | Completed(T, Completion<E>)
 
 pub interface ArenaProvider<Access> {
-    usage : Access -> (Int, Int, Int, Int)
+    usage : Access -> (Int, Int, Int, Int) ! {ArenaOps<Access>}
 }
-pub effect ArenaOps<R> {
-    usage : Unit -> (Int, Int, Int, Int)
+pub effect ArenaOps<Access> {
+    usage : Access -> (Int, Int, Int, Int)
 }
 pub resource Arena<R> {
     owned R
@@ -58,7 +58,7 @@ pub resource Arena<R> {
     result Scope<ArenaInitError, ArenaFinishError, Answer> for <Answer>
     codec scope
     provider ArenaProvider<Arena<R>>
-    effect ArenaOps<R>
+    effect ArenaOps<Arena<R>>
     interpret Allocate<R>, Free<R>
     acquire ArenaConfig(capacity, slots) => match (
         Foreign.checked_i64 capacity,
@@ -92,6 +92,6 @@ pub resource Arena<R> {
         Foreign.ConversionFailed(_) => Retained(state, ReleaseFailed)
     }
     handlers (state, (capacity, slots)) {
-        usage () => resume (0, capacity, 0, slots)
+        usage access => resume (0, capacity, 0, slots)
     }
 }

@@ -4792,6 +4792,28 @@ impl Resolver {
             )?;
         }
 
+        // Original source headers retain sealing authority through selective
+        // imports and facades. Canonical metadata does not publish source names.
+        for fact in summary.source_resource_facts() {
+            self.type_work.charge(fact.spelling.len()).map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    import_span,
+                    "source provider header retention exceeded its budget",
+                )
+            })?;
+            self.retain_source_resource_type(
+                Self::clone_imported_string_after_precharge(&fact.spelling, import_span)?,
+                Arc::clone(fact),
+                import_span,
+            )?;
+            self.retain_source_resource_contract_dependencies(fact, summary, import_span)?;
+        }
+        for interface in summary.implemented_interfaces() {
+            self.imported
+                .retain_implemented_interface(interface, &mut self.type_work)
+                .map_err(|failure| imported_fact_comparison_error(failure, import_span))?;
+        }
         Ok(())
     }
 
@@ -5865,7 +5887,7 @@ impl Resolver {
             error(
                 ResolveReason::TypeResourceExhausted,
                 span,
-                "imported constructor spelling retention could not reserve storage",
+                "imported spelling retention could not reserve storage",
             )
         })?;
         cloned.push_str(value);
@@ -8913,7 +8935,14 @@ impl Resolver {
 
             let result = (|| -> Result<ResolvedImplementation, ResolveError> {
                 let head = self.resolve_interface_application(&implementation.head)?;
-                if head.interface.id.module().is_builtin_resource()
+                if self
+                    .resource_provider_interfaces
+                    .iter()
+                    .any(|(family, interface)| {
+                        *interface == head.interface.id
+                            && self.source_resource_owned_positions.contains_key(family)
+                    })
+                    || head.interface.id.module().is_builtin_resource()
                     || self
                         .imported
                         .foreign_state_access_interface(head.interface.id)
@@ -8922,7 +8951,7 @@ impl Resolver {
                     return Err(error(
                         ResolveReason::SealedProvider,
                         implementation.span,
-                        "only resource acquisition may introduce the builtin cell provider",
+                        "only resource acquisition may introduce a sealed provider",
                     ));
                 }
                 let prerequisites = ResolvedRequirementBuffer(
@@ -12039,7 +12068,14 @@ impl Resolver {
                         )
                     })?;
                     let application = self.resolve_interface_application(&source.application)?;
-                    if application.interface.id.module().is_builtin_resource()
+                    if self
+                        .resource_provider_interfaces
+                        .iter()
+                        .any(|(family, interface)| {
+                            *interface == application.interface.id
+                                && self.source_resource_owned_positions.contains_key(family)
+                        })
+                        || application.interface.id.module().is_builtin_resource()
                         || self
                             .imported
                             .foreign_state_access_interface(application.interface.id)
@@ -12050,7 +12086,7 @@ impl Resolver {
                         return Err(error(
                             ResolveReason::SealedProvider,
                             source.span,
-                            "only resource acquisition may introduce the builtin cell provider",
+                            "only resource acquisition may introduce a sealed provider",
                         ));
                     }
                     let mut state = Box::new(PendingLexicalResolution {
@@ -20484,7 +20520,45 @@ impl Resolver {
                     })
                 })();
             self.type_scopes.truncate(type_scope);
-            resources.0.push(resolved?);
+            let resource = resolved?;
+            self.type_work
+                .charge(
+                    resources
+                        .0
+                        .len()
+                        .saturating_add(self.resource_provider_interfaces.len())
+                        .saturating_add(self.imported.implementations().count()),
+                )
+                .map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        source.span,
+                        "provider association authentication exceeded its budget",
+                    )
+                })?;
+            if resources
+                .0
+                .iter()
+                .any(|previous| previous.provider.interface.id == resource.provider.interface.id)
+                || self
+                    .resource_provider_interfaces
+                    .values()
+                    .any(|interface| *interface == resource.provider.interface.id)
+                || self
+                    .imported
+                    .has_implementation_for(resource.provider.interface.id)
+                || self.imported.implementations().any(|implementation| {
+                    implementation.fact.interface() == resource.provider.interface.id
+                })
+            {
+                crate::resolved::discard_resolved_source_resource_definition(resource);
+                return Err(error(
+                    ResolveReason::SealedProvider,
+                    source.span,
+                    "a provider interface may have only one resource association",
+                ));
+            }
+            resources.0.push(resource);
         }
         Ok(resources.into_vec())
     }

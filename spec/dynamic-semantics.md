@@ -682,12 +682,27 @@ non-null owner, refusal destroys that unpublished owner once before delivering
 Null acquisition creates no destructor obligation.
 
 Associated ordinary operations preserve the nearest exact handler rule. A nearer
-ordinary source handler takes precedence over the resource handler. The admitted
-resource clause uses its lexical state/data and ordinary clause-owned `resume`;
-resumption continues the same activation without repeating acquisition. Nested
-source resource scopes complete their own finish before their enclosing scope
-finishes. This checkpoint does not admit outward capture or owned discard of a
-source resource boundary, quarantine, dependency teardown or byte access.
+ordinary source handler takes precedence over the resource handler. The resource
+publishes checked lexical forwarding for all associated methods; ordinary calls
+and constrained helpers request the corresponding operation with its unchanged
+operand and complete effect arguments.
+
+After selecting a source resource handler and before entering its clause, the
+machine authenticates the exact activation, unique live guard and original owner.
+It instantiates the request's value domain under the caller and traverses every
+typed position containing this resource's access family, including tuple and
+nominal constructor payloads. Each such value must be the non-owning access key of
+that selected activation; a state view, stale or donor key cannot replace it.
+The recorded private data does not authorize access. Work or storage refusal
+enters no resource clause. This check does not add an outer resource requirement
+to a nearer ordinary handler.
+
+The admitted resource clause uses its lexical state/data and ordinary
+clause-owned `resume`; resumption continues the same activation without repeating
+acquisition. Repeated executions allocate distinct activation keys. Nested source
+resource scopes complete their own finish before their enclosing scope finishes.
+This checkpoint does not admit outward capture or owned discard of a source
+resource boundary, quarantine, dependency teardown or byte access.
 
 Normal body return saves its value and invokes the admitted Ash finish once.
 Before the Current teardown, the machine authenticates the state token's exact

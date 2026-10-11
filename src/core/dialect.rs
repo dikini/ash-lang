@@ -55,6 +55,7 @@ use crate::{
 #[cfg_attr(test, derive(Clone))]
 pub(crate) struct MethodEvidenceMethod {
     pub(crate) id: MethodId,
+    pub(crate) spelling: Box<str>,
     pub(crate) interface_parameters: Box<[TypeVariableId]>,
     pub(crate) inherited_parameters: Box<[crate::resolved::InheritedOwnerParameter]>,
     pub(crate) parameters: Box<[(TypeVariableId, Kind)]>,
@@ -637,11 +638,14 @@ pub(crate) fn same_imported_method_evidence_catalog(
     }
     for (a, b) in left.methods.iter().zip(&right.methods) {
         work.charge(
-            a.inherited_parameters
+            a.spelling
                 .len()
+                .saturating_add(b.spelling.len())
+                .saturating_add(a.inherited_parameters.len())
                 .saturating_add(b.inherited_parameters.len()),
         )?;
         if a.id != b.id
+            || a.spelling != b.spelling
             || a.inherited_parameters != b.inherited_parameters
             || !ids(&a.interface_parameters, &b.interface_parameters, work)?
             || !parameters(&a.parameters, &b.parameters, work)?
@@ -2834,6 +2838,10 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             .method_evidence
             .implementation_owner(implementation)
             .is_some())
+    }
+
+    pub(crate) fn method_evidence_anchors(&self) -> &[MethodEvidenceAnchor] {
+        &self.method_evidence_anchors
     }
 
     #[allow(
@@ -6009,6 +6017,7 @@ mod tests {
         };
         let mut catalog = MethodEvidenceCatalog::new(
             vec![MethodEvidenceMethod {
+                spelling: "method".into(),
                 id: method,
                 interface_parameters: Box::new([parameter]),
                 inherited_parameters: Box::new([crate::resolved::InheritedOwnerParameter {

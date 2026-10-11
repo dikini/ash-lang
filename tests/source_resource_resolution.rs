@@ -229,7 +229,7 @@ fn public_source_resource_compiles_row_free_arguments_with_nonfirst_owned_positi
     let actuals = "<{| Before}, R, {| After}>";
     let entry_actuals = "Owner.Probe<{}, Fresh, {}>";
     assert_eq!(OWNER.matches(formals).count(), 3);
-    assert_eq!(OWNER.matches(actuals).count(), 5);
+    assert_eq!(OWNER.matches(actuals).count(), 6);
     assert_eq!(PURE_ENTRY.matches(entry_actuals).count(), 1);
     let owner = replace_changed(OWNER, formals, "<Before, R, After>");
     let owner = replace_changed(&owner, actuals, "<Before, R, After>");
@@ -249,7 +249,7 @@ fn public_source_resource_facade_preserves_mixed_arguments_and_owned_position() 
     let entry = r"import facade as Facade
 main : Unit -> Facade.Result<Unit, Unit, Int>
 main () = resource Facade.Sensor<{}, Fresh, {}> sensor = 8 {
-    perform Facade.Reads<Fresh>.read ()
+    perform Facade.Reads<Facade.Sensor<{}, Fresh, {}>>.read sensor
 }
 ";
     let fixture = CompilationFixture::new(OWNER, entry);
@@ -296,7 +296,7 @@ fn public_source_resource_rejects_wrong_kind_and_actual_tags() {
         (
             replace_changed(
                 OWNER,
-                "    effect ProbeOps<R>\n",
+                "    effect ProbeOps<Probe<{| Before}, R, {| After}>>\n",
                 "    effect ProbeOps<{}>\n",
             ),
             PURE_ENTRY.to_owned(),
@@ -477,4 +477,197 @@ main () = resource cell<Outer> outer = 1 {
         matches!(failure.pipeline_failure(), Some(PipelineFailure::Typing(TypeError::Source(diagnostic))) if diagnostic.reason == TypeReason::ResourceEscape),
         "{failure:?}"
     );
+}
+
+#[test]
+fn public_source_provider_association_requires_exact_names_types_and_effect_rows() {
+    let owner = include_str!("fixtures/source-owner/forwarding_owner.ash");
+    let variants = [
+        owner.replace(
+            "    offset : (Access, Int) -> Int ! {ProbeOps<Access>}\n",
+            "",
+        ),
+        owner.replace(
+            "offset : (Access, Int) -> Int !",
+            "shift : (Access, Int) -> Int !",
+        ),
+        owner.replace(
+            "offset : (Access, Int) -> Int !",
+            "offset : (Access, Bool) -> Int !",
+        ),
+        owner.replace(
+            "read : Access -> Int ! {ProbeOps<Access>}",
+            "read : Access -> Int",
+        ),
+        owner
+            .replace(
+                "pub interface ProbeProvider",
+                "pub effect Extra {\n    mark : Unit -> Unit\n}\npub interface ProbeProvider",
+            )
+            .replace(
+                "read : Access -> Int ! {ProbeOps<Access>}",
+                "read : Access -> Int ! {ProbeOps<Access>, Extra}",
+            ),
+    ];
+    for owner in variants {
+        let failure = CompilationFixture::new(&owner, PURE_ENTRY).refusal();
+        assert!(
+            matches!(failure.pipeline_failure(),
+            Some(PipelineFailure::Typing(TypeError::Source(diagnostic)))
+                if diagnostic.reason == TypeReason::Argument),
+            "{failure:?}"
+        );
+    }
+}
+
+#[test]
+fn public_source_provider_seal_survives_interface_only_imports_and_facades() {
+    let owner = include_str!("fixtures/source-owner/forwarding_owner.ash");
+    for route in [
+        "import owner (ProbeProvider, ProbeOps)",
+        "import facade (ProbeProvider, ProbeOps)",
+    ] {
+        for body in [
+            "type Local = Local(Unit)\nimpl ProbeProvider<Local> {\n    read value = perform ProbeOps<Local>.read value\n    offset input = perform ProbeOps<Local>.offset input\n}\nmain : Unit -> Int\nmain () = 42\n",
+            "type Local = Local(Unit)\nmain : Unit -> Int\nmain () = {\n    with ProbeProvider<Local> {\n        read value = perform ProbeOps<Local>.read value\n        offset input = perform ProbeOps<Local>.offset input\n    }\n    42\n}\n",
+        ] {
+            let entry = format!("{route}\n{body}");
+            let fixture = CompilationFixture::new(owner, &entry);
+            fs::write(
+                fixture.0.join("facade.ash"),
+                "pub import owner (ProbeProvider, ProbeOps)\n",
+            )
+            .unwrap();
+            let failure = fixture.refusal();
+            assert!(
+                matches!(failure.pipeline_failure(), Some(PipelineFailure::Resolution(error))
+                if error.diagnostic().reason == ResolveReason::SealedProvider),
+                "{route}: {failure:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn public_source_provider_rejects_a_second_association_and_existing_imported_impl() {
+    let owner = include_str!("fixtures/source-owner/forwarding_owner.ash");
+    let (_, definition) = owner.split_once("pub resource Probe<").unwrap();
+    let duplicate = format!(
+        "{owner}\npub resource Other<{}",
+        definition.replace(
+            "Probe<{| Before}, R, {| After}>",
+            "Other<{| Before}, R, {| After}>"
+        )
+    );
+    let failure = CompilationFixture::new(&duplicate, PURE_ENTRY).refusal();
+    assert!(
+        matches!(failure.pipeline_failure(), Some(PipelineFailure::Resolution(error))
+        if error.diagnostic().reason == ResolveReason::SealedProvider),
+        "{failure:?}"
+    );
+
+    let (prefix, definition) = owner.split_once("pub interface ProbeProvider").unwrap();
+    let (association, resource) = definition.split_once("pub resource Probe<").unwrap();
+    for visibility in ["", "pub "] {
+        let prior = format!(
+            "pub interface ProbeProvider{association}\n{visibility}impl ProbeProvider<Int> {{\n    read value = perform ProbeOps<Int>.read value\n    offset input = perform ProbeOps<Int>.offset input\n}}\n"
+        );
+        let moved = format!(
+            "import prior (ProbeProvider, ProbeOps, impl ProbeProvider)\n{prefix}pub resource Probe<{resource}"
+        );
+        let fixture = CompilationFixture::new(&moved, PURE_ENTRY);
+        fs::write(fixture.0.join("prior.ash"), prior).unwrap();
+        let failure = fixture.refusal();
+        assert!(
+            matches!(failure.pipeline_failure(), Some(PipelineFailure::Resolution(error))
+            if error.diagnostic().reason == ResolveReason::SealedProvider),
+            "{visibility:?}: {failure:?}"
+        );
+    }
+}
+
+#[test]
+fn public_source_provider_passive_headers_add_no_resource_or_native_source_names() {
+    let owner = include_str!("fixtures/source-owner/forwarding_owner.ash");
+    for route in ["owner", "facade"] {
+        let fixture = CompilationFixture::new(
+            owner,
+            &format!(
+                "import {route} (ProbeProvider, ProbeOps)\nmain : Unit -> Int\nmain () = 42\n"
+            ),
+        );
+        fs::write(
+            fixture.0.join("facade.ash"),
+            "pub import owner (ProbeProvider, ProbeOps)\n",
+        )
+        .unwrap();
+        compile_path(RunConfiguration {
+            entry: fixture.0.join("entry.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap();
+        fs::write(fixture.0.join("entry.ash"), format!("import {route} (ProbeProvider, ProbeOps)\nmain : Unit -> Int\nmain () = resource Probe<{{}}, Fresh, {{}}> owner = 42 {{\n    42\n}}\n")).unwrap();
+        let failure = fixture.refusal();
+        assert!(
+            matches!(failure.pipeline_failure(), Some(PipelineFailure::Resolution(error)) if error.diagnostic().reason == ResolveReason::UnknownType),
+            "{route}: {failure:?}"
+        );
+        fs::write(fixture.0.join("entry.ash"), format!("import {route} (ProbeProvider, ProbeOps)\nmain : Unit -> Unit\nmain () = perform Allocate<{{}}, Int, {{}}>.call 42\n")).unwrap();
+        let failure = fixture.refusal();
+        assert!(
+            matches!(failure.pipeline_failure(), Some(PipelineFailure::Resolution(error)) if error.diagnostic().reason == ResolveReason::UnknownEffect),
+            "{route}: {failure:?}"
+        );
+    }
+}
+
+#[test]
+fn public_source_provider_imported_generic_helper_cannot_hide_access_capture() {
+    let owner = include_str!("fixtures/source-owner/forwarding_owner.ash");
+    let entry = r"import owner as Owner
+import helper as Helper
+main : Unit -> Owner.Scope<Unit, Unit, (Unit -> Int)>
+main () = resource Owner.Probe<{}, Fresh, {}> owner = 42 {
+    Helper.retain owner
+}
+
+";
+    for import in [
+        "import owner (ProbeProvider, ProbeOps)",
+        "import facade (ProbeProvider, ProbeOps)",
+    ] {
+        let fixture = CompilationFixture::new(owner, entry);
+        fs::write(
+            fixture.0.join("facade.ash"),
+            "pub import owner (ProbeProvider, ProbeOps)\n",
+        )
+        .unwrap();
+        fs::write(fixture.0.join("helper.ash"), format!("{import}\npub retain<Access> : Access -> (Unit -> Int)\nretain access = fn(ignored) {{\n    let held = access\n    42\n}}\n")).unwrap();
+        let failure = fixture.refusal();
+        assert!(
+            matches!(failure.pipeline_failure(), Some(PipelineFailure::Typing(TypeError::Source(diagnostic))) if diagnostic.reason == TypeReason::ResourceEscape),
+            "{import}: {failure:?}"
+        );
+    }
+}
+
+#[test]
+fn public_source_provider_passive_census_preserves_unassociated_interface_selection() {
+    let prior = "pub interface Plain<A> {\n    value : A -> Int\n}\ntype SourceKey = SourceKey\nimpl Plain<SourceKey> {\n    value ignored = 1\n}\n";
+    for route in ["owner", "facade"] {
+        let entry = format!(
+            "import {route} (Plain, value)\ntype Local = Local\nimpl Plain<Local> {{\n    value ignored = 42\n}}\nmain : Unit -> Int\nmain () = value Local\n"
+        );
+        let fixture = CompilationFixture::new(prior, &entry);
+        fs::write(
+            fixture.0.join("facade.ash"),
+            "pub import owner (Plain, value)\n",
+        )
+        .unwrap();
+        compile_path(RunConfiguration {
+            entry: fixture.0.join("entry.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .expect("a passive private-implementation census supplies no selection or seal");
+    }
 }

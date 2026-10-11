@@ -34,7 +34,7 @@ observe result = match result {
 
 usage : Memory.ArenaConfig -> Observation
 usage config = observe (resource Memory.Arena<Fresh> arena = config {
-    perform Memory.ArenaOps<Fresh>.usage ()
+    Memory.usage arena
 })
 
 unreachable : Unit -> (Int, Int, Int, Int)
@@ -80,7 +80,7 @@ main () = {
     let oversized_slots = refusal (Memory.ArenaConfig (64, (9223372036854775807 + 1)))
     let oversized_size = refusal (Memory.ArenaConfig (((9223372036854775807 + 1) * 2), 4))
     let nested = resource Memory.Arena<Outer> outer = (Memory.ArenaConfig (64, 4)) {
-        let outer_usage = perform Memory.ArenaOps<Outer>.usage ()
+        let outer_usage = Memory.usage outer
         let inner_usage = usage (Memory.ArenaConfig (4, 1))
         (outer_usage, inner_usage)
     }

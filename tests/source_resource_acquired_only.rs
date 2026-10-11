@@ -171,7 +171,7 @@ fn acquired_only_reports_cannot_forge_owner_consumption_or_retention() {
                 "        Retained(state, ())\n    }\n    handlers (state, data)",
             ),
         OWNER[..OWNER.find("    finish (state, data)").unwrap()].to_owned()
-            + "    finish (state, data) => Consumed\n    handlers (state, data) {\n        read () => resume data\n    }\n}\n",
+            + "    finish (state, data) => Consumed\n    handlers (state, data) {\n        read access => resume data\n    }\n}\n",
     ] {
         let fixture = Fixture::new(&owner, ENTRY);
         let failure = compile_path(fixture.configuration()).expect_err("forged native disposition");

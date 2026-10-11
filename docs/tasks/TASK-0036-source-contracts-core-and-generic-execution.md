@@ -48,6 +48,27 @@ run the full architecture/workspace gate at integrated delivery.
 
 ## Discoveries
 
+Provider association checks exact method/operation names and substituted value
+types, with the single associated effect row. Interface order is independent of
+operation order. Checked lexical forwarding carries complete Type/Row arguments
+through ordinary calls and constrained helpers, final Core and the private image.
+Copied binder, operation, operand, effect and resource-owner claims require their
+original correspondence; a same-typed application alone supplies no activation
+authority.
+
+An inner source scope already owns normalized immutable descriptor metadata.
+Enclosing late normalization preserves that descriptor; final independent
+admission still rejects altered or unresolved actuals and changed original
+forests. This prevents both accidental rewriting of certificates and admission
+through a compiler-only copying claim.
+
+Selected source-handler entry authenticates the unique live guard, original
+owner and exact activation before traversing every typed access position,
+including nominal payloads. Ordinary handler selection precedes this check.
+Modeled guard/frame tests and real generated-native lifecycle tests establish
+different boundaries. Byte access, outward control, retained dependencies and
+quarantine remain subsequent obligations.
+
 The acquired_only delivery authenticates the instantiated nominal report fields
 in defining constructor order: body answer first, acquisition error second.
 It does not impose an extra report-parameter order, so a concrete-error
@@ -56,8 +77,7 @@ Capture-value analysis must preserve that result shape while retaining finish
 as a cleanup obligation; reusing Scope/Completion assembly would fabricate a
 completion field. A source consumed-completion error becomes terminal after
 native consumption and cannot publish success or retry release. Native retained
-outcomes, byte access, broader provider shapes and outward control remain subsequent
-CP-0022 obligations.
+outcomes, byte access and outward control remain subsequent CP-0022 obligations.
 
 Initialized-byte acquisition projects the original declared source leaf before
 native entry, independently of ABI operands and private data. Readiness retains
@@ -295,13 +315,13 @@ path responsible for recursive disposal. The architecture carrier inventory
 also covers named aliases introduced for shared checked-code maps and borrowed
 Core image views. These repairs preserve traversal charges and fallible reserves.
 
-Product resource instances use direct provided-effect requests in this slice;
-they do not carry the experiment's lexical forwarding certificate. Linked
-evidence must authenticate their exact original header and complete actuals,
-place the fresh identity only in the body scope, and retain nested experimental
-scopes without fabricating forwarding evidence. Passive source declarations
-also remain admissible when a program selects Pure Core; only executing a
-resource scope needs Effect Core.
+Product resource instances now install checked lexical forwarding for their
+associated methods. Linked evidence authenticates the exact original source
+header and complete actuals, and places the fresh identity only in the body
+scope. Experimental provider certificates do not grant product authority.
+Passive source declarations remain admissible without executing a resource.
+Associated methods' exact effectful value types select the existing Effect
+carrier even when the ordinary entry has an empty row.
 
 Header input and private data walks must prepay owner-candidate lookup on the
 same cumulative validation meter. An ordinary nominal can require inspecting

@@ -5175,8 +5175,19 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             Ok(())
         };
 
+        let source_sealed = |interface| -> Result<bool, ValidationError> {
+            for header in self.program.registry.source_resource_facts() {
+                self.charge_type_work(1)?;
+                if header.provider.interface.id == interface {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        };
         for owner in catalog.implementation_owners() {
-            if owner.application.interface().module().is_builtin_resource() {
+            if owner.application.interface().module().is_builtin_resource()
+                || source_sealed(owner.application.interface())?
+            {
                 return Err(ValidationError::new(ValidationReason::NodeType, None));
             }
             validate_application(
@@ -5193,6 +5204,14 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         }
         self.charge_type_work(catalog.lexical_owners().len())?;
         for owner in catalog.lexical_owners() {
+            if source_sealed(owner.application.interface())?
+                && !matches!(
+                    owner.resource,
+                    Some(super::dialect::MethodEvidenceResourceOwner::Provider(_))
+                )
+            {
+                return Err(ValidationError::new(ValidationReason::NodeType, None));
+            }
             if owner.application.interface().module().is_builtin_resource() {
                 let acquisition = owner
                     .resource
@@ -5239,26 +5258,45 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 let mut found = false;
                 for node in &self.program.nodes {
                     self.charge_type_work(1)?;
-                    let Some(scope) = F::provider_scope(&node.kind) else {
-                        continue;
-                    };
-                    if scope.lexical != owner.source {
+                    let (definition, family, identity, arguments, lexical, forwardings) =
+                        if let Some(scope) = F::provider_scope(&node.kind) {
+                            let descriptor = scope.descriptor();
+                            (
+                                descriptor.definition().id,
+                                descriptor.definition().family,
+                                descriptor.identity(),
+                                descriptor.arguments(),
+                                scope.lexical,
+                                &*scope.forwardings,
+                            )
+                        } else if let Some(scope) = F::source_scope(&node.kind) {
+                            (
+                                scope.header().original.id,
+                                scope.header().original.family,
+                                scope.identity(),
+                                scope.arguments(),
+                                scope.lexical,
+                                &*scope.forwardings,
+                            )
+                        } else {
+                            continue;
+                        };
+                    if lexical != owner.source {
                         continue;
                     }
-                    let descriptor = scope.descriptor();
-                    self.charge_type_work(scope.forwardings.len())?;
+                    self.charge_type_work(forwardings.len())?;
                     if found
-                        || evidence.definition != descriptor.definition().id
-                        || evidence.family != descriptor.definition().family
-                        || evidence.identity != descriptor.identity()
-                        || evidence.arguments.len() != descriptor.arguments().len()
-                        || !scope.forwardings.iter().any(|method| {
+                        || evidence.definition != definition
+                        || evidence.family != family
+                        || evidence.identity != identity
+                        || evidence.arguments.len() != arguments.len()
+                        || !forwardings.iter().any(|method| {
                             method.method == owner.method && method.binder == owner.binder
                         })
                     {
                         return Err(ValidationError::new(ValidationReason::NodeType, None));
                     }
-                    for (left, right) in evidence.arguments.iter().zip(descriptor.arguments()) {
+                    for (left, right) in evidence.arguments.iter().zip(arguments) {
                         let mut budget = TypeWorkBudget::with_limit(
                             self.type_work_limit.saturating_sub(self.type_work.get()),
                         );
@@ -6180,6 +6218,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     ) -> Result<bool, ValidationError> {
         for node in &self.program.nodes {
             self.charge_type_work(1)?;
+            if F::source_scope(&node.kind).is_some_and(|scope| scope.identity() == id) {
+                return Ok(true);
+            }
             if let Some(scope) = F::provider_scope(&node.kind)
                 && let Some(admitted) = scope.descriptor.admitted_arc()
                 && admitted.identity() == id
@@ -21462,6 +21503,7 @@ mod tests {
             .methods
             .iter()
             .map(|method| MethodEvidenceMethod {
+                spelling: method.spelling.clone().into_boxed_str(),
                 id: method.id,
                 interface_parameters: interface
                     .parameters

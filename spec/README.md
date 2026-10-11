@@ -107,8 +107,10 @@ default execution refuses missing bindings before Ash runs. Constants, foreign
 byte access, dependent ownership and copy windows remain outside the admitted
 subset. Source resource declarations additionally admit dependency-free opaque
 and initialized byte owners, private data and checked `scope` or `acquired_only`
-reports, with
-one acquisition and an unconditional consuming teardown. Exact constructor and
+reports, one acquisition and an unconditional consuming teardown. Checked lexical
+forwarding supports the associated interface methods and ordinary constrained
+helpers, preserving exact operation types, effect rows and typed access operands.
+Exact constructor and
 native-call identities authenticate publication and completion; declarations
 alone confer no ownership. The [source-resource rules](static-semantics.md#source-resource-declarations)
 bound this lifecycle and its supported associated handler shape.

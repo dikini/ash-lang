@@ -87,7 +87,7 @@ impl Drop for Fixture {
 const ENTRY: &str = r#"import owner as Owner
 main : Unit -> Owner.Scope<Unit, Unit, Int>
 main () = resource Owner.Probe<{}, Fresh, {}> owner = 42 {
-    perform Owner.ProbeOps<Fresh>.read ()
+    Owner.read owner
 }
 "#;
 #[test]
@@ -155,7 +155,7 @@ main () = {
         Foreign.ConversionFailed(_) => 0
     }
     resource Owner.Probe<{}, Fresh, {}> owner = (42, extent) {
-        perform Owner.ProbeOps<Fresh>.read ()
+        Owner.read owner
     }
 }
 "#;

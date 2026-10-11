@@ -1079,6 +1079,24 @@ acquisition and the same owner's teardown. A same-spelled symbol, swapped
 argument, ordinary state ADT or ordinary effect cannot replace those facts.
 Incorrect authored headers report `type.argument`.
 
+The associated interface and effect have the same uniquely named methods and
+operations. After substituting their complete arguments, each method has the
+operation's exact value domain and result and the single associated effect
+instance as its effect row. Declaration order need not agree. An existing
+implementation, duplicate resource association, missing operation or mismatched
+method cannot establish this relation. Ordinary implementation and `with`
+selection cannot introduce the sealed provider. Selective imports and facades
+retain original source headers and a passive declaration census for rejection;
+neither record publishes additional names or executable evidence.
+
+Acquisition introduces checked lexical forwarding for every associated method.
+Ordinary namespace calls and constrained polymorphic helpers select that same
+evidence. Each forwarding preserves the original method and operation identities,
+complete Type/Row arguments, unchanged typed operand and exact provided effect.
+Independent Core checking authenticates the source occurrence, generated binders
+and request forest against their original association. Copying a claim or taking
+evidence from another activation cannot grant authority.
+
 Both report codecs authenticate ordinary library ADTs by their exact constructor
 order and field types. Acquisition has `Acquired(State, D)` then `Refused(I)`;
 completion has `Consumed`, `ConsumedFailure(E)` then `Retained(State, E)`.
@@ -1122,17 +1140,15 @@ body. The report type, outward effects, evidence and stored dependencies cannot
 expose the fresh identity; an escape reports `type.resource-escape`.
 
 This implementation checkpoint executes dependency-free opaque and initialized
-byte owners with
-Type-only state-family arguments, one Current operand for a consuming `void`
-teardown, either report codec and direct requests for the declared provided effect.
-The association has exactly one Unit-domain operation and one provider method
-without local type parameters; their result types agree and the method's domain
-is the complete resource application. Resource and symbol arguments retain
-their complete Type/Row vectors. The lifecycle checker admits native requests,
-ordinary constructor and product assembly, sequential bindings and matches.
-Callable lifecycle helpers,
-source `given` forwarding, native access windows and lifecycle control capture
-remain unsupported. Client computations must have no residual outward row after
+byte owners with Type-only state-family arguments, one Current operand for a
+consuming `void` teardown and either report codec. Associated interfaces may
+contain multiple methods with the exact operation types and rows described
+above; method-local type parameters remain unsupported by this carrier.
+Resource and symbol arguments retain their complete Type/Row vectors. The
+lifecycle checker admits native requests, ordinary constructor and product
+assembly, sequential bindings and matches. Callable lifecycle helpers, source
+`given` forwarding, native access windows and lifecycle control capture remain
+unsupported. Client computations must have no residual outward row after
 removing the exact provided instance. These are checkpoint restrictions, not
 additional language rules for all resources; the broader obligations remain in
 [CP-0022](../docs/proposals/CP-0022-ash-authored-foreign-interfaces.md).

@@ -3312,6 +3312,20 @@ impl<'a> MethodEvidenceInputs<'a> {
         Ok(count)
     }
 }
+fn clone_method_spelling(
+    text: &str,
+    work: &mut TypeWorkBudget,
+    span: Span,
+) -> Result<Box<str>, EvidenceValidationFailure> {
+    work.charge(text.len()).map_err(|_| type_resource(span))?;
+    let mut result = String::new();
+    result
+        .try_reserve_exact(text.len())
+        .map_err(|_| type_resource(span))?;
+    result.push_str(text);
+    Ok(result.into_boxed_str())
+}
+
 #[cfg(test)]
 fn build_core_method_evidence_catalog(
     program: &ResolvedModuleProgram,
@@ -3842,6 +3856,7 @@ fn build_method_evidence_catalog_from_inputs(
                 .map_err(|_| type_resource(method.span))?;
             inherited_parameters.extend(method.inherited_parameters.iter().copied());
             methods.push(MethodEvidenceMethod {
+                spelling: clone_method_spelling(&method.spelling, type_work, method.span)?,
                 id: method.id,
                 inherited_parameters: inherited_parameters.into_boxed_slice(),
                 interface_parameters: interface_parameters.into_boxed_slice(),
@@ -6054,8 +6069,42 @@ fn collect_method_evidence_expression_occurrences<'a>(
                 if program
                     .registry()
                     .source_resource_fact(resource.definition)
-                    .is_none()
+                    .is_some()
                 {
+                    let expected = provider_sources::preceding_equation_row(
+                        program,
+                        registry,
+                        EvidenceScope {
+                            expected_equation,
+                            owner: scope.map(|owner| match owner {
+                                MethodEvidenceOwner::Global(binder) => {
+                                    RequirementOwner::Global(binder)
+                                }
+                                MethodEvidenceOwner::Implementation(method) => {
+                                    RequirementOwner::Impl(method.implementation())
+                                }
+                                MethodEvidenceOwner::ResourceFamily(resource) => {
+                                    RequirementOwner::ResourceFamily(resource)
+                                }
+                            }),
+                            ..EvidenceScope::NONE
+                        },
+                        &row_contexts,
+                        row_head,
+                        constraint_work,
+                        type_work,
+                        expression.span,
+                    )?;
+                    provider_sources::retain_source_resource_lexical_owners(
+                        program,
+                        resource,
+                        expected.as_ref(),
+                        expression.span,
+                        lexical_owners,
+                        constraint_work,
+                        type_work,
+                    )?;
+                } else {
                     retain_provider_lexical_owners(
                         program,
                         resource,
@@ -7601,28 +7650,25 @@ fn validate_pending_expressions<'a, 'body>(
                     type_work,
                     expression.span,
                 )?;
+                let source_context = OriginalLexicalContext {
+                    equation: scope.expected_equation,
+                    owner: scope.owner,
+                    local_head: head.1,
+                };
                 reserve_expressions(pending, 2, budget, expression.span)?;
                 resize_lexical_heads(&mut heads, pending.len(), head, budget, expression.span)?;
                 charge(budget, 2, expression.span)?;
                 method_scopes
                     .try_reserve(1)
                     .map_err(|_| resource(expression.span))?;
-                let lexical_head = if program
-                    .registry()
-                    .source_resource_fact(resource_scope.definition)
-                    .is_some()
-                {
-                    // Direct provided-effect requests retain the current
-                    // evidence environment; a header grants no dictionary.
-                    head.0
-                } else {
-                    sources
-                        .try_reserve(1)
-                        .map_err(|_| resource(expression.span))?;
-                    let index = Some(sources.len());
-                    sources.push((LinkedLexicalSource::Provider(resource_scope), head.0));
-                    index
-                };
+                sources
+                    .try_reserve(1)
+                    .map_err(|_| resource(expression.span))?;
+                let lexical_head = Some(sources.len());
+                sources.push((
+                    LinkedLexicalSource::Provider(resource_scope, source_context, expression.span),
+                    head.0,
+                ));
                 let body_scope = Some(method_scopes.len());
                 method_scopes.push((LinkedLocalScope::ProviderResource(resource_scope), head.1));
                 pending.push(&resource_scope.body);
@@ -8277,7 +8323,7 @@ fn validate_evidence_node(
                     .lexical_sources
                     .get(index)
                     .ok_or_else(|| invalid_root(span))?;
-                if let LinkedLexicalSource::Provider(resource) = *candidate
+                if let LinkedLexicalSource::Provider(resource, _, _) = *candidate
                     && resource.family_provider == Some(source)
                 {
                     resource_source = Some(resource);
@@ -8392,7 +8438,32 @@ fn validate_evidence_node(
                 head = *parent;
             }
             let source = found.ok_or_else(|| invalid_root(span))?;
-            if let LinkedLexicalSource::Provider(resource) = source {
+            if let LinkedLexicalSource::Provider(resource, _, _) = source {
+                if program
+                    .registry()
+                    .source_resource_fact(resource.definition)
+                    .is_some()
+                {
+                    charge(budget, methods.len(), span)?;
+                    if resource.provider.module() != group.module()
+                        || !methods
+                            .iter()
+                            .copied()
+                            .eq(interface.methods.iter().map(|method| method.id))
+                        || !source.same_application(
+                            program,
+                            registry,
+                            expected_application,
+                            scope,
+                            budget,
+                            type_work,
+                            span,
+                        )?
+                    {
+                        return Err(invalid_root(span));
+                    }
+                    return Ok(());
+                }
                 return provider_sources::validate_provider_selection(
                     resource,
                     group.module(),
@@ -12881,6 +12952,7 @@ Memory.AllocationRefused(error) => 0
             .methods
             .iter()
             .map(|method| MethodEvidenceMethod {
+                spelling: method.spelling.clone().into_boxed_str(),
                 id: method.id,
                 inherited_parameters: method.inherited_parameters.clone(),
                 interface_parameters: fact
@@ -12905,6 +12977,7 @@ Memory.AllocationRefused(error) => 0
         let unrelated = &program.groups()[0].interface_facts()[1];
         for method in &unrelated.methods {
             methods.push(MethodEvidenceMethod {
+                spelling: method.spelling.clone().into_boxed_str(),
                 id: method.id,
                 inherited_parameters: method.inherited_parameters.clone(),
                 interface_parameters: unrelated
@@ -13661,6 +13734,7 @@ Memory.AllocationRefused(error) => 0
                     }]),
                 };
                 let methods = [MethodEvidenceMethod {
+                    spelling: "method".into(),
                     id: method,
                     inherited_parameters: Box::new([]),
                     interface_parameters: Box::new([TypeVariableId::resolved(module, 0)]),
@@ -13959,6 +14033,7 @@ Memory.AllocationRefused(error) => 0
         let row = &catalog.methods()[0];
         let methods = (0..64)
             .map(|_| MethodEvidenceMethod {
+                spelling: row.spelling.clone(),
                 id: row.id,
                 inherited_parameters: Box::new([]),
                 interface_parameters: Box::new([]),
@@ -14016,7 +14091,9 @@ Memory.AllocationRefused(error) => 0
         // Three retained complete application arguments add three Type carrier
         // cells each to this concrete adapter source.
         // Four complete owner-argument retention slots accompany the copies.
-        let type_work = precheck_types + 45 + 4;
+        // Original method spellings retain four bytes for `base` and seven
+        // for `convert`, charged before their fallible string reservations.
+        let type_work = precheck_types + 45 + 4 + 4 + 7;
         assert_eq!(measured_constraint.used(), constraint_work);
         assert_eq!(measured_type.used(), type_work);
         drop(catalog);

@@ -3,10 +3,10 @@ import owner as Owner
 probe : Int -> Owner.Scope<Unit, Unit, Int>
 probe size = resource Owner.Probe<{}, Fresh, {}> owner = size {
     match size == 7 {
-        true => handle perform Owner.ProbeOps<Fresh>.read () with Owner.ProbeOps<Fresh> {
-            read () => resume 84
+        true => handle Owner.read owner with Owner.ProbeOps<Owner.Probe<{}, Fresh, {}>> {
+            read ignored => resume 84
         }
-        false => perform Owner.ProbeOps<Fresh>.read ()
+        false => Owner.read owner
     }
 }
 
@@ -26,7 +26,7 @@ main () = {
     let unpublished = probe 9
     let nested = resource Owner.Probe<{}, Outer, {}> outer = 64 {
         resource Owner.Probe<{}, Inner, {}> inner = 4 {
-            perform Owner.ProbeOps<Inner>.read ()
+            Owner.read inner
         }
     }
     let overridden = probe 7

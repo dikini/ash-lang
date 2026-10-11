@@ -4768,6 +4768,8 @@ pub struct ImportedFacts {
     effect_positions: HashMap<EffectId, usize>,
     implementations: Vec<ImportedImplementationFact>,
     implementation_positions: HashMap<ImplId, usize>,
+    /// Passive declaration census; it selects no implementation evidence.
+    implemented_interfaces: HashSet<InterfaceId>,
     public_implementation_order: Vec<ImplId>,
     source_resource_facts: HashMap<ResourceDefinitionId, Arc<SourceResourceTypeFact>>,
     source_resource_types: HashMap<String, Arc<SourceResourceTypeFact>>,
@@ -5113,6 +5115,24 @@ impl ImportedFacts {
         self.nominal_order
             .iter()
             .filter_map(|identity| self.nominals.get(identity))
+    }
+
+    pub(crate) fn has_implementation_for(&self, interface: InterfaceId) -> bool {
+        self.implemented_interfaces.contains(&interface)
+    }
+
+    pub(crate) fn retain_implemented_interface(
+        &mut self,
+        interface: InterfaceId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ResolvedBuildFailure> {
+        work.charge(1)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        self.implemented_interfaces
+            .try_reserve(1)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        self.implemented_interfaces.insert(interface);
+        Ok(())
     }
 
     pub(crate) fn implementations(&self) -> impl Iterator<Item = &ImportedImplementationFact> {
@@ -7902,6 +7922,8 @@ pub struct ExportSummary {
     hidden_interfaces: Vec<SharedCheckedInterfaceFact>,
     implementations: Vec<AuthorizedImplementationFact>,
     implementation_positions: HashMap<ImplId, usize>,
+    /// Passive declaration census; it selects no implementation evidence.
+    implemented_interfaces: HashSet<InterfaceId>,
     hidden_nominals: HashMap<NominalTypeId, ExportedHiddenType>,
     hidden_nominal_order: Vec<NominalTypeId>,
     /// Canonical representations retained for opaque public nominal linkage.
@@ -10338,6 +10360,16 @@ pub(crate) enum BuiltinCellSummaryMutationForTest {
 }
 
 impl ExportSummary {
+    pub(crate) fn source_resource_facts(
+        &self,
+    ) -> impl Iterator<Item = &Arc<SourceResourceTypeFact>> {
+        self.source_resource_facts.values()
+    }
+
+    pub(crate) fn implemented_interfaces(&self) -> impl Iterator<Item = InterfaceId> + '_ {
+        self.implemented_interfaces.iter().copied()
+    }
+
     /// Exact original product resource header selected by its published spelling.
     pub fn source_resource_type(&self, spelling: &str) -> Option<&Arc<SourceResourceTypeFact>> {
         self.source_resource_types.get(spelling)
@@ -12264,6 +12296,7 @@ impl ExportSummary {
             hidden_interfaces: Vec::new(),
             implementations: Vec::new(),
             implementation_positions: HashMap::new(),
+            implemented_interfaces: HashSet::new(),
             hidden_nominals: HashMap::new(),
             hidden_nominal_order: Vec::new(),
             canonical_representations: HashMap::new(),
@@ -12392,6 +12425,7 @@ impl ExportSummary {
             hidden_interfaces: Vec::new(),
             implementations: Vec::new(),
             implementation_positions: HashMap::new(),
+            implemented_interfaces: HashSet::new(),
             hidden_nominals: HashMap::new(),
             hidden_nominal_order: Vec::new(),
             canonical_representations: HashMap::new(),
@@ -12479,6 +12513,47 @@ impl ExportSummary {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
         }
+        // Preserve original headers through interface-only facades. These
+        // records add no resource alias and carry no executable provider body.
+        type_work
+            .charge(resolved.imported.source_resource_facts.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        summary
+            .source_resource_facts
+            .try_reserve(resolved.imported.source_resource_facts.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for (id, fact) in &resolved.imported.source_resource_facts {
+            if summary
+                .source_resource_facts
+                .get(id)
+                .is_some_and(|original| !Arc::ptr_eq(original, fact))
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            summary
+                .source_resource_facts
+                .entry(*id)
+                .or_insert_with(|| Arc::clone(fact));
+        }
+        // A private declaration still prevents later resource association.
+        // Carry only its interface identity, never selection authorization.
+        let implementation_count = checked_implementations
+            .len()
+            .checked_add(resolved.imported.implemented_interfaces.len())
+            .ok_or(ResolvedBuildFailure::TypeResource)?;
+        type_work
+            .charge(implementation_count)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        summary
+            .implemented_interfaces
+            .try_reserve(implementation_count)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        summary
+            .implemented_interfaces
+            .extend(checked_implementations.iter().map(|fact| fact.interface()));
+        summary
+            .implemented_interfaces
+            .extend(resolved.imported.implemented_interfaces.iter().copied());
         type_work
             .charge(resolved.export_candidate.resource_type_order.len())
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
@@ -15167,6 +15242,7 @@ impl ExportSummary {
             hidden_interfaces: Vec::new(),
             implementations: Vec::new(),
             implementation_positions: HashMap::new(),
+            implemented_interfaces: HashSet::new(),
             hidden_nominals: HashMap::new(),
             hidden_nominal_order: Vec::new(),
             canonical_representations: HashMap::new(),
@@ -36886,6 +36962,7 @@ mod tests {
             hidden_interfaces: Vec::new(),
             implementations: Vec::new(),
             implementation_positions: HashMap::new(),
+            implemented_interfaces: HashSet::new(),
             hidden_nominals: HashMap::new(),
             hidden_nominal_order: Vec::new(),
             canonical_representations: HashMap::new(),

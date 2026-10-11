@@ -38,10 +38,10 @@ pub type Outcome<T> = Success(T)
     | Failure(Unit)
 
 pub interface ProbeProvider<Access> {
-    read : Access -> Int
+    read : Access -> Int ! {ProbeOps<Access>}
 }
-pub effect ProbeOps<R> {
-    read : Unit -> Int
+pub effect ProbeOps<Access> {
+    read : Access -> Int
 }
 pub resource Probe<Before : EffectRow, R, After : EffectRow> {
     owned R
@@ -53,7 +53,7 @@ pub resource Probe<Before : EffectRow, R, After : EffectRow> {
     result Outcome<Answer> for <Answer>
     codec acquired_only
     provider ProbeProvider<Probe<{| Before}, R, {| After}>>
-    effect ProbeOps<R>
+    effect ProbeOps<Probe<{| Before}, R, {| After}>>
     interpret Allocate<{| Before}, R, {| After}>, Free<{| Before}, R, {| After}>
     acquire size => match perform Allocate<{| Before}, R, {| After}>.call size {
         Foreign.Returned(Foreign.Readable(Foreign.NonNull(state))) => match size == 9 {
@@ -71,6 +71,6 @@ pub resource Probe<Before : EffectRow, R, After : EffectRow> {
         Foreign.ConversionFailed(_) => Retained(state, ())
     }
     handlers (state, data) {
-        read () => resume data
+        read access => resume data
     }
 }

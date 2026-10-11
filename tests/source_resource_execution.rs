@@ -62,6 +62,120 @@ fn generated_owner_host_acquires_publishes_private_payload_and_releases_once() {
 }
 
 #[test]
+fn generated_source_provider_methods_preserve_association_and_lexical_forwarding() {
+    // Method and operation declaration orders differ. Ordinary interface calls
+    // must select their exact checked operation and retain its typed operands.
+    generated_owner_program(
+        include_str!("fixtures/source-owner/forwarding_owner.ash"),
+        include_str!("fixtures/source-owner/forwarding_entry.ash"),
+        "Completed((42, 1), Closed)",
+        "acquire:42\nrelease:42\n",
+    );
+}
+
+#[test]
+fn generated_source_provider_helpers_retain_evidence_and_ordinary_precedence() {
+    let owner = include_str!("fixtures/source-owner/forwarding_owner.ash");
+    let helpers = include_str!("fixtures/source-owner/forwarding_helpers.ash");
+    generated_owner_program_with_helpers(
+        owner,
+        include_str!("fixtures/source-owner/forwarding_helper_entry.ash"),
+        Some(helpers),
+        "Completed((42, 5), Closed)",
+        "acquire:42\nrelease:42\n",
+    );
+    generated_owner_program_with_helpers(
+        owner,
+        include_str!("fixtures/source-owner/forwarding_override_entry.ash"),
+        Some(helpers),
+        "Completed((42, (84, 105), 42), Closed)",
+        "acquire:42\nrelease:42\n",
+    );
+}
+
+#[test]
+fn generated_source_provider_repeated_and_nested_activations_keep_unique_owners() {
+    let owner = include_str!("fixtures/source-owner/forwarding_owner.ash");
+    generated_owner_program(
+        owner,
+        include_str!("fixtures/source-owner/forwarding_repeated_entry.ash"),
+        "(Completed((42, 5), Closed), Completed((8, 5), Closed), NotAcquired(()), NotAcquired(()))",
+        "acquire:42\nrelease:42\nacquire:8\nrelease:8\nacquire:0\nacquire:9\nrelease:9\n",
+    );
+    generated_owner_program(
+        owner,
+        include_str!("fixtures/source-owner/forwarding_nested_entry.ash"),
+        "Completed((64, Completed((4, 3), Closed), 64), Closed)",
+        "acquire:64\nacquire:4\nrelease:4\nrelease:64\n",
+    );
+}
+
+#[test]
+fn generated_source_provider_wrapped_access_restores_through_generic_helpers() {
+    let owner = include_str!("fixtures/source-owner/forwarding_owner.ash")
+        .replace(
+            "pub interface ProbeProvider",
+            "pub type Wrapped<T> = Wrapped(T)\n\npub interface ProbeProvider",
+        )
+        .replace("read : Access -> Int", "read : Wrapped<Access> -> Int")
+        .replace(
+            "read access => resume data",
+            "read Wrapped(access) => resume data",
+        );
+    generated_owner_program(
+        &owner,
+        include_str!("fixtures/source-owner/forwarding_wrapped_entry.ash"),
+        "Completed((42, 5), Closed)",
+        "acquire:42\nrelease:42\n",
+    );
+    generated_owner_program_with_helpers(
+        &owner,
+        include_str!("fixtures/source-owner/forwarding_helper_entry.ash"),
+        Some(include_str!(
+            "fixtures/source-owner/forwarding_wrapped_helpers.ash"
+        )),
+        "Completed((42, 5), Closed)",
+        "acquire:42\nrelease:42\n",
+    );
+}
+
+#[test]
+fn generated_source_provider_forwarding_preserves_acquired_only_report() {
+    let owner = include_str!("fixtures/source-owner/forwarding_owner.ash")
+        .replace(
+            "pub type Scope<I, E, T> = NotAcquired(I)\n    | Completed(T, Completion<E>)",
+            "pub type Outcome<T> = Success(T)\n    | Failure(Unit)",
+        )
+        .replace(
+            "result Scope<Unit, Unit, Answer> for <Answer>",
+            "result Outcome<Answer> for <Answer>",
+        )
+        .replace("codec scope", "codec acquired_only");
+    let entry = include_str!("fixtures/source-owner/forwarding_entry.ash").replace(
+        "Owner.Scope<Unit, Unit, (Int, Int)>",
+        "Owner.Outcome<(Int, Int)>",
+    );
+    generated_owner_program(
+        &owner,
+        &entry,
+        // Constructor Display renders its tuple payload's fields inside the
+        // constructor parentheses; the checked report still has one tuple field.
+        "Success(42, 1)",
+        "acquire:42\nrelease:42\n",
+    );
+}
+
+#[test]
+fn generated_source_provider_complete_rows_preserve_frozen_metadata() {
+    generated_owner_program(
+        include_str!("fixtures/source-owner/forwarding_owner.ash"),
+        include_str!("fixtures/source-owner/forwarding_generic_rows_entry.ash"),
+        "Completed(Completed((4, 5), Closed), Closed)",
+        "acquire:42\nacquire:4\nrelease:4\nrelease:42\n",
+    );
+}
+
+#[test]
 fn generated_initialized_byte_owner_host_preserves_native_acquisition_and_release() {
     // The native fixture initializes one eight-byte size_t object. Seven bytes
     // therefore form a valid promised region, independent of its stored value.
@@ -146,9 +260,26 @@ fn generated_owner_case(owner: &str) {
 }
 
 fn generated_owner_program(owner: &str, entry: &str, expected_result: &str, expected_trace: &str) {
+    generated_owner_program_with_helpers(owner, entry, None, expected_result, expected_trace);
+}
+
+fn generated_owner_program_with_helpers(
+    owner: &str,
+    entry: &str,
+    helpers: Option<&str>,
+    expected_result: &str,
+    expected_trace: &str,
+) {
     let fixture = Fixture::new(entry);
     fs::write(fixture.0.join("owner.ash"), owner).unwrap();
+    if let Some(helpers) = helpers {
+        fs::write(fixture.0.join("helpers.ash"), helpers).unwrap();
+    }
     let compiled = compile_path(fixture.configuration()).unwrap();
+    println!(
+        "forwarding/native compilation work: {:?}",
+        compiled.compilation_work()
+    );
     let native = fixture.0.join("native_owner.c");
     let object = fixture.0.join("native_owner.o");
     let archive = fixture.0.join("libash_owner.a");
@@ -181,6 +312,9 @@ fn generated_owner_program(owner: &str, entry: &str, expected_result: &str, expe
     // The generated host restores checked Core; it does not reopen Ash source.
     fs::remove_file(fixture.0.join("entry.ash")).unwrap();
     fs::remove_file(fixture.0.join("owner.ash")).unwrap();
+    if helpers.is_some() {
+        fs::remove_file(fixture.0.join("helpers.ash")).unwrap();
+    }
     let executable = fixture.0.join("program");
     let mut configuration = BuildConfiguration::new(executable.clone());
     configuration.native_inputs = vec![NativeLinkInput::StaticArchive(archive)];
@@ -190,7 +324,21 @@ fn generated_owner_program(owner: &str, entry: &str, expected_result: &str, expe
     configuration.cargo_target_directory = Some(cache.join("ffi-native-hosts"));
     let prepared = prepare_program(&compiled, configuration).unwrap();
     assert!(!prepared.generated_rust().contains("compile_path"));
-    build_prepared(prepared).unwrap();
+    let rust_bytes = prepared.generated_rust().len();
+    let preparation_work = prepared.preparation_work();
+    let built = build_prepared(prepared).unwrap();
+    let generated = built.generated_source().parent().unwrap();
+    let image = generated.join("program-image.bin");
+    let facts = generated.join("expected-facts.bin");
+    println!(
+        "owner/native preparation: rust_bytes={rust_bytes}, image_bytes={}, fact_bytes={}, work={preparation_work}",
+        fs::metadata(&image).unwrap().len(),
+        fs::metadata(&facts).unwrap().len(),
+    );
+    // Compilation embeds both exact payloads. Execution must require neither
+    // Ash source nor files used to build the standalone host.
+    fs::remove_file(image).unwrap();
+    fs::remove_file(facts).unwrap();
     let trace = fixture.0.join("native-trace");
     let mut child = Command::new(executable)
         .env("ASH_OWNER_TRACE", &trace)

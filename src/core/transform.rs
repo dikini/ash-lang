@@ -378,6 +378,12 @@ impl TransformFamily for EffectOperationFamily {
                         ..third
                     },
                 ];
+                builder.charge_effect_metadata(scope.forwardings.len())?;
+                let mut forwardings = Vec::new();
+                forwardings
+                    .try_reserve_exact(scope.forwardings.len())
+                    .map_err(|_| BuildError::TypeWorkExceeded)?;
+                forwardings.extend_from_slice(&scope.forwardings);
                 let scope = super::source_resource::SourceResourceScopeNode::new(
                     Arc::clone(scope.original()),
                     arguments,
@@ -390,6 +396,8 @@ impl TransformFamily for EffectOperationFamily {
                     handle,
                     handler,
                     output,
+                    scope.lexical,
+                    forwardings.into_boxed_slice(),
                     relocated,
                     &mut builder.type_work,
                 )
