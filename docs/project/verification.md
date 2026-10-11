@@ -29,7 +29,23 @@ default-feature coverage and avoids a second set of integration-test binaries.
 
 ## Selecting and reusing evidence
 
-During development, select only the checks required by the changed boundary:
+During the edit loop, check the affected package and run the specific target
+and cases required by the changed boundary. For example, an xtask receipt
+change can start with:
+
+```sh
+cargo check -p xtask --bin xtask --locked
+cargo test -p xtask --test verify --locked \
+  matching_successful_stages_reuse_but_plain_verify_runs_fresh -- --exact
+```
+
+These commands provide focused feedback; they do not establish a complete gate
+or a canonical stage receipt. Broaden coverage when the task's affected
+boundaries require it, and run the governing delivery gate once the change is
+ready. Documentation-only work follows the documentation policy's manual
+checks unless its governing artifact requires code verification.
+
+At a verification boundary, select only the required gate stages:
 
 ```sh
 cargo xtask verify --step clippy --step test
@@ -38,6 +54,8 @@ cargo xtask verify --step clippy --step test
 This records **partial verification**, not a complete gate. Selection does not
 decide which checks your task requires; its governing artifact does. Stages run
 in the order above even when selected in another order.
+The `test` stage still builds and runs every workspace test target. Stage
+selection does not select individual test targets or cases.
 
 For an unchanged checkout, complete the remaining checks and reuse matching
 successful stages explicitly:
