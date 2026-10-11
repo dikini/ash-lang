@@ -139,6 +139,41 @@ fn executable_path(root: &Path, executable: &std::ffi::OsStr) -> Result<PathBuf,
     Err(format!("executable not found: {}", path.display()))
 }
 
+fn pin_selection(
+    root: &Path,
+    component: &str,
+    label: &str,
+    executable: &std::ffi::OsStr,
+    tools: &mut BTreeMap<String, String>,
+    cache: &mut BTreeMap<PathBuf, String>,
+) -> Result<(), String> {
+    let name = Path::new(executable);
+    if name.components().count() > 1 || name.is_absolute() {
+        return pin_tool(root, component, label, executable, tools, cache);
+    }
+    let mut found = false;
+    for (index, directory) in env::split_paths(&env::var_os("PATH").unwrap_or_default()).enumerate()
+    {
+        let path = root.join(directory).join(name);
+        if path.is_file() {
+            found = true;
+            pin_tool(
+                root,
+                component,
+                &format!("{label}-{index}"),
+                path.as_os_str(),
+                tools,
+                cache,
+            )?;
+        }
+    }
+    if found {
+        Ok(())
+    } else {
+        Err(format!("PATH tool not found: {}", name.display()))
+    }
+}
+
 pub(super) fn require_ignored_output(root: &Path, directory: &Path) -> Result<(), String> {
     let directory = directory
         .canonicalize()
@@ -199,7 +234,10 @@ pub(super) fn snapshot(root: &Path, external: &[PathBuf]) -> Result<Inputs, Stri
         let path = std::path::absolute(path).map_err(|error| error.to_string())?;
         let pin = input_file_pin(&path).map_err(|error| format!("{}: {error}", path.display()))?;
         if pin.sha256.is_none() {
-            return Err(format!("named input has no readable referent: {}", path.display()));
+            return Err(format!(
+                "named input has no readable referent: {}",
+                path.display()
+            ));
         }
         files.insert(path, Some(pin));
     }
@@ -267,7 +305,7 @@ pub(super) fn snapshot(root: &Path, external: &[PathBuf]) -> Result<Inputs, Stri
         let executable = env::var_os(variable).unwrap_or_else(|| name.into());
         let bytes = output(Command::new(&executable).current_dir(&root).args(arguments))?;
         tools.insert(name.to_owned(), digest(&bytes));
-        pin_tool(
+        pin_selection(
             &root,
             name,
             name,
@@ -289,33 +327,29 @@ pub(super) fn snapshot(root: &Path, external: &[PathBuf]) -> Result<Inputs, Stri
         "cc",
         "ar",
     ] {
-        let mut found = false;
-        for (index, directory) in
-            env::split_paths(&env::var_os("PATH").unwrap_or_default()).enumerate()
-        {
-            let path = root.join(directory).join(name);
-            if path.is_file() {
-                found = true;
-                pin_tool(
-                    &root,
-                    name,
-                    &format!("path-{name}-{index}"),
-                    path.as_os_str(),
-                    &mut tools,
-                    &mut executable_pins,
-                )?;
-            }
-        }
-        if !found {
-            return Err(format!("PATH tool not found: {name}"));
-        }
+        pin_selection(
+            &root,
+            name,
+            &format!("path-{name}"),
+            name.as_ref(),
+            &mut tools,
+            &mut executable_pins,
+        )?;
     }
     for variable in ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"] {
         if let Some(path) = env::var_os(variable).filter(|path| !path.is_empty()) {
-            tools.insert(
-                variable.into(),
-                executable_pin(&executable_path(&root, &path)?, &mut executable_pins)?,
-            );
+            let component = Path::new(&path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or("invalid wrapper name")?;
+            pin_selection(
+                &root,
+                component,
+                variable,
+                &path,
+                &mut tools,
+                &mut executable_pins,
+            )?;
         }
     }
     let runner_sha256 = file_pin(&env::current_exe().map_err(|error| error.to_string())?)?;

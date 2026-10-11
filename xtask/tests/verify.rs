@@ -56,6 +56,10 @@ fi
 if [ "$1" = "clippy" ] && [ -L input-link ]; then
     [ "$(readlink input-link)" = missing-first ]
 fi
+wrapper=${RUSTC_WORKSPACE_WRAPPER:-${RUSTC_WRAPPER:-}}
+if [ "$1" = "clippy" ] && [ -n "$wrapper" ]; then
+    "$wrapper" --fixture
+fi
 if [ "$1" = "build" ] && [ -f target/use-native-tools ]; then
     cc --fixture-compile
     ar --fixture-archive
@@ -101,6 +105,9 @@ printf 'fixture command succeeded\n'
             .env("CC", self.0.join("target/bin/cc"))
             .env("AR", self.0.join("target/bin/ar"))
             .env("CARGO_TARGET_DIR", self.0.join("target"));
+        command
+            .env("RUSTC_WRAPPER", "")
+            .env("RUSTC_WORKSPACE_WRAPPER", "");
         command
     }
 
@@ -401,6 +408,47 @@ fn changed_dangling_symlink_identity_invalidates_reuse() {
     std::os::unix::fs::symlink("missing-second", &link).unwrap();
     assert!(!fixture.run(&args).status.success());
     assert_eq!(fixture.calls().len(), 2);
+}
+
+#[test]
+fn bare_compiler_wrappers_pin_the_executable_after_a_path_shadow() {
+    for variable in ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"] {
+        let fixture = Fixture::new();
+        let shadow = fixture.0.join("target/shadow");
+        fs::create_dir(&shadow).unwrap();
+        fs::write(shadow.join("fixture-wrapper"), "not executable\n").unwrap();
+        let wrapper = fixture.0.join("target/bin/fixture-wrapper");
+        fs::copy(fixture.0.join("target/bin/cc"), &wrapper).unwrap();
+        let path = std::env::join_paths([
+            shadow,
+            fixture.0.join("target/bin"),
+            "/usr/bin".into(),
+            "/bin".into(),
+        ])
+        .unwrap();
+        let args = ["--step", "clippy", "--reuse"];
+        success(
+            &fixture
+                .command(&args)
+                .env("PATH", &path)
+                .env(variable, "fixture-wrapper")
+                .output()
+                .unwrap(),
+        );
+        let mut bytes = fs::read(&wrapper).unwrap();
+        bytes.extend_from_slice(b"\nexit 1\n");
+        fs::write(wrapper, bytes).unwrap();
+        assert!(
+            !fixture
+                .command(&args)
+                .env("PATH", &path)
+                .env(variable, "fixture-wrapper")
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+    }
 }
 
 #[test]

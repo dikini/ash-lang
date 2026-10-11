@@ -49,6 +49,12 @@ still require readable contents. The comparison harness passed stub-based
 smoke checks for identical outer test counts, complete seven-stage reuse and
 rejection after inherited Cargo configuration movement.
 
+The same PATH selection pinning now covers bare compiler overrides and both
+compiler wrappers. A changed executable behind a non-executable PATH shadow
+cannot reuse the wrapper's earlier success. All 17 focused regressions, strict
+xtask Clippy and xtask rustdoc pass; the complete product comparison is pending
+the milestone PM's build lease.
+
 ## Dependencies introduced to xtask
 
 These are development-tool dependencies already resolved and used by Ash.
