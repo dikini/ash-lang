@@ -38,7 +38,14 @@ dependencies. Native tools run offline with one build job. `--cargo-target-dir`
 selects a reusable build cache; otherwise the tool uses `CARGO_TARGET_DIR` or a
 cache inside the generated project. Generated Rust, its manifest and the native
 tool log remain in a fresh `.ash-build` directory beside the requested output.
-Failed linking preserves an existing output executable. A compiler/runtime
+After copying, the build removes only its generated Cargo root package from a
+shared cache, including executable aliases and leaf build metadata. Shared
+dependencies and current test executables remain. A private cache inside the
+generated project is removed completely. Publication follows successful cleanup.
+Failed linking preserves an existing output executable and its diagnostic log,
+while cleanup retires partial generated Cargo artifacts. A cleanup failure also
+preserves the existing destination and records its cause in the native build log.
+A compiler/runtime
 configuration mismatch rejects during Rust compilation, before publication;
 startup checks compatibility again.
 
@@ -46,6 +53,13 @@ The Rust API separates `driver::compile_path`, `build::prepare_program` and
 `build::build_prepared`. The prepared phase owns generated inputs and is
 consumed by linking. Reusable compiled programs retain their original source
 provenance; preparation does not reopen those source paths.
+
+`BuiltProgram::generated_source` and `BuiltProgram::build_log` still return
+retained working records. Callers own their lifetime: keep useful records while
+a PR or checkpoint is live, then preserve lasting conclusions and scoped results
+in documentation and discard obsolete build/review history when the PR closes.
+Keep records needed by another live PR or checkpoint until that need ends.
+The generator does not infer PR closure or delete published executables.
 
 ### Native link inputs
 

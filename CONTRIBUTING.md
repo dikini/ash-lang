@@ -39,8 +39,14 @@ confirm that normative and informative statements remain distinct.
 
 Ash uses Rust and Cargo as accepted by
 [AD-0001](docs/decisions/AD-0001-implementation-environment.md). Rustup reads
-`rust-toolchain.toml` automatically and selects the pinned toolchain. Run
-`cargo xtask verify` before submitting a change.
+`rust-toolchain.toml` automatically and selects the pinned toolchain. Complete
+the checks required by the change's governing artifact before submitting it.
+Use focused package/target checks while editing and `cargo xtask verify` for a
+required complete Rust gate. Documentation-only changes follow the documentation
+policy's checks unless their governing artifact also requires code verification.
+The [Rust verification guide](docs/project/verification.md) documents focused
+checks, partial stages, explicit receipt reuse, retained build caches and required
+fresh integration gates.
 
 Whenever `Cargo.toml` or `Cargo.lock` changes, record the evidence required by
 the [dependency policy](docs/project/dependencies.md). Package trouble does not

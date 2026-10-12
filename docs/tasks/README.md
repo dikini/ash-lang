@@ -14,3 +14,4 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 - [TASK-0038: Ash native-buffer library](TASK-0038-ash-native-buffer-library.md)
 - [TASK-0040: Ash copying SQLite library](TASK-0040-ash-copying-sqlite-library.md)
 - [TASK-0041: ffi-ash milestone closure](TASK-0041-ffi-ash-milestone-closure.md)
+- [TASK-0042: Rust verification performance](TASK-0042-rust-verification-performance.md)

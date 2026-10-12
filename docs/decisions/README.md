@@ -22,3 +22,4 @@ Use [the template](template.md) and allocate the next `AD-NNNN` ID.
 - [AD-0011: Milestone Worktree Lifecycle](AD-0011-milestone-worktree-lifecycle.md)
 - [AD-0012: Proof development feedback and build reuse](AD-0012-proof-development-feedback-and-build-reuse.md)
 - [AD-0013: Generated native bridges and program builds](AD-0013-generated-native-bridges-and-program-builds.md)
+- [AD-0014: Rust verification stage reuse](AD-0014-rust-verification-stage-reuse.md)

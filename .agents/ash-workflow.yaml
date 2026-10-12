@@ -1,0 +1,13 @@
+# Role preferences read by the Ash workflow skills at dispatch time.
+# Use "inherit" to omit that override. This file grants no action permissions.
+version: 1
+roles:
+  orchestrator:
+    model: inherit
+    reasoning_effort: inherit
+  developer:
+    model: inherit
+    reasoning_effort: inherit
+  reviewer:
+    model: inherit
+    reasoning_effort: inherit

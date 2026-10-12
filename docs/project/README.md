@@ -11,6 +11,9 @@ dependencies, specification discipline, and writing:
 - [Formal notation](notation.md)
 - [Specification discipline](specification.md)
 - [Writing guide](writing.md)
+- [Agent workflow](agent-workflow.md)
+- [Rust verification](verification.md)
+- [Milestone team launch template](milestone-launch-template.md)
 - [Proof development tooling](proof-tooling.md)
 - [Lean proof navigation](proof-lsp.md)
 

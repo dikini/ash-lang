@@ -30,4 +30,11 @@ Do not import historical Ash as current authority. Do not infer semantics from a
 
 The project-local skill under `.agents/skills/` provides a focused context-reconstruction workflow. Verify changes using the evidence required by the governing artifact and documentation policy, then check links and authority boundaries in any documentation you change.
 
+Use `ash-orchestrator` to initiate and coordinate authorized agent work,
+`ash-developer` for delivery and `ash-reviewer` for independent review. The short
+[agent workflow](docs/project/agent-workflow.md) defines shared handoffs and
+acceptance ownership. Read only the applicable role and current assignment;
+load dispatch details only when dispatching. Model/effort preferences are in
+`.agents/ash-workflow.yaml` and apply at dispatch, without new action permissions.
+
 Apply the [writing guide](docs/project/writing.md) to all Ash communication, including chat, reviews, plans, commit and PR messages, and repository prose.

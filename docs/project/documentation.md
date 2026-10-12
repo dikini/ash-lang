@@ -84,6 +84,20 @@ Verify changed Markdown against the writing guide and Markdown lint. Check
 relative links and documented commands. Confirm that normative, accepted,
 proposed, and informative statements retain their actual status.
 
+## Working records and build history
+
+Keep useful working records while a PR is live, including current handoffs,
+review notes, and verification receipts and logs needed for review or repair.
+
+Preserve lasting conclusions in the appropriate documentation. Record measured
+results with their scope and limits; consolidate durable findings rather than
+copying the build chronology into a guide or decision.
+
+After PR closure, discard obsolete build history. Keep records still needed by
+another live PR or active checkpoint until that need ends. Retain compatible
+build caches that serve continuing work. Worktree retirement follows
+[AD-0011](../decisions/AD-0011-milestone-worktree-lifecycle.md).
+
 ## Current verification boundary
 
 `cargo xtask verify` enforces Rust formatting, build, lint, tests, and rustdoc

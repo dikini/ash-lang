@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ash reviewer"
+  short_description: "Review Ash PRs and verify their acceptance evidence"
+  default_prompt: "Use $ash-reviewer to independently review this Ash PR and its acceptance evidence."
