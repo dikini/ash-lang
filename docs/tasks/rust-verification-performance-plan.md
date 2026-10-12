@@ -4,31 +4,37 @@ Owned by [TASK-0042](TASK-0042-rust-verification-performance.md).
 
 ## Goal and boundary
 
-Implement AD-0014 in the isolated tooling checkout. Keep all product sources
-unchanged, preserve the milestone's current gate and serialize heavy builds.
+Deliver AD-0014 and temporary generated-host artifact cleanup through the
+existing PR #18 branch and shared product checkout/cache. Preserve the retained
+ffi-ash checkpoint and its semantic/work/depth/stack invariants. The developer
+owns writes and Cargo; the PM assigns the heavy-build window.
 
 ## Steps
 
-1. Add CLI regressions with a temporary Git fixture and an external Cargo stub.
-   Test the actual runner boundary, command coverage, partial evidence, reuse,
-   failed runs, moved inputs and invalidation. Observe the expected failures.
-2. Replace the duplicate default-feature all-target build with all-target check
-   and library/binary/example build. Keep the other required commands.
-3. Implement stage selection, explicit reuse and successful-stage receipts.
-   Pin Git-visible files, external inputs, tools, effective environment and
-   Cargo configuration. Compare before/after pins and authenticate saved logs.
-4. Run the focused suite and strict tool checks. Repair concrete failures.
-5. Document the real CLI and ownership contract; review dependency roles and
-   lockfile changes without selecting new package versions.
-6. After PM assigns the build window, archive a frozen milestone commit into a
-   comparison checkout. Apply the same tooling overlay before both plans.
-   Execute the old reference plan and revised fresh plan with independent,
-   comparable caches, then measure explicit reuse. Preserve every log and pin.
-7. Obtain independent review, apply required repairs, refresh affected evidence
-   and supply PM with exact commits, commands, measurements and limitations.
+1. Preserve the reviewed receipt regressions, exact-input refusal rules and
+   default-feature checking/product linkage. These are implemented.
+2. Carry the authorized host-cleanup patch and its ten focused checks into the
+   same candidate. Preserve copied programs, shared dependencies, current test
+   binaries and diagnostics; retire only temporary generated root artifacts.
+3. Consolidate durable tool, task and workflow findings. Keep the whole-task
+   timing comparison incomplete and record operating/timing/cleanup ownership.
+4. Publish the immutable candidate on the existing PR branch. Obtain independent
+   review of its entire delta and the exact gate recipe before the PM assigns
+   one fresh seven-stage gate on the compatible cache.
+5. Authenticate all stage pins, target counts and matching native/image evidence.
+   If assigned, immediately test exact reuse without duplicate stage execution.
+   Review and retain that evidence separately from the fresh gate.
+6. After explicit PM integration assignment, preserve both histories with an
+   unsigned merge. Apply/read back the bounded acceptance record after
+   independent retained verification. Return cleanup Result and Next owner.
+7. Complete the controlled old/revised comparison only under a later explicit
+   assignment with comparable inputs/cache states. Do not restart obsolete
+   archives/operators or infer causal savings from historical gate timings.
 
 ## Completion evidence
 
-Passing tool regressions, fresh gate and matched reuse receipts; measured old
-and revised wall time and unchanged product inputs; documentation/link review;
-independent verdict and concrete milestone handoff.
+This partial delivery requires receipt/cleanup regressions, a fresh candidate
+seven-stage gate, matching native/image proof, manual documentation checks,
+independent verdict, verified retention and scoped cleanup handoff. Exact reuse
+is a distinct witness. The full task additionally requires a controlled
+old/revised comparison; it remains active until that evidence exists.

@@ -15,7 +15,10 @@ use crate::{
     types::TypeWorkBudget,
 };
 
-use super::{emit, image};
+use super::{
+    artifacts::{ArtifactFailure, GeneratedArtifacts},
+    emit, image,
+};
 
 /// The single native target supported by the first program-build slice.
 pub const NATIVE_TARGET: &str = "x86_64-unknown-linux-gnu";
@@ -422,10 +425,13 @@ fn fresh_project(parent: &Path) -> Result<PathBuf, BuildFailure> {
 /// Ash source/toolchain;
 /// the resulting executable reconstructs and validates private Core at startup
 /// without invoking the Ash compiler or reading original source files.
+/// Generated Cargo root artifacts are removed after copying. Shared dependency
+/// caches remain; a private cache inside the generated project is temporary.
 ///
 /// # Errors
 /// Returns native-tool or filesystem failures. Failed linking preserves an
-/// existing destination executable and retains the generated project/log.
+/// existing destination executable and retains generated inputs and diagnostics,
+/// while retiring partial Cargo root artifacts. Cleanup failure prevents publication.
 pub fn build_prepared(prepared: PreparedProgramBuild) -> Result<BuiltProgram, BuildFailure> {
     let native_host = prepared.native_payloads.is_some();
     let output = std::path::absolute(&prepared.configuration.output)?;
@@ -483,11 +489,11 @@ pub fn build_prepared(prepared: PreparedProgramBuild) -> Result<BuiltProgram, Bu
         project.join("Cargo.lock"),
         include_bytes!("../../Cargo.lock"),
     )?;
-    let target_directory = match prepared.configuration.cargo_target_directory {
-        Some(directory) => std::path::absolute(directory)?,
+    let (target_directory, private_target) = match prepared.configuration.cargo_target_directory {
+        Some(directory) => (std::path::absolute(directory)?, false),
         None => match std::env::var_os("CARGO_TARGET_DIR") {
-            Some(directory) => std::path::absolute(directory)?,
-            None => project.join("target"),
+            Some(directory) => (std::path::absolute(directory)?, false),
+            None => (project.join("target"), true),
         },
     };
     let build_log = project.join("native-build.log");
@@ -527,19 +533,28 @@ pub fn build_prepared(prepared: PreparedProgramBuild) -> Result<BuiltProgram, Bu
         .env_remove("CARGO_BUILD_TARGET")
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(error_log))
-        .status()?;
+        .status();
+    let finished = GeneratedArtifacts {
+        project: &project,
+        target_directory: &target_directory,
+        package_name,
+        target: NATIVE_TARGET,
+        profile: cargo_profile,
+        private_target,
+    }
+    .finish(
+        status.as_ref().is_ok_and(|status| status.success()),
+        &output,
+        &build_log,
+    );
+    let status = status?;
     if !status.success() {
         return Err(BuildFailure(Failure::NativeTool(build_log)));
     }
-    let linked = project.join("linked-program");
-    fs::copy(
-        target_directory
-            .join(NATIVE_TARGET)
-            .join(profile)
-            .join(package_name),
-        &linked,
-    )?;
-    fs::rename(linked, &output)?;
+    finished.map_err(|failure| match failure {
+        ArtifactFailure::Io(error) => BuildFailure::from(error),
+        ArtifactFailure::Cleanup => BuildFailure(Failure::NativeTool(build_log.clone())),
+    })?;
     Ok(BuiltProgram {
         executable: output,
         generated_source,

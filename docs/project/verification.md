@@ -5,9 +5,10 @@ runner. Run commands from the Git repository root, with the pinned Rust toolchai
 and one Cargo job. The milestone PM assigns the heavy-build slot.
 The alias builds xtask with the optimized `verification` profile for receipt
 hashing. Its child product checks use their existing default profiles.
-For candidates whose matching-compiler fingerprint includes the root manifest
-and lockfile, a tooling overlay changes that identity. Retain required native
-and embedded-image evidence under the original configuration separately.
+The matching-compiler fingerprint includes product source, the root manifest
+and lockfile. Tooling and host changes therefore have their own identity. An
+adopted candidate needs native and embedded-image proof matched to its compiler
+and runtime; historical overlay/original binaries do not supply that equality.
 
 ## Required stages
 
@@ -61,11 +62,12 @@ does not require an empty cache. Do not clean or relocate a cache as a routine
 precondition for a gate. Cold builds belong to measurements that require them
 or to diagnosis of a demonstrated cache problem.
 
-The PM assigns a single writer to each product cache. Reviewers can inspect the
-same frozen source, receipts and logs without allocating another product cache.
-When isolation requires another checkout, coordinate access to an existing
-compatible cache; changed paths or configurations can still require Cargo to
-recompile affected artifacts. Receipt reuse remains bound to its recorded
+Use one branch per PR and one sequential product checkout with its shared build
+set. The PM assigns one product writer and Cargo operator. Reviewers inspect
+immutable inputs, artifacts and receipts and ask the operator for necessary
+reruns. Branch switches require released readers and a clean working tree.
+Changed source/configuration can require Cargo to rebuild affected artifacts;
+retain compatible dependencies. Receipt reuse remains bound to its recorded
 checkout and inputs.
 
 Estimate storage before a cold comparison. Retain required logs, input records
@@ -136,8 +138,11 @@ another directory; output inside the checkout must be Git-ignored. Per-stage
 receipts retain input pins, exact arguments, log hashes and elapsed seconds.
 Per-run summaries and `latest.json` record success, complete or partial scope,
 executed/reused stages, failures and wall time. Each stage prints its log path.
-Deleting
-receipts or logs only removes the opportunity for reuse.
+Deleting receipts or logs only removes the opportunity for reuse. Keep useful
+working records while their PR/checkpoint is live. At closure, consolidate
+lasting task/tool findings and retire obsolete history and superseded output
+under the documentation policy. Return cleanup Result and Next owner before
+starting the next PR; preserve live dependencies and compatible caches.
 
 A handoff includes the exact source and target commits, stage summary, receipt
 and log paths, explicit external inputs, configuration and cache conditions,

@@ -10,8 +10,11 @@
 ## Dependencies
 
 The user authorized implementation and coordination with the ffi-ash team.
-Use an isolated tooling checkout and target cache. The milestone PM owns the
-heavy-build slot; preserve its current frozen gate, review and product checkout.
+Continue PR #18 on its existing `codex/verification-reuse` branch in the assigned
+product checkout. The milestone PM assigns one heavy-build operator. Reuse the
+same compatible target cache and its generated-host child; reviewers inspect
+that operator's frozen inputs and evidence. Preserve the active CP-0022
+checkpoint, unrelated worktrees and Main drafts.
 
 ## Work
 
@@ -28,90 +31,100 @@ The [execution plan](rust-verification-performance-plan.md) belongs to this task
 
 ## Progress
 
-Design accepted through the user's implementation instruction. Coordination
-requested; the current milestone gate continues unchanged.
+[PR #18](https://github.com/dikini/ash-lang/pull/18) delivers the revised command
+matrix, conservative exact-input receipts and temporary generated-host cleanup.
+Its existing history now includes retained ffi-ash checkpoint `c2e21cc` through
+an unsigned explicit merge. The PR targets `integration/ffi-ash`; Main
+integration remains a separate human gate. Current-candidate review,
+verification, retention and acceptance are still pending.
 
-The real-tool partial reuse smoke test initially took 26.47 seconds for two
-unchanged stages. Debug receipt hashing was avoidable overhead. The xtask alias
-now uses an optimized, tool-only profile; product gate profiles are unchanged.
+The tooling implementation passed 17 regressions and independent adversarial
+review at `aadd4be`. The regressions cover permissions, PATH shadows, dangling
+symlinks, compiler overrides, both wrappers, rustup delegation, moved inputs,
+failed commands and changed logs. Exact input pins include file metadata and
+actual delegated tools. Product profiles, tests and work/depth/stack policies
+remain unchanged.
 
-Independent review of candidate `777aec9` reproduced stale reuse after chmod,
-changed PATH native tools masked by overrides, and changed rustup components
-behind a fixed launcher. Each gained a failing regression before repair.
-File metadata and the actual delegated tools are now pinned. Failed executions
-also retain their timing and log in the run summary without a success receipt.
-The subsequent repairs were independently re-reviewed. The full comparison
-waited for the milestone repair and its assigned build window.
+The controlled old-six/revised-seven comparison did not complete. Storage
+failures and a source-formula owner guard stopped the earlier attempts; their
+revised/reuse legs never ran. The three-string repair preserved the actual
+spelling charges and passed its four-test target and three owning probes using
+compatible artifacts. PR #17 subsequently retained a successful six-stage gate
+under its declared overlay conditions. That gate is historical evidence for
+PR #17, not a completed performance comparison or this changed candidate.
+The later fresh-seven assessment was interrupted by the human pause before
+completion. Its receipts provide neither a full gate nor exact seven-stage
+reuse. Modified host source also invalidates those old exact-input receipts.
 
-Re-review exposed non-executable PATH shadows and dangling symlink retargeting.
-The runner now pins all existing PATH candidates conservatively and records
-link identity even when the referent is absent. Named external file inputs
-still require readable contents. The comparison harness passed stub-based
-smoke checks for identical outer test counts, complete seven-stage reuse and
-rejection after inherited Cargo configuration movement.
+Generated Cargo roots now retire after the executable is copied and before it
+is published. Package-scoped cleanup preserves shared dependencies and current
+test artifacts. Link, copy and cleanup failures preserve the existing output
+and diagnostic log; a private generated cache is removed completely. Source,
+manifest, payload and log records retain their caller-controlled lifetime.
 
-The same PATH selection pinning now covers bare compiler overrides and both
-compiler wrappers. A changed executable behind a non-executable PATH shadow
-cannot reuse the wrapper's earlier success. All 17 focused regressions, strict
-xtask Clippy and xtask rustdoc pass. Independent review cleared tooling candidate
-`aadd4be` after adversarial probes of permissions, overrides, rustup delegation,
-PATH shadows, symlinks and both wrappers.
+The authorized cleanup patch passed the following connected focused checks on
+2026-10-12 in the existing product checkout and cache:
 
-[Draft PR #18](https://github.com/dikini/ash-lang/pull/18) contains the reviewed
-implementation. The milestone PM assigned the serial old-six, revised-seven
-and explicit-reuse comparison to its sole build owner on product candidate
-`dd3239e`, with the same seven-file tooling overlay in both fresh plans.
-Product target metadata is unchanged: 134 targets, with two overlaid xtask
-targets and 17 tooling tests accounted for separately. Real formatting/metadata
-smoke checks took 11.74 seconds fresh and 2.23 seconds reused; these are partial
-checks, not full-gate measurements.
+| Operation | Result | Wall seconds |
+| --- | --- | ---: |
+| Selected compilation | Passed | 128.563 |
+| Cleanup unit cases | 5 passed | 3.239 |
+| Program-build target | 4 passed | 41.753 |
+| Native static/shared and refusal matrix | 1 passed | 6.914 |
+| Strict focused Clippy | Passed | 23.223 |
 
-The first comparison attempt exhausted temporary storage during the old build.
-Its logs and cache were preserved and excluded. A second attempt completed the
-old default build in 906.59 seconds, then was stopped because the measured
-debug-artifact footprint made two retained caches unsafe on the project disk.
-That partial attempt is also excluded. The PM assigned a new serial comparison
-on a separate filesystem with enough capacity, fresh caches and new input
-records. Complete gate times, matching per-target test counts and the final
-handoff are pending. On that candidate, the altered root manifest/lockfile
-changes the runtime identity; original-configuration native/image evidence
-remains a separate requirement.
+Compilation plus tests took 180.469 seconds; with Clippy, 203.692 seconds.
+These are scoped observations, not a causal full-gate speedup. The ten tests
+and their input hashes were independently checked. They do not establish the
+final candidate's complete gate. The controlled cleanup fixtures retained zero
+root files, preserved shared artifact bytes and executed the copied programs.
+The connected real-host run retained no new generated roots. Separately,
+authorized retirement removed 29 historical generated packages, 589 files and
+87 directories, reclaiming 6,600,482,816 allocated bytes. All 21,442 protected
+other files and 484 Cargo fingerprints were unchanged. The cleanup bundle and
+its receipts remain live review evidence until this PR/checkpoint no longer
+needs them.
 
-The third attempt completed the old default build in 731.34 seconds and Clippy
-in 135.52 seconds, then stopped on a failing source-formula owner guard in
-`method_parameter_resources`. Its three expected strings omit spelling charges
-retained by the owning unit probes. The test stage exited 101 after 1,482.94
-seconds; only 69 of 136 outer targets were reached. Independent review
-authenticated all five completed stage logs and unchanged input/tool pins.
-Documentation, revised fresh and reuse stages did not start. This failed
-partial attempt establishes no complete gate or before/after result. The PM
-assigned focused diagnosis using the existing cache.
+This partial delivery requires one fresh seven-stage gate on its final frozen
+inputs, exact per-target counts, matching compiler/native-image evidence and
+independent review. An immediate explicit reuse witness may consume those same
+successful inputs, commands and logs; it must execute no stages and remains
+labelled reuse. Neither witness supplies the deferred controlled old/revised
+comparison. TASK-0042 remains active after this bounded delivery.
 
-The subsequent three-string repair reused that same checkout and target path.
-Its affected test target compiled in 2.86 seconds (Cargo-reported), and the
-command passed all four tests in 4.29 seconds wall time. The three owning unit
-probes each passed in under one second command wall time. These are focused
-repair results, not a full-gate comparison; they demonstrate the edit loop with
-compatible cached artifacts rather than a new cold build.
+## Operating and cleanup handoff
 
-The edit-loop guide now selects packages, targets and cases explicitly and
-distinguishes fresh verification from cold compilation. Suitable checkouts and
-compatible caches are reused, with one writer per product cache. Superseded
-failed caches can be reclaimed after preserving evidence and confirming no
-active owner needs them. The user also requested measurement of the compilation
-cost itself. Reduced debug information is a later controlled experiment;
-existing gate profiles, limits and tests remain unchanged here.
+Use one branch per PR, one physical product checkout and one shared build set.
+The developer is the sole writer and Cargo operator; use one job and sequential
+checks. Branch switches require released readers, a clean working tree and
+preserved owned changes. The current checkout is `.worktree/ffi-ash-contract`;
+the cache is `.worktrees/pr11-rereview-target-97287b0`, including its
+`ffi-native-hosts` child. No role-specific checkout, branch or cache is needed.
+Reviewers inspect immutable evidence and request necessary reruns from the
+operator. All agent commits, merges and pushes remain unsigned; the signed
+explicit Main merge belongs to the human.
 
-After the sole owner confirmed no remaining dependency and independent review
-checked the deletion scope, the two excluded storage-failed caches were retired.
-Their 78.43 GB allocated footprint was removed; measured free space increased
-by 78.42 GB (73.03 GiB). Interruption logs/receipts, file metadata inventories,
-Cargo fingerprints, dependency records and referenced build outputs were
-preserved outside the caches. The active comparison cache, product checkout,
-shared caches and other worktrees were untouched. The user accepted reuse of
-one sequential product checkout with target caches retained across branch
-switches; [AD-0011](../decisions/AD-0011-milestone-worktree-lifecycle.md) and the
-[agent guide](../project/agent-workflow.md) now record that workflow.
+During development, run focused checks for the affected boundary. Run the
+required full gate once at the final acceptance boundary. Do not add benchmark
+builds, cold caches or documentation builds outside the assigned scope.
+
+Record inspection/dispatch, compile/link, tests/native hosts, documentation,
+review, integration/acceptance, cleanup and waiting separately. Preserve model
+and effort, tool-call timings and available turn wall time. Exact model runtime
+is unavailable unless exposed; a turn wall or elapsed-minus-tools proxy is not
+exact LLM time. Parallel tool sums and batch wall time are different measures.
+The PM owns the current timing account and the developer supplies scoped
+operation receipts; timing collection adds no verification runs.
+
+At closure, consolidate lasting conclusions here and in tool documentation.
+Retire obsolete working history and superseded output only after proving that
+no live PR/checkpoint needs them. Preserve compatible dependencies, current
+tests, published executables and CP-0022 evidence. The developer supplies a
+cleanup **Result** and **Next owner**; PM confirms them before starting the next
+PR. Current result: the twelve-path transition snapshot is authenticated and
+all owned source is preserved; historical generated-root retirement is complete.
+Current next owner: developer prepares the immutable candidate and evidence,
+then PM assigns whole-candidate review and its gate. Closure cleanup is pending.
 
 ## Dependencies introduced to xtask
 
@@ -157,15 +170,20 @@ unrelated crates.io Vulkan package `ash` does not apply to this local Ash
 package. The database date bounds this observation. Published SHA-2 advisory
 [RUSTSEC-2021-0100](https://rustsec.org/advisories/RUSTSEC-2021-0100.html)
 does not affect the resolved 0.10.9 release. Full workspace verification with the
-changed lockfile remains part of the assigned comparison gate.
+changed lockfile remains part of the assigned candidate gate.
 
 ## Verification
 
-Run the xtask regression suite, formatting, strict xtask Clippy and rustdoc.
-Exercise the real revised full gate and explicit reuse on the frozen benchmark
-checkout. Preserve source/configuration equality, output logs, test counts and
-wall times. Check changed Markdown links, authority and command accuracy.
-Independent review precedes the milestone tooling handoff.
+Require the complete fresh seven-stage gate and exact product/tool target
+inventory at the final candidate. Retain focused cleanup/tool regressions,
+matching native/image observations and independent review as separate claims.
+Any immediate reuse witness must report all seven stages reused under equal
+inputs, configuration and saved logs; a fallback or mixed run is not that
+witness. Check changed Markdown links, authority and command accuracy.
+
+A controlled old/revised timing comparison with comparable cache states remains
+required for the whole task. It needs a later explicit scope and operator
+window; no new comparison is assigned by this partial delivery.
 
 ## Discoveries
 
@@ -185,5 +203,7 @@ optimization; those changes and measurements require a later delivery window.
 
 ## Deviations
 
-None. This delivery removes no semantic, negative, native or stress tests and
-changes no production work, depth or stack limit.
+The whole-task controlled timing comparison remains incomplete. This partial
+delivery removes no semantic, negative, native or stress tests and changes no
+production work, depth or stack limit. The paused assessment and superseded
+comparison recipes are not continuation points.

@@ -30,10 +30,13 @@ later wakeups require an explicitly requested automation.
   Use one Cargo job, compatible caches and checks required by the task. Separate
   real native observations from injected failures and foreign assumptions.
   Preserve work/depth/stack limits.
-- For sequential PR development, keep one product checkout and its target cache.
+- Use one branch per PR. For sequential PR development, keep one physical
+  product checkout and its shared target cache.
   Switch branches only after the current frozen gate and handoff release the
-  checkout and the working tree is clean. Reviewers use that checkout and its
-  evidence. A fresh gate does not imply a cold build; separate caches require an
+  checkout and the working tree is clean. The developer is the sole product
+  writer and heavy-build operator. Reviewers inspect immutable pins, artifacts
+  and receipts and request necessary reruns from that operator. A fresh gate
+  does not imply a cold build; separate caches require an
   assigned comparison or isolation need under AD-0011.
 - Use the [Rust verification guide](verification.md) for selected checks and
   explicit local receipt reuse. Partial evidence does not establish a full gate;
@@ -46,6 +49,26 @@ later wakeups require an explicitly requested automation.
   evidence after movement. Apply the authorized merge/signing method; a specific
   override affects that delivery only. Main and checkpoint cleanup retain their
   separate gates under AD-0011.
+
+## Working records and timing
+
+Generated hosts retire their unique Cargo root artifacts after copying and
+before publication; shared dependencies, current tests and published outputs
+remain. See the [build tool contract](../tools/ash.md). Callers retain useful
+source/log records while a PR or checkpoint needs them.
+
+At PR closure, consolidate lasting findings in existing task/tool documentation
+and retire obsolete working history and superseded output under the
+[documentation policy](documentation.md). Preserve live checkpoint dependencies
+and compatible caches. Require a cleanup Result and Next owner before starting
+the next PR; do not sweep unrelated artifacts or unretained source/commits.
+
+Collect available timing by operation: inspection/dispatch, compile/link,
+tests/native hosts, documentation, review, integration/acceptance, cleanup and
+waiting. Keep tool-call durations and batch/turn wall time separate. Record model
+and effort; label exact model runtime unavailable when it is not exposed.
+Elapsed-minus-tools is only a proxy. Use existing receipts and task/handoff
+records; timing collection does not authorize extra verification or benchmarks.
 
 ## Acceptance
 

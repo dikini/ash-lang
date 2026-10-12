@@ -59,12 +59,14 @@ whole checkout does not become another gate delay. The product commands keep
 their default profiles. Repeated references to one executable are hashed once
 per snapshot; snapshots still re-read their inputs across stage boundaries.
 
-Measured milestone candidate `dd3239e` includes the root manifest and lockfile
+Historical measured milestone candidate `dd3239e` includes the root manifest and lockfile
 in its matching-compiler fingerprint. The tooling overlay therefore changes
 that candidate's identity even though its fingerprint algorithm and product
 sources are unchanged. Measurements must record the overlaid
 source/configuration identity and retain required native and embedded-image
-proof under the original product configuration separately.
+proof under the original product configuration separately. An adopted
+candidate requires matching compiler/native-image proof under its own
+configuration; historical measurement binaries cannot substitute for it.
 
 ## Consequences
 

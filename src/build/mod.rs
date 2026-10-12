@@ -5,6 +5,7 @@
 //! independently validate reconstructed Core. There is no runtime Ash compiler
 //! or stable Core file format; ownership/access remain explicit exclusions.
 
+mod artifacts;
 mod bridge;
 mod emit;
 mod host;
