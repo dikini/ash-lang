@@ -35,8 +35,10 @@ The [execution plan](rust-verification-performance-plan.md) belongs to this task
 matrix, conservative exact-input receipts and temporary generated-host cleanup.
 Its existing history now includes retained ffi-ash checkpoint `c2e21cc` through
 an unsigned explicit merge. The PR targets `integration/ffi-ash`; Main
-integration remains a separate human gate. Current-candidate review,
-verification, retention and acceptance are still pending.
+integration remains a separate human gate. Candidate `1325097` passed
+[independent review and completed-evidence authentication](https://github.com/dikini/ash-lang/pull/18#pullrequestreview-5487833850).
+Unsigned checkpoint integration, retained acceptance and closure are the next
+gates; their assignment belongs to the milestone PM.
 
 The tooling implementation passed 17 regressions and independent adversarial
 review at `aadd4be`. The regressions cover permissions, PATH shadows, dangling
@@ -85,12 +87,48 @@ other files and 484 Cargo fingerprints were unchanged. The cleanup bundle and
 its receipts remain live review evidence until this PR/checkpoint no longer
 needs them.
 
-This partial delivery requires one fresh seven-stage gate on its final frozen
-inputs, exact per-target counts, matching compiler/native-image evidence and
-independent review. An immediate explicit reuse witness may consume those same
-successful inputs, commands and logs; it must execute no stages and remains
-labelled reuse. Neither witness supplies the deferred controlled old/revised
-comparison. TASK-0042 remains active after this bounded delivery.
+On 2026-10-12, candidate `1325097` passed one fresh seven-stage gate with seven
+stages executed and none reused. Its immediate exact-input functional witness
+reused all seven successes and executed no stages. Fresh summaries and logs
+were preserved before reuse. The complete 136 outer targets matched metadata:
+134 product targets passed 3,671 tests with no failures and one ignored test;
+two tooling targets passed 17 tests with no failures or ignored tests. Nine
+nested summaries were retained separately and excluded from those totals.
+
+| Measured operation | Wall seconds | Scope |
+| --- | ---: | --- |
+| Fresh gate runner | 1,026.273 | All seven stages and their input checks |
+| Fresh launch | 1,051.218 | Includes the 24.91-second operator compilation |
+| Test stage | 827.276 | Includes reported test compilation of 4m27s |
+| Documentation stage | 16.081 | Warnings-denied workspace rustdoc |
+| Exact reuse runner | 8.045 | Seven stages reused, none executed |
+| Exact reuse launch | 8.165 | Includes the invocation around the runner |
+
+Product target execution times sum to 475.53 seconds and tooling targets to
+81.86 seconds. These rounded subtimes overlap the test-stage wall; do not add
+them to it or equate them with model runtime. Exact LLM runtime is unavailable.
+Tool-call, batch and turn wall measurements retain their distinct scopes.
+
+The current native build, source arena, acquired-only and source-owner suites
+passed under the candidate's matching compiler/runtime configuration. The
+standalone cases executed after source and embedded image/facts removal. The
+default-feature build and subsequent all-feature test runtime identities were
+recorded separately. Postgate inspection found zero generated-host root aliases,
+dependency files, fingerprints or incremental roots in the scoped shared caches;
+shared dependencies and current tests remained available. This observation is
+not a new reclaimed-byte measurement.
+
+The [public result and timing receipt](https://github.com/dikini/ash-lang/pull/18#issuecomment-6119984446)
+and independent review bound these claims to `1325097` and its frozen inputs.
+This task-only summary changes the whole-repository Git input identity. Transfer
+requires demonstrated equality of the unchanged executable, compiler,
+configuration and native inputs plus independent review; the old whole-input
+receipts must not be reused against unequal Git inputs. Manual Markdown, link
+and authority checks verify this prose; the reviewer assesses the bounded
+evidence transfer.
+Neither the fresh gate nor exact reuse supplies the deferred controlled
+old/revised comparison or a causal speedup claim. TASK-0042 remains active after
+this partial delivery; no ffi criterion is completed by the tooling evidence.
 
 ## Operating and cleanup handoff
 
@@ -121,10 +159,13 @@ Retire obsolete working history and superseded output only after proving that
 no live PR/checkpoint needs them. Preserve compatible dependencies, current
 tests, published executables and CP-0022 evidence. The developer supplies a
 cleanup **Result** and **Next owner**; PM confirms them before starting the next
-PR. Current result: the twelve-path transition snapshot is authenticated and
-all owned source is preserved; historical generated-root retirement is complete.
-Current next owner: developer prepares the immutable candidate and evidence,
-then PM assigns whole-candidate review and its gate. Closure cleanup is pending.
+PR. Current **Result**: the twelve-path transition preserved all owned source;
+the candidate's fresh gate, exact reuse and zero generated-root residue are
+independently authenticated. Shared caches and live PR/checkpoint evidence
+remain retained; historical generated-root retirement is complete. Current
+**Next owner**: the reviewer authenticates this task-only successor's evidence
+transfer, then the PM assigns unsigned integration and retained acceptance.
+Scoped closure cleanup still requires its own Result and Next owner.
 
 ## Dependencies introduced to xtask
 
@@ -170,7 +211,7 @@ unrelated crates.io Vulkan package `ash` does not apply to this local Ash
 package. The database date bounds this observation. Published SHA-2 advisory
 [RUSTSEC-2021-0100](https://rustsec.org/advisories/RUSTSEC-2021-0100.html)
 does not affect the resolved 0.10.9 release. Full workspace verification with the
-changed lockfile remains part of the assigned candidate gate.
+changed lockfile passed the candidate's fresh gate recorded above.
 
 ## Verification
 
