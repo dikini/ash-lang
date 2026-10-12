@@ -111,7 +111,9 @@ Tool-call, batch and turn wall measurements retain their distinct scopes.
 
 The current native build, source arena, acquired-only and source-owner suites
 passed under the candidate's matching compiler/runtime configuration. The
-standalone cases executed after source and embedded image/facts removal. The
+arena, acquired-only and generic program-build fixtures remove Ash sources and
+retain payload files. Source-owner and scalar native-build fixtures also remove
+image/facts files before child execution. The
 default-feature build and subsequent all-feature test runtime identities were
 recorded separately. Postgate inspection found zero generated-host root aliases,
 dependency files, fingerprints or incremental roots in the scoped shared caches;
