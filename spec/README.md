@@ -103,15 +103,20 @@ and imports. `@builtin.foreign` supplies ordinary common result types, including
 Core interpretation for admitted owner-free native entry instances, leaving an
 empty outward row. Ordinary source handlers cannot install a native symbol's
 interpreter. Source contracts and checked Core supply no executable binding;
-default execution refuses missing bindings before Ash runs. Constants, foreign
-byte access, dependent ownership and copy windows remain outside the admitted
-subset. Source resource declarations additionally admit dependency-free opaque
+default execution refuses missing bindings before Ash runs. Constants, dependent
+ownership and copy windows remain outside the admitted subset. Source resource
+declarations additionally admit dependency-free opaque
 and initialized byte owners, private data and checked `scope` or `acquired_only`
 reports, one acquisition and an unconditional consuming teardown. Checked lexical
 forwarding supports the associated interface methods and ordinary constrained
 helpers, preserving exact operation types, effect rows and typed access operands.
-Exact constructor and
-native-call identities authenticate publication and completion; declarations
+Sealed common byte reads and writes borrow the exact initialized live state in
+acquire, handler and finish phases. Original call correspondence, complete
+Type/Row instances and the unique guard authenticate access; private data and a
+compatible state type grant no permission. Conversion refusals are ordinary
+`Foreign.Call` results, and complete reply admission precedes native access.
+Exact constructor and native-call identities authenticate publication and
+completion; declarations
 alone confer no ownership. The [source-resource rules](static-semantics.md#source-resource-declarations)
 bound this lifecycle and its supported associated handler shape.
 

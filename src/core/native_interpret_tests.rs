@@ -166,6 +166,61 @@ impl Fixture {
             Box::new(if unit { Type::Unit } else { Type::Int }),
         );
         let mut builder = EffectCoreBuilder::with_effect_registry(Arc::clone(&self.registry));
+        // The imported common module now also defines two sealed generic byte
+        // declarations. Keep their actual globals in this independently built
+        // forest so every retained original parameter row remains consumed.
+        let declarations = self
+            .registry
+            .scalar_preflights()
+            .filter_map(|(_, fact)| {
+                fact.role()
+                    .byte_parameter(fact.module())
+                    .map(|parameter| (fact, parameter))
+            })
+            .collect::<Vec<_>>();
+        builder
+            .reserve_resolved_binders(declarations.iter().map(|(fact, _)| fact.function()))
+            .unwrap();
+        let mut members = Vec::new();
+        for (fact, parameter) in declarations {
+            let operation = match fact.role() {
+                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ByteRead => {
+                    crate::core::packed::Intrinsic::ForeignByteRead {
+                        function: fact.function(),
+                    }
+                }
+                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ByteWrite => {
+                    crate::core::packed::Intrinsic::ForeignByteWrite {
+                        function: fact.function(),
+                    }
+                }
+                _ => unreachable!(),
+            };
+            let intrinsic = builder
+                .intrinsic(
+                    operation,
+                    fact.module(),
+                    fact.signature().clone(),
+                    fact.origin().clone(),
+                )
+                .unwrap();
+            let abstracted = builder
+                .type_abstraction(
+                    vec![(parameter, crate::types::Kind::Type)],
+                    intrinsic,
+                    fact.core_signature().clone(),
+                    fact.origin().clone(),
+                )
+                .unwrap();
+            let binder = builder
+                .resolved_binder(
+                    fact.function(),
+                    fact.core_signature().clone(),
+                    fact.origin().clone(),
+                )
+                .unwrap();
+            members.push((binder, abstracted));
+        }
         let operand = if unit {
             builder.unit(Type::Unit, origin.clone()).unwrap()
         } else {
@@ -177,6 +232,14 @@ impl Fixture {
                 )
                 .unwrap()
         };
+        let operand = builder
+            .recursive_binding(
+                members,
+                operand,
+                if unit { Type::Unit } else { Type::Int },
+                origin.clone(),
+            )
+            .unwrap();
         let request = builder
             .request(
                 self.instance(unit),

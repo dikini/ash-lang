@@ -39,6 +39,13 @@ enum Expr {
         scalar: bool,
         type_application: bool,
     },
+    // Constructed only from an original source-scope byte-call relation.
+    // Inputs remain strict control children; the admitted reply stores neither.
+    BorrowedCallReply {
+        function: usize,
+        argument: usize,
+        reply: usize,
+    },
     Tuple(Vec<usize>),
     Constructor(ConstructorId),
     Project {
@@ -163,6 +170,15 @@ impl Expr {
                 arguments: ids(arguments, budget)?,
                 scalar: *scalar,
                 type_application: *type_application,
+            },
+            Self::BorrowedCallReply {
+                function,
+                argument,
+                reply,
+            } => Self::BorrowedCallReply {
+                function: function + offset,
+                argument: argument + offset,
+                reply: reply + offset,
             },
             Self::Cleanup { body, action } => Self::Cleanup {
                 body: body + offset,
@@ -326,6 +342,83 @@ pub(super) struct CallSuccessors {
     pub(super) targets: Vec<(usize, usize)>,
     pub(super) unknown: bool,
     pub(super) returns: bool,
+}
+
+// This result cut consumes a flow-proved original call mapped through the
+// scope's authenticated copy forest. A compatible arrow or State spelling is
+// only a cheap rejection filter; it supplies no capture or execution authority.
+#[inline(never)]
+fn source_byte_call_module<F: CoreOperationFamily>(
+    nodes: &[StoredNode<F>],
+    id: usize,
+    operation: fn(&F::Kind) -> Option<&EffectOperation>,
+    budget: &mut TypeWorkBudget,
+) -> Result<Option<crate::module::ModuleId>, Failure> {
+    let Some(PureExprKind::Computation(PureComputation::Apply(application))) =
+        F::pure(&nodes.get(id).ok_or(Failure::Invalid)?.kind)
+    else {
+        return Ok(None);
+    };
+    let Some(function) = nodes
+        .get(index(application.function()))
+        .ok_or(Failure::Invalid)?
+        .ty
+        .function_view()
+    else {
+        return Ok(None);
+    };
+    let Type::Tuple(domain) = function.domain() else {
+        return Ok(None);
+    };
+    let Type::Application(result, _) = function.value() else {
+        return Ok(None);
+    };
+    let Type::Nominal(call) = &**result else {
+        return Ok(None);
+    };
+    if !matches!(domain.len(), 2 | 3)
+        || !call.module().is_builtin_foreign()
+        || call.declaration() != 1
+    {
+        return Ok(None);
+    }
+    charge(budget, nodes.len())?;
+    let mut admitted = None;
+    for node in nodes {
+        let Some(EffectOperation::SourceResourceScope(scope)) = operation(&node.kind) else {
+            continue;
+        };
+        scope
+            .visit_byte_calls(
+                |relation, _| {
+                    if relation.apply.is_some_and(|apply| index(apply) == id) {
+                        let module = relation.function.module().ok_or_else(|| {
+                            crate::core::ValidationError::new(
+                                crate::core::ValidationReason::Registry,
+                                None,
+                            )
+                        })?;
+                        if module != call.module() {
+                            return Err(crate::core::ValidationError::new(
+                                crate::core::ValidationReason::Registry,
+                                None,
+                            ));
+                        }
+                        admitted = Some(module);
+                    }
+                    Ok(())
+                },
+                budget,
+            )
+            .map_err(|failure| {
+                if failure.reason() == crate::core::ValidationReason::Resource {
+                    Failure::Resource
+                } else {
+                    Failure::Invalid
+                }
+            })?;
+    }
+    Ok(admitted)
 }
 
 // Owned only by one exact observed control State inside one discover invocation.
@@ -752,6 +845,11 @@ impl Graph {
                     children.try_reserve(1).map_err(|_| Failure::Resource)?;
                     children.push(*function);
                 }
+                Expr::BorrowedCallReply {
+                    function,
+                    argument,
+                    reply,
+                } => children = copy_slice(&[*function, *argument, *reply], budget)?,
                 Expr::Cleanup { body, action } => children = copy_slice(&[*body, *action], budget)?,
                 Expr::Bind {
                     binder,
@@ -1305,6 +1403,7 @@ impl Graph {
                 nodes,
                 symbols,
                 types,
+                operation,
                 methods,
                 adapters,
                 headers,
@@ -1394,8 +1493,10 @@ impl Graph {
                     intrinsic.operation(),
                     crate::core::packed::Intrinsic::ForeignCheckedI64 { .. }
                         | crate::core::packed::Intrinsic::ForeignCheckedSizeT { .. }
+                        | crate::core::packed::Intrinsic::ForeignByteRead { .. }
+                        | crate::core::packed::Intrinsic::ForeignByteWrite { .. }
                 ) {
-                    return self.build_scalar_preflight_result(id, *intrinsic, source, budget);
+                    return self.build_foreign_call_result(id, *intrinsic, source, budget);
                 }
                 self.targets.try_reserve(1).map_err(|_| Failure::Resource)?;
                 self.targets.insert(id, id);
@@ -1519,6 +1620,7 @@ impl Graph {
         nodes: &[StoredNode<F>],
         symbols: &mut HashMap<BinderId, usize>,
         types: &mut HashMap<crate::types::TypeVariableId, usize>,
+        operation: fn(&F::Kind) -> Option<&EffectOperation>,
         methods: &super::MethodUses<'_>,
         adapters: &[super::MethodAdapter],
         headers: &mut FunctionMetadataPreparation<'_, F>,
@@ -1545,12 +1647,26 @@ impl Graph {
                     body: index(binding.body()),
                 }
             }
-            PureComputation::Apply(application) => Expr::Call {
-                function: index(application.function()),
-                arguments: copy_slice(&[index(application.argument())], budget)?,
-                scalar: scalar(&node.ty),
-                type_application: false,
-            },
+            PureComputation::Apply(application) => {
+                if let Some(module) = source_byte_call_module(nodes, id, operation, budget)? {
+                    let body = self.foreign_call_reply(module, source, budget)?;
+                    // The original phase proof admits exactly this borrowed
+                    // call. Its evaluated inputs remain in the control graph;
+                    // neither result alternative stores their owner or metadata.
+                    Expr::BorrowedCallReply {
+                        function: index(application.function()),
+                        argument: index(application.argument()),
+                        reply: body,
+                    }
+                } else {
+                    Expr::Call {
+                        function: index(application.function()),
+                        arguments: copy_slice(&[index(application.argument())], budget)?,
+                        scalar: scalar(&node.ty),
+                        type_application: false,
+                    }
+                }
+            }
             PureComputation::Tuple(tuple) => {
                 charge(budget, tuple.elements().len())?;
                 let mut fields = Vec::new();
@@ -1945,9 +2061,11 @@ impl Graph {
         })
     }
 
-    // Keep constructor-result temporaries outside the shared capture frame.
+    // Keep common-call constructor temporaries outside the shared capture frame.
+    // This describes independent reply values only. Byte operand and live-owner
+    // authority is established by the original source phase and Core checks.
     #[inline(never)]
-    fn build_scalar_preflight_result(
+    fn build_foreign_call_result(
         &mut self,
         id: usize,
         intrinsic: crate::core::packed::IntrinsicNode,
@@ -1957,8 +2075,23 @@ impl Graph {
         self.targets.try_reserve(1).map_err(|_| Failure::Resource)?;
         self.targets.insert(id, id);
         let parameter = self.push(Expr::Slot, source, budget)?;
+        let body = self.foreign_call_reply(intrinsic.module(), source, budget)?;
+        Ok(Expr::Function {
+            parameters: copy_slice(&[parameter], budget)?,
+            body,
+            captures: Vec::new(),
+        })
+    }
+
+    #[inline(never)]
+    fn foreign_call_reply(
+        &mut self,
+        module: crate::module::ModuleId,
+        source: Span,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
         let scalar = self.push(Expr::Scalar, source, budget)?;
-        let call = crate::types::NominalTypeId::new(intrinsic.module(), 1);
+        let call = crate::types::NominalTypeId::new(module, 1);
         let returned = self.push(
             Expr::Constructor(ConstructorId::new(call, 0)),
             source,
@@ -1976,7 +2109,7 @@ impl Graph {
         )?;
         let error = self.push(
             Expr::Constructor(ConstructorId::new(
-                crate::types::NominalTypeId::new(intrinsic.module(), 0),
+                crate::types::NominalTypeId::new(module, 0),
                 0,
             )),
             source,
@@ -1997,16 +2130,11 @@ impl Graph {
             source,
             budget,
         )?;
-        let body = self.push(
+        self.push(
             Expr::Merge(copy_slice(&[success, refusal], budget)?),
             source,
             budget,
-        )?;
-        Ok(Expr::Function {
-            parameters: copy_slice(&[parameter], budget)?,
-            body,
-            captures: Vec::new(),
-        })
+        )
     }
 
     // Source-only conversion storage must not enlarge the ordinary capture frame.
@@ -4404,6 +4532,17 @@ impl<'a> Analysis<'a> {
         let port = self.port(code, context, budget)?;
         self.close(budget)?;
         let (expression, _) = self.slots[port].key;
+        if matches!(
+            self.graph.expressions[expression],
+            Expr::BorrowedCallReply { .. }
+        ) {
+            charge(budget, 1)?;
+            return Ok(CallSuccessors {
+                targets: Vec::new(),
+                unknown: false,
+                returns: true,
+            });
+        }
         let Expr::Call { function, .. } = self.graph.expressions[expression] else {
             return Err(Failure::Invalid);
         };
@@ -4444,6 +4583,22 @@ impl<'a> Analysis<'a> {
         let port = self.port(code, context, budget)?;
         self.close(budget)?;
         let (expression, _) = self.slots[port].key;
+        if matches!(
+            self.graph.expressions[expression],
+            Expr::BorrowedCallReply { .. }
+        ) {
+            charge(budget, 4)?;
+            // This immutable native-call result has no dynamic callable atoms.
+            // Keep the completed prefix explicit for ordinary control discovery.
+            return Ok((
+                CallSuccessors {
+                    targets: Vec::new(),
+                    unknown: false,
+                    returns: true,
+                },
+                PendingCallPrefix(DeliveredCallPrefix { end: 0, opaque: 2 }),
+            ));
+        }
         let Expr::Call { function, .. } = self.graph.expressions[expression] else {
             return Err(Failure::Invalid);
         };
@@ -5224,6 +5379,10 @@ impl<'a> Analysis<'a> {
             }
             Expr::Alias(value) => {
                 P::link(self, slot, *value, context, budget)?;
+                SetupOutcome::FixedSetupReady
+            }
+            Expr::BorrowedCallReply { reply, .. } => {
+                P::link(self, slot, *reply, context, budget)?;
                 SetupOutcome::FixedSetupReady
             }
             Expr::Merge(values) => {

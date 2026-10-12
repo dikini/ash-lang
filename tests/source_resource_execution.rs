@@ -57,6 +57,142 @@ fn source_resource_lifecycle_compiles_from_original_checked_templates() {
 }
 
 #[test]
+fn initialized_owner_byte_read_compiles_through_public_source_admission() {
+    let fixture = Fixture::new(include_str!("fixtures/source-owner/entry.ash"));
+    let owner = include_str!("fixtures/source-owner/owner.ash")
+        .replace("repr Address = opaque", "repr Address = bytes")
+        .replace(
+            "outcome result nonnull { readable result }",
+            "outcome result nonnull { readable result, initialized_bytes result from 0 }",
+        )
+        .replace(
+            "read access => resume data",
+            "read access => match Foreign.byte_read (state, 0) {\n            Foreign.Returned(byte) => resume byte\n            Foreign.ConversionFailed(_) => resume 0\n        }",
+        );
+    fs::write(fixture.0.join("owner.ash"), owner).unwrap();
+    compile_path(fixture.configuration()).expect("initialized byte access source admission");
+}
+
+#[test]
+fn byte_primitives_reject_arbitrary_state_arguments_in_independent_core() {
+    for entry in [
+        "import @builtin.foreign as Foreign\nmain : Unit -> Foreign.Call<Int>\nmain () = Foreign.byte_read (7, 0)\n",
+        "import @builtin.foreign as Foreign\nmain : Unit -> Foreign.Call<Unit>\nmain () = Foreign.byte_write (7, 0, 255)\n",
+        "import @builtin.foreign as Foreign\nhelper<S> : (S, Int) -> Foreign.Call<Int>\nhelper pair = Foreign.byte_read pair\nmain : Unit -> Int\nmain () = 42\n",
+    ] {
+        let fixture = Fixture::new(entry);
+        let failure = compile_path(fixture.configuration()).unwrap_err();
+        assert!(
+            matches!(failure, ash::driver::FileFailure::Pipeline(ref diagnostic)
+            if matches!(diagnostic.failure(), ash::driver::PipelineFailure::Validation(_))),
+            "arbitrary S must reach independent Core rejection: {failure:?}"
+        );
+    }
+}
+
+#[test]
+fn byte_callable_alias_compiles_with_original_call_lineage() {
+    let fixture = Fixture::new(include_str!("fixtures/source-owner/byte_entry.ash"));
+    fs::write(
+        fixture.0.join("owner.ash"),
+        include_str!("fixtures/source-owner/byte_owner.ash"),
+    )
+    .unwrap();
+    compile_path(fixture.configuration())
+        .expect("selected canonical alias and byte write admission");
+}
+
+#[test]
+fn generated_byte_owner_reads_writes_and_refuses_without_mutation() {
+    generated_owner_program_with_native(
+        include_str!("fixtures/source-owner/byte_owner.ash"),
+        include_str!("fixtures/source-owner/byte_entry.ash"),
+        None,
+        "Completed((5, 255, true, 255, false, 255, false, 255), Closed)",
+        "acquire:42\nrelease:42\n",
+        include_str!("fixtures/source-owner/native_bytes.c"),
+    );
+}
+
+#[test]
+fn generated_byte_owner_borrows_live_state_in_acquire_body_and_finish() {
+    let owner = include_str!("fixtures/source-owner/byte_owner.ash")
+        .replace("false => Acquired(state, size)", "false => match Foreign.byte_read (state, 0) {\n            Foreign.Returned(byte) => Acquired(state, byte)\n            Foreign.ConversionFailed(_) => Refused ()\n        }")
+        .replace("finish (state, data) => match perform Free", "finish (state, data) => {\n        let restored = Foreign.byte_write (state, 0, data)\n        match perform Free")
+        .replace("    handlers (state, data)", "    }\n    handlers (state, data)");
+    let native = include_str!("fixtures/source-owner/native_bytes.c").replace(
+        "record(\"release\", owner->identity);",
+        "record(\"release\", owner->identity);\n    record(\"final-byte\", owner->bytes[0]);",
+    );
+    generated_owner_program_with_native(
+        &owner,
+        "import owner as Owner\nimport @builtin.foreign as Foreign\nmain : Unit -> Owner.Scope<Unit, Unit, Foreign.Call<Int>>\nmain () = resource Owner.Probe<{}, R, {}> owner = (42, 7) {\n    let written = Owner.write (owner, 0, 255)\n    Owner.read (owner, 0)\n}\n",
+        None,
+        "Completed(Returned(255), Closed)",
+        "acquire:42\nrelease:42\nfinal-byte:5\n",
+        &native,
+    );
+}
+
+#[test]
+fn generated_byte_owner_complete_actuals_nested_aliases_and_override_precedence() {
+    let owner = include_str!("fixtures/source-owner/byte_owner.ash")
+        .replace(
+            "Before : EffectRow, R, After : EffectRow",
+            "Before : EffectRow, Phantom, R, After : EffectRow",
+        )
+        .replace(
+            "<{| Before}, R, {| After}>",
+            "<{| Before}, Phantom, R, {| After}>",
+        );
+    let entry = include_str!("fixtures/source-owner/byte_generic_rows_entry.ash")
+        .replace("Before : EffectRow, R, After : EffectRow", "Before : EffectRow, Phantom, R, After : EffectRow")
+        .replace("<{| Before}, R, {| After}>", "<{| Before}, Phantom, R, {| After}>")
+        .replace("<{| Before}, Inner, {| After}>", "<{| Before}, Phantom, Inner, {| After}>")
+        .replace("<{Tag}, Outer, {}>", "<{Tag}, Int, Outer, {}>")
+        .replace("Foreign.Call<Int>", "(Foreign.Call<Int>, Foreign.Call<Int>, Foreign.Call<Int>)")
+        .replace("    Owner.read (inner, 0)", "    let first = Owner.read (inner, 0)\n    let overridden = handle (Owner.read (inner, 0)) with Owner.ProbeOps<Owner.Probe<{| Before}, Phantom, Inner, {| After}>> {\n        read (access, index) => resume Foreign.Returned 84\n        write (access, index, byte) => resume Foreign.Returned ()\n    }\n    let last = Owner.read (inner, 1)\n    (first, overridden, last)");
+    // Both selected canonical alias branches execute under two different
+    // phantom Type/Row applications of the same defining helper and template.
+    // Those arguments are absent from the byte callable's State value type.
+    let nested = "Owner.Scope<Unit, Unit, Owner.Scope<Unit, Unit, (Foreign.Call<Int>, Foreign.Call<Int>, Foreign.Call<Int>)>>";
+    let entry = format!(
+        "{}main : Unit -> ({nested}, {nested})\nmain () = {{\n    let first = resource Owner.Probe<{{Tag}}, Int, Outer, {{}}> outer = (42, 7) {{\n        within outer\n    }}\n    let second = resource Owner.Probe<{{}}, Unit, Other, {{}}> outer = (44, 7) {{\n        within outer\n    }}\n    (first, second)\n}}\n",
+        entry.split("main :").next().unwrap()
+    );
+    generated_owner_program_with_native(
+        &owner,
+        &entry,
+        None,
+        "(Completed(Completed((Returned(5), Returned(84), Returned(255)), Closed), Closed), Completed(Completed((Returned(5), Returned(84), Returned(255)), Closed), Closed))",
+        "acquire:42\nacquire:43\nrelease:43\nrelease:42\nacquire:44\nacquire:43\nrelease:43\nrelease:44\n",
+        include_str!("fixtures/source-owner/native_bytes.c"),
+    );
+}
+
+#[test]
+fn generated_byte_owner_acquired_only_null_and_zero_extent_keep_result_and_release_shape() {
+    let owner = include_str!("fixtures/source-owner/byte_owner.ash")
+        .replace(
+            "pub type Scope<I, E, T> = NotAcquired(I)\n    | Completed(T, Completion<E>)",
+            "pub type Outcome<T> = Success(T)\n    | Failure(Unit)",
+        )
+        .replace(
+            "result Scope<Unit, Unit, Answer> for <Answer>",
+            "result Outcome<Answer> for <Answer>",
+        )
+        .replace("codec scope", "codec acquired_only");
+    generated_owner_program_with_native(
+        &owner,
+        "import owner as Owner\nimport @builtin.foreign as Foreign\nread_result : Foreign.Call<Int> -> Int\nread_result value = match value {\n    Foreign.Returned(byte) => byte\n    Foreign.ConversionFailed(_) => 999\n}\nmain : Unit -> (Owner.Outcome<Int>, Owner.Outcome<Int>)\nmain () = {\n    let null = resource Owner.Probe<{}, Null, {}> owner = (0, 7) {\n        read_result (Owner.read (owner, 0))\n    }\n    let zero = resource Owner.Probe<{}, Zero, {}> owner = (42, 0) {\n        read_result (Owner.read (owner, 0))\n    }\n    (null, zero)\n}\n",
+        None,
+        "(Failure(()), Success(999))",
+        "acquire:0\nacquire:42\nrelease:42\n",
+        include_str!("fixtures/source-owner/native_bytes.c"),
+    );
+}
+
+#[test]
 fn generated_owner_host_acquires_publishes_private_payload_and_releases_once() {
     generated_owner_case(include_str!("fixtures/source-owner/owner.ash"));
 }
@@ -270,6 +406,24 @@ fn generated_owner_program_with_helpers(
     expected_result: &str,
     expected_trace: &str,
 ) {
+    generated_owner_program_with_native(
+        owner,
+        entry,
+        helpers,
+        expected_result,
+        expected_trace,
+        include_str!("fixtures/source-owner/native_owner.c"),
+    );
+}
+
+fn generated_owner_program_with_native(
+    owner: &str,
+    entry: &str,
+    helpers: Option<&str>,
+    expected_result: &str,
+    expected_trace: &str,
+    native_source: &str,
+) {
     let fixture = Fixture::new(entry);
     fs::write(fixture.0.join("owner.ash"), owner).unwrap();
     if let Some(helpers) = helpers {
@@ -283,11 +437,7 @@ fn generated_owner_program_with_helpers(
     let native = fixture.0.join("native_owner.c");
     let object = fixture.0.join("native_owner.o");
     let archive = fixture.0.join("libash_owner.a");
-    fs::write(
-        &native,
-        include_str!("fixtures/source-owner/native_owner.c"),
-    )
-    .unwrap();
+    fs::write(&native, native_source).unwrap();
     for output in [
         Command::new("cc")
             .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-c"])

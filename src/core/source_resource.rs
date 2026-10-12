@@ -549,6 +549,7 @@ pub(crate) struct CheckedSourceResourceTemplate {
     finish_entry: (TypedBinder, NodeId),
     handler_entry: (TypedBinder, NodeId),
     methods: Box<[(crate::interface::MethodId, crate::types::OperationId)]>,
+    byte_calls: [Box<[SourceByteCall]>; 3],
 }
 
 #[derive(Debug)]
@@ -738,9 +739,9 @@ impl CheckedSourceResourceTemplate {
         }
         let placeholder_binder = answer.parameter().id();
         let handler_body = answer.body();
-        check_flow(&acquire, &header, &acquire_entry, Phase::Acquire, work)?;
-        check_flow(&finish, &header, &finish_entry, Phase::Finish, work)?;
-        check_handler(
+        let acquire_calls = check_flow(&acquire, &header, &acquire_entry, Phase::Acquire, work)?;
+        let finish_calls = check_flow(&finish, &header, &finish_entry, Phase::Finish, work)?;
+        let handler_calls = check_handler(
             &handler,
             &header,
             &handler_entry.0,
@@ -757,6 +758,7 @@ impl CheckedSourceResourceTemplate {
             finish_entry,
             handler_entry: (handler_entry.0, handler_body),
             methods,
+            byte_calls: [acquire_calls, finish_calls, handler_calls],
         })
     }
     pub(crate) fn header(&self) -> &Arc<CheckedSourceResourceHeader> {
@@ -820,6 +822,13 @@ enum Phase {
 }
 // Flat symbolic records: tuples and constructors retain scalar indices only.
 // No symbolic value, failure path or arena disposal recurses through host heaps.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SourceByteCall {
+    pub(crate) apply: Option<NodeId>,
+    pub(crate) application: NodeId,
+    pub(crate) function: crate::resolved::BinderId,
+}
+
 #[derive(Debug)]
 enum FlowFact {
     Independent,
@@ -829,10 +838,12 @@ enum FlowFact {
     Constructor(ConstructorId, Option<usize>),
     Callable(ConstructorId),
     ScalarPreflight,
+    ByteCallable(crate::resolved::BinderId, Option<NodeId>),
 }
 #[derive(Default)]
 struct FlowFacts {
     values: Vec<FlowFact>,
+    byte_calls: Vec<SourceByteCall>,
 }
 fn push<T>(
     values: &mut Vec<T>,
@@ -1098,10 +1109,17 @@ fn eval_flow(
                     .registry
                     .scalar_preflight(local.binder())
                     .ok_or_else(invalid)?;
-                if !same(&stored.ty, fact.signature(), work)? {
+                if !same(&stored.ty, fact.core_signature(), work)? {
                     return Err(invalid());
                 }
-                facts.add(FlowFact::ScalarPreflight, work)?
+                facts.add(
+                    if fact.role().byte_parameter(fact.module()).is_some() {
+                        FlowFact::ByteCallable(fact.function(), None)
+                    } else {
+                        FlowFact::ScalarPreflight
+                    },
+                    work,
+                )?
             };
             one((value, path), work)
         }
@@ -1130,6 +1148,12 @@ fn eval_flow(
                     Intrinsic::ForeignCheckedSizeT { function } => {
                         (function, ForeignScalarPreflightRole::SizeT)
                     }
+                    Intrinsic::ForeignByteRead { function } => {
+                        (function, ForeignScalarPreflightRole::ByteRead)
+                    }
+                    Intrinsic::ForeignByteWrite { function } => {
+                        (function, ForeignScalarPreflightRole::ByteWrite)
+                    }
                     _ => return Err(invalid()),
                 };
                 charge(work, 1)?;
@@ -1144,7 +1168,14 @@ fn eval_flow(
                 {
                     return Err(invalid());
                 }
-                let value = facts.add(FlowFact::ScalarPreflight, work)?;
+                let value = facts.add(
+                    if role.byte_parameter(fact.module()).is_some() {
+                        FlowFact::ByteCallable(function, None)
+                    } else {
+                        FlowFact::ScalarPreflight
+                    },
+                    work,
+                )?;
                 one((value, path), work)
             }
             _ => one((0, path), work),
@@ -1224,7 +1255,7 @@ fn eval_flow(
             )? {
                 let constructor = match facts.fact(function)? {
                     FlowFact::Callable(constructor) => Some(*constructor),
-                    FlowFact::ScalarPreflight => None,
+                    FlowFact::ScalarPreflight | FlowFact::ByteCallable(_, Some(_)) => None,
                     _ => return Err(invalid()),
                 };
                 for (argument, path) in eval_flow(
@@ -1240,7 +1271,40 @@ fn eval_flow(
                     let value = if let Some(constructor) = constructor {
                         facts.wrapped(constructor, argument, work)?
                     } else {
-                        if !facts.independent(argument, work)? {
+                        if let FlowFact::ByteCallable(function, Some(application)) =
+                            facts.fact(function)?
+                        {
+                            let function = *function;
+                            let selected_application = *application;
+                            let fact = program
+                                .registry
+                                .scalar_preflight(function)
+                                .ok_or_else(invalid)?;
+                            let FlowFact::Tuple(fields) = facts.fact(argument)? else {
+                                return Err(invalid());
+                            };
+                            let write = fact.role() == crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ByteWrite;
+                            if fields.len() != 2 + usize::from(write) || path.consumed
+                                || header.owner.owner().representation() != crate::foreign::source_contract::PreparedAddressRepresentation::Bytes
+                                || !matches!(header.acquire.owner_role(), Some(PreparedOwnerCall::Acquire {initialized_bytes:Some(_), ..}))
+                                || !matches!(facts.fact(fields[0])?, FlowFact::Fresh if phase == Phase::Acquire && path.acquired)
+                                    && !matches!(facts.fact(fields[0])?, FlowFact::Current if phase != Phase::Acquire)
+                            { return Err(invalid()); }
+                            for field in &fields[1..] {
+                                if !facts.independent(*field, work)? {
+                                    return Err(invalid());
+                                }
+                            }
+                            push(
+                                &mut facts.byte_calls,
+                                SourceByteCall {
+                                    apply: Some(id),
+                                    application: selected_application,
+                                    function,
+                                },
+                                work,
+                            )?;
+                        } else if !facts.independent(argument, work)? {
                             return Err(invalid());
                         }
                         // Both scalar-check alternatives contain independent
@@ -1288,16 +1352,43 @@ fn eval_flow(
         }
         EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(
             application,
-        ))) => eval_flow(
-            program,
-            header,
-            application.function(),
-            phase,
-            path,
-            facts,
-            depth + 1,
-            work,
-        ),
+        ))) => {
+            let mut results = Vec::new();
+            for (value, path) in eval_flow(
+                program,
+                header,
+                application.function(),
+                phase,
+                path,
+                facts,
+                depth + 1,
+                work,
+            )? {
+                let value = if let FlowFact::ByteCallable(function, None) = facts.fact(value)? {
+                    let function = *function;
+                    if application.arguments().len() != 1
+                        || !application.row_arguments().is_empty()
+                        || !same(&application.arguments()[0], &header.original.state.ty, work)?
+                    {
+                        return Err(invalid());
+                    }
+                    push(
+                        &mut facts.byte_calls,
+                        SourceByteCall {
+                            apply: None,
+                            application: id,
+                            function,
+                        },
+                        work,
+                    )?;
+                    facts.add(FlowFact::ByteCallable(function, Some(id)), work)?
+                } else {
+                    value
+                };
+                push(&mut results, (value, path), work)?;
+            }
+            Ok(results)
+        }
         EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Match(matching))) => {
             let mut results = Vec::new();
             for (value, path) in eval_flow(
@@ -1477,7 +1568,7 @@ fn check_flow(
     entry: &(TypedBinder, NodeId),
     phase: Phase,
     work: &mut TypeWorkBudget,
-) -> Result<(), ValidationError> {
+) -> Result<Box<[SourceByteCall]>, ValidationError> {
     let mut facts = facts(work)?;
     let value = if phase == Phase::Acquire {
         0
@@ -1547,7 +1638,7 @@ fn check_flow(
             _ => return Err(invalid()),
         }
     }
-    Ok(())
+    Ok(facts.byte_calls.into_boxed_slice())
 }
 fn check_handler(
     program: &UnvalidatedEffectProgram,
@@ -1556,7 +1647,7 @@ fn check_handler(
     body: NodeId,
     answer: crate::resolved::BinderId,
     work: &mut TypeWorkBudget,
-) -> Result<(), ValidationError> {
+) -> Result<Box<[SourceByteCall]>, ValidationError> {
     let mut facts = facts(work)?;
     let mut path = FlowPath::new(work)?;
     path.bind(state.id(), state_data(&mut facts, work)?, work)?;
@@ -1642,7 +1733,7 @@ fn check_handler(
             }
         }
     }
-    Ok(())
+    Ok(facts.byte_calls.into_boxed_slice())
 }
 
 /// Complete compiler claim for one immutable defining forest. This is not an
@@ -2001,6 +2092,61 @@ impl SourceResourceScopeNode {
             }
         }
         Ok(false)
+    }
+
+    /// Maps a flow-proved original call and its selected canonical type
+    /// application through the independently authenticated specialization forest.
+    pub(crate) fn visit_byte_calls(
+        &self,
+        mut visit: impl FnMut(SourceByteCall, &mut TypeWorkBudget) -> Result<(), ValidationError>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
+        for (phase, calls) in self.original().byte_calls.iter().enumerate() {
+            let copy = &self.descriptor.copies[phase];
+            for call in calls {
+                charge(work, copy.nodes.len())?;
+                let map = |original| {
+                    copy.nodes
+                        .iter()
+                        .find_map(|(source, target)| (*source == original).then_some(*target))
+                };
+                visit(
+                    SourceByteCall {
+                        apply: call
+                            .apply
+                            .map(|apply| map(apply).ok_or_else(invalid))
+                            .transpose()?,
+                        application: map(call.application).ok_or_else(invalid)?,
+                        function: call.function,
+                    },
+                    work,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn contains_byte_call(
+        &self,
+        apply: NodeId,
+        application: NodeId,
+        function: crate::resolved::BinderId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ValidationError> {
+        let mut found = false;
+        self.visit_byte_calls(
+            |call, _| {
+                found |= call
+                    == SourceByteCall {
+                        apply: Some(apply),
+                        application,
+                        function,
+                    };
+                Ok(())
+            },
+            work,
+        )?;
+        Ok(found)
     }
 
     /// Enumerates only original checked lifecycle requests whose exact copied
@@ -3310,6 +3456,180 @@ mod tests {
         fs::write(fixture.0.join("owner.ash"), owner).unwrap();
         fs::write(fixture.0.join("entry.ash"), entry).unwrap();
         fixture
+    }
+
+    fn byte_access_fixture(acquired_only: bool, generic_rows: bool) -> Fixture {
+        let fixture = Fixture::new();
+        let mut owner = include_str!("../../tests/fixtures/source-owner/byte_owner.ash").to_owned();
+        let mut entry = if generic_rows {
+            include_str!("../../tests/fixtures/source-owner/byte_generic_rows_entry.ash").to_owned()
+        } else {
+            include_str!("../../tests/fixtures/source-owner/byte_entry.ash").to_owned()
+        };
+        if generic_rows {
+            owner = owner
+                .replace(
+                    "Before : EffectRow, R, After : EffectRow",
+                    "Before : EffectRow, Phantom, R, After : EffectRow",
+                )
+                .replace(
+                    "<{| Before}, R, {| After}>",
+                    "<{| Before}, Phantom, R, {| After}>",
+                );
+            entry = entry
+                .replace(
+                    "Before : EffectRow, R, After : EffectRow",
+                    "Before : EffectRow, Phantom, R, After : EffectRow",
+                )
+                .replace(
+                    "<{| Before}, R, {| After}>",
+                    "<{| Before}, Phantom, R, {| After}>",
+                )
+                .replace(
+                    "<{| Before}, Inner, {| After}>",
+                    "<{| Before}, Phantom, Inner, {| After}>",
+                )
+                .replace("<{Tag}, Outer, {}>", "<{Tag}, Int, Outer, {}>");
+        }
+        if acquired_only {
+            owner = owner
+                .replace(
+                    "pub type Scope<I, E, T> = NotAcquired(I)\n    | Completed(T, Completion<E>)",
+                    "pub type Outcome<T> = Success(T)\n    | Failure(Unit)",
+                )
+                .replace(
+                    "result Scope<Unit, Unit, Answer> for <Answer>",
+                    "result Outcome<Answer> for <Answer>",
+                )
+                .replace("codec scope", "codec acquired_only");
+            entry = entry.replace("Owner.Scope<Unit, Unit, ", "Owner.Outcome<");
+        }
+        fs::write(fixture.0.join("owner.ash"), owner).unwrap();
+        fs::write(fixture.0.join("entry.ash"), entry).unwrap();
+        fixture
+    }
+
+    #[test]
+    fn byte_access_original_copies_and_complete_rows_reject_independent_forgeries() {
+        for acquired_only in [false, true] {
+            let fixture = byte_access_fixture(acquired_only, true);
+            check_independent_source_scope(&fixture);
+            let compiled = fixture.compile();
+            let (checked, provenance) = compiled.effect_build_input().unwrap();
+            let sources = provenance
+                .iter()
+                .map(|(_, source)| source.as_ref())
+                .collect::<Vec<_>>();
+            let modules = provenance
+                .iter()
+                .map(|(module, source)| (*module, source.id()))
+                .collect::<Vec<_>>();
+            let original = super::super::transform::identity_effect_traversal(checked).unwrap();
+            let index = source_forwarding_scope_indices(&original).into_iter().find(|index| {
+                matches!(&original.nodes[*index].kind, EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope))
+                    if matches!(&scope.arguments()[0], KindedArgument::RowArg(row) if row.tail().is_some()))
+            }).expect("the generic nested occurrence preserves its phantom Row actual");
+            for changed in [0, 1, 3] {
+                let mut forged =
+                    super::super::transform::identity_effect_traversal(checked).unwrap();
+                let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+                    &mut forged.nodes[index].kind
+                else {
+                    unreachable!()
+                };
+                let descriptor = Arc::get_mut(&mut scope.descriptor).unwrap();
+                let old = &descriptor.arguments[changed];
+                assert!(
+                    matches!(old, KindedArgument::RowArg(row) if row.tail().is_some())
+                        || matches!(old, KindedArgument::TypeArg(Type::Variable(_)))
+                );
+                // Before/After do not occur in the canonical byte value type S.
+                // Change only the copied ordered Row actual, leaving every byte
+                // Apply, type application, operand, original forest and type intact.
+                let replacement = if changed == 1 {
+                    KindedArgument::TypeArg(Type::Unit)
+                } else {
+                    KindedArgument::RowArg(crate::types::EffectRow::empty())
+                };
+                let old = std::mem::replace(&mut descriptor.arguments[changed], replacement);
+                crate::types::discard_kinded_argument_iteratively(old);
+                let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+                    &forged.nodes[index].kind
+                else {
+                    unreachable!()
+                };
+                let failure = scope
+                    .authenticate(
+                        NodeId::new(forged.arena, index as u32),
+                        &forged,
+                        &mut TypeWorkBudget::default(),
+                    )
+                    .unwrap_err();
+                assert_eq!(failure.reason(), ValidationReason::Registry);
+                assert!(
+                    super::super::validate::validate_effect_modules_family(
+                        forged, &sources, &modules
+                    )
+                    .is_err()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn byte_access_independent_core_has_exact_budget_prefix_and_fresh_retry() {
+        let limit = crate::compiler_work::CompilationPhase::IndependentCore.hard_limit();
+        for acquired_only in [false, true] {
+            let fixture = byte_access_fixture(acquired_only, false);
+            let compiled = fixture.compile();
+            let (checked, provenance) = compiled.effect_build_input().unwrap();
+            let sources = provenance
+                .iter()
+                .map(|(_, source)| source.as_ref())
+                .collect::<Vec<_>>();
+            let modules = provenance
+                .iter()
+                .map(|(module, source)| (*module, source.id()))
+                .collect::<Vec<_>>();
+            let mut measured = TypeWorkBudget::with_limit(limit);
+            super::super::validate::validate_effect_modules_with_work(
+                super::super::transform::identity_effect_traversal(checked).unwrap(),
+                &sources,
+                &modules,
+                &mut measured,
+            )
+            .unwrap();
+            let cost = measured.used();
+            assert!(cost < crate::compiler_work::CompilationPhase::IndependentCore.budget());
+            for prefix in [0, 5] {
+                let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+                short.charge(prefix).unwrap();
+                assert_eq!(
+                    super::super::validate::validate_effect_modules_with_work(
+                        super::super::transform::identity_effect_traversal(checked).unwrap(),
+                        &sources,
+                        &modules,
+                        &mut short
+                    )
+                    .unwrap_err()
+                    .reason(),
+                    ValidationReason::Resource
+                );
+                for _ in 0..2 {
+                    let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                    exact.charge(prefix).unwrap();
+                    super::super::validate::validate_effect_modules_with_work(
+                        super::super::transform::identity_effect_traversal(checked).unwrap(),
+                        &sources,
+                        &modules,
+                        &mut exact,
+                    )
+                    .unwrap();
+                    assert_eq!(exact.used(), prefix + cost);
+                }
+            }
+            println!("byte access independent Core: acquired_only={acquired_only}, work={cost}");
+        }
     }
 
     #[test]

@@ -602,7 +602,7 @@ owner formals, scalar acquisition operands, one pointer acquisition result, and
 an unconditional consuming `void` teardown whose sole operand is the exact
 Current state. Each foreign symbol still retains its complete ordered Type and
 EffectRow arguments; the native Type-only projection does not replace them.
-Byte access, dependent owners, additional teardown operands and native
+Dependent owners, additional teardown operands and native
 retained-status outcomes are unsupported executable shapes in this checkpoint.
 
 Before any Ash expression runs, program admission checks both acquisition and
@@ -702,7 +702,7 @@ clause-owned `resume`; resumption continues the same activation without repeatin
 acquisition. Repeated executions allocate distinct activation keys. Nested source
 resource scopes complete their own finish before their enclosing scope finishes.
 This checkpoint does not admit outward capture or owned discard of a source
-resource boundary, quarantine, dependency teardown or byte access.
+resource boundary, quarantine or dependency teardown.
 
 Normal body return saves its value and invokes the admitted Ash finish once.
 Before the Current teardown, the machine authenticates the state token's exact
@@ -732,6 +732,64 @@ state and may perform its own acquisition. These rules assume the authored
 foreign contract holds; linking and checked Core do not prove external binary
 validity, and divergence or external process termination provides no eventual
 release guarantee.
+
+## Common initialized byte access
+
+`Foreign.byte_read<S>` and `Foreign.byte_write<S>` borrow an initialized live
+state from the admitted source acquire, handler or finish phase. The call retains
+its selected original canonical occurrence and complete ordered caller and
+defining declaration Type/Row instances. Runtime admission authenticates that
+correspondence, the exact activation and original owner, and the unique live
+guard. A compatible state type, stale or donor token, consumed state, or private
+data cannot replace any of these facts. Borrowing does not consume the guard or
+change ordinary handler selection and precedence.
+
+The original guard supplies the initialized writable extent. After ordinary
+strict argument evaluation, admission checks the index in the GNU64 `size_t`
+range and against that extent before inspecting or charging conversion of a
+write's byte value. A valid byte is an integer in `[0, 255]`. An invalid index or
+byte returns canonical `Foreign.ConversionFailed(error)` without reading or
+writing native memory. A zero extent remains owned and refuses every index.
+Internal work or storage exhaustion is terminal and supplies no conversion
+result. A valid index with insufficient byte-conversion work therefore differs
+from an invalid index whose complete refusal report is affordable.
+
+Before a read or write callback, the machine disposes owned call-specialization
+metadata, charges bounded operation and result work, and fallibly reserves and
+initializes the complete reply cell. Readiness retains only that unpublished
+cell and a borrowed guard with the checked index. A read returns an unsigned byte;
+converting `[0, 255]` to the mathematical `Int` uses existing inline integer
+storage and cannot allocate or refuse. A write has an already checked byte and
+an initialized Unit reply. Both callbacks fill or preserve the prepared payload
+and publish its location without further charging, reservation or allocation.
+Rejected write admission leaves native memory unchanged.
+
+In the following steps, `ready(g, index, slot)` already authenticates the original
+call and live guard and prepays the complete reply. `slot` belongs exclusively to
+readiness; these steps have no fallible admission premise after native access.
+
+```sequent
+family initialized-byte-access-steps:
+  E-Byte-Read :=
+    read_byte(g, index) = byte
+    fill_returned(slot, Int(byte)) = heap_1, value
+    ===>
+    CONFIG(heap, environment, ByteReadReady(g, index, slot), continuation) -> CONFIG(heap_1, environment, value, continuation)
+
+  E-Byte-Write :=
+    write_byte(g, index, byte) = ()
+    publish_returned_unit(slot) = value
+    ===>
+    CONFIG(heap, environment, ByteWriteReady(g, index, byte, slot), continuation) -> CONFIG(heap, environment, value, continuation)
+```
+
+The returned value is ordinary `Foreign.Returned(Int)` or
+`Foreign.Returned(())`; neither reply owns or exposes the state. Later continuation
+failure cannot replay the callback. The scope still owns exactly one release
+obligation until teardown consumes it. External initialization and writability
+remain foreign-contract assumptions; checked source, binding and image admission
+do not prove the external binary's memory validity. Copy windows, dependent
+ownership and outward source control remain outside this checkpoint.
 
 ## Effect handlers and completion
 

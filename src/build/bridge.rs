@@ -202,6 +202,11 @@ impl TargetResolvedForeignBridge {
     pub(crate) const fn call(&self) -> TargetBridgeCall {
         self.call
     }
+    pub(crate) fn byte_owner(&self) -> bool {
+        self.symbol.owner().is_some_and(|owner| {
+            owner.owner().representation() == PreparedAddressRepresentation::Bytes
+        })
+    }
     #[cfg(test)]
     pub(crate) fn symbol(&self) -> &Arc<CheckedForeignSymbol> {
         &self.symbol
@@ -521,6 +526,13 @@ fn operation_name(
 }
 
 fn render_bridge(output: &mut impl Write, plan: &TargetResolvedForeignBridge) -> fmt::Result {
+    if plan.call == TargetBridgeCall::OwnerAcquire && plan.byte_owner() {
+        let name = &plan.rust_function_name;
+        write!(
+            output,
+            "pub fn {name}__read(address: *mut core::ffi::c_void, index: usize) -> u8 {{\n    // SAFETY: The original live guard admits index below its initialized byte extent.\n    unsafe {{ address.cast::<u8>().add(index).read() }}\n}}\npub fn {name}__write(address: *mut core::ffi::c_void, index: usize, byte: u8) {{\n    // SAFETY: The original unique guard admits index below its writable initialized extent.\n    unsafe {{ address.cast::<u8>().add(index).write(byte) }};\n}}\n"
+        )?;
+    }
     output.write_str("#[cfg(not(all(target_arch = \"x86_64\", target_os = \"linux\", target_env = \"gnu\", target_pointer_width = \"64\")))]\ncompile_error!(\"unsupported Ash native bridge target\");\nunsafe extern \"C\" {\n    #[link_name = \"")?;
     for character in plan.symbol.symbol().native_name().chars() {
         for escaped in character.escape_default() {

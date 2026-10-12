@@ -1120,6 +1120,9 @@ mod source_handler_entry_tests {
     thread_local! {
         static ARMED: Cell<usize> = const { Cell::new(0) };
         static DESTROYED: Cell<usize> = const { Cell::new(0) };
+        static BYTE: Cell<u8> = const { Cell::new(0) };
+        static BYTE_READS: Cell<usize> = const { Cell::new(0) };
+        static BYTE_WRITES: Cell<usize> = const { Cell::new(0) };
     }
 
     fn reset_counts() {
@@ -1161,10 +1164,175 @@ mod source_handler_entry_tests {
         .expect("the sentinel records a nonnull injected guard")
     }
 
+    fn read_byte_sentinel(address: *mut core::ffi::c_void, index: usize) -> u8 {
+        assert_eq!(address, NonNull::<u8>::dangling().as_ptr().cast());
+        assert_eq!(index, 0);
+        BYTE_READS.set(BYTE_READS.get() + 1);
+        BYTE.get()
+    }
+
+    fn write_byte_sentinel(address: *mut core::ffi::c_void, index: usize, byte: u8) {
+        assert_eq!(address, NonNull::<u8>::dangling().as_ptr().cast());
+        assert_eq!(index, 0);
+        BYTE_WRITES.set(BYTE_WRITES.get() + 1);
+        BYTE.set(byte);
+    }
+
+    #[test]
+    fn byte_guard_bounds_and_complete_reply_admission_precede_callbacks() {
+        use super::super::source_byte_phases::{ByteReplyReady, report_reservation_fault};
+        use crate::foreign::source_runtime::NativeByteCallbacks;
+        reset_counts();
+        BYTE.set(0);
+        BYTE_READS.set(0);
+        BYTE_WRITES.set(0);
+        let facts = Fixture::compile_with_bytes(false, true);
+        let machine = Machine::new_effect(facts.program());
+        let source = machine.source_resource_scope(facts.scope).unwrap();
+        let returned = source.header().acquire.call_codec().ids().returned;
+        let mut ready =
+            NativeOwnerGuardReady::new(Arc::clone(&source.header().owner), destroy_sentinel);
+        ready.prepare_byte_callbacks(NativeByteCallbacks {
+            read: read_byte_sentinel,
+            write: write_byte_sentinel,
+        });
+        ready.prepare_initialized_bytes(Some(1));
+        let guard = acquire_sentinel(&[NativeScalarValue::USize(42)], ready)
+            .unwrap()
+            .record()
+            .into_guard()
+            .unwrap();
+        assert_eq!(guard.initialized_bytes(), Some(1));
+        assert!(guard.byte_access(1).is_none());
+        assert!(guard.byte_access(usize::MAX).is_none());
+        assert_eq!((BYTE_READS.get(), BYTE_WRITES.get()), (0, 0));
+        let mut heap = Vec::new();
+        for read in [false, true] {
+            let mut short = TypeWorkBudget::with_limit(1 + usize::from(read));
+            assert!(ByteReplyReady::admit(&mut heap, &mut short, returned, read).is_err());
+            assert!(heap.is_empty());
+            assert_eq!((BYTE_READS.get(), BYTE_WRITES.get()), (0, 0));
+            assert_eq!(BYTE.get(), 0);
+        }
+        for read in [false, true] {
+            let _fault = report_reservation_fault::fail_next();
+            let mut exact = TypeWorkBudget::with_limit(2 + usize::from(read));
+            assert!(ByteReplyReady::admit(&mut heap, &mut exact, returned, read).is_err());
+            assert_eq!(exact.remaining(), 0);
+            assert_eq!(report_reservation_fault::hits(), 1);
+            assert!(heap.is_empty());
+            assert_eq!((BYTE_READS.get(), BYTE_WRITES.get()), (0, 0));
+            assert_eq!(BYTE.get(), 0, "refused storage precedes any native write");
+        }
+        let mut zero_work = TypeWorkBudget::with_limit(3);
+        let zero = ByteReplyReady::admit(&mut heap, &mut zero_work, returned, true).unwrap();
+        let Value::Location(zero_location) = zero.read(guard.byte_access(0).unwrap()) else {
+            panic!("prepaid zero byte report")
+        };
+        assert!(
+            matches!(&heap[zero_location], super::super::HeapCell::Constructor(found, Some(Value::Integer(value))) if *found == returned && value.to_u64() == Some(0))
+        );
+        let mut write_work = TypeWorkBudget::with_limit(2);
+        let write = ByteReplyReady::admit(&mut heap, &mut write_work, returned, false).unwrap();
+        assert_eq!(write_work.remaining(), 0);
+        let output = write.write(guard.byte_access(0).unwrap(), 255);
+        assert!(matches!(output, Value::Location(_)));
+        assert_eq!(
+            (BYTE_READS.get(), BYTE_WRITES.get(), BYTE.get()),
+            (1, 1, 255)
+        );
+        for _ in 0..2 {
+            let mut read_work = TypeWorkBudget::with_limit(3);
+            let read = ByteReplyReady::admit(&mut heap, &mut read_work, returned, true).unwrap();
+            assert_eq!(read_work.remaining(), 0);
+            let Value::Location(location) = read.read(guard.byte_access(0).unwrap()) else {
+                panic!("prepaid byte report")
+            };
+            assert!(
+                matches!(&heap[location], super::super::HeapCell::Constructor(found, Some(Value::Integer(value))) if *found == returned && value.to_u64() == Some(255))
+            );
+        }
+        assert_eq!((BYTE_READS.get(), BYTE_WRITES.get()), (3, 1));
+        drop(guard);
+        assert_eq!(DESTROYED.get(), 1);
+        let opaque = Fixture::compile(false);
+        let machine = Machine::new_effect(opaque.program());
+        let guard = injected_guard(Arc::clone(
+            &machine
+                .source_resource_scope(opaque.scope)
+                .unwrap()
+                .header()
+                .owner,
+        ));
+        assert!(guard.byte_access(0).is_none());
+        drop(guard);
+        assert_eq!(ARMED.get(), DESTROYED.get());
+    }
+
+    #[test]
+    fn byte_guard_missing_initialization_zero_extent_and_null_never_grant_access() {
+        use crate::foreign::source_runtime::NativeByteCallbacks;
+        reset_counts();
+        BYTE_READS.set(0);
+        BYTE_WRITES.set(0);
+        let facts = Fixture::compile_with_bytes(false, true);
+        let machine = Machine::new_effect(facts.program());
+        let owner = &machine
+            .source_resource_scope(facts.scope)
+            .unwrap()
+            .header()
+            .owner;
+        for extent in [None, Some(0)] {
+            let mut ready = NativeOwnerGuardReady::new(Arc::clone(owner), destroy_sentinel);
+            ready.prepare_byte_callbacks(NativeByteCallbacks {
+                read: read_byte_sentinel,
+                write: write_byte_sentinel,
+            });
+            ready.prepare_initialized_bytes(extent);
+            let guard = acquire_sentinel(&[NativeScalarValue::USize(42)], ready)
+                .unwrap()
+                .record()
+                .into_guard()
+                .unwrap();
+            assert_eq!(guard.initialized_bytes(), extent);
+            assert!(guard.byte_access(0).is_none());
+            assert_eq!((BYTE_READS.get(), BYTE_WRITES.get()), (0, 0));
+            drop(guard);
+            assert_eq!(ARMED.get(), DESTROYED.get());
+        }
+        let mut missing_callbacks = NativeOwnerGuardReady::new(Arc::clone(owner), destroy_sentinel);
+        missing_callbacks.prepare_initialized_bytes(Some(1));
+        let guard = acquire_sentinel(&[NativeScalarValue::USize(42)], missing_callbacks)
+            .unwrap()
+            .record()
+            .into_guard()
+            .unwrap();
+        assert!(guard.byte_access(0).is_none());
+        drop(guard);
+        let mut null = NativeOwnerGuardReady::new(Arc::clone(owner), destroy_sentinel);
+        null.prepare_byte_callbacks(NativeByteCallbacks {
+            read: read_byte_sentinel,
+            write: write_byte_sentinel,
+        });
+        null.prepare_initialized_bytes(Some(7));
+        assert!(
+            null.returned(std::ptr::null_mut())
+                .record()
+                .into_guard()
+                .is_none()
+        );
+        assert_eq!(ARMED.get(), DESTROYED.get());
+        assert_eq!((BYTE_READS.get(), BYTE_WRITES.get()), (0, 0));
+    }
+
     struct Fixture(PathBuf);
 
     impl Fixture {
         fn compile(ordinary_override: bool) -> Facts {
+            Self::compile_with_bytes(ordinary_override, false)
+        }
+
+        fn compile_with_bytes(ordinary_override: bool, bytes: bool) -> Facts {
             static IDS: AtomicU64 = AtomicU64::new(0);
             let directory = std::env::temp_dir().join(format!(
                 "ash-source-handler-entry-{}-{}",
@@ -1173,11 +1341,13 @@ mod source_handler_entry_tests {
             ));
             fs::create_dir(&directory).unwrap();
             let fixture = Self(directory);
-            fs::write(
-                fixture.0.join("owner.ash"),
-                include_str!("../../tests/fixtures/source-owner/forwarding_owner.ash"),
-            )
-            .unwrap();
+            let mut owner =
+                include_str!("../../tests/fixtures/source-owner/forwarding_owner.ash").to_owned();
+            if bytes {
+                owner = owner.replace("repr Address = opaque", "repr Address = bytes")
+                    .replace("outcome result nonnull { readable result }", "outcome result nonnull { readable result, initialized_bytes result from 0 }");
+            }
+            fs::write(fixture.0.join("owner.ash"), owner).unwrap();
             let body = if ordinary_override {
                 r#"handle (Owner.read owner) with Owner.ProbeOps<Owner.Probe<{}, R, {}>> {
         read access => resume 84

@@ -4414,7 +4414,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             &authenticated_method_evidence,
         )?;
         self.validate_scopes()?;
-        self.validate_type_scopes()
+        self.validate_type_scopes()?;
+        self.reject_pure_byte_applications()
     }
 
     fn validate_method_evidence_type_owners(
@@ -10910,6 +10911,26 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         &self,
         identity: crate::types::TypeVariableId,
     ) -> Result<Option<&Kind>, ValidationError> {
+        if matches!(
+            self.source_resource_context,
+            SourceResourceValidationContext::OriginalTemplate { .. }
+        ) {
+            let mut found = None;
+            for (_, fact) in self.program.registry.scalar_preflights() {
+                self.charge_type_work(1)?;
+                if fact.role().byte_parameter(fact.module()) == Some(identity)
+                    && let Type::Forall(parameters, _) = fact.core_signature()
+                {
+                    // Registry authentication established this sealed defining
+                    // declaration. This admits its scheme kind only; lexical
+                    // scope still rejects an unbound S or a forged application.
+                    found = parameters.first().map(|(_, kind)| kind);
+                }
+            }
+            if found.is_some() {
+                return Ok(found);
+            }
+        }
         let Some(types) = self.provider_external_types else {
             return Ok(None);
         };
@@ -11766,7 +11787,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         if !F::effect_row(&node.effects).is_empty() {
                             return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                         }
-                        fact.signature()
+                        fact.core_signature()
                     } else {
                         return Err(ValidationError::with_cause(
                             ValidationCause::UnknownVariableBinder,
@@ -11889,6 +11910,84 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         result.map_err(|()| ValidationError::new(ValidationReason::Resource, None))
     }
 
+    fn sealed_byte_application(&self, function: NodeId) -> Result<bool, ValidationError> {
+        let ty = &self.node(function)?.ty;
+        let Type::Forall(parameters, _) = ty else {
+            return Ok(false);
+        };
+        self.charge_type_work(parameters.len())?;
+        let mut found = false;
+        // Complete the charged unordered traversal before returning. A fresh
+        // reconstructed registry must have the same exact admission cost.
+        for (_, fact) in self.program.registry.scalar_preflights() {
+            self.charge_type_work(1)?;
+            let Some(parameter) = fact.role().byte_parameter(fact.module()) else {
+                continue;
+            };
+            // Exact declaration-owned quantifier identity is necessary. An
+            // alpha-equivalent ordinary generic function has no byte role.
+            if parameters.as_ref() == [(parameter, Kind::Type)]
+                && self.same_type_charged(ty, fact.core_signature())?
+            {
+                found = true;
+            }
+        }
+        Ok(found)
+    }
+
+    fn borrowed_byte_call_shape(&self, function: NodeId) -> Result<bool, ValidationError> {
+        let Some(function) = self.node(function)?.ty.function_view() else {
+            return Ok(false);
+        };
+        let Type::Tuple(fields) = function.domain() else {
+            return Ok(false);
+        };
+        if !matches!(fields.len(), 2 | 3) {
+            return Ok(false);
+        }
+        self.charge_type_work(fields.len())?;
+        if !fields[1..].iter().all(|field| *field == Type::Int)
+            || !self.function_contains_source_owner_state(&fields[0])?
+        {
+            return Ok(false);
+        }
+        let Type::Application(call, output) = function.value() else {
+            return Ok(false);
+        };
+        let mut found = false;
+        for (_, fact) in self.program.registry.scalar_preflights() {
+            self.charge_type_work(1)?;
+            if fact.role().byte_parameter(fact.module()).is_some()
+                && matches!(call.as_ref(), Type::Nominal(id) if *id == fact.call_codec().ids().call)
+                && **output
+                    == if fields.len() == 2 {
+                        Type::Int
+                    } else {
+                        Type::Unit
+                    }
+            {
+                found = true;
+            }
+        }
+        Ok(found)
+    }
+
+    fn reject_pure_byte_applications(&self) -> Result<(), ValidationError> {
+        for (index, stored) in self.program.nodes.iter().enumerate() {
+            self.charge_type_work(1)?;
+            if let Some(PureExprKind::Computation(PureComputation::TypeApplication(application))) =
+                F::pure(&stored.kind)
+                && self.sealed_byte_application(application.function())?
+            {
+                return Err(ValidationError::new(
+                    ValidationReason::Registry,
+                    Some(node_id(self.program.arena, index)?),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn original_source_phase_function(&self, id: NodeId) -> Result<bool, ValidationError> {
         if !matches!(
             self.source_resource_context,
@@ -11926,7 +12025,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
         let role = match intrinsic.operation() {
             Intrinsic::ForeignCheckedI64 { .. } => ForeignScalarPreflightRole::I64,
-            _ => ForeignScalarPreflightRole::SizeT,
+            Intrinsic::ForeignCheckedSizeT { .. } => ForeignScalarPreflightRole::SizeT,
+            Intrinsic::ForeignByteRead { .. } => ForeignScalarPreflightRole::ByteRead,
+            Intrinsic::ForeignByteWrite { .. } => ForeignScalarPreflightRole::ByteWrite,
+            _ => return Err(ValidationError::new(ValidationReason::Registry, Some(id))),
         };
         if fact.function() != function
             || fact.module() != intrinsic.module()
@@ -11987,7 +12089,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 use super::packed::Intrinsic;
                 match intrinsic.operation() {
                     Intrinsic::ForeignCheckedI64 { function }
-                    | Intrinsic::ForeignCheckedSizeT { function } => {
+                    | Intrinsic::ForeignCheckedSizeT { function }
+                    | Intrinsic::ForeignByteRead { function }
+                    | Intrinsic::ForeignByteWrite { function } => {
                         self.validate_scalar_preflight_intrinsic(id, node, *intrinsic, function)?;
                     }
                     Intrinsic::ForeignLayoutWitness { producer } => {
@@ -12240,7 +12344,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             } else {
                                 (!matches!(
                                     F::pure(&self.node(abstraction.body())?.kind),
-                                    Some(PureExprKind::Value(PureValue::Function(_)))
+                                    Some(PureExprKind::Value(
+                                        PureValue::Function(_) | PureValue::Intrinsic(_)
+                                    ))
                                 ))
                                 .then_some(ValidationCause::RecursiveFunctionBody)
                             }
@@ -15017,6 +15123,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         let has_discard = self.validate_effect_nodes(&type_binders, &native_registry)?;
         if self.source_resource_context == SourceResourceValidationContext::FinalProgram {
             self.validate_source_owner_request_coverage()?;
+            self.validate_source_byte_call_coverage()?;
         }
         self.validate_registration_edges()?;
         self.validate_effect_abstraction_shapes(&authenticated_method_evidence)?;
@@ -15112,6 +15219,68 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 Some(NodeId::new(self.program.arena, node as u32)),
             ),
         })?;
+        Ok(())
+    }
+
+    fn validate_source_byte_call_coverage(&self) -> Result<(), ValidationError> {
+        use super::effect::{EffectExprKind, EffectOperation};
+        let mut work =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let mut calls = HashSet::new();
+        let mut applications = HashSet::new();
+        let result = (|| {
+            work.charge(self.program.nodes.len())
+                .map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
+            for stored in &self.program.nodes {
+                let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+                    &stored.kind
+                else {
+                    continue;
+                };
+                scope.visit_byte_calls(
+                    |call, work| {
+                        work.charge(2)
+                            .map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
+                        applications
+                            .try_reserve(1)
+                            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                        applications.insert(call.application);
+                        if let Some(apply) = call.apply {
+                            calls.try_reserve(1).map_err(|_| {
+                                ValidationError::new(ValidationReason::Resource, None)
+                            })?;
+                            calls.insert(apply);
+                        }
+                        Ok(())
+                    },
+                    &mut work,
+                )?;
+            }
+            Ok(())
+        })();
+        self.charge_type_work(work.used())?;
+        result?;
+        for (index, stored) in self.program.nodes.iter().enumerate() {
+            self.charge_type_work(1)?;
+            let id = node_id(self.program.arena, index)?;
+            let forbidden = match &stored.kind {
+                EffectExprKind::Pure(PureExprKind::Computation(
+                    PureComputation::TypeApplication(application),
+                )) => {
+                    self.sealed_byte_application(application.function())?
+                        && !applications.contains(&id)
+                }
+                EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(
+                    application,
+                ))) => {
+                    self.borrowed_byte_call_shape(application.function())? && !calls.contains(&id)
+                }
+                _ => false,
+            };
+            if forbidden {
+                return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+            }
+        }
         Ok(())
     }
 
@@ -15947,7 +16116,11 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 pending.push(current);
                 match super::effect::EffectOperationFamily::pure(&self.node(current)?.kind) {
                     Some(
-                        PureExprKind::Value(PureValue::Function(_) | PureValue::Constructor(_))
+                        PureExprKind::Value(
+                            PureValue::Function(_)
+                            | PureValue::Constructor(_)
+                            | PureValue::Intrinsic(_),
+                        )
                         | PureExprKind::Variable(_)
                         | PureExprKind::Computation(PureComputation::TypeAbstraction(_)),
                     ) => break,

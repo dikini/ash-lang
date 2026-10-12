@@ -630,10 +630,12 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/foreign/source_owner_runtime.rs::NativeOwnerCallReturned.guard", FieldSourceRuntimeOwnerShared),
     kind_site!("src/foreign/source_owner_runtime.rs::NativeOwnerConsumed.owner", FieldSourceRuntimeOwnerShared),
     kind_site!("src/foreign/source_owner_runtime.rs::NativeOwnerGuard.owner", FieldSourceRuntimeOwnerShared),
+    kind_site!("src/foreign/source_owner_runtime.rs::NativeByteAccess._guard", FieldSourceRuntimeOwnerShared, Borrowed),
     kind_site!("src/foreign/source_owner_runtime.rs::NativeOwnerGuardReady.guard", FieldSourceRuntimeOwnerShared),
     kind_site!("src/foreign/source_runtime.rs::NativeOwnerCallReturned.$alias", FieldSourceRuntimeOwnerShared),
     kind_site!("src/foreign/source_runtime.rs::NativeOwnerConsumed.$alias", FieldSourceRuntimeOwnerShared),
     kind_site!("src/foreign/source_runtime.rs::NativeOwnerGuard.$alias", FieldSourceRuntimeOwnerShared),
+    kind_site!("src/foreign/source_runtime.rs::NativeByteAccess.$alias", FieldSourceRuntimeOwnerShared, Borrowed),
     kind_site!("src/foreign/source_runtime.rs::NativeOwnerGuardReady.$alias", FieldSourceRuntimeOwnerShared),
     kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_source_resource_definitions::$block_160_0_3::$block_160_0_3_6::Effects.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_source_resource_definitions::$block_160_0_3::$block_160_0_3_6::Handlers.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
@@ -737,6 +739,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/eval/source_scalar_phases.rs::ScalarCallProgress.Returned.0", FieldNativeCallMixed),
     kind_site!("src/eval/source_scalar_phases.rs::ScalarCallProgress.Recorded.0", FieldNativeCallMixed),
     kind_site!("src/eval/source_scalar_phases.rs::ScalarCallReported.value", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/source_byte_phases.rs::ByteReplyReady.cell", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Borrowed),
     // Connected source-native, compiled-program and private build carriers.
     // Native tables share original descriptors; declaration/phase guards retain
     // owned records alongside shared facts and dismantle partial work iteratively.
@@ -760,6 +763,7 @@ const KIND_SITES: &[KindSite] = &[
     // iterative fact destructor; publication shares that same immutable fact.
     // The codec and source origins contain no Type/Kind carrier edges.
     kind_site!("src/foreign/scalar_preflight.rs::CheckedForeignScalarPreflight.annotation", FieldForeignTypesOwned),
+    kind_site!("src/foreign/scalar_preflight.rs::CheckedForeignScalarPreflight.core_signature", FieldForeignTypesOwned),
     kind_site!("src/foreign/checked_source.rs::ForeignBindingContext.registry", FieldForeignBindingRegistryBorrow),
     kind_site!("src/foreign/source_contract.rs::PreparedForeignLibrary.symbols", FieldForeignPreparedKinds),
     kind_site!("src/foreign/source_contract.rs::PreparedForeignLibrary.owners", FieldForeignPreparedKinds),
@@ -2388,6 +2392,13 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/eval/machine.rs::Evaluation.value", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
     kind_site!("src/eval/machine.rs::Frame.ApplyArgument.function", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
     kind_site!("src/eval/machine.rs::Frame.ApplyFunction.caller_environment", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.SourceApplyFunction.caller_environment", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.SourceByteArgument.callable", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.SourceByteArgument.caller", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.SourceByteInstantiation.caller", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.SourceByteInstantiation.defining", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::SourceByteCallable.caller", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::SourceByteCallable.defining", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
     kind_site!("src/eval/machine.rs::Frame.Bind.environment", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
     kind_site!("src/eval/machine.rs::Frame.CleanupBoundary.environment", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
     kind_site!("src/eval/machine.rs::Frame.CleanupCompletion.saved", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
@@ -2431,6 +2442,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/eval/value.rs::ObservedValue.heap", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
     kind_site!("src/eval/value.rs::Value.Data.0", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
     kind_site!("src/eval/value.rs::Value.Function.0", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/value.rs::Value.ByteCallable.0", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
     kind_site!("src/eval/value.rs::Value.Polymorphic.environment", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
     kind_site!("src/evidence.rs::EvidenceSelector.abstracts", FieldEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/evidence.rs::EvidenceSelector.implementations", FieldEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),

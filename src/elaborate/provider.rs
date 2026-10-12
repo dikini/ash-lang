@@ -299,10 +299,53 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     pub(super) fn check_provider_source_application(
         &mut self,
         function: NodeId,
+        function_type: &Type,
         argument: &Type,
         span: Span,
     ) -> Result<(), TypeError> {
         if !self.contains_provider_state(argument)? {
+            return Ok(());
+        }
+        // This source frontier checks the candidate's complete value types.
+        // Independent lifecycle flow must still authenticate the selected
+        // canonical callable and its exact original TypeApplication; compatible
+        // ordinary callables receive no execution authority from this check.
+        if let Some(header) = self
+            .provider_context
+            .as_ref()
+            .and_then(|context| context.source.as_ref())
+            && header.owner.owner().representation()
+                == crate::foreign::source_contract::PreparedAddressRepresentation::Bytes
+            && matches!(
+                header.acquire.owner_role(),
+                Some(
+                    crate::foreign::source_contract::PreparedOwnerCall::Acquire {
+                        initialized_bytes: Some(_),
+                        ..
+                    }
+                )
+            )
+            && let Type::Tuple(fields) = argument
+            && (fields.len() == 2 || fields.len() == 3)
+            && fields[1..].iter().all(|field| *field == Type::Int)
+            && let Some(result) = function_type
+                .function_view()
+                .map(|function| function.value())
+            && let Type::Application(call, output) = result
+            && matches!(call.as_ref(),Type::Nominal(id) if *id == header.acquire.call_codec().ids().call)
+            && **output
+                == if fields.len() == 2 {
+                    Type::Int
+                } else {
+                    Type::Unit
+                }
+            && crate::types::same_type_with_budget(
+                &fields[0],
+                &header.original.state.ty,
+                &mut self.type_work,
+            )
+            .map_err(|()| type_resource())?
+        {
             return Ok(());
         }
         let constructor = self.builder.direct_constructor(function)?.ok_or_else(|| {

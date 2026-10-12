@@ -77,6 +77,8 @@ const FOREIGN_SOURCE: &str = concat!(
     "    | BlockedDependent\n",
     "pub checked_i64 : Int -> Call<Int>\nchecked_i64 value = checked_i64 value\n",
     "pub checked_size_t : Int -> Call<Int>\nchecked_size_t value = checked_size_t value\n",
+    "pub byte_read<S> : (S, Int) -> Call<Int>\nbyte_read value = byte_read value\n",
+    "pub byte_write<S> : (S, Int, Int) -> Call<Unit>\nbyte_write value = byte_write value\n",
 );
 
 /// Exact source coordinates for compiler-owned scalar preflight declarations.
@@ -85,23 +87,25 @@ pub(crate) fn foreign_scalar_preflight_ranges(
     source: Span,
     local: u32,
 ) -> Option<(crate::source::ByteRange, crate::source::ByteRange)> {
-    const I64: &str = "pub checked_i64 : Int -> Call<Int>\nchecked_i64 value = checked_i64 value\n";
-    const SIZE: &str =
-        "pub checked_size_t : Int -> Call<Int>\nchecked_size_t value = checked_size_t value\n";
     if source.range().start() != 0
         || usize::try_from(source.range().end()).ok()? != FOREIGN_SOURCE.len()
     {
         return None;
     }
-    let (start, name) = match local {
-        0 => (FOREIGN_SOURCE.len() - I64.len() - SIZE.len(), "checked_i64"),
-        1 => (FOREIGN_SOURCE.len() - SIZE.len(), "checked_size_t"),
+    let (name, generic, length) = match local {
+        0 => ("checked_i64", 0, 16),
+        1 => ("checked_size_t", 0, 16),
+        2 => ("byte_read", 3, 21),
+        3 => ("byte_write", 3, 27),
         _ => return None,
     };
+    // Only the immutable compiler-owned source is inspected here. Runtime
+    // selection uses retained identities and provenance, never these names.
+    let start = FOREIGN_SOURCE.find(name)?.checked_sub("pub ".len())?;
     let name_start = u32::try_from(start + "pub ".len()).ok()?;
     let name_end = name_start.checked_add(u32::try_from(name.len()).ok()?)?;
-    let annotation_start = name_end.checked_add(3)?;
-    let annotation_end = annotation_start.checked_add(16)?;
+    let annotation_start = name_end.checked_add(3 + generic)?;
+    let annotation_end = annotation_start.checked_add(length)?;
     Some((
         crate::source::ByteRange::new(name_start, name_end).ok()?,
         crate::source::ByteRange::new(annotation_start, annotation_end).ok()?,
