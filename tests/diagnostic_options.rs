@@ -60,6 +60,7 @@ fn diagnostic_defaults_and_explicit_options_follow_the_accepted_precedence() {
 #[test]
 fn invocation_errors_keep_format_selection_independent_of_early_parse_errors() {
     for arguments in [
+        vec!["--bad", "build", "--message-format", "json", "entry.ash"],
         vec!["--bad", "--message-format", "json", "entry.ash"],
         vec!["--message-format", "json", "--bad", "entry.ash"],
         vec![

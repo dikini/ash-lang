@@ -9,6 +9,17 @@ use instantiation::Instantiation;
 #[path = "foreign.rs"]
 mod foreign;
 
+#[path = "source_scalar_phases.rs"]
+mod source_scalar_phases;
+
+#[path = "source_owner_phases.rs"]
+mod source_owner_phases;
+#[cfg(test)]
+pub(crate) use source_owner_phases::post_record_test as source_owner_post_record_test;
+
+#[path = "source_resource_phases.rs"]
+mod source_resource_phases;
+
 #[path = "native_buffer.rs"]
 mod native_buffer;
 
@@ -419,6 +430,8 @@ pub enum RuntimeFailure {
     InvalidControlState,
     /// An executable foreign binding or codec violated its admitted contract.
     ForeignBinding,
+    /// A source resource completion failed in a codec without a completion field.
+    ResourceCompletion,
     /// The per-evaluation heap cannot represent another cell.
     HeapCapacity,
     /// A captured continuation cannot retain another control frame.
@@ -506,6 +519,7 @@ impl RuntimeFailure {
             Self::EnvironmentCapacity => "runtime.environment-capacity",
             Self::InvalidControlState => "runtime.invalid-control-state",
             Self::ForeignBinding => "runtime.foreign-binding",
+            Self::ResourceCompletion => "runtime.resource-completion",
             Self::HeapCapacity => "runtime.heap-capacity",
             Self::CapturedControlCapacity => "runtime.captured-control-capacity",
             Self::ResourceCapacity => "runtime.resource-capacity",
@@ -558,6 +572,7 @@ impl fmt::Display for RuntimeFailure {
             Self::EnvironmentCapacity => "runtime lexical environment capacity is exhausted",
             Self::InvalidControlState => "runtime machine control state is inconsistent",
             Self::ForeignBinding => "executable foreign binding or conversion contract failed",
+            Self::ResourceCompletion => "source resource completion failed",
             Self::HeapCapacity => "runtime heap capacity is exhausted",
             Self::CapturedControlCapacity => "runtime captured-control capacity is exhausted",
             Self::ResourceCapacity => "runtime resource capacity is exhausted",
@@ -597,6 +612,11 @@ enum Frame {
         environment: Environment,
     },
     ProviderBoundary(Box<ProviderBoundary>),
+    SourceResourceInitializer {
+        node: NodeId,
+        environment: Environment,
+    },
+    SourceResourceBoundary(Box<SourceResourceBoundary>),
     ProviderStateAccess {
         node: NodeId,
         instantiation: Instantiation,
@@ -647,6 +667,10 @@ enum Frame {
         body: NodeId,
         environment: Environment,
     },
+    NativeInterpretBoundary {
+        node: NodeId,
+        environment: Environment,
+    },
     HandlerBoundary {
         node: NodeId,
         environment: Environment,
@@ -684,6 +708,20 @@ struct ProviderBoundary {
     finished: Option<ProviderFinish>,
     saved: Option<Value>,
     discarded: bool,
+}
+
+/// One product source-resource activation. The source state and client handle
+/// carry only `key`; this slot is the sole owner of its native guard.
+#[derive(Debug)]
+struct SourceResourceBoundary {
+    node: NodeId,
+    key: ActivationKey,
+    environment: Environment,
+    owner: Option<crate::foreign::source_runtime::NativeOwnerGuard>,
+    phase: ProviderPhase,
+    payload: Option<Value>,
+    saved: Option<Value>,
+    consumed: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -733,6 +771,9 @@ fn selected_handler_for_discard(
     let actual = match program.node(*node) {
         Some(ExecutableNode::Effect(expression)) => match &expression.kind {
             EffectExprKind::Operation(EffectOperation::Handler(boundary)) => boundary.id(),
+            EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
+                scope.handler.id()
+            }
             EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
                 charge_effect_work(
                     work,
@@ -920,6 +961,11 @@ type WorkTrace = Arc<std::sync::Mutex<Vec<(NodeId, usize)>>>;
 #[derive(Debug)]
 pub struct Machine<'runtime> {
     foreign_runtime: Option<&'runtime mut crate::foreign::runtime::ForeignRuntime>,
+    source_bindings: Option<&'runtime crate::foreign::source_bindings::SourceNativeBindings>,
+    source_errors:
+        Option<&'runtime std::collections::HashMap<crate::module::ModuleId, ConstructorId>>,
+    pending_source_call: Option<source_scalar_phases::ScalarCallProgress<'runtime>>,
+    pending_source_owner_call: Option<source_owner_phases::SourceOwnerCallProgress<'runtime>>,
     cleanup_limit: usize,
     live_cleanups: usize,
     program: ExecutableProgram,
@@ -946,6 +992,10 @@ impl<'runtime> Machine<'runtime> {
     fn new(program: &ValidatedProgram) -> Self {
         Self {
             foreign_runtime: None,
+            source_bindings: None,
+            source_errors: None,
+            pending_source_call: None,
+            pending_source_owner_call: None,
             program: ExecutableProgram::Pure(program.shared()),
             cleanup_limit: 0,
             live_cleanups: 0,
@@ -979,6 +1029,10 @@ impl<'runtime> Machine<'runtime> {
     ) -> Self {
         Self {
             foreign_runtime: None,
+            source_bindings: None,
+            source_errors: None,
+            pending_source_call: None,
+            pending_source_owner_call: None,
             program: ExecutableProgram::Effect(program.shared()),
             cleanup_limit: MAX_CAPTURED_FRAME_CELLS,
             live_cleanups: 0,
@@ -1088,6 +1142,14 @@ impl<'runtime> Machine<'runtime> {
 
     fn run_loop(&mut self) -> Result<Evaluation, RuntimeFailure> {
         loop {
+            // Recording is the first step after a native return. No generic
+            // disposal/work/trace/report refusal may precede that receipt.
+            if self.step_source_scalar()? {
+                continue;
+            }
+            if self.step_source_owner()? {
+                continue;
+            }
             disposal::check()?;
             let control = self
                 .control
@@ -1133,6 +1195,21 @@ impl<'runtime> Machine<'runtime> {
                     }
                     let transition =
                         dispatch_entry(&self.program, node, environment, &mut self.heap)?;
+                    if matches!(
+                        &transition.frame,
+                        Some(Frame::NativeInterpretBoundary { .. })
+                    ) {
+                        charge_effect_work(&mut self.instantiation_work, 1, RuntimePhase::Access)?;
+                        self.frames.try_reserve(1).map_err(|_| {
+                            resource_failure(
+                                ResourceFailureCause::StorageReservationFailed,
+                                RuntimePhase::Access,
+                                RuntimeResource::FrameStorage,
+                                Some(1),
+                                None,
+                            )
+                        })?;
+                    }
                     disposal::check()?;
                     self.apply(transition);
                 }
@@ -1254,6 +1331,12 @@ impl<'runtime> Machine<'runtime> {
             Frame::ProviderBoundary(boundary) => {
                 self.return_provider(boundary, value)?;
             }
+            Frame::SourceResourceInitializer { node, environment } => {
+                self.enter_source_resource(node, environment, value)?;
+            }
+            Frame::SourceResourceBoundary(boundary) => {
+                self.return_source_resource(boundary, value)?;
+            }
             Frame::ProviderStateAccess {
                 node,
                 instantiation,
@@ -1291,6 +1374,9 @@ impl<'runtime> Machine<'runtime> {
                 };
                 self.trace_effect(EffectTraceEvent::ResourceReleased(key.0));
                 self.control = Some(Control::Return(result));
+            }
+            Frame::NativeInterpretBoundary { .. } => {
+                self.control = Some(Control::Return(value));
             }
             Frame::HandlerBoundary {
                 node, registration, ..
@@ -1369,6 +1455,7 @@ impl<'runtime> Machine<'runtime> {
                             value,
                             &mut self.heap,
                             &mut self.instantiation_work,
+                            self.program.registry(),
                         )?
                     };
                 self.control = Some(Control::Return(result));
@@ -1936,6 +2023,60 @@ impl<'runtime> Machine<'runtime> {
             &mut self.instantiation_work,
             Some(RuntimePhase::Access),
         )?;
+        // Source-native operations are interpreted only by the mandatory exact
+        // native boundary. They never enter ordinary handler selection or the
+        // legacy manifest/provider fallback.
+        charge_effect_work(&mut self.instantiation_work, 1, RuntimePhase::Access)?;
+        let source_symbol = self
+            .program
+            .registry()
+            .native_symbol(operation)
+            .map(Arc::clone);
+        if let Some(symbol) = source_symbol {
+            if symbol.owner().is_some() {
+                self.trace_effect(EffectTraceEvent::Request(operation));
+                return self.prepare_source_owner_request(node, operation, effect, value, &symbol);
+            }
+            let native_program = self.program.clone();
+            let mut admitted = false;
+            for frame in self.frames.iter().rev() {
+                charge_effect_work(&mut self.instantiation_work, 1, RuntimePhase::Access)?;
+                let Frame::NativeInterpretBoundary { node, environment } = frame else {
+                    continue;
+                };
+                let Some(ExecutableNode::Effect(expression)) = native_program.node(*node) else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                let EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) =
+                    &expression.kind
+                else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                for entry in boundary.interpretations() {
+                    charge_effect_work(&mut self.instantiation_work, 1, RuntimePhase::Access)?;
+                    if !Arc::ptr_eq(entry.symbol(), &symbol) {
+                        continue;
+                    }
+                    let handled = environment.instantiation.effect(
+                        entry.effect(),
+                        &mut self.instantiation_work,
+                        Some(RuntimePhase::Access),
+                    )?;
+                    if same_effect_instance(&handled, &effect, &mut self.instantiation_work)? {
+                        admitted = true;
+                        break;
+                    }
+                }
+                if admitted {
+                    break;
+                }
+            }
+            if !admitted {
+                return Err(RuntimeFailure::ForeignBinding);
+            }
+            self.trace_effect(EffectTraceEvent::Request(operation));
+            return self.prepare_source_scalar_request(operation, effect, value, &symbol);
+        }
         let mut selected = None;
         let mut selected_member = 0;
         // Keep immutable program authority borrowed independently of the mutable
@@ -1972,6 +2113,9 @@ impl<'runtime> Machine<'runtime> {
                 Some(ExecutableNode::Effect(expression)) => match &expression.kind {
                     EffectExprKind::Operation(EffectOperation::Handler(handler)) => {
                         (Some(handler), None)
+                    }
+                    EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
+                        (Some(&scope.handler), None)
                     }
                     EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
                         (None, Some(scope))
@@ -2016,6 +2160,7 @@ impl<'runtime> Machine<'runtime> {
         let Some(selected) = selected else {
             return self.interpret_foreign(&effect, operation, value);
         };
+        self.authenticate_source_handler_access(selected, node, instantiation, &value)?;
         let registration = match &self.frames[selected] {
             Frame::HandlerBoundary {
                 node,
@@ -2733,6 +2878,9 @@ impl<'runtime> Machine<'runtime> {
         };
         match &expression.kind {
             EffectExprKind::Operation(EffectOperation::Handler(handler)) => Some(handler),
+            EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
+                Some(&scope.handler)
+            }
             EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
                 Some(scope.handler())
             }
@@ -2925,6 +3073,10 @@ fn dispatch_entry(
                         Control::Evaluate(scope.initializer(), environment.clone()),
                         Frame::ProviderInitializer { node, environment },
                     ),
+                    EffectOperation::SourceResourceScope(scope) => Transition::suspend(
+                        Control::Evaluate(scope.initializer, environment.clone()),
+                        Frame::SourceResourceInitializer { node, environment },
+                    ),
                     EffectOperation::Registration(_) => {
                         return Err(RuntimeFailure::InvalidControlState);
                     }
@@ -2939,6 +3091,10 @@ fn dispatch_entry(
                             node,
                             instantiation: environment.instantiation,
                         },
+                    ),
+                    EffectOperation::NativeInterpret(boundary) => Transition::suspend(
+                        Control::Evaluate(boundary.body(), environment.clone()),
+                        Frame::NativeInterpretBoundary { node, environment },
                     ),
                     EffectOperation::Handler(handler) => Transition::suspend(
                         Control::Evaluate(handler.body(), environment.clone()),
@@ -3289,11 +3445,14 @@ fn dispatch_return(
             environment,
         } => return_recursive_initialization(pending, next, body, environment, value, heap),
         Frame::HandlerBoundary { .. }
+        | Frame::NativeInterpretBoundary { .. }
         | Frame::CleanupBoundary { .. }
         | Frame::CleanupCompletion { .. }
         | Frame::ResourceInitializer { .. }
         | Frame::ProviderInitializer { .. }
         | Frame::ProviderBoundary(_)
+        | Frame::SourceResourceInitializer { .. }
+        | Frame::SourceResourceBoundary(_)
         | Frame::ProviderStateAccess { .. }
         | Frame::ResourceBoundary { .. }
         | Frame::Request { .. }
@@ -3514,6 +3673,7 @@ fn apply_intrinsic(
     argument: Value,
     heap: &mut Vec<HeapCell>,
     work: &mut TypeWorkBudget,
+    registry: &crate::resolved::ResolvedRegistry,
 ) -> Result<Value, RuntimeFailure> {
     use crate::core::packed::Intrinsic;
     let operation = intrinsic.operation();
@@ -3521,6 +3681,10 @@ fn apply_intrinsic(
         return Err(RuntimeFailure::InvalidControlState);
     }
     let result = match (operation, argument) {
+        (
+            Intrinsic::ForeignCheckedI64 { .. } | Intrinsic::ForeignCheckedSizeT { .. },
+            Value::Integer(integer),
+        ) => return apply_scalar_preflight(intrinsic, integer, heap, work, registry),
         (Intrinsic::BytesEmpty, Value::Unit) => Value::Bytes(Arc::from([])),
         (Intrinsic::BytesLength, Value::Bytes(bytes)) => {
             Value::Integer(crate::integer::Integer::from_usize(bytes.len()))
@@ -3605,6 +3769,92 @@ fn apply_intrinsic(
     Ok(result)
 }
 
+// Result preparation stays outside the shared evaluator dispatch frame.
+#[inline(never)]
+fn apply_scalar_preflight(
+    intrinsic: crate::core::packed::IntrinsicNode,
+    integer: crate::integer::Integer,
+    heap: &mut Vec<HeapCell>,
+    work: &mut TypeWorkBudget,
+    registry: &crate::resolved::ResolvedRegistry,
+) -> Result<Value, RuntimeFailure> {
+    use crate::{
+        core::packed::Intrinsic,
+        foreign::{
+            scalar_preflight::ForeignScalarPreflightRole,
+            source_contract::PreparedScalarRepresentation,
+            source_runtime::{NativeScalarConversionError, narrow_gnu_scalar},
+        },
+    };
+    let (function, role, representation) = match intrinsic.operation() {
+        Intrinsic::ForeignCheckedI64 { function } => (
+            function,
+            ForeignScalarPreflightRole::I64,
+            PreparedScalarRepresentation::Signed(64),
+        ),
+        Intrinsic::ForeignCheckedSizeT { function } => (
+            function,
+            ForeignScalarPreflightRole::SizeT,
+            PreparedScalarRepresentation::SizeT,
+        ),
+        _ => return Err(RuntimeFailure::InvalidControlState),
+    };
+    charge_runtime_work(work, 1, RuntimePhase::Evaluation)?;
+    let fact = registry
+        .scalar_preflight(function)
+        .ok_or(RuntimeFailure::InvalidControlState)?;
+    if fact.function() != function || fact.module() != intrinsic.module() || fact.role() != role {
+        return Err(RuntimeFailure::InvalidControlState);
+    }
+    let error = fact
+        .conversion_error_constructor()
+        .ok_or(RuntimeFailure::InvalidControlState)?;
+    let ids = fact.call_codec().ids();
+    let accepted = match narrow_gnu_scalar(&integer, representation, work) {
+        Ok(_) => true,
+        Err(NativeScalarConversionError::OutOfRange) => false,
+        Err(NativeScalarConversionError::WorkExhausted) => {
+            return Err(resource_failure(
+                ResourceFailureCause::WorkBudgetExhausted,
+                RuntimePhase::Evaluation,
+                RuntimeResource::WorkUnits,
+                None,
+                Some(work.remaining()),
+            ));
+        }
+        Err(
+            NativeScalarConversionError::InvalidRepresentation
+            | NativeScalarConversionError::UnsupportedHost,
+        ) => {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+    };
+    let cells = if accepted { 1 } else { 2 };
+    charge_runtime_work(work, cells, RuntimePhase::Evaluation)?;
+    heap.len()
+        .checked_add(cells)
+        .ok_or(RuntimeFailure::HeapCapacity)?;
+    heap.try_reserve(cells).map_err(|_| {
+        resource_failure(
+            ResourceFailureCause::StorageReservationFailed,
+            RuntimePhase::Evaluation,
+            RuntimeResource::ForeignCodecStorage,
+            Some(cells),
+            None,
+        )
+    })?;
+    let (constructor, payload) = if accepted {
+        (ids.returned, Value::Integer(integer))
+    } else {
+        let location = heap.len();
+        heap.push(HeapCell::Constructor(error, None));
+        (ids.conversion_failed, Value::Location(location))
+    };
+    let location = heap.len();
+    heap.push(HeapCell::Constructor(constructor, Some(payload)));
+    Ok(Value::Location(location))
+}
+
 fn allocate_heap(heap: &mut Vec<HeapCell>, cell: HeapCell) -> Result<Location, RuntimeFailure> {
     admit_heap_cell(heap.len())?;
     let location = heap.len();
@@ -3667,10 +3917,31 @@ fn matches_pattern(
     heap: &[HeapCell],
     bindings: &mut Vec<(BinderId, Value)>,
 ) -> Result<bool, RuntimeFailure> {
-    let mut work = vec![(pattern, value.clone())];
+    matches_pattern_with_work(pattern, value, heap, bindings, None)
+}
+
+fn matches_pattern_with_work(
+    pattern: &CorePattern,
+    value: &Value,
+    heap: &[HeapCell],
+    bindings: &mut Vec<(BinderId, Value)>,
+    mut meter: Option<(&mut TypeWorkBudget, RuntimePhase)>,
+) -> Result<bool, RuntimeFailure> {
+    let mut work = Vec::new();
+    work.try_reserve(1)
+        .map_err(|_| RuntimeFailure::ResourceCapacity)?;
+    work.push((pattern, value.clone()));
     while let Some((pattern, value)) = work.pop() {
+        if let Some((budget, phase)) = &mut meter {
+            charge_effect_work(budget, 1, *phase)?;
+        }
         match &pattern.kind {
-            CorePatternKind::Binder(binder) => bindings.push((binder.id(), value)),
+            CorePatternKind::Binder(binder) => {
+                bindings
+                    .try_reserve(1)
+                    .map_err(|_| RuntimeFailure::ResourceCapacity)?;
+                bindings.push((binder.id(), value));
+            }
             CorePatternKind::Wildcard => {}
             CorePatternKind::Boolean(expected) => {
                 if !matches!(value, Value::Boolean(found) if found == *expected) {
@@ -3686,13 +3957,22 @@ fn matches_pattern(
                 let Value::Location(location) = value else {
                     return Ok(false);
                 };
-                let location = resolve_location(heap, location)?;
+                let location = if let Some((budget, _)) = &mut meter {
+                    resolve_location_with_work(heap, location, budget)?
+                } else {
+                    resolve_location(heap, location)?
+                };
                 let Some(HeapCell::Tuple(elements)) = heap.get(location) else {
                     return Ok(false);
                 };
                 if patterns.len() != elements.len() {
                     return Ok(false);
                 }
+                if let Some((budget, phase)) = &mut meter {
+                    charge_effect_work(budget, patterns.len(), *phase)?;
+                }
+                work.try_reserve(patterns.len())
+                    .map_err(|_| RuntimeFailure::ResourceCapacity)?;
                 work.extend(
                     patterns
                         .iter()
@@ -3708,7 +3988,11 @@ fn matches_pattern(
                 let Value::Location(location) = value else {
                     return Ok(false);
                 };
-                let location = resolve_location(heap, location)?;
+                let location = if let Some((budget, _)) = &mut meter {
+                    resolve_location_with_work(heap, location, budget)?
+                } else {
+                    resolve_location(heap, location)?
+                };
                 let Some(HeapCell::Constructor(found, found_payload)) = heap.get(location) else {
                     return Ok(false);
                 };
@@ -3717,7 +4001,11 @@ fn matches_pattern(
                 }
                 match (payload.as_deref(), found_payload) {
                     (None, None) => {}
-                    (Some(pattern), Some(value)) => work.push((pattern, value.clone())),
+                    (Some(pattern), Some(value)) => {
+                        work.try_reserve(1)
+                            .map_err(|_| RuntimeFailure::ResourceCapacity)?;
+                        work.push((pattern, value.clone()));
+                    }
                     _ => return Ok(false),
                 }
             }
@@ -3738,7 +4026,25 @@ pub fn evaluate(program: &ValidatedProgram) -> Result<Evaluation, RuntimeFailure
 
 /// Evaluates one independently validated effect Core program.
 pub fn evaluate_effect(program: &ValidatedEffectProgram) -> Result<Evaluation, RuntimeFailure> {
+    let mut work = TypeWorkBudget::default();
+    crate::foreign::source_bindings::reject_missing_source_bindings(program, &mut work)?;
     Machine::new_effect(program).run()
+}
+
+/// Evaluates only a program whose source-native bindings were admitted before
+/// Ash execution. This borrows the immutable original binding table throughout.
+///
+/// # Errors
+/// Native conversion, work/storage admission and existing evaluation failures
+/// terminate without retrying an already returned external call.
+pub fn evaluate_effect_with_source_native_program(
+    admitted: crate::foreign::source_bindings::AdmittedSourceNativeProgram<'_, '_>,
+) -> Result<Evaluation, RuntimeFailure> {
+    let (program, bindings, errors) = admitted.into_parts();
+    let mut machine = Machine::new_effect(program);
+    machine.source_bindings = Some(bindings);
+    machine.source_errors = Some(&errors);
+    machine.run()
 }
 
 /// Evaluates validated Effect Core using identity-bound executable host bindings.
@@ -3752,6 +4058,8 @@ pub fn evaluate_effect_with_foreign_runtime(
     program: &ValidatedEffectProgram,
     runtime: &mut crate::foreign::runtime::ForeignRuntime,
 ) -> Result<Evaluation, RuntimeFailure> {
+    let mut work = TypeWorkBudget::default();
+    crate::foreign::source_bindings::reject_missing_source_bindings(program, &mut work)?;
     let mut machine = Machine::new_effect(program);
     machine.foreign_runtime = Some(runtime);
     machine.run()
@@ -3830,6 +4138,156 @@ mod tests {
     };
 
     #[test]
+    fn scalar_preflight_ranges_and_reports_are_atomic_and_retryable() {
+        if !cfg!(all(
+            target_arch = "x86_64",
+            target_os = "linux",
+            target_env = "gnu",
+            target_pointer_width = "64"
+        )) {
+            return;
+        }
+        let identity = SourceFile::new("preflight-runtime-identity", "")
+            .unwrap()
+            .id()
+            .value();
+        let path = std::env::temp_dir().join(format!(
+            "ash-preflight-runtime-{}-{identity}.ash",
+            std::process::id()
+        ));
+        struct Fixture(std::path::PathBuf);
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let fixture = Fixture(path);
+        std::fs::write(&fixture.0, "import @builtin.foreign as Foreign\nmain : Unit -> (Foreign.Call<Int>, Foreign.Call<Int>)\nmain () = (Foreign.checked_i64 0, Foreign.checked_size_t 0)\n").unwrap();
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry: fixture.0.clone(),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap();
+        let (program, _) = compiled
+            .pure_build_input()
+            .expect("checks preserve Pure Core");
+        let intrinsics = [true, false].map(|signed| {
+            program
+                .nodes()
+                .iter()
+                .find_map(|node| match &node.kind {
+                    PureExprKind::Value(PureValue::Intrinsic(intrinsic))
+                        if matches!(
+                            intrinsic.operation(),
+                            crate::core::packed::Intrinsic::ForeignCheckedI64 { .. }
+                        ) == signed
+                            && matches!(
+                                intrinsic.operation(),
+                                crate::core::packed::Intrinsic::ForeignCheckedI64 { .. }
+                                    | crate::core::packed::Intrinsic::ForeignCheckedSizeT { .. }
+                            ) =>
+                    {
+                        Some(*intrinsic)
+                    }
+                    _ => None,
+                })
+                .unwrap()
+        });
+        let signed_max = Integer::from_i64(i64::MAX);
+        let unsigned_max = Integer::from_u64(u64::MAX);
+        let one = Integer::from_i64(1);
+        for (integer, accepted) in [
+            (Integer::from_i64(i64::MIN), [true, false]),
+            (Integer::from_i64(-1), [true, false]),
+            (Integer::from_i64(0), [true, true]),
+            (signed_max.clone(), [true, true]),
+            (&signed_max + &one, [false, true]),
+            (unsigned_max.clone(), [false, true]),
+            (&unsigned_max + &one, [false, false]),
+        ] {
+            for (intrinsic, accepted) in intrinsics.into_iter().zip(accepted) {
+                let mut measured = TypeWorkBudget::unbounded();
+                let mut heap = Vec::new();
+                apply_scalar_preflight(
+                    intrinsic,
+                    integer.clone(),
+                    &mut heap,
+                    &mut measured,
+                    program.registry(),
+                )
+                .unwrap();
+                let required = measured.used();
+                for prefix in [0, 17] {
+                    let mut short = TypeWorkBudget::with_limit(prefix + required - 1);
+                    short.charge(prefix).unwrap();
+                    let mut refused_heap = Vec::new();
+                    let failure = apply_scalar_preflight(
+                        intrinsic,
+                        integer.clone(),
+                        &mut refused_heap,
+                        &mut short,
+                        program.registry(),
+                    )
+                    .unwrap_err();
+                    assert!(matches!(failure, RuntimeFailure::Report(report)
+                        if report.primary.resource().is_some_and(|details|
+                            details.cause == ResourceFailureCause::WorkBudgetExhausted
+                                && details.phase == RuntimePhase::Evaluation
+                                && details.resource == RuntimeResource::WorkUnits)));
+                    assert!(
+                        refused_heap.is_empty(),
+                        "refusal cannot publish a partial result"
+                    );
+                    for _ in 0..2 {
+                        let mut exact = TypeWorkBudget::with_limit(prefix + required);
+                        exact.charge(prefix).unwrap();
+                        let mut heap = Vec::new();
+                        let Value::Location(location) = apply_scalar_preflight(
+                            intrinsic,
+                            integer.clone(),
+                            &mut heap,
+                            &mut exact,
+                            program.registry(),
+                        )
+                        .unwrap() else {
+                            panic!("constructor result")
+                        };
+                        let function = match intrinsic.operation() {
+                            crate::core::packed::Intrinsic::ForeignCheckedI64 { function }
+                            | crate::core::packed::Intrinsic::ForeignCheckedSizeT { function } => {
+                                function
+                            }
+                            _ => unreachable!(),
+                        };
+                        let fact = program.registry().scalar_preflight(function).unwrap();
+                        let ids = fact.call_codec().ids();
+                        if accepted {
+                            assert!(
+                                matches!(&heap[location], HeapCell::Constructor(constructor, Some(Value::Integer(value)))
+                                if *constructor == ids.returned && *value == integer)
+                            );
+                            assert_eq!(heap.len(), 1);
+                        } else {
+                            let HeapCell::Constructor(constructor, Some(Value::Location(error))) =
+                                &heap[location]
+                            else {
+                                panic!("conversion refusal")
+                            };
+                            assert_eq!(*constructor, ids.conversion_failed);
+                            assert!(
+                                matches!(&heap[*error], HeapCell::Constructor(constructor, None)
+                                if Some(*constructor) == fact.conversion_error_constructor())
+                            );
+                            assert_eq!(heap.len(), 2);
+                        }
+                        assert_eq!(exact.used(), prefix + required);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn packed_literal_copy_reports_low_work_without_panicking() {
         let source = SourceFile::new("packed-limit.ash", "()").unwrap();
         let origin = Origin::Source(source.span(ByteRange::new(0, 2).unwrap()).unwrap());
@@ -3872,9 +4330,10 @@ mod tests {
             "main : Unit -> Int\nmain () = handle (helper 0) with E<Int> {\nask ignored => resume 42\n}\n",
         ));
         // Application: 3. Request argument: 2 slots + substitution root + Int.
+        // Exact source-native registry lookup (absent for this request): 1.
         // Handler search: 1. Handler argument: 2 slots + Int.
         // Exact comparison: argument tag + Int.
-        const REQUIRED: usize = 13;
+        const REQUIRED: usize = 14;
         let mut short = Machine::new_effect(&program);
         short.instantiation_work = TypeWorkBudget::with_limit(REQUIRED - 1);
         assert!(is_work_exhaustion(short.run().unwrap_err()));
@@ -6532,6 +6991,18 @@ mod tests {
             returns: &["Machine::acquire_resource", "Machine::return_from"],
         },
         TransitionOwner {
+            feature: "source resource",
+            entry: "dispatch_entry",
+            frames: &[
+                "Frame::SourceResourceInitializer",
+                "Frame::SourceResourceBoundary",
+            ],
+            returns: &[
+                "Machine::enter_source_resource",
+                "Machine::return_source_resource",
+            ],
+        },
+        TransitionOwner {
             feature: "handler",
             entry: "dispatch_entry",
             frames: &["Frame::HandlerBoundary"],
@@ -6703,7 +7174,7 @@ mod tests {
     #[test]
     fn every_effect_operation_has_one_explicit_transition_owner() {
         assert_eq!(TRANSITION_OWNERSHIP.len(), 14);
-        assert_eq!(EFFECT_TRANSITION_OWNERSHIP.len(), 8);
+        assert_eq!(EFFECT_TRANSITION_OWNERSHIP.len(), 9);
         assert_eq!(
             EFFECT_TRANSITION_OWNERSHIP
                 .iter()
@@ -6713,6 +7184,7 @@ mod tests {
                 "cleanup",
                 "registration",
                 "resource",
+                "source resource",
                 "handler",
                 "request",
                 "resume",
@@ -6724,7 +7196,7 @@ mod tests {
             !owner.entry.is_empty()
                 && owner.frames.len()
                     == match owner.feature {
-                        "resource" | "cleanup" => 2,
+                        "resource" | "source resource" | "cleanup" => 2,
                         "discard" => 0,
                         _ => 1,
                     }
@@ -7582,3 +8054,6 @@ mod tests {
 #[cfg(test)]
 #[path = "provider_publication_tests.rs"]
 mod provider_publication_tests;
+
+#[cfg(test)]
+pub(crate) use source_scalar_phases::post_record_test as source_scalar_post_record_test;

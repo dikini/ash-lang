@@ -673,13 +673,25 @@ fn linked_polymorphic_method_evidence_evaluates() {
     let interface_source = graph
         .module(interface_module)
         .expect("the interface module should remain in the graph")
-        .source()
-        .id();
+        .source();
     let implementation_source = graph
         .module(implementation_module)
         .expect("the implementation module should remain in the graph")
-        .source()
-        .id();
+        .source();
+    let exact_source_range = |source: &ash::source::SourceFile, snippet: &str| {
+        let mut occurrences = source.text().match_indices(snippet);
+        let (start, _) = occurrences.next().expect("the exact fixture text exists");
+        assert!(occurrences.next().is_none(), "fixture text must be unique");
+        (
+            source.id(),
+            u32::try_from(start).unwrap(),
+            u32::try_from(start + snippet.len()).unwrap(),
+        )
+    };
+    let method_range = exact_source_range(
+        implementation_source,
+        "map (function, Box(value)) = Box(function(value))",
+    );
     let Origin::Related { primary, related } = &implementation_method.origin else {
         panic!("the separately checked implementation method should retain exact provenance");
     };
@@ -690,7 +702,7 @@ fn linked_polymorphic_method_evidence_evaluates() {
             primary.range().start(),
             primary.range().end()
         ),
-        (implementation_source, 81, 130),
+        method_range,
     );
     assert_eq!(
         related
@@ -698,11 +710,14 @@ fn linked_polymorphic_method_evidence_evaluates() {
             .map(|span| (span.source(), span.range().start(), span.range().end()))
             .collect::<Vec<_>>(),
         [
-            (implementation_source, 57, 132),
-            (implementation_source, 81, 130),
-            (interface_source, 42, 76),
-            (interface_source, 54, 76),
-            (implementation_source, 110, 130),
+            exact_source_range(
+                implementation_source,
+                "pub impl Functor<Box> {\n    map (function, Box(value)) = Box(function(value))\n}",
+            ),
+            method_range,
+            exact_source_range(interface_source, "map<A, B> : (A -> B, F<A>) -> F<B>"),
+            exact_source_range(interface_source, "(A -> B, F<A>) -> F<B>"),
+            exact_source_range(implementation_source, "Box(function(value))"),
         ],
         "the checked carrier should keep the full cross-module method and annotation provenance before Core erasure",
     );

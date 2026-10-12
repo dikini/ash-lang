@@ -19,8 +19,11 @@ Use [the template](template.md) and allocate the next `CP-NNNN` ID.
 
 ## Proposed changes
 
-No proposed semantic transition is awaiting acceptance.
+No proposed semantic transition is under review.
 
 ## Accepted changes
 
-No accepted semantic transition awaits its product checkpoint.
+- [CP-0022: Ash-authored foreign interfaces](CP-0022-ash-authored-foreign-interfaces.md)
+  authorizes the bounded `ffi-ash` transition and its
+  [implementation tasks](../tasks/README.md). It remains prospective until the
+  complete product checkpoint is integrated into Main.

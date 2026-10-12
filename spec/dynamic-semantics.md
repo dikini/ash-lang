@@ -3,7 +3,8 @@
 Ash evaluation is defined by one deterministic small-step relation over
 configurations `CONFIG(heap, environment, control, continuation)`. The heap is
 fresh for one evaluation and maps numeric locations to tuples, completed
-constructors, uninitialized recursive data slots, or aliases. Tuple elements
+constructors, uninitialized slots for recursive data or native reports, or
+aliases. Tuple elements
 and constructor payloads are runtime values. The environment maps resolved term
 identities to runtime values. Effect execution also retains lexical type/row
 instantiation in the environment, separately from term bindings. This metadata
@@ -32,14 +33,17 @@ static operations rather than values.
 
 Elaboration produces one validated linked Core expression: dependency-ordered
 recursive global groups around the generated application of the entry module's
-local `main` to unit. Static checking has already established an empty entry
-effect row. Evaluation starts with that expression as control, a fresh empty
-heap and environment, and an empty continuation:
+local `main` to unit. The final linked expression has an empty outward effect
+row after mandatory owner-free native interpretation and exact discharge by
+admitted source resource scopes. Evaluation starts
+with that expression as control, a fresh empty heap and environment, and an
+empty continuation:
 
 ```sequent
 E-Program-Start :=
   elaborate(modules, entry) = linked_program
   validate(linked_program) = success
+  required_source_native_bindings(linked_program) are admitted
   ===>
   INITIAL(modules, entry) = CONFIG(empty_heap, empty_environment, linked_program, empty_continuation)
 ```
@@ -50,6 +54,15 @@ whole-program validation before evaluation. Neither premise performs module
 loading at runtime. The ordinary recursive-binding and application rules enter
 the linked groups and call `main`. Imports have no initialization step, and
 modules are not runtime values.
+
+For a program with owner-free source-native effects, the linked expression
+includes the mandatory native interpretation described below. A source resource
+scope instead retains its exact acquisition and teardown interpretations. Both
+forms require their executable bindings before any Ash expression runs. The
+binding premise is vacuous for a program requiring none. Binding admission
+retains the exact original checked symbol and bridge authority, independently checked against
+the validated program; a missing or changed binding is an internal failure.
+It performs no Ash evaluation or implicit native compilation/linkage.
 
 ## Type instantiation and erasure
 
@@ -480,6 +493,246 @@ over Boolean values. The left rules propagate a step in the left operand. The
 right rules apply only after the left operand is an integer value. The value
 rules compute the primitive result.
 
+## Owner-free scalar native execution
+
+This section describes source-native scalar operands/results and zero-operand
+`void` calls in the admitted Linux x86-64 GNU profile. Supported integer
+representations are signed/unsigned 8-, 32- and 64-bit scalars and 64-bit
+`size_t`. These calls create no resource activation or owning source value.
+The ordinary scoped `native_buffer` behavior remains described separately.
+
+`NativeInterpret(S, body)` is a checked Core boundary installed for the program's
+required owner-free native effects. It is not a source expression. Independent
+validation checks its exact symbol identities, complete ordered Type/EffectRow
+instances and row discharge; it removes only the listed native instances.
+Ordinary outward effects still require their own interpretation.
+
+Entering this boundary evaluates `body` with a continuation boundary retaining
+`S` and the current lexical instantiation. Ordinary return removes that boundary
+and passes the value outward. A source-native request evaluates its operand once,
+then authenticates its original operation and checked symbol against the admitted
+binding. Its complete actual vector must match a listed instance under the
+request's and boundary's saved lexical instantiations. Every argument retains
+its declared kind and position, including unused row arguments. The native
+Type-only projection does not replace this complete source authority.
+A source-native request never selects an ordinary source handler or a legacy
+manifest binding. The native boundary and remaining continuation stay in place
+through the synchronous call and its report.
+
+Before calling native code, the machine traverses the checked operand paths,
+charges mathematical-integer magnitude work, and narrows each borrowed `Int`
+exactly into its declared representation. A value outside that representation's
+range produces canonical `Foreign.ConversionFailed(error)` before invocation.
+The error belongs to the original opaque `Foreign.ConversionError` type.
+Constructing this refusal report also requires work and storage admission; an
+internal refusal terminates without invoking native code.
+
+Successful preparation retains stable native operands in ABI order. It prepays
+bounded reply conversion and recording work and reserves the ordinary
+`Foreign.Returned` constructor slot before publishing `CallReady`. Binding,
+conversion, work or storage refusal before readiness invokes no native function.
+These checks do not establish that the external binary obeys its authored
+signature or foreign assumptions.
+
+The following three steps separate invocation, recording and reporting.
+`d` retains the exact admitted symbol/bridge and complete instantiated source
+arguments. `p` retains the prepaid recording/report allowance and reserved
+constructor slot. `native` denotes one synchronous external invocation under the
+contract's assumptions; `raw` is a native scalar or a void reply. `report`
+authenticates its expected representation, widens a scalar exactly to
+mathematical `Int`, or supplies `Unit` for void, and initializes the reserved
+constructor with canonical `Foreign.Returned`.
+
+```sequent
+family scalar-native-call-steps:
+  E-Scalar-Native-Call :=
+    native(d, operands) = raw
+    ===>
+    CONFIG(heap, environment, CallReady(d, operands, p), continuation) -> CONFIG(heap, environment, CallReturned(d, raw, p), continuation)
+
+  E-Scalar-Native-Record :=
+    ===>
+    CONFIG(heap, environment, CallReturned(d, raw, p), continuation) -> CONFIG(heap, environment, CallRecorded(d, raw, p), continuation)
+
+  E-Scalar-Native-Report :=
+    report(heap, d, raw, p) = heap_1, value
+    ===>
+    CONFIG(heap, environment, CallRecorded(d, raw, p), continuation) -> CONFIG(heap_1, environment, value, continuation)
+```
+
+Only `CallReady` can invoke the function, and that step consumes readiness.
+`CallReturned` retains no invocation capability. Recording is the next machine
+step: it retains the raw reply and its admitted report slot without charging
+work, allocating an Ash result, or performing a fallible check. No disposal,
+reporting or continuation failure can precede this recording step.
+
+Reporting consumes the allowance already deducted before invocation; it does
+not charge the caller's ledger again. Unsigned 64-bit replies preserve their
+full mathematical value. A `void` call reads no native result and reports
+`Foreign.Returned(())`. Integer construction retains the runtime's existing
+internal allocation limitations; a reserved constructor slot does not reserve
+all physical storage inside mathematical integers.
+
+A detectable internal failure after recording terminates evaluation without
+returning to readiness, publishing a final result or retrying the external call.
+This applies to report construction and later ordinary continuation work.
+Already performed native side effects remain performed. A new evaluation has
+fresh machine state and may make its own calls. Internal work/storage failures
+are not `Foreign.ConversionFailed` outcomes.
+
+## Common scalar preflight
+
+The pure common scalar checks invoke no native symbol. On a supported GNU64
+host, a successful check reports `Foreign.Returned` containing the original
+mathematical integer; only an out-of-range input reports
+`Foreign.ConversionFailed` with the canonical opaque error. Work or storage
+exhaustion and an unsupported host are terminal evaluator failures. The machine
+prices the check and reserves its complete report before publishing any
+constructor cell. A terminal refusal publishes no partial result. These checks
+create no resource activation, state token, native readiness or destructor
+obligation.
+
+## Source resource execution with native owners
+
+The admitted product source resource scope combines an Ash initializer, acquire
+and finish functions, private data `D`, and an associated ordinary effect handler.
+This checkpoint supports dependency-free opaque and initialized byte foreign
+owners with Type-kind
+owner formals, scalar acquisition operands, one pointer acquisition result, and
+an unconditional consuming `void` teardown whose sole operand is the exact
+Current state. Each foreign symbol still retains its complete ordered Type and
+EffectRow arguments; the native Type-only projection does not replace them.
+Byte access, dependent owners, additional teardown operands and native
+retained-status outcomes are unsupported executable shapes in this checkpoint.
+
+Before any Ash expression runs, program admission checks both acquisition and
+teardown bindings for every source resource scope against their exact original
+checked symbols. Reconstructed executable images must independently admit the
+original headers and defining acquire, finish and handler forests, then validate
+each final scope's copied occurrences, substitutions and fresh identities.
+Ordinary `NativeInterpret` grants no owner-call permission. An owner request
+requires the matching validated source scope, its current acquire or finish
+phase, exact copied request membership, and the complete effect instance under
+that scope's saved lexical instantiation.
+
+For an initialized byte owner, preflight projects the exact source leaf selected
+by its original `initialized_bytes` fact and checks the mathematical value in
+the GNU64 nonnegative `size_t` range. The path need not select a native ABI
+operand. A negative or unrepresentable extent returns `Foreign.ConversionFailed`
+before acquisition; work or storage refusal remains terminal. Readiness retains
+the checked extent without creating memory access or an owner. Infallible
+recording attaches that extent to the unique non-null guard under the declared
+initialization and writability assumption. A null return establishes no region.
+The resource's private payload cannot replace or enlarge this recorded extent.
+
+The initializer evaluates once in the preceding environment. Before native
+acquisition, the machine authenticates the unconditional destructor, reserves
+scope and guard storage, checks each scalar conversion, and reserves the native
+report slots and recording/report work. A representable operand supplies its
+stable ABI scalar; a conversion refusal produces canonical
+`Foreign.ConversionFailed(error)` without invoking the native function. Missing
+bindings, malformed authority, unsupported representations and internal work or
+storage refusal cannot invoke acquisition.
+
+For acquisition, `d` retains the exact symbol, complete instance and sealed
+destructor. `p` retains the admitted inline guard and prepaid report storage.
+`g` is a unique guarded native address or the absence of an owner for a null
+reply. The generated typed bridge arms `g` immediately when the native call
+returns, before constructing an Ash result. The pointer remains inside that
+guard and is never an ordinary Ash value. The following steps consume readiness,
+record ownership, and publish the prepared report:
+
+```sequent
+family native-owner-native-call-steps:
+  E-Native-Owner-Call :=
+    native(d, operands) = raw
+    arm(p, raw) = g
+    ===>
+    CONFIG(heap, environment, CallReady(d, operands, p), continuation) -> CONFIG(heap, environment, CallReturned(d, g, p), continuation)
+
+  E-Native-Owner-Record :=
+    ===>
+    CONFIG(heap, environment, CallReturned(d, g, p), continuation) -> CONFIG(heap, environment, CallRecorded(d, g, p), continuation)
+
+  E-Native-Owner-Report :=
+    report_and_place(heap, continuation, d, g, p) = heap_1, continuation_1, value
+    ===>
+    CONFIG(heap, environment, CallRecorded(d, g, p), continuation) -> CONFIG(heap_1, environment, CallReported(value), continuation_1)
+```
+
+Only `CallReady` invokes the native function. Its return retains no invocation
+capability. Recording is infallible, allocates no Ash result, and charges no
+additional work; it precedes disposal, reporting and continuation failure.
+Reporting uses the prepaid allowance and reserved constructor slots. For this
+owner-address result it produces the checked roles corresponding to
+`Foreign.Returned(Foreign.Readable(Foreign.Null))` or
+`Foreign.Returned(Foreign.Readable(Foreign.NonNull(state)))`. A non-null state
+contains the scope's activation key, not its address. The scope receives the
+unique guard before the state report becomes available to Ash evaluation.
+
+Ash acquisition policy then selects the resource codec's `Acquired(state, data)`
+or `Refused(error)` role. Publication requires the recorded owner of this exact
+activation; ordinary constructor creation cannot create ownership authority.
+A successful publication binds a non-owning access handle for the body and
+retains `D` in the scope. The body receives neither an owning value nor direct
+access to `D`; the admitted Ash handler uses its saved state and private data.
+Acquisition refusal executes no body. If native acquisition already returned a
+non-null owner, refusal destroys that unpublished owner once before delivering
+`NotAcquired(error)` under `scope` or `Failure(error)` under `acquired_only`.
+Null acquisition creates no destructor obligation.
+
+Associated ordinary operations preserve the nearest exact handler rule. A nearer
+ordinary source handler takes precedence over the resource handler. The resource
+publishes checked lexical forwarding for all associated methods; ordinary calls
+and constrained helpers request the corresponding operation with its unchanged
+operand and complete effect arguments.
+
+After selecting a source resource handler and before entering its clause, the
+machine authenticates the exact activation, unique live guard and original owner.
+It instantiates the request's value domain under the caller and traverses every
+typed position containing this resource's access family, including tuple and
+nominal constructor payloads. Each such value must be the non-owning access key of
+that selected activation; a state view, stale or donor key cannot replace it.
+The recorded private data does not authorize access. Work or storage refusal
+enters no resource clause. This check does not add an outer resource requirement
+to a nearer ordinary handler.
+
+The admitted resource clause uses its lexical state/data and ordinary
+clause-owned `resume`; resumption continues the same activation without repeating
+acquisition. Repeated executions allocate distinct activation keys. Nested source
+resource scopes complete their own finish before their enclosing scope finishes.
+This checkpoint does not admit outward capture or owned discard of a source
+resource boundary, quarantine, dependency teardown or byte access.
+
+Normal body return saves its value and invokes the admitted Ash finish once.
+Before the Current teardown, the machine authenticates the state token's exact
+live activation and reserves its report storage while the scope still owns the
+guard. Only successful preflight can detach that guard for consumption. The
+unconditional native `void` call destroys the address once and produces a
+non-owning consumed receipt with the original authority, before Ash report
+construction. Its returned-to-recorded transition is infallible. The prepaid
+report supplies `Foreign.Returned(Foreign.Consumed(()))`; source finish maps it
+to the resource codec's consumed completion. The scope records consumption
+before publishing its report. Under `scope`, the source result remains
+`Completed(body_value, completion)`. Under `acquired_only`, normal consumed
+completion produces `Success(body_value)`; neither codec flattens a nested body
+result. A witnessed consumed completion mapped to `ConsumedFailure(error)` is
+terminal under `acquired_only`, reported as `runtime.resource-completion`, and
+publishes no success or acquisition failure. Recorded consumption still prevents
+a second native release. This slice admits no native retained disposition.
+
+An internal failure after a native return never retries the call or recreates
+readiness. A live guard, including one not yet published to the body, invokes its
+sealed unconditional destructor once during host destruction. A consumed receipt
+has no destructor callback, so failure during finish reporting cannot repeat
+teardown. Host destruction allocates no Ash result and runs no source finish or
+handler. Foreign side effects remain performed; internal exhaustion is not a
+source conversion or completion outcome. A fresh evaluation has fresh machine
+state and may perform its own acquisition. These rules assume the authored
+foreign contract holds; linking and checked Core do not prove external binary
+validity, and divergence or external process termination provides no eventual
+release guarantee.
+
 ## Effect handlers and completion
 
 `HANDLER(handler, instance, clauses, environment)` is an ordered lexical
@@ -509,8 +762,8 @@ The static handler identity determines `handler`. Its clauses are exhaustive
 for `instance`, so ordinary body return and operation selection are the only
 reachable ways to leave the boundary.
 
-A request first evaluates its one operand. Once that operand is a value,
-`select_nearest` searches outward for the innermost accepting source-handler
+A request first evaluates its one operand. For a non-source-native operation,
+once that operand is a value, `select_nearest` searches outward for the innermost accepting source-handler
 or cell boundary. The source-handler branch below requires its exact effect
 identity and instantiated type arguments to equal the operation's instance,
 with no nearer accepting cell boundary. The request saves its lexical instantiation
@@ -526,6 +779,7 @@ family request-steps:
     CONFIG(heap, environment, perform operation operand, continuation) -> CONFIG(heap, environment, operand, REQUEST(operation, instantiation(environment)) :: continuation)
 
   E-Request-Select :=
+    operation is not a source-native symbol
     requested = instantiate(instance(operation), request_instantiation)
     select_nearest(continuation, requested) = clause, handler_environment, handler, owner, captured, outer
     no nearer cell boundary accepts requested

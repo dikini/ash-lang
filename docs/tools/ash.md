@@ -10,6 +10,137 @@ The invocation requires exactly one entry path. Every `--root` option must
 precede that path. The executable reads UTF-8 Ash source files and does not read
 a program from standard input.
 
+## Building an executable
+
+The program-build path supports the retained Pure subset, scalar/void foreign
+calls and dependency-free opaque or initialized byte resource scopes on Linux
+x86-64 GNU. It
+compiles the source graph once
+and generates a Rust host containing private Core construction data, the
+existing evaluator and any required typed native bridges:
+
+```text
+ash build --output ./program [--target TARGET] [--cargo-target-dir PATH] entry.ash
+./program
+```
+
+The target is `x86_64-unknown-linux-gnu`. Repeatable `--root name=path` options
+configure imports as in ordinary execution. Diagnostic options may precede
+`build` or follow it, before the entry path.
+Build options must precede the entry path; `--output` is required exactly once.
+Success prints the executable's absolute path. The resulting program prints its
+result value on one line. It can run after the original Ash source files are
+removed. Startup reconstructs fresh Core identities, independently validates
+the construction data, and invokes the evaluator without source compilation.
+
+Building requires the matching Ash checkout, Rust toolchain and cached Cargo
+dependencies. Native tools run offline with one build job. `--cargo-target-dir`
+selects a reusable build cache; otherwise the tool uses `CARGO_TARGET_DIR` or a
+cache inside the generated project. Generated Rust, its manifest and the native
+tool log remain in a fresh `.ash-build` directory beside the requested output.
+Failed linking preserves an existing output executable. A compiler/runtime
+configuration mismatch rejects during Rust compilation, before publication;
+startup checks compatibility again.
+
+The Rust API separates `driver::compile_path`, `build::prepare_program` and
+`build::build_prepared`. The prepared phase owns generated inputs and is
+consumed by linking. Reusable compiled programs retain their original source
+provenance; preparation does not reopen those source paths.
+
+### Native link inputs
+
+Configuring explicit native link inputs currently requires the Rust build API. Set
+`build::BuildConfiguration::native_inputs` to an ordered list of
+`build::NativeLinkInput::StaticArchive(PathBuf)` and
+`build::NativeLinkInput::SharedLibrary(PathBuf)` values before calling
+`build::prepare_program`. The command-line build path has no native-input
+options yet. Ordinary `ash entry.ash`, `driver::execute` and `driver::run_path`
+refuse required source-native bindings before Ash execution; they do not compile
+or link a host implicitly.
+
+For an existing authored `entry.ash` and regular static archive
+`libcounter.a`, a Rust caller can build the linked program with:
+
+```rust
+use ash::build::{BuildConfiguration, NativeLinkInput, build_path};
+use ash::driver::RunConfiguration;
+use ash::module::ModuleRoots;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut build = BuildConfiguration::new("./program".into());
+    build.native_inputs.push(NativeLinkInput::StaticArchive("./libcounter.a".into()));
+    let source = RunConfiguration {
+        entry: "entry.ash".into(),
+        roots: ModuleRoots::empty(),
+    };
+    let program = build_path(source, build)?;
+    println!("{}", program.executable().display());
+    Ok(())
+}
+```
+
+This builds the executable; run `./program` separately. The C linkage integration
+fixture in `tests/program_build_native.rs` constructs both supported input kinds
+and uses the separate compile, prepare and build phases.
+
+Native preparation retains the exact encoded Core and expected-contract bytes
+once. The build writes them to fixed files in its generated project and embeds
+them at Rust compile time. The executable reads neither these files nor the
+original Ash sources at startup. Failed linking retains the generated project
+and its diagnostics without replacing an existing output executable.
+
+Each link input names an existing whole-program native file. Preparation
+canonicalizes the paths and checks the supported file kind: a regular static
+archive or an ELF64 little-endian x86-64 shared library. It preserves input
+order, including archive dependency order. These inputs do not supply Ash
+contract facts or prove that a binary follows the authored signature and foreign
+assumptions. The generated host checks its linked bridge registrations against
+its independently validated original contracts before Ash execution.
+
+Shared dependencies use the system loader. The build emits no automatic rpath
+and provides no runtime library-name resolver. Install dependencies in the
+loader's search path or set `LD_LIBRARY_PATH` explicitly for the generated
+process. A missing shared dependency can prevent the host from starting.
+
+### Supported foreign execution
+
+The first source-native subset admits owner-free scalar calls and zero-operand
+`void` calls. Scalar representations are signed/unsigned 8-, 32-
+and 64-bit integers and the profile's 64-bit `size_t`. Ash `Int` remains
+mathematical: checked narrowing refuses an out-of-range input before the native
+call, reporting `Foreign.ConversionFailed`; a scalar reply widens exactly,
+including unsigned 64-bit results. A successful `void` call reports
+`Foreign.Returned(())` without reading a native result.
+
+Imports and generic helpers retain complete ordered Type/EffectRow arguments.
+Executable interpreter instances must be closed; unused row arguments are not
+removed from their identity. The generated host supplies the mandatory native
+interpretation, rather than selecting an ordinary Ash handler for a native
+symbol. Work/storage admission failures terminate execution instead of becoming
+conversion outcomes. A returned native call is recorded before reporting or
+ordinary continuation work can refuse; subsequent failure does not retry the
+call or undo its external effects.
+
+The Pure carrier retains its restrictions on polymorphic or lexical type
+operations. It admits the common side-effect-free `Foreign.checked_i64` and
+`Foreign.checked_size_t` checks, both returning `Foreign.Call<Int>` with the
+unchanged integer or a conversion failure. The Effect carrier also admits
+generic helper abstraction/application, native requests and dependency-free
+opaque or initialized byte source resource scopes with the admitted lifecycle
+codec. Ordinary
+handler precedence, local resumption and nested normal completion use the
+existing evaluator. Outward resource capture, discard, retained quarantine and
+byte-access windows remain outside this build profile.
+
+Both carriers refuse unsupported method evidence, newtype conversion, other
+intrinsics and integer literal payloads outside signed 64-bit range. Evaluated
+integer arithmetic and widened native results retain their mathematical
+semantics. These are build-path limitations, not changes to ordinary non-foreign
+execution. The source [arena library](../../libraries/README.md) provides the
+minimal allocation/usage/release lifecycle. SQLite and native-buffer ports,
+complete ownership/access execution, constant publication and the separate
+optional `ash check-ffi` authoring tool remain work in the `ffi-ash` milestone.
+
 ## Diagnostic formats and locales
 
 Diagnostics use human-readable explanations by default. Explicit options select
@@ -56,8 +187,8 @@ once.
 `import @builtin.cell as Cell` loads the compiler-owned cell API without a
 `--root` option or filesystem lookup. `builtin` cannot be configured as a root:
 `--root builtin=path` reports `invocation.reserved-root` before inspecting
-configured paths. `@builtin.cell` and `@builtin.native_buffer` are the fixed
-modules beneath this root; another path
+configured paths. `@builtin.cell`, `@builtin.native_buffer` and
+`@builtin.foreign` are the fixed modules beneath this root; another path
 reports `module.unknown-builtin`. Ordinary aliases, targeted imports and
 facade re-exports preserve the API's identity, but a module that acquires a
 resource must directly import its selected builtin module.
@@ -450,7 +581,7 @@ global that uses it at two unrelated instantiations:
 
 ```ash
 pub interface Functor<F : Type -> Type> {
-map<A, B> : (A -> B, F<A>) -> F<B>
+    map<A, B> : (A -> B, F<A>) -> F<B>
 }
 
 to_bool : Int -> Bool
@@ -472,7 +603,7 @@ pub import api (Functor, map)
 pub type Box<A> = Box(A)
 
 pub impl Functor<Box> {
-map (function, Box(value)) = Box(function(value))
+    map (function, Box(value)) = Box(function(value))
 }
 ```
 
@@ -616,7 +747,9 @@ implementation is reported without exposing that declaration's metadata.
 
 Entry failures are ordered as `entry.missing-main`, `entry.main-polymorphic`,
 `entry.main-domain`, `entry.main-effects`, `entry.main-open-result`, and
-`entry.main-constrained`. A nonempty effect row is a source rejection, so
+`entry.main-constrained`. After mandatory exact owner-free native interpretation,
+any residual ordinary effect requirement or open entry row is a source rejection.
+Required source-native bindings are admitted separately before Ash execution;
 execution has no source-level unhandled-operation outcome.
 
 Effect declaration and resolution failures use `effect.operation-shape`,

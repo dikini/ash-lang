@@ -55,6 +55,7 @@ use crate::{
 #[cfg_attr(test, derive(Clone))]
 pub(crate) struct MethodEvidenceMethod {
     pub(crate) id: MethodId,
+    pub(crate) spelling: Box<str>,
     pub(crate) interface_parameters: Box<[TypeVariableId]>,
     pub(crate) inherited_parameters: Box<[crate::resolved::InheritedOwnerParameter]>,
     pub(crate) parameters: Box<[(TypeVariableId, Kind)]>,
@@ -637,11 +638,14 @@ pub(crate) fn same_imported_method_evidence_catalog(
     }
     for (a, b) in left.methods.iter().zip(&right.methods) {
         work.charge(
-            a.inherited_parameters
+            a.spelling
                 .len()
+                .saturating_add(b.spelling.len())
+                .saturating_add(a.inherited_parameters.len())
                 .saturating_add(b.inherited_parameters.len()),
         )?;
         if a.id != b.id
+            || a.spelling != b.spelling
             || a.inherited_parameters != b.inherited_parameters
             || !ids(&a.interface_parameters, &b.interface_parameters, work)?
             || !parameters(&a.parameters, &b.parameters, work)?
@@ -2230,7 +2234,35 @@ impl UnvalidatedProgram {
     }
 }
 
+/// Passive fields borrowed for encoding one recorded Core node.
+type ImageNodeView<'a, F> = (
+    &'a Type,
+    &'a <F as CoreOperationFamily>::Effects,
+    &'a Option<Origin>,
+    &'a <F as CoreOperationFamily>::Kind,
+);
+
 impl<F: CoreOperationFamily> UnvalidatedCoreProgram<F> {
+    /// Passive borrowed records for image encoding. These do not admit execution.
+    pub(crate) fn image_root(&self) -> NodeId {
+        self.root
+    }
+    pub(crate) fn image_node_count(&self) -> usize {
+        self.nodes.len()
+    }
+    pub(crate) fn image_node_index(&self, id: NodeId) -> Option<usize> {
+        if id.arena != self.arena {
+            return None;
+        }
+        let index = id.index().ok()?;
+        (index < self.nodes.len()).then_some(index)
+    }
+    pub(crate) fn image_node(&self, index: usize) -> Option<ImageNodeView<'_, F>> {
+        self.nodes
+            .get(index)
+            .map(|node| (&node.ty, &node.effects, &node.origin, &node.kind))
+    }
+
     pub(crate) fn method_evidence(&self) -> &Arc<MethodEvidenceCatalog> {
         &self.method_evidence
     }
@@ -2414,6 +2446,11 @@ impl<F: CoreOperationFamily> ValidatedCoreProgram<F> {
     #[must_use]
     pub fn node_count(&self) -> usize {
         self.0.node_count()
+    }
+
+    /// Borrows every independently validated node for paid admission scans.
+    pub(crate) fn nodes(&self) -> &[CoreTypedExpr<F>] {
+        &self.0.nodes
     }
 
     /// Returns the immutable nominal and constructor registry.
@@ -2688,6 +2725,47 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         )
     }
 
+    /// Runs one payload-construction operation on the caller's actual ledger.
+    ///
+    /// Private image reconstruction uses this seam between its own admission
+    /// steps. The meter returns to the caller after both success and failure;
+    /// no separate allowance or replayed charge is introduced.
+    pub(crate) fn with_caller_type_work<T>(
+        &mut self,
+        work: &mut TypeWorkBudget,
+        operation: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        std::mem::swap(&mut self.type_work, work);
+        let result = operation(self);
+        std::mem::swap(&mut self.type_work, work);
+        result
+    }
+
+    /// Admits backing storage for a private reconstruction before payloads move.
+    ///
+    /// The image supplies complete node and binder counts. Ordinary public
+    /// builders keep their existing allocation behavior.
+    pub(crate) fn reserve_image_reconstruction_storage(
+        &mut self,
+        nodes: usize,
+        binders: usize,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), BuildError> {
+        work.charge(
+            nodes
+                .checked_add(binders)
+                .ok_or(BuildError::TypeWorkExceeded)?,
+        )
+        .map_err(|()| BuildError::TypeWorkExceeded)?;
+        self.nodes
+            .try_reserve_exact(nodes)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        self.materialized_resolved
+            .try_reserve(binders)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        Ok(())
+    }
+
     pub(crate) fn with_registry_and_method_evidence(
         registry: Arc<ResolvedRegistry>,
         method_evidence: Arc<MethodEvidenceCatalog>,
@@ -2760,6 +2838,10 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             .method_evidence
             .implementation_owner(implementation)
             .is_some())
+    }
+
+    pub(crate) fn method_evidence_anchors(&self) -> &[MethodEvidenceAnchor] {
+        &self.method_evidence_anchors
     }
 
     #[allow(
@@ -5935,6 +6017,7 @@ mod tests {
         };
         let mut catalog = MethodEvidenceCatalog::new(
             vec![MethodEvidenceMethod {
+                spelling: "method".into(),
                 id: method,
                 interface_parameters: Box::new([parameter]),
                 inherited_parameters: Box::new([crate::resolved::InheritedOwnerParameter {

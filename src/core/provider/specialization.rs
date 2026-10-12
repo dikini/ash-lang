@@ -202,7 +202,10 @@ fn renamed<T: Copy + Eq>(
 }
 
 impl ProviderFreshening<'_> {
-    fn authenticate(&self, work: &mut TypeWorkBudget) -> Result<(), ValidationError> {
+    pub(in crate::core) fn authenticate(
+        &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
         fn pairs<T: Eq>(
             pairs: &[(T, T)],
             work: &mut TypeWorkBudget,
@@ -368,7 +371,7 @@ impl ProviderTemplateSubstitution<'_> {
     }
 }
 
-fn specialize_projection(
+pub(in crate::core) fn specialize_projection(
     original: &super::projection::NodeProjection,
     copied: &std::collections::HashMap<NodeId, NodeId>,
     fresh: &ProviderFreshening<'_>,
@@ -5695,21 +5698,9 @@ impl LocalDeclarations {
         sigma: &ProviderTemplateSubstitution<'_>,
         work: &mut TypeWorkBudget,
     ) -> Result<(), ValidationError> {
-        use crate::types::{Type, TypeStructureNode, TypeVariableId};
-        let mut visit =
-            |node: TypeStructureNode<'_>, work: &mut TypeWorkBudget| -> Result<bool, ()> {
-                if let TypeStructureNode::Type(Type::Forall(parameters, _)) = node {
-                    for (id, kind) in parameters {
-                        if matches!(id, TypeVariableId::Generated(_))
-                            && !sigma.types.contains_key(id)
-                            && !sigma.rows.contains_key(id)
-                        {
-                            self.variable(*id, kind, work).map_err(|_| ())?;
-                        }
-                    }
-                }
-                Ok(false)
-            };
+        let mut visit = |node: crate::types::TypeStructureNode<'_>, work: &mut TypeWorkBudget| {
+            self.forall_structure(node, sigma, work)
+        };
         match metadata {
             super::projection::Metadata::Type(ty) => {
                 crate::types::visit_type_structure_with_budget(ty, work, &mut visit)
@@ -5742,6 +5733,73 @@ impl LocalDeclarations {
                 }
             }
             super::projection::Metadata::Kind(_) => {}
+        }
+        Ok(())
+    }
+    fn forall_structure(
+        &mut self,
+        node: crate::types::TypeStructureNode<'_>,
+        sigma: &ProviderTemplateSubstitution<'_>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ()> {
+        use crate::types::{Type, TypeStructureNode, TypeVariableId};
+        if let TypeStructureNode::Type(Type::Forall(parameters, _)) = node {
+            for (id, kind) in parameters {
+                if matches!(id, TypeVariableId::Generated(_))
+                    && !sigma.types.contains_key(id)
+                    && !sigma.rows.contains_key(id)
+                {
+                    self.variable(*id, kind, work).map_err(|_| ())?;
+                }
+            }
+        }
+        Ok(false)
+    }
+    fn type_foralls(
+        &mut self,
+        ty: &crate::types::Type,
+        sigma: &ProviderTemplateSubstitution<'_>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
+        crate::types::visit_type_structure_with_budget(ty, work, |node, work| {
+            self.forall_structure(node, sigma, work)
+        })
+        .map_err(|()| super::resource())?;
+        Ok(())
+    }
+    fn pattern_foralls(
+        &mut self,
+        root: &crate::core::CorePattern,
+        sigma: &ProviderTemplateSubstitution<'_>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
+        use crate::core::CorePatternKind;
+        super::charge(work, 1)?;
+        let mut pending = Vec::new();
+        pending.try_reserve(1).map_err(|_| super::resource())?;
+        pending.push(root);
+        while let Some(pattern) = pending.pop() {
+            super::charge(work, 1)?;
+            self.type_foralls(&pattern.ty, sigma, work)?;
+            match &pattern.kind {
+                CorePatternKind::Binder(binder) => self.type_foralls(binder.ty(), sigma, work)?,
+                CorePatternKind::Tuple(fields) => {
+                    super::charge(work, fields.len())?;
+                    pending
+                        .try_reserve(fields.len())
+                        .map_err(|_| super::resource())?;
+                    pending.extend(fields.iter().rev());
+                }
+                CorePatternKind::Constructor {
+                    payload: Some(payload),
+                    ..
+                } => {
+                    super::charge(work, 1)?;
+                    pending.try_reserve(1).map_err(|_| super::resource())?;
+                    pending.push(payload);
+                }
+                _ => {}
+            }
         }
         Ok(())
     }
@@ -5909,6 +5967,85 @@ pub(crate) struct ProviderLocalInventory {
     pub(crate) resumes: Box<[crate::resolved::ResumeId]>,
     pub(crate) nominals: Box<[crate::types::NominalTypeId]>,
     pub(crate) lexicals: Box<[crate::interface::LexicalEvidenceId]>,
+}
+/// Original source-resource forest declarations, without an experimental
+/// provider certificate. Extra wrapper metadata is retained explicitly.
+pub(crate) fn source_resource_local_identities(
+    program: &UnvalidatedEffectProgram,
+    roots: &[NodeId],
+    extra_binders: &[&crate::core::TypedBinder],
+    extra_patterns: &[&crate::core::CorePattern],
+    extra_handler: Option<&crate::core::HandlerNode>,
+    sigma: &ProviderTemplateSubstitution<'_>,
+    work: &mut TypeWorkBudget,
+) -> Result<ProviderLocalInventory, ValidationError> {
+    let order = crate::core::transform::provider_entry_forest_order(
+        program,
+        roots,
+        &std::collections::HashSet::new(),
+        work,
+    )
+    .map_err(|_| super::resource())?;
+    let mut declarations = LocalDeclarations::default();
+    for id in order {
+        let stored = super::node(program, id)?;
+        declarations.node(stored, work)?;
+        let projection = super::projection::project(id, stored, work)?;
+        for metadata in &projection.metadata {
+            declarations.foralls(metadata, sigma, work)?;
+        }
+    }
+    for binder in extra_binders {
+        retain_identity(&mut declarations.binders, binder.id(), work)?;
+        declarations.type_foralls(binder.ty(), sigma, work)?;
+    }
+    for pattern in extra_patterns {
+        declarations.pattern(pattern, work)?;
+        declarations.pattern_foralls(pattern, sigma, work)?;
+    }
+    if let Some(handler) = extra_handler {
+        retain_identity(&mut declarations.handlers, handler.id(), work)?;
+        for clause in handler.clauses() {
+            retain_identity(&mut declarations.resumes, clause.resume(), work)?;
+            declarations.pattern(clause.pattern(), work)?;
+            declarations.pattern_foralls(clause.pattern(), sigma, work)?;
+        }
+        for argument in handler.effect().arguments() {
+            crate::types::visit_argument_structure_with_budget(argument, work, |node, work| {
+                declarations.forall_structure(node, sigma, work)
+            })
+            .map_err(|()| super::resource())?;
+        }
+    }
+    if !program.method_evidence.lexical_owners().is_empty() {
+        return Err(super::invalid(program.root));
+    }
+    fn array<T>(
+        set: std::collections::HashSet<T>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Box<[T]>, ValidationError> {
+        super::charge(work, set.len())?;
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(set.len())
+            .map_err(|_| super::resource())?;
+        values.extend(set);
+        Ok(values.into_boxed_slice())
+    }
+    super::charge(work, declarations.variables.len())?;
+    let mut types = Vec::new();
+    types
+        .try_reserve_exact(declarations.variables.len())
+        .map_err(|_| super::resource())?;
+    types.extend(declarations.variables);
+    Ok(ProviderLocalInventory {
+        binders: array(declarations.binders, work)?,
+        types: types.into_boxed_slice(),
+        handlers: array(declarations.handlers, work)?,
+        resumes: array(declarations.resumes, work)?,
+        nominals: array(declarations.nominals, work)?,
+        lexicals: Box::new([]),
+    })
 }
 impl ProviderOriginalTemplate<'_> {
     pub(crate) fn local_identities(

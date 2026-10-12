@@ -49,7 +49,47 @@ operations with their exact effect, operation, handler, and resume-owner
 identities. A row tail
 or effect argument is zonked before a checked summary or Core node is retained.
 
-A resource expression lowers to one Effect `Resource` carrier with an
+Admitted scalar and owner foreign symbols retain their original immutable
+contracts with the declaring native effects and exact operation table. Selected
+imports and hidden signature closure preserve those same allocations. Summary and final
+Core validation reconstruct table/tag correspondence, defining identities,
+complete ordered parameter kinds and the canonical source signature. Display
+aliases grant no replacement contract or result-codec authority. An ordinary
+Core handler cannot target an admitted native symbol.
+
+The common scalar checks lower to pure intrinsic nodes in either Core dialect.
+Each node retains its exact original function identity, role and module, rather
+than selecting behavior by a source spelling. Independent validation checks the
+retained registry fact, empty row, exact `Int -> Call<Int>` signature and
+original provenance. Constructor-aware capture treats success as the original independent
+`Int` and failure as an opaque nullary error. The matching-compiler private
+image retains those facts and their shared codec once, reconstructs unchecked nodes,
+and independently validates them without reopening or checking source.
+
+An ordinary native entry lowers to an explicit Effect Core interpretation of
+the generated entry application and interprets only owner-free scalar or void
+members. Each listed member retains the complete ordered Type/EffectRow instance
+and the exact original checked symbol allocation. The body and boundary have the
+same value type; the boundary's row is the body's row
+minus only the listed exact native instances. This is a compiler-generated Core
+boundary, not an additional source expression. Pure Core remains closed.
+
+Independent Core validation authenticates the registry's original source
+correspondence, then reconstructs each boundary's exact table/tag membership,
+complete argument kinds and saturation, lexical dependencies, duplicate-free
+membership, body type and row subtraction. A same-operation donor allocation
+cannot replace the original symbol. Transforming the body or complete actuals
+requires corresponding reconstruction and independent validation. Capture
+summaries retain those full actuals and specialize both Type and Row arguments
+under their saved contexts.
+
+Compilation retains this checked boundary without loading executable bindings.
+Default execution refuses an unbound native requirement before Ash runs, including
+requirements in nested Core boundaries. Executable binding admission is separate
+from source and Core authority. This scalar/void boundary supplies no resource,
+ownership, access or copy-window authority.
+
+A builtin resource expression lowers to one Effect `Resource` carrier with an
 initializer and body. It retains the acquisition's identity binder, handle
 binder, exact builtin API relation, generated provider methods and causal
 origin. The initializer remains outside the acquired scope. The body receives
@@ -64,6 +104,103 @@ Core validation authenticate the builtin kind, ordinary Outcome/Error
 constructors, sealed provider, generated methods, ownership, origins and exact
 result/row relation. Both transforms re-establish those checks. Core contains
 neither a native address nor an allocated owner.
+
+A declared source resource uses a separate Effect `SourceResourceScope` carrier.
+It retains the exact original resource header and checked acquire, finish and
+handler templates, complete ordered Type/EffectRow actuals, one fresh owned
+identity, initializer, lifecycle entries, private state/data pattern, non-owning
+handle, provided handler and result contract. The initializer remains outside
+the owned scope. The owned identity cannot occur in the carrier's result type
+or outward row. The carrier contains no native address, allocated owner or
+execution binding.
+
+The defining module checks each original template once. Lifecycle templates
+retain the original formal type binders, a synthetic parameter function and the
+source parameter match. The handler additionally binds its answer type and a
+synthetic callback from `Unit` to that answer with the exact provided effect as
+its singleton row. Its ordinary application to `Unit` supplies the preparation
+body whose effect the handler removes. This callback is a compiler preparation
+shape; specialization replaces its application with the actual client body and
+retains no executable placeholder. Ordinary Core validation checks each
+immutable forest's graph, kinds, lexical scope, types, rows, patterns, native
+signatures and source origins before the source resource proof checks its phases.
+Dependency summaries retain body-free headers; linking retains the checked
+defining code rather than recompiling imported lifecycle bodies.
+
+The current executable source profile admits a dependency-free opaque or
+initialized byte owner
+with a Type-only state family, one interpreted acquisition and one consuming
+teardown of that same original owner. Teardown has one canonical current-owner
+operand and a void native result. Resource and native instances retain all
+ordered Type/EffectRow arguments, including an owned slot that is not first.
+The resource handle's value type uses a saturated nominal application for a
+Type-only family and the resource application carrier for a row-bearing family;
+the scope retains the same complete tagged instance in either case.
+Higher-kinded resource formals, row-bearing owner state families, byte access,
+dependent owners and nonempty outward handler rows remain unsupported by this
+profile. Passive foreign-owner declarations have a separate admission boundary
+and supply no execution permission.
+
+An initialized byte acquisition retains the original integer source path and
+outcome provenance in its canonical contract and matching-compiler image.
+Independent reconstruction preserves the byte representation and exact extent
+fact rather than replacing them with opaque metadata. Runtime preparation checks
+the selected mathematical value before native entry; private data does not grant
+an initialized extent.
+
+The header proof authenticates the exact `Acquire<State, D, I>`,
+`Finish<State, E>` and the selected report constructor roles and payloads through
+nominal and constructor identities. It checks the private data and input
+contracts, the complete interpreted instances and the original owner and symbol
+allocations. `scope` retains Scope/Completion roles; `acquired_only` checks the
+instantiated Success/Failure fields without a completion value. Capture-value
+analysis preserves the same report shape and keeps finish as a cleanup obligation.
+The provider association matches each interface method to one associated effect
+operation by exact name, independent of declaration order. After substituting
+each declaration's complete Type/EffectRow arguments, each method has the
+operation's exact domain and result and the single associated effect instance as
+its effect row. Method-local type parameters remain unsupported. Both declarations
+retain their original interface and effect parameter identities and complete
+applications. Acquisition supplies checked lexical forwarding evidence for
+ordinary method calls and constrained helpers; independent Core checks the
+generated binders, unchanged operands, operation/effect identity and correspondence
+with the original scope.
+
+The original acquisition proof accepts publication only from a witnessed
+nonnull native acquisition. Its private payload and refusal result cannot carry
+the acquired state. A refusal after a provisional acquisition preserves the
+cleanup obligation. Finish may report consumption only after the consuming
+native call; a retained result must return the exact current state after a
+witnessed pre-call refusal. Original handler clauses cannot request native
+owner operations or return owned state through `resume`. The supported phase
+bodies use ordinary matches, bindings, constructors, tuples and independent
+scalar primitives and authenticated scalar preflight calls; handler clauses
+resume an independent payload. The phase proof checks every possible matching
+arm when an independent scalar choice is unknown, including when it is paired
+with owned state. Only a definite match excludes later arms. Additional
+handler requests, arbitrary helper calls and local control abstractions need
+further phase evidence. This phase proof has a separate bound of 64 nested
+expression or pattern steps and uses the shared work ledger; ordinary Core
+payload and pattern depth limits remain unchanged.
+
+Specialization supplies copying claims rather than execution authority. Final
+Core validation independently reconstructs each copied forest from the exact
+immutable original, its complete simultaneous Type/EffectRow substitution and
+its fresh local identities. It checks every source and target node, binder,
+local type variable and kind, handler, resume owner, constructor role and
+causal origin. Maps must cover each original declaration exactly, and copies
+cannot reuse original identities or each other's local identities. Hidden
+parameters, the source handler pattern and handler clause metadata undergo the
+same reconstruction. The client body determines the specialized answer type;
+the original handler's synthetic callback application does not supply a second
+body or a source callback feature.
+
+Ordinary native boundaries remain scalar-only. A source scope provides its own
+checked acquisition and teardown phases; a non-owning resource handle does not
+authorize a native owner call. Final Core validation, executable binding
+admission and runtime activation remain distinct boundaries. A transformed or
+restored source scope must reconstruct the same original templates,
+applications, copying maps and transfer of the phase proof before execution.
 
 Resolution has already replaced source type spellings with stable nominal and
 type-parameter identities. Elaboration may introduce inference variables while
@@ -664,6 +801,10 @@ rejects every effect operation. Effect Core validation independently checks:
 - each resource's builtin origin, unique acquisition identity and handle,
   sealed provider and operation relation, initializer scope and `Int` type,
   body scope, exact row discharge and result contract;
+- each source resource's immutable defining templates, original owner and
+  symbols, complete arguments, fresh identity, exact copied forests and local
+  freshening maps, phase lineage, private payload, non-owning handle, provider
+  association, handler answer and result/row contract;
 - each hook API's declaration-level endomorphic shape, exact target and
   authenticated scope-discharge relation;
 - each registration's unique owner, preceding callback binding, callback

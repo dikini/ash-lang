@@ -281,35 +281,31 @@ impl CaptureValueSummary {
                 .extend_types(&mut types, budget)
                 .map_err(|_| ())?;
             types.extend(graph.types.0.iter());
-            for request in graph.code.iter().filter_map(|code| match code {
-                Control::Request(request)
-                | Control::Handler {
-                    effect: request, ..
+            for code in &graph.code {
+                if let Control::NativeInterpret { effects, .. } = code {
+                    budget.charge(effects.len())?;
                 }
-                | Control::Resource {
-                    effect: request, ..
-                } => Some(request),
-                _ => None,
-            }) {
-                if let Some(effect) = &request.effect {
-                    crate::types::extend_owner_type_children_with_charge(
-                        effect.arguments(),
-                        &mut types,
-                        budget,
-                    )?;
-                }
-                budget.charge(request.members.len())?;
-                for member in &request.members {
-                    crate::types::extend_owner_type_children_with_charge(
-                        member.provided.arguments(),
-                        &mut types,
-                        budget,
-                    )?;
-                    crate::types::extend_owner_type_children_with_charge(
-                        member.native.arguments(),
-                        &mut types,
-                        budget,
-                    )?;
+                for request in code.requests() {
+                    if let Some(effect) = &request.effect {
+                        crate::types::extend_owner_type_children_with_charge(
+                            effect.arguments(),
+                            &mut types,
+                            budget,
+                        )?;
+                    }
+                    budget.charge(request.members.len())?;
+                    for member in &request.members {
+                        crate::types::extend_owner_type_children_with_charge(
+                            member.provided.arguments(),
+                            &mut types,
+                            budget,
+                        )?;
+                        crate::types::extend_owner_type_children_with_charge(
+                            member.native.arguments(),
+                            &mut types,
+                            budget,
+                        )?;
+                    }
                 }
             }
         }
@@ -327,16 +323,7 @@ impl CaptureValueSummary {
         let mut identities = Vec::new();
         let mut pending = Vec::new();
         if let Some(graph) = &self.graph {
-            for request in graph.code.iter().filter_map(|code| match code {
-                Control::Request(request)
-                | Control::Handler {
-                    effect: request, ..
-                }
-                | Control::Resource {
-                    effect: request, ..
-                } => Some(request),
-                _ => None,
-            }) {
+            for request in graph.code.iter().flat_map(Control::requests) {
                 if let Some(effect) = &request.effect {
                     budget.charge(1 + effect.arguments().len())?;
                     identities.try_reserve(1).map_err(|_| ())?;
@@ -1797,6 +1784,14 @@ impl<'a, F: CoreOperationFamily> FunctionMetadataPreparation<'a, F> {
                         .map_err(|_| Failure::Resource)?;
                     preparation.bound.push(scope.descriptor.identity());
                 }
+                Some(EffectOperation::SourceResourceScope(scope)) => {
+                    charge(budget, 1)?;
+                    preparation
+                        .bound
+                        .try_reserve(1)
+                        .map_err(|_| Failure::Resource)?;
+                    preparation.bound.push(scope.identity());
+                }
                 _ => {}
             }
             if let Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) =
@@ -2002,6 +1997,34 @@ impl<'a, F: CoreOperationFamily> FunctionMetadataPreparation<'a, F> {
                 retain_type_variables(&mut header, scope.handler_output.value(), budget)?;
                 retain_row_variables(&mut header, scope.handler_output.effects(), budget)?;
             }
+            Some(EffectOperation::SourceResourceScope(scope)) => {
+                for argument in scope
+                    .arguments()
+                    .iter()
+                    .chain(scope.handler.effect().arguments())
+                {
+                    retain_metadata_variables(&mut header, Metadata::Argument(argument), budget)?;
+                }
+                for interpretation in scope.native_interpretations() {
+                    for argument in interpretation.effect().arguments() {
+                        retain_metadata_variables(
+                            &mut header,
+                            Metadata::Argument(argument),
+                            budget,
+                        )?;
+                    }
+                }
+                for binder in [
+                    &scope.acquire.parameter,
+                    &scope.finish.parameter,
+                    &scope.handler_state,
+                    &scope.handle,
+                ] {
+                    retain_type_variables(&mut header, binder.ty(), budget)?;
+                }
+                retain_type_variables(&mut header, scope.handler_output.value(), budget)?;
+                retain_row_variables(&mut header, scope.handler_output.effects(), budget)?;
+            }
             Some(EffectOperation::Handler(handler)) => {
                 for argument in handler.effect().arguments() {
                     retain_metadata_variables(&mut header, Metadata::Argument(argument), budget)?;
@@ -2109,6 +2132,34 @@ impl NodeMetadataHeaders {
                 retain_type_variables(&mut header, scope.handler_output.value(), budget)?;
                 retain_row_variables(&mut header, scope.handler_output.effects(), budget)?;
             }
+            Some(EffectOperation::SourceResourceScope(scope)) => {
+                for argument in scope
+                    .arguments()
+                    .iter()
+                    .chain(scope.handler.effect().arguments())
+                {
+                    retain_metadata_variables(&mut header, Metadata::Argument(argument), budget)?;
+                }
+                for interpretation in scope.native_interpretations() {
+                    for argument in interpretation.effect().arguments() {
+                        retain_metadata_variables(
+                            &mut header,
+                            Metadata::Argument(argument),
+                            budget,
+                        )?;
+                    }
+                }
+                for binder in [
+                    &scope.acquire.parameter,
+                    &scope.finish.parameter,
+                    &scope.handler_state,
+                    &scope.handle,
+                ] {
+                    retain_type_variables(&mut header, binder.ty(), budget)?;
+                }
+                retain_type_variables(&mut header, scope.handler_output.value(), budget)?;
+                retain_row_variables(&mut header, scope.handler_output.effects(), budget)?;
+            }
             Some(EffectOperation::Handler(handler)) => {
                 for argument in handler.effect().arguments() {
                     retain_metadata_variables(&mut header, Metadata::Argument(argument), budget)?;
@@ -2182,6 +2233,11 @@ fn retain_function_metadata<F: CoreOperationFamily>(
                 charge(budget, 1)?;
                 bound.try_reserve(1).map_err(|_| Failure::Resource)?;
                 bound.push(scope.descriptor.identity());
+            }
+            Some(EffectOperation::SourceResourceScope(scope)) => {
+                charge(budget, 1)?;
+                bound.try_reserve(1).map_err(|_| Failure::Resource)?;
+                bound.push(scope.identity());
             }
             _ => {}
         }
@@ -2609,7 +2665,7 @@ fn compile_provider_capture_control<'a, F: CoreOperationFamily>(
             }
         }
         let handler = graph.code.len();
-        data.position_provider_handler(handler, id, budget)?;
+        data.position_provider_handler(handler, id, true, budget)?;
         graph.code.push(Control::Handler {
             body: index(scope.handler.body()) + 1,
             effect: group,
@@ -2711,6 +2767,22 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
     budget: &mut TypeWorkBudget,
 ) -> Result<Control, Failure> {
     Ok(match operation {
+        Some(EffectOperation::NativeInterpret(boundary)) => {
+            charge(budget, boundary.interpretations().len())?;
+            let mut effects = Vec::new();
+            effects
+                .try_reserve_exact(boundary.interpretations().len())
+                .map_err(|_| Failure::Resource)?;
+            for interpretation in boundary.interpretations() {
+                let mut request = Request::effect(interpretation.effect(), source, budget)?;
+                request.operation = Some(interpretation.symbol().operation());
+                effects.push(request);
+            }
+            Control::NativeInterpret {
+                body: index(boundary.body()) + 1,
+                effects,
+            }
+        }
         Some(EffectOperation::ProviderStateAccess(_)) if provider_query => Control::Unavailable,
         Some(EffectOperation::ProviderStateAccess(access)) => {
             Control::Sequence(copy_slice(&[index(access.operand()) + 1], budget)?)
@@ -2778,6 +2850,110 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
                 &[index(resource.initializer) + 1, acquisition],
                 budget,
             )?)
+        }
+        Some(EffectOperation::SourceResourceScope(scope)) => {
+            charge(
+                budget,
+                scope
+                    .handler
+                    .clauses()
+                    .len()
+                    .checked_add(8)
+                    .ok_or(Failure::Resource)?,
+            )?;
+            graph.code.try_reserve(7).map_err(|_| Failure::Resource)?;
+            let mut clauses = Vec::new();
+            clauses
+                .try_reserve_exact(scope.handler.clauses().len())
+                .map_err(|_| Failure::Resource)?;
+            for clause in scope.handler.clauses() {
+                clauses.push(Clause {
+                    operation: Some(clause.operation()),
+                    body: index(clause.body()) + 1,
+                    owner: *owners
+                        .get(&(scope.handler.id(), clause.resume()))
+                        .ok_or(Failure::Invalid)?,
+                    source: clause.origin().primary_span(),
+                });
+            }
+            let handler = graph.code.len();
+            data.position_provider_handler(
+                handler,
+                id,
+                matches!(
+                    scope.header().codec.report,
+                    super::source_resource::SourceResourceReportCodec::Scope { .. }
+                ),
+                budget,
+            )?;
+            graph.code.push(Control::Handler {
+                body: index(scope.handler.body()) + 1,
+                effect: Request::effect(scope.handler.effect(), source, budget)?,
+                clauses,
+                owning_resource: None,
+            });
+            let mut phases = Vec::new();
+            phases.try_reserve_exact(2).map_err(|_| Failure::Resource)?;
+            for root in [scope.acquire.body, scope.finish.body] {
+                let mut effects = Vec::new();
+                charge(budget, scope.native_interpretations().len())?;
+                effects
+                    .try_reserve_exact(scope.native_interpretations().len())
+                    .map_err(|_| Failure::Resource)?;
+                for interpretation in scope.native_interpretations() {
+                    let mut effect = Request::effect(interpretation.effect(), source, budget)?;
+                    effect.operation = Some(interpretation.symbol().operation());
+                    effects.push(effect);
+                }
+                let position = graph.code.len();
+                data.position(position, id, budget)?;
+                graph.code.push(Control::NativeInterpret {
+                    body: index(root) + 1,
+                    effects,
+                });
+                phases.push(position);
+            }
+            let successful = graph.code.len();
+            data.position(successful, id, budget)?;
+            graph.code.push(Control::Sequence(copy_slice(
+                &[handler, phases[1]],
+                budget,
+            )?));
+            let outcome = graph.code.len();
+            data.position(outcome, id, budget)?;
+            graph
+                .code
+                .push(Control::Choice(copy_slice(&[0, successful], budget)?));
+            let acquisition = graph.code.len();
+            data.position(acquisition, id, budget)?;
+            graph.code.push(Control::Sequence(copy_slice(
+                &[phases[0], outcome],
+                budget,
+            )?));
+            let owner = graph.code.len();
+            data.position(owner, id, budget)?;
+            let mut native_owner = Request::effect(scope.handler.effect(), source, budget)?;
+            for interpretation in scope.native_interpretations() {
+                let other = Request::effect(interpretation.effect(), source, budget)?;
+                charge(budget, other.members.len())?;
+                native_owner
+                    .members
+                    .try_reserve(other.members.len())
+                    .map_err(|_| Failure::Resource)?;
+                native_owner.members.extend(other.members);
+            }
+            let Control::Handler {
+                owning_resource, ..
+            } = &mut graph.code[handler]
+            else {
+                return Err(Failure::Invalid);
+            };
+            *owning_resource = Some(owner);
+            graph.code.push(Control::Resource {
+                body: acquisition,
+                effect: native_owner,
+            });
+            Control::Sequence(copy_slice(&[index(scope.initializer) + 1, owner], budget)?)
         }
         Some(EffectOperation::ProviderScope(_)) => return Err(Failure::Invalid),
         Some(EffectOperation::Request(request)) => {
@@ -3029,6 +3205,7 @@ fn compile_with_boundary<F: CoreOperationFamily>(
         }
         let (handler, scope) = match operation(&node.kind) {
             Some(EffectOperation::Handler(handler)) => (Some(handler), None),
+            Some(EffectOperation::SourceResourceScope(scope)) => (Some(&scope.handler), None),
             Some(EffectOperation::ProviderScope(scope)) => {
                 (Some(&scope.handler), Some(scope.as_ref()))
             }
@@ -4528,14 +4705,10 @@ pub(in crate::core) fn reconstruct_actual_provider_captures(
     };
     for code in &source.code {
         let mut code = code.copy(code_offset, target_offset, type_offset, budget)?;
-        if let Control::Request(request)
-        | Control::Handler {
-            effect: request, ..
+        if let Control::NativeInterpret { effects, .. } = &code {
+            charge(budget, effects.len())?;
         }
-        | Control::Resource {
-            effect: request, ..
-        } = &mut code
-        {
+        for request in code.requests_mut() {
             instantiate_capture_request(request, &substitutions.0, rows, budget)?;
         }
         actual.graph.code.push(code);
@@ -5352,6 +5525,9 @@ fn solve_capture_values<F: CoreOperationFamily>(
                     Some(EffectOperation::Registration(scope)) => {
                         value = values[index(scope.body)].copy(budget)?;
                     }
+                    Some(EffectOperation::NativeInterpret(boundary)) => {
+                        value = values[index(boundary.body())].copy(budget)?;
+                    }
                     Some(EffectOperation::Resource(resource)) => {
                         value = values[index(resource.body)].copy(budget)?;
                     }
@@ -5368,6 +5544,13 @@ fn solve_capture_values<F: CoreOperationFamily>(
                             for clause in handler.clauses() {
                                 value.join(&values[index(clause.body())], budget)?;
                             }
+                        }
+                    }
+                    Some(EffectOperation::SourceResourceScope(scope)) => {
+                        value.join(&values[index(scope.handler.body())], budget)?;
+                        charge(budget, scope.handler.clauses().len())?;
+                        for clause in scope.handler.clauses() {
+                            value.join(&values[index(clause.body())], budget)?;
                         }
                     }
                     Some(EffectOperation::Handler(handler)) => {
@@ -6901,13 +7084,37 @@ mod tests {
             EffectExprKind, binding::BindingNode, effect::DiscardNode, validate_effect,
             variable::TypedBinder,
         };
+        const ORIGINAL_CLAUSE: &str = concat!(
+            "        ask ignored => handle ({\n",
+            "            let _ = resume ()\n",
+            "            perform D.ask ()\n",
+            "        }) with D {\n",
+            "            ask ignored => discard\n",
+            "        }",
+        );
+        const RESUME_ONLY_CLAUSE: &str = concat!(
+            "        ask ignored => {\n",
+            "            let _ = handle ({\n",
+            "                let _ = resume ()\n",
+            "                perform D.ask ()\n",
+            "            }) with D {\n",
+            "                ask ignored => discard\n",
+            "            }\n",
+            "            perform D.ask ()\n",
+            "        }",
+        );
         for fixture in [
             include_str!("../../tests/fixtures/effects/capture-prefix-before.ash"),
             include_str!("../../tests/fixtures/effects/capture-prefix-after.ash"),
         ] {
             // Publish only a resume-only program, then introduce discard in
             // actual Core. No source capture claim can authorize this check.
-            let fixture = fixture.replace("ask ignored => handle ({\nlet _ = resume ()\nperform D.ask ()\n}) with D {\nask ignored => discard\n}", "ask ignored => {\nlet _ = handle ({\nlet _ = resume ()\nperform D.ask ()\n}) with D {\nask ignored => discard\n}\nperform D.ask ()\n}");
+            assert_eq!(
+                fixture.matches(ORIGINAL_CLAUSE).count(),
+                1,
+                "the fixture must contain exactly one clause for the prerequisite rewrite",
+            );
+            let fixture = fixture.replace(ORIGINAL_CLAUSE, RESUME_ONLY_CLAUSE);
             let discard_start = fixture.find("discard").unwrap();
             let text = format!(
                 "{}\ngood : Unit -> Unit\ngood () = ()\nbad : Unit -> Unit\nbad () = ()\n",
@@ -7143,12 +7350,14 @@ mod tests {
             },
         };
         let exported = ExportedGlobal {
+            scalar_preflight: None,
             binder: BinderId::new(0),
             scheme: ConstrainedScheme::from_rank1_type(Type::Unit),
             origin: origin.clone(),
             capture: capture.clone(),
         };
         let mut imported = ImportedGlobalScheme {
+            scalar_preflight: None,
             binder: exported.binder,
             scheme: ConstrainedScheme::from_rank1_type(Type::Unit),
             origin,

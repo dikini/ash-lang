@@ -226,7 +226,7 @@ pub(in crate::core) fn project_clause(
     Ok(result)
 }
 
-pub(super) fn project_binder(
+pub(in crate::core) fn project_binder(
     node: NodeId,
     binder: &TypedBinder,
     work: &mut TypeWorkBudget,
@@ -239,6 +239,22 @@ pub(super) fn project_binder(
         origins: Vec::new(),
     };
     result.binder(binder, work)?;
+    Ok(result)
+}
+
+pub(in crate::core) fn project_pattern(
+    node: NodeId,
+    pattern: &CorePattern,
+    work: &mut TypeWorkBudget,
+) -> Result<NodeProjection, ValidationError> {
+    let mut result = NodeProjection {
+        node,
+        children: Vec::new(),
+        atoms: Vec::new(),
+        metadata: Vec::new(),
+        origins: Vec::new(),
+    };
+    result.pattern(pattern, work)?;
     Ok(result)
 }
 
@@ -482,7 +498,11 @@ pub(in crate::core) fn project_with<F: crate::core::dialect::CoreOperationFamily
             }
             // Nested scopes carry independently admitted proof projections.
             // They cannot enter an original-template certificate implicitly.
-            EffectOperation::ProviderScope(_) => return Err(invalid()),
+            EffectOperation::ProviderScope(_)
+            | EffectOperation::SourceResourceScope(_)
+            | EffectOperation::NativeInterpret(_) => {
+                return Err(invalid());
+            }
         },
     }
     Ok(result)

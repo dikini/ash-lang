@@ -1,4 +1,5 @@
 use ash::{
+    integer::Integer,
     lexer::{LexReason, Token, TokenKind, lex},
     parser::{ResourceFailure, SYNTAX_WORK_LIMIT},
     source::SourceFile,
@@ -339,7 +340,6 @@ fn reports_each_excluded_lexical_form_with_its_exact_span() {
         ("café", LexReason::UnicodeIdentifier, 5),
         ("// no", LexReason::Comment, 5),
         ("/* no */", LexReason::Comment, 8),
-        ("-123", LexReason::NegativeLiteral, 4),
         ("01", LexReason::InvalidIntegerLiteral, 2),
         ("$", LexReason::UnknownCharacter, 1),
         ("😀", LexReason::UnknownCharacter, 4),
@@ -372,16 +372,16 @@ fn reports_each_excluded_lexical_form_with_its_exact_span() {
 
 #[test]
 fn lexical_errors_keep_expected_and_found_forms_as_structured_fields() {
-    let source = SourceFile::new("negative.ash", "-42").expect("the negative source should fit");
+    let source = SourceFile::new("integer.ash", "01").expect("the negative source should fit");
     let lexed = lex(&source).expect("the source should remain representable while lexing");
     let diagnostic = &lexed.diagnostics[0];
 
-    assert_eq!(diagnostic.reason, LexReason::NegativeLiteral);
+    assert_eq!(diagnostic.reason, LexReason::InvalidIntegerLiteral);
     assert_eq!(
         diagnostic.expected.as_deref(),
-        Some("a nonnegative decimal integer")
+        Some("0 or a nonzero digit followed by ASCII digits")
     );
-    assert_eq!(diagnostic.found.as_deref(), Some("-42"));
+    assert_eq!(diagnostic.found.as_deref(), Some("01"));
 }
 
 #[test]
@@ -573,7 +573,7 @@ fn eof_directly_after_a_token_uses_the_source_end() {
 }
 
 #[test]
-fn lone_minus_and_slash_are_independent_unknown_characters() {
+fn lone_minus_is_a_token_and_slash_remains_an_unknown_character() {
     let source =
         SourceFile::new("unknown.ash", "- /").expect("the unknown-character source should fit");
     let lexed = lex(&source).expect("the source should remain representable while lexing");
@@ -584,16 +584,15 @@ fn lone_minus_and_slash_are_independent_unknown_characters() {
             .iter()
             .map(|diagnostic| diagnostic.reason)
             .collect::<Vec<_>>(),
-        vec![LexReason::UnknownCharacter, LexReason::UnknownCharacter]
+        vec![LexReason::UnknownCharacter]
     );
-    assert_eq!(lexed.diagnostics[0].found.as_deref(), Some("-"));
-    assert_eq!(lexed.diagnostics[1].found.as_deref(), Some("/"));
-    assert_eq!(lexed.diagnostics[0].primary.span().range().start(), 0);
-    assert_eq!(lexed.diagnostics[0].primary.span().range().end(), 1);
-    assert_eq!(lexed.diagnostics[1].primary.span().range().start(), 2);
-    assert_eq!(lexed.diagnostics[1].primary.span().range().end(), 3);
-    assert_eq!(lexed.tokens.len(), 1);
-    assert_range(&lexed.tokens[0], 3, 3);
+    assert_eq!(lexed.diagnostics[0].found.as_deref(), Some("/"));
+    assert_eq!(lexed.diagnostics[0].primary.span().range().start(), 2);
+    assert_eq!(lexed.diagnostics[0].primary.span().range().end(), 3);
+    assert_eq!(lexed.tokens.len(), 2);
+    assert_eq!(lexed.tokens[0].kind, TokenKind::Minus);
+    assert_range(&lexed.tokens[0], 0, 1);
+    assert_range(&lexed.tokens[1], 3, 3);
 }
 
 #[test]
@@ -637,4 +636,20 @@ fn syntax_work_budget_stops_token_retention_before_the_next_allocation() {
         lexed.tokens.last().map(|token| &token.kind),
         Some(TokenKind::EndOfFile)
     ));
+}
+
+#[test]
+fn a_foreign_literal_sign_remains_separate_from_its_unsigned_integer_token() {
+    let source = SourceFile::new("sign.ash", "-42").unwrap();
+    let lexed = lex(&source).unwrap();
+    assert!(lexed.diagnostics.is_empty());
+    assert_eq!(lexed.tokens[0].kind, TokenKind::Minus);
+    assert_eq!(
+        lexed.tokens[1].kind,
+        TokenKind::Integer(Integer::parse_decimal("42").unwrap())
+    );
+    assert_eq!(lexed.tokens[0].span.range().start(), 0);
+    assert_eq!(lexed.tokens[0].span.range().end(), 1);
+    assert_eq!(lexed.tokens[1].span.range().start(), 1);
+    assert_eq!(lexed.tokens[1].span.range().end(), 3);
 }

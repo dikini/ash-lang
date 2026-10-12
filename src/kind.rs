@@ -27,6 +27,15 @@ use crate::{
 
 static TYPE_KIND: Kind = Kind::Type;
 
+// The synthesis worker owns latent rows at its ordinary entry. A nested
+// argument worker instead lends that obligation to the enclosing iterative
+// effect queue; this is traversal ownership, not a validation certificate.
+#[derive(Clone, Copy)]
+enum LatentRowAuthentication {
+    SynthesisOwned,
+    QueueOwned,
+}
+
 // A synthesis observer retains only admitted scalar identities. Separate
 // domains preserve callers that need unrestricted or borrowed owner coverage;
 // interface methods combine permission and coverage in one reserved map.
@@ -1288,6 +1297,7 @@ struct NominalKindFact {
 struct ResourceKindFact<'a> {
     family: NominalTypeId,
     parameters: &'a [crate::resolved::ResolvedTypeVariable],
+    owned_position: usize,
     origin: Span,
 }
 
@@ -2532,11 +2542,64 @@ impl<'a> KindEnvironments<'a> {
         self.row_resource_owners.try_reserve(1).map_err(|_| {
             KindFailure::resource(origin, "resource kind authority could not reserve storage")
         })?;
+        // Product source resources retain an explicit owned position. The
+        // experimental resource contract continues to reserve its first slot.
+        // Read the selection from original defining authority, never actuals.
+        budget.charge(1).map_err(|()| {
+            KindFailure::resource(
+                origin,
+                "resource owner selection exceeded its type-work budget",
+            )
+        })?;
+        let source = self
+            .owner_registry
+            .and_then(|registry| registry.source_resource_fact(resource))
+            .or_else(|| {
+                self.imported_resource_owners
+                    .and_then(|imported| imported.source_resource_fact(resource))
+            });
+        let owned_position = if let Some(source) = source {
+            if source.id != resource
+                || source.family != family
+                || source.parameters.len() != parameters.len()
+            {
+                return Err(KindFailure::internal_cause(
+                    origin,
+                    KindInternalCause::LinkedValueType,
+                ));
+            }
+            for (original, retained) in source.parameters.iter().zip(parameters) {
+                budget.charge(1).map_err(|()| {
+                    KindFailure::resource(
+                        origin,
+                        "resource owner selection exceeded its type-work budget",
+                    )
+                })?;
+                if original.id != retained.id
+                    || !same_kind_with_charge(&original.kind, &retained.kind, || budget.charge(1))
+                        .map_err(|()| {
+                        KindFailure::resource(
+                            origin,
+                            "resource owner selection exceeded its type-work budget",
+                        )
+                    })?
+                {
+                    return Err(KindFailure::internal_cause(
+                        origin,
+                        KindInternalCause::LinkedValueType,
+                    ));
+                }
+            }
+            source.owned_position
+        } else {
+            0
+        };
         self.row_resource_owners.insert(
             resource,
             ResourceKindFact {
                 family,
                 parameters,
+                owned_position,
                 origin,
             },
         );
@@ -2799,8 +2862,9 @@ impl<'a> KindEnvironments<'a> {
                 }
                 if let Some(effects) = &self.effects {
                     self.authenticate_effect_type_queue(
-                        effects,
+                        Some(effects),
                         Some(&argument.provenance),
+                        &mut KindVariableObserver::separate(None, None),
                         argument.span,
                         &mut ledger,
                         pending,
@@ -3071,13 +3135,14 @@ impl<'a> KindEnvironments<'a> {
     where
         'a: 'environment,
     {
-        self.authenticate_effect_rows(ty, provenance, fallback_span, budget)?;
+        self.authenticate_effect_rows(ty, provenance, variables, fallback_span, budget)?;
         self.synthesize_core_with_ledger(
             ty,
             provenance,
             provenance.map(ResolvedTypeProvenance::root),
             type_mirror,
             root_function_domain_mirror,
+            LatentRowAuthentication::SynthesisOwned,
             variables,
             fallback_span,
             budget,
@@ -3088,6 +3153,7 @@ impl<'a> KindEnvironments<'a> {
         &'environment self,
         ty: &Type,
         provenance: Option<&ResolvedTypeProvenance>,
+        variables: &mut KindVariableObserver<'_>,
         span: Span,
         budget: &mut SynthesisLedger<'_>,
     ) -> Result<(), KindFailure>
@@ -3111,7 +3177,14 @@ impl<'a> KindEnvironments<'a> {
             )
         })?;
         pending.push((ty, provenance.map(ResolvedTypeProvenance::root)));
-        self.authenticate_effect_type_queue(effects, provenance, span, budget, pending)
+        self.authenticate_effect_type_queue(
+            Some(effects),
+            provenance,
+            variables,
+            span,
+            budget,
+            pending,
+        )
     }
 
     fn authenticate_effect_row<'environment>(
@@ -3312,7 +3385,14 @@ impl<'a> KindEnvironments<'a> {
             }
         }
         if let Some(effects) = &self.effects {
-            self.authenticate_effect_type_queue(effects, Some(provenance), span, budget, pending)?;
+            self.authenticate_effect_type_queue(
+                Some(effects),
+                Some(provenance),
+                &mut KindVariableObserver::separate(None, None),
+                span,
+                budget,
+                pending,
+            )?;
         }
         Ok(())
     }
@@ -3443,8 +3523,11 @@ impl<'a> KindEnvironments<'a> {
 
     fn authenticate_effect_type_queue<'environment>(
         &'environment self,
-        effects: &HashMap<crate::types::EffectId, &'a [crate::resolved::ResolvedTypeVariable]>,
+        effects: Option<
+            &HashMap<crate::types::EffectId, &'a [crate::resolved::ResolvedTypeVariable]>,
+        >,
         provenance: Option<&ResolvedTypeProvenance>,
+        variables: &mut KindVariableObserver<'_>,
         span: Span,
         budget: &mut SynthesisLedger<'_>,
         mut pending: Vec<(&Type, Option<usize>)>,
@@ -3460,7 +3543,11 @@ impl<'a> KindEnvironments<'a> {
                 )
             })?;
             let node = match (provenance, root) {
-                (Some(provenance), Some(root)) => provenance.nodes().get(root),
+                (Some(provenance), Some(root)) => {
+                    Some(provenance.nodes().get(root).ok_or_else(|| {
+                        KindFailure::internal_cause(span, KindInternalCause::InvalidTypeProvenance)
+                    })?)
+                }
                 (None, None) => None,
                 _ => {
                     return Err(KindFailure::internal_cause(
@@ -3594,6 +3681,7 @@ impl<'a> KindEnvironments<'a> {
                         computation.effects(),
                         effects,
                         provenance,
+                        variables,
                         argument_roots,
                         span,
                         budget,
@@ -3636,7 +3724,9 @@ impl<'a> KindEnvironments<'a> {
                 | Type::Unit
                 | Type::Variable(_)
                 | Type::Inference(_)
-                | Type::Nominal(_) => {}
+                | Type::Nominal(_) => {
+                    require_fact_node(node, span, budget)?;
+                }
             }
         }
         Ok(())
@@ -3646,8 +3736,11 @@ impl<'a> KindEnvironments<'a> {
     fn authenticate_effect_row_into<'environment, 'row>(
         &'environment self,
         row: &'row EffectRow,
-        effects: &HashMap<crate::types::EffectId, &'a [crate::resolved::ResolvedTypeVariable]>,
+        effects: Option<
+            &HashMap<crate::types::EffectId, &'a [crate::resolved::ResolvedTypeVariable]>,
+        >,
         provenance: Option<&ResolvedTypeProvenance>,
+        variables: &mut KindVariableObserver<'_>,
         argument_roots: Option<&[usize]>,
         span: Span,
         budget: &mut SynthesisLedger<'_>,
@@ -3662,15 +3755,84 @@ impl<'a> KindEnvironments<'a> {
             .iter()
             .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
         {
-            budget.charge(1).map_err(|()| {
-                KindFailure::resource(
-                    span,
-                    "effect-row identity lookup exceeded its owning work budget",
-                )
-            })?;
-            let parameters = effects.get(&instance.effect()).ok_or_else(|| {
-                KindFailure::internal_cause(span, KindInternalCause::MissingRowEffect)
-            })?;
+            // The borrowed canonical path reads both the declaration and its
+            // independently retained signature; an installed map needs one read.
+            budget
+                .charge(if effects.is_some() { 1 } else { 2 })
+                .map_err(|()| {
+                    KindFailure::resource(
+                        span,
+                        "effect-row identity lookup exceeded its owning work budget",
+                    )
+                })?;
+            let parameters = match effects {
+                Some(effects) => effects.get(&instance.effect()).copied().ok_or_else(|| {
+                    KindFailure::internal_cause(span, KindInternalCause::MissingRowEffect)
+                })?,
+                None => {
+                    let registry = self.owner_registry.ok_or_else(|| {
+                        KindFailure::internal_cause(span, KindInternalCause::MissingRowEffect)
+                    })?;
+                    let declaration = registry.effect(instance.effect()).ok_or_else(|| {
+                        KindFailure::internal_cause(span, KindInternalCause::MissingRowEffect)
+                    })?;
+                    let owner = crate::resolved::OwnerId::Effect(instance.effect());
+                    let signature = registry.owner_signature(owner).ok_or_else(|| {
+                        KindFailure::internal_cause(span, KindInternalCause::MissingRowEffect)
+                    })?;
+                    if declaration.id != instance.effect() || signature.owner != owner {
+                        return Err(KindFailure::internal_cause(
+                            span,
+                            KindInternalCause::LinkedValueType,
+                        ));
+                    }
+                    if declaration.parameters.len() != signature.parameters.len() {
+                        return Err(KindFailure::internal_cause(
+                            span,
+                            KindInternalCause::EffectArgumentCount,
+                        ));
+                    }
+                    for (parameter, identity) in declaration
+                        .parameters
+                        .iter()
+                        .zip(signature.parameters.iter())
+                    {
+                        budget.charge(1).map_err(|()| {
+                            KindFailure::resource(
+                                span,
+                                "effect owner correspondence exceeded its owning work budget",
+                            )
+                        })?;
+                        if parameter.id != *identity {
+                            return Err(KindFailure::internal_cause(
+                                span,
+                                KindInternalCause::LinkedValueType,
+                            ));
+                        }
+                        let canonical = registry.type_variable(*identity).ok_or_else(|| {
+                            KindFailure::internal_cause(
+                                span,
+                                KindInternalCause::MissingCanonicalBinder,
+                            )
+                        })?;
+                        if !same_kind_with_charge(&parameter.kind, &canonical.kind, || {
+                            budget.charge(1)
+                        })
+                        .map_err(|()| {
+                            KindFailure::resource(
+                                span,
+                                "effect owner kind correspondence exceeded its owning work budget",
+                            )
+                        })? {
+                            return Err(KindFailure::internal_cause(
+                                span,
+                                KindInternalCause::LinkedValueType,
+                            ));
+                        }
+                    }
+                    declaration.parameters.as_ref()
+                }
+            };
             if parameters.len() != instance.arguments().len() {
                 return Err(KindFailure::internal_cause(
                     span,
@@ -3685,7 +3847,29 @@ impl<'a> KindEnvironments<'a> {
                     None => None,
                 };
                 let argument = match argument {
-                    KindedArgument::TypeArg(argument) => argument,
+                    KindedArgument::TypeArg(argument) => {
+                        if parameter.kind == Kind::EffectRow {
+                            if provenance.is_none() {
+                                return Err(KindFailure::internal_cause(
+                                    span,
+                                    KindInternalCause::LinkedValueType,
+                                ));
+                            }
+                            return Err(KindFailure::Source(Box::new(structured_error(
+                                KindReason::Argument,
+                                span,
+                                "this row slot requires a written effect-row argument",
+                                &parameter.kind,
+                                &Kind::Type,
+                                Some((
+                                    parameter.origin.primary_span(),
+                                    "the effect parameter kind is declared here",
+                                )),
+                                budget.resolved_budget(span)?,
+                            )?)));
+                        }
+                        argument
+                    }
                     KindedArgument::RowArg(_) => {
                         self.owner_argument_source_roots(
                             std::iter::once(argument),
@@ -3709,12 +3893,8 @@ impl<'a> KindEnvironments<'a> {
                             )
                         })?;
                         owner_arguments.push((argument, &parameter.kind));
-                        let inputs = self.owner_type_inputs(
-                            owner_arguments,
-                            &mut KindVariableObserver::separate(None, None),
-                            span,
-                            budget,
-                        )?;
+                        let inputs =
+                            self.owner_type_inputs(owner_arguments, variables, span, budget)?;
                         for (input, expected) in inputs {
                             let found = self.synthesize_core_with_ledger(
                                 input,
@@ -3722,7 +3902,8 @@ impl<'a> KindEnvironments<'a> {
                                 None,
                                 None,
                                 None,
-                                &mut KindVariableObserver::separate(None, None),
+                                LatentRowAuthentication::QueueOwned,
+                                variables,
                                 span,
                                 budget,
                             )?;
@@ -3730,19 +3911,9 @@ impl<'a> KindEnvironments<'a> {
                                 .map_err(|()| KindFailure::resource(span,
                                     "effect-argument kind checking exceeded its owning work budget"))?
                             { return Err(KindFailure::internal_cause(span, KindInternalCause::EffectArgumentKind)); }
-                            budget.charge(1).map_err(|()| {
-                                KindFailure::resource(
-                                    span,
-                                    "effect-row authentication exceeded its owning work budget",
-                                )
-                            })?;
-                            pending.try_reserve(1).map_err(|_| {
-                                KindFailure::resource(
-                                    span,
-                                    "effect-row authentication could not reserve traversal storage",
-                                )
-                            })?;
-                            pending.push((input, None));
+                            // owner_argument_source_roots already queued this
+                            // payload with its exact source root. Its one queue
+                            // entry owns all further latent-row authentication.
                         }
                         continue;
                     }
@@ -3753,7 +3924,8 @@ impl<'a> KindEnvironments<'a> {
                     argument_root,
                     None,
                     None,
-                    &mut KindVariableObserver::separate(None, None),
+                    LatentRowAuthentication::QueueOwned,
+                    variables,
                     span,
                     budget,
                 )?;
@@ -3866,19 +4038,20 @@ impl<'a> KindEnvironments<'a> {
         };
         let fact = match tail.variable() {
             crate::types::EffectRowVariable::Rigid(identity) => {
+                let fact = &self
+                    .delta
+                    .get(&identity)
+                    .ok_or_else(|| {
+                        KindFailure::internal_cause(span, KindInternalCause::MissingRowBinderKind)
+                    })?
+                    .fact;
                 if !variables.observe(identity) {
                     return Err(KindFailure::internal_cause(
                         span,
                         KindInternalCause::NonOwnerRowTail,
                     ));
                 }
-                &self
-                    .delta
-                    .get(&identity)
-                    .ok_or_else(|| {
-                        KindFailure::internal_cause(span, KindInternalCause::MissingRowBinderKind)
-                    })?
-                    .fact
+                fact
             }
             crate::types::EffectRowVariable::Inference(identity) => {
                 self.omega.get(&identity).ok_or_else(|| {
@@ -3886,6 +4059,16 @@ impl<'a> KindEnvironments<'a> {
                 })?
             }
         };
+        authenticate_kind_descendants_with_ledger(fact.kind, fact.retained_mirrors, budget)
+            .map_err(|failure| match failure {
+                LinkedKindMirrorFailure::Resource => KindFailure::resource(
+                    span,
+                    "row-binder kind correspondence exceeded its owning work budget",
+                ),
+                LinkedKindMirrorFailure::Mismatch => {
+                    KindFailure::internal_cause(span, KindInternalCause::RetainedBinderKind)
+                }
+            })?;
         let is_row = same_kind_with_charge(fact.kind, &Kind::EffectRow, || budget.charge(1))
             .map_err(|()| {
                 KindFailure::resource(
@@ -3965,6 +4148,7 @@ impl<'a> KindEnvironments<'a> {
                                 registry.and_then(|registry| {
                                     registry
                                         .effect(instance.effect())
+                                        .filter(|effect| effect.id == instance.effect())
                                         .map(|effect| effect.parameters.as_ref())
                                 })
                             })
@@ -3988,6 +4172,14 @@ impl<'a> KindEnvironments<'a> {
                             return Err(KindFailure::internal_cause(
                                 span,
                                 KindInternalCause::MissingRowEffect,
+                            ));
+                        }
+                        if signature.is_some_and(|signature| {
+                            signature.owner != crate::resolved::OwnerId::Effect(instance.effect())
+                        }) {
+                            return Err(KindFailure::internal_cause(
+                                span,
+                                KindInternalCause::LinkedValueType,
                             ));
                         }
                         if signature
@@ -4129,7 +4321,7 @@ impl<'a> KindEnvironments<'a> {
         }
         if !definition
             .parameters
-            .first()
+            .get(definition.owned_position)
             .is_some_and(|identity| identity.kind == Kind::Type)
         {
             return Err(KindFailure::internal_cause(
@@ -4243,6 +4435,7 @@ impl<'a> KindEnvironments<'a> {
         provenance_root: Option<usize>,
         type_mirror: Option<&Type>,
         root_function_domain_mirror: Option<&Type>,
+        latent_rows: LatentRowAuthentication,
         variables: &mut KindVariableObserver<'_>,
         fallback_span: Span,
         budget: &mut SynthesisLedger<'_>,
@@ -4382,12 +4575,6 @@ impl<'a> KindEnvironments<'a> {
                             }
                             require_fact_node(node, span, budget)?;
                             charge_lookup_attempt(span, budget)?;
-                            if !variables.observe(*identity) {
-                                return Err(KindFailure::internal_cause(
-                                    span,
-                                    KindInternalCause::BodyFreeConstructorOwner,
-                                ));
-                            }
                             let mut fact = self
                                 .delta
                                 .get(identity)
@@ -4398,6 +4585,12 @@ impl<'a> KindEnvironments<'a> {
                                     )
                                 })?
                                 .fact;
+                            if !variables.observe(*identity) {
+                                return Err(KindFailure::internal_cause(
+                                    span,
+                                    KindInternalCause::BodyFreeConstructorOwner,
+                                ));
+                            }
                             authenticate_kind_descendants_with_ledger(
                                 fact.kind,
                                 fact.retained_mirrors,
@@ -4676,6 +4869,42 @@ impl<'a> KindEnvironments<'a> {
                                     span,
                                     budget,
                                 )?;
+                                if matches!(latent_rows, LatentRowAuthentication::SynthesisOwned)
+                                    && self.effects.is_none()
+                                    && self.owner_registry.is_some()
+                                {
+                                    let argument_roots = match node {
+                                        Some(ResolvedTypeProvenanceNode::Function {
+                                            effect_arguments,
+                                            ..
+                                        }) if effect_arguments.len()
+                                            == computation.effect_argument_count() =>
+                                        {
+                                            Some(effect_arguments.as_ref())
+                                        }
+                                        None => None,
+                                        _ => {
+                                            return Err(KindFailure::internal_cause(
+                                                span,
+                                                KindInternalCause::EffectFunctionProvenance,
+                                            ));
+                                        }
+                                    };
+                                    let mut pending = Vec::new();
+                                    self.authenticate_effect_row_into(
+                                        computation.effects(),
+                                        None,
+                                        provenance,
+                                        variables,
+                                        argument_roots,
+                                        span,
+                                        budget,
+                                        &mut pending,
+                                    )?;
+                                    self.authenticate_effect_type_queue(
+                                        None, provenance, variables, span, budget, pending,
+                                    )?;
+                                }
                             }
                             if domain_override.is_some() {
                                 if domain_mirror.is_some() {
@@ -5448,6 +5677,29 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
             budget,
         )?;
     }
+    for resource in &module.source_resources {
+        authenticate_owner_parameters(&module.registry, &resource.parameters, budget)?;
+        if resource
+            .parameters
+            .iter()
+            .any(|parameter| parameter.kind == Kind::EffectRow)
+        {
+            environments.insert_row_resource_family(
+                resource.family,
+                resource.id,
+                &resource.parameters,
+                resource.span,
+                budget,
+            )?;
+        } else {
+            environments.insert_nominal(
+                resource.family,
+                &resource.parameters,
+                resource.span,
+                budget,
+            )?;
+        }
+    }
     for resource in &module.resources {
         authenticate_owner_parameters(&module.registry, &resource.parameters, budget)?;
         if let Some(family) = &resource.family_template {
@@ -5513,6 +5765,50 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
 
     for declaration in &module.declaration_order {
         let outcome = match *declaration {
+            crate::resolved::ResolvedDeclarationIndex::SourceResource(index) => {
+                let resource = &module.source_resources[index];
+                environments.install_complete_owner_parameters(&resource.parameters, budget)?;
+                for ty in [
+                    &resource.input,
+                    &resource.state,
+                    &resource.data,
+                    &resource.acquisition,
+                    &resource.completion,
+                ] {
+                    environments.expect_value_type(ty, budget)?;
+                }
+                environments
+                    .extend_owner_parameters(std::slice::from_ref(&resource.answer), budget)?;
+                let result = environments.expect_value_type(&resource.result, budget);
+                environments
+                    .remove_owner_parameter_extension(std::slice::from_ref(&resource.answer));
+                result?;
+                for effect in std::iter::once(&resource.provided).chain(resource.interpreted.iter())
+                {
+                    check_hook_target_kind(effect, &environments, budget)?;
+                }
+                check_expression_annotations(
+                    &resource.acquire,
+                    &module.registry,
+                    &mut environments,
+                    budget,
+                )?;
+                check_expression_annotations(
+                    &resource.finish,
+                    &module.registry,
+                    &mut environments,
+                    budget,
+                )?;
+                for clause in &resource.handlers {
+                    check_expression_annotations(
+                        &clause.body,
+                        &module.registry,
+                        &mut environments,
+                        budget,
+                    )?;
+                }
+                DeclarationKindOutcome::Checked
+            }
             crate::resolved::ResolvedDeclarationIndex::Resource(index) => {
                 let resource = &module.resources[index];
                 environments.install_complete_owner_parameters(&resource.parameters, budget)?;
@@ -5837,6 +6133,7 @@ fn authenticate_declaration_order(
         .len()
         .checked_add(module.interfaces.len())
         .and_then(|count| count.checked_add(module.resources.len()))
+        .and_then(|count| count.checked_add(module.source_resources.len()))
         .ok_or_else(|| {
             KindFailure::resource(module.span, "owner coverage storage is not representable")
         })?;
@@ -5856,9 +6153,14 @@ fn authenticate_declaration_order(
     let mut owner_coverage = module.registry.owner_signature_shape_matches(
         module.effects.len(),
         module.interfaces.len(),
-        module.resources.len(),
+        module
+            .resources
+            .len()
+            .saturating_add(module.source_resources.len()),
     );
     let mut next_resource = 0;
+    let mut next_source_resource = 0;
+    let mut next_source_owner = 0;
     let mut next_type = 0;
     let mut next_interface = 0;
     let mut next_effect = 0;
@@ -5872,15 +6174,37 @@ fn authenticate_declaration_order(
             )
         })?;
         let ordered = match *declaration {
+            crate::resolved::ResolvedDeclarationIndex::SourceResource(index) => {
+                let ordered =
+                    index == next_source_resource && index < module.source_resources.len();
+                next_source_resource = next_source_resource.saturating_add(1);
+                ordered
+            }
             crate::resolved::ResolvedDeclarationIndex::Resource(index) => {
                 let ordered = index == next_resource && index < module.resources.len();
                 next_resource = next_resource.saturating_add(1);
                 ordered
             }
             crate::resolved::ResolvedDeclarationIndex::Type(index) => {
-                let ordered = index == next_type && index < module.registry.nominals().len();
-                next_type = next_type.saturating_add(1);
-                ordered
+                if module
+                    .registry
+                    .nominals()
+                    .get(index)
+                    .is_some_and(|nominal| module.registry.source_owner_nominal(nominal.id))
+                {
+                    let ordinary_count = module
+                        .registry
+                        .nominals()
+                        .len()
+                        .saturating_sub(module.registry.source_owner_candidate_count());
+                    let ordered = index == ordinary_count.saturating_add(next_source_owner);
+                    next_source_owner = next_source_owner.saturating_add(1);
+                    ordered
+                } else {
+                    let ordered = index == next_type && index < module.registry.nominals().len();
+                    next_type = next_type.saturating_add(1);
+                    ordered
+                }
             }
             crate::resolved::ResolvedDeclarationIndex::Interface(index) => {
                 let ordered = index == next_interface && index < module.interfaces.len();
@@ -5910,6 +6234,9 @@ fn authenticate_declaration_order(
             ));
         }
         let owner = match *declaration {
+            crate::resolved::ResolvedDeclarationIndex::SourceResource(index) => Some(
+                crate::resolved::OwnerId::Resource(module.source_resources[index].id),
+            ),
             crate::resolved::ResolvedDeclarationIndex::Resource(index) => Some(
                 crate::resolved::OwnerId::Resource(module.resources[index].id),
             ),
@@ -5943,7 +6270,9 @@ fn authenticate_declaration_order(
         )
     })?;
     if next_resource != module.resources.len()
-        || next_type != module.registry.nominals().len()
+        || next_source_resource != module.source_resources.len()
+        || next_source_owner != module.registry.source_owner_candidate_count()
+        || next_type.saturating_add(next_source_owner) != module.registry.nominals().len()
         || next_interface != module.interfaces.len()
         || next_effect != module.effects.len()
         || next_global != module.definitions.len()
@@ -5982,6 +6311,33 @@ fn authenticate_imported_environments<'a>(
     budget: &mut TypeWorkBudget,
 ) -> Result<(), KindFailure> {
     let imported = &module.imported;
+    for resource in imported.source_resource_facts() {
+        authenticate_unique_parameter_ids(
+            &resource.parameters,
+            resource.origin.primary_span(),
+            budget,
+        )?;
+        if resource
+            .parameters
+            .iter()
+            .any(|parameter| parameter.kind == Kind::EffectRow)
+        {
+            environments.insert_row_resource_family(
+                resource.family,
+                resource.id,
+                &resource.parameters,
+                resource.origin.primary_span(),
+                budget,
+            )?;
+        } else {
+            environments.insert_nominal(
+                resource.family,
+                &resource.parameters,
+                resource.origin.primary_span(),
+                budget,
+            )?;
+        }
+    }
     for (_, resource) in imported.resource_facts() {
         authenticate_unique_parameter_ids(
             &resource.parameters,
@@ -6396,6 +6752,7 @@ fn preflight_interface_application_kinds<'a>(
     budget: &mut TypeWorkBudget,
 ) -> Result<bool, KindFailure> {
     if module.resources.is_empty()
+        && module.source_resources.is_empty()
         && module.definitions.is_empty()
         && module.implementations.is_empty()
     {
@@ -6445,6 +6802,11 @@ fn check_interface_application_kinds_in_owner_environments<'a>(
             )
         })?;
         match *declaration {
+            crate::resolved::ResolvedDeclarationIndex::SourceResource(index) => {
+                let resource = &module.source_resources[index];
+                environments.install_complete_owner_parameters(&resource.parameters, budget)?;
+                check(&resource.provider, environments, budget)?;
+            }
             crate::resolved::ResolvedDeclarationIndex::Resource(index) => {
                 let resource = &module.resources[index];
                 environments.install_complete_owner_parameters(&resource.parameters, budget)?;
@@ -6542,6 +6904,11 @@ fn visit_interface_applications(
             )
         })?;
         match *declaration {
+            crate::resolved::ResolvedDeclarationIndex::SourceResource(index) => {
+                if !visit(&module.source_resources[index].provider, budget)? {
+                    return Ok(false);
+                }
+            }
             crate::resolved::ResolvedDeclarationIndex::Resource(index) => {
                 if !visit(&module.resources[index].provider, budget)? {
                     return Ok(false);
@@ -7214,6 +7581,17 @@ fn authenticate_provider_instance_arguments<'a>(
                 }
             })?;
         parameters
+    } else if let Some(original) = environments
+        .imported_resource_owners
+        .and_then(|imported| imported.source_resource_fact(resource.definition))
+    {
+        if original.family != resource.family {
+            return Err(KindFailure::internal_cause(
+                span,
+                KindInternalCause::MissingOwnerBinder,
+            ));
+        }
+        original.parameters.as_ref()
     } else {
         let original = environments
             .imported_resource_owners
@@ -7250,7 +7628,20 @@ fn authenticate_provider_instance_arguments<'a>(
             cause: None,
         }));
     }
-    for (argument, parameter) in arguments.iter().zip(parameters.iter().skip(1)) {
+    let owned_position = registry
+        .source_resource_fact(resource.definition)
+        .or_else(|| {
+            environments
+                .imported_resource_owners
+                .and_then(|imported| imported.source_resource_fact(resource.definition))
+        })
+        .map_or(0, |fact| fact.owned_position);
+    for (argument, (_, parameter)) in arguments.iter().zip(
+        parameters
+            .iter()
+            .enumerate()
+            .filter(|(position, _)| *position != owned_position),
+    ) {
         environments.expect_interface_argument(
             argument,
             &parameter.kind,
@@ -9306,6 +9697,7 @@ mod tests {
 
     fn empty_module_parts(span: Span) -> ResolvedModuleParts {
         ResolvedModuleParts {
+            source_resources: Vec::new(),
             resources: Vec::new(),
             module: ModuleId::new(0),
             registry: Arc::new(ResolvedRegistry::new(Vec::new(), Vec::new())),
@@ -9831,6 +10223,56 @@ mod tests {
                 &mut TypeWorkBudget::unbounded(),
             )
             .expect("a closed latent row remains a valid method value type");
+
+        // The latent argument has a known row kind but is not an owning
+        // interface or method binder. Authentication must use the method's
+        // allowed-variable observer rather than silently widening its domain.
+        let non_owner_row = ResolvedTypeVariable {
+            id: TypeVariableId::new(1),
+            spelling: "Outside".into(),
+            kind: Kind::EffectRow,
+            origin: Origin::Source(span),
+        };
+        environments
+            .insert_declared(
+                non_owner_row.id,
+                &non_owner_row.kind,
+                span,
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("the non-owner row has an independently known kind");
+        let effect = crate::types::EffectId::new(ModuleId::new(0), 0);
+        environments.effects = Some(HashMap::from([(
+            effect,
+            std::slice::from_ref(&non_owner_row),
+        )]));
+        let escaped_row = Type::function_computation(
+            Type::Variable(parameter),
+            crate::types::ComputationType::new(
+                Type::Bool,
+                EffectRow::singleton(crate::types::EffectInstance::new_kinded(
+                    effect,
+                    Box::new([KindedArgument::RowArg(EffectRow::open(
+                        crate::types::EffectRowVariable::rigid(non_owner_row.id),
+                        Box::new([]),
+                    ))]),
+                )),
+            ),
+        );
+        let failure = environments
+            .expect_body_free_interface_method_with_ledger(
+                &escaped_row,
+                &[parameter],
+                BodyFreeInterfaceMethodSeed::AllInterfaceParameters,
+                &[],
+                span,
+                &mut TypeWorkBudget::default(),
+            )
+            .expect_err("a latent row argument cannot bypass the allowed owner set");
+        let KindFailure::Internal(failure) = failure else {
+            panic!("non-owner row admission must be an internal identity failure");
+        };
+        assert_eq!(failure.cause, Some(KindInternalCause::NonOwnerRowTail));
     }
 
     #[test]
@@ -9997,6 +10439,84 @@ mod tests {
             .expect_err("the exact diagnostic budget should retain the source failure");
         assert!(matches!(failure, KindFailure::Source(_)));
         assert_eq!(exact.used(), DIAGNOSTIC_WORK);
+
+        let row_parameter = ResolvedTypeVariable {
+            id: TypeVariableId::new(1),
+            spelling: "Delta".into(),
+            kind: Kind::EffectRow,
+            origin: Origin::Source(span),
+        };
+        let outer = crate::types::EffectId::new(ModuleId::new(0), 0);
+        let nested = crate::types::EffectId::new(ModuleId::new(0), 1);
+        environments.effects = Some(HashMap::from([
+            (outer, std::slice::from_ref(&row_parameter)),
+            (nested, std::slice::from_ref(&parameter)),
+        ]));
+        let queued_payload = Type::function_computation(
+            Type::Unit,
+            crate::types::ComputationType::new(
+                Type::Int,
+                EffectRow::singleton(crate::types::EffectInstance::new_kinded(
+                    outer,
+                    Box::new([KindedArgument::RowArg(EffectRow::singleton(
+                        crate::types::EffectInstance::new_kinded(
+                            nested,
+                            Box::new([KindedArgument::TypeArg(Type::Int)]),
+                        ),
+                    ))]),
+                )),
+            ),
+        );
+        // Node 3 owns the RowArg. Its child must point to node 2's atomic
+        // payload, not a missing node or a non-Fact row node.
+        for (payload_root, expected) in [
+            (2, None),
+            (usize::MAX, Some(KindInternalCause::InvalidTypeProvenance)),
+            (3, Some(KindInternalCause::AtomicTypeProvenance)),
+        ] {
+            let provenance = ResolvedTypeProvenance::new(
+                vec![
+                    ResolvedTypeProvenanceNode::Fact(span),
+                    ResolvedTypeProvenanceNode::Fact(span),
+                    ResolvedTypeProvenanceNode::Fact(span),
+                    ResolvedTypeProvenanceNode::Row {
+                        span,
+                        argument_roots: Box::new([payload_root]),
+                    },
+                    ResolvedTypeProvenanceNode::Function {
+                        span,
+                        domain: 0,
+                        codomain: 1,
+                        effect_arguments: Box::new([3]),
+                    },
+                ],
+                4,
+            );
+            let mut measured = TypeWorkBudget::default();
+            let result =
+                environments.synthesize(&queued_payload, Some(&provenance), span, &mut measured);
+            let Some(expected) = expected else {
+                result.expect("the queued payload's genuine Fact root should authenticate");
+                continue;
+            };
+            let failure = result
+                .err()
+                .expect("the queued RowArg payload root is malformed");
+            assert_eq!(failure.internal_context().unwrap().cause, expected);
+            let work = measured.used();
+            let mut short = TypeWorkBudget::with_limit(work - 1);
+            assert!(matches!(
+                environments.synthesize(&queued_payload, Some(&provenance), span, &mut short),
+                Err(KindFailure::Resource(_))
+            ));
+            let mut exact = TypeWorkBudget::with_limit(work);
+            let failure = environments
+                .synthesize(&queued_payload, Some(&provenance), span, &mut exact)
+                .err()
+                .expect("a fresh exact budget reaches the same malformed provenance");
+            assert_eq!(failure.internal_context().unwrap().cause, expected);
+            assert_eq!(exact.used(), work);
+        }
     }
 
     #[test]

@@ -9,7 +9,8 @@ Ash is a rank-1 language whose programs are acyclic graphs of passive source
 modules. Each `.ash` source file defines one unnamed module containing
 imports followed by nominal data or `newtype` declarations, method-only
 interface declarations, effect declarations, anonymous implementation
-declarations, and global function definitions. Global signatures may state
+declarations, scalar foreign-library declarations, and global function
+definitions. Global signatures may state
 explicit interface constraints and latent effect rows, and implementation
 heads may state explicit prerequisite constraints. A module has no result
 expression, runtime module value, or initialization.
@@ -94,6 +95,26 @@ live captures in structural order, then continues the clause with `Unit`.
 Inference proves safe closure without skipping outside or running completion
 owners. Its effect row includes invoked cleanup actions.
 
+An owner-free scalar `foreign library` declaration supplies passive ABI facts
+and exact native effects with one `call` operation each. Complete ordered
+`Type` and `EffectRow` parameters and original contracts survive publication
+and imports. `@builtin.foreign` supplies ordinary common result types, including
+`Call<T>` and opaque `ConversionError`. Compilation installs an explicit checked
+Core interpretation for admitted owner-free native entry instances, leaving an
+empty outward row. Ordinary source handlers cannot install a native symbol's
+interpreter. Source contracts and checked Core supply no executable binding;
+default execution refuses missing bindings before Ash runs. Constants, foreign
+byte access, dependent ownership and copy windows remain outside the admitted
+subset. Source resource declarations additionally admit dependency-free opaque
+and initialized byte owners, private data and checked `scope` or `acquired_only`
+reports, one acquisition and an unconditional consuming teardown. Checked lexical
+forwarding supports the associated interface methods and ordinary constrained
+helpers, preserving exact operation types, effect rows and typed access operands.
+Exact constructor and
+native-call identities authenticate publication and completion; declarations
+alone confer no ownership. The [source-resource rules](static-semantics.md#source-resource-declarations)
+bound this lifecycle and its supported associated handler shape.
+
 `resource cell<R> c = initializer { body }` acquires one scoped mutable integer
 cell through the compiler-owned `@builtin.cell` API. The scope owns release;
 handles provide reusable access while it remains live. Inferred dependencies
@@ -176,11 +197,11 @@ patterns, exhaustive matches and equations, sequential bindings, method-only
 interfaces, explicit constraints, anonymous implementations, and pure and
 effectful expressions with single-use, non-escaping handler continuations.
 
-Beyond the fixed sealed cell provider and acquisition form, the effect kernel
-adds no general provider or resource declarations, first-class registration
-tokens, arbitrary removal or priorities, general destructor declarations,
-foreign resources, escaping or multi-shot resume, asynchronous execution, or
-dynamic loading.
+Beyond the fixed builtin providers and the bounded source-resource forms
+described above, the effect kernel adds no general provider or resource
+declarations, first-class registration tokens, arbitrary removal or priorities,
+general destructor declarations, escaping or multi-shot resume, asynchronous
+execution, or dynamic loading.
 A linked nonempty effect row is a source rejection rather than an
 unhandled-operation runtime result.
 
@@ -210,15 +231,15 @@ bare `Option` constructor, and a global whose explicit parameter has kind
 
 ```ash
 pub type Option<A> =
-None
-| Some(A)
+    None
+    | Some(A)
 
 pub interface Observe<F : Type -> Type> {
-observe : F<Int> -> Int
+    observe : F<Int> -> Int
 }
 
 pub impl Observe<Option> {
-observe value = 40 + 2
+    observe value = 40 + 2
 }
 
 pub relay<F : Type -> Type> : F<Int> -> F<Int>
@@ -413,7 +434,7 @@ and once from `Bool` to `Int`:
 
 ```ash
 pub interface Functor<F : Type -> Type> {
-map<A, B> : (A -> B, F<A>) -> F<B>
+    map<A, B> : (A -> B, F<A>) -> F<B>
 }
 
 to_bool : Int -> Bool
@@ -436,7 +457,7 @@ pub import api (Functor, map)
 pub type Box<A> = Box(A)
 
 pub impl Functor<Box> {
-map (function, Box(value)) = Box(function(value))
+    map (function, Box(value)) = Box(function(value))
 }
 ```
 

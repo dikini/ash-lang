@@ -953,6 +953,7 @@ fn declaration_source_items<'a>(
             }
         }
         ResolvedDeclarationIndex::Resource(_)
+        | ResolvedDeclarationIndex::SourceResource(_)
         | ResolvedDeclarationIndex::Type(_)
         | ResolvedDeclarationIndex::Interface(_)
         | ResolvedDeclarationIndex::Effect(_) => return Ok(pending),

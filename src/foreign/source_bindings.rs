@@ -1,0 +1,837 @@
+//! Source-native executable bindings and the pre-execution admission receipt.
+//! Only a sealed, independently checked executable member can enter this table.
+
+use std::{collections::HashMap, sync::Arc};
+
+use crate::{
+    core::{EffectExprKind, EffectOperation, ValidatedEffectProgram},
+    eval::{ResourceFailure, ResourceFailureCause, RuntimeFailure, RuntimePhase, RuntimeResource},
+    foreign::{
+        checked_source::{CheckedExecutableForeignSymbol, CheckedForeignSymbol},
+        source_runtime::{
+            NativeOwnerAcquireCallback, NativeOwnerCallReturned, NativeOwnerConsumed,
+            NativeOwnerGuard, NativeOwnerGuardReady, NativeOwnerTeardownCallback,
+            NativeScalarCallError, NativeScalarReply, NativeScalarValue,
+        },
+    },
+    module::ModuleId,
+    resolved::{ResolvedNominalDeclarationKind, ResolvedRegistry},
+    source::{Origin, Span},
+    types::{ConstructorId, EffectInstance, Kind, KindedArgument, TypeWorkBudget},
+};
+
+pub(crate) type NativeScalarCallback =
+    fn(&[NativeScalarValue]) -> Result<NativeScalarReply, NativeScalarCallError>;
+
+#[derive(Debug)]
+pub(crate) struct SourceScalarBinding {
+    symbol: Arc<CheckedForeignSymbol>,
+    target: &'static str,
+    callback: NativeScalarCallback,
+}
+
+/// Generated callbacks remain separate from scalar transport and supply no
+/// lifecycle authority until a controlled source-scope receipt admits a request.
+#[derive(Debug)]
+pub(crate) enum SourceOwnerCallback {
+    Acquire(NativeOwnerAcquireCallback),
+    Teardown(NativeOwnerTeardownCallback),
+}
+
+#[derive(Debug)]
+struct SourceOwnerBinding {
+    symbol: Arc<CheckedForeignSymbol>,
+    target: &'static str,
+    callback: SourceOwnerCallback,
+}
+
+/// Opaque supplied bindings. Empty construction grants no executable authority.
+#[derive(Debug, Default)]
+pub struct SourceNativeBindings {
+    entries: HashMap<crate::types::OperationId, SourceScalarBinding>,
+    owners: HashMap<crate::types::OperationId, SourceOwnerBinding>,
+}
+
+impl SourceNativeBindings {
+    /// This crate-private constructor consumes the sealed executable member and
+    /// emitter-provided typed callback. No arbitrary source descriptor or name
+    /// can register a callback through the public API.
+    pub(crate) fn insert_checked(
+        &mut self,
+        sealed: CheckedExecutableForeignSymbol,
+        callback: NativeScalarCallback,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), RuntimeFailure> {
+        paid(work, 2)?;
+        let target = sealed.target();
+        if target != "x86_64-unknown-linux-gnu" {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+        let symbol = sealed.into_source();
+        if symbol.owner().is_some()
+            || !matches!(
+                symbol.symbol().call(),
+                super::source_contract::PreparedForeignCall::Scalar { .. }
+            )
+            || matches!(
+                symbol.symbol().result(),
+                super::source_contract::PreparedAbiResult::Address(_)
+            )
+        {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+        // Subset admission inspects only borrowed normalized metadata; it does
+        // not prepare another ABI or normalize library policy again.
+        paid(work, symbol.symbol().operands().len())?;
+        if symbol.symbol().operands().iter().any(|operand| {
+            !matches!(
+                operand.source(),
+                super::source_contract::PreparedOperandSource::Source(_)
+            ) || !matches!(
+                operand.representation(),
+                super::source_contract::PreparedRepresentation::Scalar(_)
+            )
+        }) {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+        if self.entries.contains_key(&symbol.operation())
+            || self.owners.contains_key(&symbol.operation())
+        {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+        self.entries.try_reserve(1).map_err(|_| storage(1))?;
+        self.entries.insert(
+            symbol.operation(),
+            SourceScalarBinding {
+                symbol,
+                target,
+                callback,
+            },
+        );
+        Ok(())
+    }
+
+    /// Consumes independently sealed generated authority, but grants no ability
+    /// to invoke an owner operation outside its controlled resource scope.
+    pub(crate) fn insert_owner_checked(
+        &mut self,
+        sealed: CheckedExecutableForeignSymbol,
+        callback: SourceOwnerCallback,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), RuntimeFailure> {
+        use super::source_contract::{
+            PreparedAbiResult, PreparedAddressRepresentation, PreparedOperandSource,
+            PreparedOwnerCall, PreparedRepresentation,
+        };
+        paid(work, 3)?;
+        let target = sealed.target();
+        let symbol = sealed.into_source();
+        let owner = symbol.owner().ok_or(RuntimeFailure::ForeignBinding)?;
+        if target != "x86_64-unknown-linux-gnu" || symbol.owner_codec().is_none() {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+        paid(work, symbol.symbol().operands().len())?;
+        let admitted = match (&callback, symbol.owner_role()) {
+            (
+                SourceOwnerCallback::Acquire(_),
+                Some(PreparedOwnerCall::Acquire {
+                    initialized_bytes, ..
+                }),
+            ) => {
+                matches!(
+                    (owner.owner().representation(), initialized_bytes),
+                    (PreparedAddressRepresentation::Opaque, None)
+                        | (PreparedAddressRepresentation::Bytes, Some(_))
+                ) && symbol.symbol().result()
+                    == PreparedAbiResult::Address(owner.owner().representation())
+                    && symbol.symbol().operands().iter().all(|operand| {
+                        matches!(operand.source(), PreparedOperandSource::Source(_))
+                            && matches!(operand.representation(), PreparedRepresentation::Scalar(_))
+                    })
+            }
+            (
+                SourceOwnerCallback::Teardown(_),
+                Some(PreparedOwnerCall::Teardown {
+                    current_operand: 0, ..
+                }),
+            ) => {
+                symbol.symbol().result() == PreparedAbiResult::Void
+                    && symbol.symbol().operands().len() == 1
+                    && matches!(
+                        symbol.symbol().operands()[0].source(),
+                        PreparedOperandSource::Current(_)
+                    )
+                    && symbol.symbol().operands()[0].representation()
+                        == PreparedRepresentation::Address(owner.owner().representation())
+            }
+            _ => false,
+        };
+        if !admitted
+            || self.entries.contains_key(&symbol.operation())
+            || self.owners.contains_key(&symbol.operation())
+        {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+        self.owners.try_reserve(1).map_err(|_| storage(1))?;
+        self.owners.insert(
+            symbol.operation(),
+            SourceOwnerBinding {
+                symbol,
+                target,
+                callback,
+            },
+        );
+        Ok(())
+    }
+
+    /// Passive exact-membership check used by pre-execution scope admission.
+    /// It returns no callback or per-request lifecycle permission.
+    pub(crate) fn authenticate_owner_binding(
+        &self,
+        symbol: &Arc<CheckedForeignSymbol>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), RuntimeFailure> {
+        paid(work, 2)?;
+        let binding = self
+            .owners
+            .get(&symbol.operation())
+            .ok_or(RuntimeFailure::ForeignBinding)?;
+        if binding.target != "x86_64-unknown-linux-gnu" || !Arc::ptr_eq(&binding.symbol, symbol) {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+        Ok(())
+    }
+
+    /// Admits one request from a final checked scope's actual lifecycle copy.
+    /// Header facts or an ordinary interpreter alone cannot create this receipt.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn admit_source_owner_invocation<'bindings>(
+        &'bindings self,
+        program: &crate::eval::ExecutableProgram,
+        scope_node: crate::core::NodeId,
+        request: crate::core::NodeId,
+        phase: SourceOwnerPhase,
+        instance: &EffectInstance,
+        symbol: &Arc<CheckedForeignSymbol>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<AdmittedSourceOwnerInvocation<'bindings>, RuntimeFailure> {
+        paid(work, 6)?;
+        let crate::eval::ExecutableProgram::Effect(program) = program else {
+            return Err(RuntimeFailure::ForeignBinding);
+        };
+        let Some(scope_node_value) = program.node(scope_node) else {
+            return Err(RuntimeFailure::ForeignBinding);
+        };
+        let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+            &scope_node_value.kind
+        else {
+            return Err(RuntimeFailure::ForeignBinding);
+        };
+        if !scope
+            .contains_phase_request(program, request, phase == SourceOwnerPhase::Acquire, work)
+            .map_err(|error| {
+                if error.reason() == crate::core::ValidationReason::Resource {
+                    effect_work_refusal(work)
+                } else {
+                    RuntimeFailure::ForeignBinding
+                }
+            })?
+        {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+        let header = scope.header();
+        let expected = match phase {
+            SourceOwnerPhase::Acquire => &header.acquire,
+            SourceOwnerPhase::Finish => &header.teardown,
+        };
+        if !Arc::ptr_eq(symbol, expected)
+            || !program
+                .registry()
+                .native_symbol(symbol.operation())
+                .is_some_and(|canonical| Arc::ptr_eq(canonical, symbol))
+            || !program
+                .registry()
+                .effect(symbol.effect())
+                .and_then(|effect| effect.native_contract.as_ref())
+                .is_some_and(|canonical| Arc::ptr_eq(canonical, symbol))
+        {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+        self.authenticate_owner_binding(symbol, work)?;
+        self.authenticate_owner_binding(&header.teardown, work)?;
+        admit_complete_native_instance(symbol, instance, work)?;
+        let instance = crate::types::clone_effect_instance_with_budget(instance, work)
+            .map_err(|()| effect_work_refusal(work))?;
+        paid(work, 1)?;
+        let receipt = SourceOwnerScopeRequest {
+            _scope: Arc::clone(scope.original()),
+            _scope_node: scope_node,
+            _request: request,
+            _phase: phase,
+            _instance: instance,
+        };
+        let binding = self
+            .owners
+            .get(&symbol.operation())
+            .ok_or(RuntimeFailure::ForeignBinding)?;
+        let teardown = self
+            .owners
+            .get(&header.teardown.operation())
+            .ok_or(RuntimeFailure::ForeignBinding)?;
+        match (phase, &binding.callback, &teardown.callback) {
+            (
+                SourceOwnerPhase::Acquire,
+                SourceOwnerCallback::Acquire(_),
+                SourceOwnerCallback::Teardown(callback),
+            ) => {
+                let hidden_error = authenticate_hidden_error(program.registry(), symbol, work)?;
+                paid(work, 1)?;
+                let readiness = NativeOwnerGuardReady::new(Arc::clone(&header.owner), *callback);
+                Ok(AdmittedSourceOwnerInvocation::Acquire(
+                    AdmittedSourceOwnerAcquireInvocation {
+                        binding,
+                        readiness,
+                        receipt,
+                        hidden_error,
+                    },
+                ))
+            }
+            (
+                SourceOwnerPhase::Finish,
+                SourceOwnerCallback::Teardown(_),
+                SourceOwnerCallback::Teardown(_),
+            ) => Ok(AdmittedSourceOwnerInvocation::Teardown(
+                AdmittedSourceOwnerTeardownInvocation {
+                    symbol: &binding.symbol,
+                    receipt,
+                },
+            )),
+            _ => Err(RuntimeFailure::ForeignBinding),
+        }
+    }
+
+    pub(crate) fn request<'bindings>(
+        &'bindings self,
+        symbol: &Arc<CheckedForeignSymbol>,
+        instance: EffectInstance,
+        hidden_error: ConstructorId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<AdmittedSourceScalarInvocation<'bindings>, RuntimeFailure> {
+        paid(work, 2)?;
+        let binding = self
+            .entries
+            .get(&symbol.operation())
+            .ok_or(RuntimeFailure::ForeignBinding)?;
+        if !Arc::ptr_eq(symbol, &binding.symbol)
+            || instance.effect() != symbol.effect()
+            || binding.target != "x86_64-unknown-linux-gnu"
+            || hidden_error != ConstructorId::new(symbol.call_codec().ids().conversion_error, 0)
+        {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+        let parameters = symbol.symbol().parameters();
+        paid(work, parameters.len())?;
+        if instance.arguments().len() != parameters.len()
+            || symbol.parameter_ids().len() != parameters.len()
+        {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+        // Final independent Core validation and Instantiation::effect already
+        // check kind formation/substitution. Retain and recheck ALL ordered tags;
+        // unsupported higher-kinded source-native parameters remain explicit.
+        let projection = symbol.symbol().native_type_projection();
+        let mut native = 0;
+        // The parameter-count precharge pays this complete ordered scan. Check
+        // the derived Type-only projection here without rescanning phantom rows.
+        for (index, (parameter, actual)) in parameters.iter().zip(instance.arguments()).enumerate()
+        {
+            if !matches!(
+                (parameter.kind(), actual),
+                (Kind::Type, KindedArgument::TypeArg(_))
+                    | (Kind::EffectRow, KindedArgument::RowArg(_))
+            ) {
+                return Err(RuntimeFailure::ForeignBinding);
+            }
+            if matches!(actual, KindedArgument::TypeArg(_)) {
+                paid(work, 1)?;
+                if projection.get(native) != Some(&index) {
+                    return Err(RuntimeFailure::ForeignBinding);
+                }
+                native += 1;
+            }
+        }
+        if native != projection.len() {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+        Ok(AdmittedSourceScalarInvocation {
+            binding,
+            _instance: instance,
+            hidden_error,
+        })
+    }
+}
+
+fn effect_work_refusal(work: &TypeWorkBudget) -> RuntimeFailure {
+    RuntimeFailure::resource(ResourceFailure::new(
+        ResourceFailureCause::WorkBudgetExhausted,
+        RuntimePhase::Access,
+        RuntimeResource::WorkUnits,
+        None,
+        Some(work.remaining()),
+    ))
+}
+
+fn admit_complete_native_instance(
+    symbol: &CheckedForeignSymbol,
+    instance: &EffectInstance,
+    work: &mut TypeWorkBudget,
+) -> Result<(), RuntimeFailure> {
+    let parameters = symbol.symbol().parameters();
+    paid(work, parameters.len())?;
+    if instance.effect() != symbol.effect()
+        || instance.arguments().len() != parameters.len()
+        || symbol.parameter_ids().len() != parameters.len()
+    {
+        return Err(RuntimeFailure::ForeignBinding);
+    }
+    let projection = symbol.symbol().native_type_projection();
+    let mut native = 0;
+    for (index, (parameter, actual)) in parameters.iter().zip(instance.arguments()).enumerate() {
+        if !matches!(
+            (parameter.kind(), actual),
+            (Kind::Type, KindedArgument::TypeArg(_)) | (Kind::EffectRow, KindedArgument::RowArg(_))
+        ) {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+        if matches!(actual, KindedArgument::TypeArg(_)) {
+            paid(work, 1)?;
+            if projection.get(native) != Some(&index) {
+                return Err(RuntimeFailure::ForeignBinding);
+            }
+            native += 1;
+        }
+    }
+    if native != projection.len() {
+        return Err(RuntimeFailure::ForeignBinding);
+    }
+    Ok(())
+}
+
+/// Current checked scope lifecycle phase; ordinary interpreter requests cannot
+/// construct an invocation using this stage alone.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SourceOwnerPhase {
+    Acquire,
+    Finish,
+}
+
+/// Per-request scope authority retains the final checked template and full
+/// runtime instance. Only exact final-program scope/request admission creates it.
+#[derive(Debug)]
+struct SourceOwnerScopeRequest {
+    _scope: Arc<crate::core::source_resource::CheckedSourceResourceTemplate>,
+    _scope_node: crate::core::NodeId,
+    _request: crate::core::NodeId,
+    _phase: SourceOwnerPhase,
+    _instance: EffectInstance,
+}
+
+#[derive(Debug)]
+pub(crate) enum AdmittedSourceOwnerInvocation<'bindings> {
+    Acquire(AdmittedSourceOwnerAcquireInvocation<'bindings>),
+    Teardown(AdmittedSourceOwnerTeardownInvocation<'bindings>),
+}
+
+#[derive(Debug)]
+pub(crate) struct AdmittedSourceOwnerAcquireInvocation<'bindings> {
+    binding: &'bindings SourceOwnerBinding,
+    readiness: NativeOwnerGuardReady,
+    receipt: SourceOwnerScopeRequest,
+    hidden_error: ConstructorId,
+}
+
+#[derive(Debug)]
+pub(crate) struct AdmittedSourceOwnerTeardownInvocation<'bindings> {
+    symbol: &'bindings Arc<CheckedForeignSymbol>,
+    receipt: SourceOwnerScopeRequest,
+}
+
+/// Ownership returned from native code has no acquisition or teardown callback
+/// capability. The complete request and original symbol remain retained.
+#[derive(Debug)]
+pub(crate) struct SourceOwnerReturnedAuthority<'bindings> {
+    _symbol: &'bindings Arc<CheckedForeignSymbol>,
+    _receipt: SourceOwnerScopeRequest,
+}
+
+impl<'bindings> AdmittedSourceOwnerAcquireInvocation<'bindings> {
+    /// Accepts only the extent shape required by this exact acquisition contract.
+    /// The evaluator projects and narrows its original source leaf beforehand.
+    pub(crate) fn prepare_initialized_bytes(
+        mut self,
+        extent: Option<usize>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, RuntimeFailure> {
+        let Some(super::source_contract::PreparedOwnerCall::Acquire {
+            initialized_bytes, ..
+        }) = self.binding.symbol.owner_role()
+        else {
+            return Err(RuntimeFailure::ForeignBinding);
+        };
+        if extent.is_some() || initialized_bytes.is_some() {
+            paid(work, 1)?;
+        }
+        if extent.is_some() != initialized_bytes.is_some() {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+        self.readiness.prepare_initialized_bytes(extent);
+        Ok(self)
+    }
+
+    pub(crate) fn symbol(&self) -> &Arc<CheckedForeignSymbol> {
+        &self.binding.symbol
+    }
+    pub(crate) fn returned_constructor(&self) -> ConstructorId {
+        self.binding.symbol.call_codec().ids().returned
+    }
+    pub(crate) fn conversion_failed_constructor(&self) -> ConstructorId {
+        self.binding.symbol.call_codec().ids().conversion_failed
+    }
+    pub(crate) fn hidden_error_constructor(&self) -> ConstructorId {
+        self.hidden_error
+    }
+    pub(crate) fn nullable_constructors(&self) -> [ConstructorId; 2] {
+        *self
+            .binding
+            .symbol
+            .owner_codec()
+            .expect("admitted owner codec")
+            .nullable_constructors()
+    }
+    pub(crate) fn readable_constructor(&self) -> ConstructorId {
+        self.binding
+            .symbol
+            .owner_codec()
+            .expect("admitted owner codec")
+            .output_constructors()[1]
+    }
+    pub(crate) fn invoke(
+        self,
+        values: &[NativeScalarValue],
+    ) -> Result<
+        (
+            SourceOwnerReturnedAuthority<'bindings>,
+            NativeOwnerCallReturned,
+        ),
+        NativeScalarCallError,
+    > {
+        let SourceOwnerCallback::Acquire(callback) = &self.binding.callback else {
+            return Err(NativeScalarCallError::ArgumentContract);
+        };
+        let raw = callback(values, self.readiness)?;
+        Ok((
+            SourceOwnerReturnedAuthority {
+                _symbol: &self.binding.symbol,
+                _receipt: self.receipt,
+            },
+            raw,
+        ))
+    }
+}
+
+impl<'bindings> AdmittedSourceOwnerTeardownInvocation<'bindings> {
+    pub(crate) fn owner(&self) -> &Arc<super::source_owner::CheckedForeignOwner> {
+        self.symbol.owner().expect("admitted owner identity")
+    }
+    pub(crate) fn returned_constructor(&self) -> ConstructorId {
+        self.symbol.call_codec().ids().returned
+    }
+    pub(crate) fn consumed_constructor(&self) -> ConstructorId {
+        self.symbol
+            .owner_codec()
+            .expect("admitted owner codec")
+            .disposition_constructors()[0]
+    }
+    pub(crate) fn invoke(
+        self,
+        guard: NativeOwnerGuard,
+    ) -> (SourceOwnerReturnedAuthority<'bindings>, NativeOwnerConsumed) {
+        let consumed = guard.finish();
+        (
+            SourceOwnerReturnedAuthority {
+                _symbol: self.symbol,
+                _receipt: self.receipt,
+            },
+            consumed,
+        )
+    }
+}
+
+/// Non-Clone per-request receipt. Private fields retain exact executable/source
+/// authority and the complete instantiated vector through result publication.
+#[derive(Debug)]
+pub(crate) struct AdmittedSourceScalarInvocation<'bindings> {
+    binding: &'bindings SourceScalarBinding,
+    _instance: EffectInstance,
+    hidden_error: ConstructorId,
+}
+
+impl<'bindings> AdmittedSourceScalarInvocation<'bindings> {
+    pub(crate) fn symbol(&self) -> &Arc<CheckedForeignSymbol> {
+        &self.binding.symbol
+    }
+    pub(crate) fn result(&self) -> super::source_contract::PreparedAbiResult {
+        self.binding.symbol.symbol().result()
+    }
+    pub(crate) fn returned_constructor(&self) -> ConstructorId {
+        self.binding.symbol.call_codec().ids().returned
+    }
+    pub(crate) fn conversion_failed_constructor(&self) -> ConstructorId {
+        self.binding.symbol.call_codec().ids().conversion_failed
+    }
+    pub(crate) fn hidden_error_constructor(&self) -> ConstructorId {
+        self.hidden_error
+    }
+    pub(crate) fn invoke(
+        self,
+        values: &[NativeScalarValue],
+    ) -> Result<(SourceScalarReturnedAuthority<'bindings>, NativeScalarReply), NativeScalarCallError>
+    {
+        let raw = (self.binding.callback)(values)?;
+        Ok((
+            SourceScalarReturnedAuthority {
+                _binding: self.binding,
+                _instance: self._instance,
+            },
+            raw,
+        ))
+    }
+}
+
+/// Consuming invocation yields this non-Clone retention receipt with NO invoke
+/// method. Returned/Recorded can retain original authority without any callback
+/// capability, preventing replay even inside later phase APIs.
+#[derive(Debug)]
+pub(crate) struct SourceScalarReturnedAuthority<'bindings> {
+    _binding: &'bindings SourceScalarBinding,
+    _instance: EffectInstance,
+}
+
+/// Immutable program and table borrow prevent registry/binding mutation between
+/// pre-execution admission and evaluator use. Construction is restricted below.
+#[derive(Debug)]
+pub struct AdmittedSourceNativeProgram<'program, 'bindings> {
+    program: &'program ValidatedEffectProgram,
+    bindings: &'bindings mut SourceNativeBindings,
+    errors: HashMap<ModuleId, ConstructorId>,
+}
+
+impl<'program, 'bindings> AdmittedSourceNativeProgram<'program, 'bindings> {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        &'program ValidatedEffectProgram,
+        &'bindings mut SourceNativeBindings,
+        HashMap<ModuleId, ConstructorId>,
+    ) {
+        (self.program, self.bindings, self.errors)
+    }
+}
+
+pub(crate) fn admit_source_native_program<'program, 'bindings>(
+    program: &'program ValidatedEffectProgram,
+    bindings: &'bindings mut SourceNativeBindings,
+    work: &mut TypeWorkBudget,
+) -> Result<AdmittedSourceNativeProgram<'program, 'bindings>, RuntimeFailure> {
+    let mut errors = HashMap::new();
+    for node in program.nodes() {
+        paid(work, 1)?;
+        if let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) = &node.kind {
+            if !cfg!(all(
+                target_arch = "x86_64",
+                target_os = "linux",
+                target_env = "gnu",
+                target_pointer_width = "64"
+            )) {
+                return Err(RuntimeFailure::ForeignBinding);
+            }
+            paid(work, scope.native_interpretations().len())?;
+            for interpretation in scope.native_interpretations() {
+                let symbol = interpretation.symbol();
+                bindings.authenticate_owner_binding(symbol, work)?;
+                if symbol.owner().is_none()
+                    || !program
+                        .registry()
+                        .native_symbol(symbol.operation())
+                        .is_some_and(|canonical| Arc::ptr_eq(canonical, symbol))
+                    || !program
+                        .registry()
+                        .effect(symbol.effect())
+                        .and_then(|effect| effect.native_contract.as_ref())
+                        .is_some_and(|canonical| Arc::ptr_eq(canonical, symbol))
+                {
+                    return Err(RuntimeFailure::ForeignBinding);
+                }
+                let module = symbol.call_codec().module();
+                paid(work, 1)?;
+                if !errors.contains_key(&module) {
+                    let id = authenticate_hidden_error(program.registry(), symbol, work)?;
+                    errors.try_reserve(1).map_err(|_| storage(1))?;
+                    errors.insert(module, id);
+                }
+            }
+            continue;
+        }
+        let EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) = &node.kind
+        else {
+            continue;
+        };
+        if !boundary.interpretations().is_empty()
+            && !cfg!(all(
+                target_arch = "x86_64",
+                target_os = "linux",
+                target_env = "gnu",
+                target_pointer_width = "64"
+            ))
+        {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+        for interpretation in boundary.interpretations() {
+            paid(work, 3)?;
+            let symbol = interpretation.symbol();
+            if symbol.owner().is_some() {
+                // Ordinary entry interpretation cannot grant owner lifecycle authority.
+                return Err(RuntimeFailure::ForeignBinding);
+            }
+            let bound = bindings
+                .entries
+                .get(&symbol.operation())
+                .ok_or(RuntimeFailure::ForeignBinding)?;
+            let canonical = program
+                .registry()
+                .native_symbol(symbol.operation())
+                .ok_or(RuntimeFailure::ForeignBinding)?;
+            let effect = program
+                .registry()
+                .effect(symbol.effect())
+                .ok_or(RuntimeFailure::ForeignBinding)?;
+            if !Arc::ptr_eq(&bound.symbol, symbol)
+                || !Arc::ptr_eq(canonical, symbol)
+                || effect
+                    .native_contract
+                    .as_ref()
+                    .is_none_or(|tag| !Arc::ptr_eq(tag, symbol))
+            {
+                return Err(RuntimeFailure::ForeignBinding);
+            }
+            let module = symbol.call_codec().module();
+            paid(work, 1)?;
+            if !errors.contains_key(&module) {
+                let id = authenticate_hidden_error(program.registry(), symbol, work)?;
+                errors.try_reserve(1).map_err(|_| storage(1))?;
+                errors.insert(module, id);
+            }
+        }
+    }
+    Ok(AdmittedSourceNativeProgram {
+        program,
+        bindings,
+        errors,
+    })
+}
+
+pub(crate) fn reject_missing_source_bindings(
+    program: &ValidatedEffectProgram,
+    work: &mut TypeWorkBudget,
+) -> Result<(), RuntimeFailure> {
+    for node in program.nodes() {
+        paid(work, 1)?;
+        if let EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) = &node.kind
+            && !boundary.interpretations().is_empty()
+        {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+        if matches!(
+            &node.kind,
+            EffectExprKind::Operation(EffectOperation::SourceResourceScope(_))
+        ) {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+    }
+    Ok(())
+}
+
+fn authenticate_hidden_error(
+    registry: &ResolvedRegistry,
+    symbol: &CheckedForeignSymbol,
+    work: &mut TypeWorkBudget,
+) -> Result<ConstructorId, RuntimeFailure> {
+    paid(work, 4)?;
+    let codec = symbol.call_codec();
+    let error = codec.ids().conversion_error;
+    if !codec.module().is_builtin_foreign() {
+        return Err(RuntimeFailure::ForeignBinding);
+    }
+    let hidden = ConstructorId::new(error, 0);
+    let nominal = registry
+        .nominal(error)
+        .ok_or(RuntimeFailure::ForeignBinding)?;
+    let constructor = registry
+        .constructor(hidden)
+        .ok_or(RuntimeFailure::ForeignBinding)?;
+    if nominal.declaration_kind != ResolvedNominalDeclarationKind::Data
+        || nominal.representation.is_some()
+        || nominal.representation_provenance.is_some()
+        || nominal.constructors.as_ref() != [hidden]
+        || registry
+            .nominal_parameters(error)
+            .is_none_or(|parameters| !parameters.is_empty())
+        || constructor.owner != error
+        || constructor.payload.is_some()
+        || !within(codec.source(), &nominal.origin, work)?
+        || !within(codec.source(), &constructor.origin, work)?
+    {
+        return Err(RuntimeFailure::ForeignBinding);
+    }
+    Ok(hidden)
+}
+
+fn within(
+    source: Span,
+    mut origin: &Origin,
+    work: &mut TypeWorkBudget,
+) -> Result<bool, RuntimeFailure> {
+    loop {
+        paid(work, 1)?;
+        match origin {
+            Origin::Source(span) => {
+                return Ok(source.source() == span.source()
+                    && source.range().start() <= span.range().start()
+                    && span.range().end() <= source.range().end());
+            }
+            Origin::Generated { cause, .. } => origin = cause,
+            Origin::Related { primary, .. } => origin = primary,
+        }
+    }
+}
+
+fn paid(work: &mut TypeWorkBudget, units: usize) -> Result<(), RuntimeFailure> {
+    work.charge(units).map_err(|()| {
+        RuntimeFailure::resource(ResourceFailure::new(
+            ResourceFailureCause::WorkBudgetExhausted,
+            RuntimePhase::Access,
+            RuntimeResource::WorkUnits,
+            Some(units),
+            Some(work.remaining()),
+        ))
+    })
+}
+fn storage(units: usize) -> RuntimeFailure {
+    RuntimeFailure::resource(ResourceFailure::new(
+        ResourceFailureCause::StorageReservationFailed,
+        RuntimePhase::Access,
+        RuntimeResource::ForeignCodecStorage,
+        Some(units),
+        None,
+    ))
+}

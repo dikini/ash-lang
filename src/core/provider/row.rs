@@ -175,6 +175,7 @@ pub(in crate::core) enum RowEquationOperation {
     Empty,
     Union { callable: Option<NodeId> },
     Request,
+    NativeInterpret,
     StateAccess,
     Handler { output: HandlerOutputId },
     Resume { output: HandlerOutputId },
@@ -469,6 +470,9 @@ impl HandlerRowRecipeDraft {
                 recipe.edges.push(equation);
             }
             let operation = match &stored.kind {
+                EffectExprKind::Operation(EffectOperation::SourceResourceScope(_)) => {
+                    return Err(invalid(id));
+                }
                 EffectExprKind::Pure(PureExprKind::Value(_) | PureExprKind::Variable(_)) => {
                     RowEquationOperation::Empty
                 }
@@ -479,6 +483,9 @@ impl HandlerRowRecipeDraft {
                             _ => None,
                         },
                     }
+                }
+                EffectExprKind::Operation(EffectOperation::NativeInterpret(_)) => {
+                    RowEquationOperation::NativeInterpret
                 }
                 EffectExprKind::Operation(EffectOperation::Request(_)) => {
                     RowEquationOperation::Request

@@ -1,5 +1,8 @@
 //! Closed assembly of the grammar forms accepted by this parser dialect.
 
+#[path = "foreign_grammar.rs"]
+mod foreign;
+
 use crate::lexer::TokenKind;
 
 use super::{ExpectedForm, NodeKind, ParseReason, Parser, SynchronizationBoundary, expression};
@@ -391,7 +394,8 @@ fn expect_upper_identifier(parser: &mut Parser<'_>) {
 }
 
 fn starts_module_declaration(parser: &Parser<'_>) -> bool {
-    parser.at(&TokenKind::Type)
+    foreign::starts_library(parser)
+        || parser.at(&TokenKind::Type)
         || parser.at(&TokenKind::Newtype)
         || parser.at(&TokenKind::Resource)
         || parser.at(&TokenKind::Effect)
@@ -416,7 +420,9 @@ fn starts_module_declaration(parser: &Parser<'_>) -> bool {
 }
 
 fn module_declaration(parser: &mut Parser<'_>) -> TypeParametersOutcome {
-    if parser.at(&TokenKind::Resource)
+    if foreign::starts_library(parser) {
+        foreign::library(parser)
+    } else if parser.at(&TokenKind::Resource)
         || parser.at(&TokenKind::Pub) && parser.nth(1) == Some(&TokenKind::Resource)
     {
         resource_definition(parser)
@@ -1609,17 +1615,11 @@ fn resource_expression(parser: &mut Parser<'_>) {
         } else {
             expect_upper_identifier(parser);
         }
-        let _ = parser.expect(&TokenKind::Less, ExpectedForm::Type);
-        parser.start(NodeKind::Type);
-        parser.start(NodeKind::AtomicType);
-        expect_upper_identifier(parser);
-        parser.finish();
-        parser.finish();
-        while parser.at(&TokenKind::Comma) {
-            let _ = parser.bump();
-            application_argument(parser);
+        if parser.at(&TokenKind::Less) {
+            type_arguments(parser);
+        } else {
+            parser.report(ParseReason::ExpectedForm, ExpectedForm::Type);
         }
-        let _ = parser.expect(&TokenKind::Greater, ExpectedForm::Greater);
         parser.finish();
         binder(parser);
         let _ = parser.expect(&TokenKind::Equal, ExpectedForm::Equal);
@@ -2626,6 +2626,15 @@ fn resource_field_word(parser: &mut Parser<'_>, word: &str) {
 
 fn resource_handlers(parser: &mut Parser<'_>) {
     binder(parser);
+    resource_handlers_body(parser);
+}
+
+fn source_resource_handlers(parser: &mut Parser<'_>) {
+    pattern(parser);
+    resource_handlers_body(parser);
+}
+
+fn resource_handlers_body(parser: &mut Parser<'_>) {
     let _ = parser.expect(&TokenKind::LeftBrace, ExpectedForm::LeftBrace);
     let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
     if parser.at(&TokenKind::RightBrace) {
@@ -2714,6 +2723,12 @@ fn resource_definition(parser: &mut Parser<'_>) -> TypeParametersOutcome {
     }
     let _ = parser.expect(&TokenKind::LeftBrace, ExpectedForm::LeftBrace);
     let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
+    if matches!(parser.current(), Some(TokenKind::Identifier(word)) if word == "owned") {
+        source_resource_fields(parser);
+        let _ = parser.expect(&TokenKind::RightBrace, ExpectedForm::RightBrace);
+        parser.finish();
+        return TypeParametersOutcome::Complete;
+    }
     for word in [
         "input",
         "state",
@@ -2775,6 +2790,78 @@ fn resource_definition(parser: &mut Parser<'_>) -> TypeParametersOutcome {
     let _ = parser.expect(&TokenKind::RightBrace, ExpectedForm::RightBrace);
     parser.finish();
     TypeParametersOutcome::Complete
+}
+
+fn source_resource_fields(parser: &mut Parser<'_>) {
+    for word in [
+        "owned",
+        "input",
+        "state",
+        "data",
+        "acquisition",
+        "completion",
+        "result",
+        "codec",
+        "provider",
+        "effect",
+        "interpret",
+        "acquire",
+        "finish",
+        "handlers",
+    ] {
+        parser.start(NodeKind::SourceResourceField);
+        if word == "effect" {
+            let _ = parser.expect(&TokenKind::Effect, ExpectedForm::Identifier);
+        } else {
+            resource_field_word(parser, word);
+        }
+        match word {
+            "owned" => expect_upper_identifier(parser),
+            "input" | "state" | "data" | "acquisition" | "completion" | "provider" => {
+                type_expression(parser);
+            }
+            "result" => {
+                type_expression(parser);
+                resource_field_word(parser, "for");
+                if parser.at(&TokenKind::Less) {
+                    let _ = type_parameters(parser, TypeParameterOwnerBoundary::Effect);
+                } else {
+                    parser.report(ParseReason::ExpectedForm, ExpectedForm::Type);
+                }
+            }
+            "codec" => {
+                if matches!(parser.current(), Some(TokenKind::Identifier(codec))
+                    if codec == "scope" || codec == "acquired_only")
+                {
+                    let _ = parser.bump();
+                } else {
+                    parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+                }
+            }
+            "effect" => effect_instance(parser),
+            "interpret" => {
+                effect_instance(parser);
+                while parser.at(&TokenKind::Comma) {
+                    let _ = parser.bump();
+                    effect_instance(parser);
+                }
+            }
+            "acquire" | "finish" => {
+                pattern(parser);
+                let _ = parser.expect(&TokenKind::FatArrow, ExpectedForm::FatArrow);
+                expression(parser);
+            }
+            "handlers" => source_resource_handlers(parser),
+            _ => unreachable!(),
+        }
+        parser.finish();
+        if word == "handlers" && parser.at(&TokenKind::RightBrace) {
+            break;
+        }
+        if !parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd) {
+            break;
+        }
+    }
 }
 
 #[cfg(test)]

@@ -279,21 +279,6 @@ pub(crate) fn lex_with_budget(
             )?;
             continue;
         }
-        if bytes[offset] == b'-' && bytes.get(offset + 1).is_some_and(u8::is_ascii_digit) {
-            offset += 2;
-            while offset < bytes.len() && bytes[offset].is_ascii_digit() {
-                offset += 1;
-            }
-            record_diagnostic(
-                source,
-                &mut diagnostics,
-                LexReason::NegativeLiteral,
-                start,
-                offset,
-                &text[start..offset],
-            )?;
-            continue;
-        }
 
         let kind = match bytes[offset] {
             b'"' => {
@@ -376,6 +361,7 @@ pub(crate) fn lex_with_budget(
                 offset += 2;
                 TokenKind::Arrow
             }
+            b'-' => single(&mut offset, TokenKind::Minus),
             _ => {
                 let Some(character) = text[offset..].chars().next() else {
                     return Err(SourceError::InvalidLineState);

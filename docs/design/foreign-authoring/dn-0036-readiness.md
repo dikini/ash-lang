@@ -9,8 +9,16 @@ syntax, accepts no compiler architecture and authorizes no implementation.
 The user selected a first target: an end-to-end Ash-authored **copying SQLite
 binding on one host ABI**, with general borrowing and wider Arena graphs left
 for later proposals. The user also selected generated native bridges as the first
-execution/linking direction. The exact ABI profile remains a design decision. This scope is a first DN-0037 checkpoint, not completion of
+execution/linking direction. This scope is a first DN-0037 checkpoint, not completion of
 the whole foreign-authoring program.
+
+The later [ffi-ash milestone scope](../DN-0037-ash-authored-foreign-library-interfaces.md#agreed-ffi-ash-milestone)
+selects `x86_64-unknown-linux-gnu`, generated Rust runtime bridges, optional
+separate C/header checks, whole-program checked-Core embedding, and native-buffer
+and minimal-arena source libraries alongside SQLite. [AD-0013](../../decisions/AD-0013-generated-native-bridges-and-program-builds.md)
+records the converged build boundary. [CP-0022](../../proposals/CP-0022-ash-authored-foreign-interfaces.md)
+records the accepted semantic transition, still awaiting product delivery. The historical evidence
+below keeps its original pins and limitations.
 
 ## Two library cases, one common boundary
 
@@ -255,9 +263,8 @@ explicit assumption.
 | Generic descriptor-driven ABI call engine | One generic execution engine can consume supported signatures without compiling a bridge per signature. | Adds an ABI engine and representation/dependency surface to audit. Symbol provision, output memory, sentinel values and ownership contracts still need design; runtime dynamic loading is not automatically admitted. |
 | Move manifests into Ash while retaining the existing Rust adapters | Separates source contract admission from ABI execution and can provide an intermediate comparison. | Insufficient as the selected delivery: the author still needs library-specific host code. It must be labeled preparation, not Ash-only binding support. |
 
-Generated bridges are the selected design direction, not an accepted
-architectural decision or implemented capability. The source semantic proposal
-and converged compiler/runtime/linking decisions need their own authority transitions
+Generated Rust bridges are now an accepted build direction in AD-0013, not an
+implemented capability. The source semantic proposal still needs acceptance
 under the [artifact guide](../../project/artifacts.md).
 
 ### Generated bridge boundary
@@ -278,8 +285,8 @@ selected target representation. This catches incompatible generated types and
 unsupported target shapes earlier than a descriptor-driven runtime call. It
 does not establish that an incorrectly declared external binary obeys the ABI,
 or that native code obeys retention, invalidation and consumption assumptions.
-A header parser is not required; whether generated checks also use supplied
-headers needs an explicit design choice.
+A header parser is not required. AD-0013 places optional generated C/header
+verification in a separate authoring command, rather than the runtime call path.
 
 The generated wrapper handles the admitted ABI boundary: scalar conversion,
 opaque handle representation, temporary buffers, output storage and return

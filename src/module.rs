@@ -60,6 +60,54 @@ const STRING_SOURCE: &str = concat!(
     "pub equal : (String, String) -> Bool\nequal value = equal value\n",
 );
 
+// The common codec identities follow declaration order: ConversionError is
+// nominal 0 and Call is nominal 1, with Returned 0 and ConversionFailed 1.
+// ConversionError's private representation does not define a public inventory
+// of conversion causes; only its opaque nominal identity is source-accessible.
+const FOREIGN_SOURCE: &str = concat!(
+    "pub opaque type ConversionError = HiddenConversionError\n",
+    "pub type Call<T> = Returned(T)\n",
+    "    | ConversionFailed(ConversionError)\n",
+    "pub type Output<T> = Unreadable\n",
+    "    | Readable(T)\n",
+    "pub type Nullable<T> = Null\n",
+    "    | NonNull(T)\n",
+    "pub type Disposition<T> = Consumed(T)\n",
+    "    | Retained(T)\n",
+    "    | BlockedDependent\n",
+    "pub checked_i64 : Int -> Call<Int>\nchecked_i64 value = checked_i64 value\n",
+    "pub checked_size_t : Int -> Call<Int>\nchecked_size_t value = checked_size_t value\n",
+);
+
+/// Exact source coordinates for compiler-owned scalar preflight declarations.
+/// These roles follow the unchanged canonical foreign nominal inventory.
+pub(crate) fn foreign_scalar_preflight_ranges(
+    source: Span,
+    local: u32,
+) -> Option<(crate::source::ByteRange, crate::source::ByteRange)> {
+    const I64: &str = "pub checked_i64 : Int -> Call<Int>\nchecked_i64 value = checked_i64 value\n";
+    const SIZE: &str =
+        "pub checked_size_t : Int -> Call<Int>\nchecked_size_t value = checked_size_t value\n";
+    if source.range().start() != 0
+        || usize::try_from(source.range().end()).ok()? != FOREIGN_SOURCE.len()
+    {
+        return None;
+    }
+    let (start, name) = match local {
+        0 => (FOREIGN_SOURCE.len() - I64.len() - SIZE.len(), "checked_i64"),
+        1 => (FOREIGN_SOURCE.len() - SIZE.len(), "checked_size_t"),
+        _ => return None,
+    };
+    let name_start = u32::try_from(start + "pub ".len()).ok()?;
+    let name_end = name_start.checked_add(u32::try_from(name.len()).ok()?)?;
+    let annotation_start = name_end.checked_add(3)?;
+    let annotation_end = annotation_start.checked_add(16)?;
+    Some((
+        crate::source::ByteRange::new(name_start, name_end).ok()?,
+        crate::source::ByteRange::new(annotation_start, annotation_end).ok()?,
+    ))
+}
+
 /// A validated name for one configured module root.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct ModuleRootName(String);
@@ -203,6 +251,7 @@ enum ModuleIdNamespace {
     BuiltinNativeBuffer,
     BuiltinBytes,
     BuiltinString,
+    BuiltinForeign,
     DirectCoreSource,
 }
 
@@ -251,6 +300,19 @@ impl ModuleId {
         matches!(self.namespace, ModuleIdNamespace::BuiltinString)
     }
 
+    pub(crate) const fn is_builtin_foreign(self) -> bool {
+        matches!(self.namespace, ModuleIdNamespace::BuiltinForeign)
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn builtin_foreign_for_test(value: u32) -> Self {
+        Self {
+            namespace: ModuleIdNamespace::BuiltinForeign,
+            graph: 0,
+            value,
+        }
+    }
+
     pub(crate) const fn is_builtin_resource(self) -> bool {
         self.is_builtin_cell() || self.is_builtin_native_buffer()
     }
@@ -280,6 +342,9 @@ impl fmt::Display for ModuleId {
             }
             ModuleIdNamespace::BuiltinString => {
                 write!(formatter, "builtin.string:{}:{}", self.graph, self.value)
+            }
+            ModuleIdNamespace::BuiltinForeign => {
+                write!(formatter, "builtin.foreign:{}:{}", self.graph, self.value)
             }
             ModuleIdNamespace::Admitted => write!(formatter, "{}:{}", self.graph, self.value),
             ModuleIdNamespace::BuiltinCell => {
@@ -1399,6 +1464,7 @@ pub fn load_module_graph(
         let mut builtin_native_buffer = None;
         let mut builtin_bytes = None;
         let mut builtin_string = None;
+        let mut builtin_foreign = None;
 
         while let Some(frame) = frames.last() {
             let module = frame.module;
@@ -1503,7 +1569,7 @@ pub fn load_module_graph(
                 if segments.len() != 1
                     || !matches!(
                         segments[0].text.as_str(),
-                        "cell" | "native_buffer" | "bytes" | "string"
+                        "cell" | "native_buffer" | "bytes" | "string" | "foreign"
                     )
                 {
                     return Err(ModuleFailure::source(
@@ -1519,6 +1585,8 @@ pub fn load_module_graph(
                     &mut builtin_bytes
                 } else if segments[0].text == "string" {
                     &mut builtin_string
+                } else if segments[0].text == "foreign" {
+                    &mut builtin_foreign
                 } else if native_buffer {
                     &mut builtin_native_buffer
                 } else {
@@ -1527,7 +1595,15 @@ pub fn load_module_graph(
                 let target = if let Some(id) = *cached {
                     id
                 } else {
-                    let id = if packed {
+                    let id = if segments[0].text == "foreign" {
+                        admit_builtin_foreign(
+                            graph_identity,
+                            import.span,
+                            &mut budget,
+                            &mut staged,
+                            &mut dependency_order,
+                        )?
+                    } else if packed {
                         admit_builtin_packed(
                             segments[0].text == "bytes",
                             graph_identity,
@@ -1632,6 +1708,50 @@ pub fn load_module_graph(
             .collect::<Vec<_>>()
             .into_boxed_slice(),
     })
+}
+
+fn admit_builtin_foreign(
+    graph: u32,
+    import_span: Span,
+    budget: &mut GraphBudget,
+    staged: &mut Vec<StagedModule>,
+    dependency_order: &mut Vec<ModuleId>,
+) -> Result<ModuleId, LoadGraphError> {
+    budget.charge_sources()?;
+    staged
+        .try_reserve(1)
+        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
+    dependency_order
+        .try_reserve(1)
+        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
+    let mut text = String::new();
+    text.try_reserve_exact(FOREIGN_SOURCE.len())
+        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
+    text.push_str(FOREIGN_SOURCE);
+    let path = PathBuf::from("@builtin.foreign");
+    let (source, surface) =
+        parse_surface_module(&path, text, Some(import_span), &mut budget.syntax_work)?;
+    let value = u32::try_from(staged.len())
+        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
+    let id = ModuleId {
+        namespace: ModuleIdNamespace::BuiltinForeign,
+        graph,
+        value,
+    };
+    let owners = OwnerSet::from_paths(&[], budget)?;
+    staged.push(StagedModule {
+        id,
+        canonical_path: path,
+        owners,
+        source,
+        surface,
+        dependencies: Vec::new(),
+        relative_edges: Vec::new(),
+        state: VisitState::Finished,
+        foreign: None,
+    });
+    dependency_order.push(id);
+    Ok(id)
 }
 
 fn admit_builtin_packed(
@@ -2077,6 +2197,46 @@ mod tests {
     use super::*;
 
     #[test]
+    fn common_foreign_identity_and_admission_remain_distinct_and_retryable() {
+        let fixture = ModuleId::builtin_foreign_for_test(7);
+        assert!(fixture.is_builtin_foreign());
+        assert_eq!(fixture.to_string(), "builtin.foreign:0:7");
+        assert_ne!(fixture, ModuleId::new(7));
+        let source = SourceFile::new("importer", "import @builtin.foreign as Foreign\n").unwrap();
+        let span = source
+            .span(crate::source::ByteRange::new(0, 1).unwrap())
+            .unwrap();
+        for allowance in [0, 1, 1] {
+            let mut budget = GraphBudget::with_limits(GraphLimits {
+                sources: allowance,
+                ..GraphLimits::default()
+            });
+            let mut staged = Vec::new();
+            let mut order = Vec::new();
+            let result = admit_builtin_foreign(17, span, &mut budget, &mut staged, &mut order);
+            if allowance == 0 {
+                assert_resource(result.map(|_| ()), ModuleResource::Sources);
+                assert!(staged.is_empty() && order.is_empty());
+            } else {
+                let id = result.unwrap();
+                assert!(id.is_builtin_foreign());
+                assert_eq!(id.to_string(), "builtin.foreign:17:0");
+                assert_eq!(order, [id]);
+                assert_ne!(id, ModuleId::from(staged[0].source.id()));
+                assert_ne!(id, ModuleId::admitted(17, 0));
+                assert_eq!(staged[0].source.text(), FOREIGN_SOURCE);
+                assert_eq!(staged[0].surface.span.range().start(), 0);
+                assert_eq!(
+                    staged[0].surface.span.range().end() as usize,
+                    FOREIGN_SOURCE.len()
+                );
+                assert!(staged[0].dependencies.is_empty() && staged[0].relative_edges.is_empty());
+                assert_eq!(budget.owner_facts, 0);
+            }
+        }
+    }
+
+    #[test]
     fn builtin_admission_charges_sources_before_publishing_and_retries() {
         let source = SourceFile::new("importer", "import @builtin.cell as Cell\n").unwrap();
         let span = source
@@ -2110,6 +2270,7 @@ mod tests {
     fn builtin_and_resource_syntax_accept_exact_work_and_retry_after_one_short() {
         for text in [
             CELL_SOURCE,
+            FOREIGN_SOURCE,
             "main : Unit -> Int\nmain () = resource cell<R> c = (1 + 2) {\n42\n}\n",
         ] {
             let path = Path::new("syntax-boundary");
@@ -2261,6 +2422,8 @@ mod tests {
                 implementations: Vec::new(),
                 definitions: Vec::new(),
                 resources: Vec::new(),
+                source_resources: Vec::new(),
+                foreign_libraries: Vec::new(),
                 span,
             },
             dependencies: Box::new([]),
@@ -2310,4 +2473,47 @@ pub enum ForeignOperationRole {
     Borrow,
     /// Consumes or retains ownership under a finish capability.
     Finish,
+}
+
+// Compiler-private role reconstruction. Put beside module graph identity
+// allocation; the image retains this enum separately from its source pathname.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ImageModuleRole {
+    Ordinary,
+    BuiltinForeign,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ImageModuleFailure {
+    Resource,
+    InvalidBuiltinSource,
+}
+
+pub(crate) fn restore_image_module(
+    source: &SourceFile,
+    role: ImageModuleRole,
+    work: &mut crate::types::TypeWorkBudget,
+) -> Result<ModuleId, ImageModuleFailure> {
+    work.charge(1).map_err(|()| ImageModuleFailure::Resource)?;
+    match role {
+        ImageModuleRole::Ordinary => Ok(ModuleId::from(source.id())),
+        ImageModuleRole::BuiltinForeign => {
+            if source.text().len() != FOREIGN_SOURCE.len() {
+                return Err(ImageModuleFailure::InvalidBuiltinSource);
+            }
+            work.charge(source.text().len())
+                .map_err(|()| ImageModuleFailure::Resource)?;
+            if source.text().as_bytes() != FOREIGN_SOURCE.as_bytes() {
+                return Err(ImageModuleFailure::InvalidBuiltinSource);
+            }
+            work.charge(1).map_err(|()| ImageModuleFailure::Resource)?;
+            let graph =
+                allocate_module_graph_identity().map_err(|_| ImageModuleFailure::Resource)?;
+            Ok(ModuleId {
+                namespace: ModuleIdNamespace::BuiltinForeign,
+                graph,
+                value: source.id().value(),
+            })
+        }
+    }
 }
