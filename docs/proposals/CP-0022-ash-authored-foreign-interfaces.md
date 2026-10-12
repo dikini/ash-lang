@@ -506,9 +506,20 @@ exact owner/family arguments:
 | `copy_nul` | `(View<W,...>, Int) -> Result<Bytes, ConversionError>`; NUL family and checked scan bound; direct provider window only. |
 | `decode_utf8` | `Bytes -> Result<String, ConversionError>`; ordinary independent values, no native permission. |
 | `extent_value` | `Extent<W,...> -> Int`; exposes a copied length, not authority to read another view. |
-| `byte_read` | `(State<R,...>, Int) -> Result<Int, ConversionError>`; initialized owned byte region, live borrowed state and checked index. |
-| `byte_write` | `(State<R,...>, Int, Int) -> Result<Unit, ConversionError>`; additionally checked byte range and pre-mutation result admission. |
+| `byte_read<S>` | `(S, Int) -> Foreign.Call<Int>`; compiler-sealed `S` must be the exact descriptor-witnessed initialized live State, with checked index. |
+| `byte_write<S>` | `(S, Int, Int) -> Foreign.Call<Unit>`; the same sealed State admission, additionally checked byte range and pre-mutation result admission. |
 | `data_of` / `replace_data` | Exact descriptor-supplied `State`/`D` relation; controlled state access/update, never an owning value. |
+
+The human-approved byte API clarification of 2026-10-12 adopts these two
+generic signatures and the existing canonical `Foreign.Call` codec. `Returned`
+and `ConversionFailed` with opaque `Foreign.ConversionError` are ordinary
+independent byte results; internal work or storage exhaustion is terminal.
+This codec choice applies to these byte primitives only. Generic `S` transports
+the state type and grants no authority by itself. Admission retains the original
+call occurrence, owner and family, selected evidence and copied specialization,
+including the complete ordered Type/EffectRow actuals of both the caller and
+defining declaration independently of the primitive's `S` argument. A merely
+compatible State or an arbitrary `S` is insufficient.
 
 `codec scope` requires the exact P-1 `Scope`/`Completion` roles below. The
 `acquired_only` codec requires a nominal result with defining-order roles

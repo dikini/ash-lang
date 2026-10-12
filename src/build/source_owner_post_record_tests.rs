@@ -1,10 +1,11 @@
 //! Injected owner continuation-work witnesses, separate from real C evidence.
 
 use super::{
-    __private_native_bridge, __private_native_owner_acquire_bridge,
-    __private_native_owner_teardown_bridge, __run_private_effect_image, NATIVE_TARGET,
-    PrivateFailure, PrivateNativeBridge, PrivateNativeCoordinates, PrivateNativeLibrary,
-    PrivateNativeMember, PrivateProgramFailure, bridge, image, runtime_fingerprint,
+    __private_native_bridge, __private_native_byte_owner_acquire_bridge,
+    __private_native_owner_acquire_bridge, __private_native_owner_teardown_bridge,
+    __run_private_effect_image, NATIVE_TARGET, PrivateFailure, PrivateNativeBridge,
+    PrivateNativeCoordinates, PrivateNativeLibrary, PrivateNativeMember, PrivateProgramFailure,
+    bridge, image, runtime_fingerprint,
 };
 use crate::{
     driver::{RunConfiguration, compile_path},
@@ -24,6 +25,7 @@ use std::{
 };
 thread_local! {
     static PROVIDERS:Cell<Option<([PrivateNativeCoordinates;2], &'static [u8])>>=const { Cell::new(None) };
+    static BYTE_OWNER: Cell<bool> = const { Cell::new(false) };
     static NEGATIVE_PROVIDER:Cell<Option<(PrivateNativeCoordinates, &'static [u8])>>=const { Cell::new(None) };
     static ACQUIRES:Cell<usize>=const {Cell::new(0)};
     static RELEASES:Cell<usize>=const {Cell::new(0)};
@@ -46,7 +48,17 @@ fn injected_release(address: *mut core::ffi::c_void) {
 }
 fn acquire_provider() -> PrivateNativeBridge {
     let (coordinates, facts) = PROVIDERS.get().expect("emitter-selected owner facts");
-    __private_native_owner_acquire_bridge(coordinates[0], facts, injected_acquire)
+    if BYTE_OWNER.get() {
+        __private_native_byte_owner_acquire_bridge(
+            coordinates[0],
+            facts,
+            injected_acquire,
+            |_, _| panic!("post-record sentinel never supplies readable native bytes"),
+            |_, _, _| panic!("post-record sentinel never supplies writable native bytes"),
+        )
+    } else {
+        __private_native_owner_acquire_bridge(coordinates[0], facts, injected_acquire)
+    }
 }
 fn teardown_provider() -> PrivateNativeBridge {
     let (coordinates, facts) = PROVIDERS.get().expect("emitter-selected owner facts");
@@ -253,10 +265,12 @@ fn owner_post_record_case_with_entry(
     assert_eq!(*compiled.compilation_work(), compilation_work);
     fs::remove_file(entry).unwrap();
     fs::remove_file(fixture.0.join("owner.ash")).unwrap();
+    let byte_owner = build.bridges.iter().any(|bridge| bridge.plan.byte_owner());
     drop(build);
     drop(compiled);
     assert!(PROVIDERS.get().is_none());
     PROVIDERS.set(Some((coordinates, facts)));
+    BYTE_OWNER.set(byte_owner);
     NEGATIVE_PROVIDER.set(negative_coordinates.map(|coordinates| (coordinates, facts)));
     ACQUIRES.set(0);
     RELEASES.set(0);
@@ -264,6 +278,7 @@ fn owner_post_record_case_with_entry(
     impl Drop for Providers {
         fn drop(&mut self) {
             PROVIDERS.set(None);
+            BYTE_OWNER.set(false);
             NEGATIVE_PROVIDER.set(None);
         }
     }

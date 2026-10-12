@@ -12,6 +12,12 @@ mod foreign;
 #[path = "source_scalar_phases.rs"]
 mod source_scalar_phases;
 
+#[path = "source_byte_phases.rs"]
+mod source_byte_phases;
+#[cfg(test)]
+#[path = "source_byte_tests.rs"]
+mod source_byte_tests;
+
 #[path = "source_owner_phases.rs"]
 mod source_owner_phases;
 #[cfg(test)]
@@ -109,7 +115,10 @@ struct RecursiveMemberTemplate {
 }
 
 enum RecursiveMemberKind {
-    Intrinsic(crate::core::packed::IntrinsicNode),
+    Intrinsic {
+        intrinsic: crate::core::packed::IntrinsicNode,
+        abstraction: Option<NodeId>,
+    },
     Function {
         parameter: BinderId,
         body: NodeId,
@@ -255,7 +264,20 @@ impl Environment {
                                     origin: origin.clone(),
                                 })
                             }
-                            RecursiveMemberKind::Intrinsic(intrinsic) => {
+                            RecursiveMemberKind::Intrinsic {
+                                intrinsic,
+                                abstraction,
+                            } => {
+                                if let Some(abstraction) = abstraction {
+                                    return Some(Value::Polymorphic {
+                                        abstraction: *abstraction,
+                                        environment: Self {
+                                            head: Some(Arc::clone(entry)),
+                                            len: entry.visible_len,
+                                            instantiation: entry.instantiation.clone(),
+                                        },
+                                    });
+                                }
                                 Value::Intrinsic(*intrinsic)
                             }
                             RecursiveMemberKind::Data { location } => Value::Location(*location),
@@ -648,6 +670,21 @@ enum Frame {
         argument: NodeId,
         caller_environment: Environment,
     },
+    SourceApplyFunction {
+        node: NodeId,
+        argument: NodeId,
+        caller_environment: Environment,
+    },
+    SourceByteArgument {
+        node: NodeId,
+        callable: SourceByteCallable,
+        caller: Instantiation,
+    },
+    SourceByteInstantiation {
+        application: NodeId,
+        caller: Instantiation,
+        defining: Instantiation,
+    },
     ApplyArgument {
         function: Value,
     },
@@ -722,6 +759,17 @@ struct SourceResourceBoundary {
     payload: Option<Value>,
     saved: Option<Value>,
     consumed: bool,
+}
+
+/// Private runtime provenance for one selected sealed byte callable. Both
+/// lexical instantiations remain independent; neither owns a native guard.
+#[doc(hidden)]
+#[derive(Clone, Debug)]
+pub struct SourceByteCallable {
+    intrinsic: crate::core::packed::IntrinsicNode,
+    application: NodeId,
+    caller: Instantiation,
+    defining: Instantiation,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1402,6 +1450,56 @@ impl<'runtime> Machine<'runtime> {
             Frame::TypeApplication { node, caller } => {
                 self.return_type_application(node, &caller, value)?
             }
+            Frame::SourceByteInstantiation {
+                application,
+                caller,
+                defining,
+            } => {
+                let Value::Intrinsic(intrinsic) = value else {
+                    return Err(RuntimeFailure::ForeignBinding);
+                };
+                if !matches!(
+                    intrinsic.operation(),
+                    crate::core::packed::Intrinsic::ForeignByteRead { .. }
+                        | crate::core::packed::Intrinsic::ForeignByteWrite { .. }
+                ) {
+                    return Err(RuntimeFailure::ForeignBinding);
+                }
+                self.control = Some(Control::Return(Value::ByteCallable(SourceByteCallable {
+                    intrinsic,
+                    application,
+                    caller,
+                    defining,
+                })));
+            }
+            Frame::SourceApplyFunction {
+                node,
+                argument,
+                caller_environment,
+            } => {
+                if let Value::ByteCallable(callable) = value {
+                    self.frames
+                        .try_reserve(1)
+                        .map_err(|_| RuntimeFailure::ResourceCapacity)?;
+                    self.frames.push(Frame::SourceByteArgument {
+                        node,
+                        callable,
+                        caller: caller_environment.instantiation.clone(),
+                    });
+                    self.control = Some(Control::Evaluate(argument, caller_environment));
+                } else {
+                    let transition =
+                        return_application_function(argument, caller_environment, value)?;
+                    self.apply(transition);
+                }
+            }
+            Frame::SourceByteArgument {
+                node,
+                callable,
+                caller,
+            } => {
+                self.return_source_byte_call(node, callable, caller, value)?;
+            }
             Frame::Resume { node } => self.return_resume(node, value)?,
             Frame::ClauseBoundary {
                 handler,
@@ -1992,6 +2090,22 @@ impl<'runtime> Machine<'runtime> {
                     application.row_arguments(),
                     &mut self.instantiation_work,
                 )?;
+                if matches!(pure_expression(&self.program, abstraction.body())?,
+                    PureExprKind::Value(PureValue::Intrinsic(intrinsic))
+                        if matches!(intrinsic.operation(), crate::core::packed::Intrinsic::ForeignByteRead { .. }
+                            | crate::core::packed::Intrinsic::ForeignByteWrite { .. }))
+                {
+                    charge_effect_work(&mut self.instantiation_work, 1, RuntimePhase::Access)?;
+                    self.frames
+                        .try_reserve(1)
+                        .map_err(|_| RuntimeFailure::ResourceCapacity)?;
+                    self.frames.push(Frame::SourceByteInstantiation {
+                        application: node,
+                        caller: caller.clone(),
+                        defining: environment.instantiation.clone(),
+                    });
+                    self.max_frame_depth = self.max_frame_depth.max(self.frames.len());
+                }
                 self.control = Some(Control::Evaluate(abstraction.body(), environment));
             }
             value @ (Value::ConstructorFunction(_) | Value::Location(_)) => {
@@ -3142,7 +3256,18 @@ fn dispatch_entry(
             enter_primitive(*operation, environment)
         }
         PureExprKind::Computation(PureComputation::Apply(application)) => {
-            enter_application(*application, environment)
+            if matches!(program, ExecutableProgram::Effect(_)) {
+                Transition::suspend(
+                    Control::Evaluate(application.function(), environment.clone()),
+                    Frame::SourceApplyFunction {
+                        node,
+                        argument: application.argument(),
+                        caller_environment: environment,
+                    },
+                )
+            } else {
+                enter_application(*application, environment)
+            }
         }
         PureExprKind::Value(PureValue::Constructor(constructor)) => {
             enter_constructor(program, *constructor, heap)?
@@ -3314,7 +3439,12 @@ fn enter_recursive_binding(
         let erased = pure_expression(program, erased_initializer)?;
         let kind = match erased {
             PureExprKind::Value(PureValue::Intrinsic(intrinsic)) => {
-                RecursiveMemberKind::Intrinsic(*intrinsic)
+                RecursiveMemberKind::Intrinsic {
+                    intrinsic: *intrinsic,
+                    abstraction: (matches!(program, ExecutableProgram::Effect(_))
+                        && erased_initializer != member.initializer())
+                    .then_some(member.initializer()),
+                }
             }
             PureExprKind::Value(PureValue::Function(function)) => RecursiveMemberKind::Function {
                 parameter: function.parameter().id(),
@@ -3457,6 +3587,9 @@ fn dispatch_return(
         | Frame::ResourceBoundary { .. }
         | Frame::Request { .. }
         | Frame::TypeApplication { .. }
+        | Frame::SourceApplyFunction { .. }
+        | Frame::SourceByteArgument { .. }
+        | Frame::SourceByteInstantiation { .. }
         | Frame::Resume { .. }
         | Frame::ClauseBoundary { .. }
         | Frame::RegistrationBoundary { .. }

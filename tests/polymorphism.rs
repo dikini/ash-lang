@@ -146,6 +146,7 @@ fn runtime_value_class(value: &Value) -> &'static str {
         Value::Bytes(_) => "bytes",
         Value::String(_) => "string",
         Value::Intrinsic(_) => "intrinsic",
+        Value::ByteCallable(_) => "byte-callable",
         Value::Integer(_) => "integer",
         Value::Boolean(_) => "boolean",
         Value::Unit => "unit",

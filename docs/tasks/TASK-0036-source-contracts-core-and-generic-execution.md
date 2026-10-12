@@ -85,7 +85,7 @@ Selected source-handler entry authenticates the unique live guard, original
 owner and exact activation before traversing every typed access position,
 including nominal payloads. Ordinary handler selection precedes this check.
 Modeled guard/frame tests and real generated-native lifecycle tests establish
-different boundaries. Byte access, outward control, retained dependencies and
+different boundaries. Outward control, retained dependencies and
 quarantine remain subsequent obligations.
 
 The acquired_only delivery authenticates the instantiated nominal report fields
@@ -96,7 +96,7 @@ Capture-value analysis must preserve that result shape while retaining finish
 as a cleanup obligation; reusing Scope/Completion assembly would fabricate a
 completion field. A source consumed-completion error becomes terminal after
 native consumption and cannot publish success or retry release. Native retained
-outcomes, byte access and outward control remain subsequent CP-0022 obligations.
+outcomes and outward control remain subsequent CP-0022 obligations.
 
 Initialized-byte acquisition projects the original declared source leaf before
 native entry, independently of ABI operands and private data. Readiness retains
@@ -106,8 +106,50 @@ are refused during canonical foreign resolution, before resource or bridge
 admission. Preflight work exhaustion follows the existing effect-work diagnostic
 and remains terminal; post-return cleanup does not replay acquisition or release.
 The image retains representation and original extent facts separately from the
-checked executable resource template. Byte access and broader control remain
-separate obligations.
+checked executable resource template. Broader control remains a separate
+obligation.
+
+The human-approved byte API clarification uses compiler-sealed generic `S` and
+the existing `Foreign.Call` result for these two primitives. Original call
+correspondence, complete caller and defining Type/Row actuals, borrowed state
+lineage and the unique live guard remain separate admission obligations. A
+monomorphic State type or direct guard lookup would lose phantom applications
+and branch-selected defining context. Immutable templates reconstruct original
+TypeApplication/Apply relations; final Core and image restoration independently
+check copied specialization and provenance. Capture-value analysis retains strict
+callable and operand control edges while giving only the reply an independent
+value. Ordinary generic helpers cannot manufacture descriptor permission.
+
+Byte access retains eligibility during acquire, handler and finish before native
+consumption. The original guard supplies extent and callbacks; private data does
+not grant memory permission. Bounds checking precedes byte inspection and its
+magnitude charge. A refusal report affordable without byte-conversion work
+distinguishes this order from two simultaneously invalid inputs. Owned
+specialization metadata is iteratively disposed before the callback, and complete
+report work and fallible cell reservation precede every read or mutation. Existing
+integer storage represents every unsigned byte inline, so no integer
+representation change or post-read reservation is needed. Work/storage refusal
+is terminal, independent conversion refusal is ordinary, and rejected writes do
+not mutate memory.
+
+Charged authority scans must complete their traversal before returning a match.
+Early success in an unordered registry made fresh image reconstructions consume
+different amounts of work, breaking exact/one-short evidence. Completing the same
+charged scan preserves admission and gives deterministic costs without raising
+policy limits. Pure images may retain the exact passive canonical byte prototypes
+and their Type parameter rows; they cannot instantiate or execute byte calls.
+General polymorphic image forms remain outside that passive boundary, and complete
+retained parameter-row consumption remains an independent Core invariant.
+
+Generated native byte witnesses use actually initialized writable storage and an
+independent release identity. They exercise acquire/body/finish borrowing, both
+canonical alias branches under distinct phantom Type/Row applications, nested
+ordinary overrides, both report codecs and null/zero-extent disposition. Source,
+image and facts files are removed before standalone execution. Injected guard,
+storage and ledger refusals establish separate pre-callback boundaries; they are
+not external-library failures. Copy windows, dependencies, quarantine and outward
+control remain later CP-0022 work; byte primitives alone complete no original
+issue criterion or library migration.
 
 A self-consistent image can reconstruct a different valid integer source path;
 reconstruction alone does not prove correspondence to a generated call site.

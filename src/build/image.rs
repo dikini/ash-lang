@@ -1042,6 +1042,8 @@ impl Encoder<'_> {
                     let (function, role) = match value.operation() {
                         Intrinsic::ForeignCheckedI64 { function } => (function, Role::I64),
                         Intrinsic::ForeignCheckedSizeT { function } => (function, Role::SizeT),
+                        Intrinsic::ForeignByteRead { function } => (function, Role::ByteRead),
+                        Intrinsic::ForeignByteWrite { function } => (function, Role::ByteWrite),
                         _ => return Err(ImageFailure::Unsupported(Unsupported::Intrinsic)),
                     };
                     NodeTag::ScalarPreflight {
@@ -1117,7 +1119,10 @@ impl Encoder<'_> {
                         body: self.node(group.body())?,
                     }
                 }
-                PureComputation::TypeAbstraction(abstraction) if self.image.effect_dialect => {
+                PureComputation::TypeAbstraction(abstraction)
+                    if self.image.effect_dialect
+                        || self.passive_byte_abstraction(abstraction)? =>
+                {
                     let start = self.image.quantifiers.len();
                     for (id, kind) in abstraction.parameters() {
                         let id = self.type_variable(*id)?;
@@ -2286,12 +2291,11 @@ impl PureImage {
         &self,
         work: &mut TypeWorkBudget,
     ) -> Result<ValidatedProgram, ImageFailure> {
-        // The Pure entry stays closed to Effect metadata. Effect reconstruction
-        // has a separate validated-family entry, not a silent dialect conversion.
+        // The Pure entry stays closed to Effect metadata. Its only quantified
+        // declarations are the passive canonical byte prototypes authenticated
+        // by the registry and node checks below; applications remain refused.
         charge(work, 1)?;
         if self.effect_dialect
-            || !self.quantifiers.is_empty()
-            || !self.global_parameters.is_empty()
             || !self.abstract_nominals.is_empty()
             || !self.effects.is_empty()
             || !self.operations.is_empty()
@@ -2375,6 +2379,8 @@ impl PureImage {
             if !self.kinds.is_empty()
                 || !self.parameters.is_empty()
                 || !self.nominal_parameters.is_empty()
+                || !self.quantifiers.is_empty()
+                || !self.global_parameters.is_empty()
                 || !self.provenance.is_empty()
                 || !self.provenance_children.is_empty()
                 || !self.call_codecs.is_empty()
@@ -2712,9 +2718,32 @@ impl Decoder<'_> {
             | NodeTag::SourceScope(_)
             | NodeTag::Request { .. }
             | NodeTag::NativeInterpret { .. }
-            | NodeTag::TypeAbstraction { .. }
             | NodeTag::TypeApplication { .. } => {
                 return Err(ImageFailure::Unsupported(Unsupported::ErasedTypeOperation));
+            }
+            NodeTag::TypeAbstraction { parameters, body } => {
+                let NodeTag::ScalarPreflight { role, module, .. } =
+                    get(&self.image.nodes, body)?.tag
+                else {
+                    return Err(ImageFailure::Unsupported(Unsupported::ErasedTypeOperation));
+                };
+                let original = *get(&self.modules, module)?;
+                let [parameter] = parameters.get(&self.image.quantifiers)? else {
+                    return Err(ImageFailure::InvalidRecord);
+                };
+                let identity = self.type_variable(parameter.id)?;
+                let kind = self.kind(parameter.kind)?;
+                if role.byte_parameter(original) != Some(identity)
+                    || kind != crate::types::Kind::Type
+                {
+                    return Err(ImageFailure::Unsupported(Unsupported::ErasedTypeOperation));
+                }
+                let body = *get(nodes, body)?;
+                let mut restored = Vec::new();
+                push(&mut restored, (identity, kind), self.work)?;
+                builder.with_caller_type_work(self.work, |builder| {
+                    builder.type_abstraction(restored, body, ty.into_inner(), origin.take())
+                })
             }
             NodeTag::ScalarPreflight {
                 function,
@@ -2728,6 +2757,8 @@ impl Decoder<'_> {
                 let operation = match role {
                     Role::I64 => Intrinsic::ForeignCheckedI64 { function },
                     Role::SizeT => Intrinsic::ForeignCheckedSizeT { function },
+                    Role::ByteRead => Intrinsic::ForeignByteRead { function },
+                    Role::ByteWrite => Intrinsic::ForeignByteWrite { function },
                 };
                 builder.with_caller_type_work(self.work, |builder| {
                     builder.intrinsic(operation, module, ty.into_inner(), origin.take())
@@ -3687,6 +3718,173 @@ main () = match perform Measure.call 42 {
     }
 
     #[test]
+    fn byte_access_image_reconstructs_original_calls_and_rejects_pre_provider_forgery() {
+        use crate::foreign::scalar_preflight::ForeignScalarPreflightRole as Role;
+        let tree = SourceTree::new();
+        tree.write(
+            "owner.ash",
+            include_str!("../../tests/fixtures/source-owner/byte_owner.ash"),
+        );
+        tree.write(
+            "entry.ash",
+            include_str!("../../tests/fixtures/source-owner/byte_entry.ash"),
+        );
+        let compiled = compile_path(tree.configuration()).unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let mut work = TypeWorkBudget::default();
+        let build =
+            encode_effect_for_build(program, provenance, "x86_64-unknown-linux-gnu", &mut work)
+                .unwrap();
+        let bytes = build.image.encode_bytes(&mut work).unwrap();
+        let expected = build.image.encode_native_expectations(&mut work).unwrap();
+        let library = &build.libraries[0];
+        let library_metadata = (library.image_library, library.module, library.ordinal);
+        fn forbidden_provider() -> super::super::PrivateNativeBridge {
+            panic!("byte-call forgery must fail before provider selection")
+        }
+        let members = build
+            .bridges
+            .iter()
+            .map(|bridge| super::super::PrivateNativeMember {
+                coordinates: super::super::PrivateNativeCoordinates {
+                    image_library: library.image_library,
+                    library_module: library.module,
+                    library_ordinal: library.ordinal,
+                    image_symbol: bridge.image_symbol,
+                    symbol_index: bridge.symbol_index,
+                    operation_module: bridge.operation_module,
+                    operation_effect: bridge.operation_effect,
+                    operation_local: bridge.operation_local,
+                },
+                provider: forbidden_provider,
+            })
+            .collect::<Vec<_>>();
+        drop(build);
+        drop(compiled);
+        drop(tree);
+        let restore = |work: &mut TypeWorkBudget| {
+            let image = PureImage::decode_bytes(&bytes, work)?;
+            image.compare_native_expectations(&expected, work)?;
+            image.restore_effect(work)
+        };
+        let mut measured = TypeWorkBudget::default();
+        restore(&mut measured).unwrap();
+        let required = measured.used();
+        assert!(required < 327_680);
+        for prefix in [0, 5] {
+            let mut short = TypeWorkBudget::with_limit(prefix + required - 1);
+            short.charge(prefix).unwrap();
+            match restore(&mut short) {
+                Err(ImageFailure::Resource) => {}
+                Err(failure) => panic!(
+                    "byte image one-short refusal: {failure:?}, used={}, required={required}, prefix={prefix}",
+                    short.used()
+                ),
+                Ok(_) => panic!(
+                    "byte image one-short unexpectedly admitted: used={}, required={required}, prefix={prefix}",
+                    short.used()
+                ),
+            }
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + required);
+                exact.charge(prefix).unwrap();
+                restore(&mut exact).unwrap();
+                assert_eq!(exact.used(), prefix + required);
+            }
+        }
+        let static_expected: &'static [u8] = Box::leak(expected.into_boxed_slice());
+        let libraries = [super::super::PrivateNativeLibrary {
+            image_library: library_metadata.0,
+            module: library_metadata.1,
+            ordinal: library_metadata.2,
+            members: &members,
+        }];
+        for change in 0..4 {
+            let mut corrupt =
+                PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+            let read = corrupt
+                .scalar_preflights
+                .iter()
+                .position(|record| record.role == Role::ByteRead)
+                .unwrap();
+            match change {
+                0 => corrupt.scalar_preflights[read].function = BinderIdentity::Generated(0),
+                1 => corrupt.scalar_preflights[read].role = Role::ByteWrite,
+                2 => corrupt.scalar_preflights[read].annotation.provenance = u32::MAX,
+                _ => {
+                    let write = corrupt
+                        .scalar_preflights
+                        .iter()
+                        .find(|record| record.role == Role::ByteWrite)
+                        .unwrap()
+                        .function;
+                    let same_binder = |binder| match (binder, write) {
+                        (
+                            BinderIdentity::Resolved {
+                                module: a,
+                                local: x,
+                            },
+                            BinderIdentity::Resolved {
+                                module: b,
+                                local: y,
+                            },
+                        ) => a == b && x == y,
+                        (BinderIdentity::Generated(a), BinderIdentity::Generated(b)) => a == b,
+                        _ => false,
+                    };
+                    let selected = corrupt.nodes.iter().position(|node| {
+                        matches!(node.tag, NodeTag::TypeApplication { function, .. }
+                            if matches!(corrupt.nodes[function as usize].tag, NodeTag::Variable(binder) if same_binder(binder)))
+                    }).unwrap();
+                    let donor = corrupt
+                        .nodes
+                        .iter()
+                        .find(|node| node.origin != corrupt.nodes[selected].origin)
+                        .unwrap()
+                        .origin;
+                    // Every value type, operand and application remains unchanged.
+                    // Only the copied canonical-call occurrence's original origin
+                    // is replaced. This is independent executable correspondence.
+                    corrupt.nodes[selected].origin = donor;
+                    corrupt
+                        .compare_native_expectations(
+                            static_expected,
+                            &mut TypeWorkBudget::default(),
+                        )
+                        .unwrap();
+                    assert!(
+                        corrupt
+                            .restore_effect(&mut TypeWorkBudget::default())
+                            .is_err()
+                    );
+                }
+            }
+            let forged = corrupt
+                .encode_bytes(&mut TypeWorkBudget::default())
+                .unwrap();
+            assert!(
+                matches!(
+                    super::super::__run_private_effect_image(
+                        &super::super::runtime_fingerprint(),
+                        &forged,
+                        static_expected,
+                        &libraries
+                    ),
+                    Err(super::super::PrivateProgramFailure(
+                        super::super::PrivateFailure::Image(_)
+                    ))
+                ),
+                "mutation {change}"
+            );
+        }
+        println!(
+            "byte image: image_bytes={}, fact_bytes={}, restore_work={required}",
+            bytes.len(),
+            static_expected.len()
+        );
+    }
+
+    #[test]
     fn initialized_byte_owner_image_preserves_extent_and_rejects_changed_original_facts() {
         let tree = SourceTree::new();
         let owner = include_str!("../../tests/fixtures/source-owner/owner.ash")
@@ -3851,7 +4049,7 @@ main () = match perform Measure.call 42 {
         let compiled = compile_path(tree.configuration()).unwrap();
         let (program, provenance) = compiled.pure_build_input().unwrap();
         let image = encode(program, provenance, &mut TypeWorkBudget::default()).unwrap();
-        assert_eq!(image.scalar_preflights.len(), 2);
+        assert_eq!(image.scalar_preflights.len(), 4);
         assert_eq!(image.call_codecs.len(), 1);
         assert_eq!(
             image.scalar_preflights[0].codec,
@@ -3873,6 +4071,8 @@ main () = match perform Measure.call 42 {
                 image.scalar_preflights[0].role = match image.scalar_preflights[0].role {
                     Role::I64 => Role::SizeT,
                     Role::SizeT => Role::I64,
+                    Role::ByteRead => Role::ByteWrite,
+                    Role::ByteWrite => Role::ByteRead,
                 }
             },
             |image| image.scalar_preflights[0].annotation.provenance = u32::MAX,
@@ -4434,6 +4634,8 @@ impl Wire for crate::foreign::scalar_preflight::ForeignScalarPreflightRole {
         match self {
             Self::I64 => 0u8,
             Self::SizeT => 1,
+            Self::ByteRead => 2,
+            Self::ByteWrite => 3,
         }
         .write(writer)
     }
@@ -4441,6 +4643,8 @@ impl Wire for crate::foreign::scalar_preflight::ForeignScalarPreflightRole {
         match u8::read(reader)? {
             0 => Ok(Self::I64),
             1 => Ok(Self::SizeT),
+            2 => Ok(Self::ByteRead),
+            3 => Ok(Self::ByteWrite),
             _ => Err(ImageFailure::InvalidEncoding),
         }
     }
@@ -4900,6 +5104,11 @@ impl Encoder<'_> {
                         )
                         && !matches!(input, StructuralInput::Type(Type::Variable(id))
                             if id.module().is_some_and(|module| module.is_builtin_foreign()))
+                        && !matches!(input, StructuralInput::Type(Type::Forall(parameters, _))
+                            if matches!(parameters.as_ref(), [(id, crate::types::Kind::Type)]
+                                if id.module().is_some_and(|module|
+                                    crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ByteRead.byte_parameter(module) == Some(*id)
+                                        || crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ByteWrite.byte_parameter(module) == Some(*id))))
                     {
                         return Err(ImageFailure::Unsupported(Unsupported::Type));
                     }
@@ -5182,6 +5391,25 @@ impl StructuralOwner {
 }
 
 impl Decoder<'_> {
+    fn passive_byte_quantifier(&mut self, tag: TypeTag) -> Result<bool, ImageFailure> {
+        let TypeTag::Forall { parameters } = tag else {
+            return Ok(false);
+        };
+        charge(self.work, 2)?;
+        let [parameter] = parameters.get(&self.image.quantifiers)? else {
+            return Ok(false);
+        };
+        let TypeVariableIdentity::Resolved {
+            module,
+            local: 4 | 5,
+        } = parameter.id
+        else {
+            return Ok(false);
+        };
+        Ok(get(&self.modules, module)?.is_builtin_foreign()
+            && matches!(get(&self.image.kinds, parameter.kind)?, KindRecord::Type))
+    }
+
     fn type_variable(
         &mut self,
         id: TypeVariableIdentity,
@@ -5288,6 +5516,7 @@ impl Decoder<'_> {
                         )
                         && !matches!(record.tag, TypeTag::Variable(TypeVariableIdentity::Resolved { module, .. })
                             if get(&self.modules, module).is_ok_and(|module| module.is_builtin_foreign()))
+                        && !self.passive_byte_quantifier(record.tag)?
                     {
                         return Err(ImageFailure::Unsupported(Unsupported::Type));
                     }
@@ -5541,6 +5770,27 @@ impl Decoder<'_> {
 // Reserve each entry fallibly and precharge before every lookup/insert.
 
 impl Encoder<'_> {
+    // Scalar imports retain these passive schemes without authorizing pure
+    // byte applications or general polymorphic executable images.
+    fn passive_byte_abstraction(
+        &mut self,
+        abstraction: &crate::core::TypeAbstractionNode,
+    ) -> Result<bool, ImageFailure> {
+        charge(self.work, 2)?;
+        let NodeTag::ScalarPreflight { role, module, .. } =
+            get(&self.image.nodes, self.node(abstraction.body())?)?.tag
+        else {
+            return Ok(false);
+        };
+        let [(parameter, crate::types::Kind::Type)] = abstraction.parameters() else {
+            return Ok(false);
+        };
+        Ok(parameter.module().is_some_and(|original| {
+            role.byte_parameter(original) == Some(*parameter)
+                && self.modules.get(&original) == Some(&module)
+        }))
+    }
+
     fn operation_identity(
         &mut self,
         id: crate::types::OperationId,

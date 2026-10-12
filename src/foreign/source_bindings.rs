@@ -35,6 +35,10 @@ pub(crate) struct SourceScalarBinding {
 #[derive(Debug)]
 pub(crate) enum SourceOwnerCallback {
     Acquire(NativeOwnerAcquireCallback),
+    ByteAcquire(
+        NativeOwnerAcquireCallback,
+        super::source_runtime::NativeByteCallbacks,
+    ),
     Teardown(NativeOwnerTeardownCallback),
 }
 
@@ -141,9 +145,23 @@ impl SourceNativeBindings {
                 matches!(
                     (owner.owner().representation(), initialized_bytes),
                     (PreparedAddressRepresentation::Opaque, None)
-                        | (PreparedAddressRepresentation::Bytes, Some(_))
                 ) && symbol.symbol().result()
                     == PreparedAbiResult::Address(owner.owner().representation())
+                    && symbol.symbol().operands().iter().all(|operand| {
+                        matches!(operand.source(), PreparedOperandSource::Source(_))
+                            && matches!(operand.representation(), PreparedRepresentation::Scalar(_))
+                    })
+            }
+            (
+                SourceOwnerCallback::ByteAcquire(_, _),
+                Some(PreparedOwnerCall::Acquire {
+                    initialized_bytes: Some(_),
+                    ..
+                }),
+            ) => {
+                owner.owner().representation() == PreparedAddressRepresentation::Bytes
+                    && symbol.symbol().result()
+                        == PreparedAbiResult::Address(PreparedAddressRepresentation::Bytes)
                     && symbol.symbol().operands().iter().all(|operand| {
                         matches!(operand.source(), PreparedOperandSource::Source(_))
                             && matches!(operand.representation(), PreparedRepresentation::Scalar(_))
@@ -281,12 +299,16 @@ impl SourceNativeBindings {
         match (phase, &binding.callback, &teardown.callback) {
             (
                 SourceOwnerPhase::Acquire,
-                SourceOwnerCallback::Acquire(_),
+                SourceOwnerCallback::Acquire(_) | SourceOwnerCallback::ByteAcquire(_, _),
                 SourceOwnerCallback::Teardown(callback),
             ) => {
                 let hidden_error = authenticate_hidden_error(program.registry(), symbol, work)?;
                 paid(work, 1)?;
-                let readiness = NativeOwnerGuardReady::new(Arc::clone(&header.owner), *callback);
+                let mut readiness =
+                    NativeOwnerGuardReady::new(Arc::clone(&header.owner), *callback);
+                if let SourceOwnerCallback::ByteAcquire(_, bytes) = &binding.callback {
+                    readiness.prepare_byte_callbacks(*bytes);
+                }
                 Ok(AdmittedSourceOwnerInvocation::Acquire(
                     AdmittedSourceOwnerAcquireInvocation {
                         binding,
@@ -525,8 +547,12 @@ impl<'bindings> AdmittedSourceOwnerAcquireInvocation<'bindings> {
         ),
         NativeScalarCallError,
     > {
-        let SourceOwnerCallback::Acquire(callback) = &self.binding.callback else {
-            return Err(NativeScalarCallError::ArgumentContract);
+        let callback = match &self.binding.callback {
+            SourceOwnerCallback::Acquire(callback)
+            | SourceOwnerCallback::ByteAcquire(callback, _) => callback,
+            SourceOwnerCallback::Teardown(_) => {
+                return Err(NativeScalarCallError::ArgumentContract);
+            }
         };
         let raw = callback(values, self.readiness)?;
         Ok((

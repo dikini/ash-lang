@@ -11566,7 +11566,7 @@ impl ExportSummary {
                     fact.authenticate_original(type_work)
                         .map_err(scalar_preflight_failure)?;
                     if fact.function() != global.binder
-                        || !global.scheme.type_parameters.is_empty()
+                        || !fact.matches_parameters(&global.scheme.type_parameters)
                         || !global.scheme.requirements.is_empty()
                         || !crate::types::same_type_with_budget(
                             &global.scheme.value_type,
@@ -20785,10 +20785,13 @@ impl ResolvedRegistry {
             }
             fact.authenticate(self, work)
                 .map_err(scalar_preflight_failure)?;
-            let other = self
+            // Every sealed common callable uses the same authenticated codec.
+            // Role count is independent of the original two scalar preflights.
+            let common = self
                 .scalar_preflights
-                .get(&BinderId::resolved(fact.module(), 1 - fact.role().local()));
-            if other.is_some_and(|other| !Arc::ptr_eq(other.call_codec(), fact.call_codec())) {
+                .get(&BinderId::resolved(fact.module(), 0))
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            if !Arc::ptr_eq(common.call_codec(), fact.call_codec()) {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
         }
@@ -21506,7 +21509,7 @@ impl ResolvedRegistry {
         Ok(registry)
     }
 
-    /// Pure images retain monomorphic metadata or the exact builtin preflight codec.
+    /// Pure images retain monomorphic metadata and exact common declarations.
     pub(crate) fn monomorphic_image_subset(
         &self,
         work: &mut TypeWorkBudget,
@@ -21527,8 +21530,6 @@ impl ResolvedRegistry {
             || !self.owner_definition_positions.is_empty()
             || self.owner_signatures != OwnerSignatures::default()
             || !self.effect_positions.is_empty()
-            || !self.global_parameter_rows.is_empty()
-            || !self.global_parameter_positions.is_empty()
             || !self.abstract_nominal_names.is_empty()
             || !self.abstract_nominal_kinds.is_empty()
             || !self.provider_contracts.is_empty()
@@ -21541,6 +21542,8 @@ impl ResolvedRegistry {
         }
         if self.scalar_preflights.is_empty() {
             return Ok(self.type_variables.is_empty()
+                && self.global_parameter_rows.is_empty()
+                && self.global_parameter_positions.is_empty()
                 && self
                     .nominal_parameters
                     .values()
@@ -21577,7 +21580,7 @@ impl ResolvedRegistry {
         }) {
             return Ok(false);
         }
-        let count = modules.len().checked_mul(4).ok_or_else(resource)?;
+        let count = modules.len().checked_mul(6).ok_or_else(resource)?;
         work.charge(count).map_err(|()| resource())?;
         let mut expected = HashSet::new();
         expected.try_reserve(count).map_err(|_| resource())?;
@@ -21599,6 +21602,34 @@ impl ResolvedRegistry {
                 {
                     return Ok(false);
                 }
+            }
+        }
+        // Importing scalar checks also retains the two sealed byte schemes.
+        // These passive declarations do not admit a pure byte application or
+        // general polymorphic metadata into this image profile.
+        work.charge(self.global_parameter_rows.len())
+            .map_err(|()| resource())?;
+        if self.global_parameter_rows.len() != self.global_parameter_positions.len() {
+            return Ok(false);
+        }
+        for (position, row) in self.global_parameter_rows.iter().enumerate() {
+            work.charge(3).map_err(|()| resource())?;
+            let Some(fact) = self.scalar_preflight(row.owner) else {
+                return Ok(false);
+            };
+            let Some(parameter) = fact.role().byte_parameter(fact.module()) else {
+                return Ok(false);
+            };
+            let Some(canonical) = self.type_variable(parameter) else {
+                return Ok(false);
+            };
+            if !modules.contains_key(&fact.module())
+                || row.parameters.as_ref() != [parameter]
+                || canonical.kind != Kind::Type
+                || self.global_parameter_positions.get(&row.owner) != Some(&position)
+                || !expected.insert(parameter)
+            {
+                return Ok(false);
             }
         }
         for (nominal, parameters) in &self.nominal_parameters {

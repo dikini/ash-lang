@@ -136,7 +136,7 @@ ordered Type/EffectRow arguments, including an owned slot that is not first.
 The resource handle's value type uses a saturated nominal application for a
 Type-only family and the resource application carrier for a row-bearing family;
 the scope retains the same complete tagged instance in either case.
-Higher-kinded resource formals, row-bearing owner state families, byte access,
+Higher-kinded resource formals, row-bearing owner state families,
 dependent owners and nonempty outward handler rows remain unsupported by this
 profile. Passive foreign-owner declarations have a separate admission boundary
 and supply no execution permission.
@@ -174,14 +174,27 @@ native call; a retained result must return the exact current state after a
 witnessed pre-call refusal. Original handler clauses cannot request native
 owner operations or return owned state through `resume`. The supported phase
 bodies use ordinary matches, bindings, constructors, tuples and independent
-scalar primitives and authenticated scalar preflight calls; handler clauses
-resume an independent payload. The phase proof checks every possible matching
+scalar primitives, authenticated scalar preflight calls and sealed common byte
+calls; handler clauses resume an independent payload. A byte call borrows the
+exact fresh acquired or current live initialized state without consuming it.
+Canonical callable aliases retain each selected original TypeApplication and
+Apply occurrence, independently of their value type. The phase proof checks
+every possible matching
 arm when an independent scalar choice is unknown, including when it is paired
 with owned state. Only a definite match excludes later arms. Additional
 handler requests, arbitrary helper calls and local control abstractions need
 further phase evidence. This phase proof has a separate bound of 64 nested
 expression or pattern steps and uses the shared work ledger; ordinary Core
 payload and pattern depth limits remain unchanged.
+
+Byte specialization retains the complete ordered caller and defining declaration
+Type/EffectRow arguments independently of the primitive's single state argument.
+Independent admission reconstructs each original byte call and its copied
+occurrence; a compatible State value type is insufficient. Capture-value analysis
+preserves strict callable and operand evaluation as control edges, then gives the
+common reply its ordinary independent value. The byte result cannot turn the
+borrowed state into a copied answer. Private images reconstruct the same original
+call relationships and enforce canonical facts before selecting native bindings.
 
 Specialization supplies copying claims rather than execution authority. Final
 Core validation independently reconstructs each copied forest from the exact

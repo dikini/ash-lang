@@ -11579,6 +11579,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 crate::foreign::scalar_preflight::ForeignScalarPreflightRole::SizeT => {
                     Intrinsic::ForeignCheckedSizeT { function: name.id }
                 }
+                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ByteRead => {
+                    Intrinsic::ForeignByteRead { function: name.id }
+                }
+                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ByteWrite => {
+                    Intrinsic::ForeignByteWrite { function: name.id }
+                }
             }));
         }
         if !module.is_builtin_bytes() && !module.is_builtin_string() {
@@ -16244,7 +16250,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         argument: TypedNode,
     ) -> Result<TypedNode, TypeError> {
         let function = TypedNodeOwner::new(function);
-        self.check_provider_source_application(function.node, &argument.ty, argument_span)?;
+        self.check_provider_source_application(
+            function.node,
+            &function.ty,
+            &argument.ty,
+            argument_span,
+        )?;
         let codomain = ProvenancedTypeOwner::new(codomain);
         let ProvenancedType {
             ty: codomain_ty,

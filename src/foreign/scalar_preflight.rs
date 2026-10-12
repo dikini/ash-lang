@@ -1,4 +1,5 @@
-//! Original compiler-owned scalar checks, independent of native call authority.
+//! Original compiler-owned scalar checks and sealed byte declarations.
+//! A declaration fact grants no live native access or owner authority.
 
 use std::sync::Arc;
 
@@ -9,13 +10,15 @@ use crate::{
     module::ModuleId,
     resolved::{BinderId, ResolvedRegistry, ResolvedType, ResolvedTypeProvenanceNode},
     source::{Origin, Span, discard_origin_iteratively},
-    types::{ConstructorId, Type, TypeWorkBudget, discard_type_iteratively},
+    types::{ConstructorId, Kind, Type, TypeVariableId, TypeWorkBudget, discard_type_iteratively},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ForeignScalarPreflightRole {
     I64,
     SizeT,
+    ByteRead,
+    ByteWrite,
 }
 
 impl ForeignScalarPreflightRole {
@@ -23,6 +26,17 @@ impl ForeignScalarPreflightRole {
         match self {
             Self::I64 => 0,
             Self::SizeT => 1,
+            Self::ByteRead => 2,
+            Self::ByteWrite => 3,
+        }
+    }
+
+    pub(crate) const fn byte_parameter(self, module: ModuleId) -> Option<TypeVariableId> {
+        match self {
+            // The four preceding canonical nominal declarations each bind T.
+            Self::ByteRead => Some(TypeVariableId::resolved(module, 4)),
+            Self::ByteWrite => Some(TypeVariableId::resolved(module, 5)),
+            _ => None,
         }
     }
 }
@@ -33,6 +47,7 @@ pub(crate) struct CheckedForeignScalarPreflight {
     source: Span,
     origin: Origin,
     annotation: ResolvedType,
+    core_signature: Option<Type>,
     call_codec: Arc<CheckedForeignCallCodec>,
 }
 
@@ -63,6 +78,9 @@ impl Eq for CheckedForeignScalarPreflight {}
 impl Drop for CheckedForeignScalarPreflight {
     fn drop(&mut self) {
         discard_type_iteratively(std::mem::replace(&mut self.annotation.ty, Type::Unit));
+        if let Some(signature) = self.core_signature.take() {
+            discard_type_iteratively(signature);
+        }
         discard_origin_iteratively(std::mem::replace(
             &mut self.annotation.origin,
             Origin::Source(self.source),
@@ -120,12 +138,31 @@ impl CheckedForeignScalarPreflight {
         call_codec: Arc<CheckedForeignCallCodec>,
         work: &mut TypeWorkBudget,
     ) -> Result<Self, ForeignAdmissionError> {
+        let core_signature = if let Some(parameter) = role.byte_parameter(call_codec.module()) {
+            let body = crate::types::IterativeTypeOwner::new(
+                crate::types::clone_type_with_budget(&annotation.ty, work)
+                    .map_err(|()| failure(ForeignAdmissionReason::WorkExhausted, source))?,
+            );
+            charge(work, 3, source)?;
+            let mut parameters = Vec::new();
+            parameters
+                .try_reserve_exact(1)
+                .map_err(|_| failure(ForeignAdmissionReason::WorkExhausted, source))?;
+            parameters.push((parameter, Kind::Type));
+            Some(Type::Forall(
+                parameters.into_boxed_slice(),
+                Box::new(body.into_inner()),
+            ))
+        } else {
+            None
+        };
         let fact = Self {
             function,
             role,
             source,
             origin,
             annotation,
+            core_signature,
             call_codec,
         };
         charge(work, 1, source)?;
@@ -153,6 +190,15 @@ impl CheckedForeignScalarPreflight {
     }
     pub(crate) fn signature(&self) -> &Type {
         &self.annotation.ty
+    }
+    pub(crate) fn core_signature(&self) -> &Type {
+        self.core_signature.as_ref().unwrap_or(&self.annotation.ty)
+    }
+    pub(crate) fn matches_parameters(&self, parameters: &[(TypeVariableId, Kind)]) -> bool {
+        match self.role.byte_parameter(self.module()) {
+            Some(parameter) => parameters == [(parameter, Kind::Type)],
+            None => parameters.is_empty(),
+        }
     }
     pub(crate) fn call_codec(&self) -> &Arc<CheckedForeignCallCodec> {
         &self.call_codec
@@ -192,6 +238,9 @@ impl CheckedForeignScalarPreflight {
             || !matches!(&self.annotation.origin, Origin::Source(span) if *span == self.annotation.span)
         {
             return Err(invalid());
+        }
+        if self.role.byte_parameter(module).is_some() {
+            return self.authenticate_byte_annotation(work);
         }
         let Type::Function(domain, codomain) = &self.annotation.ty else {
             return Err(invalid());
@@ -244,6 +293,93 @@ impl CheckedForeignScalarPreflight {
             || *function != self.annotation.span
         {
             return Err(invalid());
+        }
+        Ok(())
+    }
+
+    fn authenticate_byte_annotation(
+        &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ForeignAdmissionError> {
+        let invalid = || failure(ForeignAdmissionReason::InvalidSignature, self.source);
+        let parameter = self
+            .role
+            .byte_parameter(self.module())
+            .ok_or_else(invalid)?;
+        let write = self.role == ForeignScalarPreflightRole::ByteWrite;
+        let Type::Function(domain, result) = self.signature() else {
+            return Err(invalid());
+        };
+        let Type::Tuple(fields) = domain.as_ref() else {
+            return Err(invalid());
+        };
+        let Type::Application(call, output) = result.as_ref() else {
+            return Err(invalid());
+        };
+        charge(work, 10 + fields.len(), self.source)?;
+        if fields.len() != 2 + usize::from(write)
+            || fields[0] != Type::Variable(parameter)
+            || fields[1..].iter().any(|field| *field != Type::Int)
+            || !matches!(call.as_ref(), Type::Nominal(id) if *id == self.call_codec.ids().call)
+            || **output != if write { Type::Unit } else { Type::Int }
+        {
+            return Err(invalid());
+        }
+        let start = self.annotation.span.range().start();
+        let exact = |span: Span, offset: u32, length: u32| {
+            span.source() == self.source.source()
+                && span.range().start() == start + offset
+                && span.range().end() == start + offset + length
+        };
+        let nodes = self.annotation.provenance.nodes();
+        let Some(ResolvedTypeProvenanceNode::Function {
+            span,
+            domain,
+            codomain,
+            effect_arguments,
+        }) = nodes.get(self.annotation.provenance.root())
+        else {
+            return Err(invalid());
+        };
+        let Some(ResolvedTypeProvenanceNode::Tuple {
+            span: tuple,
+            elements,
+        }) = nodes.get(*domain)
+        else {
+            return Err(invalid());
+        };
+        let Some(ResolvedTypeProvenanceNode::Application {
+            span: application,
+            function,
+            argument,
+            argument_span,
+        }) = nodes.get(*codomain)
+        else {
+            return Err(invalid());
+        };
+        let offset = if write { 17 } else { 12 };
+        if *span != self.annotation.span
+            || !effect_arguments.is_empty()
+            || !exact(*tuple, 0, if write { 13 } else { 8 })
+            || elements.len() != fields.len()
+            || !exact(*application, offset, if write { 10 } else { 9 })
+            || !matches!(nodes.get(*function), Some(ResolvedTypeProvenanceNode::Fact(span)) if exact(*span,offset,4))
+            || !matches!(nodes.get(*argument), Some(ResolvedTypeProvenanceNode::Fact(span)) if exact(*span,offset+5,if write {4} else {3}) && *span == *argument_span)
+        {
+            return Err(invalid());
+        }
+        for (index, element) in elements.iter().enumerate() {
+            let (offset, length) = if index == 0 {
+                (1, 1)
+            } else if index == 1 {
+                (4, 3)
+            } else {
+                (9, 3)
+            };
+            if !matches!(nodes.get(*element), Some(ResolvedTypeProvenanceNode::Fact(span)) if exact(*span,offset,length))
+            {
+                return Err(invalid());
+            }
         }
         Ok(())
     }

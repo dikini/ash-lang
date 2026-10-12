@@ -173,7 +173,7 @@ impl Resolver {
             )
         })?;
         let codec = Arc::new(codec);
-        if declarations.definitions.len() != 2 {
+        if declarations.definitions.len() != 4 {
             return Err(error(
                 ResolveReason::InternalState,
                 span,
@@ -183,6 +183,8 @@ impl Resolver {
         for (definition, role) in declarations.definitions.iter().zip([
             ForeignScalarPreflightRole::I64,
             ForeignScalarPreflightRole::SizeT,
+            ForeignScalarPreflightRole::ByteRead,
+            ForeignScalarPreflightRole::ByteWrite,
         ]) {
             let ResolvedDefinitionKind::Equational(global) = &definition.kind else {
                 return Err(error(
@@ -192,7 +194,25 @@ impl Resolver {
                 ));
             };
             if global.interface.name.id != BinderId::resolved(self.module, role.local())
-                || !global.interface.type_parameters.is_empty()
+                || match role.byte_parameter(self.module) {
+                    None => !global.interface.type_parameters.is_empty(),
+                    Some(expected) => {
+                        let parameters = &global.interface.type_parameters;
+                        let (name, _) =
+                            crate::module::foreign_scalar_preflight_ranges(span, role.local())
+                                .ok_or_else(|| {
+                                    error(
+                                        ResolveReason::InternalState,
+                                        span,
+                                        "sealed byte declaration range is invalid",
+                                    )
+                                })?;
+                        parameters.len() != 1
+                            || parameters[0].id != expected
+                            || parameters[0].kind != crate::types::Kind::Type
+                            || !matches!(&parameters[0].origin, crate::source::Origin::Source(parameter) if parameter.source() == span.source() && parameter.range().start() == name.end()+1 && parameter.range().end() == name.end()+2)
+                    }
+                }
                 || !global.interface.requirements.is_empty()
             {
                 return Err(error(

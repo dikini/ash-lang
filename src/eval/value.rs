@@ -141,7 +141,7 @@ impl ObservedValue {
                     Value::Reference { .. } => output.push_str("<arena-reference>"),
                     Value::Bytes(value) => output.push_str(&format!("{value:?}")),
                     Value::String(value) => output.push_str(&format!("{value:?}")),
-                    Value::Intrinsic(_) => output.push_str("<function>"),
+                    Value::Intrinsic(_) | Value::ByteCallable(_) => output.push_str("<function>"),
                     Value::Integer(value) => output.push_str(&value.to_string()),
                     Value::Boolean(value) => output.push_str(if value { "true" } else { "false" }),
                     Value::Unit => output.push_str("()"),
@@ -284,6 +284,8 @@ pub enum Value {
     String(Arc<str>),
     /// An authenticated compiler-owned first-order pure callable.
     Intrinsic(crate::core::packed::IntrinsicNode),
+    /// A sealed byte callable retaining its selected original instantiation.
+    ByteCallable(super::machine::SourceByteCallable),
     /// An opaque, non-owning access key for a live resource activation.
     ResourceHandle(ActivationKey),
     /// An opaque borrowed native state view with no native ownership edge.
@@ -327,7 +329,7 @@ impl fmt::Display for Value {
             Self::Reference { .. } => formatter.write_str("<arena-reference>"),
             Self::Bytes(value) => write!(formatter, "{value:?}"),
             Self::String(value) => write!(formatter, "{value:?}"),
-            Self::Intrinsic(_) => formatter.write_str("<function>"),
+            Self::Intrinsic(_) | Self::ByteCallable(_) => formatter.write_str("<function>"),
             Self::Integer(value) => value.fmt(formatter),
             Self::Boolean(value) => value.fmt(formatter),
             Self::Unit => formatter.write_str("()"),

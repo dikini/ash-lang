@@ -35,6 +35,16 @@ pub enum Intrinsic {
         /// Claim of the original compiler-owned function identity.
         function: crate::resolved::BinderId,
     },
+    /// Reads through an independently admitted initialized live State.
+    ForeignByteRead {
+        /// Original sealed canonical byte declaration.
+        function: crate::resolved::BinderId,
+    },
+    /// Writes through that State only after complete reply admission.
+    ForeignByteWrite {
+        /// Original sealed canonical byte declaration.
+        function: crate::resolved::BinderId,
+    },
     /// Produces an opaque witness from one independently authenticated dictionary.
     ForeignLayoutWitness {
         /// Copied header; canonical dictionary validation is mandatory.
@@ -99,6 +109,25 @@ impl IntrinsicNode {
                 ),
             ),
             Intrinsic::ForeignLayoutWitness { producer } => return producer.producer_type(),
+            Intrinsic::ForeignByteRead { .. } | Intrinsic::ForeignByteWrite { .. } => {
+                let write = matches!(self.operation, Intrinsic::ForeignByteWrite { .. });
+                let parameter =
+                    crate::types::TypeVariableId::resolved(self.module, if write { 5 } else { 4 });
+                let mut fields = vec![Type::Variable(parameter), Type::Int];
+                if write {
+                    fields.push(Type::Int);
+                }
+                (
+                    Type::Tuple(fields.into_boxed_slice()),
+                    Type::Application(
+                        Box::new(Type::Nominal(crate::types::NominalTypeId::new(
+                            self.module,
+                            1,
+                        ))),
+                        Box::new(if write { Type::Unit } else { Type::Int }),
+                    ),
+                )
+            }
             Intrinsic::BytesEmpty => (Type::Unit, Type::Bytes),
             Intrinsic::BytesAppendByte { appended, .. } => (
                 Type::Tuple(Box::new([Type::Bytes, Type::Int])),
@@ -123,9 +152,10 @@ impl IntrinsicNode {
     }
     pub(crate) fn authentic_module(self) -> bool {
         match self.operation {
-            Intrinsic::ForeignCheckedI64 { .. } | Intrinsic::ForeignCheckedSizeT { .. } => {
-                self.module.is_builtin_foreign()
-            }
+            Intrinsic::ForeignCheckedI64 { .. }
+            | Intrinsic::ForeignCheckedSizeT { .. }
+            | Intrinsic::ForeignByteRead { .. }
+            | Intrinsic::ForeignByteWrite { .. } => self.module.is_builtin_foreign(),
             Intrinsic::ForeignLayoutWitness { .. } => false,
             Intrinsic::BytesEmpty
             | Intrinsic::BytesAppendByte { .. }

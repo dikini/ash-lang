@@ -1057,8 +1057,18 @@ authority.
 These checks grant no native-call, access or ownership permission and do not
 replace a later native call's exact operand conversion.
 
-Constants, qualified ABI references, output slots, foreign access and copy
-windows remain outside this implementation checkpoint. Owner declarations and
+The canonical byte functions have empty ordinary effect rows and signatures
+`Foreign.byte_read<S> : (S, Int) -> Foreign.Call<Int>` and
+`Foreign.byte_write<S> : (S, Int, Int) -> Foreign.Call<Unit>`. Their generic state
+parameter is compiler-sealed: only the exact descriptor-witnessed initialized
+live state in an admitted source lifecycle or handler phase can authorize an
+application. Ordinary instantiation with an arbitrary or merely compatible `S`,
+including forwarding through an ordinary generic helper, grants no permission.
+The result codec is the existing canonical `Foreign.Call` allocation, with an
+opaque conversion error; this choice applies only to these byte primitives.
+
+Constants, qualified ABI references, output slots, general foreign access and
+copy windows remain outside this implementation checkpoint. Owner declarations and
 their parsed contracts alone grant no executable permission.
 
 ## Source resource declarations
@@ -1146,7 +1156,16 @@ contain multiple methods with the exact operation types and rows described
 above; method-local type parameters remain unsupported by this carrier.
 Resource and symbol arguments retain their complete Type/Row vectors. The
 lifecycle checker admits native requests, ordinary constructor and product
-assembly, sequential bindings and matches. Callable lifecycle helpers, source
+assembly, sequential bindings, matches and sealed byte calls. A byte call must
+retain its original canonical function, TypeApplication and Apply occurrences,
+original state family and owner, selected evidence and copied specialization.
+Both the caller and defining declaration retain their complete ordered Type/Row
+actuals independently of `S`, including arguments absent from the callable's
+value type. Branch-selected canonical aliases retain each alternative's defining
+context. Independent Core checks these relationships rather than granting
+permission from the monomorphic operand type. Byte calls borrow the fresh
+acquired or current live state without consuming it; their independent results
+cannot expose that state. Callable lifecycle helpers, source
 `given` forwarding, native access windows and lifecycle control capture remain
 unsupported. Client computations must have no residual outward row after
 removing the exact provided instance. These are checkpoint restrictions, not

@@ -268,7 +268,11 @@ fn render_native_suffix(
             let constructor = match member.plan.call() {
                 super::bridge::TargetBridgeCall::Scalar => "__private_native_bridge",
                 super::bridge::TargetBridgeCall::OwnerAcquire => {
-                    "__private_native_owner_acquire_bridge"
+                    if member.plan.byte_owner() {
+                        "__private_native_byte_owner_acquire_bridge"
+                    } else {
+                        "__private_native_owner_acquire_bridge"
+                    }
                 }
                 super::bridge::TargetBridgeCall::OwnerTeardown => {
                     "__private_native_owner_teardown_bridge"
@@ -279,7 +283,13 @@ fn render_native_suffix(
                 "pub fn {name}__provide() -> ash::build::PrivateNativeBridge {{\n    ash::build::{constructor}("
             )?;
             render_coordinates(output, library, member)?;
-            writeln!(output, ", super::EXPECTED_FACTS, {name})\n}}")?;
+            write!(output, ", super::EXPECTED_FACTS, {name}")?;
+            if member.plan.call() == super::bridge::TargetBridgeCall::OwnerAcquire
+                && member.plan.byte_owner()
+            {
+                write!(output, ", {name}__read, {name}__write")?;
+            }
+            writeln!(output, ")\n}}")?;
         }
         writeln!(
             output,
