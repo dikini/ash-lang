@@ -78,6 +78,14 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 
 ### Compiler transformations and backends
 
+- [DN-0048: Pure Core Kernels and Parallel Lowering](DN-0048-pure-core-kernels-and-parallel-lowering.md)
+  — Pure Core first, a typed Ash-owned kernel IR with strict completion,
+  optional interaction-net dependencies and sharing, and SIMD/GPU lowering;
+  exploratory contracts, law obligations and bounded comparison criteria.
+- [DN-0045: Native Compilation and Interactive Execution](DN-0045-native-compilation-and-interactive-execution.md)
+  — AOT and interactive paths, human and AI feedback needs, shared lowering,
+  LLVM/MLIR/Cranelift alternatives, continuation representations and CPS;
+  no accepted native architecture.
 - [DN-0044: No Default Runtime](DN-0044-no-default-runtime.md)
   — working exploration of library-supplied services, compiler defaults,
   ordinary construction and storage lowering, constrained targets, and foreign
@@ -86,6 +94,13 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
   — work-in-progress exploration of typed compiler transformations,
   declarative phase hooks, registration scopes, unresolved selection policy,
   staged handlers and providers, and library-defined specialized kernels.
+
+### Tooling and feedback
+
+- [DN-0046: Agent Semantic Exploration and Feedback](DN-0046-agent-semantic-exploration-and-feedback.md)
+  — an agent interface combining semantic navigation, search and executable
+  probes alongside intended LSP support; depends on DN-0045's shared compiler
+  and execution boundaries, without requiring completed optimizing AOT or JIT.
 
 ### Surface language, typing, and elaboration
 
@@ -158,6 +173,10 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 
 ### Downstream type-system and resource exploration
 
+- [DN-0047: ECS and Open Heterogeneous Stores](DN-0047-ecs-and-open-heterogeneous-stores.md)
+  — ECS as a stress case for typed immutable worlds, generic queries, static
+  heterogeneous schemas, authenticated type-key composition, checked lookup
+  and future existential packaging; theoretical costs without measurements.
 - [DN-0042: Native Interaction and Efficient Data](DN-0042-native-interaction-and-efficient-data.md)
   — a summary connecting FFI, resources, regions, native use cases, numeric
   representations and data processing, with missing collection and SIMD
