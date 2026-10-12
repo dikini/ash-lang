@@ -48,6 +48,34 @@ run the full architecture/workspace gate at integrated delivery.
 
 ## Discoveries
 
+Source control moves the same guard/activation through capture and resume.
+Owned discard runs acquired scopes' original finish once in structural order,
+with required outer resources live; it never fabricates an abandoned body value
+or result wrapper. An acquisition discarded before publication revokes only its
+unpublished native guard. Running finish remains a nonabandonable cleanup action,
+and exact native interpretation preserves ordinary outward requests and their
+required outside interpreters. The 2026-10-12 human clarification makes a consumed
+`ConsumedFailure(E)` terminal on owned discard for the scope codec; normal
+`Scope.ConsumedError(E)` is unchanged.
+
+The connected control witnesses distinguish source/Core admission, real generated
+native execution and injected transfer/disposal checkpoints. Native traces use
+independent owner identities and byte storage, proving inner-before-outer finish,
+outer access during inner finish, discarded-body nonexecution and pending-guard
+revocation without invented data. A two-original-library fixture fits compiler
+checking but exceeds the unchanged cumulative image allowance; sharing one
+original template provides the bounded native witness without raising policy
+limits. The Core and image witnesses compare exact continuation substitutions,
+output rows and native interpretation order. Image mutation refuses before native
+provider selection. Exact/one-short/prefix/fresh-retry tests retain cumulative
+costs; injected source guards dispose iteratively at 32,768 depth on 64 KiB.
+
+Imported original source headers must be inventoried by defining identity, not
+spelling. Two namespace imports can both name `Probe`; a spelling map can retain
+only one. Canonical family-kind reconstruction uses the complete header inventory,
+with charged fallible retention, while original signatures and sealed association
+remain independently checked.
+
 Provider association checks exact method/operation names and substituted value
 types, with the single associated effect row. Interface order is independent of
 operation order. Checked lexical forwarding carries complete Type/Row arguments
@@ -75,18 +103,22 @@ before fallible allocation. Independent ledger fixtures must count their actual
 names, including `use`, `first`/`second`, `relate` and `relation`; equal numeric
 deltas from different fixtures do not establish shared provenance.
 
-An inner source scope already owns normalized immutable descriptor metadata.
-Enclosing late normalization preserves that descriptor; final independent
-admission still rejects altered or unresolved actuals and changed original
-forests. This prevents both accidental rewriting of certificates and admission
-through a compiler-only copying claim.
+An inner source scope retains immutable defining templates, identity maps and
+copying claims. Enclosing control equations can leave its instance continuation
+row temporarily unresolved. Partial normalization must preserve the complete
+claim; strict finalization resolves its Type/Row payloads and substitutions
+together before resume-row replay. A shared descriptor gets a charged private
+copy before any instance mutation. Independent admission still rejects altered
+or unresolved actuals and changed original forests. Finalization tracks only
+newly pending scopes, preserving unrelated programs' work and rollback state.
 
 Selected source-handler entry authenticates the unique live guard, original
 owner and exact activation before traversing every typed access position,
 including nominal payloads. Ordinary handler selection precedes this check.
 Modeled guard/frame tests and real generated-native lifecycle tests establish
-different boundaries. Outward control, retained dependencies and
-quarantine remain subsequent obligations.
+different boundaries. Source capture/resume and owned discard now retain those
+same guard and selection checks; retained dependencies and quarantine remain
+subsequent obligations.
 
 The acquired_only delivery authenticates the instantiated nominal report fields
 in defining constructor order: body answer first, acquisition error second.
@@ -96,7 +128,7 @@ Capture-value analysis must preserve that result shape while retaining finish
 as a cleanup obligation; reusing Scope/Completion assembly would fabricate a
 completion field. A source consumed-completion error becomes terminal after
 native consumption and cannot publish success or retry release. Native retained
-outcomes and outward control remain subsequent CP-0022 obligations.
+outcomes remain subsequent CP-0022 obligations.
 
 Initialized-byte acquisition projects the original declared source leaf before
 native entry, independently of ABI operands and private data. Readiness retains
@@ -106,7 +138,7 @@ are refused during canonical foreign resolution, before resource or bridge
 admission. Preflight work exhaustion follows the existing effect-work diagnostic
 and remains terminal; post-return cleanup does not replay acquisition or release.
 The image retains representation and original extent facts separately from the
-checked executable resource template. Broader control remains a separate
+checked executable resource template. Finite-window control remains a separate
 obligation.
 
 The human-approved byte API clarification uses compiler-sealed generic `S` and
@@ -147,7 +179,7 @@ canonical alias branches under distinct phantom Type/Row applications, nested
 ordinary overrides, both report codecs and null/zero-extent disposition. Source,
 image and facts files are removed before standalone execution. Injected guard,
 storage and ledger refusals establish separate pre-callback boundaries; they are
-not external-library failures. Copy windows, dependencies, quarantine and outward
+not external-library failures. Copy windows, dependencies, quarantine and finite-window
 control remain later CP-0022 work; byte primitives alone complete no original
 issue criterion or library migration.
 
@@ -311,14 +343,11 @@ Source template preparation now pays for one iterative module inventory and
 reuses its immutable identities for each forest's fallible, collision-checked
 reservation. Independent final validation remains a separate obligation.
 
-The first executable resource checkpoint admits dependency-free opaque state,
-one acquisition and a single-Current-operand void teardown, the exact `scope`
-codec, private independent data and one Unit-domain associated operation. Client
-code requests that operation directly. The checkpoint refuses nonempty residual
-client rows, phase-local ordinary helper calls and provider `given` forwarding.
-Native bytes, windows, dependent owners, outward control, retained completion and
-library migrations remain required work. These are implementation boundaries,
-not amendments to CP-0022.
+Current bounded execution admits dependency-free opaque and initialized-byte
+owners, both report codecs, complete associated-method forwarding and ordinary
+outward capture/resume/owned discard. Native windows, dependent owners, quarantine,
+retained completion and library migrations remain CP-0022 work. These are
+implementation boundaries, not amendments to the broader accepted contract.
 
 A public source resource currently needs a public provider interface. Retaining
 an interface declared privately in the same module as a hidden resource-header

@@ -348,13 +348,15 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         );
         let body_row = self.zonk_effect_row(&body.effects)?;
         let residual = self.remove_cleanup_effect(&body_row, &provided, progress.span, true)?;
-        if !residual.is_empty() {
-            return Err(inference_failure(
-                TypeReason::Argument,
-                progress.span,
-                "source resource scope requires a synchronous client computation in this checkpoint",
-            ));
-        }
+        let direct = progress
+            .template
+            .handler_direct_row(&mut self.type_work)
+            .map_err(validation)?;
+        let direct = progress
+            .replacements
+            .substitute_row(&direct, &mut self.type_work)?;
+        let residual = self.union_effects(&residual, &direct, progress.span)?;
+
         self.zonk_builder_types_since(None, false)
             .map_err(TypeError::Internal)?;
         let body_type = IterativeTypeOwner::new(self.zonk(&body.ty)?);
@@ -368,8 +370,30 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 .replacements
                 .substitute(&header.result.ty, &mut self.type_work)?,
         );
-        let effects =
+        let mut effects =
             self.union_effects(&progress.initializer.effects, &residual, progress.span)?;
+        for acquire in [true, false] {
+            let original = progress
+                .template
+                .lifecycle_row(acquire, &mut self.type_work)
+                .map_err(validation)?;
+            let mut outward = progress
+                .replacements
+                .substitute_row(&original, &mut self.type_work)?;
+            for interpretation in &header.interpreted {
+                let original = clone_effect_instance_with_budget(
+                    &interpretation.instance,
+                    &mut self.type_work,
+                )
+                .map_err(|_| type_resource())?;
+                let interpreted = progress
+                    .replacements
+                    .substitute_row(&EffectRow::singleton(original), &mut self.type_work)?;
+                let effect = interpreted.known().first().ok_or_else(invalid_state)?;
+                outward = self.remove_cleanup_effect(&outward, effect, progress.span, true)?;
+            }
+            effects = self.union_effects(&effects, &outward, progress.span)?;
+        }
         self.check_provider_instance_escape(
             progress.resource,
             &report,
@@ -1174,10 +1198,15 @@ impl CoreElaborator<EffectOperationFamily> {
         function: NodeId,
         function_type: &Type,
         header: &SourceResourceTypeFact,
-        answer: bool,
+        continuation: Option<TypeVariableId>,
     ) -> Result<crate::core::UnvalidatedEffectProgram, TypeError> {
         self.zonk_builder_types().map_err(TypeError::Internal)?;
-        let parameters = self.source_parameters(header, answer)?;
+        let mut parameters = self.source_parameters(header, continuation.is_some())?;
+        if let Some(row) = continuation {
+            self.type_work.charge(1).map_err(|_| type_resource())?;
+            parameters.try_reserve(1).map_err(|_| type_resource())?;
+            parameters.push((row, Kind::EffectRow));
+        }
         let scheme_parameters =
             clone_kinded_type_parameters_with_budget(&parameters, &mut self.type_work)
                 .map_err(|_| type_resource())?
@@ -1287,7 +1316,7 @@ impl CoreElaborator<EffectOperationFamily> {
                 core_type,
                 Origin::Source(definition.span),
             )?;
-            self.finish_source_program(function, &function_type, definition, false)
+            self.finish_source_program(function, &function_type, definition, None)
         })();
         self.base_context = context;
         self.provider_context = None;
@@ -1333,20 +1362,47 @@ impl CoreElaborator<EffectOperationFamily> {
                 Origin::Source(definition.handlers_pattern.span),
             )?;
             let answer_type = Type::Variable(definition.answer.id);
-            // The immutable template represents its future client computation
-            // by an internal thunk. Applying it contributes the exact provided
-            // effect through ordinary application checking and row inference.
+            let continuation = self.fresh_type_variable(&Kind::EffectRow, definition.span)?;
+            let handled = self.check_effect_clauses(
+                &definition.provided.instance,
+                &definition.handlers,
+                definition.span,
+                &mut context,
+                &answer_type,
+                EffectRow::empty(),
+            );
+            let cleanup = self.remove_pattern_binders(&mut context, &binders);
+            let (handler, demands, checked_clauses) = handled?;
+            cleanup?;
+            let demands = self.zonk_effect_row(&demands)?;
             let placeholder_effect = clone_effect_instance_with_budget(
                 &definition.provided.instance,
                 &mut self.type_work,
             )
             .map_err(|_| type_resource())?;
+            let residual = crate::types::rebuild_effect_row_with_budget(
+                std::iter::empty(),
+                Some(crate::types::EffectRowVariable::rigid(continuation)),
+                demands
+                    .known()
+                    .iter()
+                    .chain(std::iter::once(&placeholder_effect)),
+                crate::types::clone_type_with_budget,
+                &mut self.type_work,
+            )
+            .map_err(|_| type_resource())?;
+            let demands = self.union_effects(&demands, &residual, definition.span)?;
+            // The original thunk carries the complete ordinary continuation row.
+            // At specialization its private residual is solved from the client's
+            // least output, while direct clause demands remain explicit.
+            let callback_row = self.union_effects(
+                &EffectRow::singleton(placeholder_effect),
+                &demands,
+                definition.span,
+            )?;
             let callback_type = IterativeTypeOwner::new(Type::function_computation(
                 Type::Unit,
-                ComputationType::new(
-                    Type::Variable(definition.answer.id),
-                    EffectRow::singleton(placeholder_effect),
-                ),
+                ComputationType::new(Type::Variable(definition.answer.id), callback_row),
             ));
             let callback_binder_type = self.clone_type(&callback_type)?;
             let answer = self
@@ -1367,18 +1423,6 @@ impl CoreElaborator<EffectOperationFamily> {
                 Type::Variable(definition.answer.id),
                 Origin::Source(definition.span),
             )?;
-            let handled = self.check_effect_clauses(
-                &definition.provided.instance,
-                &definition.handlers,
-                definition.span,
-                &mut context,
-                &answer_type,
-                EffectRow::empty(),
-            );
-            let cleanup = self.remove_pattern_binders(&mut context, &binders);
-            let (handler, demands, checked_clauses) = handled?;
-            cleanup?;
-            let demands = self.zonk_effect_row(&demands)?;
             self.type_work
                 .charge(checked_clauses.len())
                 .map_err(|_| type_resource())?;
@@ -1446,7 +1490,7 @@ impl CoreElaborator<EffectOperationFamily> {
                 core_type,
                 Origin::Source(definition.span),
             )?;
-            self.finish_source_program(function, &function_type, definition, true)
+            self.finish_source_program(function, &function_type, definition, Some(continuation))
         })();
         self.base_context = context;
         self.provider_context = None;

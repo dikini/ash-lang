@@ -151,6 +151,7 @@ impl Machine<'_> {
             payload: None,
             saved: None,
             consumed: false,
+            discarded: false,
         });
         self.frames.push(Frame::SourceResourceBoundary(boundary));
         self.live_resources = live;
@@ -191,6 +192,17 @@ impl Machine<'_> {
         let protocol = scope.header().codec;
         match boundary.phase {
             ProviderPhase::Acquire => {
+                if boundary.discarded {
+                    // Acquisition has not published state or private data. Its
+                    // pending native guard is revoked without fabricating either.
+                    drop(boundary.owner.take());
+                    self.live_resources = self
+                        .live_resources
+                        .checked_sub(1)
+                        .ok_or(RuntimeFailure::InvalidControlState)?;
+                    self.control = Some(Control::Return(Value::Unit));
+                    return Ok(());
+                }
                 let (constructor, payload) =
                     self.foreign_report(&value, RuntimePhase::Acquisition)?;
                 if constructor == protocol.acquire[1] {
@@ -289,7 +301,7 @@ impl Machine<'_> {
                     .try_reserve(1)
                     .map_err(|_| RuntimeFailure::ResourceCapacity)?;
                 boundary.phase = ProviderPhase::Finish;
-                boundary.saved = Some(value);
+                boundary.saved = (!boundary.discarded).then_some(value);
                 self.frames.push(Frame::SourceResourceBoundary(boundary));
                 self.control = Some(Control::Evaluate(finish_body, finish_environment));
             }
@@ -304,6 +316,19 @@ impl Machine<'_> {
                 let consumed_failure = constructor == protocol.finish[1] && payload.is_some();
                 if !consumed && !consumed_failure {
                     return Err(RuntimeFailure::ForeignBinding);
+                }
+                if boundary.discarded {
+                    self.live_resources = self
+                        .live_resources
+                        .checked_sub(1)
+                        .ok_or(RuntimeFailure::InvalidControlState)?;
+                    self.trace_effect(EffectTraceEvent::ResourceReleased(key.0));
+                    if consumed_failure {
+                        return Err(RuntimeFailure::ResourceCompletion);
+                    }
+                    // No abandoned body value or Scope report exists on discard.
+                    self.control = Some(Control::Return(Value::Unit));
+                    return Ok(());
                 }
                 let body = boundary
                     .saved
@@ -1519,6 +1544,187 @@ mod source_handler_entry_tests {
     }
 
     #[test]
+    fn source_control_transfer_refusal_preserves_the_same_unique_guard() {
+        // Direct transfer checkpoints use real admitted source metadata and an
+        // injected guard; generated-host tests establish actual typed cuts.
+        let facts = Fixture::compile(false);
+        let source = match &facts.program().node(facts.scope).unwrap().kind {
+            crate::core::EffectExprKind::Operation(
+                crate::core::EffectOperation::SourceResourceScope(scope),
+            ) => scope,
+            _ => unreachable!(),
+        };
+        let handler = source.handler.id();
+        let owner = source.handler.clauses()[0].resume();
+        let resume = descendants(facts.program(), source.handler.clauses()[0].body())
+            .into_iter()
+            .find(|id| {
+                matches!(&facts.program().node(*id).unwrap().kind,
+                crate::core::EffectExprKind::Operation(crate::core::EffectOperation::Resume(resume))
+                    if resume.handler() == handler && resume.owner() == owner)
+            })
+            .unwrap();
+        for cause in [
+            crate::eval::ResourceFailureCause::AllocatorRefused,
+            crate::eval::ResourceFailureCause::StorageReservationFailed,
+        ] {
+            reset_counts();
+            let mut machine = Machine::new_effect(facts.program());
+            let key = publish(&mut machine, facts.scope);
+            machine.capture_limit = 1;
+            assert!(machine.capture_from(0).is_err());
+            assert_eq!(machine.frames.len(), 2);
+            assert_eq!(machine.captured_cells, 0);
+            machine.capture_limit = 2;
+            super::super::native_buffer::tests::FAIL_CONTROL_RESERVATION.set(Some(cause));
+            assert!(machine.capture_from(0).is_err());
+            assert_eq!(machine.frames.len(), 2);
+            assert_eq!(machine.captured_cells, 0);
+            assert_eq!(DESTROYED.get(), 0);
+            let captured = machine.capture_from(0).unwrap();
+            assert_eq!(machine.captured_cells, 2);
+            assert!(
+                matches!(&captured.frames[0], Frame::SourceResourceBoundary(boundary) if boundary.key == key && boundary.owner.is_some())
+            );
+            machine.frames.push(Frame::ClauseBoundary {
+                handler,
+                owner,
+                continuation: Some(captured),
+                registration: None,
+            });
+            for discard in [false, true] {
+                super::super::native_buffer::tests::FAIL_CONTROL_RESERVATION.set(Some(cause));
+                let failed = if discard {
+                    machine.discard(handler, owner)
+                } else {
+                    machine.return_resume(resume, integer(42))
+                };
+                assert!(failed.is_err());
+                assert_eq!(machine.captured_cells, 2);
+                assert!(
+                    matches!(&machine.frames[0], Frame::ClauseBoundary { continuation: Some(capture), .. } if matches!(&capture.frames[0], Frame::SourceResourceBoundary(boundary) if boundary.key == key && boundary.owner.is_some()))
+                );
+                assert_eq!(DESTROYED.get(), 0);
+            }
+            machine.instantiation_work = TypeWorkBudget::with_limit(0);
+            assert!(machine.discard(handler, owner).is_err());
+            assert_eq!(machine.captured_cells, 2);
+            machine.instantiation_work = TypeWorkBudget::unbounded();
+            machine.discard(handler, owner).unwrap();
+            assert_eq!(machine.captured_cells, 0);
+            assert!(machine.frames.iter().any(|frame| matches!(frame, Frame::SourceResourceBoundary(boundary) if boundary.key == key && boundary.discarded && boundary.owner.is_some() && boundary.saved.is_none())));
+            assert_eq!(DESTROYED.get(), 0);
+            drop(machine);
+            assert_eq!(ARMED.get(), 1);
+            assert_eq!(DESTROYED.get(), 1);
+        }
+    }
+
+    #[test]
+    fn source_control_discard_work_is_exact_before_consumption_and_source_guards_drop_iteratively()
+    {
+        let facts = Fixture::compile(false);
+        let source = match &facts.program().node(facts.scope).unwrap().kind {
+            crate::core::EffectExprKind::Operation(
+                crate::core::EffectOperation::SourceResourceScope(scope),
+            ) => scope,
+            _ => unreachable!(),
+        };
+        let handler = source.handler.id();
+        let owner = source.handler.clauses()[0].resume();
+        let setup = || {
+            reset_counts();
+            let mut machine = Machine::new_effect(facts.program());
+            let key = publish(&mut machine, facts.scope);
+            let capture = machine.capture_from(0).unwrap();
+            machine.frames.push(Frame::ClauseBoundary {
+                handler,
+                owner,
+                continuation: Some(capture),
+                registration: None,
+            });
+            machine.instantiation_work = TypeWorkBudget::unbounded();
+            (machine, key)
+        };
+        let (mut measured, _) = setup();
+        measured.discard(handler, owner).unwrap();
+        let required = measured.instantiation_work.used();
+        drop(measured);
+        for prefix in [0, 5] {
+            for available in [required - 1, required, required] {
+                let (mut machine, key) = setup();
+                machine.instantiation_work = TypeWorkBudget::with_limit(prefix + available);
+                machine.instantiation_work.charge(prefix).unwrap();
+                let result = machine.discard(handler, owner);
+                if available < required {
+                    let RuntimeFailure::Report(report) = result.unwrap_err() else {
+                        panic!("bounded capture refusal")
+                    };
+                    assert_eq!(
+                        report.primary.resource().unwrap().cause,
+                        crate::eval::ResourceFailureCause::WorkBudgetExhausted
+                    );
+                    assert_eq!(machine.captured_cells, 2);
+                    assert!(
+                        matches!(&machine.frames[0], Frame::ClauseBoundary { continuation: Some(capture), .. }
+                        if matches!(&capture.frames[0], Frame::SourceResourceBoundary(boundary) if boundary.key == key && !boundary.discarded && boundary.owner.is_some()))
+                    );
+                } else {
+                    result.unwrap();
+                    assert_eq!(machine.instantiation_work.used(), prefix + required);
+                    assert_eq!(machine.captured_cells, 0);
+                }
+                assert_eq!(DESTROYED.get(), 0);
+                drop(machine);
+                assert_eq!(ARMED.get(), 1);
+                assert_eq!(DESTROYED.get(), 1);
+            }
+        }
+        let metadata = Arc::clone(&source.header().owner);
+        let node = facts.scope;
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(move || {
+                reset_counts();
+                let mut captured = super::super::CapturedContinuation { frames: Vec::new() };
+                for depth in 0..32_768u32 {
+                    captured = super::super::CapturedContinuation {
+                        frames: vec![
+                            Frame::SourceResourceBoundary(Box::new(
+                                super::super::SourceResourceBoundary {
+                                    node,
+                                    key: ActivationKey(depth),
+                                    phase: super::super::ProviderPhase::Body,
+                                    environment: Environment::new(),
+                                    owner: Some(injected_guard(Arc::clone(&metadata))),
+                                    consumed: false,
+                                    payload: Some(integer(42)),
+                                    saved: None,
+                                    discarded: false,
+                                },
+                            )),
+                            Frame::ClauseBoundary {
+                                handler,
+                                owner,
+                                registration: None,
+                                continuation: Some(captured),
+                            },
+                        ],
+                    };
+                }
+                drop(captured);
+                assert_eq!(ARMED.get(), 32_768);
+                assert_eq!(DESTROYED.get(), 32_768);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        println!(
+            "source discard admission work={required}; exact/one-short/prefix/fresh retry, 32768 injected guards disposed on 64KiB"
+        );
+    }
+
+    #[test]
     fn exact_published_guard_passes_hook_then_source_machine_entry() {
         reset_counts();
         let facts = Fixture::compile(false);
@@ -1650,6 +1856,7 @@ mod source_handler_entry_tests {
                         payload: original.payload.clone(),
                         saved: None,
                         consumed: false,
+                        discarded: false,
                     };
                     machine
                         .frames

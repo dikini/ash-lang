@@ -515,6 +515,26 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     crate::elaborate::BorrowedOwnerArgument::TypeArg(body.value()),
                     &mut self.type_work,
                 )?;
+                let original_direct = template
+                    .handler_direct_row(&mut self.type_work)
+                    .map_err(validation)?;
+                let direct = phase
+                    .sigma
+                    .substitute_row(&original_direct, &mut self.type_work)?;
+                let mut residual =
+                    clone_effect_row_with_budget(body.effects(), &mut self.type_work)
+                        .map_err(|_| type_resource())?;
+                for effect in direct.known() {
+                    residual = residual
+                        .remove_exact_with_budget(effect, &mut self.type_work)
+                        .map_err(|_| type_resource())?
+                        .map_err(|_| invalid_state())?;
+                }
+                phase.sigma.insert_borrowed(
+                    template.handler_continuation(),
+                    crate::elaborate::BorrowedOwnerArgument::RowArg(&residual),
+                    &mut self.type_work,
+                )?;
             }
             let original_handler = template.original_handler_node();
             let mut roots = Vec::new();

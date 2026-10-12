@@ -759,6 +759,7 @@ struct SourceResourceBoundary {
     payload: Option<Value>,
     saved: Option<Value>,
     consumed: bool,
+    discarded: bool,
 }
 
 /// Private runtime provenance for one selected sealed byte callable. Both
@@ -862,17 +863,24 @@ fn retained_provider_handlers_for_discard(
     let mut retained = Vec::new();
     charge_effect_work(work, outer.len(), RuntimePhase::Capture)?;
     for frame in outer {
-        if let Frame::ProviderBoundary(boundary) = frame
-            && boundary.phase == ProviderPhase::Body
-        {
+        let owner = match frame {
+            Frame::ProviderBoundary(boundary) if boundary.phase == ProviderPhase::Body => {
+                Some((boundary.node, boundary.key, boundary.owner.is_some()))
+            }
+            Frame::SourceResourceBoundary(boundary) if boundary.phase == ProviderPhase::Body => {
+                Some((boundary.node, boundary.key, boundary.owner.is_some()))
+            }
+            _ => None,
+        };
+        if let Some((node, key, live)) = owner {
             charge_effect_work(work, owners.len().saturating_add(2), RuntimePhase::Capture)?;
-            if boundary.owner.is_none() || owners.contains(&boundary.key) {
+            if !live || owners.contains(&key) {
                 return Err(RuntimeFailure::InvalidControlState);
             }
             reserve_control(&mut owners, 1, RuntimeResource::CaptureInspection, false)?;
             reserve_control(&mut enclosing, 1, RuntimeResource::CaptureInspection, false)?;
-            owners.push(boundary.key);
-            enclosing.push((boundary.node, boundary.key));
+            owners.push(key);
+            enclosing.push((node, key));
         }
     }
     let mut pending = Vec::new();
@@ -896,6 +904,19 @@ fn retained_provider_handlers_for_discard(
                 charge_effect_work(work, owners.len().saturating_add(2), RuntimePhase::Capture)?;
                 if boundary.phase != ProviderPhase::Body
                     || boundary.owner.is_none()
+                    || owners.contains(&boundary.key)
+                {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                reserve_control(&mut owners, 1, RuntimeResource::CaptureInspection, false)?;
+                reserve_control(&mut enclosing, 1, RuntimeResource::CaptureInspection, false)?;
+                owners.push(boundary.key);
+                enclosing.push((boundary.node, boundary.key));
+            }
+            Frame::SourceResourceBoundary(boundary) => {
+                charge_effect_work(work, owners.len().saturating_add(2), RuntimePhase::Capture)?;
+                if boundary.phase == ProviderPhase::Finish
+                    || boundary.phase == ProviderPhase::Body && boundary.owner.is_none()
                     || owners.contains(&boundary.key)
                 {
                     return Err(RuntimeFailure::InvalidControlState);
@@ -2858,7 +2879,9 @@ impl<'runtime> Machine<'runtime> {
                     } => {
                         self.handler(*node)
                             .ok_or(RuntimeFailure::InvalidControlState)?;
-                        if self.provider_scope(*node).is_some() != provider.is_some()
+                        if (self.provider_scope(*node).is_some()
+                            || self.source_resource_scope(*node).is_some())
+                            != provider.is_some()
                             || provider.is_some() && registration.is_some()
                         {
                             return Err(RuntimeFailure::InvalidControlState);
@@ -2866,6 +2889,12 @@ impl<'runtime> Machine<'runtime> {
                     }
                     Frame::ProviderBoundary(boundary) => {
                         if boundary.phase != ProviderPhase::Body {
+                            return Err(RuntimeFailure::InvalidControlState);
+                        }
+                        owners += 1;
+                    }
+                    Frame::SourceResourceBoundary(boundary) => {
+                        if boundary.phase == ProviderPhase::Finish {
                             return Err(RuntimeFailure::InvalidControlState);
                         }
                         owners += 1;
@@ -2963,6 +2992,12 @@ impl<'runtime> Machine<'runtime> {
                     boundary.discarded = true;
                     boundary.saved = None;
                     closing.push(frame)
+                }
+                Frame::SourceResourceBoundary(boundary) => {
+                    debug_assert_ne!(boundary.phase, ProviderPhase::Finish);
+                    boundary.discarded = true;
+                    boundary.saved = None;
+                    closing.push(frame);
                 }
                 Frame::CleanupBoundary { .. } => closing.push(frame),
                 Frame::HandlerBoundary {

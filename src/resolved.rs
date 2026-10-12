@@ -21901,19 +21901,39 @@ impl ResolvedRegistry {
                 abstract_nominal_names.insert(*id, name.clone());
             }
         }
-        for (spelling, resource) in imported.source_resource_types() {
+        // Published spellings can coincide across namespace imports. Kind
+        // authority follows the complete original-header inventory, including
+        // headers retained only by a method or a selective import.
+        for resource in imported.source_resource_facts() {
             let kind =
                 NonMaterializedNominalKind::for_resource(resource.id, &resource.parameters, budget)
                     .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            budget
+                .charge(2)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            abstract_nominal_kinds
+                .try_reserve(1)
+                .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+            abstract_nominal_names
+                .try_reserve(1)
+                .map_err(|_| ResolvedBuildFailure::TypeResource)?;
             abstract_nominal_kinds.entry(resource.family).or_insert(
                 NonMaterializedNominalKindFact {
                     kind,
                     origin: resource.origin.primary_span(),
                 },
             );
-            abstract_nominal_names
-                .entry(resource.family)
-                .or_insert_with(|| spelling.to_owned());
+            if let std::collections::hash_map::Entry::Vacant(entry) =
+                abstract_nominal_names.entry(resource.family)
+            {
+                budget
+                    .charge(resource.spelling.len())
+                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                entry.insert(
+                    try_clone_string(&resource.spelling)
+                        .map_err(|_| ResolvedBuildFailure::TypeResource)?,
+                );
+            }
         }
         for (spelling, resource) in imported.resource_facts() {
             let kind =

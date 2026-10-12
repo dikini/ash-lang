@@ -1165,11 +1165,27 @@ value type. Branch-selected canonical aliases retain each alternative's defining
 context. Independent Core checks these relationships rather than granting
 permission from the monomorphic operand type. Byte calls borrow the fresh
 acquired or current live state without consuming it; their independent results
-cannot expose that state. Callable lifecycle helpers, source
-`given` forwarding, native access windows and lifecycle control capture remain
-unsupported. Client computations must have no residual outward row after
-removing the exact provided instance. These are checkpoint restrictions, not
-additional language rules for all resources; the broader obligations remain in
+cannot expose that state. Ordinary outward requests in these phases must carry
+independent operands and cannot synthesize native-state lineage. The instance's
+handler output is the body row minus its exact provided instance, union the
+source handler's direct ordinary requests. The scope's outward row additionally
+includes initializer, acquisition and finish effects, removing only the listed
+exact native instances from the interpreted phases. Other ordinary rows remain.
+
+Capture/resume moves the same activation and owner without acquisition. Owned
+discard completes acquired source scopes in structural order while required outer
+resources remain live. It must retain the interpreters needed by source finish;
+a running finish or unfinished closing operation cannot be abandoned. The
+surrounding structural cleanup rules check these obligations independently.
+Acquisition capture can retain an unpublished guard; discarding it revokes that
+guard without inventing private data or a source finish input. A consumed
+`ConsumedFailure(E)` during owned discard is terminal `ResourceCompletion` for
+both codecs. Normal `scope` return still reports `ConsumedError(E)`.
+
+Callable lifecycle helpers, source `given` forwarding, native access/copy windows,
+dependent ownership and quarantine remain unsupported. These are checkpoint
+restrictions, not additional language rules for all resources; the broader
+obligations remain in
 [CP-0022](../docs/proposals/CP-0022-ash-authored-foreign-interfaces.md).
 Compiler-owned cell and native-buffer rules below remain unchanged.
 

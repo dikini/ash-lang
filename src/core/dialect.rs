@@ -2630,6 +2630,7 @@ pub struct CoreBuilder<F: CoreOperationFamily = PureOperationFamily> {
     pub(super) type_work: TypeWorkBudget,
     rewrite_type_work: TypeWorkBudget,
     requires_type_rewrite: bool,
+    pub(super) source_resource_finalization_start: Option<usize>,
     deferred_cleanup_rows: HashSet<crate::types::InferenceVariableId>,
 }
 
@@ -2671,6 +2672,7 @@ pub(crate) struct CoreBuilderCheckpoint {
     next_binder: u32,
     binder_phase_started: bool,
     requires_type_rewrite: bool,
+    pub(super) source_resource_finalization_start: Option<usize>,
 }
 
 impl<F: CoreOperationFamily> CoreBuilder<F> {
@@ -2699,6 +2701,7 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             type_work,
             rewrite_type_work: TypeWorkBudget::default(),
             requires_type_rewrite: false,
+            source_resource_finalization_start: None,
             deferred_cleanup_rows: HashSet::new(),
         }
     }
@@ -4154,6 +4157,7 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             next_binder: self.next_binder,
             binder_phase_started: self.binder_phase_started,
             requires_type_rewrite: self.requires_type_rewrite,
+            source_resource_finalization_start: self.source_resource_finalization_start,
         }
     }
 
@@ -4181,6 +4185,7 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         self.next_binder = checkpoint.next_binder;
         self.binder_phase_started = checkpoint.binder_phase_started;
         self.requires_type_rewrite = checkpoint.requires_type_rewrite;
+        self.source_resource_finalization_start = checkpoint.source_resource_finalization_start;
     }
 
     pub(crate) fn rewrite_types_and_rows<R, Q>(

@@ -5585,6 +5585,33 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 },
             )?;
         }
+        if strict && let Some(builder) = F::effect_builder(&mut self.builder) {
+            let type_work = RefCell::new(&mut self.type_work);
+            builder.finalize_source_resource_instances(
+                &mut |ty| {
+                    zonk_core_type(
+                        ty,
+                        &self.inference_solutions,
+                        &self.row_inference_solutions,
+                        &self.inference_variables,
+                        &self.authenticated_inference_solutions,
+                        &mut type_work.borrow_mut(),
+                        true,
+                    )
+                },
+                &mut |row| {
+                    zonk_core_effect_row(
+                        row,
+                        &self.inference_solutions,
+                        &self.row_inference_solutions,
+                        &self.inference_variables,
+                        &self.authenticated_inference_solutions,
+                        &mut type_work.borrow_mut(),
+                        true,
+                    )
+                },
+            )?;
+        }
         Ok(())
     }
 

@@ -182,8 +182,9 @@ Apply occurrence, independently of their value type. The phase proof checks
 every possible matching
 arm when an independent scalar choice is unknown, including when it is paired
 with owned state. Only a definite match excludes later arms. Additional
-handler requests, arbitrary helper calls and local control abstractions need
-further phase evidence. This phase proof has a separate bound of 64 nested
+native handler requests, arbitrary helper calls and local control abstractions
+need further phase evidence. Ordinary outward requests preserve only independent
+phase values and do not authorize new state lineage. This phase proof has a separate bound of 64 nested
 expression or pattern steps and uses the shared work ledger; ordinary Core
 payload and pattern depth limits remain unchanged.
 
@@ -206,7 +207,22 @@ cannot reuse original identities or each other's local identities. Hidden
 parameters, the source handler pattern and handler clause metadata undergo the
 same reconstruction. The client body determines the specialized answer type;
 the original handler's synthetic callback application does not supply a second
-body or a source callback feature.
+body or a source callback feature. The original handler has a compiler-private
+continuation-row parameter in addition to the header and answer formals. Its
+complete specialization retains the client's residual row, with direct handler
+requests accounted separately. Partial enclosing normalization preserves this
+claim; after control equations are solved, strict finalization normalizes all
+instance Type/Row payloads and substitutions together. It never rewrites the
+immutable defining template or freshening maps. Unresolved or altered claims
+still fail independent admission.
+
+Capture analysis represents source finish as a structural cleanup obligation,
+with only the exact listed native instances removed from its required row.
+Acquisition retains its conditional publication path; pending-owner discard
+revokes the unpublished guard. Acquired-body discard sequences the original
+finish without fabricating an answer, and a running finish remains
+nonabandonable. Scope and acquired-only report projection retain their independent
+constructor roles, including terminal consumed failure on owned discard.
 
 Ordinary native boundaries remain scalar-only. A source scope provides its own
 checked acquisition and teardown phases; a non-owning resource handle does not

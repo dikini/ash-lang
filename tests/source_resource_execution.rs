@@ -46,6 +46,235 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn source_owner_outward_capture_and_resume_is_admitted() {
+    let fixture = Fixture::new(
+        "import owner as Owner\neffect Pause {\n    pause : Unit -> Unit\n}\nmain : Unit -> Owner.Scope<Unit, Unit, Int>\nmain () = handle (resource Owner.Probe<{}, Fresh, {}> owner = 42 {\n    let paused = perform Pause.pause ()\n    Owner.read owner\n}) with Pause {\n    pause ignored => resume ()\n}\n",
+    );
+    compile_path(fixture.configuration())
+        .expect("outward capture/resume must preserve the same source owner activation");
+}
+
+#[test]
+fn generated_source_owner_outward_resume_moves_the_same_guard() {
+    generated_owner_program_with_helpers(
+        include_str!("fixtures/source-owner/owner.ash"),
+        "import owner as Owner\neffect Pause {\n    pause : Unit -> Unit\n}\nmain : Unit -> Owner.Scope<Unit, Unit, Int>\nmain () = handle (resource Owner.Probe<{}, Fresh, {}> owner = 42 {\n    let paused = perform Pause.pause ()\n    Owner.read owner\n}) with Pause {\n    pause ignored => resume ()\n}\n",
+        None,
+        "Completed(42, Closed)",
+        "acquire:42\nrelease:42\n",
+    );
+}
+
+#[test]
+fn generated_source_owner_owned_discard_finishes_without_scope_report() {
+    let owner = include_str!("fixtures/source-owner/byte_owner.ash")
+        .replace("finish (state, data) => match perform Free", "finish (state, data) => {\n        let marked = Foreign.byte_write (state, 0, 99)\n        match perform Free")
+        .replace("    handlers (state, data)", "    }\n    handlers (state, data)");
+    let native = include_str!("fixtures/source-owner/native_bytes.c").replace(
+        "record(\"release\", owner->identity);",
+        "record(\"release\", owner->identity);\n    record(\"final-byte\", owner->bytes[0]);",
+    );
+    generated_owner_program_with_native(
+        &owner,
+        "import owner as Owner\neffect Pause {\n    pause : Unit -> Unit\n}\nmain : Unit -> Int\nmain () = handle {\n    let abandoned = resource Owner.Probe<{}, Fresh, {}> owner = (42, 7) {\n        let paused = perform Pause.pause ()\n        Owner.read (owner, 0)\n    }\n    111\n} with Pause {\n    pause ignored => {\n        let closed = discard\n        84\n    }\n}\n",
+        None,
+        "84",
+        "acquire:42\nrelease:42\nfinal-byte:99\n",
+        &native,
+    );
+}
+
+fn owner_with_outward_finish() -> String {
+    format!("{}\n{}", include_str!("fixtures/source-owner/owner.ash")
+        .replace("finish (state, data) => match perform Free", "finish (state, data) => {\n        let noticed = perform Notice.notice data\n        match perform Free")
+        .replace("    handlers (state, data)", "    }\n    handlers (state, data)"),
+        "pub effect Notice {\n    notice : Int -> Unit\n}\n")
+}
+
+#[test]
+fn source_owner_outward_finish_requires_its_outside_interpreter() {
+    let owner = owner_with_outward_finish();
+    let positive = "import owner as Owner\neffect Pause {\n    pause : Unit -> Unit\n}\nmain : Unit -> Int\nmain () = handle (handle {\n    let abandoned = resource Owner.Probe<{}, Fresh, {}> owner = 42 {\n        let paused = perform Pause.pause ()\n        Owner.read owner\n    }\n    111\n} with Pause {\n    pause ignored => {\n        let closed = discard\n        84\n    }\n}) with Owner.Notice {\n    notice label => resume ()\n}\n";
+    let fixture = Fixture::new(positive);
+    fs::write(fixture.0.join("owner.ash"), &owner).unwrap();
+    compile_path(fixture.configuration())
+        .expect("required finish interpreter remains outside the cut");
+    let negative = "import owner as Owner\neffect Pause {\n    pause : Unit -> Unit\n}\nmain : Unit -> Int\nmain () = handle (handle {\n    let abandoned = resource Owner.Probe<{}, Fresh, {}> owner = 42 {\n        let paused = perform Pause.pause ()\n        Owner.read owner\n    }\n    111\n} with Owner.Notice {\n    notice label => resume ()\n}) with Pause {\n    pause ignored => {\n        let closed = discard\n        84\n    }\n}\n";
+    fs::write(fixture.0.join("entry.ash"), negative).unwrap();
+    let error = compile_path(fixture.configuration())
+        .expect_err("discard cannot skip the required finish interpreter");
+    println!(
+        "required interpreter refusal: {} {:?}",
+        error.reason_code(),
+        error.pipeline_failure()
+    );
+    assert_eq!(error.reason_code(), "effect.row-union-ambiguous");
+}
+
+#[test]
+fn generated_source_owner_outward_finish_resumes_in_its_outside_interpreter() {
+    generated_owner_program(
+        &owner_with_outward_finish(),
+        "import owner as Owner\neffect Pause {\n    pause : Unit -> Unit\n}\nmain : Unit -> Int\nmain () = handle (handle {\n    let abandoned = resource Owner.Probe<{}, Fresh, {}> owner = 42 {\n        let paused = perform Pause.pause ()\n        Owner.read owner\n    }\n    111\n} with Pause {\n    pause ignored => {\n        let closed = discard\n        84\n    }\n}) with Owner.Notice {\n    notice label => resume ()\n}\n",
+        "84",
+        "acquire:42\nrelease:42\n",
+    );
+}
+
+#[test]
+fn generated_source_owner_consumed_failure_on_discard_is_terminal() {
+    let owner = include_str!("fixtures/source-owner/owner.ash").replace(
+        "Foreign.Returned(Foreign.Consumed(())) => Consumed",
+        "Foreign.Returned(Foreign.Consumed(())) => ConsumedFailure ()",
+    );
+    generated_owner_execution_with_native(
+        &owner,
+        "import owner as Owner\neffect Pause {\n    pause : Unit -> Unit\n}\nmain : Unit -> Int\nmain () = handle {\n    let abandoned = resource Owner.Probe<{}, Fresh, {}> owner = 42 {\n        let paused = perform Pause.pause ()\n        Owner.read owner\n    }\n    111\n} with Pause {\n    pause ignored => {\n        let closed = discard\n        84\n    }\n}\n",
+        None,
+        Err("source resource completion failed"),
+        "acquire:42\nrelease:42\n",
+        include_str!("fixtures/source-owner/native_owner.c"),
+    );
+}
+
+#[test]
+fn generated_source_owner_normal_consumed_error_remains_a_scope_report() {
+    let owner = include_str!("fixtures/source-owner/owner.ash").replace(
+        "Foreign.Returned(Foreign.Consumed(())) => Consumed",
+        "Foreign.Returned(Foreign.Consumed(())) => ConsumedFailure ()",
+    );
+    generated_owner_program(
+        &owner,
+        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Unit, Int>\nmain () = resource Owner.Probe<{}, Fresh, {}> owner = 42 {\n    Owner.read owner\n}\n",
+        "Completed(42, ConsumedError(()))",
+        "acquire:42\nrelease:42\n",
+    );
+}
+
+fn outer_owner_write_only() -> String {
+    include_str!("fixtures/source-owner/byte_owner.ash")
+        .replace("    read : (Access, Int) -> Foreign.Call<Int> ! {ProbeOps<Access>}\n", "")
+        .replace("    read : (Access, Int) -> Foreign.Call<Int>\n", "")
+        .replace("        read (access, index) => {\n            let read_byte = match index == 0 {\n                true => Foreign.byte_read\n                false => Foreign.byte_read\n            }\n            resume read_byte (state, index)\n        }\n", "")
+}
+
+#[test]
+fn source_owner_distinct_originals_with_same_spelling_survive_control_checking() {
+    let fixture = Fixture::new(
+        "import owner as Owner\nimport helpers as Inner\neffect Pause {\n    pause : Unit -> Unit\n}\nmain : Unit -> Owner.Scope<Unit, Unit, Int>\nmain () = resource Owner.Probe<{}, Outer, {}> outer = (64, 7) {\n    handle (handle {\n        let abandoned = resource Inner.Probe<{}, Fresh, {}> inner = 42 {\n            let paused = perform Pause.pause ()\n            Inner.read inner\n        }\n        111\n    } with Pause {\n        pause ignored => {\n            let closed = discard\n            84\n        }\n    }) with Inner.Notice {\n        notice label => {\n            let marked = Owner.write (outer, 0, 99)\n            resume ()\n        }\n    }\n}\n",
+    );
+    fs::write(fixture.0.join("owner.ash"), outer_owner_write_only()).unwrap();
+    fs::write(fixture.0.join("helpers.ash"), owner_with_outward_finish()).unwrap();
+    compile_path(fixture.configuration()).expect(
+        "both original Probe headers and exact copied control rows survive independent Core",
+    );
+}
+
+#[test]
+fn generated_source_owner_discard_keeps_the_needed_outer_owner_live() {
+    let owner = format!("{}\npub effect Notice {{\n    notice : Int -> Unit\n}}\n", outer_owner_write_only()
+        .replace("finish (state, data) => match perform Free", "finish (state, data) => {\n        let noticed = perform Notice.notice data\n        match perform Free")
+        .replace("    handlers (state, data)", "    }\n    handlers (state, data)"));
+    let native = include_str!("fixtures/source-owner/native_bytes.c").replace(
+        "record(\"release\", owner->identity);",
+        "record(\"release\", owner->identity);\n    record(\"final-byte\", owner->bytes[0]);",
+    );
+    generated_owner_program_with_native(
+        &owner,
+        "import owner as Owner\neffect Pause {\n    pause : Unit -> Unit\n}\nmain : Unit -> Owner.Scope<Unit, Unit, Int>\nmain () = handle (resource Owner.Probe<{}, Outer, {}> outer = (64, 7) {\n    handle (handle {\n        let abandoned = resource Owner.Probe<{}, Inner, {}> inner = (42, 7) {\n            let paused = perform Pause.pause ()\n            Owner.write (inner, 0, 11)\n        }\n        111\n    } with Pause {\n        pause ignored => {\n            let closed = discard\n            84\n        }\n    }) with Owner.Notice {\n        notice label => {\n            let marked = Owner.write (outer, 0, 99)\n            resume ()\n        }\n    }\n}) with Owner.Notice {\n    notice label => resume ()\n}\n",
+        None,
+        "Completed(84, Closed)",
+        "acquire:64\nacquire:42\nrelease:42\nfinal-byte:5\nrelease:64\nfinal-byte:99\n",
+        &native,
+    );
+}
+
+#[test]
+fn generated_source_owner_owned_discard_finishes_nested_guards_in_order() {
+    let owner = outer_owner_write_only()
+        .replace("finish (state, data) => match perform Free", "finish (state, data) => {\n        let marked = Foreign.byte_write (state, 0, 99)\n        match perform Free")
+        .replace("    handlers (state, data)", "    }\n    handlers (state, data)");
+    let native = include_str!("fixtures/source-owner/native_bytes.c").replace(
+        "record(\"release\", owner->identity);",
+        "record(\"release\", owner->identity);\n    record(\"final-byte\", owner->bytes[0]);",
+    );
+    generated_owner_program_with_native(
+        &owner,
+        "import owner as Owner\neffect Pause {\n    pause : Unit -> Unit\n}\nmain : Unit -> Int\nmain () = handle {\n    let abandoned = resource Owner.Probe<{}, Outer, {}> outer = (64, 7) {\n        resource Owner.Probe<{}, Inner, {}> inner = (42, 7) {\n            let paused = perform Pause.pause ()\n            Owner.write (inner, 0, 11)\n        }\n    }\n    111\n} with Pause {\n    pause ignored => {\n        let closed = discard\n        84\n    }\n}\n",
+        None,
+        "84",
+        "acquire:64\nacquire:42\nrelease:42\nfinal-byte:99\nrelease:64\nfinal-byte:99\n",
+        &native,
+    );
+}
+
+#[test]
+fn generated_source_owner_acquisition_discard_revokes_only_the_unpublished_guard() {
+    let owner = outer_owner_write_only()
+        .replace("false => Acquired(state, size)", "false => {\n                let paused = perform Pause.pause ()\n                Acquired(state, size)\n            }")
+        .replace("finish (state, data) => match perform Free", "finish (state, data) => {\n        let marked = Foreign.byte_write (state, 0, 99)\n        match perform Free")
+        .replace("    handlers (state, data)", "    }\n    handlers (state, data)");
+    let owner = format!("{owner}\npub effect Pause {{\n    pause : Unit -> Unit\n}}\n");
+    let native = include_str!("fixtures/source-owner/native_bytes.c").replace(
+        "record(\"release\", owner->identity);",
+        "record(\"release\", owner->identity);\n    record(\"final-byte\", owner->bytes[0]);",
+    );
+    generated_owner_program_with_native(
+        &owner,
+        "import owner as Owner\nmain : Unit -> Int\nmain () = handle {\n    let abandoned = resource Owner.Probe<{}, R, {}> owner = (42, 7) {\n        Owner.write (owner, 0, 11)\n    }\n    111\n} with Owner.Pause {\n    pause ignored => {\n        let closed = discard\n        84\n    }\n}\n",
+        None,
+        "84",
+        "acquire:42\nrelease:42\nfinal-byte:5\n",
+        &native,
+    );
+}
+
+#[test]
+fn generated_source_owner_acquisition_discard_before_allocation_makes_no_native_call() {
+    let owner = outer_owner_write_only()
+        .replace("acquire (size, extent) => match perform Allocate", "acquire (size, extent) => {\n        let paused = perform Pause.pause ()\n        match perform Allocate")
+        .replace("    finish (state, data)", "    }\n    finish (state, data)");
+    let owner = format!("{owner}\npub effect Pause {{\n    pause : Unit -> Unit\n}}\n");
+    generated_owner_program_with_native(
+        &owner,
+        "import owner as Owner\nmain : Unit -> Int\nmain () = handle {\n    let abandoned = resource Owner.Probe<{}, R, {}> owner = (42, 7) {\n        Owner.write (owner, 0, 11)\n    }\n    111\n} with Owner.Pause {\n    pause ignored => {\n        let closed = discard\n        84\n    }\n}\n",
+        None,
+        "84",
+        "",
+        include_str!("fixtures/source-owner/native_bytes.c"),
+    );
+}
+
+#[test]
+fn generated_source_owner_capture_during_acquisition_moves_the_pending_guard() {
+    let owner = include_str!("fixtures/source-owner/owner.ash")
+        .replace("false => Acquired(state, size)", "false => {\n                let paused = perform Pause.pause ()\n                Acquired(state, size)\n            }");
+    let owner = format!("{owner}\npub effect Pause {{\n    pause : Unit -> Unit\n}}\n");
+    generated_owner_program(
+        &owner,
+        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Unit, Int>\nmain () = handle (resource Owner.Probe<{}, Fresh, {}> owner = 42 {\n    Owner.read owner\n}) with Owner.Pause {\n    pause ignored => resume ()\n}\n",
+        "Completed(42, Closed)",
+        "acquire:42\nrelease:42\n",
+    );
+}
+
+#[test]
+fn source_owner_running_finish_cannot_be_discarded() {
+    let fixture = Fixture::new(
+        "import owner as Owner\nmain : Unit -> Int\nmain () = handle {\n    let abandoned = resource Owner.Probe<{}, Fresh, {}> owner = 42 {\n        Owner.read owner\n    }\n    111\n} with Owner.Notice {\n    notice label => {\n        let closed = discard\n        84\n    }\n}\n",
+    );
+    fs::write(fixture.0.join("owner.ash"), owner_with_outward_finish()).unwrap();
+    let error =
+        compile_path(fixture.configuration()).expect_err("running finish is nonabandonable");
+    println!(
+        "running finish refusal: {} {:?}",
+        error.reason_code(),
+        error.pipeline_failure()
+    );
+    assert_eq!(error.reason_code(), "effect.discard-unsafe");
+}
+
+#[test]
 fn source_resource_lifecycle_compiles_from_original_checked_templates() {
     let fixture = Fixture::new(include_str!("fixtures/source-owner/entry.ash"));
     let compiled =
@@ -424,6 +653,24 @@ fn generated_owner_program_with_native(
     expected_trace: &str,
     native_source: &str,
 ) {
+    generated_owner_execution_with_native(
+        owner,
+        entry,
+        helpers,
+        Ok(expected_result),
+        expected_trace,
+        native_source,
+    );
+}
+
+fn generated_owner_execution_with_native(
+    owner: &str,
+    entry: &str,
+    helpers: Option<&str>,
+    expected_result: Result<&str, &str>,
+    expected_trace: &str,
+    native_source: &str,
+) {
     let fixture = Fixture::new(entry);
     fs::write(fixture.0.join("owner.ash"), owner).unwrap();
     if let Some(helpers) = helpers {
@@ -506,15 +753,31 @@ fn generated_owner_program_with_native(
         thread::sleep(Duration::from_millis(20));
     }
     let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        String::from_utf8(output.stdout).unwrap().trim(),
-        expected_result
-    );
+    match expected_result {
+        Ok(expected) => {
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), expected);
+        }
+        Err(expected) => {
+            assert!(
+                !output.status.success(),
+                "failed completion published success"
+            );
+            assert!(
+                output.stdout.is_empty(),
+                "failed completion published a report"
+            );
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains(expected),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
     if expected_trace.is_empty() {
         assert!(
             !trace.exists(),
