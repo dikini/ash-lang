@@ -565,6 +565,13 @@ creates neither an abandoned body value nor a fabricated `Scope` result. Running
 completion cannot be abandoned, and a required outside interpreter cannot be
 skipped. This control behavior applies outside finite copy windows.
 
+The human clarification accepted on 2026-10-12 applies to the `scope` codec's
+owned-discard path: if source finish consumes the owner and returns
+`ConsumedFailure(E)`, cleanup terminates with `ResourceCompletion` failure. It
+publishes neither a discarded body value nor a `Scope` report. Normal-return
+`Scope.ConsumedError(E)` and the existing terminal `acquired_only` behavior are
+unchanged; this clarification does not select a codec for other primitives.
+
 Consumed-error completion records consumption even if error conversion fails.
 Retained-error completion removes all source access and quarantines the same
 owner with its dependencies until host destruction is safe. There is no

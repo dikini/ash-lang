@@ -2915,10 +2915,41 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
             }
             let successful = graph.code.len();
             data.position(successful, id, budget)?;
-            graph.code.push(Control::Sequence(copy_slice(
-                &[handler, phases[1]],
+            // Finish is an armed structural obligation, not a body suffix that
+            // discard may skip. Its running frame is nonabandonable under the
+            // same independent capture rules as an ordinary cleanup action.
+            let mut effects = crate::types::clone_effect_row_with_budget(
+                F::effect_row(&nodes[index(scope.finish.body)].effects),
                 budget,
-            )?));
+            )
+            .map_err(|_| Failure::Resource)?;
+            for interpretation in scope.native_interpretations() {
+                effects = match effects
+                    .remove_exact_with_budget(interpretation.effect(), budget)
+                    .map_err(|_| Failure::Resource)?
+                {
+                    Ok(row) => row,
+                    Err(crate::types::EffectRowError::Missing) => effects,
+                    Err(_) => return Err(Failure::Invalid),
+                };
+            }
+            charge(budget, 3)?;
+            graph
+                .types
+                .0
+                .try_reserve(1)
+                .map_err(|_| Failure::Resource)?;
+            let row_type = graph.types.0.len();
+            graph.types.0.push(Type::function_computation(
+                Type::Unit,
+                crate::types::ComputationType::new(Type::Unit, effects),
+            ));
+            graph.code.push(Control::Cleanup {
+                body: handler,
+                action: phases[1],
+                row_type,
+                source,
+            });
             let outcome = graph.code.len();
             data.position(outcome, id, budget)?;
             graph

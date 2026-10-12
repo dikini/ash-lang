@@ -11586,7 +11586,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             ValidationError::new(ValidationReason::Registry, Some(id))
                         })?;
                     if abstraction.parameters().len()
-                        != original.parameters.len() + usize::from(answer)
+                        != original.parameters.len() + 2 * usize::from(answer)
                     {
                         return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
                     }
@@ -11603,6 +11603,14 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
                         }
                     }
+                    if answer
+                        && !matches!(
+                            abstraction.parameters().last(),
+                            Some((crate::types::TypeVariableId::Generated(_), Kind::EffectRow))
+                        )
+                    {
+                        return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                    }
                     original_root_seen = true;
                     Some(resource)
                 }
@@ -11612,7 +11620,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             for (parameter, kind) in abstraction.parameters() {
                 let parameter_is_resolved =
                     matches!(parameter, crate::types::TypeVariableId::Resolved { .. });
-                if self.module_sources.is_some() {
+                if self.module_sources.is_some() && original_root.is_none() {
                     self.charge_type_work(1)?;
                     if linked_identity_class
                         .replace(parameter_is_resolved)

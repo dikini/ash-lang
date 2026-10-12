@@ -1666,6 +1666,152 @@ mod tests {
         }
     }
     #[test]
+    fn source_control_image_checks_rows_before_provider_and_retries_exactly() {
+        let root = std::env::temp_dir().join(format!("ash-control-image-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        let fixture = Fixture(root);
+        fs::write(
+            fixture.0.join("owner.ash"),
+            include_str!("../../tests/fixtures/source-owner/owner.ash"),
+        )
+        .unwrap();
+        fs::write(fixture.0.join("entry.ash"),
+            "import owner as Owner\neffect Pause {\n    pause : Unit -> Unit\n}\nmain : Unit -> Owner.Scope<Unit, Unit, Int>\nmain () = handle (resource Owner.Probe<{}, R, {}> owner = 42 {\n    let paused = perform Pause.pause ()\n    Owner.read owner\n}) with Pause {\n    pause ignored => resume ()\n}\n").unwrap();
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry: fixture.0.join("entry.ash"),
+            roots: crate::module::ModuleRoots::empty(),
+        })
+        .unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let build = super::super::encode_effect_for_build(
+            program,
+            provenance,
+            super::super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        let bytes = build
+            .image
+            .encode_bytes(&mut TypeWorkBudget::default())
+            .unwrap();
+        let expected = build
+            .image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        fn forbidden_provider() -> super::super::super::PrivateNativeBridge {
+            panic!("control forgery must fail before native provider selection")
+        }
+        let library = &build.libraries[0];
+        let coordinates = (library.image_library, library.module, library.ordinal);
+        let members = build
+            .bridges
+            .iter()
+            .map(|bridge| super::super::super::PrivateNativeMember {
+                coordinates: super::super::super::PrivateNativeCoordinates {
+                    image_library: library.image_library,
+                    library_module: library.module,
+                    library_ordinal: library.ordinal,
+                    image_symbol: bridge.image_symbol,
+                    symbol_index: bridge.symbol_index,
+                    operation_module: bridge.operation_module,
+                    operation_effect: bridge.operation_effect,
+                    operation_local: bridge.operation_local,
+                },
+                provider: forbidden_provider,
+            })
+            .collect::<Vec<_>>();
+        drop(build);
+        drop(compiled);
+        drop(fixture);
+        let restore = |work: &mut TypeWorkBudget| {
+            let image = PureImage::decode_bytes(&bytes, work)?;
+            image.admit_expected_native_facts(&expected, work)?;
+            image.restore_effect(work)
+        };
+        let mut normal = TypeWorkBudget::default();
+        drop(restore(&mut normal).unwrap());
+        let cost = normal.used();
+        assert!(cost < normal.limit());
+        for prefix in [0, 5] {
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            assert!(restore(&mut short).is_err());
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                drop(restore(&mut exact).unwrap());
+                assert_eq!(exact.used(), prefix + cost);
+            }
+        }
+        let expected: &'static [u8] = Box::leak(expected.into_boxed_slice());
+        let libraries = [super::super::super::PrivateNativeLibrary {
+            image_library: coordinates.0,
+            module: coordinates.1,
+            ordinal: coordinates.2,
+            members: &members,
+        }];
+        for change in 0..3 {
+            let mut image =
+                PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+            let empty = image
+                .types
+                .iter()
+                .position(|record| {
+                    matches!(
+                        record.tag,
+                        super::super::TypeTag::Row {
+                            known: 0,
+                            tail: None
+                        }
+                    )
+                })
+                .unwrap() as u32;
+            let scope = image.source_scopes[0];
+            match change {
+                0 => image.source_scopes[0].output_effects = empty,
+                1 => {
+                    let copy = image.source_copies[scope.handler_copy as usize];
+                    let selected = copy.rows.get(&image.source_substitutions).unwrap().iter().position(|record| {
+                        matches!(image.types[record.value as usize].tag, super::super::TypeTag::Row { known, .. } if known > 0)
+                    }).unwrap();
+                    image.source_substitutions[copy.rows.start as usize + selected].value = empty;
+                }
+                _ => {
+                    let start = scope.interpretations.start as usize;
+                    image.interpretations.swap(start, start + 1);
+                }
+            }
+            // Passive native contracts remain unchanged. The executable control
+            // claims must still pass independent Core before a provider is asked.
+            image
+                .compare_native_expectations(expected, &mut TypeWorkBudget::default())
+                .unwrap();
+            assert!(
+                image
+                    .restore_effect(&mut TypeWorkBudget::default())
+                    .is_err()
+            );
+            let forged = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
+            assert!(matches!(
+                super::super::super::__run_private_effect_image(
+                    &super::super::super::runtime_fingerprint(),
+                    &forged,
+                    expected,
+                    &libraries,
+                ),
+                Err(super::super::super::PrivateProgramFailure(
+                    super::super::super::PrivateFailure::Image(_)
+                ))
+            ));
+        }
+        println!(
+            "source control image: bytes={}, facts={}, cumulative work={cost}; three pre-provider original-claim refusals",
+            bytes.len(),
+            expected.len()
+        );
+    }
+
+    #[test]
     fn arena_image_reconstruction_keeps_one_cumulative_allowance() {
         let root = std::env::temp_dir().join(format!("ash-arena-cost-{}", std::process::id()));
         fs::create_dir(&root).unwrap();

@@ -71,6 +71,58 @@ impl Drop for ArgumentsGuard {
     }
 }
 
+fn finalized_arguments(
+    arguments: &[KindedArgument],
+    rewrite: &mut dyn FnMut(&Type) -> Result<Type, super::BuildError>,
+    rewrite_row: &mut dyn FnMut(
+        &crate::types::EffectRow,
+    ) -> Result<crate::types::EffectRow, super::BuildError>,
+    work: &mut TypeWorkBudget,
+) -> Result<Box<[KindedArgument]>, super::BuildError> {
+    let exhausted = || super::BuildError::TypeWorkExceeded;
+    work.charge(arguments.len()).map_err(|_| exhausted())?;
+    let mut staged = ArgumentsGuard(Vec::new());
+    staged
+        .0
+        .try_reserve_exact(arguments.len())
+        .map_err(|_| exhausted())?;
+    for argument in arguments {
+        staged.0.push(match argument {
+            KindedArgument::TypeArg(ty) => KindedArgument::TypeArg(rewrite(ty)?),
+            KindedArgument::RowArg(row) => KindedArgument::RowArg(rewrite_row(row)?),
+        });
+    }
+    Ok(staged.into_boxed_slice())
+}
+
+fn finalize_arguments(
+    arguments: &mut Box<[KindedArgument]>,
+    rewrite: &mut dyn FnMut(&Type) -> Result<Type, super::BuildError>,
+    rewrite_row: &mut dyn FnMut(
+        &crate::types::EffectRow,
+    ) -> Result<crate::types::EffectRow, super::BuildError>,
+    work: &mut TypeWorkBudget,
+) -> Result<(), super::BuildError> {
+    let replacement = finalized_arguments(arguments, rewrite, rewrite_row, work)?;
+    for argument in std::mem::replace(arguments, replacement).into_vec() {
+        crate::types::discard_kinded_argument_iteratively(argument);
+    }
+    Ok(())
+}
+
+fn finalize_instance(
+    instance: &mut crate::types::EffectInstance,
+    rewrite: &mut dyn FnMut(&Type) -> Result<Type, super::BuildError>,
+    rewrite_row: &mut dyn FnMut(
+        &crate::types::EffectRow,
+    ) -> Result<crate::types::EffectRow, super::BuildError>,
+    work: &mut TypeWorkBudget,
+) -> Result<(), super::BuildError> {
+    let arguments = finalized_arguments(instance.arguments(), rewrite, rewrite_row, work)?;
+    *instance = crate::types::EffectInstance::new_kinded(instance.effect(), arguments);
+    Ok(())
+}
+
 fn charge(work: &mut TypeWorkBudget, count: usize) -> Result<(), ValidationError> {
     work.charge(count).map_err(|()| resource())
 }
@@ -620,7 +672,7 @@ fn entry(
         return Err(invalid());
     };
     charge(work, abstraction.parameters().len())?;
-    if abstraction.parameters().len() != header.parameters.len() + usize::from(answer) {
+    if abstraction.parameters().len() != header.parameters.len() + 2 * usize::from(answer) {
         return Err(invalid());
     }
     for ((id, kind), formal) in abstraction.parameters().iter().zip(&header.parameters) {
@@ -628,7 +680,14 @@ fn entry(
             return Err(invalid());
         }
     }
-    if answer && abstraction.parameters().last() != Some(&(header.answer.id, Kind::Type)) {
+    if answer
+        && (abstraction.parameters().get(header.parameters.len())
+            != Some(&(header.answer.id, Kind::Type))
+            || !matches!(
+                abstraction.parameters().last(),
+                Some((crate::types::TypeVariableId::Generated(_), Kind::EffectRow))
+            ))
+    {
         return Err(invalid());
     }
     let EffectExprKind::Pure(PureExprKind::Value(PureValue::Function(function))) =
@@ -725,15 +784,31 @@ impl CheckedSourceResourceTemplate {
         };
         if !same(domain, &Type::Unit, work)?
             || !variable(codomain.value(), header.original.answer.id)
-            || codomain.effects().tail().is_some()
-            || codomain.effects().known().len() != 1
-            || crate::types::compare_effect_instances_with_budget(
-                &codomain.effects().known()[0],
-                &header.original.provided.instance,
-                work,
-            )
+            || !codomain.effects().tail().is_some_and(|tail| {
+                tail.variable()
+                    == crate::types::EffectRowVariable::rigid(Self::handler_continuation_in(
+                        &handler,
+                    ))
+            })
+            || !codomain
+                .effects()
+                .known()
+                .iter()
+                .any(|effect| effect.effect() == header.original.provided.instance.effect())
+        {
+            return Err(invalid());
+        }
+        let residual = codomain
+            .effects()
+            .remove_exact_with_budget(&header.original.provided.instance, work)
             .map_err(|_| resource())?
-                != std::cmp::Ordering::Equal
+            .map_err(|_| invalid())?;
+        if !crate::types::same_effect_rows_with_budget(
+            &residual,
+            &node(&handler, answer.body())?.effects,
+            work,
+        )
+        .map_err(|_| resource())?
         {
             return Err(invalid());
         }
@@ -784,6 +859,53 @@ impl CheckedSourceResourceTemplate {
     }
     pub(crate) fn handler_entry(&self) -> (&TypedBinder, NodeId) {
         (&self.handler_entry.0, self.handler_entry.1)
+    }
+    fn handler_continuation_in(program: &UnvalidatedEffectProgram) -> crate::types::TypeVariableId {
+        let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeAbstraction(
+            abstraction,
+        ))) = &node(program, program.root)
+            .expect("checked source handler root")
+            .kind
+        else {
+            unreachable!("checked source handler abstraction")
+        };
+        abstraction
+            .parameters()
+            .last()
+            .expect("checked source continuation parameter")
+            .0
+    }
+    pub(crate) fn handler_continuation(&self) -> crate::types::TypeVariableId {
+        Self::handler_continuation_in(&self.handler)
+    }
+    pub(crate) fn handler_direct_row(
+        &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<crate::types::EffectRow, ValidationError> {
+        crate::types::rebuild_effect_row_with_budget(
+            node(&self.handler, self.handler_entry.1)?
+                .effects
+                .known()
+                .iter(),
+            None,
+            std::iter::empty(),
+            crate::types::clone_type_with_budget,
+            work,
+        )
+        .map_err(|_| resource())
+    }
+    pub(crate) fn lifecycle_row(
+        &self,
+        acquire: bool,
+        work: &mut TypeWorkBudget,
+    ) -> Result<crate::types::EffectRow, ValidationError> {
+        let (program, root) = if acquire {
+            (&self.acquire, self.acquire_entry.1)
+        } else {
+            (&self.finish, self.finish_entry.1)
+        };
+        crate::types::clone_effect_row_with_budget(&node(program, root)?.effects, work)
+            .map_err(|_| resource())
     }
     pub(crate) fn handler_pattern(&self) -> &CorePattern {
         let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Match(matching))) =
@@ -1431,6 +1553,33 @@ fn eval_flow(
             Ok(results)
         }
         EffectExprKind::Operation(EffectOperation::Request(request)) => {
+            charge(work, header.original.interpreted.len())?;
+            let controlled_native = header
+                .original
+                .interpreted
+                .iter()
+                .any(|effect| effect.instance.effect() == request.effect().effect());
+            if !controlled_native {
+                let mut results = Vec::new();
+                for (operand, path) in eval_flow(
+                    program,
+                    header,
+                    request.operand(),
+                    phase,
+                    path,
+                    facts,
+                    depth + 1,
+                    work,
+                )? {
+                    // An ordinary outward operation cannot transport this
+                    // phase's controlled native state or synthesize its lineage.
+                    if !facts.independent(operand, work)? {
+                        return Err(invalid());
+                    }
+                    push(&mut results, (0, path), work)?;
+                }
+                return Ok(results);
+            }
             if phase == Phase::Handler {
                 return Err(invalid());
             }
@@ -2002,6 +2151,100 @@ impl SourceResourceScopeNode {
             forwardings,
         })
     }
+    /// Finishes only an instance's solved Type/Row specialization. The defining
+    /// template, identity/freshening maps and copied forest stay immutable; final
+    /// Core still reconstructs and compares the complete correspondence.
+    pub(crate) fn finalize_instantiation(
+        &mut self,
+        rewrite: &mut dyn FnMut(&Type) -> Result<Type, super::BuildError>,
+        rewrite_row: &mut dyn FnMut(
+            &crate::types::EffectRow,
+        ) -> Result<crate::types::EffectRow, super::BuildError>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), super::BuildError> {
+        let exhausted = || super::BuildError::TypeWorkExceeded;
+        let retain_error = |error: ValidationError| {
+            if error.reason() == ValidationReason::Resource {
+                exhausted()
+            } else {
+                super::BuildError::InvalidPayload
+            }
+        };
+        // A transformed or cloned scope must not rewrite another scope's claim.
+        // Retain a private descriptor before touching any shared specialization.
+        if Arc::get_mut(&mut self.descriptor).is_none() {
+            let [first, second, third] = self.copy_claims();
+            let copies = [
+                SourceResourceCopy::retain(first, work).map_err(retain_error)?,
+                SourceResourceCopy::retain(second, work).map_err(retain_error)?,
+                SourceResourceCopy::retain(third, work).map_err(retain_error)?,
+            ];
+            let arguments = ArgumentsGuard(
+                crate::types::clone_kinded_arguments_with_budget(self.arguments().iter(), work)
+                    .map_err(|_| exhausted())?
+                    .into_vec(),
+            );
+            let interpretations = super::effect::copy_native_interpretations_with_budget(
+                self.native_interpretations(),
+                work,
+            )?;
+            self.descriptor = Arc::new(SourceResourceScopeDescriptor {
+                template: Arc::clone(self.original()),
+                arguments: arguments.into_boxed_slice(),
+                identity: self.identity(),
+                interpretations,
+                copies,
+            });
+        }
+        let descriptor =
+            Arc::get_mut(&mut self.descriptor).ok_or(super::BuildError::InvalidPayload)?;
+        finalize_arguments(&mut descriptor.arguments, rewrite, rewrite_row, work)?;
+        for copy in &mut descriptor.copies {
+            work.charge(
+                copy.types
+                    .len()
+                    .checked_add(copy.rows.len())
+                    .ok_or_else(exhausted)?,
+            )
+            .map_err(|_| exhausted())?;
+            for actual in copy.types.values_mut() {
+                let replacement = rewrite(actual)?;
+                crate::types::replace_type_iteratively(actual, replacement);
+            }
+            for actual in copy.rows.values_mut() {
+                *actual = rewrite_row(actual)?;
+            }
+        }
+        work.charge(descriptor.interpretations.len())
+            .map_err(|_| exhausted())?;
+        for interpretation in &mut descriptor.interpretations {
+            finalize_instance(&mut interpretation.effect, rewrite, rewrite_row, work)?;
+        }
+        work.charge(4).map_err(|_| exhausted())?;
+        for binder in [
+            &mut self.acquire.parameter,
+            &mut self.finish.parameter,
+            &mut self.handler_state,
+            &mut self.handle,
+        ] {
+            binder.rewrite_type(&mut |ty| rewrite(ty))?;
+        }
+        self.handler_pattern.rewrite_types(&mut |ty| rewrite(ty))?;
+        let output = rewrite(self.handler_output.value())?;
+        crate::types::replace_type_iteratively(&mut self.handler_output.value, output);
+        self.handler_output.effects = rewrite_row(self.handler_output.effects())?;
+        finalize_instance(&mut self.handler.effect, rewrite, rewrite_row, work)?;
+        work.charge(self.handler.clauses.len())
+            .map_err(|_| exhausted())?;
+        for clause in &mut self.handler.clauses {
+            clause
+                .arm
+                .pattern_mut()
+                .rewrite_types(&mut |ty| rewrite(ty))?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn original(&self) -> &Arc<CheckedSourceResourceTemplate> {
         &self.descriptor.template
     }
@@ -2178,6 +2421,17 @@ impl SourceResourceScopeNode {
                 else {
                     continue;
                 };
+                // Ordinary outward requests keep their checked effect rows and
+                // are not permissions for the native owner interpreter. Their
+                // copied correspondence was authenticated with the whole forest.
+                charge(work, 1)?;
+                if original
+                    .registry
+                    .native_symbol(original_call.operation())
+                    .is_none_or(|symbol| symbol.owner().is_none())
+                {
+                    continue;
+                }
                 let EffectExprKind::Operation(EffectOperation::Request(call)) =
                     &node(program, *target)?.kind
                 else {
@@ -2358,7 +2612,7 @@ impl SourceResourceScopeNode {
                 work,
                 copy.types.len() + copy.rows.len() + copy.nodes.len() + formals.len(),
             )?;
-            if copy.types.len() + copy.rows.len() != formals.len() + usize::from(phase == 2) {
+            if copy.types.len() + copy.rows.len() != formals.len() + 2 * usize::from(phase == 2) {
                 return Err(invalid());
             }
             for (formal, argument) in formals.iter().zip(self.arguments()) {
@@ -2396,6 +2650,42 @@ impl SourceResourceScopeNode {
                 )?
             {
                 return Err(invalid());
+            }
+            if phase == 2 {
+                let mut expected =
+                    crate::types::clone_effect_row_with_budget(self.handler_output.effects(), work)
+                        .map_err(|_| resource())?;
+                let original_direct = template.handler_direct_row(work)?;
+                let direct = crate::types::substitute_row_for_template_with(
+                    &original_direct,
+                    &copy.types,
+                    &copy.rows,
+                    &HashMap::new(),
+                    &crate::types::TemplateIdentityRenaming {
+                        variables: &HashMap::new(),
+                        nominals: &HashMap::new(),
+                    },
+                    |cells| work.charge(cells).map_err(|_| resource()),
+                    resource,
+                )?
+                .map_err(|_| invalid())?;
+                for effect in direct.known() {
+                    expected = expected
+                        .remove_exact_with_budget(effect, work)
+                        .map_err(|_| resource())?
+                        .map_err(|_| invalid())?;
+                }
+                if !crate::types::same_effect_rows_with_budget(
+                    copy.rows
+                        .get(&template.handler_continuation())
+                        .ok_or_else(invalid)?,
+                    &expected,
+                    work,
+                )
+                .map_err(|_| resource())?
+                {
+                    return Err(invalid());
+                }
             }
             if phase == 0 {
                 // The retained native list is an ordered specialization claim,
@@ -2899,9 +3189,9 @@ impl SourceResourceScopeNode {
         // Original forest projections imply the phase flow proof for each exact
         // copied instance. Initializer and client answer cannot expose the fresh
         // identity; ordinary type-scope validation checks that boundary.
-        if !self.handler_output.effects().is_empty() {
-            return Err(invalid());
-        }
+        // The ordinary handler checker independently reconstructs its least
+        // residual row, and the scope checker removes only the listed native
+        // instances. Ordinary outward requests retain their capture demands.
         Ok(())
     }
 }
@@ -3202,6 +3492,87 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn source_control_core_retains_exact_continuation_rows_and_budget() {
+        let fixture = Fixture::new();
+        fs::write(fixture.0.join("entry.ash"),
+            "import owner as Owner\neffect Pause {\n    pause : Unit -> Unit\n}\nmain : Unit -> Owner.Scope<Unit, Unit, Int>\nmain () = handle (resource Owner.Probe<{}, R, {}> owner = 42 {\n    let paused = perform Pause.pause ()\n    Owner.read owner\n}) with Pause {\n    pause ignored => resume ()\n}\n").unwrap();
+        let compiled = fixture.compile();
+        let (checked, provenance) = compiled.effect_build_input().unwrap();
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let modules = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let validate = |program, work: &mut TypeWorkBudget| {
+            super::super::validate::validate_effect_modules_with_work(
+                program, &sources, &modules, work,
+            )
+        };
+        let fresh = || super::super::transform::identity_effect_traversal(checked).unwrap();
+        let mut normal = TypeWorkBudget::with_limit(
+            crate::compiler_work::CompilationPhase::IndependentCore.budget(),
+        );
+        validate(fresh(), &mut normal).unwrap();
+        let cost = normal.used();
+        for prefix in [0, 5] {
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            assert_eq!(
+                validate(fresh(), &mut short).unwrap_err().reason(),
+                ValidationReason::Resource
+            );
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                validate(fresh(), &mut exact).unwrap();
+                assert_eq!(exact.used(), prefix + cost);
+            }
+        }
+        // Every mutation is kind-correct. The existing body, forest, original
+        // header and template remain intact, so each altered claim must fail.
+        for mutation in 0..3 {
+            let mut forged = fresh();
+            let scope = forged
+                .nodes
+                .iter_mut()
+                .find_map(|node| match &mut node.kind {
+                    EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
+                        Some(scope)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            let continuation = scope.original().handler_continuation();
+            assert_eq!(scope.handler_output.effects().known().len(), 1);
+            assert!(scope.handler_output.effects().tail().is_none());
+            match mutation {
+                0 => {
+                    let descriptor = Arc::get_mut(&mut scope.descriptor).unwrap();
+                    *descriptor.copies[2].rows.get_mut(&continuation).unwrap() =
+                        crate::types::EffectRow::empty();
+                }
+                1 => scope.handler_output.effects = crate::types::EffectRow::empty(),
+                _ => Arc::get_mut(&mut scope.descriptor)
+                    .unwrap()
+                    .interpretations
+                    .swap(0, 1),
+            }
+            let error = validate(forged, &mut TypeWorkBudget::default()).unwrap_err();
+            assert_eq!(
+                error.reason(),
+                ValidationReason::Registry,
+                "mutation {mutation}: {error:?}"
+            );
+        }
+        println!(
+            "source control independent Core work={cost}; exact/one-short/prefix/two fresh retries and three original-claim refusals"
+        );
     }
 
     #[test]

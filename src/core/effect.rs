@@ -762,10 +762,10 @@ impl CoreOperationFamily for EffectOperationFamily {
                 return rewrite_kinded_arguments(&mut access.arguments, rewrite, charge);
             }
             EffectExprKind::Operation(EffectOperation::SourceResourceScope(_)) => {
-                // Instance construction normalizes this metadata before freezing
-                // its original-forest certificate. Later enclosing normalization
-                // leaves it intact; independent admission compares the frozen
-                // payload against the exact original substitutions and copies.
+                // Partial enclosing normalization must not rewrite only half of
+                // a specialization claim. The strict finalization seam resolves
+                // its complete Type/Row payload after control equations settle;
+                // independent admission still compares originals and copies.
                 return Ok(());
             }
             EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
@@ -1115,12 +1115,15 @@ impl CoreBuilder<EffectOperationFamily> {
             ));
         }
         scope.handler.clauses = clauses.into_boxed_slice();
-        self.push_operation(
+        let index = self.nodes.len();
+        let node = self.push_operation(
             ty,
             effects,
             origin,
             EffectOperation::SourceResourceScope(scope),
-        )
+        )?;
+        self.source_resource_finalization_start.get_or_insert(index);
+        Ok(node)
     }
 
     pub(crate) fn resource_scope(
@@ -1693,6 +1696,34 @@ impl CoreBuilder<EffectOperationFamily> {
         Ok(())
     }
 
+    /// Finalizes instance claims after enclosing control equations are solved,
+    /// before their output rows can feed the resume fixed point.
+    pub(crate) fn finalize_source_resource_instances(
+        &mut self,
+        rewrite: &mut dyn FnMut(&Type) -> Result<Type, super::BuildError>,
+        rewrite_row: &mut dyn FnMut(&EffectRow) -> Result<EffectRow, super::BuildError>,
+    ) -> Result<(), super::BuildError> {
+        let Some(start) = self.source_resource_finalization_start else {
+            return Ok(());
+        };
+        let suffix = self
+            .nodes
+            .get_mut(start..)
+            .ok_or(super::BuildError::InvalidNodeId)?;
+        self.type_work
+            .charge(suffix.len())
+            .map_err(|_| super::BuildError::TypeWorkExceeded)?;
+        for node in suffix {
+            if let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+                &mut node.kind
+            {
+                scope.finalize_instantiation(rewrite, rewrite_row, &mut self.type_work)?;
+            }
+        }
+        self.source_resource_finalization_start = None;
+        Ok(())
+    }
+
     /// Completes source-only cleanup row replay after its row variables are solved.
     pub(crate) fn finish_cleanup_effect_rows(&mut self) -> Result<(), super::BuildError> {
         let count = self.nodes.len();
@@ -1730,6 +1761,9 @@ impl CoreBuilder<EffectOperationFamily> {
             let handler = match &self.nodes[index].kind {
                 EffectExprKind::Operation(EffectOperation::Handler(handler)) => Some(handler),
                 EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
+                    Some(&scope.handler)
+                }
+                EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
                     Some(&scope.handler)
                 }
                 _ => None,
@@ -1792,6 +1826,9 @@ impl CoreBuilder<EffectOperationFamily> {
                     // bottom. At the fixed point it is included in that output.
                     let owner_output = match &self.nodes[owner].kind {
                         EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
+                            scope.handler_output.effects()
+                        }
+                        EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
                             scope.handler_output.effects()
                         }
                         _ => &self.nodes[owner].effects,

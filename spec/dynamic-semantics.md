@@ -701,8 +701,24 @@ The admitted resource clause uses its lexical state/data and ordinary
 clause-owned `resume`; resumption continues the same activation without repeating
 acquisition. Repeated executions allocate distinct activation keys. Nested source
 resource scopes complete their own finish before their enclosing scope finishes.
-This checkpoint does not admit outward capture or owned discard of a source
-resource boundary, quarantine or dependency teardown.
+Outward capture moves the source boundary and its same unique owner into the
+continuation; resume restores that activation without acquisition or byte
+reinitialization. Ordinary outward rows survive exact native interpretation.
+Quarantine, dependent ownership and finite access/copy windows remain outside
+this checkpoint.
+
+Owned discard replaces abandoned source-body frames with their admitted finish
+computations, from inner to outer, retaining required outer resource handlers and
+live guards. It saves no abandoned body value and builds no `Scope` or `Success`
+wrapper for it. Source finish can request an ordinary outside interpreter and
+resume its own running computation; neither that running finish nor its required
+outside interpreter may be skipped by discard. Internal admission and storage
+refusals precede capture consumption and ownership transfer.
+
+An acquisition discarded before publication revokes its pending guard once; it
+does not manufacture `D` or invoke source finish. If capture preceded native
+allocation, there is no destructor obligation. Normal acquisition refusal keeps
+its existing independent report.
 
 Normal body return saves its value and invokes the admitted Ash finish once.
 Before the Current teardown, the machine authenticates the state token's exact
@@ -719,7 +735,11 @@ completion produces `Success(body_value)`; neither codec flattens a nested body
 result. A witnessed consumed completion mapped to `ConsumedFailure(error)` is
 terminal under `acquired_only`, reported as `runtime.resource-completion`, and
 publishes no success or acquisition failure. Recorded consumption still prevents
-a second native release. This slice admits no native retained disposition.
+a second native release. On owned discard, a consumed finish returning
+`ConsumedFailure(error)` is terminal `runtime.resource-completion` under either
+codec and publishes no abandoned scope report. Normal `scope` completion instead
+retains `ConsumedError(error)` alongside the saved body result. This slice admits
+no native retained disposition.
 
 An internal failure after a native return never retries the call or recreates
 readiness. A live guard, including one not yet published to the body, invokes its

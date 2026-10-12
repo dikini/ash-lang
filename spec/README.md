@@ -115,6 +115,10 @@ acquire, handler and finish phases. Original call correspondence, complete
 Type/Row instances and the unique guard authenticate access; private data and a
 compatible state type grant no permission. Conversion refusals are ordinary
 `Foreign.Call` results, and complete reply admission precedes native access.
+Outward capture/resume moves the same source owner; owned discard runs required
+finish computations in structural order with needed outer resources live,
+without an abandoned result wrapper. Running completion cannot be abandoned.
+Acquisition discard revokes an unpublished guard without fabricating private data.
 Exact constructor and native-call identities authenticate publication and
 completion; declarations
 alone confer no ownership. The [source-resource rules](static-semantics.md#source-resource-declarations)
@@ -154,7 +158,8 @@ dependencies remain checked.
 Normal completion invokes it, then returns the saved body value unchanged.
 Capture/resume transfers the invocation owner; copies of the callable gain no
 cleanup authority. Owned abandonment invokes actions under the surviving
-context and still-live builtin resources, not restored captured source handlers.
+context with needed live resource handlers. Ordinary source handlers removed by
+the cut are not restored.
 Required removed interpreters reject at each action's closing position.
 An executing action and its unfinished close operation remain required
 completions and cannot be discarded. Action effects and stored dependencies
