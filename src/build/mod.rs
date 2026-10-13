@@ -169,6 +169,7 @@ enum PrivateNativeCallback {
         crate::foreign::source_runtime::NativeByteCallbacks,
     ),
     OwnerTeardown(crate::foreign::source_runtime::NativeOwnerTeardownCallback),
+    OwnerStatusTeardown(crate::foreign::source_runtime::NativeOwnerStatusTeardownCallback),
 }
 
 /// Constructs passive generated data, never a checked registry/symbol or binding.
@@ -235,6 +236,20 @@ pub fn __private_native_owner_teardown_bridge(
         coordinates,
         expected_facts,
         callback: PrivateNativeCallback::OwnerTeardown(callback),
+    }
+}
+
+/// Passive generated status-returning owner teardown member.
+#[doc(hidden)]
+pub fn __private_native_owner_status_teardown_bridge(
+    coordinates: PrivateNativeCoordinates,
+    expected_facts: &'static [u8],
+    callback: crate::foreign::source_runtime::NativeOwnerStatusTeardownCallback,
+) -> PrivateNativeBridge {
+    PrivateNativeBridge {
+        coordinates,
+        expected_facts,
+        callback: PrivateNativeCallback::OwnerStatusTeardown(callback),
     }
 }
 
@@ -383,6 +398,14 @@ pub fn __run_private_effect_image(
                         checked_symbol,
                         crate::foreign::source_bindings::SourceOwnerCallback::ByteAcquire(
                             callback, bytes,
+                        ),
+                        &mut work,
+                    ),
+                PrivateNativeCallback::OwnerStatusTeardown(callback) => bindings
+                    .insert_owner_checked(
+                        checked_symbol,
+                        crate::foreign::source_bindings::SourceOwnerCallback::StatusTeardown(
+                            callback,
                         ),
                         &mut work,
                     ),

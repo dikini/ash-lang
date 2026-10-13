@@ -11,13 +11,14 @@ mod owner;
 
 pub(crate) use owner::{
     NativeByteAccess, NativeByteCallbacks, NativeOwnerAdmissionError, NativeOwnerDependency,
-    NativeOwnerDisposition, NativeOwnerGuard, NativeOwnerStorage, NativeOwnerViewKind,
+    NativeOwnerDestruction, NativeOwnerDisposition, NativeOwnerGuard, NativeOwnerStatus,
+    NativeOwnerStorage, NativeOwnerViewKind,
 };
 #[doc(hidden)]
 pub use owner::{
     NativeByteReadCallback, NativeByteWriteCallback, NativeOwnerAcquireCallback,
     NativeOwnerCallReturned, NativeOwnerGuardReady, NativeOwnerOperand,
-    NativeOwnerTeardownCallback,
+    NativeOwnerStatusTeardownCallback, NativeOwnerTeardownCallback,
 };
 
 use crate::{

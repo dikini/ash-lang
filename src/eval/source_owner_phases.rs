@@ -84,6 +84,12 @@ struct TeardownReportSlots {
     retained: ConstructorId,
     blocked: ConstructorId,
     returned_constructor: ConstructorId,
+    status: Option<StatusReportStorage>,
+}
+
+#[derive(Debug)]
+struct StatusReportStorage {
+    prepaid: crate::foreign::source_runtime::PrepaidScalarReport,
 }
 
 /// Report and recording storage are prepared while the boundary still owns its
@@ -110,6 +116,7 @@ pub(super) struct OwnerTeardownReady<'binding> {
 pub(super) struct OwnerTeardownReturned<'binding> {
     authority: SourceOwnerReturnedAuthority<'binding>,
     consumed: NativeOwnerDisposition,
+    status: Option<crate::foreign::source_runtime::NativeOwnerStatus>,
     recording: PrepaidOwnerRecord,
     slots: TeardownReportSlots,
 }
@@ -118,6 +125,7 @@ pub(super) struct OwnerTeardownReturned<'binding> {
 pub(super) struct OwnerTeardownRecorded<'binding> {
     _authority: SourceOwnerReturnedAuthority<'binding>,
     consumed: NativeOwnerDisposition,
+    status: Option<crate::foreign::source_runtime::NativeOwnerStatus>,
     slots: TeardownReportSlots,
 }
 
@@ -323,6 +331,24 @@ impl<'binding> OwnerTeardownPrepared<'binding> {
                 _ => OwnerPhaseFailure::Authority,
             })?;
         let returned_constructor = invocation.returned_constructor();
+        let status = if matches!(
+            invocation.result(),
+            crate::foreign::source_contract::PreparedAbiResult::Scalar(_)
+        ) {
+            let prepaid = crate::foreign::source_runtime::PrepaidScalarReport::admit(
+                invocation.result(),
+                work,
+            )
+            .map_err(|error| match error {
+                crate::foreign::source_runtime::NativeScalarConversionError::WorkExhausted => {
+                    OwnerPhaseFailure::WorkReservation
+                }
+                _ => OwnerPhaseFailure::Authority,
+            })?;
+            Some(StatusReportStorage { prepaid })
+        } else {
+            None
+        };
         let first = reserve_slots(heap, work, 2)?;
         Ok(Self {
             invocation,
@@ -336,6 +362,7 @@ impl<'binding> OwnerTeardownPrepared<'binding> {
                 retained,
                 blocked,
                 returned_constructor,
+                status,
             },
             blocked: has_dependents,
         })
@@ -362,7 +389,7 @@ impl<'binding> OwnerTeardownPrepared<'binding> {
 
 impl<'binding> OwnerTeardownReady<'binding> {
     /// The unique guard holds the exact teardown sealed before acquisition.
-    /// Its unconditional void call consumes once and yields a non-Clone receipt.
+    /// Its original void/status call records disposition and yields a non-Clone receipt.
     pub(super) fn invoke(self) -> OwnerTeardownReturned<'binding> {
         let Self {
             invocation,
@@ -372,10 +399,11 @@ impl<'binding> OwnerTeardownReady<'binding> {
             recording,
             slots,
         } = self;
-        let (authority, consumed) = invocation.invoke(guard, &operands, blocked);
+        let (authority, consumed, status) = invocation.invoke(guard, &operands, blocked);
         OwnerTeardownReturned {
             authority,
             consumed,
+            status,
             recording,
             slots,
         }
@@ -387,12 +415,14 @@ impl<'binding> OwnerTeardownReturned<'binding> {
         let Self {
             authority,
             consumed,
+            status,
             recording: PrepaidOwnerRecord,
             slots,
         } = self;
         OwnerTeardownRecorded {
             _authority: authority,
             consumed,
+            status,
             slots,
         }
     }
@@ -406,6 +436,23 @@ impl OwnerTeardownRecorded<'_> {
         if !empty_slots(heap, self.slots.disposition, 2) {
             return Err(OwnerPhaseFailure::HeapSlotInvariant);
         }
+        let mut payload = Value::Unit;
+        if !self.consumed.is_blocked() {
+            match (self.status, self.slots.status) {
+                (Some(raw), Some(report)) => {
+                    if !raw.valid || !raw.readable {
+                        return Err(OwnerPhaseFailure::Authority);
+                    }
+                    let value =
+                        crate::foreign::source_runtime::widen_gnu_reply(raw.reply, report.prepaid)
+                            .map_err(|_| OwnerPhaseFailure::Authority)?
+                            .ok_or(OwnerPhaseFailure::Authority)?;
+                    payload = Value::Integer(value);
+                }
+                (None, None) => {}
+                _ => return Err(OwnerPhaseFailure::Authority),
+            }
+        }
         let constructor = if self.consumed.is_blocked() {
             self.slots.blocked
         } else if self.consumed.is_retained() {
@@ -415,7 +462,7 @@ impl OwnerTeardownRecorded<'_> {
         };
         heap[self.slots.disposition] = HeapCell::Constructor(
             constructor,
-            (!self.consumed.is_blocked()).then_some(Value::Unit),
+            (!self.consumed.is_blocked()).then_some(payload),
         );
         heap[self.slots.returned] = HeapCell::Constructor(
             self.slots.returned_constructor,
@@ -528,7 +575,9 @@ impl<'runtime> super::Machine<'runtime> {
             .ok_or(super::RuntimeFailure::ForeignBinding)?;
         let phase = match symbol.owner_role() {
             Some(PreparedOwnerCall::Acquire { .. }) => SourceOwnerPhase::Acquire,
-            Some(PreparedOwnerCall::Teardown { .. }) => SourceOwnerPhase::Finish,
+            Some(PreparedOwnerCall::Teardown { .. } | PreparedOwnerCall::StatusTeardown { .. }) => {
+                SourceOwnerPhase::Finish
+            }
             None => return Err(super::RuntimeFailure::ForeignBinding),
         };
         let expected_phase = match phase {
@@ -756,9 +805,14 @@ impl<'runtime> super::Machine<'runtime> {
                 self.pending_source_owner_call = Some(SourceOwnerCallProgress::AcquireReady(ready));
             }
             AdmittedSourceOwnerInvocation::Teardown(invocation) => {
-                let Some(PreparedOwnerCall::Teardown {
-                    current_operand, ..
-                }) = symbol.owner_role()
+                let Some(
+                    PreparedOwnerCall::Teardown {
+                        current_operand, ..
+                    }
+                    | PreparedOwnerCall::StatusTeardown {
+                        current_operand, ..
+                    },
+                ) = symbol.owner_role()
                 else {
                     return Err(super::RuntimeFailure::ForeignBinding);
                 };
@@ -806,6 +860,8 @@ impl<'runtime> super::Machine<'runtime> {
                     .owner
                     .as_ref()
                     .ok_or(super::RuntimeFailure::ForeignBinding)?;
+                #[cfg(test)]
+                post_record_test::teardown_preflight(&mut self.instantiation_work);
                 let prepared = OwnerTeardownPrepared::admit(
                     invocation,
                     guard,
@@ -813,8 +869,11 @@ impl<'runtime> super::Machine<'runtime> {
                     index,
                     &mut self.heap,
                     &mut self.instantiation_work,
-                )
-                .map_err(|error| phase_failure(error, &self.instantiation_work))?;
+                );
+                #[cfg(test)]
+                post_record_test::teardown_preflight_completed(&self.instantiation_work);
+                let prepared =
+                    prepared.map_err(|error| phase_failure(error, &self.instantiation_work))?;
                 // Every fallible operand/report/authority admission precedes
                 // removal of the boundary's one native ownership edge.
                 let super::Frame::SourceResourceBoundary(boundary) = &mut self.frames[index] else {
@@ -1092,11 +1151,18 @@ fn prepare_destruction_operands(
     let owner = destructor
         .owner()
         .ok_or(super::RuntimeFailure::ForeignBinding)?;
-    let Some(PreparedOwnerCall::Teardown {
-        application,
-        current_operand,
-        ..
-    }) = destructor.owner_role()
+    let Some(
+        PreparedOwnerCall::Teardown {
+            application,
+            current_operand,
+            ..
+        }
+        | PreparedOwnerCall::StatusTeardown {
+            application,
+            current_operand,
+            ..
+        },
+    ) = destructor.owner_role()
     else {
         return Err(super::RuntimeFailure::ForeignBinding);
     };
@@ -1267,6 +1333,9 @@ pub(crate) mod post_record_test {
         pub(crate) teardown_reported: usize,
         pub(crate) teardown_recorded_with_zero_shared_work: bool,
         pub(crate) teardown_consumed_report_published: bool,
+        pub(crate) teardown_preflight_used: Option<usize>,
+        pub(crate) teardown_recorded_retained: bool,
+        pub(crate) teardown_failed_without_report: bool,
     }
 
     #[derive(Clone, Copy)]
@@ -1285,7 +1354,9 @@ pub(crate) mod post_record_test {
     enum Phase {
         AcquireReturn,
         TeardownReturn,
+        TeardownExtraction,
         InitializedExtentPreflight,
+        TeardownPreflight { prefix: usize, allowance: usize },
     }
 
     pub(crate) fn observe<T>(inject: bool, run: impl FnOnce() -> T) -> (T, Observation) {
@@ -1294,6 +1365,36 @@ pub(crate) mod post_record_test {
 
     pub(crate) fn observe_teardown<T>(inject: bool, run: impl FnOnce() -> T) -> (T, Observation) {
         observe_phase(inject, Phase::TeardownReturn, run)
+    }
+
+    pub(crate) fn observe_teardown_extraction<T>(run: impl FnOnce() -> T) -> (T, Observation) {
+        observe_phase(true, Phase::TeardownExtraction, run)
+    }
+
+    pub(crate) fn observe_teardown_preflight<T>(
+        prefix: usize,
+        allowance: usize,
+        run: impl FnOnce() -> T,
+    ) -> (T, Observation) {
+        observe_phase(true, Phase::TeardownPreflight { prefix, allowance }, run)
+    }
+    pub(super) fn teardown_preflight(work: &mut TypeWorkBudget) {
+        if let Some(State {
+            phase: Phase::TeardownPreflight { prefix, allowance },
+            ..
+        }) = STATE.get()
+        {
+            *work = TypeWorkBudget::with_limit(prefix + allowance);
+            work.charge(prefix).unwrap();
+        }
+    }
+    pub(super) fn teardown_preflight_completed(work: &TypeWorkBudget) {
+        if let Some(mut state) = STATE.get()
+            && matches!(state.phase, Phase::TeardownPreflight { .. })
+        {
+            state.observation.teardown_preflight_used = Some(work.used());
+            STATE.set(Some(state));
+        }
     }
 
     pub(crate) fn observe_extent_preflight<T>(run: impl FnOnce() -> T) -> (T, Observation) {
@@ -1390,7 +1491,7 @@ pub(crate) mod post_record_test {
     }
 
     pub(super) fn teardown_returned<'binding>(
-        returned: OwnerTeardownReturned<'binding>,
+        mut returned: OwnerTeardownReturned<'binding>,
         work: &mut TypeWorkBudget,
     ) -> OwnerTeardownReturned<'binding> {
         if let Some(mut state) = STATE.get() {
@@ -1402,6 +1503,12 @@ pub(crate) mod post_record_test {
             ));
             if state.inject && state.phase == Phase::TeardownReturn {
                 *work = TypeWorkBudget::with_limit(0);
+            }
+            if state.inject && state.phase == Phase::TeardownExtraction {
+                // The original scalar selected and recorded disposition before
+                // this injection. A generated typed scalar cannot return Void.
+                returned.status.as_mut().unwrap().reply =
+                    crate::foreign::source_runtime::NativeScalarReply::Void;
             }
             STATE.set(Some(state));
         }
@@ -1428,6 +1535,7 @@ pub(crate) mod post_record_test {
             // contains original authority and no destructor callback.
             let _consumed_authority = recorded.consumed.owner();
             state.observation.teardown_recorded += 1;
+            state.observation.teardown_recorded_retained = recorded.consumed.is_retained();
             state.observation.teardown_recorded_with_zero_shared_work = work.remaining() == 0;
             STATE.set(Some(state));
         }
@@ -1450,8 +1558,13 @@ pub(crate) mod post_record_test {
                     Some(HeapCell::Constructor(_, Some(Value::Location(actual)))) if *actual == disposition
                 ) && matches!(
                     heap.get(disposition),
-                    Some(HeapCell::Constructor(actual, Some(Value::Unit))) if *actual == consumed
+                    Some(HeapCell::Constructor(actual, Some(Value::Unit | Value::Integer(_)))) if *actual == consumed
                 );
+            } else {
+                let (returned, disposition, _) = state.teardown_slots.unwrap();
+                state.observation.teardown_failed_without_report =
+                    empty_slots(heap, disposition, 2)
+                        && matches!(heap.get(returned), Some(HeapCell::Uninitialized));
             }
             STATE.set(Some(state));
         }

@@ -347,10 +347,12 @@ impl Resolver {
                 .members
                 .iter()
                 .any(|member| matches!(member, SurfaceForeignMember::Owner(_)));
-            // Publishing executable constants needs the ordinary term bridge;
-            // do not silently omit a source member from this first admission slice.
+            // Owner status contracts retain checked literal facts in their
+            // original descriptor. They create no ordinary value binder or
+            // executable constant operand. General constant publication still
+            // needs the separate ordinary term bridge.
             if let Some((span, message)) = library.members.iter().find_map(|member| match member {
-                SurfaceForeignMember::Constant(constant) => Some((
+                SurfaceForeignMember::Constant(constant) if !has_owner => Some((
                     constant.span,
                     "source foreign constant publication is not implemented yet",
                 )),

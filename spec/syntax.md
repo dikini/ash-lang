@@ -71,8 +71,13 @@ foreign_library_declaration ::=
 foreign_member ::=
     "profile" string_literal
   | "repr" upper_identifier "=" foreign_representation
+  | foreign_constant
   | foreign_owner
   | foreign_symbol ;
+foreign_constant ::=
+  "const" upper_identifier ":" foreign_reference "=" foreign_integer ;
+foreign_integer ::= [ "-" ] integer ;
+foreign_reference ::= upper_identifier [ "." upper_identifier ] ;
 foreign_representation ::=
     "signed" "(" integer ")"
   | "unsigned" "(" integer ")"
@@ -96,7 +101,9 @@ foreign_call_contract ::=
   | "output" "result" "as" ("scalar" | "owner" "(" type ")")
   | "outcome" outcome_test "{" [ outcome_fact { "," outcome_fact } ] "}"
   | "retained_dependents" "block" ;
-outcome_test ::= "result" ("null" | "nonnull") | "otherwise" ;
+outcome_test ::=
+    "result" ("null" | "nonnull" | "==" foreign_reference)
+  | "otherwise" ;
 outcome_fact ::=
     ("readable" | "unreadable") "result"
   | ("consumed" | "retained") source_position
@@ -297,8 +304,13 @@ argument product. Quoted declaration strings follow [lexical
 structure](lexical-structure.md#tokens). [Static
 semantics](static-semantics.md#source-foreign-declarations) requires exact ABI
 coverage, owner roles and result shape. Pointer representations are restricted
-to admitted owner addresses; constants, output slots, access members and copy
-windows remain outside this implementation checkpoint. A byte owner requires an
+to admitted owner addresses. Owner status alternatives may reference checked
+literal facts in the original library. A passive `const` has a mathematical
+integer literal with an optional minus sign, not a value expression or ordinary
+term binder. Scalar-result alternatives declare that bare result readable.
+Ordinary constant values and operands,
+output slots, access members and copy windows remain outside this implementation
+checkpoint. A byte owner requires an
 explicit `initialized_bytes` fact for execution through an admitted resource
 scope; preparing its contract alone grants no activation or byte access. Effect arguments
 retain their written order; the declaring effect determines each argument's

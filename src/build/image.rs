@@ -418,6 +418,7 @@ pub(crate) struct PureImage {
     prepared_projections: Vec<u32>,
     prepared_predicates: Vec<PreparedPredicateRecord>,
     prepared_outcomes: Vec<PreparedOutcomeRecord>,
+    prepared_owner_status_outcomes: Vec<PreparedOwnerStatusOutcomeRecord>,
     prepared_symbols: Vec<PreparedSymbolRecord>,
     prepared_libraries: Vec<PreparedLibraryRecord>,
     native_symbols: Vec<NativeSymbolRecord>,
@@ -1279,7 +1280,7 @@ struct Decoder<'a> {
 
 // A private layout marker for the matching compiler/runtime only. Neither the
 // embedded byte sequence nor its numeric tags promise compatibility.
-const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x0a";
+const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x0b";
 
 enum WireOutput<'a> {
     Encoded(Vec<u8>),
@@ -2073,6 +2074,7 @@ impl PureImage {
         writer.table(&self.prepared_projections)?;
         writer.table(&self.prepared_predicates)?;
         writer.table(&self.prepared_outcomes)?;
+        writer.table(&self.prepared_owner_status_outcomes)?;
         writer.table(&self.prepared_symbols)?;
         writer.table(&self.prepared_libraries)?;
         writer.table(&self.native_symbols)?;
@@ -2236,6 +2238,7 @@ impl PureImage {
             prepared_projections: reader.table()?,
             prepared_predicates: reader.table()?,
             prepared_outcomes: reader.table()?,
+            prepared_owner_status_outcomes: reader.table()?,
             prepared_symbols: reader.table()?,
             prepared_libraries: reader.table()?,
             native_symbols: reader.table()?,
@@ -2310,6 +2313,7 @@ impl PureImage {
             || !self.prepared_projections.is_empty()
             || !self.prepared_predicates.is_empty()
             || !self.prepared_outcomes.is_empty()
+            || !self.prepared_owner_status_outcomes.is_empty()
             || !self.prepared_symbols.is_empty()
             || !self.prepared_libraries.is_empty()
             || !self.native_symbols.is_empty()
@@ -3573,6 +3577,144 @@ main () = match perform Measure.call 42 {
     }
 
     #[test]
+    fn status_owner_image_retains_total_original_branches_and_rejects_copied_fact_forgery() {
+        let tree = SourceTree::new();
+        tree.write(
+            "owner.ash",
+            include_str!("../../tests/fixtures/source-owner/status_owner.ash"),
+        );
+        tree.write("entry.ash", "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Int, Int>\nmain () = resource Owner.Probe<{}, R, {}> owner = 42 {\n    Owner.read owner\n}\n");
+        let compiled = compile_path(tree.configuration()).unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let mut work = TypeWorkBudget::default();
+        let build =
+            encode_effect_for_build(program, provenance, "x86_64-unknown-linux-gnu", &mut work)
+                .unwrap();
+        let bytes = build.image.encode_bytes(&mut work).unwrap();
+        let expected = build.image.encode_native_expectations(&mut work).unwrap();
+        let library = &build.libraries[0];
+        let metadata = (library.image_library, library.module, library.ordinal);
+        fn forbidden_provider() -> super::super::PrivateNativeBridge {
+            panic!("changed status facts must fail before provider selection");
+        }
+        let members = build
+            .bridges
+            .iter()
+            .map(|bridge| super::super::PrivateNativeMember {
+                coordinates: super::super::PrivateNativeCoordinates {
+                    image_library: metadata.0,
+                    library_module: metadata.1,
+                    library_ordinal: metadata.2,
+                    image_symbol: bridge.image_symbol,
+                    symbol_index: bridge.symbol_index,
+                    operation_module: bridge.operation_module,
+                    operation_effect: bridge.operation_effect,
+                    operation_local: bridge.operation_local,
+                },
+                provider: forbidden_provider,
+            })
+            .collect::<Vec<_>>();
+        drop(build);
+        drop(compiled);
+        drop(tree);
+        let restore = |work: &mut TypeWorkBudget| {
+            let image = PureImage::decode_bytes(&bytes, work)?;
+            image.compare_native_expectations(&expected, work)?;
+            image.restore_effect(work)
+        };
+        let mut normal = TypeWorkBudget::default();
+        restore(&mut normal).unwrap();
+        let exact = normal.used();
+        for prefix in [0, 11] {
+            let mut short = TypeWorkBudget::with_limit(prefix + exact - 1);
+            short.charge(prefix).unwrap();
+            assert!(matches!(restore(&mut short), Err(ImageFailure::Resource)));
+            for _ in 0..2 {
+                let mut work = TypeWorkBudget::with_limit(prefix + exact);
+                work.charge(prefix).unwrap();
+                restore(&mut work).unwrap();
+                assert_eq!(work.used(), prefix + exact);
+            }
+        }
+        let expected: &'static [u8] = Box::leak(expected.into_boxed_slice());
+        let libraries = [super::super::PrivateNativeLibrary {
+            image_library: metadata.0,
+            module: metadata.1,
+            ordinal: metadata.2,
+            members: &members,
+        }];
+        for mutation in 0..6 {
+            let mut corrupt =
+                PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+            let first = corrupt.prepared_owner_status_outcomes[0];
+            match mutation {
+                0 => corrupt.prepared_owner_status_outcomes[0].consumes = true,
+                1 => corrupt.prepared_owner_status_outcomes[0].readable = false,
+                2 => {
+                    corrupt.prepared_predicates[first.predicates.start as usize]
+                        .value
+                        .magnitude += 1
+                }
+                3 => corrupt.prepared_owner_status_outcomes.swap(0, 1),
+                4 => {
+                    let application = corrupt
+                        .prepared_symbols
+                        .iter()
+                        .find_map(|symbol| match symbol.owner_call {
+                            Some(PreparedOwnerCallRecord::StatusTeardown {
+                                application, ..
+                            }) => Some(application),
+                            _ => None,
+                        })
+                        .unwrap();
+                    corrupt.prepared_owner_arguments[application.arguments.start as usize]
+                        .parameter = 0;
+                }
+                _ => {
+                    corrupt.prepared_owner_status_outcomes[0].outcome_span =
+                        corrupt.prepared_owner_status_outcomes[1].outcome_span
+                }
+            }
+            assert!(
+                corrupt
+                    .compare_native_expectations(expected, &mut TypeWorkBudget::default())
+                    .is_err()
+            );
+            // Well-formed foreign disposition assertions are
+            // authenticated by the separately generated complete facts, not
+            // inferred from structural Core validity or native observations.
+            // A bare raw scalar is always readable, so that mutation also
+            // violates independently checked result shape.
+            if mutation >= 1 {
+                assert!(
+                    corrupt
+                        .restore_effect(&mut TypeWorkBudget::default())
+                        .is_err(),
+                    "malformed status/application/span mutation {mutation} fails independent reconstruction"
+                );
+            } else {
+                corrupt
+                    .restore_effect(&mut TypeWorkBudget::default())
+                    .expect("well-formed foreign claims require the original facts gate");
+            }
+            let forged = corrupt
+                .encode_bytes(&mut TypeWorkBudget::default())
+                .unwrap();
+            assert!(matches!(
+                super::super::__run_private_effect_image(
+                    &super::super::runtime_fingerprint(),
+                    &forged,
+                    expected,
+                    &libraries
+                ),
+                Err(super::super::PrivateProgramFailure(
+                    super::super::PrivateFailure::Image(_)
+                ))
+            ));
+        }
+    }
+
+    #[test]
     fn source_forwarding_image_restores_helper_evidence_and_rejects_executable_forgery() {
         let tree = SourceTree::new();
         tree.write(
@@ -4403,6 +4545,13 @@ enum PreparedOwnerCallRecord {
         block_span: SpanRecord,
         outcome_span: SpanRecord,
     },
+    StatusTeardown {
+        application: PreparedOwnerApplicationRecord,
+        current_operand: u32,
+        output_span: SpanRecord,
+        block_span: SpanRecord,
+        outcomes: Slice,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -4431,6 +4580,16 @@ struct PreparedPredicateRecord {
 struct PreparedOutcomeRecord {
     predicates: Slice,
     span: SpanRecord,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PreparedOwnerStatusOutcomeRecord {
+    predicates: Slice,
+    consumes: bool,
+    readable: bool,
+    disposition_span: SpanRecord,
+    readability_span: SpanRecord,
+    outcome_span: SpanRecord,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -4587,6 +4746,16 @@ wire_struct!(PreparedOwnerApplicationRecord, 24, owner, arguments, span);
 wire_struct!(PreparedOperandRecord, 18, representation, source, span);
 wire_struct!(PreparedPredicateRecord, 9, value);
 wire_struct!(PreparedOutcomeRecord, 20, predicates, span);
+wire_struct!(
+    PreparedOwnerStatusOutcomeRecord,
+    46,
+    predicates,
+    consumes,
+    readable,
+    disposition_span,
+    readability_span,
+    outcome_span
+);
 wire_struct!(
     PreparedSymbolRecord,
     66,
@@ -4812,7 +4981,7 @@ impl Wire for RepresentationRecord {
 }
 
 impl Wire for PreparedOwnerCallRecord {
-    const MINIMUM: usize = 65;
+    const MINIMUM: usize = 61;
     fn write(&self, writer: &mut WireWriter<'_>) -> Result<(), ImageFailure> {
         match self {
             Self::Acquire {
@@ -4848,6 +5017,20 @@ impl Wire for PreparedOwnerCallRecord {
                 block_span.write(writer)?;
                 outcome_span.write(writer)
             }
+            Self::StatusTeardown {
+                application,
+                current_operand,
+                output_span,
+                block_span,
+                outcomes,
+            } => {
+                2u8.write(writer)?;
+                application.write(writer)?;
+                current_operand.write(writer)?;
+                output_span.write(writer)?;
+                block_span.write(writer)?;
+                outcomes.write(writer)
+            }
         }
     }
     fn read(reader: &mut WireReader<'_>) -> Result<Self, ImageFailure> {
@@ -4867,6 +5050,13 @@ impl Wire for PreparedOwnerCallRecord {
                 disposition_span: Wire::read(reader)?,
                 block_span: Wire::read(reader)?,
                 outcome_span: Wire::read(reader)?,
+            }),
+            2 => Ok(Self::StatusTeardown {
+                application: Wire::read(reader)?,
+                current_operand: Wire::read(reader)?,
+                output_span: Wire::read(reader)?,
+                block_span: Wire::read(reader)?,
+                outcomes: Wire::read(reader)?,
             }),
             _ => Err(ImageFailure::InvalidEncoding),
         }
@@ -6004,6 +6194,55 @@ impl Encoder<'_> {
                 block_span: self.span(*block_span)?,
                 outcome_span: self.span(*outcome_span)?,
             }),
+            PreparedOwnerCall::StatusTeardown {
+                application,
+                current_operand,
+                output_span,
+                block_span,
+                outcomes,
+            } => {
+                let start = self.image.prepared_owner_status_outcomes.len();
+                for outcome in outcomes {
+                    let predicate_start = self.image.prepared_predicates.len();
+                    for predicate in &outcome.predicates {
+                        if predicate.position
+                            != crate::foreign::source_contract::PreparedNativePosition::Result
+                        {
+                            return Err(ImageFailure::InvalidRecord);
+                        }
+                        push(
+                            &mut self.image.prepared_predicates,
+                            PreparedPredicateRecord {
+                                value: ScalarValueRecord {
+                                    negative: predicate.value.negative,
+                                    magnitude: predicate.value.magnitude,
+                                },
+                            },
+                            self.work,
+                        )?;
+                    }
+                    let record = PreparedOwnerStatusOutcomeRecord {
+                        predicates: Slice::of(&self.image.prepared_predicates, predicate_start)?,
+                        consumes: outcome.consumes,
+                        readable: outcome.readable,
+                        disposition_span: self.span(outcome.disposition_span)?,
+                        readability_span: self.span(outcome.readability_span)?,
+                        outcome_span: self.span(outcome.outcome_span)?,
+                    };
+                    push(
+                        &mut self.image.prepared_owner_status_outcomes,
+                        record,
+                        self.work,
+                    )?;
+                }
+                Ok(PreparedOwnerCallRecord::StatusTeardown {
+                    application: self.encode_prepared_owner_application(application)?,
+                    current_operand: index(*current_operand)?,
+                    output_span: self.span(*output_span)?,
+                    block_span: self.span(*block_span)?,
+                    outcomes: Slice::of(&self.image.prepared_owner_status_outcomes, start)?,
+                })
+            }
         }
     }
 
@@ -7145,6 +7384,49 @@ impl Decoder<'_> {
                 block_span: self.span(block_span)?,
                 outcome_span: self.span(outcome_span)?,
             },
+            PreparedOwnerCallRecord::StatusTeardown {
+                application,
+                current_operand,
+                output_span,
+                block_span,
+                outcomes,
+            } => {
+                let mut restored = Vec::new();
+                for outcome in outcomes.get(&self.image.prepared_owner_status_outcomes)? {
+                    let mut predicates = Vec::new();
+                    for predicate in outcome.predicates.get(&self.image.prepared_predicates)? {
+                        push(
+                            &mut predicates,
+                            crate::foreign::source_contract::PreparedOutcomePredicate {
+                                position:
+                                    crate::foreign::source_contract::PreparedNativePosition::Result,
+                                value: crate::foreign::source_contract::PreparedScalarValue {
+                                    negative: predicate.value.negative,
+                                    magnitude: predicate.value.magnitude,
+                                },
+                            },
+                            self.work,
+                        )?;
+                    }
+                    let value = crate::foreign::source_contract::PreparedOwnerStatusOutcome {
+                        predicates,
+                        consumes: outcome.consumes,
+                        readable: outcome.readable,
+                        disposition_span: self.span(outcome.disposition_span)?,
+                        readability_span: self.span(outcome.readability_span)?,
+                        outcome_span: self.span(outcome.outcome_span)?,
+                    };
+                    push(&mut restored, value, self.work)?;
+                }
+                PreparedOwnerCall::StatusTeardown {
+                    application: self.prepared_owner_application(application)?,
+                    current_operand: usize::try_from(current_operand)
+                        .map_err(|_| ImageFailure::InvalidRecord)?,
+                    output_span: self.span(output_span)?,
+                    block_span: self.span(block_span)?,
+                    outcomes: restored,
+                }
+            }
         })
     }
 

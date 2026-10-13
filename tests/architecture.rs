@@ -631,6 +631,15 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/foreign/source_owner_runtime.rs::NativeOwnerGuard.owner", FieldSourceRuntimeOwnerShared),
     kind_site!("src/foreign/source_owner_runtime.rs::NativeByteAccess._guard", FieldSourceRuntimeOwnerShared, Borrowed),
     kind_site!("src/foreign/source_owner_runtime.rs::NativeOwnerGuardReady.guard", FieldSourceRuntimeOwnerShared),
+    // Source readiness and flat host storage share the exact original status
+    // symbol. Its existing checked owner disposes Type/Row facts iteratively;
+    // the finite scalar branches own no type tree or recursive guard edge.
+    kind_site!("src/foreign/source_bindings.rs::AdmittedSourceOwnerTeardownInvocation.plan", FieldSourceRuntimeOwnerShared),
+    kind_site!("src/foreign/source_owner_runtime.rs::NativeOwnerDestruction.Status.symbol", FieldSourceRuntimeOwnerShared),
+    kind_site!("src/foreign/source_owner_runtime.rs::NativeOwnerSlot.raw", FieldSourceRuntimeOwnerShared),
+    kind_site!("src/foreign/source_owner_runtime.rs::RawOwnerGuard.teardown", FieldSourceRuntimeOwnerShared),
+    kind_site!("src/foreign/source_runtime.rs::NativeOwnerDestruction.$alias", FieldSourceRuntimeOwnerShared),
+
     kind_site!("src/foreign/source_runtime.rs::NativeOwnerCallReturned.$alias", FieldSourceRuntimeOwnerShared),
     kind_site!("src/foreign/source_runtime.rs::NativeOwnerGuard.$alias", FieldSourceRuntimeOwnerShared),
     kind_site!("src/foreign/source_runtime.rs::NativeByteAccess.$alias", FieldSourceRuntimeOwnerShared, Borrowed),
@@ -692,10 +701,10 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/foreign/source_owner_runtime.rs::NativeOwnerSlot.authority", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState),
     kind_site!("src/foreign/source_owner_runtime.rs::NativeOwnerSlotAuthority.access", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState),
     kind_site!("src/foreign/source_owner_runtime.rs::NativeOwnerSlotAuthority.state", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState),
-    kind_site!("src/foreign/source_owner_runtime.rs::NativeOwnerStorage.slots", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState),
+    kind_site!("src/foreign/source_owner_runtime.rs::NativeOwnerStorage.slots", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Mixed),
     kind_site!("src/foreign/source_runtime.rs::NativeOwnerDependency.$alias", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
     kind_site!("src/foreign/source_runtime.rs::NativeOwnerDisposition.$alias", FieldSourceRuntimeOwnerShared),
-    kind_site!("src/foreign/source_runtime.rs::NativeOwnerStorage.$alias", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState),
+    kind_site!("src/foreign/source_runtime.rs::NativeOwnerStorage.$alias", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Mixed),
     // Connected native image reconstruction, exact original brands and bridge plans.
     kind_site!("src/build/bridge.rs::TargetResolvedForeignBridge.symbol", FieldBuildNativeFactsShared),
     kind_site!("src/build/image.rs::NativeBridgeEmission.plan", FieldBuildNativeFactsShared),

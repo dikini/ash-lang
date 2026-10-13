@@ -129,21 +129,23 @@ defining code rather than recompiling imported lifecycle bodies.
 
 The current executable source profile admits opaque and initialized byte owners
 with declared dependencies and Type-only state families. It retains one
-interpreted acquisition and one Current finish member of the same original owner,
-with that owner's original host destructor authenticated separately. The
-unconditional `void` finish and destruction contracts admit consumed or retained
-dispositions and exact declared Current/Enclosing pointer operands. Resource and
-native instances retain all ordered Type/EffectRow arguments, including an owned
-slot that is not first.
-The resource handle's value type uses a saturated nominal application for a
-Type-only family and the resource application carrier for a row-bearing family;
-the scope retains the same complete tagged instance in either case.
-Higher-kinded resource formals, row-bearing owner state families,
-status-conditioned owner teardown, callable lifecycle helpers and native
-access/copy windows and library migrations remain unsupported by this profile.
-Exact native interpretation preserves ordinary outward handler rows and ordinary override
-precedence. Passive foreign-owner declarations have a separate admission boundary
-and supply no execution permission.
+interpreted acquisition and one Current finish member of the same original
+owner, with that owner's original host destructor authenticated separately. The
+`void` or scalar-status finish and destruction contracts admit total consumed
+or retained dispositions and exact declared Current/Enclosing pointer operands.
+Scalar status alternatives retain their original checked literals, readable
+raw result and disposition facts; they grant no ordinary constant value or
+operand.
+Resource and native instances retain all ordered Type/EffectRow arguments,
+including an owned slot that is not first. The resource handle's value type
+uses a saturated nominal application for a Type-only family and the resource
+application carrier for a row-bearing family; the scope retains the same
+complete tagged instance in either case. Higher-kinded resource formals,
+row-bearing owner state families, callable lifecycle helpers, scalar teardown
+operands, native access/copy windows and library migrations remain unsupported
+by this profile. Exact native interpretation preserves ordinary outward handler
+rows and ordinary override precedence. Passive foreign-owner declarations have
+a separate admission boundary and supply no execution permission.
 
 An initialized byte acquisition retains the original integer source path and
 outcome provenance in its canonical contract and matching-compiler image.

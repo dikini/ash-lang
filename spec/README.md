@@ -98,35 +98,38 @@ owners. Its effect row includes invoked cleanup actions.
 An owner-free scalar `foreign library` declaration supplies passive ABI facts
 and exact native effects with one `call` operation each. Complete ordered
 `Type` and `EffectRow` parameters and original contracts survive publication
-and imports. `@builtin.foreign` supplies ordinary common result types, including
-`Call<T>` and opaque `ConversionError`. Compilation installs an explicit checked
-Core interpretation for admitted owner-free native entry instances, leaving an
-empty outward row. Ordinary source handlers cannot install a native symbol's
-interpreter. Source contracts and checked Core supply no executable binding;
-default execution refuses missing bindings before Ash runs. Constants and copy
-windows remain outside the admitted subset. Source resource declarations admit
-opaque and initialized byte owners with declared dependencies, private data and
-checked `scope` or `acquired_only` reports. Their Type-only owner families support
-one acquisition and unconditional `void` finish and host-destruction contracts
-with consumed or retained dispositions. Retention revokes ordinary access and
-quarantines the same owner and dependency closure; safe host destruction preserves
-dependency order. Status-conditioned owner teardown, callable lifecycle helpers
-and library migrations remain unsupported. Checked lexical forwarding supports
-the associated interface methods and ordinary constrained
-helpers, preserving exact operation types, effect rows and typed access operands.
-Sealed common byte reads and writes borrow the exact initialized live state in
-acquire, handler and finish phases. Original call correspondence, complete
-Type/Row instances and the unique guard authenticate access; private data and a
-compatible state type grant no permission. Conversion refusals are ordinary
-`Foreign.Call` results, and complete reply admission precedes native access.
-Outward capture/resume moves the same source owner; owned discard runs required
-finish computations in structural order with needed outer resources live,
-without an abandoned result wrapper. Running completion cannot be abandoned.
-Acquisition discard revokes an unpublished guard without fabricating private data.
-Exact constructor and native-call identities authenticate publication and
-completion; declarations
-alone confer no ownership. The [source-resource rules](static-semantics.md#source-resource-declarations)
-bound this lifecycle and its supported associated handler shape.
+and imports. `@builtin.foreign` supplies ordinary common result types,
+including `Call<T>` and opaque `ConversionError`. Compilation installs an
+explicit checked Core interpretation for admitted owner-free native entry
+instances, leaving an empty outward row. Ordinary source handlers cannot
+install a native symbol's interpreter. Source contracts and checked Core supply
+no executable binding; default execution refuses missing bindings before Ash
+runs. Ordinary constant values, constant operands and copy windows remain
+outside the admitted subset. Source resource declarations admit opaque and
+initialized byte owners with declared dependencies, private data and checked
+`scope` or `acquired_only` reports. Their Type-only owner families support one
+acquisition and `void` or scalar-status finish and host-destruction contracts
+with total consumed or retained dispositions. Scalar status predicates use
+checked literal facts from the original owner library without publishing
+ordinary values. Retention revokes ordinary access and quarantines the same
+owner and dependency closure; safe host destruction preserves dependency order.
+Callable lifecycle helpers and library migrations remain unsupported. Checked
+lexical forwarding supports the associated interface methods and ordinary
+constrained helpers, preserving exact operation types, effect rows and typed
+access operands. Sealed common byte reads and writes borrow the exact
+initialized live state in acquire, handler and finish phases. Original call
+correspondence, complete Type/Row instances and the unique guard authenticate
+access; private data and a compatible state type grant no permission.
+Conversion refusals are ordinary `Foreign.Call` results, and complete reply
+admission precedes native access. Outward capture/resume moves the same source
+owner; owned discard runs required finish computations in structural order with
+needed outer resources live, without an abandoned result wrapper. Running
+completion cannot be abandoned. Acquisition discard revokes an unpublished
+guard without fabricating private data. Exact constructor and native-call
+identities authenticate publication and completion; declarations alone confer
+no ownership. The [source-resource
+rules](static-semantics.md#source-resource-declarations) bound this lifecycle
+and its supported associated handler shape.
 
 `resource cell<R> c = initializer { body }` acquires one scoped mutable integer
 cell through the compiler-owned `@builtin.cell` API. The scope owns release;
