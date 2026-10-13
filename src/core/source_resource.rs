@@ -600,7 +600,8 @@ impl CheckedSourceResourceHeader {
             };
             let arguments = match role {
                 PreparedOwnerCall::Acquire { application, .. }
-                | PreparedOwnerCall::Teardown { application, .. } => application.arguments(),
+                | PreparedOwnerCall::Teardown { application, .. }
+                | PreparedOwnerCall::StatusTeardown { application, .. } => application.arguments(),
             };
             charge(work, arguments.len())?;
             if arguments.len() != state_arguments.len() {
@@ -625,7 +626,9 @@ impl CheckedSourceResourceHeader {
                 PreparedOwnerCall::Acquire { .. } if acquiring.is_none() => {
                     acquiring = Some(Arc::clone(symbol))
                 }
-                PreparedOwnerCall::Teardown { .. } if tearing_down.is_none() => {
+                PreparedOwnerCall::Teardown { .. } | PreparedOwnerCall::StatusTeardown { .. }
+                    if tearing_down.is_none() =>
+                {
                     tearing_down = Some(Arc::clone(symbol))
                 }
                 _ => return Err(invalid()),
@@ -656,9 +659,16 @@ impl CheckedSourceResourceHeader {
                     ..
                 })
             )
-        ) || teardown.symbol().result()
-            != crate::foreign::source_contract::PreparedAbiResult::Void
-        {
+        ) || !matches!(
+            (teardown.owner_role(), teardown.symbol().result()),
+            (
+                Some(PreparedOwnerCall::Teardown { .. }),
+                crate::foreign::source_contract::PreparedAbiResult::Void
+            ) | (
+                Some(PreparedOwnerCall::StatusTeardown { .. }),
+                crate::foreign::source_contract::PreparedAbiResult::Scalar(_)
+            )
+        ) {
             return Err(invalid());
         }
         let owned = header.parameters[header.owned_position].id;
@@ -2088,20 +2098,14 @@ fn eval_flow<'a>(
                     if path.consumed || path.attempted_teardown {
                         return Err(invalid());
                     }
-                    let Some(PreparedOwnerCall::Teardown {
-                        current_operand,
-                        consumes,
-                        ..
-                    }) = expected.owner_role()
-                    else {
-                        return Err(invalid());
-                    };
+                    let role = expected.owner_role().ok_or_else(invalid)?;
+                    let current_operand = role.current_operand().ok_or_else(invalid)?;
                     let Some(crate::foreign::source_contract::PreparedOperandSource::Current(
                         selection,
                     )) = expected
                         .symbol()
                         .operands()
-                        .get(*current_operand)
+                        .get(current_operand)
                         .map(|operand| operand.source())
                     else {
                         return Err(invalid());
@@ -2113,22 +2117,53 @@ fn eval_flow<'a>(
                         return Err(invalid());
                     }
                     path.attempted_teardown = true;
-                    let refusal = facts.wrapped(call.conversion_failed, 0, work)?;
-                    push(&mut results, (refusal, path.copy(work)?), work)?;
+                    // Current/Enclosing are authenticated guarded addresses.
+                    // Their refusal is terminal, not ordinary scalar conversion.
+                    // Preserve the existing void profile's flow/accounting.
+                    if matches!(role, PreparedOwnerCall::Teardown { .. })
+                        || expected.symbol().operands().iter().any(|operand| {
+                            matches!(
+                                operand.source(),
+                                crate::foreign::source_contract::PreparedOperandSource::Source(_)
+                            )
+                        })
+                    {
+                        let refusal = facts.wrapped(call.conversion_failed, 0, work)?;
+                        push(&mut results, (refusal, path.copy(work)?), work)?;
+                    }
                     let blocked = facts.add(
                         FlowFact::Constructor(codec.disposition_constructors()[2], None),
                         work,
                     )?;
                     let blocked = facts.wrapped(call.returned, blocked, work)?;
                     push(&mut results, (blocked, path.copy(work)?), work)?;
-                    path.consumed = *consumes;
-                    let disposition = facts.wrapped(
-                        codec.disposition_constructors()[usize::from(!consumes)],
-                        0,
-                        work,
-                    )?;
-                    let returned = facts.wrapped(call.returned, disposition, work)?;
-                    push(&mut results, (returned, path), work)?;
+                    if let PreparedOwnerCall::Teardown { consumes, .. } = role {
+                        path.consumed = *consumes;
+                        let disposition = facts.wrapped(
+                            codec.disposition_constructors()[usize::from(!consumes)],
+                            0,
+                            work,
+                        )?;
+                        let returned = facts.wrapped(call.returned, disposition, work)?;
+                        push(&mut results, (returned, path), work)?;
+                        continue;
+                    }
+                    for (consumes, readable) in role.dispositions() {
+                        let mut recorded = path.copy(work)?;
+                        recorded.consumed = consumes;
+                        if readable {
+                            let disposition = facts.wrapped(
+                                codec.disposition_constructors()[usize::from(!consumes)],
+                                0,
+                                work,
+                            )?;
+                            let returned = facts.wrapped(call.returned, disposition, work)?;
+                            push(&mut results, (returned, recorded), work)?;
+                        } else {
+                            let refusal = facts.wrapped(call.conversion_failed, 0, work)?;
+                            push(&mut results, (refusal, recorded), work)?;
+                        }
+                    }
                 }
             }
             Ok(results)
@@ -4487,6 +4522,102 @@ mod tests {
                 super::super::validate::validate_effect_modules_family(forged, &sources, &modules)
                     .is_err()
             );
+        }
+    }
+
+    #[test]
+    fn status_owner_scope_copies_preserve_phantom_rows_and_reject_changed_original_claims() {
+        let fixture = Fixture::new();
+        fs::write(
+            fixture.0.join("owner.ash"),
+            include_str!("../../tests/fixtures/source-owner/status_owner.ash"),
+        )
+        .unwrap();
+        fs::write(fixture.0.join("entry.ash"), "import owner as Owner\neffect Notice {\n    notice : Unit -> Unit\n}\nmain : Unit -> Owner.Scope<Unit, Int, Int>\nmain () = resource Owner.Probe<{Notice}, R, {}> owner = 42 {\n    Owner.read owner\n}\n").unwrap();
+        check_independent_source_scope(&fixture);
+        let compiled = fixture.compile();
+        let (checked, provenance) = compiled.effect_build_input().unwrap();
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let modules = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let fresh = || super::super::transform::identity_effect_traversal(checked).unwrap();
+        let validate = |program, work: &mut TypeWorkBudget| {
+            super::super::validate::validate_effect_modules_with_work(
+                program, &sources, &modules, work,
+            )
+        };
+        let mut measured = TypeWorkBudget::default();
+        validate(fresh(), &mut measured).unwrap();
+        let exact = measured.used();
+        for prefix in [0, 7] {
+            let mut short = TypeWorkBudget::with_limit(prefix + exact - 1);
+            short.charge(prefix).unwrap();
+            assert_eq!(
+                validate(fresh(), &mut short).unwrap_err().reason(),
+                ValidationReason::Resource
+            );
+            for _ in 0..2 {
+                let mut work = TypeWorkBudget::with_limit(prefix + exact);
+                work.charge(prefix).unwrap();
+                validate(fresh(), &mut work).unwrap();
+                assert_eq!(work.used(), prefix + exact);
+            }
+        }
+        for change in 0..4 {
+            let mut changed = fresh();
+            let index = changed
+                .nodes
+                .iter()
+                .position(|stored| {
+                    matches!(
+                        &stored.kind,
+                        EffectExprKind::Operation(EffectOperation::SourceResourceScope(_))
+                    )
+                })
+                .unwrap();
+            let id = NodeId::new(changed.arena, u32::try_from(index).unwrap());
+            let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+                &mut changed.nodes[index].kind
+            else {
+                unreachable!()
+            };
+            let before = scope.header().original.parameters[0].id;
+            let descriptor = Arc::get_mut(&mut scope.descriptor).unwrap();
+            assert!(
+                matches!(&descriptor.arguments[0], KindedArgument::RowArg(row) if !row.known().is_empty())
+            );
+            assert!(
+                matches!(&descriptor.arguments[2], KindedArgument::RowArg(row) if row.known().is_empty())
+            );
+            if change == 0 {
+                let previous = std::mem::replace(
+                    &mut descriptor.arguments[0],
+                    KindedArgument::RowArg(crate::types::EffectRow::empty()),
+                );
+                crate::types::discard_kinded_argument_iteratively(previous);
+            } else {
+                *descriptor.copies[change - 1].rows.get_mut(&before).unwrap() =
+                    crate::types::EffectRow::empty();
+            }
+            let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+                &changed.nodes[index].kind
+            else {
+                unreachable!()
+            };
+            assert_eq!(
+                scope
+                    .authenticate(id, &changed, &mut TypeWorkBudget::default())
+                    .unwrap_err()
+                    .reason(),
+                ValidationReason::Registry,
+                "well-kinded phantom row/copy change {change}"
+            );
+            assert!(validate(changed, &mut TypeWorkBudget::default()).is_err());
         }
     }
 

@@ -598,13 +598,14 @@ The admitted product source resource scope combines an Ash initializer, acquire
 and finish functions, private data `D`, and an associated ordinary effect handler.
 This checkpoint supports opaque and initialized byte foreign owners with declared
 dependencies and Type-kind owner formals. Acquisition admits scalar and exact
-declared enclosing-State operands with one pointer result. Unconditional `void`
-finish and host-destruction contracts admit consumed or retained dispositions,
-using the exact Current State and declared Enclosing pointer operands. Each
+declared enclosing-State operands with one pointer result. Finish and host
+destruction contracts use the exact Current State and declared Enclosing pointer
+operands. A `void` result has one unconditional disposition; a scalar result
+selects consumed or retained from the original total status alternatives. Each
 foreign symbol still retains its complete ordered Type and EffectRow arguments;
-the native Type-only projection does not replace them. Scalar teardown operands,
-status-conditioned owner teardown and native access/copy windows remain
-unsupported executable shapes in this checkpoint.
+the native Type-only projection does not replace them. Scalar teardown operands
+and native access/copy windows remain unsupported executable shapes in this
+checkpoint.
 
 Before any Ash expression runs, program admission checks both acquisition and
 teardown bindings for every source resource scope against their exact original
@@ -627,7 +628,8 @@ initialization and writability assumption. A null return establishes no region.
 The resource's private payload cannot replace or enlarge this recorded extent.
 
 The initializer evaluates once in the preceding environment. Before native
-acquisition, the machine authenticates the unconditional destructor, reserves
+acquisition, the machine authenticates the original destructor and its total
+outcome contract, reserves
 scope and guard storage, checks each scalar conversion, and reserves the native
 report slots and recording/report work. A representable operand supplies its
 stable ABI scalar; a conversion refusal produces canonical
@@ -759,7 +761,7 @@ a second native release. On owned discard, a consumed finish returning
 `ConsumedFailure(error)` is terminal `runtime.resource-completion` under either
 codec and publishes no abandoned scope report. Normal `scope` completion instead
 retains `ConsumedError(error)` alongside the saved body result. An admitted
-unconditional native retained disposition records the same owner before report
+native retained disposition records the same owner before report
 construction and revokes its ordinary source access. Normal `scope` completion
 reports `Completed(body_value, RetainedError(error))`. On owned discard, witnessed
 `Retained(state, error)` is terminal `runtime.resource-completion`; it publishes
@@ -772,9 +774,30 @@ keeps those edges and blocks enclosing destruction. That incomplete destruction
 is terminal, is not retried and supplies no successful source cleanup report.
 Unresolved native objects remain protected until process termination.
 
+For scalar-status teardown, readiness prepays the complete raw-status
+traversal, reply conversion and recording/report work, and reserves both the
+successful report cells and opaque conversion-error cell before C. The typed
+callback returns a raw scalar; only the original finite alternatives select
+consumed or retained. The machine records that disposition and dependency-edge
+changes before converting or reporting the result. A readable result produces
+`Foreign.Returned(Foreign.Consumed(status))` or
+`Foreign.Returned(Foreign.Retained(status))`. An unreadable result produces
+`Foreign.ConversionFailed(error)` after recording; it cannot restore consumed
+State or replay teardown. Complete reply storage is admitted before entry;
+converting the admitted GNU64 scalar to mathematical `Int` requires no later
+allocation. Work or storage exhaustion remains terminal.
+
+A retained dependent blocks any Current teardown before C. Its report is
+`Foreign.Returned(Foreign.BlockedDependent)` with no scalar payload or
+fabricated native status. Host destruction selects its disposition from the
+same original contract, records it without an Ash result, and preserves the
+existing one-attempt dependency order and incomplete-destruction protection.
+Successful later host consumption cannot change an earlier source
+`RetainedError` or failed discard.
+
 An internal failure after a native return never retries the call or recreates
 readiness. A live guard, including one not yet published to the body, invokes its
-sealed unconditional destructor once during host destruction. A consumed receipt
+sealed original destructor once during host destruction. A consumed receipt
 has no destructor callback, so failure during finish reporting cannot repeat
 teardown. Host destruction allocates no Ash result and runs no source finish or
 handler. Foreign side effects remain performed; internal exhaustion is not a

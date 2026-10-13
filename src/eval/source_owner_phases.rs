@@ -84,6 +84,15 @@ struct TeardownReportSlots {
     retained: ConstructorId,
     blocked: ConstructorId,
     returned_constructor: ConstructorId,
+    status: Option<StatusReportStorage>,
+}
+
+#[derive(Debug)]
+struct StatusReportStorage {
+    prepaid: crate::foreign::source_runtime::PrepaidScalarReport,
+    error: Location,
+    hidden_error: ConstructorId,
+    conversion_failed: ConstructorId,
 }
 
 /// Report and recording storage are prepared while the boundary still owns its
@@ -110,6 +119,7 @@ pub(super) struct OwnerTeardownReady<'binding> {
 pub(super) struct OwnerTeardownReturned<'binding> {
     authority: SourceOwnerReturnedAuthority<'binding>,
     consumed: NativeOwnerDisposition,
+    status: Option<crate::foreign::source_runtime::NativeOwnerStatus>,
     recording: PrepaidOwnerRecord,
     slots: TeardownReportSlots,
 }
@@ -118,6 +128,7 @@ pub(super) struct OwnerTeardownReturned<'binding> {
 pub(super) struct OwnerTeardownRecorded<'binding> {
     _authority: SourceOwnerReturnedAuthority<'binding>,
     consumed: NativeOwnerDisposition,
+    status: Option<crate::foreign::source_runtime::NativeOwnerStatus>,
     slots: TeardownReportSlots,
 }
 
@@ -323,7 +334,37 @@ impl<'binding> OwnerTeardownPrepared<'binding> {
                 _ => OwnerPhaseFailure::Authority,
             })?;
         let returned_constructor = invocation.returned_constructor();
-        let first = reserve_slots(heap, work, 2)?;
+        let status = if matches!(
+            invocation.result(),
+            crate::foreign::source_contract::PreparedAbiResult::Scalar(_)
+        ) {
+            let prepaid = crate::foreign::source_runtime::PrepaidScalarReport::admit(
+                invocation.result(),
+                work,
+            )
+            .map_err(|error| match error {
+                crate::foreign::source_runtime::NativeScalarConversionError::WorkExhausted => {
+                    OwnerPhaseFailure::WorkReservation
+                }
+                _ => OwnerPhaseFailure::Authority,
+            })?;
+            Some((
+                prepaid,
+                invocation.hidden_error_constructor(),
+                invocation.conversion_failed_constructor(),
+            ))
+        } else {
+            None
+        };
+        let first = reserve_slots(heap, work, if status.is_some() { 3 } else { 2 })?;
+        let status = status.map(
+            |(prepaid, hidden_error, conversion_failed)| StatusReportStorage {
+                prepaid,
+                error: first + 2,
+                hidden_error,
+                conversion_failed,
+            },
+        );
         Ok(Self {
             invocation,
             recording: PrepaidOwnerRecord,
@@ -336,6 +377,7 @@ impl<'binding> OwnerTeardownPrepared<'binding> {
                 retained,
                 blocked,
                 returned_constructor,
+                status,
             },
             blocked: has_dependents,
         })
@@ -372,10 +414,11 @@ impl<'binding> OwnerTeardownReady<'binding> {
             recording,
             slots,
         } = self;
-        let (authority, consumed) = invocation.invoke(guard, &operands, blocked);
+        let (authority, consumed, status) = invocation.invoke(guard, &operands, blocked);
         OwnerTeardownReturned {
             authority,
             consumed,
+            status,
             recording,
             slots,
         }
@@ -387,12 +430,14 @@ impl<'binding> OwnerTeardownReturned<'binding> {
         let Self {
             authority,
             consumed,
+            status,
             recording: PrepaidOwnerRecord,
             slots,
         } = self;
         OwnerTeardownRecorded {
             _authority: authority,
             consumed,
+            status,
             slots,
         }
     }
@@ -403,8 +448,42 @@ impl OwnerTeardownRecorded<'_> {
         self,
         heap: &mut [HeapCell],
     ) -> Result<OwnerTeardownReported, OwnerPhaseFailure> {
-        if !empty_slots(heap, self.slots.disposition, 2) {
+        if !empty_slots(
+            heap,
+            self.slots.disposition,
+            if self.slots.status.is_some() { 3 } else { 2 },
+        ) {
             return Err(OwnerPhaseFailure::HeapSlotInvariant);
+        }
+        let mut payload = Value::Unit;
+        if !self.consumed.is_blocked() {
+            match (self.status, self.slots.status) {
+                (Some(raw), Some(report)) => {
+                    if !raw.valid {
+                        return Err(OwnerPhaseFailure::Authority);
+                    }
+                    if !raw.readable {
+                        heap[report.error] = HeapCell::Constructor(report.hidden_error, None);
+                        heap[self.slots.returned] = HeapCell::Constructor(
+                            report.conversion_failed,
+                            Some(Value::Location(report.error)),
+                        );
+                        return Ok(OwnerTeardownReported {
+                            boundary: self.slots.boundary,
+                            activation: self.slots.activation,
+                            value: Value::Location(self.slots.returned),
+                            consumed: self.consumed,
+                        });
+                    }
+                    let value =
+                        crate::foreign::source_runtime::widen_gnu_reply(raw.reply, report.prepaid)
+                            .map_err(|_| OwnerPhaseFailure::Authority)?
+                            .ok_or(OwnerPhaseFailure::Authority)?;
+                    payload = Value::Integer(value);
+                }
+                (None, None) => {}
+                _ => return Err(OwnerPhaseFailure::Authority),
+            }
         }
         let constructor = if self.consumed.is_blocked() {
             self.slots.blocked
@@ -415,7 +494,7 @@ impl OwnerTeardownRecorded<'_> {
         };
         heap[self.slots.disposition] = HeapCell::Constructor(
             constructor,
-            (!self.consumed.is_blocked()).then_some(Value::Unit),
+            (!self.consumed.is_blocked()).then_some(payload),
         );
         heap[self.slots.returned] = HeapCell::Constructor(
             self.slots.returned_constructor,
@@ -528,7 +607,9 @@ impl<'runtime> super::Machine<'runtime> {
             .ok_or(super::RuntimeFailure::ForeignBinding)?;
         let phase = match symbol.owner_role() {
             Some(PreparedOwnerCall::Acquire { .. }) => SourceOwnerPhase::Acquire,
-            Some(PreparedOwnerCall::Teardown { .. }) => SourceOwnerPhase::Finish,
+            Some(PreparedOwnerCall::Teardown { .. } | PreparedOwnerCall::StatusTeardown { .. }) => {
+                SourceOwnerPhase::Finish
+            }
             None => return Err(super::RuntimeFailure::ForeignBinding),
         };
         let expected_phase = match phase {
@@ -756,9 +837,14 @@ impl<'runtime> super::Machine<'runtime> {
                 self.pending_source_owner_call = Some(SourceOwnerCallProgress::AcquireReady(ready));
             }
             AdmittedSourceOwnerInvocation::Teardown(invocation) => {
-                let Some(PreparedOwnerCall::Teardown {
-                    current_operand, ..
-                }) = symbol.owner_role()
+                let Some(
+                    PreparedOwnerCall::Teardown {
+                        current_operand, ..
+                    }
+                    | PreparedOwnerCall::StatusTeardown {
+                        current_operand, ..
+                    },
+                ) = symbol.owner_role()
                 else {
                     return Err(super::RuntimeFailure::ForeignBinding);
                 };
@@ -806,6 +892,8 @@ impl<'runtime> super::Machine<'runtime> {
                     .owner
                     .as_ref()
                     .ok_or(super::RuntimeFailure::ForeignBinding)?;
+                #[cfg(test)]
+                post_record_test::teardown_preflight(&mut self.instantiation_work);
                 let prepared = OwnerTeardownPrepared::admit(
                     invocation,
                     guard,
@@ -813,8 +901,11 @@ impl<'runtime> super::Machine<'runtime> {
                     index,
                     &mut self.heap,
                     &mut self.instantiation_work,
-                )
-                .map_err(|error| phase_failure(error, &self.instantiation_work))?;
+                );
+                #[cfg(test)]
+                post_record_test::teardown_preflight_completed(&self.instantiation_work);
+                let prepared =
+                    prepared.map_err(|error| phase_failure(error, &self.instantiation_work))?;
                 // Every fallible operand/report/authority admission precedes
                 // removal of the boundary's one native ownership edge.
                 let super::Frame::SourceResourceBoundary(boundary) = &mut self.frames[index] else {
@@ -1092,11 +1183,18 @@ fn prepare_destruction_operands(
     let owner = destructor
         .owner()
         .ok_or(super::RuntimeFailure::ForeignBinding)?;
-    let Some(PreparedOwnerCall::Teardown {
-        application,
-        current_operand,
-        ..
-    }) = destructor.owner_role()
+    let Some(
+        PreparedOwnerCall::Teardown {
+            application,
+            current_operand,
+            ..
+        }
+        | PreparedOwnerCall::StatusTeardown {
+            application,
+            current_operand,
+            ..
+        },
+    ) = destructor.owner_role()
     else {
         return Err(super::RuntimeFailure::ForeignBinding);
     };
@@ -1267,6 +1365,7 @@ pub(crate) mod post_record_test {
         pub(crate) teardown_reported: usize,
         pub(crate) teardown_recorded_with_zero_shared_work: bool,
         pub(crate) teardown_consumed_report_published: bool,
+        pub(crate) teardown_preflight_used: Option<usize>,
     }
 
     #[derive(Clone, Copy)]
@@ -1286,6 +1385,7 @@ pub(crate) mod post_record_test {
         AcquireReturn,
         TeardownReturn,
         InitializedExtentPreflight,
+        TeardownPreflight { prefix: usize, allowance: usize },
     }
 
     pub(crate) fn observe<T>(inject: bool, run: impl FnOnce() -> T) -> (T, Observation) {
@@ -1294,6 +1394,32 @@ pub(crate) mod post_record_test {
 
     pub(crate) fn observe_teardown<T>(inject: bool, run: impl FnOnce() -> T) -> (T, Observation) {
         observe_phase(inject, Phase::TeardownReturn, run)
+    }
+
+    pub(crate) fn observe_teardown_preflight<T>(
+        prefix: usize,
+        allowance: usize,
+        run: impl FnOnce() -> T,
+    ) -> (T, Observation) {
+        observe_phase(true, Phase::TeardownPreflight { prefix, allowance }, run)
+    }
+    pub(super) fn teardown_preflight(work: &mut TypeWorkBudget) {
+        if let Some(State {
+            phase: Phase::TeardownPreflight { prefix, allowance },
+            ..
+        }) = STATE.get()
+        {
+            *work = TypeWorkBudget::with_limit(prefix + allowance);
+            work.charge(prefix).unwrap();
+        }
+    }
+    pub(super) fn teardown_preflight_completed(work: &TypeWorkBudget) {
+        if let Some(mut state) = STATE.get()
+            && matches!(state.phase, Phase::TeardownPreflight { .. })
+        {
+            state.observation.teardown_preflight_used = Some(work.used());
+            STATE.set(Some(state));
+        }
     }
 
     pub(crate) fn observe_extent_preflight<T>(run: impl FnOnce() -> T) -> (T, Observation) {
@@ -1450,7 +1576,7 @@ pub(crate) mod post_record_test {
                     Some(HeapCell::Constructor(_, Some(Value::Location(actual)))) if *actual == disposition
                 ) && matches!(
                     heap.get(disposition),
-                    Some(HeapCell::Constructor(actual, Some(Value::Unit))) if *actual == consumed
+                    Some(HeapCell::Constructor(actual, Some(Value::Unit | Value::Integer(_)))) if *actual == consumed
                 );
             }
             STATE.set(Some(state));

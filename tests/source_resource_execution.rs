@@ -45,6 +45,297 @@ impl Drop for Fixture {
     }
 }
 
+fn owner_with_scalar_teardown_result() -> String {
+    include_str!("fixtures/source-owner/owner.ash")
+        .replace("repr Size = size_t", "repr Size = size_t\n    repr Status = signed(32)")
+        .replace("Foreign.Disposition<Unit>", "Foreign.Disposition<Int>")
+        .replace("abi (pointer(Address)) -> void", "abi (pointer(Address)) -> Status")
+        .replace(
+            "outcome otherwise { consumed 0 }",
+            "output result as scalar\n        outcome otherwise { readable result, consumed 0 }",
+        )
+        .replace("completion Finish<State<R>, Unit>", "completion Finish<State<R>, Int>")
+        .replace("result Scope<Unit, Unit, Answer>", "result Scope<Unit, Int, Answer>")
+        .replace(
+            "Foreign.Returned(Foreign.Consumed(())) => Consumed",
+            "Foreign.Returned(Foreign.Consumed(status)) => match status == 0 {\n            true => Consumed\n            false => ConsumedFailure(status)\n        }",
+        )
+        .replace(
+            "Foreign.Returned(Foreign.Retained(())) => Retained(state, ())",
+            "Foreign.Returned(Foreign.Retained(status)) => Retained(state, status)",
+        )
+        .replace("Retained(state, ())", "Retained(state, 1)")
+}
+
+#[test]
+fn generated_status_owner_records_consumption_before_reporting_scalar_result() {
+    let owner = owner_with_scalar_teardown_result();
+    let native = include_str!("fixtures/source-owner/native_owner.c")
+        .replace("void ash_owner_release(void *raw)", "int32_t ash_owner_release(void *raw)")
+        .replace(
+            "record(\"release\", owner->size);\n    free(owner);",
+            "int32_t status = owner->size == 42 ? 3 : 0;\n    record(\"release\", owner->size);\n    free(owner);\n    return status;",
+        );
+    generated_owner_program_with_native(
+        &owner,
+        "import owner as Owner\nprobe : Int -> Owner.Scope<Unit, Int, Int>\nprobe size = resource Owner.Probe<{}, Fresh, {}> owner = size {\n    Owner.read owner\n}\nmain : Unit -> (Owner.Scope<Unit, Int, Int>, Owner.Scope<Unit, Int, Int>)\nmain () = (probe 42, probe 64)\n",
+        None,
+        "(Completed(42, ConsumedError(3)), Completed(64, Closed))",
+        "acquire:42\nrelease:42\nacquire:64\nrelease:64\n",
+        &native,
+    );
+}
+
+fn owner_with_conditional_status_teardown() -> String {
+    include_str!("fixtures/source-owner/status_owner.ash").to_owned()
+}
+
+#[test]
+fn generated_status_owner_retains_then_original_host_teardown_consumes_once() {
+    let native = include_str!("fixtures/source-owner/native_owner.c")
+        .replace("size_t size;", "size_t size;\n    unsigned attempts;")
+        .replace("owner->size = size;", "owner->size = size;\n    owner->attempts = 0;")
+        .replace("void ash_owner_release(void *raw)", "int32_t ash_owner_release(void *raw)")
+        .replace("record(\"release\", owner->size);\n    free(owner);", "record(\"release\", owner->size);\n    if (owner->attempts++ == 0) return 7;\n    free(owner);\n    return 0;");
+    generated_owner_program_with_native(
+        &owner_with_conditional_status_teardown(),
+        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Int, Int>\nmain () = resource Owner.Probe<{}, Fresh, {}> owner = 42 {\n    Owner.read owner\n}\n",
+        None,
+        "Completed(42, RetainedError(7))",
+        "acquire:42\nrelease:42\nrelease:42\n",
+        &native,
+    );
+}
+
+#[test]
+fn generated_status_owner_incomplete_host_teardown_does_not_retry() {
+    let native = include_str!("fixtures/source-owner/native_owner.c")
+        .replace(
+            "void ash_owner_release(void *raw)",
+            "int32_t ash_owner_release(void *raw)",
+        )
+        .replace(
+            "record(\"release\", owner->size);\n    free(owner);",
+            "record(\"release\", owner->size);\n    return 7;",
+        );
+    generated_owner_execution_with_native(
+        &owner_with_conditional_status_teardown(),
+        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Int, Int>\nmain () = resource Owner.Probe<{}, Fresh, {}> owner = 42 {\n    Owner.read owner\n}\n",
+        None,
+        Err("source resource completion failed"),
+        "acquire:42\nrelease:42\nrelease:42\n",
+        &native,
+    );
+}
+
+#[test]
+fn generated_status_owner_unreadable_reply_reports_after_consumption_without_host_retry() {
+    let owner = owner_with_scalar_teardown_result()
+        .replace(
+            "outcome otherwise { readable result, consumed 0 }",
+            "outcome otherwise { unreadable result, consumed 0 }",
+        )
+        .replace(
+            "Foreign.ConversionFailed(_) => Retained(state, 1)",
+            "Foreign.ConversionFailed(_) => ConsumedFailure(1)",
+        );
+    let native = include_str!("fixtures/source-owner/native_owner.c")
+        .replace(
+            "void ash_owner_release(void *raw)",
+            "int32_t ash_owner_release(void *raw)",
+        )
+        .replace(
+            "record(\"release\", owner->size);\n    free(owner);",
+            "record(\"release\", owner->size);\n    free(owner);\n    return 0;",
+        );
+    generated_owner_program_with_native(
+        &owner,
+        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Int, Int>\nmain () = resource Owner.Probe<{}, Fresh, {}> owner = 42 {\n    Owner.read owner\n}\n",
+        None,
+        "Completed(42, ConsumedError(1))",
+        "acquire:42\nrelease:42\n",
+        &native,
+    );
+}
+
+#[test]
+fn generated_status_dependent_retention_blocks_parent_before_c_and_host_recovers_in_order() {
+    let owner = include_str!("fixtures/source-owner/dependent_owner.ash")
+        .replace(
+            "    repr Size = size_t",
+            "    repr Size = size_t\n    repr Status = signed(32)\n    const Held : Status = 7",
+        )
+        .replace(
+            "        let marked = Foreign.byte_write (state, 0, 99)\n",
+            "",
+        );
+    let owner = owner.replace("symbol ParentFree<P> : ParentState<P> -> Foreign.Call<Foreign.Disposition<Unit>>", "symbol ParentFree<P> : ParentState<P> -> Foreign.Call<Foreign.Disposition<Int>>")
+        .replace("abi (pointer(ParentBytes)) -> void", "abi (pointer(ParentBytes)) -> Status")
+        .replace("        outcome otherwise { consumed 0 }", "        output result as scalar\n        outcome otherwise { readable result, consumed 0 }");
+    let start = owner.find("    symbol ChildFree<P, R>").unwrap();
+    let end = start + owner[start..].find("    symbol ChildHold<P, R>").unwrap();
+    let free = owner[start..end]
+        .replace("Foreign.Disposition<Unit>", "Foreign.Disposition<Int>")
+        .replace("-> void", "-> Status")
+        .replace("outcome otherwise { readable result, consumed 0 }", "outcome result == Held { readable result, retained 0 }\n        outcome otherwise { readable result, consumed 0 }");
+    let owner = format!("{}{free}{}", &owner[..start], &owner[end..]);
+    let parent_start = owner.find("pub resource Parent<P>").unwrap();
+    let child_start = owner.find("pub interface ChildProvider").unwrap();
+    let parent = owner[parent_start..child_start]
+        .replace(
+            "completion Finish<ParentState<P>, Unit>",
+            "completion Finish<ParentState<P>, Int>",
+        )
+        .replace(
+            "result Scope<Unit, Unit, Answer>",
+            "result Scope<Unit, Int, Answer>",
+        )
+        .replace("Foreign.Consumed(())", "Foreign.Consumed(_)")
+        .replace(
+            "Foreign.Returned(Foreign.Retained(())) => Retained(state, ())",
+            "Foreign.Returned(Foreign.Retained(status)) => Retained(state, status)",
+        )
+        .replace(
+            "Foreign.Returned(Foreign.BlockedDependent) => Retained(state, ())",
+            "Foreign.Returned(Foreign.BlockedDependent) => Retained(state, 111)",
+        )
+        .replace("Retained(state, ())", "Retained(state, 222)");
+    let owner = format!(
+        "{}{parent}{}",
+        &owner[..parent_start],
+        &owner[child_start..]
+    );
+    let child_start = owner.find("pub resource Child<P, R>").unwrap();
+    let child = owner[child_start..]
+        .replace("ChildHold<P, R>", "ChildFree<P, R>")
+        .replace(
+            "completion Finish<ChildState<P, R>, Unit>",
+            "completion Finish<ChildState<P, R>, Int>",
+        )
+        .replace(
+            "result Scope<Unit, Unit, Answer>",
+            "result Scope<Unit, Int, Answer>",
+        )
+        .replace("Foreign.Consumed(())", "Foreign.Consumed(_)")
+        .replace(
+            "Foreign.Returned(Foreign.Retained(())) => Retained(state, ())",
+            "Foreign.Returned(Foreign.Retained(status)) => Retained(state, status)",
+        )
+        .replace("Retained(state, ())", "Retained(state, 1)");
+    let owner = format!("{}{child}", &owner[..child_start]);
+    let native = include_str!("fixtures/source-owner/native_dependent_owner.c")
+        .replace("#include <assert.h>", "#include <assert.h>\n#include <stdint.h>")
+        .replace("void ash_child_release", "int32_t ash_child_release")
+        .replace("void ash_parent_release", "int32_t ash_parent_release")
+        .replace("    free(parent);", "    free(parent);\n    return 0;")
+        .replace("    record(\"child-release\", child->identity);", "    static unsigned attempts;\n    record(\"child-release\", child->identity);\n    if (attempts++ == 0) return 7;")
+        .replace("    free(child);", "    free(child);\n    return 0;");
+    generated_owner_program_with_native(
+        &owner,
+        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Int, Owner.Scope<Unit, Int, Int>>\nmain () = resource Owner.Parent<ParentFresh> parent = 64 {\n    resource Owner.Child<ParentFresh, ChildFresh> child = (parent, 4) {\n        Owner.child_read child\n    }\n}\n",
+        None,
+        "Completed(Completed(4, RetainedError(7)), RetainedError(111))",
+        "parent-acquire:64\nchild-acquire:4\nchild-release:4\nchild-release:4\nparent-final-byte:0\nparent-release:64\n",
+        &native,
+    );
+}
+
+#[test]
+fn source_status_literal_does_not_publish_an_ordinary_constant_value() {
+    let fixture = Fixture::new("import owner as Owner\nmain : Unit -> Int\nmain () = Owner.Held\n");
+    fs::write(
+        fixture.0.join("owner.ash"),
+        owner_with_conditional_status_teardown(),
+    )
+    .unwrap();
+    let failure = compile_path(fixture.configuration()).unwrap_err();
+    assert!(matches!(
+        failure.pipeline_failure(),
+        Some(ash::driver::PipelineFailure::Resolution(_))
+    ));
+}
+
+fn status_native_consuming() -> String {
+    include_str!("fixtures/source-owner/native_owner.c")
+        .replace(
+            "void ash_owner_release(void *raw)",
+            "int32_t ash_owner_release(void *raw)",
+        )
+        .replace(
+            "record(\"release\", owner->size);\n    free(owner);",
+            "record(\"release\", owner->size);\n    free(owner);\n    return 0;",
+        )
+}
+
+#[test]
+fn generated_status_owner_resume_and_ordinary_override_keep_one_activation() {
+    generated_owner_program_with_native(
+        &owner_with_scalar_teardown_result(),
+        "import owner as Owner\neffect Pause {\n    pause : Unit -> Unit\n}\nmain : Unit -> Owner.Scope<Unit, Int, (Int, Int)>\nmain () = handle (resource Owner.Probe<{}, Fresh, {}> owner = 42 {\n    let paused = perform Pause.pause ()\n    let overridden = handle (Owner.read owner) with Owner.ProbeOps<Owner.Probe<{}, Fresh, {}>> {\n        read access => resume 84\n    }\n    (overridden, Owner.read owner)\n}) with Pause {\n    pause ignored => resume ()\n}\n",
+        None,
+        "Completed((84, 42), Closed)",
+        "acquire:42\nrelease:42\n",
+        &status_native_consuming(),
+    );
+}
+
+#[test]
+fn generated_status_owner_retained_discard_is_terminal_even_when_host_later_consumes() {
+    let native = include_str!("fixtures/source-owner/native_owner.c")
+        .replace("size_t size;", "size_t size;\n    unsigned attempts;")
+        .replace("owner->size = size;", "owner->size = size;\n    owner->attempts = 0;")
+        .replace("void ash_owner_release(void *raw)", "int32_t ash_owner_release(void *raw)")
+        .replace("record(\"release\", owner->size);\n    free(owner);", "record(\"release\", owner->size);\n    if (owner->attempts++ == 0) return 7;\n    free(owner);\n    return 0;");
+    generated_owner_execution_with_native(
+        &owner_with_conditional_status_teardown(),
+        "import owner as Owner\neffect Pause {\n    pause : Unit -> Unit\n}\nmain : Unit -> Int\nmain () = handle {\n    let abandoned = resource Owner.Probe<{}, Fresh, {}> owner = 42 {\n        let paused = perform Pause.pause ()\n        Owner.read owner\n    }\n    111\n} with Pause {\n    pause ignored => {\n        let closed = discard\n        84\n    }\n}\n",
+        None,
+        Err("source resource completion failed"),
+        "acquire:42\nrelease:42\nrelease:42\n",
+        &native,
+    );
+}
+
+#[test]
+fn source_status_unreadable_consumed_result_cannot_retain_revoked_state() {
+    let fixture = Fixture::new(
+        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Int, Int>\nmain () = resource Owner.Probe<{}, Fresh, {}> owner = 42 {\n    Owner.read owner\n}\n",
+    );
+    let owner = owner_with_scalar_teardown_result().replace(
+        "outcome otherwise { readable result, consumed 0 }",
+        "outcome otherwise { unreadable result, consumed 0 }",
+    );
+    fs::write(fixture.0.join("owner.ash"), owner).unwrap();
+    let failure = compile_path(fixture.configuration()).unwrap_err();
+    assert!(matches!(
+        failure.pipeline_failure(),
+        Some(ash::driver::PipelineFailure::Typing(_))
+    ));
+}
+
+#[test]
+fn generated_status_owner_widens_full_unsigned_native_range_after_recording() {
+    let owner = owner_with_scalar_teardown_result()
+        .replace("repr Status = signed(32)", "repr Status = unsigned(64)");
+    let native = include_str!("fixtures/source-owner/native_owner.c")
+        .replace(
+            "void ash_owner_release(void *raw)",
+            "uint64_t ash_owner_release(void *raw)",
+        )
+        .replace(
+            "record(\"release\", owner->size);\n    free(owner);",
+            "record(\"release\", owner->size);\n    free(owner);\n    return UINT64_MAX;",
+        );
+    generated_owner_program_with_native(
+        &owner,
+        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Int, Int>\nmain () = resource Owner.Probe<{}, Fresh, {}> owner = 42 {\n    Owner.read owner\n}\n",
+        None,
+        "Completed(42, ConsumedError(18446744073709551615))",
+        "acquire:42\nrelease:42\n",
+        &native,
+    );
+}
+
 #[test]
 fn source_owner_retained_disposition_is_admitted() {
     let fixture = Fixture::new(

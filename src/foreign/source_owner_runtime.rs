@@ -8,7 +8,7 @@ use std::{cell::RefCell, fmt, ptr::NonNull, rc::Rc, sync::Arc};
 
 use crate::foreign::{
     source_owner::CheckedForeignOwner,
-    source_runtime::{NativeScalarCallError, NativeScalarValue},
+    source_runtime::{NativeScalarCallError, NativeScalarReply, NativeScalarValue},
 };
 use crate::types::{IterativeTypeOwner, Type, TypeWorkBudget};
 
@@ -86,10 +86,122 @@ pub type NativeOwnerAcquireCallback = fn(
     NativeOwnerGuardReady,
 ) -> Result<NativeOwnerCallReturned, NativeScalarCallError>;
 
-/// The generated unconditional consuming teardown; unsafe code stays in the host.
-/// Its callback is admitted against the exact checked owner before acquisition.
+/// A generated void teardown; unsafe code stays in the host.
+/// Its separate original disposition is admitted before acquisition.
 #[doc(hidden)]
 pub type NativeOwnerTeardownCallback = fn(&[NativeOwnerOperand]);
+
+/// The exact typed scalar reply from a generated owner teardown.
+#[doc(hidden)]
+pub type NativeOwnerStatusTeardownCallback = fn(&[NativeOwnerOperand]) -> NativeScalarReply;
+
+#[derive(Debug)]
+pub(crate) enum NativeOwnerDestruction {
+    Void {
+        callback: NativeOwnerTeardownCallback,
+        consumes: bool,
+    },
+    Status {
+        callback: NativeOwnerStatusTeardownCallback,
+        symbol: Arc<crate::foreign::checked_source::CheckedForeignSymbol>,
+    },
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct NativeOwnerStatus {
+    pub(crate) reply: NativeScalarReply,
+    pub(crate) readable: bool,
+    pub(crate) valid: bool,
+}
+
+impl NativeOwnerDestruction {
+    // This exact descriptor and its finite traversal were admitted before C.
+    // No conversion, allocation, reservation or caller charge occurs here.
+    pub(crate) fn invoke(
+        &self,
+        operands: &[NativeOwnerOperand],
+    ) -> (bool, Option<NativeOwnerStatus>) {
+        match self {
+            Self::Void { callback, consumes } => {
+                callback(operands);
+                (*consumes, None)
+            }
+            Self::Status { callback, symbol } => {
+                use crate::foreign::source_contract::{
+                    PreparedAbiResult, PreparedOwnerCall, PreparedScalarRepresentation as Repr,
+                    PreparedScalarValue,
+                };
+                let reply = callback(operands);
+                let scalar = match (symbol.symbol().result(), reply) {
+                    (
+                        PreparedAbiResult::Scalar(Repr::Signed(8)),
+                        NativeScalarReply::Scalar(NativeScalarValue::I8(value)),
+                    ) => Some((value < 0, i64::from(value).unsigned_abs())),
+                    (
+                        PreparedAbiResult::Scalar(Repr::Signed(32)),
+                        NativeScalarReply::Scalar(NativeScalarValue::I32(value)),
+                    ) => Some((value < 0, i64::from(value).unsigned_abs())),
+                    (
+                        PreparedAbiResult::Scalar(Repr::Signed(64)),
+                        NativeScalarReply::Scalar(NativeScalarValue::I64(value)),
+                    ) => Some((value < 0, value.unsigned_abs())),
+                    (
+                        PreparedAbiResult::Scalar(Repr::Unsigned(8)),
+                        NativeScalarReply::Scalar(NativeScalarValue::U8(value)),
+                    ) => Some((false, u64::from(value))),
+                    (
+                        PreparedAbiResult::Scalar(Repr::Unsigned(32)),
+                        NativeScalarReply::Scalar(NativeScalarValue::U32(value)),
+                    ) => Some((false, u64::from(value))),
+                    (
+                        PreparedAbiResult::Scalar(Repr::Unsigned(64)),
+                        NativeScalarReply::Scalar(NativeScalarValue::U64(value)),
+                    ) => Some((false, value)),
+                    (
+                        PreparedAbiResult::Scalar(Repr::SizeT),
+                        NativeScalarReply::Scalar(NativeScalarValue::USize(value)),
+                    ) => Some((false, value as u64)),
+                    _ => None,
+                };
+                if let (
+                    Some((negative, magnitude)),
+                    Some(PreparedOwnerCall::StatusTeardown { outcomes, .. }),
+                ) = (scalar, symbol.owner_role())
+                {
+                    let value = PreparedScalarValue {
+                        negative,
+                        magnitude,
+                    };
+                    if let Some(outcome) = outcomes.iter().find(|outcome| {
+                        outcome
+                            .predicates
+                            .iter()
+                            .all(|predicate| predicate.value == value)
+                    }) {
+                        return (
+                            outcome.consumes,
+                            Some(NativeOwnerStatus {
+                                reply,
+                                readable: outcome.readable,
+                                valid: true,
+                            }),
+                        );
+                    }
+                }
+                // A trusted typed wrapper cannot disagree. An injected malformed
+                // reply leaves the same owner quarantined and reports terminally.
+                (
+                    false,
+                    Some(NativeOwnerStatus {
+                        reply,
+                        readable: false,
+                        valid: false,
+                    }),
+                )
+            }
+        }
+    }
+}
 
 /// Already admitted native operands. Addresses are borrowed from guarded slots;
 /// this transport alone grants neither source access nor owner disposition.
@@ -134,7 +246,7 @@ impl NativeByteAccess<'_> {
 
 struct RawOwnerGuard {
     address: Option<NonNull<core::ffi::c_void>>,
-    teardown: NativeOwnerTeardownCallback,
+    teardown: NativeOwnerDestruction,
     operands: Vec<NativeOwnerOperand>,
     current: usize,
 }
@@ -149,8 +261,24 @@ impl fmt::Debug for RawOwnerGuard {
 }
 
 impl RawOwnerGuard {
+    #[cfg(test)]
     fn empty(
         teardown: NativeOwnerTeardownCallback,
+        count: usize,
+        current: usize,
+    ) -> Result<Self, ()> {
+        Self::with_plan(
+            NativeOwnerDestruction::Void {
+                callback: teardown,
+                consumes: true,
+            },
+            count,
+            current,
+        )
+    }
+
+    fn with_plan(
+        teardown: NativeOwnerDestruction,
         count: usize,
         current: usize,
     ) -> Result<Self, ()> {
@@ -170,7 +298,7 @@ impl RawOwnerGuard {
             // Storage has admitted consumption and kept declared dependencies
             // live. Taking the address first prevents replay during unwind.
             self.operands[self.current] = NativeOwnerOperand::Address(address.as_ptr());
-            (self.teardown)(&self.operands);
+            let _ = self.teardown.invoke(&self.operands);
         }
     }
 }
@@ -192,7 +320,6 @@ pub(crate) struct NativeOwnerStorage {
 #[derive(Debug)]
 struct NativeOwnerSlot {
     raw: RawOwnerGuard,
-    destructor_consumes: bool,
     quarantined: bool,
     host_attempted: bool,
     authority: Option<NativeOwnerSlotAuthority>,
@@ -204,8 +331,7 @@ struct NativeOwnerSlot {
 impl NativeOwnerStorage {
     fn reserve(
         &self,
-        teardown: NativeOwnerTeardownCallback,
-        destructor_consumes: bool,
+        teardown: NativeOwnerDestruction,
         count: usize,
         current: usize,
     ) -> Result<usize, ()> {
@@ -213,8 +339,7 @@ impl NativeOwnerStorage {
         slots.try_reserve(1).map_err(|_| ())?;
         let index = slots.len();
         slots.push(NativeOwnerSlot {
-            raw: RawOwnerGuard::empty(teardown, count, current)?,
-            destructor_consumes,
+            raw: RawOwnerGuard::with_plan(teardown, count, current)?,
             quarantined: false,
             host_attempted: false,
             authority: None,
@@ -256,8 +381,8 @@ impl NativeOwnerStorage {
         slot.host_attempted = true;
         if let Some(address) = slot.raw.address.take() {
             slot.raw.operands[slot.raw.current] = NativeOwnerOperand::Address(address.as_ptr());
-            (slot.raw.teardown)(&slot.raw.operands);
-            if !slot.destructor_consumes {
+            let (consumes, _) = slot.raw.teardown.invoke(&slot.raw.operands);
+            if !consumes {
                 slot.raw.address = Some(address);
                 Self::quarantine(slots, index);
             } else {
@@ -449,23 +574,38 @@ impl NativeOwnerGuard {
 
     /// Invoke the independently admitted source finishing member. Its declared
     /// total disposition is recorded before any ordinary report construction.
+    #[cfg(test)]
     pub(crate) fn finish(
-        mut self,
+        self,
         callback: NativeOwnerTeardownCallback,
         consumes: bool,
         operands: &[NativeOwnerOperand],
         blocked: bool,
     ) -> NativeOwnerDisposition {
+        self.finish_with_plan(
+            &NativeOwnerDestruction::Void { callback, consumes },
+            operands,
+            blocked,
+        )
+        .0
+    }
+
+    pub(crate) fn finish_with_plan(
+        mut self,
+        plan: &NativeOwnerDestruction,
+        operands: &[NativeOwnerOperand],
+        blocked: bool,
+    ) -> (NativeOwnerDisposition, Option<NativeOwnerStatus>) {
         if blocked {
             self.quarantine();
-            return NativeOwnerDisposition::Blocked(self);
+            return (NativeOwnerDisposition::Blocked(self), None);
         }
+        let (consumes, status);
         {
             let mut slots = self.storage.slots.borrow_mut();
             let slot = &mut slots[self.slot];
-            let address = slot.raw.address.expect("admitted live owner");
-            let _address = address;
-            (callback)(operands);
+            let _address = slot.raw.address.expect("admitted live owner");
+            (consumes, status) = plan.invoke(operands);
             if consumes {
                 NativeOwnerStorage::record_consumed(&mut slots, self.slot);
             } else {
@@ -474,9 +614,12 @@ impl NativeOwnerGuard {
         }
         self.initialized_bytes = None;
         if consumes {
-            NativeOwnerDisposition::Consumed(Arc::clone(&self.owner))
+            (
+                NativeOwnerDisposition::Consumed(Arc::clone(&self.owner)),
+                status,
+            )
         } else {
-            NativeOwnerDisposition::Retained(self)
+            (NativeOwnerDisposition::Retained(self), status)
         }
     }
 }
@@ -543,6 +686,7 @@ impl NativeOwnerGuardReady {
         .expect("injected standalone guard storage")
     }
 
+    #[cfg(test)]
     pub(crate) fn in_storage(
         owner: Arc<CheckedForeignOwner>,
         teardown: NativeOwnerTeardownCallback,
@@ -551,7 +695,26 @@ impl NativeOwnerGuardReady {
         current: usize,
         storage: Rc<NativeOwnerStorage>,
     ) -> Result<Self, ()> {
-        let slot = storage.reserve(teardown, destructor_consumes, count, current)?;
+        Self::in_storage_plan(
+            owner,
+            NativeOwnerDestruction::Void {
+                callback: teardown,
+                consumes: destructor_consumes,
+            },
+            count,
+            current,
+            storage,
+        )
+    }
+
+    pub(crate) fn in_storage_plan(
+        owner: Arc<CheckedForeignOwner>,
+        plan: NativeOwnerDestruction,
+        count: usize,
+        current: usize,
+        storage: Rc<NativeOwnerStorage>,
+    ) -> Result<Self, ()> {
+        let slot = storage.reserve(plan, count, current)?;
         Ok(Self {
             guard: NativeOwnerGuard {
                 storage,

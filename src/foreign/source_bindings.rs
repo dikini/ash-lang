@@ -54,6 +54,39 @@ pub(crate) enum SourceOwnerCallback {
         super::source_runtime::NativeByteCallbacks,
     ),
     Teardown(NativeOwnerTeardownCallback),
+    StatusTeardown(super::source_runtime::NativeOwnerStatusTeardownCallback),
+}
+
+impl SourceOwnerCallback {
+    fn teardown_plan(
+        &self,
+        symbol: &Arc<CheckedForeignSymbol>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<super::source_runtime::NativeOwnerDestruction, RuntimeFailure> {
+        use super::{source_contract::PreparedOwnerCall, source_runtime::NativeOwnerDestruction};
+        match (self, symbol.owner_role()) {
+            (Self::Teardown(callback), Some(PreparedOwnerCall::Teardown { consumes, .. })) => {
+                Ok(NativeOwnerDestruction::Void {
+                    callback: *callback,
+                    consumes: *consumes,
+                })
+            }
+            (
+                Self::StatusTeardown(callback),
+                Some(PreparedOwnerCall::StatusTeardown { outcomes, .. }),
+            ) => {
+                paid(work, 1)?;
+                for outcome in outcomes {
+                    paid(work, outcome.predicates.len().saturating_add(1))?;
+                }
+                Ok(NativeOwnerDestruction::Status {
+                    callback: *callback,
+                    symbol: Arc::clone(symbol),
+                })
+            }
+            _ => Err(RuntimeFailure::ForeignBinding),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -228,23 +261,36 @@ impl SourceNativeBindings {
                     })
             }
             (
-                SourceOwnerCallback::Teardown(_),
-                Some(PreparedOwnerCall::Teardown {
-                    current_operand, ..
-                }),
+                SourceOwnerCallback::Teardown(_) | SourceOwnerCallback::StatusTeardown(_),
+                Some(
+                    PreparedOwnerCall::Teardown {
+                        current_operand, ..
+                    }
+                    | PreparedOwnerCall::StatusTeardown {
+                        current_operand, ..
+                    },
+                ),
             ) => {
-                symbol.symbol().result() == PreparedAbiResult::Void
-                    && symbol
-                        .symbol()
-                        .operands()
-                        .get(*current_operand)
-                        .is_some_and(|operand| {
-                            matches!(operand.source(), PreparedOperandSource::Current(_))
-                                && operand.representation()
-                                    == PreparedRepresentation::Address(
-                                        owner.owner().representation(),
-                                    )
-                        })
+                matches!(
+                    (&callback, symbol.owner_role(), symbol.symbol().result()),
+                    (
+                        SourceOwnerCallback::Teardown(_),
+                        Some(PreparedOwnerCall::Teardown { .. }),
+                        PreparedAbiResult::Void
+                    ) | (
+                        SourceOwnerCallback::StatusTeardown(_),
+                        Some(PreparedOwnerCall::StatusTeardown { .. }),
+                        PreparedAbiResult::Scalar(_)
+                    )
+                ) && symbol
+                    .symbol()
+                    .operands()
+                    .get(*current_operand)
+                    .is_some_and(|operand| {
+                        matches!(operand.source(), PreparedOperandSource::Current(_))
+                            && operand.representation()
+                                == PreparedRepresentation::Address(owner.owner().representation())
+                    })
                     && symbol
                         .symbol()
                         .operands()
@@ -390,25 +436,22 @@ impl SourceNativeBindings {
             (
                 SourceOwnerPhase::Acquire,
                 SourceOwnerCallback::Acquire(_) | SourceOwnerCallback::ByteAcquire(_, _),
-                SourceOwnerCallback::Teardown(callback),
+                SourceOwnerCallback::Teardown(_) | SourceOwnerCallback::StatusTeardown(_),
             ) => {
                 let hidden_error = authenticate_hidden_error(program.registry(), symbol, work)?;
                 paid(work, 1)?;
-                let Some(super::source_contract::PreparedOwnerCall::Teardown {
-                    consumes,
-                    current_operand,
-                    ..
-                }) = teardown.symbol.owner_role()
-                else {
-                    return Err(RuntimeFailure::ForeignBinding);
-                };
+                let current_operand = teardown
+                    .symbol
+                    .owner_role()
+                    .and_then(|role| role.current_operand())
+                    .ok_or(RuntimeFailure::ForeignBinding)?;
+                let plan = teardown.callback.teardown_plan(&teardown.symbol, work)?;
                 paid(work, teardown.symbol.symbol().operands().len())?;
-                let mut readiness = NativeOwnerGuardReady::in_storage(
+                let mut readiness = NativeOwnerGuardReady::in_storage_plan(
                     Arc::clone(&header.owner),
-                    *callback,
-                    *consumes,
+                    plan,
                     teardown.symbol.symbol().operands().len(),
-                    *current_operand,
+                    current_operand,
                     Rc::clone(&self.owner_storage),
                 )
                 .map_err(|()| storage(1))?;
@@ -427,12 +470,12 @@ impl SourceNativeBindings {
             }
             (
                 SourceOwnerPhase::Finish,
-                SourceOwnerCallback::Teardown(callback),
-                SourceOwnerCallback::Teardown(_),
+                SourceOwnerCallback::Teardown(_) | SourceOwnerCallback::StatusTeardown(_),
+                SourceOwnerCallback::Teardown(_) | SourceOwnerCallback::StatusTeardown(_),
             ) => Ok(AdmittedSourceOwnerInvocation::Teardown(
                 AdmittedSourceOwnerTeardownInvocation {
                     symbol: &binding.symbol,
-                    callback: *callback,
+                    plan: binding.callback.teardown_plan(&binding.symbol, work)?,
                     receipt,
                 },
             )),
@@ -584,7 +627,7 @@ pub(crate) struct AdmittedSourceOwnerAcquireInvocation<'bindings> {
 #[derive(Debug)]
 pub(crate) struct AdmittedSourceOwnerTeardownInvocation<'bindings> {
     symbol: &'bindings Arc<CheckedForeignSymbol>,
-    callback: NativeOwnerTeardownCallback,
+    plan: super::source_runtime::NativeOwnerDestruction,
     receipt: SourceOwnerScopeRequest,
 }
 
@@ -679,7 +722,7 @@ impl<'bindings> AdmittedSourceOwnerAcquireInvocation<'bindings> {
         let callback = match &self.binding.callback {
             SourceOwnerCallback::Acquire(callback)
             | SourceOwnerCallback::ByteAcquire(callback, _) => callback,
-            SourceOwnerCallback::Teardown(_) => {
+            SourceOwnerCallback::Teardown(_) | SourceOwnerCallback::StatusTeardown(_) => {
                 return Err(NativeScalarCallError::ArgumentContract);
             }
         };
@@ -695,6 +738,16 @@ impl<'bindings> AdmittedSourceOwnerAcquireInvocation<'bindings> {
 }
 
 impl<'bindings> AdmittedSourceOwnerTeardownInvocation<'bindings> {
+    pub(crate) fn result(&self) -> super::source_contract::PreparedAbiResult {
+        self.symbol.symbol().result()
+    }
+    pub(crate) fn conversion_failed_constructor(&self) -> ConstructorId {
+        self.symbol.call_codec().ids().conversion_failed
+    }
+    pub(crate) fn hidden_error_constructor(&self) -> ConstructorId {
+        ConstructorId::new(self.symbol.call_codec().ids().conversion_error, 0)
+    }
+
     pub(crate) fn owner(&self) -> &Arc<super::source_owner::CheckedForeignOwner> {
         self.symbol.owner().expect("admitted owner identity")
     }
@@ -716,19 +769,16 @@ impl<'bindings> AdmittedSourceOwnerTeardownInvocation<'bindings> {
     ) -> (
         SourceOwnerReturnedAuthority<'bindings>,
         NativeOwnerDisposition,
+        Option<super::source_runtime::NativeOwnerStatus>,
     ) {
-        let Some(super::source_contract::PreparedOwnerCall::Teardown { consumes, .. }) =
-            self.symbol.owner_role()
-        else {
-            unreachable!("admitted total disposition");
-        };
-        let consumed = guard.finish(self.callback, *consumes, operands, blocked);
+        let (consumed, status) = guard.finish_with_plan(&self.plan, operands, blocked);
         (
             SourceOwnerReturnedAuthority {
                 _symbol: self.symbol,
                 _receipt: self.receipt,
             },
             consumed,
+            status,
         )
     }
 }

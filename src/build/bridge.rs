@@ -242,7 +242,6 @@ impl TargetResolvedForeignBridge {
     pub(crate) fn operands(&self) -> &[TargetOperand] {
         &self.operands
     }
-    #[cfg(test)]
     pub(crate) const fn result(&self) -> TargetResult {
         self.result
     }
@@ -386,20 +385,25 @@ fn plan_target_bridge(
                 }
                 PreparedOwnerCall::Teardown {
                     current_operand, ..
+                }
+                | PreparedOwnerCall::StatusTeardown {
+                    current_operand, ..
                 } => {
                     // Host destruction uses pre-admitted Current/Enclosing
                     // addresses; it performs no late scalar narrowing.
-                    if source.result() != PreparedAbiResult::Void
-                        || !source
-                            .operands()
-                            .get(*current_operand)
-                            .is_some_and(|operand| {
-                                matches!(operand.source(), PreparedOperandSource::Current(_))
-                                    && operand.representation()
-                                        == PreparedRepresentation::Address(
-                                            owner.owner().representation(),
-                                        )
-                            })
+                    if !matches!(
+                        source.result(),
+                        PreparedAbiResult::Void | PreparedAbiResult::Scalar(_)
+                    ) || !source
+                        .operands()
+                        .get(*current_operand)
+                        .is_some_and(|operand| {
+                            matches!(operand.source(), PreparedOperandSource::Current(_))
+                                && operand.representation()
+                                    == PreparedRepresentation::Address(
+                                        owner.owner().representation(),
+                                    )
+                        })
                     {
                         return Err(fail(ForeignBridgeReason::UnsupportedRepresentation, span));
                     }
@@ -597,11 +601,17 @@ fn render_bridge(output: &mut impl Write, plan: &TargetResolvedForeignBridge) ->
             ";\n}}\npub fn {}(arguments: &[{OWNER_OPERAND}], readiness: {OWNER_READY}) -> Result<{OWNER_RETURNED}, {ERROR}> {{\n    let [",
             plan.rust_function_name
         )?,
-        TargetBridgeCall::OwnerTeardown => write!(
-            output,
-            ";\n}}\npub fn {}(arguments: &[{OWNER_OPERAND}]) {{\n    let [",
-            plan.rust_function_name
-        )?,
+        TargetBridgeCall::OwnerTeardown => {
+            write!(
+                output,
+                ";\n}}\npub fn {}(arguments: &[{OWNER_OPERAND}])",
+                plan.rust_function_name
+            )?;
+            if matches!(plan.result, TargetResult::Scalar(_)) {
+                write!(output, " -> {REPLY}")?;
+            }
+            output.write_str(" {\n    let [")?;
+        }
     }
     for (index, scalar) in plan.operands.iter().enumerate() {
         if index > 0 {
@@ -641,6 +651,7 @@ fn render_bridge(output: &mut impl Write, plan: &TargetResolvedForeignBridge) ->
         TargetResult::Void if plan.call == TargetBridgeCall::OwnerTeardown =>
             output.write_str("    let () = value;\n}\n"),
         TargetResult::Void => write!(output, "    let () = value;\n    Ok({REPLY}::Void)\n}}\n"),
+        TargetResult::Scalar(scalar) if plan.call == TargetBridgeCall::OwnerTeardown => write!(output, "    {REPLY}::Scalar({VALUE}::{}(value))\n}}\n", scalar.value_variant()),
         TargetResult::Scalar(scalar) => write!(
             output,
             "    Ok({REPLY}::Scalar({VALUE}::{}(value)))\n}}\n",

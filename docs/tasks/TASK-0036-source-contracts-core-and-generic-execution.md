@@ -42,18 +42,51 @@ Use public-pipeline integration cases for source admission/publication, exact
 identity and tagged argument checks, malformed/transformed Core, invalid access
 and escape. Observe actual native acquisition, refusal, partial-owner cleanup,
 window copies, completion order, resume/discard and retained-dependent blocking
-through TASK-0037 bindings. Retain the open-Delta case and separate captured-control
-witness. Run connected compiler/Core/evaluator regressions with one Cargo job;
-keep milestone-wide regression pending between the named checkpoint gates in
-the [agent workflow](../project/agent-workflow.md). The last full gate was run at
-`868d0b43` and transferred by authenticated equality to retained `9fae971`; no
-delivery has intervened. The next gate belongs to the PM after shared
-ownership/control/runtime support is complete, including declared dependencies,
-retained-owner quarantine, control and required-completion failure matrices
-through source, Core, copying, image, bindings and guard storage. Focused PRs may
-contribute toward that boundary without making each PR a full-gate checkpoint.
+through TASK-0037 bindings. Retain the open-Delta case and separate
+captured-control witness. Run connected compiler/Core/evaluator regressions
+with one Cargo job; keep milestone-wide regression pending between the named
+checkpoint gates in the [agent workflow](../project/agent-workflow.md). The
+last full gate was run at `868d0b43` and transferred by authenticated equality
+to retained `9fae971`. PR21's focused ownership delivery is retained at
+`d44138f`; milestone-wide regression verification remains pending. The next
+gate belongs to the PM after shared ownership/control/runtime support is
+complete, including declared dependencies, retained-owner quarantine, control
+and required-completion failure matrices through source, Core, copying, image,
+bindings and guard storage. Focused PRs may contribute toward that boundary
+without making each PR a full-gate checkpoint.
 
 ## Discoveries
+
+Scalar teardown uses a separate immutable status descriptor alongside the
+existing void descriptor. It retains total original literal predicates,
+disposition/readability spans and the complete owner application. Source,
+independent Core, copying and private image reconstruction preserve those facts;
+complete generated EXPECTED_FACTS bytes authenticate foreign assumptions before
+binding. Well-formed changed foreign assertions are not rejected merely by
+structural Core validity. Malformed coverage, spans and applications have their
+own independent refusal boundary.
+
+The original typed status callback is admitted separately for source finish and
+host destruction. Readiness pays finite selection and complete reply work and
+reserves success/error cells before C. Disposition and dependency changes
+precede result widening. GNU64 replies fit num-bigint 0.5.1's inline 64-bit
+digit; no integer representation change or late allocation is required.
+Unreadable replies report conversion failure after disposition.
+BlockedDependent has no native status payload. The flat store now owns its
+typed slot authority while sharing original symbols; its retention inventory is
+Mixed and its existing iterative owners remain responsible for disposal.
+
+Connected status witnesses distinguish consumed error from Closed, retained
+source completion from later consuming host destruction, incomplete destruction
+without retry, blocked status teardown before C, dependency-order recovery,
+full unsigned widening, capture/resume/ordinary override and terminal retained
+discard. Injected readiness witnesses distinguish the I32 reply's eleven-unit
+exact allowance from one-short atomic refusal (six units spent), prefixed
+allowances and two fresh retries. Ordinary constant terms and native constant
+operands are separate work; this slice needs only checked passive status
+literals. Scalar teardown inputs and callable lifecycle helpers remain outside
+the current executable profile, so the shared-runtime checkpoint is not yet
+ready.
 
 Source control moves the same guard/activation through capture and resume.
 Owned discard runs acquired scopes' original finish once in structural order,
@@ -419,9 +452,9 @@ reservation. Independent final validation remains a separate obligation.
 Current bounded execution admits opaque and initialized-byte
 owners, both report codecs, complete associated-method forwarding and ordinary
 outward capture/resume/owned discard, declared dependencies, retained completion
-and quarantine under unconditional void owner contracts. Native windows,
-status-returning owner teardown, callable lifecycle helpers, source `given`
-forwarding and library migrations remain CP-0022 work. These are
+and quarantine under void or scalar-status owner contracts. Native windows,
+callable lifecycle helpers, source `given` forwarding and library migrations
+remain CP-0022 work. These are
 implementation boundaries, not amendments to the broader accepted contract.
 
 A public source resource currently needs a public provider interface. Retaining

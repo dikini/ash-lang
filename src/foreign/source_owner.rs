@@ -628,10 +628,26 @@ pub(super) fn validate_owner_symbol(
             application,
             current_operand,
             ..
+        }
+        | PreparedOwnerCall::StatusTeardown {
+            application,
+            current_operand,
+            ..
         } => {
-            if symbol.result() != PreparedAbiResult::Void
-                || unary_payload(payload, codec.disposition, span, work)? != &Type::Unit
-            {
+            let expected_payload = match symbol.owner_call() {
+                Some(PreparedOwnerCall::Teardown { .. })
+                    if symbol.result() == PreparedAbiResult::Void =>
+                {
+                    &Type::Unit
+                }
+                Some(PreparedOwnerCall::StatusTeardown { .. })
+                    if matches!(symbol.result(), PreparedAbiResult::Scalar(_)) =>
+                {
+                    &Type::Int
+                }
+                _ => return Err(failure(ForeignAdmissionReason::InvalidSignature, span)),
+            };
+            if unary_payload(payload, codec.disposition, span, work)? != expected_payload {
                 return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
             }
             let operand = symbol
@@ -670,7 +686,8 @@ pub(super) fn validate_owner_symbol(
                 let state = source_leaf(domain, path, span, work)?;
                 let application = match symbol.owner_call().expect("checked owner role") {
                     PreparedOwnerCall::Acquire { application, .. }
-                    | PreparedOwnerCall::Teardown { application, .. } => application,
+                    | PreparedOwnerCall::Teardown { application, .. }
+                    | PreparedOwnerCall::StatusTeardown { application, .. } => application,
                 };
                 enclosing_identity(state, owner, application, effect, registry, span, work)?;
                 let mut head = state;

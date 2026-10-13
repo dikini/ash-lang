@@ -275,7 +275,11 @@ fn render_native_suffix(
                     }
                 }
                 super::bridge::TargetBridgeCall::OwnerTeardown => {
-                    "__private_native_owner_teardown_bridge"
+                    if matches!(member.plan.result(), super::bridge::TargetResult::Scalar(_)) {
+                        "__private_native_owner_status_teardown_bridge"
+                    } else {
+                        "__private_native_owner_teardown_bridge"
+                    }
                 }
             };
             write!(

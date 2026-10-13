@@ -17,10 +17,10 @@ use crate::{
         SurfaceForeignAbiRepresentation, SurfaceForeignContract, SurfaceForeignInteger,
         SurfaceForeignLibrary, SurfaceForeignMember, SurfaceForeignNativePosition,
         SurfaceForeignOperandRoleKind, SurfaceForeignOperandSource, SurfaceForeignOutcomeCondition,
-        SurfaceForeignOutcomeFactKind, SurfaceForeignOutcomeTest, SurfaceForeignOutputRoleKind,
-        SurfaceForeignOwner, SurfaceForeignReference, SurfaceForeignRepresentation,
-        SurfaceForeignSourcePosition, SurfaceForeignSymbol, SurfaceKindKind, SurfaceType,
-        SurfaceTypeKind, SurfaceTypeParameter,
+        SurfaceForeignOutcomeFact, SurfaceForeignOutcomeFactKind, SurfaceForeignOutcomeTest,
+        SurfaceForeignOutputRoleKind, SurfaceForeignOwner, SurfaceForeignReference,
+        SurfaceForeignRepresentation, SurfaceForeignSourcePosition, SurfaceForeignSymbol,
+        SurfaceKindKind, SurfaceType, SurfaceTypeKind, SurfaceTypeParameter,
     },
     types::{Kind, TypeWorkBudget},
 };
@@ -420,7 +420,18 @@ impl PreparedOwnerApplication {
     }
 }
 
-/// Complete facts for the admitted owner-producing or consuming call shape.
+/// One total raw-status branch, retained with its source disposition/readability.
+#[derive(Debug)]
+pub struct PreparedOwnerStatusOutcome {
+    pub(crate) predicates: Vec<PreparedOutcomePredicate>,
+    pub(crate) consumes: bool,
+    pub(crate) readable: bool,
+    pub(crate) disposition_span: Span,
+    pub(crate) readability_span: Span,
+    pub(crate) outcome_span: Span,
+}
+
+/// Complete facts for the admitted owner-producing or finishing call shape.
 #[derive(Debug)]
 pub enum PreparedOwnerCall {
     Acquire {
@@ -439,6 +450,49 @@ pub enum PreparedOwnerCall {
         block_span: Span,
         outcome_span: Span,
     },
+    StatusTeardown {
+        application: PreparedOwnerApplication,
+        current_operand: usize,
+        output_span: Span,
+        block_span: Span,
+        outcomes: Vec<PreparedOwnerStatusOutcome>,
+    },
+}
+
+impl PreparedOwnerCall {
+    pub(crate) fn application(&self) -> &PreparedOwnerApplication {
+        match self {
+            Self::Acquire { application, .. }
+            | Self::Teardown { application, .. }
+            | Self::StatusTeardown { application, .. } => application,
+        }
+    }
+    pub(crate) fn current_operand(&self) -> Option<usize> {
+        match self {
+            Self::Acquire { .. } => None,
+            Self::Teardown {
+                current_operand, ..
+            }
+            | Self::StatusTeardown {
+                current_operand, ..
+            } => Some(*current_operand),
+        }
+    }
+    pub(crate) fn dispositions(&self) -> impl Iterator<Item = (bool, bool)> + '_ {
+        let void = match self {
+            Self::Teardown { consumes, .. } => Some((*consumes, true)),
+            _ => None,
+        };
+        let status = match self {
+            Self::StatusTeardown { outcomes, .. } => outcomes.as_slice(),
+            _ => &[],
+        };
+        void.into_iter().chain(
+            status
+                .iter()
+                .map(|outcome| (outcome.consumes, outcome.readable)),
+        )
+    }
 }
 
 /// One dependency-free owner family. Teardown uses the original member
@@ -1549,6 +1603,7 @@ fn prepare_owner_symbol_body(
     reserve(&mut mappings, source.abi_operands.len(), source.span)?;
     mappings.resize_with(source.abi_operands.len(), || None);
     let mut output = None;
+    let mut scalar_output = None;
     let mut block = None;
     let mut cases = Vec::new();
     // This temporary stores borrowed source cases, never recursive owned syntax.
@@ -1578,17 +1633,23 @@ fn prepare_owner_symbol_body(
                 span,
             } => {
                 if output.is_some()
+                    || scalar_output.is_some()
                     || native_position(position, work)? != PreparedNativePosition::Result
                 {
                     return Err(failure(ForeignContractReason::OutputCoverage, *span));
                 }
-                let SurfaceForeignOutputRoleKind::Owner(ty) = &role.kind else {
-                    return Err(failure(
-                        ForeignContractReason::UnimplementedContract,
-                        role.span,
-                    ));
-                };
-                output = Some(owner_application(library, &symbol, ty, work)?);
+                match &role.kind {
+                    SurfaceForeignOutputRoleKind::Owner(ty) => {
+                        output = Some(owner_application(library, &symbol, ty, work)?);
+                    }
+                    SurfaceForeignOutputRoleKind::Scalar => scalar_output = Some(*span),
+                    _ => {
+                        return Err(failure(
+                            ForeignContractReason::UnimplementedContract,
+                            role.span,
+                        ));
+                    }
+                }
             }
             SurfaceForeignContract::RetainedDependentsBlock { span } => {
                 if block.replace(*span).is_some() {
@@ -1596,10 +1657,10 @@ fn prepare_owner_symbol_body(
                 }
             }
             SurfaceForeignContract::Outcome { test, facts, span } => {
-                if cases.len() == 2 {
-                    return Err(failure(ForeignContractReason::UnimplementedContract, *span));
+                if cases.len() == cases.capacity() {
+                    reserve(&mut cases, 1, *span)?;
                 }
-                cases.push((test, facts, *span));
+                cases.push((test, facts.as_slice(), *span));
             }
         }
     }
@@ -1691,6 +1752,7 @@ fn prepare_owner_symbol_body(
         };
         if representation != library.owners[application.owner].representation
             || current.is_some()
+            || scalar_output.is_some()
             || block.is_some()
             || cases.len() != 2
         {
@@ -1776,7 +1838,36 @@ fn prepare_owner_symbol_body(
     } else {
         let (current_operand, application) =
             current.ok_or_else(|| failure(ForeignContractReason::OperandCoverage, source.span))?;
+        if let PreparedAbiResult::Scalar(representation) = symbol.result {
+            let output_span = scalar_output
+                .ok_or_else(|| failure(ForeignContractReason::OutputCoverage, source.span))?;
+            let block_span = block
+                .ok_or_else(|| failure(ForeignContractReason::OutcomeCoverage, source.span))?;
+            let PreparedOperandSource::Current(current_path) =
+                &symbol.operands[current_operand].source
+            else {
+                return Err(failure(ForeignContractReason::OperandRole, source.span));
+            };
+            let outcomes = prepare_owner_status_outcomes(
+                library,
+                domain,
+                representation,
+                current_path,
+                &cases,
+                source.span,
+                work,
+            )?;
+            symbol.call = PreparedForeignCall::Owner(PreparedOwnerCall::StatusTeardown {
+                application,
+                current_operand,
+                output_span,
+                block_span,
+                outcomes,
+            });
+            return Ok(symbol);
+        }
         if symbol.result != PreparedAbiResult::Void
+            || scalar_output.is_some()
             || cases.len() != 1
             || !matches!(cases[0].0, SurfaceForeignOutcomeTest::Otherwise(_))
         {
@@ -1823,6 +1914,148 @@ fn prepare_owner_symbol_body(
     Ok(symbol)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn prepare_owner_status_outcomes(
+    library: &PreparedForeignLibrary,
+    domain: &SurfaceType,
+    representation: PreparedScalarRepresentation,
+    current_path: &[usize],
+    cases: &[(
+        &SurfaceForeignOutcomeTest,
+        &[SurfaceForeignOutcomeFact],
+        Span,
+    )],
+    span: Span,
+    work: &mut TypeWorkBudget,
+) -> Result<Vec<PreparedOwnerStatusOutcome>, ForeignContractError> {
+    let mut outcomes: Vec<PreparedOwnerStatusOutcome> = Vec::new();
+    charge(work, cases.len(), span)?;
+    reserve(&mut outcomes, cases.len(), span)?;
+    let mut otherwise = false;
+    for (test, facts, outcome_span) in cases {
+        charge(work, 1, *outcome_span)?;
+        if otherwise {
+            return Err(failure(
+                ForeignContractReason::OutcomeCoverage,
+                *outcome_span,
+            ));
+        }
+        let mut predicates = Vec::new();
+        match test {
+            SurfaceForeignOutcomeTest::Otherwise(_) => otherwise = true,
+            SurfaceForeignOutcomeTest::All(atoms) => {
+                if atoms.is_empty() {
+                    return Err(failure(
+                        ForeignContractReason::OutcomeCoverage,
+                        *outcome_span,
+                    ));
+                }
+                charge(work, atoms.len(), *outcome_span)?;
+                reserve(&mut predicates, atoms.len(), *outcome_span)?;
+                for atom in atoms {
+                    charge(work, 1, atom.span)?;
+                    let position = native_position(&atom.position, work)?;
+                    if position != PreparedNativePosition::Result {
+                        return Err(failure(ForeignContractReason::OutcomeCoverage, atom.span));
+                    }
+                    let SurfaceForeignOutcomeCondition::Equal(reference) = &atom.condition else {
+                        return Err(failure(
+                            ForeignContractReason::UnimplementedContract,
+                            atom.span,
+                        ));
+                    };
+                    let (_, value) = constant(library, reference, work)?;
+                    if value.representation != representation {
+                        return Err(failure(ForeignContractReason::OperandRole, reference.span));
+                    }
+                    charge(work, predicates.len(), atom.span)?;
+                    if predicates
+                        .iter()
+                        .any(|previous: &PreparedOutcomePredicate| previous.position == position)
+                    {
+                        return Err(failure(
+                            ForeignContractReason::OverlappingOutcomes,
+                            atom.span,
+                        ));
+                    }
+                    predicates.push(PreparedOutcomePredicate {
+                        position,
+                        value: value.value,
+                    });
+                }
+                for previous in &outcomes {
+                    charge(
+                        work,
+                        previous.predicates.len().saturating_mul(predicates.len()),
+                        *outcome_span,
+                    )?;
+                    // This result-only profile has one scalar selector. Two
+                    // equal selectors overlap regardless of their disposition.
+                    if previous.predicates == predicates {
+                        return Err(failure(
+                            ForeignContractReason::OverlappingOutcomes,
+                            *outcome_span,
+                        ));
+                    }
+                }
+            }
+        }
+        let mut disposition = None;
+        let mut readability = None;
+        charge(work, facts.len(), *outcome_span)?;
+        for fact in *facts {
+            match &fact.kind {
+                SurfaceForeignOutcomeFactKind::Consumed(position)
+                | SurfaceForeignOutcomeFactKind::Retained(position) => {
+                    let (path, _) = owner_source_path(position, domain, work)?;
+                    charge(work, current_path.len(), fact.span)?;
+                    if path != current_path || disposition.is_some() {
+                        return Err(failure(ForeignContractReason::OperandRole, fact.span));
+                    }
+                    disposition = Some((
+                        matches!(fact.kind, SurfaceForeignOutcomeFactKind::Consumed(_)),
+                        fact.span,
+                    ));
+                }
+                SurfaceForeignOutcomeFactKind::Readable(position)
+                | SurfaceForeignOutcomeFactKind::Unreadable(position) => {
+                    if native_position(position, work)? != PreparedNativePosition::Result
+                        || readability.is_some()
+                    {
+                        return Err(failure(ForeignContractReason::Readability, fact.span));
+                    }
+                    readability = Some((
+                        matches!(fact.kind, SurfaceForeignOutcomeFactKind::Readable(_)),
+                        fact.span,
+                    ));
+                }
+                _ => {
+                    return Err(failure(
+                        ForeignContractReason::UnimplementedContract,
+                        fact.span,
+                    ));
+                }
+            }
+        }
+        let (consumes, disposition_span) = disposition
+            .ok_or_else(|| failure(ForeignContractReason::OutcomeCoverage, *outcome_span))?;
+        let (readable, readability_span) = readability
+            .ok_or_else(|| failure(ForeignContractReason::Readability, *outcome_span))?;
+        outcomes.push(PreparedOwnerStatusOutcome {
+            predicates,
+            consumes,
+            readable,
+            disposition_span,
+            readability_span,
+            outcome_span: *outcome_span,
+        });
+    }
+    if !otherwise {
+        return Err(failure(ForeignContractReason::OutcomeCoverage, span));
+    }
+    Ok(outcomes)
+}
+
 fn validate_owner_teardowns(
     library: &PreparedForeignLibrary,
     work: &mut TypeWorkBudget,
@@ -1835,7 +2068,7 @@ fn validate_owner_teardowns(
             .iter()
             .find(|symbol| symbol.member_index == owner.teardown_member)
             .ok_or_else(|| failure(ForeignContractReason::UnknownMember, span))?;
-        if !matches!(&symbol.call, PreparedForeignCall::Owner(PreparedOwnerCall::Teardown { application, .. }) if application.owner == index)
+        if !matches!(&symbol.call, PreparedForeignCall::Owner(PreparedOwnerCall::Teardown { application, .. } | PreparedOwnerCall::StatusTeardown { application, .. }) if application.owner == index)
         {
             return Err(failure(ForeignContractReason::OperandRole, span));
         }
@@ -2258,6 +2491,80 @@ fn private_owner_call(
                 return Err(failure(ForeignContractReason::OperandRole, symbol.span));
             }
         }
+        PreparedOwnerCall::StatusTeardown {
+            application,
+            current_operand,
+            output_span,
+            block_span,
+            outcomes,
+        } => {
+            let owner = private_owner_application(parts, symbol, application, work)?;
+            charge(work, symbol.operands.len().saturating_add(6), symbol.span)?;
+            let PreparedAbiResult::Scalar(representation) = symbol.result else {
+                return Err(failure(ForeignContractReason::OutputRole, symbol.span));
+            };
+            let current = symbol
+                .operands
+                .get(*current_operand)
+                .ok_or_else(|| failure(ForeignContractReason::OperandCoverage, symbol.span))?;
+            if current.representation != PreparedRepresentation::Address(owner.representation)
+                || !matches!(current.source, PreparedOperandSource::Current(_))
+                || symbol
+                    .operands
+                    .iter()
+                    .filter(|operand| matches!(operand.source, PreparedOperandSource::Current(_)))
+                    .count()
+                    != 1
+                || !private_span_within(symbol.span, *output_span)
+                || !private_span_within(symbol.span, *block_span)
+                || outcomes.is_empty()
+            {
+                return Err(failure(ForeignContractReason::OperandRole, symbol.span));
+            }
+            for (index, outcome) in outcomes.iter().enumerate() {
+                charge(
+                    work,
+                    outcome
+                        .predicates
+                        .len()
+                        .saturating_add(parts.constants.len())
+                        .saturating_add(index)
+                        .saturating_add(5),
+                    symbol.span,
+                )?;
+                if !private_span_within(symbol.span, outcome.outcome_span)
+                    || !private_span_within(outcome.outcome_span, outcome.disposition_span)
+                    || !private_span_within(outcome.outcome_span, outcome.readability_span)
+                    || outcome.predicates.is_empty() != (index + 1 == outcomes.len())
+                    || (index > 0
+                        && outcomes[index - 1].outcome_span.range().end()
+                            > outcome.outcome_span.range().start())
+                    || outcome.predicates.len() > 1
+                    || outcomes[..index]
+                        .iter()
+                        .any(|previous| previous.predicates == outcome.predicates)
+                {
+                    return Err(failure(
+                        ForeignContractReason::OutcomeCoverage,
+                        outcome.outcome_span,
+                    ));
+                }
+                for predicate in &outcome.predicates {
+                    if predicate.position != PreparedNativePosition::Result
+                        || !parts.constants.iter().any(|constant| {
+                            constant.representation == representation
+                                && constant.value == predicate.value
+                        })
+                    {
+                        return Err(failure(
+                            ForeignContractReason::OutcomeCoverage,
+                            outcome.outcome_span,
+                        ));
+                    }
+                    private_scalar_value(predicate.value, representation, outcome.outcome_span)?;
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -2351,6 +2658,45 @@ fn same_owner_call(
                 && lb == rb
                 && lo == ro
                 && same_owner_application(la, ra, work)?)
+        }
+        (
+            Some(PreparedOwnerCall::StatusTeardown {
+                application: la,
+                current_operand: lp,
+                output_span: ls,
+                block_span: lb,
+                outcomes: lo,
+            }),
+            Some(PreparedOwnerCall::StatusTeardown {
+                application: ra,
+                current_operand: rp,
+                output_span: rs,
+                block_span: rb,
+                outcomes: ro,
+            }),
+        ) => {
+            charge(work, 4, span)?;
+            if lp != rp
+                || ls != rs
+                || lb != rb
+                || lo.len() != ro.len()
+                || !same_owner_application(la, ra, work)?
+            {
+                return Ok(false);
+            }
+            for (left, right) in lo.iter().zip(ro) {
+                charge(work, right.predicates.len().saturating_add(6), span)?;
+                if left.consumes != right.consumes
+                    || left.readable != right.readable
+                    || left.disposition_span != right.disposition_span
+                    || left.readability_span != right.readability_span
+                    || left.outcome_span != right.outcome_span
+                    || left.predicates != right.predicates
+                {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
         }
         _ => Ok(false),
     }
@@ -2585,7 +2931,7 @@ pub(crate) fn restore_prepared_library(
             .iter()
             .find(|symbol| symbol.member_index == owner.teardown_member);
         if !matches!(teardown.map(|symbol| &symbol.call),
-            Some(PrivatePreparedCall::Owner(PreparedOwnerCall::Teardown { application, .. })) if application.owner == owner_index)
+            Some(PrivatePreparedCall::Owner(PreparedOwnerCall::Teardown { application, .. } | PreparedOwnerCall::StatusTeardown { application, .. })) if application.owner == owner_index)
         {
             return Err(failure(ForeignContractReason::OperandRole, owner.span));
         }
@@ -2699,7 +3045,10 @@ pub(crate) fn restore_prepared_library(
                         || !matches!(operand.representation, PreparedRepresentation::Address(_))
                         || !matches!(
                             symbol.call,
-                            PrivatePreparedCall::Owner(PreparedOwnerCall::Teardown { .. })
+                            PrivatePreparedCall::Owner(
+                                PreparedOwnerCall::Teardown { .. }
+                                    | PreparedOwnerCall::StatusTeardown { .. }
+                            )
                         )
                     {
                         return Err(failure(ForeignContractReason::OperandRole, operand.span));
@@ -3238,6 +3587,29 @@ mod owner_normalization_tests {
                 block_span: *block_span,
                 outcome_span: *outcome_span,
             },
+            PreparedOwnerCall::StatusTeardown {
+                application: value,
+                current_operand,
+                output_span,
+                block_span,
+                outcomes,
+            } => PreparedOwnerCall::StatusTeardown {
+                application: application(value),
+                current_operand: *current_operand,
+                output_span: *output_span,
+                block_span: *block_span,
+                outcomes: outcomes
+                    .iter()
+                    .map(|value| PreparedOwnerStatusOutcome {
+                        predicates: value.predicates.clone(),
+                        consumes: value.consumes,
+                        readable: value.readable,
+                        disposition_span: value.disposition_span,
+                        readability_span: value.readability_span,
+                        outcome_span: value.outcome_span,
+                    })
+                    .collect(),
+            },
         }
     }
     fn parts(value: &PreparedForeignLibrary) -> PrivatePreparedLibraryParts {
@@ -3333,6 +3705,97 @@ mod owner_normalization_tests {
                     },
                 })
                 .collect(),
+        }
+    }
+
+    fn status_owner_source() -> String {
+        OWNED_BYTES.replace("    repr Size = size_t", "    repr Size = size_t\n    repr Status = signed(32)\n    const Held : Status = 7")
+            .replace("Foreign.Disposition<Unit>", "Foreign.Disposition<Int>")
+            .replace("abi (pointer(Address)) -> void", "abi (pointer(Address)) -> Status")
+            .replace("outcome otherwise { consumed 0 }", "output result as scalar\n        outcome result == Held { readable result, retained 0 }\n        outcome otherwise { unreadable result, consumed 0 }")
+    }
+
+    #[test]
+    fn status_owner_original_branches_restore_with_exact_budgets_and_reject_forged_outcomes() {
+        let text = status_owner_source();
+        let (module, surface) = source(&text);
+        let authored = &surface.foreign_libraries[0];
+        let mut measured = TypeWorkBudget::default();
+        let original =
+            prepare_foreign_library_with_budget(module, authored, &mut measured).unwrap();
+        let exact = measured.used();
+        let mut restore_work = TypeWorkBudget::default();
+        restore_prepared_library(parts(&original), &mut restore_work).unwrap();
+        let restore_exact = restore_work.used();
+        for _ in 0..2 {
+            for prefix in [0, 19] {
+                let mut work = TypeWorkBudget::with_limit(prefix + exact);
+                work.charge(prefix).unwrap();
+                prepare_foreign_library_with_budget(module, authored, &mut work).unwrap();
+                assert_eq!(work.used(), prefix + exact);
+                let mut short = TypeWorkBudget::with_limit(prefix + exact - 1);
+                short.charge(prefix).unwrap();
+                assert_eq!(
+                    prepare_foreign_library_with_budget(module, authored, &mut short)
+                        .unwrap_err()
+                        .reason(),
+                    ForeignContractReason::WorkExhausted
+                );
+                assert!(short.used() < prefix + exact);
+                let mut work = TypeWorkBudget::with_limit(prefix + restore_exact);
+                work.charge(prefix).unwrap();
+                restore_prepared_library(parts(&original), &mut work).unwrap();
+                assert_eq!(work.used(), prefix + restore_exact);
+                let mut short = TypeWorkBudget::with_limit(prefix + restore_exact - 1);
+                short.charge(prefix).unwrap();
+                assert_eq!(
+                    restore_prepared_library(parts(&original), &mut short)
+                        .unwrap_err()
+                        .reason(),
+                    ForeignContractReason::WorkExhausted
+                );
+            }
+        }
+        for field in 0..5 {
+            let mut forged = parts(&original);
+            let PrivatePreparedCall::Owner(PreparedOwnerCall::StatusTeardown {
+                application,
+                outcomes,
+                ..
+            }) = &mut forged.symbols[1].call
+            else {
+                panic!("status call");
+            };
+            match field {
+                0 => outcomes[0].consumes = !outcomes[0].consumes,
+                1 => outcomes[0].readable = !outcomes[0].readable,
+                2 => outcomes[0].predicates[0].value.magnitude += 1,
+                3 => application.arguments[0] = PreparedOwnerArgument::Type(99),
+                4 => outcomes.swap(0, 1),
+                _ => unreachable!(),
+            }
+            assert!(
+                !same_prepared_library_parts(&original, &forged, &mut TypeWorkBudget::default())
+                    .unwrap()
+            );
+            if field >= 2 {
+                assert!(restore_prepared_library(forged, &mut TypeWorkBudget::default()).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn status_owner_outcomes_require_total_unambiguous_original_result_facts() {
+        let text = status_owner_source();
+        for malformed in [
+            text.replace("        outcome otherwise { unreadable result, consumed 0 }\n", ""),
+            text.replace("outcome otherwise { unreadable result, consumed 0 }", "outcome result == Held { readable result, consumed 0 }\n        outcome otherwise { unreadable result, consumed 0 }"),
+            text.replace("readable result, retained 0", "retained 0"),
+            text.replace("retained 0", "retained 1"),
+            text.replace("result == Held", "result == One"),
+        ] {
+            let (module, surface) = source(&malformed);
+            assert!(prepare_foreign_library_with_budget(module, &surface.foreign_libraries[0], &mut TypeWorkBudget::default()).is_err());
         }
     }
 

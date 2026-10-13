@@ -558,12 +558,7 @@ pub(crate) fn bind_foreign_symbol(
     {
         Some(call) => {
             charge(work, context.owners.len(), effect.span)?;
-            let application = match call {
-                super::source_contract::PreparedOwnerCall::Acquire { application, .. }
-                | super::source_contract::PreparedOwnerCall::Teardown { application, .. } => {
-                    application
-                }
-            };
+            let application = call.application();
             Some(
                 context
                     .owners

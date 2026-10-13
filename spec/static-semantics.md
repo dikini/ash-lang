@@ -1002,23 +1002,33 @@ their original owner roles and exact preceding state applications; a same-shaped
 or same-spelled state supplies no dependency authority.
 
 An acquisition symbol maps its pointer result to the exact saturated state
-family and returns the canonical `Foreign.Call<Foreign.Output<Foreign.Nullable<State>>>`
-codec. A current-state operand must select the matching state application in
-the source product; its pointer ABI role does not accept an `Int` substitute.
-A teardown returns the canonical `Foreign.Call<Foreign.Disposition<T>>` for
-its independent result and records consumption or retention of the selected
-state. The executable resource checkpoint below admits `void` teardown with
-`T = Unit`. Byte-owner preparation also checks its initialized extent against
-the selected mathematical `Int` source leaf. This passive check supplies no
-byte access or executable owner activation; an admitted resource scope supplies
-the separate controlled execution boundary.
+family and returns the canonical
+`Foreign.Call<Foreign.Output<Foreign.Nullable<State>>>` codec. A current-state
+operand must select the matching state application in the source product; its
+pointer ABI role does not accept an `Int` substitute. A teardown returns the
+canonical `Foreign.Call<Foreign.Disposition<T>>` for its independent result and
+records consumption or retention of the selected state. The executable resource
+checkpoint below admits `void` teardown with `T = Unit` and scalar-status
+teardown with `T = Int`. Scalar teardown requires `output result as scalar`,
+exactly one Current operand, and `retained_dependents block`. Its total finite
+alternatives test the raw Result against original same-representation declared
+literals, with one final `otherwise`. Each alternative gives exactly one
+consumed/retained fact for that Current position and one readable/unreadable
+Result fact. Repeated or contradictory selectors, missing coverage and
+mismatched positions reject. Owner libraries retain these checked literal facts
+without an ordinary value binder; constant value publication, constant native
+operands and header evaluation remain outside this checkpoint. Byte-owner
+preparation also checks its initialized extent against the selected
+mathematical `Int` source leaf. This passive check supplies no byte access or
+executable owner activation; an admitted resource scope supplies the separate
+controlled execution boundary.
 
-A scalar ABI result requires `output result as scalar` and an `otherwise`
-outcome declaring `readable result`. Its source codomain is the exact canonical
-`@builtin.foreign` type `Call<Int>`. A `void` result has no output role or
-readability fact and has codomain `Call<Unit>`; `outcome otherwise {}` provides
-its total empty outcome. `void` is not an ABI input. A zero-argument C function
-has zero ABI operands, as in `abi () -> void`.
+An owner-free scalar ABI result requires `output result as scalar` and an
+`otherwise` outcome declaring `readable result`. Its source codomain is the
+exact canonical `@builtin.foreign` type `Call<Int>`. A `void` result has no
+output role or readability fact and has codomain `Call<Unit>`; `outcome
+otherwise {}` provides its total empty outcome. `void` is not an ABI input. A
+zero-argument C function has zero ABI operands, as in `abi () -> void`.
 
 Declaration checking authenticates the canonical result nominal and constructor
 identities, complete parameter kinds and defining origins. A same-spelled or
@@ -1161,28 +1171,29 @@ expose the fresh identity; an escape reports `type.resource-escape`.
 
 This implementation checkpoint executes opaque and initialized byte owners,
 including declared retained dependencies, with Type-only state-family arguments
-and either report codec. Its unconditional `void` finish and host-destruction
-contracts admit consumed or retained dispositions. A Current call can also be
-blocked before native entry while a retained dependent remains live. Associated
-interfaces may contain multiple methods with the exact operation types and rows
-described above; method-local type parameters remain unsupported by this carrier.
-Resource and symbol arguments retain their complete Type/Row vectors. The
-lifecycle checker admits native requests, ordinary constructor and product
-assembly, sequential bindings, matches and sealed byte calls. A byte call must
-retain its original canonical function, TypeApplication and Apply occurrences,
-original state family and owner, selected evidence and copied specialization.
-Both the caller and defining declaration retain their complete ordered Type/Row
-actuals independently of `S`, including arguments absent from the callable's
-value type. Branch-selected canonical aliases retain each alternative's defining
-context. Independent Core checks these relationships rather than granting
-permission from the monomorphic operand type. Byte calls borrow the fresh
-acquired or current live state without consuming it; their independent results
-cannot expose that state. Ordinary outward requests in these phases must carry
-independent operands and cannot synthesize native-state lineage. The instance's
-handler output is the body row minus its exact provided instance, union the
-source handler's direct ordinary requests. The scope's outward row additionally
-includes initializer, acquisition and finish effects, removing only the listed
-exact native instances from the interpreted phases. Other ordinary rows remain.
+and either report codec. Its `void` or scalar-status finish and
+host-destruction contracts admit total consumed or retained dispositions. A
+Current call can also be blocked before native entry while a retained dependent
+remains live. Associated interfaces may contain multiple methods with the exact
+operation types and rows described above; method-local type parameters remain
+unsupported by this carrier. Resource and symbol arguments retain their
+complete Type/Row vectors. The lifecycle checker admits native requests,
+ordinary constructor and product assembly, sequential bindings, matches and
+sealed byte calls. A byte call must retain its original canonical function,
+TypeApplication and Apply occurrences, original state family and owner,
+selected evidence and copied specialization. Both the caller and defining
+declaration retain their complete ordered Type/Row actuals independently of
+`S`, including arguments absent from the callable's value type. Branch-selected
+canonical aliases retain each alternative's defining context. Independent Core
+checks these relationships rather than granting permission from the monomorphic
+operand type. Byte calls borrow the fresh acquired or current live state
+without consuming it; their independent results cannot expose that state.
+Ordinary outward requests in these phases must carry independent operands and
+cannot synthesize native-state lineage. The instance's handler output is the
+body row minus its exact provided instance, union the source handler's direct
+ordinary requests. The scope's outward row additionally includes initializer,
+acquisition and finish effects, removing only the listed exact native instances
+from the interpreted phases. Other ordinary rows remain.
 
 Capture/resume moves the same activation and owner without acquisition. Owned
 discard completes acquired source scopes in structural order while required outer
@@ -1194,8 +1205,8 @@ guard without inventing private data or a source finish input. A consumed
 `ConsumedFailure(E)` during owned discard is terminal `ResourceCompletion` for
 both codecs. Normal `scope` return still reports `ConsumedError(E)`.
 
-Callable lifecycle helpers, source `given` forwarding, native access/copy windows,
-status-returning owner teardown and library migrations remain unsupported. These
+Callable lifecycle helpers, source `given` forwarding, scalar teardown operands,
+native access/copy windows and library migrations remain unsupported. These
 are checkpoint restrictions, not additional language rules for all resources;
 the broader obligations remain in
 [CP-0022](../docs/proposals/CP-0022-ash-authored-foreign-interfaces.md).
