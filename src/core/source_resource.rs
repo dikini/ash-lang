@@ -164,6 +164,7 @@ pub(crate) struct CheckedSourceResourceHeader {
     pub(crate) owner: Arc<CheckedForeignOwner>,
     pub(crate) acquire: Arc<CheckedForeignSymbol>,
     pub(crate) teardown: Arc<CheckedForeignSymbol>,
+    pub(crate) dependencies: Box<[crate::types::TypeVariableId]>,
     pub(crate) codec: SourceResourceCodec,
 }
 
@@ -361,6 +362,152 @@ fn acquired_only_codec(
     Ok(ids)
 }
 
+fn dependency_state_identity(
+    ty: &Type,
+    registry: &ResolvedRegistry,
+    work: &mut TypeWorkBudget,
+) -> Result<Option<crate::types::TypeVariableId>, ValidationError> {
+    if let Type::ResourceApply(id, arguments) = ty {
+        let Some(header) = registry.source_resource_fact(*id) else {
+            return Ok(None);
+        };
+        if arguments.len() != header.parameters.len() {
+            return Err(invalid());
+        }
+        charge(work, arguments.len())?;
+        for (argument, parameter) in arguments.iter().zip(&header.parameters) {
+            if !matches!((argument, &parameter.kind), (KindedArgument::TypeArg(_), kind) if *kind != Kind::EffectRow)
+                && !matches!(
+                    (argument, &parameter.kind),
+                    (KindedArgument::RowArg(_), Kind::EffectRow)
+                )
+            {
+                return Err(invalid());
+            }
+        }
+        let Some(KindedArgument::TypeArg(Type::Variable(identity))) =
+            arguments.get(header.owned_position)
+        else {
+            return Err(invalid());
+        };
+        return Ok(Some(*identity));
+    }
+    let mut head = ty;
+    let mut arguments = Vec::new();
+    while let Type::Application(function, argument) = head {
+        push(&mut arguments, argument.as_ref(), work)?;
+        head = function;
+    }
+    let Type::Nominal(nominal) = head else {
+        return Ok(None);
+    };
+    charge(work, registry.source_resource_facts().count())?;
+    if let Some(header) = registry
+        .source_resource_facts()
+        .find(|header| header.family == *nominal)
+    {
+        if arguments.len() != header.parameters.len() {
+            // A structural walk also visits the partial application heads of
+            // a fully saturated multi-parameter access type. Only the complete
+            // value application has an owner identity; ordinary kind admission
+            // independently rejects an unsaturated value type.
+            return Ok(None);
+        }
+        arguments.reverse();
+        let Some(Type::Variable(identity)) = arguments.get(header.owned_position).copied() else {
+            return Err(invalid());
+        };
+        return Ok(Some(*identity));
+    }
+    charge(work, registry.source_owner_candidate_count())?;
+    let Some((prepared, index, _, parameters)) = registry
+        .source_owner_candidates()
+        .find(|(_, _, candidate, _)| candidate == nominal)
+    else {
+        return Ok(None);
+    };
+    if arguments.len() != parameters.len() {
+        return Ok(None);
+    }
+    crate::foreign::source_owner::authenticate_source_owner_candidate(
+        prepared, index, *nominal, parameters, registry, work,
+    )
+    .map_err(|error| {
+        if error.is_resource_exhaustion() {
+            resource()
+        } else {
+            invalid()
+        }
+    })?;
+    arguments.reverse();
+    let Some(Type::Variable(identity)) = arguments
+        .get(prepared.owners()[index].owned_parameter())
+        .copied()
+    else {
+        return Err(invalid());
+    };
+    Ok(Some(*identity))
+}
+
+fn admit_private_data(
+    ty: &Type,
+    registry: &ResolvedRegistry,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ValidationError> {
+    // Candidate identity is sufficient for rejection, never native permission.
+    // Walk arguments and defining constructor payloads: a nominal with a fixed
+    // State field must not hide it merely because no constructor runs here.
+    // Each declaration is visited once, so recursive ordinary ADTs terminate.
+    // Their actual arguments are already visited in the enclosing type walk.
+    let candidates = registry.source_owner_candidate_count();
+    let mut pending = one(ty, work)?;
+    let mut visited = std::collections::HashSet::new();
+    while let Some(ty) = pending.pop() {
+        let mut nominals = Vec::new();
+        let forbidden = crate::types::visit_type_structure_with_budget(ty, work, |node, work| {
+            if let crate::types::TypeStructureNode::Type(Type::Nominal(nominal)) = node {
+                work.charge(candidates)?;
+                if registry.source_owner_nominal(*nominal) {
+                    return Ok(true);
+                }
+                work.charge(1)?;
+                nominals.try_reserve(1).map_err(|_| ())?;
+                nominals.push(*nominal);
+            }
+            Ok(false)
+        })
+        .map_err(|_| resource())?;
+        if forbidden {
+            return Err(invalid());
+        }
+        for nominal in nominals {
+            charge(work, 1)?;
+            visited.try_reserve(1).map_err(|_| resource())?;
+            if !visited.insert(nominal) {
+                continue;
+            }
+            charge(work, registry.source_resource_facts().count())?;
+            if registry
+                .source_resource_facts()
+                .any(|header| header.family == nominal)
+            {
+                // Resource access has a distinct declaration category and no
+                // ordinary constructor payload. Its complete arguments were
+                // visited above; it is not its owner's native State family.
+                continue;
+            }
+            let declaration = registry.nominal(nominal).ok_or_else(invalid)?;
+            charge(work, declaration.constructors.len())?;
+            for constructor in &declaration.constructors {
+                if let Some(payload) = payload(*constructor, registry)? {
+                    push(&mut pending, payload, work)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 impl CheckedSourceResourceHeader {
     pub(crate) fn admit(
         header: &Arc<SourceResourceTypeFact>,
@@ -511,25 +658,56 @@ impl CheckedSourceResourceHeader {
             )
         ) || teardown.symbol().result()
             != crate::foreign::source_contract::PreparedAbiResult::Void
-            || teardown.symbol().operands().len() != 1
         {
             return Err(invalid());
         }
         let owned = header.parameters[header.owned_position].id;
-        let owner_candidates = registry.source_owner_candidate_count();
-        for ty in [&header.input.ty, &header.data.ty] {
-            if crate::types::visit_type_structure_with_budget(ty, work, |node, work| {
-                Ok(match node {
-                    crate::types::TypeStructureNode::Type(Type::Variable(id)) => *id == owned,
-                    crate::types::TypeStructureNode::Type(Type::Nominal(id)) => {
-                        work.charge(owner_candidates)?;
-                        registry.source_owner_nominal(*id)
-                    }
-                    _ => false,
-                })
-            })
-            .map_err(|_| resource())?
+        let mut dependencies = Vec::new();
+        charge(work, owner.owner().retained_parameters().len())?;
+        dependencies
+            .try_reserve_exact(owner.owner().retained_parameters().len())
+            .map_err(|_| resource())?;
+        for position in owner.owner().retained_parameters() {
+            let Some(Type::Variable(identity)) = state_arguments.get(*position).copied() else {
+                return Err(invalid());
+            };
+            charge(work, header.parameters.len())?;
+            if *identity == owned
+                || !header
+                    .parameters
+                    .iter()
+                    .any(|parameter| parameter.id == *identity && parameter.kind == Kind::Type)
             {
+                return Err(invalid());
+            }
+            dependencies.push(*identity);
+        }
+        admit_private_data(&header.data.ty, registry, work)?;
+        for ty in [&header.input.ty, &header.data.ty] {
+            let mut role_failure = None;
+            let forbidden =
+                crate::types::visit_type_structure_with_budget(ty, work, |node, work| match node {
+                    crate::types::TypeStructureNode::Type(Type::Variable(id)) => Ok(*id == owned),
+                    crate::types::TypeStructureNode::Type(
+                        ty @ (Type::Application(_, _) | Type::ResourceApply(_, _)),
+                    ) => {
+                        let identity = match dependency_state_identity(ty, registry, work) {
+                            Ok(identity) => identity,
+                            Err(error) => {
+                                role_failure = Some(error);
+                                return Ok(true);
+                            }
+                        };
+                        work.charge(dependencies.len())?;
+                        Ok(identity.is_some_and(|identity| !dependencies.contains(&identity)))
+                    }
+                    _ => Ok(false),
+                })
+                .map_err(|_| resource())?;
+            if let Some(failure) = role_failure {
+                return Err(failure);
+            }
+            if forbidden {
                 return Err(invalid());
             }
         }
@@ -539,6 +717,7 @@ impl CheckedSourceResourceHeader {
             owner: Arc::clone(owner),
             acquire,
             teardown,
+            dependencies: dependencies.into_boxed_slice(),
             codec: SourceResourceCodec {
                 acquire: acquire_codec,
                 finish: finish_codec,
@@ -716,13 +895,36 @@ impl CheckedSourceResourceTemplate {
         module_sources: &[(crate::module::ModuleId, crate::source::SourceId)],
         work: &mut TypeWorkBudget,
     ) -> Result<Self, ValidationError> {
+        Self::admit_with_structure_session(
+            header,
+            acquire,
+            finish,
+            handler,
+            sources,
+            module_sources,
+            work,
+            &mut super::validate::SourceResourceStructureSession::default(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn admit_with_structure_session(
+        header: Arc<CheckedSourceResourceHeader>,
+        acquire: UnvalidatedEffectProgram,
+        finish: UnvalidatedEffectProgram,
+        handler: UnvalidatedEffectProgram,
+        sources: &[&crate::source::SourceFile],
+        module_sources: &[(crate::module::ModuleId, crate::source::SourceId)],
+        work: &mut TypeWorkBudget,
+        session: &mut super::validate::SourceResourceStructureSession,
+    ) -> Result<Self, ValidationError> {
         // Ordinary graph, kind, scope, effect, registry and provenance checking
         // precedes the resource-specific phase and owner-lineage proof.
         for (program, answer) in [(&acquire, false), (&finish, false), (&handler, true)] {
             if !Arc::ptr_eq(&program.registry, &acquire.registry) {
                 return Err(invalid());
             }
-            super::validate::check_source_resource_structure(
+            session.check(
                 program,
                 &header.original,
                 answer,
@@ -733,7 +935,13 @@ impl CheckedSourceResourceTemplate {
         }
         let canonical =
             CheckedSourceResourceHeader::admit(&header.original, &acquire.registry, work)?;
-        if !Arc::ptr_eq(&canonical.owner, &header.owner) || canonical.codec != header.codec {
+        charge(work, header.dependencies.len().saturating_add(3))?;
+        if !Arc::ptr_eq(&canonical.owner, &header.owner)
+            || !Arc::ptr_eq(&canonical.acquire, &header.acquire)
+            || !Arc::ptr_eq(&canonical.teardown, &header.teardown)
+            || canonical.dependencies != header.dependencies
+            || canonical.codec != header.codec
+        {
             return Err(invalid());
         }
         let methods = check_provider_association(&header, &handler, work)?;
@@ -814,8 +1022,20 @@ impl CheckedSourceResourceTemplate {
         }
         let placeholder_binder = answer.parameter().id();
         let handler_body = answer.body();
-        let acquire_calls = check_flow(&acquire, &header, &acquire_entry, Phase::Acquire, work)?;
-        let finish_calls = check_flow(&finish, &header, &finish_entry, Phase::Finish, work)?;
+        let acquire_calls = check_flow(
+            &acquire,
+            &header,
+            &acquire_entry,
+            SourceResourcePhase::Acquire,
+            work,
+        )?;
+        let finish_calls = check_flow(
+            &finish,
+            &header,
+            &finish_entry,
+            SourceResourcePhase::Finish,
+            work,
+        )?;
         let handler_calls = check_handler(
             &handler,
             &header,
@@ -937,7 +1157,7 @@ impl CheckedSourceResourceTemplate {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Phase {
+pub(crate) enum SourceResourcePhase {
     Acquire,
     Finish,
     Handler,
@@ -952,10 +1172,15 @@ pub(crate) struct SourceByteCall {
 }
 
 #[derive(Debug)]
-enum FlowFact {
+enum FlowFact<'a> {
     Independent,
     Fresh,
     Current,
+    Enclosing(crate::types::TypeVariableId),
+    // A typed but constructor-unknown ordinary input. The original forest owns
+    // the Type; narrowing a checked constructor pattern preserves its payload
+    // roles without manufacturing an enclosing state or cloning Type storage.
+    InputNominal(&'a Type, Box<[crate::types::TypeVariableId]>),
     Tuple(Box<[usize]>),
     Constructor(ConstructorId, Option<usize>),
     Callable(ConstructorId),
@@ -963,8 +1188,8 @@ enum FlowFact {
     ByteCallable(crate::resolved::BinderId, Option<NodeId>),
 }
 #[derive(Default)]
-struct FlowFacts {
-    values: Vec<FlowFact>,
+struct FlowFacts<'a> {
+    values: Vec<FlowFact<'a>>,
     byte_calls: Vec<SourceByteCall>,
 }
 fn push<T>(
@@ -982,17 +1207,17 @@ fn one<T>(value: T, work: &mut TypeWorkBudget) -> Result<Vec<T>, ValidationError
     push(&mut values, value, work)?;
     Ok(values)
 }
-impl FlowFacts {
+impl<'a> FlowFacts<'a> {
     fn add(
         &mut self,
-        value: FlowFact,
+        value: FlowFact<'a>,
         work: &mut TypeWorkBudget,
     ) -> Result<usize, ValidationError> {
         let id = self.values.len();
         push(&mut self.values, value, work)?;
         Ok(id)
     }
-    fn fact(&self, id: usize) -> Result<&FlowFact, ValidationError> {
+    fn fact(&self, id: usize) -> Result<&FlowFact<'a>, ValidationError> {
         self.values.get(id).ok_or_else(invalid)
     }
     fn independent(&self, id: usize, work: &mut TypeWorkBudget) -> Result<bool, ValidationError> {
@@ -1001,6 +1226,7 @@ impl FlowFacts {
             charge(work, 1)?;
             match self.fact(id)? {
                 FlowFact::Independent => {}
+                FlowFact::InputNominal(_, identities) if identities.is_empty() => {}
                 FlowFact::Tuple(fields) => {
                     charge(work, fields.len())?;
                     pending.try_reserve(fields.len()).map_err(|_| resource())?;
@@ -1013,6 +1239,121 @@ impl FlowFacts {
         }
         Ok(true)
     }
+    fn borrowed(
+        &self,
+        id: usize,
+        current: bool,
+        header: &CheckedSourceResourceHeader,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ValidationError> {
+        let mut pending = one(id, work)?;
+        while let Some(id) = pending.pop() {
+            charge(work, 1)?;
+            match self.fact(id)? {
+                FlowFact::Independent | FlowFact::Constructor(_, None) => {}
+                FlowFact::Current if current => {}
+                FlowFact::InputNominal(_, identities) => {
+                    for identity in identities {
+                        charge(work, header.dependencies.len())?;
+                        if !header.dependencies.contains(identity) {
+                            return Ok(false);
+                        }
+                    }
+                }
+                FlowFact::Enclosing(identity) => {
+                    charge(work, header.dependencies.len())?;
+                    if !header.dependencies.contains(identity) {
+                        return Ok(false);
+                    }
+                }
+                FlowFact::Tuple(fields) => {
+                    charge(work, fields.len())?;
+                    pending.try_reserve(fields.len()).map_err(|_| resource())?;
+                    pending.extend_from_slice(fields);
+                }
+                FlowFact::Constructor(_, Some(payload)) => push(&mut pending, *payload, work)?,
+                _ => return Ok(false),
+            }
+        }
+        Ok(true)
+    }
+
+    fn input(
+        &mut self,
+        ty: &'a Type,
+        registry: &ResolvedRegistry,
+        work: &mut TypeWorkBudget,
+    ) -> Result<usize, ValidationError> {
+        enum Task<'a> {
+            Visit(&'a Type),
+            Tuple(usize),
+        }
+        let mut pending = one(Task::Visit(ty), work)?;
+        let mut values = Vec::new();
+        while let Some(task) = pending.pop() {
+            charge(work, 1)?;
+            match task {
+                Task::Visit(Type::Tuple(fields)) => {
+                    push(&mut pending, Task::Tuple(fields.len()), work)?;
+                    charge(work, fields.len())?;
+                    pending.try_reserve(fields.len()).map_err(|_| resource())?;
+                    pending.extend(fields.iter().rev().map(Task::Visit));
+                }
+                Task::Visit(ty) => {
+                    let fact = if let Some(identity) =
+                        dependency_state_identity(ty, registry, work)?
+                    {
+                        self.add(FlowFact::Enclosing(identity), work)?
+                    } else if matches!(ty, Type::Nominal(_) | Type::Application(_, _)) {
+                        let mut identities = Vec::new();
+                        let mut pending = one(ty, work)?;
+                        while let Some(part) = pending.pop() {
+                            charge(work, 1)?;
+                            if let Some(identity) = dependency_state_identity(part, registry, work)?
+                            {
+                                push(&mut identities, identity, work)?;
+                                continue;
+                            }
+                            match part {
+                                Type::Application(function, argument) => {
+                                    push(&mut pending, function.as_ref(), work)?;
+                                    push(&mut pending, argument.as_ref(), work)?;
+                                }
+                                Type::Tuple(fields) => {
+                                    charge(work, fields.len())?;
+                                    pending.try_reserve(fields.len()).map_err(|_| resource())?;
+                                    pending.extend(fields.iter());
+                                }
+                                _ => {}
+                            }
+                        }
+                        self.add(
+                            FlowFact::InputNominal(ty, identities.into_boxed_slice()),
+                            work,
+                        )?
+                    } else {
+                        0
+                    };
+                    push(&mut values, fact, work)?;
+                }
+                Task::Tuple(count) => {
+                    let start = values.len().checked_sub(count).ok_or_else(invalid)?;
+                    let mut fields = Vec::new();
+                    charge(work, count)?;
+                    fields.try_reserve_exact(count).map_err(|_| resource())?;
+                    fields.extend_from_slice(&values[start..]);
+                    values.truncate(start);
+                    let fact = self.add(FlowFact::Tuple(fields.into_boxed_slice()), work)?;
+                    push(&mut values, fact, work)?;
+                }
+            }
+        }
+        if values.len() != 1 {
+            return Err(invalid());
+        }
+        values.pop().ok_or_else(invalid)
+    }
+
     fn wrapped(
         &mut self,
         id: ConstructorId,
@@ -1103,11 +1444,12 @@ impl PatternMatch {
         }
     }
 }
-fn bind_pattern(
-    pattern: &CorePattern,
+fn bind_pattern<'a>(
+    pattern: &'a CorePattern,
     value: usize,
     path: &mut FlowPath,
-    facts: &FlowFacts,
+    facts: &mut FlowFacts<'a>,
+    registry: &ResolvedRegistry,
     depth: usize,
     work: &mut TypeWorkBudget,
 ) -> Result<PatternMatch, ValidationError> {
@@ -1115,6 +1457,65 @@ fn bind_pattern(
     charge(work, 1)?;
     if depth > 64 {
         return Err(resource());
+    }
+    if let FlowFact::InputNominal(ty, _) = facts.fact(value)? {
+        let ty = *ty;
+        if !same(ty, &pattern.ty, work)? {
+            return Err(invalid());
+        }
+        if let CorePatternKind::Constructor {
+            constructor,
+            payload: pattern_payload,
+        } = &pattern.kind
+        {
+            let (nominal, arguments) = application(ty, work)?;
+            if constructor.owner() != nominal {
+                return Err(invalid());
+            }
+            let declaration = registry.constructor(*constructor).ok_or_else(invalid)?;
+            match (&declaration.payload, pattern_payload) {
+                (None, None) => return Ok(Possible),
+                (Some(expected), Some(pattern)) => {
+                    let parameters = registry.nominal_parameters(nominal).ok_or_else(invalid)?;
+                    if parameters.len() != arguments.len() {
+                        return Err(invalid());
+                    }
+                    let mut replacements = HashMap::new();
+                    charge(work, parameters.len())?;
+                    replacements
+                        .try_reserve(parameters.len())
+                        .map_err(|_| resource())?;
+                    for (parameter, argument) in parameters.iter().zip(arguments) {
+                        if parameter.kind == Kind::EffectRow {
+                            return Err(invalid());
+                        }
+                        replacements.insert(parameter.id, argument);
+                    }
+                    let expected = crate::types::IterativeTypeOwner::new(
+                        crate::types::substitute_type_variables_borrowed_with(
+                            expected,
+                            &replacements,
+                            |cells| charge(work, cells),
+                            resource,
+                        )?,
+                    );
+                    if !same(&expected, &pattern.ty, work)? {
+                        return Err(invalid());
+                    }
+                    let value = facts.input(&pattern.ty, registry, work)?;
+                    return Ok(Possible.and(bind_pattern(
+                        pattern,
+                        value,
+                        path,
+                        facts,
+                        registry,
+                        depth + 1,
+                        work,
+                    )?));
+                }
+                _ => return Err(invalid()),
+            }
+        }
     }
     Ok(match &pattern.kind {
         CorePatternKind::Binder(binder) => {
@@ -1142,12 +1543,19 @@ fn bind_pattern(
                     Impossible
                 } else {
                     let mut matches = Certain;
-                    for (pattern, value) in patterns.iter().zip(values.iter()) {
+                    charge(work, values.len())?;
+                    let mut copied = Vec::new();
+                    copied
+                        .try_reserve_exact(values.len())
+                        .map_err(|_| resource())?;
+                    copied.extend_from_slice(values);
+                    for (pattern, value) in patterns.iter().zip(&copied) {
                         matches = matches.and(bind_pattern(
                             pattern,
                             *value,
                             path,
                             facts,
+                            registry,
                             depth + 1,
                             work,
                         )?);
@@ -1158,8 +1566,15 @@ fn bind_pattern(
             FlowFact::Independent => {
                 let mut matches = Certain;
                 for pattern in patterns {
-                    matches =
-                        matches.and(bind_pattern(pattern, value, path, facts, depth + 1, work)?);
+                    matches = matches.and(bind_pattern(
+                        pattern,
+                        value,
+                        path,
+                        facts,
+                        registry,
+                        depth + 1,
+                        work,
+                    )?);
                 }
                 matches
             }
@@ -1172,7 +1587,8 @@ fn bind_pattern(
             FlowFact::Constructor(actual, value) if actual == constructor => {
                 match (payload.as_deref(), value) {
                     (Some(pattern), Some(value)) => {
-                        bind_pattern(pattern, *value, path, facts, depth + 1, work)?
+                        let value = *value;
+                        bind_pattern(pattern, value, path, facts, registry, depth + 1, work)?
                     }
                     (None, None) => Certain,
                     _ => Impossible,
@@ -1180,7 +1596,15 @@ fn bind_pattern(
             }
             FlowFact::Independent => {
                 if let Some(payload) = payload {
-                    Possible.and(bind_pattern(payload, value, path, facts, depth + 1, work)?)
+                    Possible.and(bind_pattern(
+                        payload,
+                        value,
+                        path,
+                        facts,
+                        registry,
+                        depth + 1,
+                        work,
+                    )?)
                 } else {
                     Possible
                 }
@@ -1203,13 +1627,13 @@ fn extend<T>(
     clippy::too_many_arguments,
     reason = "the phase proof keeps its original graph, lineage, path, facts, depth and work dependencies explicit"
 )]
-fn eval_flow(
-    program: &UnvalidatedEffectProgram,
-    header: &CheckedSourceResourceHeader,
+fn eval_flow<'a>(
+    program: &'a UnvalidatedEffectProgram,
+    header: &'a CheckedSourceResourceHeader,
     id: NodeId,
-    phase: Phase,
+    phase: SourceResourcePhase,
     path: FlowPath,
-    facts: &mut FlowFacts,
+    facts: &mut FlowFacts<'a>,
     depth: usize,
     work: &mut TypeWorkBudget,
 ) -> Result<Vec<(usize, FlowPath)>, ValidationError> {
@@ -1406,11 +1830,11 @@ fn eval_flow(
                                 return Err(invalid());
                             };
                             let write = fact.role() == crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ByteWrite;
-                            if fields.len() != 2 + usize::from(write) || path.consumed
+                            if fields.len() != 2 + usize::from(write) || path.consumed || path.attempted_teardown
                                 || header.owner.owner().representation() != crate::foreign::source_contract::PreparedAddressRepresentation::Bytes
                                 || !matches!(header.acquire.owner_role(), Some(PreparedOwnerCall::Acquire {initialized_bytes:Some(_), ..}))
-                                || !matches!(facts.fact(fields[0])?, FlowFact::Fresh if phase == Phase::Acquire && path.acquired)
-                                    && !matches!(facts.fact(fields[0])?, FlowFact::Current if phase != Phase::Acquire)
+                                || !matches!(facts.fact(fields[0])?, FlowFact::Fresh if phase == SourceResourcePhase::Acquire && path.acquired)
+                                    && !matches!(facts.fact(fields[0])?, FlowFact::Current if phase != SourceResourcePhase::Acquire)
                             { return Err(invalid()); }
                             for field in &fields[1..] {
                                 if !facts.independent(*field, work)? {
@@ -1526,8 +1950,15 @@ fn eval_flow(
                 let mut matched = false;
                 for arm in matching.arms() {
                     let mut candidate = path.copy(work)?;
-                    let certainty =
-                        bind_pattern(arm.pattern(), value, &mut candidate, facts, 0, work)?;
+                    let certainty = bind_pattern(
+                        arm.pattern(),
+                        value,
+                        &mut candidate,
+                        facts,
+                        &program.registry,
+                        0,
+                        work,
+                    )?;
                     if certainty != PatternMatch::Impossible {
                         matched = true;
                         let next = eval_flow(
@@ -1573,17 +2004,18 @@ fn eval_flow(
                 )? {
                     // An ordinary outward operation cannot transport this
                     // phase's controlled native state or synthesize its lineage.
-                    if !facts.independent(operand, work)? {
+                    if !facts.borrowed(operand, false, header, work)? {
                         return Err(invalid());
                     }
-                    push(&mut results, (0, path), work)?;
+                    let value = facts.input(&stored.ty, &program.registry, work)?;
+                    push(&mut results, (value, path), work)?;
                 }
                 return Ok(results);
             }
-            if phase == Phase::Handler {
+            if phase == SourceResourcePhase::Handler {
                 return Err(invalid());
             }
-            let expected = if phase == Phase::Acquire {
+            let expected = if phase == SourceResourcePhase::Acquire {
                 &header.acquire
             } else {
                 &header.teardown
@@ -1621,8 +2053,21 @@ fn eval_flow(
                 depth + 1,
                 work,
             )? {
-                if phase == Phase::Acquire {
-                    if path.acquired || !facts.independent(operand, work)? {
+                for mapped in expected.symbol().operands() {
+                    if let crate::foreign::source_contract::PreparedOperandSource::Enclosing(
+                        selection,
+                    ) = mapped.source()
+                    {
+                        let selected = facts.selected(operand, selection, work)?;
+                        if !matches!(facts.fact(selected)?, FlowFact::Enclosing(_))
+                            || !facts.borrowed(selected, false, header, work)?
+                        {
+                            return Err(invalid());
+                        }
+                    }
+                }
+                if phase == SourceResourcePhase::Acquire {
+                    if path.acquired || !facts.borrowed(operand, false, header, work)? {
                         return Err(invalid());
                     }
                     let refusal = facts.wrapped(call.conversion_failed, 0, work)?;
@@ -1640,11 +2085,13 @@ fn eval_flow(
                     let returned = facts.wrapped(call.returned, readable, work)?;
                     push(&mut results, (returned, path), work)?;
                 } else {
-                    if path.consumed {
+                    if path.consumed || path.attempted_teardown {
                         return Err(invalid());
                     }
                     let Some(PreparedOwnerCall::Teardown {
-                        current_operand, ..
+                        current_operand,
+                        consumes,
+                        ..
                     }) = expected.owner_role()
                     else {
                         return Err(invalid());
@@ -1668,15 +2115,27 @@ fn eval_flow(
                     path.attempted_teardown = true;
                     let refusal = facts.wrapped(call.conversion_failed, 0, work)?;
                     push(&mut results, (refusal, path.copy(work)?), work)?;
-                    path.consumed = true;
-                    let consumed = facts.wrapped(codec.disposition_constructors()[0], 0, work)?;
-                    let returned = facts.wrapped(call.returned, consumed, work)?;
+                    let blocked = facts.add(
+                        FlowFact::Constructor(codec.disposition_constructors()[2], None),
+                        work,
+                    )?;
+                    let blocked = facts.wrapped(call.returned, blocked, work)?;
+                    push(&mut results, (blocked, path.copy(work)?), work)?;
+                    path.consumed = *consumes;
+                    let disposition = facts.wrapped(
+                        codec.disposition_constructors()[usize::from(!consumes)],
+                        0,
+                        work,
+                    )?;
+                    let returned = facts.wrapped(call.returned, disposition, work)?;
                     push(&mut results, (returned, path), work)?;
                 }
             }
             Ok(results)
         }
-        EffectExprKind::Operation(EffectOperation::Resume(resume)) if phase == Phase::Handler => {
+        EffectExprKind::Operation(EffectOperation::Resume(resume))
+            if phase == SourceResourcePhase::Handler =>
+        {
             let mut results = Vec::new();
             for (value, path) in eval_flow(
                 program,
@@ -1688,7 +2147,7 @@ fn eval_flow(
                 depth + 1,
                 work,
             )? {
-                if !facts.independent(value, work)? {
+                if !facts.borrowed(value, true, header, work)? {
                     return Err(invalid());
                 }
                 push(&mut results, (0, path), work)?;
@@ -1698,31 +2157,37 @@ fn eval_flow(
         _ => Err(invalid()),
     }
 }
-fn facts(work: &mut TypeWorkBudget) -> Result<FlowFacts, ValidationError> {
+fn facts<'a>(work: &mut TypeWorkBudget) -> Result<FlowFacts<'a>, ValidationError> {
     let mut facts = FlowFacts::default();
     for value in [FlowFact::Independent, FlowFact::Fresh, FlowFact::Current] {
         facts.add(value, work)?;
     }
     Ok(facts)
 }
-fn state_data(facts: &mut FlowFacts, work: &mut TypeWorkBudget) -> Result<usize, ValidationError> {
+fn state_data<'a>(
+    facts: &mut FlowFacts<'a>,
+    header: &'a CheckedSourceResourceHeader,
+    registry: &ResolvedRegistry,
+    work: &mut TypeWorkBudget,
+) -> Result<usize, ValidationError> {
+    let data = facts.input(&header.original.data.ty, registry, work)?;
     let mut fields = Vec::new();
     push(&mut fields, 2, work)?;
-    push(&mut fields, 0, work)?;
+    push(&mut fields, data, work)?;
     facts.add(FlowFact::Tuple(fields.into_boxed_slice()), work)
 }
 fn check_flow(
     program: &UnvalidatedEffectProgram,
     header: &CheckedSourceResourceHeader,
     entry: &(TypedBinder, NodeId),
-    phase: Phase,
+    phase: SourceResourcePhase,
     work: &mut TypeWorkBudget,
 ) -> Result<Box<[SourceByteCall]>, ValidationError> {
     let mut facts = facts(work)?;
-    let value = if phase == Phase::Acquire {
-        0
+    let value = if phase == SourceResourcePhase::Acquire {
+        facts.input(&header.original.input.ty, &program.registry, work)?
     } else {
-        state_data(&mut facts, work)?
+        state_data(&mut facts, header, &program.registry, work)?
     };
     let mut path = FlowPath::new(work)?;
     path.bind(entry.0.id(), value, work)?;
@@ -1732,7 +2197,7 @@ fn check_flow(
     }
     for (value, path) in results {
         match (phase, facts.fact(value)?) {
-            (Phase::Acquire, FlowFact::Constructor(id, Some(payload)))
+            (SourceResourcePhase::Acquire, FlowFact::Constructor(id, Some(payload)))
                 if *id == header.codec.acquire[0] =>
             {
                 let FlowFact::Tuple(fields) = facts.fact(*payload)? else {
@@ -1741,12 +2206,12 @@ fn check_flow(
                 if !path.acquired
                     || fields.len() != 2
                     || !matches!(facts.fact(fields[0])?, FlowFact::Fresh)
-                    || !facts.independent(fields[1], work)?
+                    || !facts.borrowed(fields[1], false, header, work)?
                 {
                     return Err(invalid());
                 }
             }
-            (Phase::Acquire, FlowFact::Constructor(id, payload))
+            (SourceResourcePhase::Acquire, FlowFact::Constructor(id, payload))
                 if *id == header.codec.acquire[1] =>
             {
                 // Refusal may abandon a provisional fresh owner; the runtime
@@ -1757,19 +2222,21 @@ fn check_flow(
                     return Err(invalid());
                 }
             }
-            (Phase::Finish, FlowFact::Constructor(id, None)) if *id == header.codec.finish[0] => {
+            (SourceResourcePhase::Finish, FlowFact::Constructor(id, None))
+                if *id == header.codec.finish[0] =>
+            {
                 if !path.consumed {
                     return Err(invalid());
                 }
             }
-            (Phase::Finish, FlowFact::Constructor(id, Some(payload)))
+            (SourceResourcePhase::Finish, FlowFact::Constructor(id, Some(payload)))
                 if *id == header.codec.finish[1] =>
             {
                 if !path.consumed || !facts.independent(*payload, work)? {
                     return Err(invalid());
                 }
             }
-            (Phase::Finish, FlowFact::Constructor(id, Some(payload)))
+            (SourceResourcePhase::Finish, FlowFact::Constructor(id, Some(payload)))
                 if *id == header.codec.finish[2] =>
             {
                 let FlowFact::Tuple(fields) = facts.fact(*payload)? else {
@@ -1799,7 +2266,11 @@ fn check_handler(
 ) -> Result<Box<[SourceByteCall]>, ValidationError> {
     let mut facts = facts(work)?;
     let mut path = FlowPath::new(work)?;
-    path.bind(state.id(), state_data(&mut facts, work)?, work)?;
+    path.bind(
+        state.id(),
+        state_data(&mut facts, header, &program.registry, work)?,
+        work,
+    )?;
     path.bind(answer, 0, work)?;
     let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Match(matching))) =
         &node(program, body)?.kind
@@ -1813,7 +2284,7 @@ fn check_handler(
         program,
         header,
         matching.scrutinee(),
-        Phase::Handler,
+        SourceResourcePhase::Handler,
         path,
         &mut facts,
         0,
@@ -1824,7 +2295,16 @@ fn check_handler(
     }
     let (value, mut path) = values.into_iter().next().ok_or_else(invalid)?;
     let arm = &matching.arms()[0];
-    if bind_pattern(arm.pattern(), value, &mut path, &facts, 0, work)? == PatternMatch::Impossible {
+    if bind_pattern(
+        arm.pattern(),
+        value,
+        &mut path,
+        &mut facts,
+        &program.registry,
+        0,
+        work,
+    )? == PatternMatch::Impossible
+    {
         return Err(invalid());
     }
     let EffectExprKind::Operation(EffectOperation::Handler(handler)) =
@@ -1866,12 +2346,20 @@ fn check_handler(
     }
     for clause in handler.clauses() {
         let mut clause_path = path.copy(work)?;
-        bind_pattern(clause.pattern(), 0, &mut clause_path, &facts, 0, work)?;
+        bind_pattern(
+            clause.pattern(),
+            0,
+            &mut clause_path,
+            &mut facts,
+            &program.registry,
+            0,
+            work,
+        )?;
         for (value, _) in eval_flow(
             program,
             header,
             clause.body(),
-            Phase::Handler,
+            SourceResourcePhase::Handler,
             clause_path,
             &mut facts,
             0,
@@ -2344,40 +2832,61 @@ impl SourceResourceScopeNode {
         mut visit: impl FnMut(SourceByteCall, &mut TypeWorkBudget) -> Result<(), ValidationError>,
         work: &mut TypeWorkBudget,
     ) -> Result<(), ValidationError> {
-        for (phase, calls) in self.original().byte_calls.iter().enumerate() {
-            let copy = &self.descriptor.copies[phase];
-            for call in calls {
-                charge(work, copy.nodes.len())?;
-                let map = |original| {
-                    copy.nodes
-                        .iter()
-                        .find_map(|(source, target)| (*source == original).then_some(*target))
-                };
-                visit(
-                    SourceByteCall {
-                        apply: call
-                            .apply
-                            .map(|apply| map(apply).ok_or_else(invalid))
-                            .transpose()?,
-                        application: map(call.application).ok_or_else(invalid)?,
-                        function: call.function,
-                    },
-                    work,
-                )?;
-            }
+        for phase in [
+            SourceResourcePhase::Acquire,
+            SourceResourcePhase::Finish,
+            SourceResourcePhase::Handler,
+        ] {
+            self.visit_phase_byte_calls(phase, &mut visit, work)?;
+        }
+        Ok(())
+    }
+
+    fn visit_phase_byte_calls(
+        &self,
+        phase: SourceResourcePhase,
+        mut visit: impl FnMut(SourceByteCall, &mut TypeWorkBudget) -> Result<(), ValidationError>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
+        let index = match phase {
+            SourceResourcePhase::Acquire => 0,
+            SourceResourcePhase::Finish => 1,
+            SourceResourcePhase::Handler => 2,
+        };
+        let copy = &self.descriptor.copies[index];
+        for call in &self.original().byte_calls[index] {
+            charge(work, copy.nodes.len())?;
+            let map = |original| {
+                copy.nodes
+                    .iter()
+                    .find_map(|(source, target)| (*source == original).then_some(*target))
+            };
+            visit(
+                SourceByteCall {
+                    apply: call
+                        .apply
+                        .map(|apply| map(apply).ok_or_else(invalid))
+                        .transpose()?,
+                    application: map(call.application).ok_or_else(invalid)?,
+                    function: call.function,
+                },
+                work,
+            )?;
         }
         Ok(())
     }
 
     pub(crate) fn contains_byte_call(
         &self,
+        phase: SourceResourcePhase,
         apply: NodeId,
         application: NodeId,
         function: crate::resolved::BinderId,
         work: &mut TypeWorkBudget,
     ) -> Result<bool, ValidationError> {
         let mut found = false;
-        self.visit_byte_calls(
+        self.visit_phase_byte_calls(
+            phase,
             |call, _| {
                 found |= call
                     == SourceByteCall {
@@ -2481,7 +2990,11 @@ impl SourceResourceScopeNode {
         let template = self.original();
         let header =
             CheckedSourceResourceHeader::admit(&template.header.original, &program.registry, work)?;
+        charge(work, template.header.dependencies.len().saturating_add(3))?;
         if !Arc::ptr_eq(&header.owner, &template.header.owner)
+            || !Arc::ptr_eq(&header.acquire, &template.header.acquire)
+            || !Arc::ptr_eq(&header.teardown, &template.header.teardown)
+            || header.dependencies != template.header.dependencies
             || header.codec != template.header.codec
         {
             return Err(invalid());
@@ -3156,6 +3669,14 @@ impl SourceResourceScopeNode {
             &template.header.original.input.ty,
             work,
         )?);
+        let data = crate::types::IterativeTypeOwner::new(specialized(
+            &template.header.original.data.ty,
+            work,
+        )?);
+        // A defining generic D may be independent until its complete Type/Row
+        // application is known. Copy correspondence cannot authorize storing a
+        // native State introduced by that otherwise kind-correct application.
+        admit_private_data(&data, &program.registry, work)?;
         let acquisition = crate::types::IterativeTypeOwner::new(specialized(
             &template.header.original.acquisition.ty,
             work,
@@ -3675,8 +4196,8 @@ mod tests {
             panic!("both passive owner table sizes were measured")
         };
         assert!(
-            *large_cost >= *small_cost + 4 * (*large_count - *small_count),
-            "four ordinary nominal payload occurrences must inspect every passive owner: {costs:?}"
+            *large_cost >= *small_cost + 2 * (*large_count - *small_count),
+            "both ordinary nominal D occurrences must inspect every passive owner: {costs:?}"
         );
     }
 
@@ -3775,6 +4296,197 @@ mod tests {
             .expect_err("ordinary callable state cannot acquire lifecycle permission");
             assert_eq!(failure.reason(), ValidationReason::ResourceEscape);
             assert_eq!(failure.node(), Some(current_function_id));
+        }
+    }
+
+    #[test]
+    fn private_data_rejects_native_state_after_substitution_with_exact_scan_budget() {
+        let fixture = Fixture::new();
+        fs::write(
+            fixture.0.join("owner.ash"),
+            format!(
+                "{}\npub type Recursive<T> = End\n    | More(T, Recursive<T>)\n",
+                include_str!("../../tests/fixtures/source-owner/dependent_owner.ash")
+            ),
+        )
+        .unwrap();
+        fs::write(
+            fixture.0.join("entry.ash"),
+            "import owner as Owner\nmain : Unit -> Int\nmain () = 42\n",
+        )
+        .unwrap();
+        let compiled = fixture.compile();
+        let (checked, _) = compiled.effect_build_input().unwrap();
+        let registry = checked.registry();
+        let parent = registry
+            .source_resource_facts()
+            .find(|fact| fact.spelling == "Parent")
+            .unwrap();
+        let child = registry
+            .source_resource_facts()
+            .find(|fact| fact.spelling == "Child")
+            .unwrap();
+        let generic = Type::Tuple(vec![Type::Variable(parent.parameters[0].id), Type::Int].into());
+        super::admit_private_data(&generic, registry, &mut TypeWorkBudget::default()).unwrap();
+        let mut replacements = std::collections::HashMap::new();
+        replacements.insert(parent.parameters[0].id, &parent.state.ty);
+        let specialized = crate::types::IterativeTypeOwner::new(
+            crate::types::substitute_type_variables_borrowed_with(
+                &generic,
+                &replacements,
+                |_| Ok(()),
+                || (),
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            super::admit_private_data(&specialized, registry, &mut TypeWorkBudget::default())
+                .unwrap_err()
+                .reason(),
+            ValidationReason::Registry
+        );
+        let recursive = registry
+            .nominals()
+            .iter()
+            .find(|nominal| nominal.spelling == "Recursive")
+            .unwrap();
+        let recursive_access = crate::types::IterativeTypeOwner::new(Type::Application(
+            Box::new(Type::Nominal(recursive.id)),
+            Box::new(
+                crate::types::clone_type_with_budget(
+                    &child.data.ty,
+                    &mut TypeWorkBudget::default(),
+                )
+                .unwrap(),
+            ),
+        ));
+        super::admit_private_data(&recursive_access, registry, &mut TypeWorkBudget::default())
+            .expect("recursive ordinary access payloads are not native State storage");
+        // The original access family is distinct from its owner's native State.
+        let mut measured = TypeWorkBudget::default();
+        super::admit_private_data(&child.data.ty, registry, &mut measured).unwrap();
+        let cost = measured.used();
+        assert!(cost > 0);
+        for prefix in [0, 9] {
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            assert_eq!(
+                super::admit_private_data(&child.data.ty, registry, &mut short)
+                    .unwrap_err()
+                    .reason(),
+                ValidationReason::Resource
+            );
+            assert!(short.used() < prefix + cost);
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                super::admit_private_data(&child.data.ty, registry, &mut exact).unwrap();
+                assert_eq!(exact.used(), prefix + cost);
+            }
+        }
+    }
+
+    #[test]
+    fn dependent_source_scope_rejects_current_identity_and_changed_copy_actuals() {
+        let fixture = Fixture::new();
+        let owner = include_str!("../../tests/fixtures/source-owner/dependent_owner.ash")
+            .replace(
+                "pub resource Parent<P>",
+                "pub resource Parent<Before : EffectRow, P, After : EffectRow>",
+            )
+            .replace("Parent<P>", "Parent<{| Before}, P, {| After}>")
+            .replace(
+                "pub resource Child<P, R>",
+                "pub resource Child<Before : EffectRow, P, R, After : EffectRow>",
+            )
+            .replace("Child<P, R>", "Child<{| Before}, P, R, {| After}>");
+        fs::write(fixture.0.join("owner.ash"), owner).unwrap();
+        fs::write(fixture.0.join("entry.ash"), "import owner as Owner\neffect Marker {\n    marker : Unit -> Unit\n}\nmain : Unit -> Owner.Scope<Unit, Unit, Owner.Scope<Unit, Unit, Int>>\nmain () = resource Owner.Parent<{Marker}, ParentFresh, {}> parent = 64 {\n    resource Owner.Child<{Marker}, ParentFresh, ChildFresh, {}> child = (parent, 4) {\n        Owner.child_read child\n    }\n}\n").unwrap();
+        let compiled = fixture.compile();
+        let (checked, provenance) = compiled.effect_build_input().unwrap();
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let modules = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let fresh = || super::super::transform::identity_effect_traversal(checked).unwrap();
+        super::super::validate::validate_effect_modules_family(fresh(), &sources, &modules)
+            .unwrap();
+        for change in 0..6 {
+            let mut forged = fresh();
+            let index = forged.nodes.iter().position(|node| matches!(&node.kind,
+                EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) if !scope.header().dependencies.is_empty()
+            )).unwrap();
+            let id = NodeId::new(forged.arena, u32::try_from(index).unwrap());
+            let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+                &mut forged.nodes[index].kind
+            else {
+                panic!("dependent scope")
+            };
+            let identity = scope.identity();
+            let dependency = scope.header().dependencies[0];
+            let position = scope
+                .header()
+                .original
+                .parameters
+                .iter()
+                .position(|parameter| parameter.id == dependency)
+                .unwrap();
+            let row_parameter = scope
+                .header()
+                .original
+                .parameters
+                .iter()
+                .position(|parameter| matches!(parameter.kind, crate::types::Kind::EffectRow))
+                .unwrap();
+            let row_id = scope.header().original.parameters[row_parameter].id;
+            let descriptor = Arc::get_mut(&mut scope.descriptor).unwrap();
+            assert!(
+                matches!(&descriptor.arguments[row_parameter], KindedArgument::RowArg(row) if !row.known().is_empty())
+            );
+            if change == 0 {
+                let previous = std::mem::replace(
+                    &mut descriptor.arguments[position],
+                    KindedArgument::TypeArg(Type::Variable(identity)),
+                );
+                crate::types::discard_kinded_argument_iteratively(previous);
+            } else if change <= 3 {
+                let actual = descriptor.copies[change - 1]
+                    .types
+                    .get_mut(&dependency)
+                    .expect("complete dependency substitution is retained in every phase");
+                crate::types::replace_type_iteratively(actual, Type::Variable(identity));
+            } else if change == 4 {
+                let actual = descriptor.copies[0]
+                    .rows
+                    .get_mut(&row_id)
+                    .expect("complete non-empty Row substitution is retained");
+                *actual = crate::types::EffectRow::empty();
+            } else {
+                let previous = std::mem::replace(
+                    &mut descriptor.arguments[row_parameter],
+                    KindedArgument::RowArg(crate::types::EffectRow::empty()),
+                );
+                crate::types::discard_kinded_argument_iteratively(previous);
+            }
+            let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+                &forged.nodes[index].kind
+            else {
+                unreachable!()
+            };
+            let failure = scope.authenticate(id, &forged, &mut TypeWorkBudget::default()).expect_err("current identity cannot replace an enclosing dependency or its original copy actual");
+            assert_eq!(
+                failure.reason(),
+                ValidationReason::Registry,
+                "claim{change}"
+            );
+            assert!(
+                super::super::validate::validate_effect_modules_family(forged, &sources, &modules)
+                    .is_err()
+            );
         }
     }
 

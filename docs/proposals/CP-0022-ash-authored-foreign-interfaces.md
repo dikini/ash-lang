@@ -558,6 +558,17 @@ identity/dependency relationship. An outer state can be used by an inner
 acquisition or cleanup while its owner is live. Ordinary user handlers retain
 precedence over provider handlers.
 
+The human clarification accepted on 2026-10-13 states: "Permission to use
+enclosing state during acquisition or cleanup does not permit storing that state
+view in an ordinary payload". Private `D` therefore contains no current,
+provisional or enclosing native State token or view, including through tuples,
+records, ADT wrappers or replacement. Ordinary declared-dependency access handles
+remain permitted under their exact identity, liveness and revocation checks.
+Acquisition and cleanup obtain a local authenticated enclosing State when their
+phase permits it. Sealed runtime dependency and destruction operands are separate
+from ordinary `D`; this clarification creates no native-view storage exception or
+new primitive.
+
 Capture/resume moves the scope ownership with the continuation and resumes the
 same activation without acquisition. Owned discard executes required source
 completion in structural order while needed outer resources remain live. It
@@ -571,6 +582,16 @@ owned-discard path: if source finish consumes the owner and returns
 publishes neither a discarded body value nor a `Scope` report. Normal-return
 `Scope.ConsumedError(E)` and the existing terminal `acquired_only` behavior are
 unchanged; this clarification does not select a codec for other primitives.
+
+The human clarification accepted on 2026-10-13 also makes a witnessed
+`Retained(State,E)` on owned discard terminal `ResourceCompletion` failure. The
+machine first revokes ordinary source access and quarantines the same owner and
+its dependency closure. It cannot continue the discarding handler clause or a
+fallback, fabricate an abandoned body value or `Scope` report, or retry source
+finish. Later safe host destruction remains a distinct obligation; even if it
+consumes the retained owner, it cannot turn failed source cleanup into success.
+Dependency-order destruction and incomplete-destruction rules are unchanged,
+as is normal-return `Scope.Completed(value, RetainedError(E))`.
 
 Consumed-error completion records consumption even if error conversion fails.
 Retained-error completion removes all source access and quarantines the same

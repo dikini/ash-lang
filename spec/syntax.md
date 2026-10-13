@@ -81,6 +81,7 @@ foreign_owner ::=
   "owner" upper_identifier type_parameters
   "{" line_end "representation" upper_identifier line_end
   "owned" upper_identifier line_end
+  [ "retains" upper_identifier { "," upper_identifier } line_end ]
   "teardown" upper_identifier [ line_end ] "}" ;
 foreign_symbol ::=
   "symbol" upper_identifier [ type_parameters ] ":" type
@@ -91,7 +92,7 @@ foreign_symbol ::=
   [ line_end ] "}" ;
 abi_representation ::= upper_identifier | "pointer" "(" upper_identifier ")" ;
 foreign_call_contract ::=
-    "operand" integer "from" source_position ("scalar" | "current")
+    "operand" integer "from" source_position ("scalar" | "current" | "enclosing")
   | "output" "result" "as" ("scalar" | "owner" "(" type ")")
   | "outcome" outcome_test "{" [ outcome_fact { "," outcome_fact } ] "}"
   | "retained_dependents" "block" ;
@@ -290,9 +291,9 @@ be empty. A private import may be complete or targeted. A public import must be
 targeted. A targeted import list contains at least one item. Neither a module
 nor a block uses a trailing semicolon.
 
-The foreign productions describe scalar declarations and the dependency-free
-owner contract subset. `source_position` selects a zero-based leaf of the source argument
-product. Quoted declaration strings follow [lexical
+The foreign productions describe scalar declarations and owner contracts with
+declared dependencies. `source_position` selects a zero-based leaf of the source
+argument product. Quoted declaration strings follow [lexical
 structure](lexical-structure.md#tokens). [Static
 semantics](static-semantics.md#source-foreign-declarations) requires exact ABI
 coverage, owner roles and result shape. Pointer representations are restricted
@@ -476,7 +477,8 @@ parameter for that type only. `codec` selects declared library ADT roles;
 [static semantics](static-semantics.md#source-resource-declarations) defines
 their admission. Declaration alone performs no acquisition and introduces no
 first-class acquisition function. This checkpoint executes both `scope` and
-`acquired_only` codecs for the admitted dependency-free owner lifecycle.
+`acquired_only` codecs for the admitted owner lifecycle, including declared
+dependencies and unconditional consumed or retained `void` contracts.
 
 A hook expression names an exact effect instance followed by a block. A
 registration expression names an exact effect instance, one primary-expression

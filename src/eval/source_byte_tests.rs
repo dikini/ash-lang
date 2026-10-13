@@ -33,7 +33,13 @@ fn write(address: *mut core::ffi::c_void, index: usize, byte: u8) {
     WRITES.set(WRITES.get() + 1);
     BYTE.set(byte);
 }
-fn release(_: *mut core::ffi::c_void) {
+fn release(arguments: &[crate::foreign::source_runtime::NativeOwnerOperand]) {
+    assert!(matches!(
+        arguments,
+        [crate::foreign::source_runtime::NativeOwnerOperand::Address(
+            _
+        )]
+    ));
     RELEASES.set(RELEASES.get() + 1);
 }
 

@@ -11,8 +11,8 @@ use crate::{
             SourceOwnerReturnedAuthority,
         },
         source_runtime::{
-            NativeOwnerCallReturned, NativeOwnerConsumed, NativeOwnerGuard, NativeScalarCallError,
-            NativeScalarValue,
+            NativeOwnerCallReturned, NativeOwnerDisposition, NativeOwnerGuard, NativeOwnerOperand,
+            NativeScalarCallError, NativeScalarValue,
         },
     },
     types::{ConstructorId, TypeWorkBudget},
@@ -46,7 +46,7 @@ struct AcquireReportSlots {
 #[derive(Debug)]
 pub(super) struct OwnerAcquireReady<'binding> {
     invocation: AdmittedSourceOwnerAcquireInvocation<'binding>,
-    operands: Vec<NativeScalarValue>,
+    operands: Vec<NativeOwnerOperand>,
     recording: PrepaidOwnerRecord,
     slots: AcquireReportSlots,
 }
@@ -81,6 +81,8 @@ struct TeardownReportSlots {
     disposition: Location,
     returned: Location,
     consumed: ConstructorId,
+    retained: ConstructorId,
+    blocked: ConstructorId,
     returned_constructor: ConstructorId,
 }
 
@@ -91,12 +93,15 @@ pub(super) struct OwnerTeardownPrepared<'binding> {
     invocation: AdmittedSourceOwnerTeardownInvocation<'binding>,
     recording: PrepaidOwnerRecord,
     slots: TeardownReportSlots,
+    blocked: bool,
 }
 
 #[derive(Debug)]
 pub(super) struct OwnerTeardownReady<'binding> {
     invocation: AdmittedSourceOwnerTeardownInvocation<'binding>,
     guard: NativeOwnerGuard,
+    operands: Vec<NativeOwnerOperand>,
+    blocked: bool,
     recording: PrepaidOwnerRecord,
     slots: TeardownReportSlots,
 }
@@ -104,7 +109,7 @@ pub(super) struct OwnerTeardownReady<'binding> {
 #[derive(Debug)]
 pub(super) struct OwnerTeardownReturned<'binding> {
     authority: SourceOwnerReturnedAuthority<'binding>,
-    consumed: NativeOwnerConsumed,
+    consumed: NativeOwnerDisposition,
     recording: PrepaidOwnerRecord,
     slots: TeardownReportSlots,
 }
@@ -112,7 +117,7 @@ pub(super) struct OwnerTeardownReturned<'binding> {
 #[derive(Debug)]
 pub(super) struct OwnerTeardownRecorded<'binding> {
     _authority: SourceOwnerReturnedAuthority<'binding>,
-    consumed: NativeOwnerConsumed,
+    consumed: NativeOwnerDisposition,
     slots: TeardownReportSlots,
 }
 
@@ -121,7 +126,7 @@ pub(super) struct OwnerTeardownReported {
     boundary: usize,
     activation: ActivationKey,
     value: Value,
-    consumed: NativeOwnerConsumed,
+    consumed: NativeOwnerDisposition,
 }
 
 #[derive(Debug)]
@@ -169,7 +174,7 @@ impl<'binding> OwnerAcquireReady<'binding> {
     /// final report preflight; no failure here invokes acquisition.
     pub(super) fn admit(
         invocation: AdmittedSourceOwnerAcquireInvocation<'binding>,
-        operands: Vec<NativeScalarValue>,
+        operands: Vec<NativeOwnerOperand>,
         initialized_bytes: Option<usize>,
         activation: ActivationKey,
         boundary: usize,
@@ -308,7 +313,15 @@ impl<'binding> OwnerTeardownPrepared<'binding> {
         if !Arc::ptr_eq(invocation.owner(), guard.owner()) {
             return Err(OwnerPhaseFailure::Authority);
         }
-        let consumed = invocation.consumed_constructor();
+        let [consumed, retained, blocked] = invocation.disposition_constructors();
+        let has_dependents = guard
+            .preflight_dependents(work)
+            .map_err(|error| match error {
+                crate::foreign::source_runtime::NativeOwnerAdmissionError::Work => {
+                    OwnerPhaseFailure::WorkReservation
+                }
+                _ => OwnerPhaseFailure::Authority,
+            })?;
         let returned_constructor = invocation.returned_constructor();
         let first = reserve_slots(heap, work, 2)?;
         Ok(Self {
@@ -320,14 +333,18 @@ impl<'binding> OwnerTeardownPrepared<'binding> {
                 disposition: first,
                 returned: first + 1,
                 consumed,
+                retained,
+                blocked,
                 returned_constructor,
             },
+            blocked: has_dependents,
         })
     }
 
     pub(super) fn ready(
         self,
         guard: NativeOwnerGuard,
+        operands: Vec<NativeOwnerOperand>,
     ) -> Result<OwnerTeardownReady<'binding>, OwnerPhaseFailure> {
         if !Arc::ptr_eq(self.invocation.owner(), guard.owner()) {
             return Err(OwnerPhaseFailure::Authority);
@@ -335,6 +352,8 @@ impl<'binding> OwnerTeardownPrepared<'binding> {
         Ok(OwnerTeardownReady {
             invocation: self.invocation,
             guard,
+            operands,
+            blocked: self.blocked,
             recording: self.recording,
             slots: self.slots,
         })
@@ -348,10 +367,12 @@ impl<'binding> OwnerTeardownReady<'binding> {
         let Self {
             invocation,
             guard,
+            operands,
+            blocked,
             recording,
             slots,
         } = self;
-        let (authority, consumed) = invocation.invoke(guard);
+        let (authority, consumed) = invocation.invoke(guard, &operands, blocked);
         OwnerTeardownReturned {
             authority,
             consumed,
@@ -385,8 +406,17 @@ impl OwnerTeardownRecorded<'_> {
         if !empty_slots(heap, self.slots.disposition, 2) {
             return Err(OwnerPhaseFailure::HeapSlotInvariant);
         }
-        heap[self.slots.disposition] =
-            HeapCell::Constructor(self.slots.consumed, Some(Value::Unit));
+        let constructor = if self.consumed.is_blocked() {
+            self.slots.blocked
+        } else if self.consumed.is_retained() {
+            self.slots.retained
+        } else {
+            self.slots.consumed
+        };
+        heap[self.slots.disposition] = HeapCell::Constructor(
+            constructor,
+            (!self.consumed.is_blocked()).then_some(Value::Unit),
+        );
         heap[self.slots.returned] = HeapCell::Constructor(
             self.slots.returned_constructor,
             Some(Value::Location(self.slots.disposition)),
@@ -407,7 +437,7 @@ impl OwnerTeardownReported {
     pub(super) fn activation(&self) -> ActivationKey {
         self.activation
     }
-    pub(super) fn into_parts(self) -> (Value, NativeOwnerConsumed) {
+    pub(super) fn into_parts(self) -> (Value, NativeOwnerDisposition) {
         (self.value, self.consumed)
     }
 }
@@ -625,6 +655,12 @@ impl<'runtime> super::Machine<'runtime> {
                     .try_reserve_exact(source.operands().len())
                     .map_err(|_| operand_storage(source.operands().len()))?;
                 for operand in source.operands() {
+                    if let PreparedOperandSource::Enclosing(path) = operand.source() {
+                        operands.push(
+                            self.enclosing_owner_operand(index, request, &value, path, false)?,
+                        );
+                        continue;
+                    }
                     let PreparedOperandSource::Source(path) = operand.source() else {
                         return Err(super::RuntimeFailure::ForeignBinding);
                     };
@@ -639,7 +675,7 @@ impl<'runtime> super::Machine<'runtime> {
                         return Err(super::RuntimeFailure::ForeignBinding);
                     };
                     match narrow_gnu_scalar(integer, representation, &mut self.instantiation_work) {
-                        Ok(operand) => operands.push(operand),
+                        Ok(operand) => operands.push(NativeOwnerOperand::Scalar(operand)),
                         Err(NativeScalarConversionError::OutOfRange) => {
                             self.control =
                                 Some(super::Control::Return(prepare_conversion_refusal(
@@ -659,6 +695,54 @@ impl<'runtime> super::Machine<'runtime> {
                         Err(_) => return Err(super::RuntimeFailure::ForeignBinding),
                     }
                 }
+                let program = self.program.clone();
+                let scope = match program.node(node) {
+                    Some(super::ExecutableNode::Effect(expression)) => match &expression.kind {
+                        crate::core::EffectExprKind::Operation(
+                            crate::core::EffectOperation::SourceResourceScope(scope),
+                        ) => scope,
+                        _ => return Err(super::RuntimeFailure::ForeignBinding),
+                    },
+                    _ => return Err(super::RuntimeFailure::ForeignBinding),
+                };
+                let super::Frame::SourceResourceBoundary(boundary) = &self.frames[index] else {
+                    return Err(super::RuntimeFailure::InvalidControlState);
+                };
+                let crate::types::Type::Tuple(state_data) = scope.finish.parameter.ty() else {
+                    return Err(super::RuntimeFailure::ForeignBinding);
+                };
+                let state = crate::types::IterativeTypeOwner::new(
+                    boundary.environment.instantiation.ty(
+                        state_data
+                            .first()
+                            .ok_or(super::RuntimeFailure::ForeignBinding)?,
+                        &mut self.instantiation_work,
+                    )?,
+                );
+                let access = crate::types::IterativeTypeOwner::new(
+                    boundary
+                        .environment
+                        .instantiation
+                        .ty(scope.handle.ty(), &mut self.instantiation_work)?,
+                );
+                let destruction = prepare_destruction_operands(
+                    invocation.destructor(),
+                    &state,
+                    &boundary.dependencies,
+                    &mut self.instantiation_work,
+                )?;
+                let super::Frame::SourceResourceBoundary(boundary) = &mut self.frames[index] else {
+                    return Err(super::RuntimeFailure::InvalidControlState);
+                };
+                let dependencies = std::mem::take(&mut boundary.dependencies);
+                let invocation = invocation.prepare_owner_authority(
+                    key.0 as usize,
+                    state,
+                    access,
+                    dependencies,
+                    destruction,
+                    &mut self.instantiation_work,
+                )?;
                 let ready = OwnerAcquireReady::admit(
                     invocation,
                     operands,
@@ -672,16 +756,48 @@ impl<'runtime> super::Machine<'runtime> {
                 self.pending_source_owner_call = Some(SourceOwnerCallProgress::AcquireReady(ready));
             }
             AdmittedSourceOwnerInvocation::Teardown(invocation) => {
-                // The bounded runtime admits exactly one Current opaque operand;
-                // it is the nonowning state key of this exact live activation.
-                let [operand] = symbol.symbol().operands() else {
+                let Some(PreparedOwnerCall::Teardown {
+                    current_operand, ..
+                }) = symbol.owner_role()
+                else {
                     return Err(super::RuntimeFailure::ForeignBinding);
                 };
-                let PreparedOperandSource::Current(path) = operand.source() else {
-                    return Err(super::RuntimeFailure::ForeignBinding);
-                };
-                if current_key(&self.heap, &value, path, &mut self.instantiation_work)? != key {
-                    return Err(super::RuntimeFailure::ForeignBinding);
+                let mut operands = Vec::new();
+                super::charge_effect_work(
+                    &mut self.instantiation_work,
+                    symbol.symbol().operands().len(),
+                    super::RuntimePhase::Access,
+                )?;
+                operands
+                    .try_reserve_exact(symbol.symbol().operands().len())
+                    .map_err(|_| operand_storage(symbol.symbol().operands().len()))?;
+                for (position, operand) in symbol.symbol().operands().iter().enumerate() {
+                    let native = match operand.source() {
+                        PreparedOperandSource::Current(path) if position == *current_operand => {
+                            if current_key(&self.heap, &value, path, &mut self.instantiation_work)?
+                                != key
+                            {
+                                return Err(super::RuntimeFailure::ForeignBinding);
+                            }
+                            let super::Frame::SourceResourceBoundary(boundary) =
+                                &self.frames[index]
+                            else {
+                                return Err(super::RuntimeFailure::InvalidControlState);
+                            };
+                            NativeOwnerOperand::Address(
+                                boundary
+                                    .owner
+                                    .as_ref()
+                                    .and_then(NativeOwnerGuard::completion_address)
+                                    .ok_or(super::RuntimeFailure::ForeignBinding)?,
+                            )
+                        }
+                        PreparedOperandSource::Enclosing(path) => {
+                            self.enclosing_owner_operand(index, request, &value, path, true)?
+                        }
+                        _ => return Err(super::RuntimeFailure::ForeignBinding),
+                    };
+                    operands.push(native);
                 }
                 let super::Frame::SourceResourceBoundary(boundary) = &self.frames[index] else {
                     return Err(super::RuntimeFailure::InvalidControlState);
@@ -709,13 +825,86 @@ impl<'runtime> super::Machine<'runtime> {
                     .take()
                     .ok_or(super::RuntimeFailure::InvalidControlState)?;
                 let ready = prepared
-                    .ready(guard)
+                    .ready(guard, operands)
                     .map_err(|error| phase_failure(error, &self.instantiation_work))?;
                 self.pending_source_owner_call =
                     Some(SourceOwnerCallProgress::TeardownReady(ready));
             }
         }
         Ok(())
+    }
+
+    fn enclosing_owner_operand(
+        &mut self,
+        boundary_index: usize,
+        request: crate::core::NodeId,
+        value: &Value,
+        path: &[usize],
+        finishing: bool,
+    ) -> Result<NativeOwnerOperand, super::RuntimeFailure> {
+        let key = current_key(&self.heap, value, path, &mut self.instantiation_work)?;
+        let program = self.program.clone();
+        let Some(super::ExecutableNode::Effect(expression)) = program.node(request) else {
+            return Err(super::RuntimeFailure::ForeignBinding);
+        };
+        let crate::core::EffectExprKind::Operation(crate::core::EffectOperation::Request(call)) =
+            &expression.kind
+        else {
+            return Err(super::RuntimeFailure::ForeignBinding);
+        };
+        let ty = match program
+            .node(call.operand())
+            .ok_or(super::RuntimeFailure::ForeignBinding)?
+        {
+            super::ExecutableNode::Effect(node) => &node.ty,
+            super::ExecutableNode::Pure(node) => &node.ty,
+        };
+        let leaf = source_type_leaf(ty, path, &mut self.instantiation_work)?;
+        let super::Frame::SourceResourceBoundary(boundary) = &self.frames[boundary_index] else {
+            return Err(super::RuntimeFailure::InvalidControlState);
+        };
+        let leaf = crate::types::IterativeTypeOwner::new(
+            boundary
+                .environment
+                .instantiation
+                .ty(leaf, &mut self.instantiation_work)?,
+        );
+        let bindings = self
+            .source_bindings
+            .ok_or(super::RuntimeFailure::ForeignBinding)?;
+        let completion = if finishing {
+            boundary.owner.as_ref()
+        } else {
+            None
+        };
+        let dependency = bindings.borrowed_owner(
+            key.0 as usize,
+            &leaf,
+            crate::foreign::source_runtime::NativeOwnerViewKind::State,
+            completion,
+            &mut self.instantiation_work,
+        )?;
+        let permitted = if finishing {
+            completion.is_some_and(|guard| guard.retains(&dependency))
+        } else {
+            super::charge_effect_work(
+                &mut self.instantiation_work,
+                boundary.dependencies.len(),
+                super::RuntimePhase::Access,
+            )?;
+            boundary
+                .dependencies
+                .iter()
+                .any(|admitted| admitted.same_slot(&dependency))
+        };
+        if !permitted {
+            return Err(super::RuntimeFailure::ForeignBinding);
+        }
+        Ok(NativeOwnerOperand::Address(
+            dependency
+                .address()
+                .ok_or(super::RuntimeFailure::ForeignBinding)?,
+        ))
     }
 
     /// Returned transitions run before every disposal check. Postnative
@@ -814,7 +1003,8 @@ impl<'runtime> super::Machine<'runtime> {
                 // This non-Clone receipt has no callback. It cannot replay the
                 // destructor, even if later source report handling fails.
                 let _authority = consumed.owner();
-                boundary.consumed = true;
+                boundary.consumed = !consumed.is_retained();
+                boundary.owner = consumed.into_retained();
                 self.control = Some(super::Control::Return(value));
             }
         }
@@ -845,6 +1035,161 @@ fn same_instance(
         }
     }
     Ok(true)
+}
+
+fn source_type_leaf<'a>(
+    mut ty: &'a crate::types::Type,
+    path: &[usize],
+    work: &mut TypeWorkBudget,
+) -> Result<&'a crate::types::Type, super::RuntimeFailure> {
+    for (index, component) in path.iter().enumerate() {
+        super::charge_effect_work(work, 1, super::RuntimePhase::Access)?;
+        if let crate::types::Type::Tuple(fields) = ty {
+            ty = fields
+                .get(*component)
+                .ok_or(super::RuntimeFailure::ForeignBinding)?;
+        } else if index != 0 || *component != 0 {
+            return Err(super::RuntimeFailure::ForeignBinding);
+        }
+    }
+    if path.is_empty() {
+        return Err(super::RuntimeFailure::ForeignBinding);
+    }
+    Ok(ty)
+}
+
+struct OwnerTypeReplacements(
+    std::collections::HashMap<crate::types::TypeVariableId, crate::types::Type>,
+);
+impl OwnerTypeReplacements {
+    fn insert(&mut self, variable: crate::types::TypeVariableId, ty: crate::types::Type) {
+        if let Some(previous) = self.0.insert(variable, ty) {
+            crate::types::discard_type_iteratively(previous);
+        }
+    }
+}
+impl Drop for OwnerTypeReplacements {
+    fn drop(&mut self) {
+        for (_, ty) in self.0.drain() {
+            crate::types::discard_type_iteratively(ty);
+        }
+    }
+}
+
+/// The original declared host destructor is not a new source effect request.
+/// Its state/dependency views are specialized from this owner and initializer
+/// receipts, and every operand is retained before acquisition can enter C.
+fn prepare_destruction_operands(
+    destructor: &crate::foreign::checked_source::CheckedForeignSymbol,
+    state: &crate::types::Type,
+    dependencies: &[crate::foreign::source_runtime::NativeOwnerDependency],
+    work: &mut TypeWorkBudget,
+) -> Result<Vec<NativeOwnerOperand>, super::RuntimeFailure> {
+    use crate::foreign::source_contract::{
+        PreparedOperandSource, PreparedOwnerArgument, PreparedOwnerCall,
+    };
+    use crate::types::{IterativeTypeOwner, Type};
+    let owner = destructor
+        .owner()
+        .ok_or(super::RuntimeFailure::ForeignBinding)?;
+    let Some(PreparedOwnerCall::Teardown {
+        application,
+        current_operand,
+        ..
+    }) = destructor.owner_role()
+    else {
+        return Err(super::RuntimeFailure::ForeignBinding);
+    };
+    let mut arguments = Vec::new();
+    let mut head = state;
+    while let Type::Application(function, argument) = head {
+        super::charge_effect_work(work, 1, super::RuntimePhase::Acquisition)?;
+        arguments.try_reserve(1).map_err(|_| operand_storage(1))?;
+        arguments.push(argument.as_ref());
+        head = function;
+    }
+    if head != &Type::Nominal(owner.nominal()) || arguments.len() != application.arguments().len() {
+        return Err(super::RuntimeFailure::ForeignBinding);
+    }
+    let mut replacements = OwnerTypeReplacements(std::collections::HashMap::new());
+    super::charge_effect_work(work, arguments.len(), super::RuntimePhase::Acquisition)?;
+    replacements
+        .0
+        .try_reserve(arguments.len())
+        .map_err(|_| operand_storage(arguments.len()))?;
+    for (formal, argument) in application.arguments().iter().zip(arguments.iter().rev()) {
+        let PreparedOwnerArgument::Type(position) = formal else {
+            return Err(super::RuntimeFailure::ForeignBinding);
+        };
+        let parameter = destructor
+            .parameter_ids()
+            .get(*position)
+            .ok_or(super::RuntimeFailure::ForeignBinding)?;
+        let argument = crate::types::clone_type_with_budget(argument, work).map_err(|()| {
+            super::effect_work_failure(work, None, super::RuntimePhase::Acquisition)
+        })?;
+        replacements.insert(*parameter, argument);
+    }
+    let signature = destructor
+        .source_signature()
+        .function_view()
+        .ok_or(super::RuntimeFailure::ForeignBinding)?;
+    let domain = IterativeTypeOwner::new(crate::types::substitute_type_variables_with(
+        signature.domain(),
+        &replacements.0,
+        |cells| super::charge_effect_work(work, cells, super::RuntimePhase::Acquisition),
+        || operand_storage(1),
+    )?);
+    let mut operands = Vec::new();
+    super::charge_effect_work(
+        work,
+        destructor.symbol().operands().len(),
+        super::RuntimePhase::Acquisition,
+    )?;
+    operands
+        .try_reserve_exact(destructor.symbol().operands().len())
+        .map_err(|_| operand_storage(destructor.symbol().operands().len()))?;
+    for (position, operand) in destructor.symbol().operands().iter().enumerate() {
+        let native = match operand.source() {
+            PreparedOperandSource::Current(_) if position == *current_operand => {
+                NativeOwnerOperand::Address(std::ptr::null_mut())
+            }
+            PreparedOperandSource::Enclosing(path) => {
+                let ty = source_type_leaf(&domain, path, work)?;
+                let mut selected = None;
+                super::charge_effect_work(
+                    work,
+                    dependencies.len(),
+                    super::RuntimePhase::Acquisition,
+                )?;
+                for dependency in dependencies {
+                    let state = dependency.state(work).map_err(|error| {
+                        crate::foreign::source_bindings::owner_admission_failure(error, work)
+                    })?;
+                    if crate::types::same_type_with_budget(ty, &state, work).map_err(|()| {
+                        super::effect_work_failure(work, None, super::RuntimePhase::Acquisition)
+                    })? {
+                        if selected.is_some_and(
+                            |previous: &crate::foreign::source_runtime::NativeOwnerDependency| {
+                                !previous.same_slot(dependency)
+                            },
+                        ) {
+                            return Err(super::RuntimeFailure::ForeignBinding);
+                        }
+                        selected = Some(dependency);
+                    }
+                }
+                NativeOwnerOperand::Address(
+                    selected
+                        .and_then(|dependency| dependency.address())
+                        .ok_or(super::RuntimeFailure::ForeignBinding)?,
+                )
+            }
+            _ => return Err(super::RuntimeFailure::ForeignBinding),
+        };
+        operands.push(native);
+    }
+    Ok(operands)
 }
 
 fn current_key<'value>(

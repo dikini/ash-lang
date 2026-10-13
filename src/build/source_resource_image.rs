@@ -937,9 +937,10 @@ impl Decoder<'_> {
             .try_reserve_exact(self.image.source_parameters.len())
             .map_err(|_| ImageFailure::Resource)?;
         for slot in &self.image.source_parameters {
-            source_parameters
-                .0
-                .push(self.parameter(*get(&self.image.parameters, *slot)?)?);
+            source_parameters.0.push(self.parameter(*get(
+                self.fact_table(&self.image.parameters, |p| p.parameters)?,
+                *slot,
+            )?)?);
         }
         // Interface slots belong exclusively to their owner records in the
         // wire coverage proof. Install their canonical binders before the
@@ -984,7 +985,10 @@ impl Decoder<'_> {
         let family = self.nominal(record.family)?;
         let spelling = self.text(record.spelling)?;
         let parameters = self.parameters(record.parameters)?;
-        let answer = self.parameter(*get(&self.image.parameters, record.answer)?)?;
+        let answer = self.parameter(*get(
+            self.fact_table(&self.image.parameters, |p| p.parameters)?,
+            record.answer,
+        )?)?;
         let owned_origin = self.origin(record.owned_origin)?;
         let origin = self.origin(record.origin)?;
         let input = self.resolved_annotation(record.input, arena)?;
@@ -1184,6 +1188,8 @@ impl Decoder<'_> {
         binders: &[crate::resolved::BinderId],
     ) -> Result<Vec<RestoredSourceTemplate>, ImageFailure> {
         let mut templates = Vec::new();
+        let mut structure_session =
+            crate::core::validate::SourceResourceStructureSession::default();
         for record in &self.image.source_templates {
             let header_record = *get(&self.image.resource_headers, record.header)?;
             let id = self.resource_identity(header_record.id)?;
@@ -1204,7 +1210,7 @@ impl Decoder<'_> {
                 push(&mut sources, source, self.work)?;
                 push(&mut module_sources, (*module, source.id()), self.work)?;
             }
-            let template = CheckedSourceResourceTemplate::admit(
+            let template = CheckedSourceResourceTemplate::admit_with_structure_session(
                 Arc::new(header),
                 acquire,
                 finish,
@@ -1212,6 +1218,7 @@ impl Decoder<'_> {
                 &sources,
                 &module_sources,
                 self.work,
+                &mut structure_session,
             )
             .map_err(ImageFailure::Validation)?;
             let record = RestoredSourceTemplate {
@@ -1577,9 +1584,15 @@ impl Decoder<'_> {
         &mut self,
         slot: u32,
     ) -> Result<Arc<crate::core::dialect::MethodEvidenceCatalog>, ImageFailure> {
-        let catalog = *get(&self.image.method_catalogs, slot)?;
+        let catalog = *get(
+            self.fact_table(&self.image.method_catalogs, |p| p.method_catalogs)?,
+            slot,
+        )?;
         let mut methods = Vec::new();
-        for record in catalog.methods.get(&self.image.source_methods)? {
+        for record in catalog
+            .methods
+            .get(self.fact_table(&self.image.source_methods, |p| p.source_methods)?)?
+        {
             let id = crate::interface::MethodId::new(
                 self.interface_identity(record.interface)?,
                 record.local,
@@ -1587,16 +1600,15 @@ impl Decoder<'_> {
             let mut interface_parameters = Vec::new();
             for id in record
                 .interface_parameters
-                .get(&self.image.method_variables)?
+                .get(self.fact_table(&self.image.method_variables, |p| p.method_variables)?)?
             {
                 let id = self.type_variable(*id)?;
                 push(&mut interface_parameters, id, self.work)?;
             }
             let mut inherited_parameters = Vec::new();
-            for parameter in record
-                .inherited_parameters
-                .get(&self.image.inherited_parameters)?
-            {
+            for parameter in record.inherited_parameters.get(
+                self.fact_table(&self.image.inherited_parameters, |p| p.inherited_parameters)?,
+            )? {
                 let owner = match parameter.owner {
                     OwnerIdentity::Effect(id) => {
                         crate::resolved::OwnerId::Effect(self.effect_identity(id)?)
@@ -1620,7 +1632,10 @@ impl Decoder<'_> {
                 )?;
             }
             let mut parameters = Vec::new();
-            for parameter in record.parameters.get(&self.image.quantifiers)? {
+            for parameter in record
+                .parameters
+                .get(self.fact_table(&self.image.quantifiers, |p| p.quantifiers)?)?
+            {
                 let id = self.type_variable(parameter.id)?;
                 let kind = self.kind(parameter.kind)?;
                 push(&mut parameters, (id, kind), self.work)?;
@@ -1651,7 +1666,7 @@ impl Decoder<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{PureImage, get};
+    use super::super::{ImageFailure, PureImage, Slice, get};
     use crate::types::TypeWorkBudget;
     use std::sync::Arc;
     use std::{
@@ -1809,6 +1824,497 @@ mod tests {
             bytes.len(),
             expected.len()
         );
+    }
+
+    #[test]
+    fn dependent_discard_image_checks_original_facts_under_normal_cumulative_work() {
+        let root = std::env::temp_dir().join(format!(
+            "ash-dependent-discard-image-{}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        let fixture = Fixture(root);
+        let owner = include_str!("../../tests/fixtures/source-owner/dependent_owner.ash");
+        let split = owner.find("pub interface ChildProvider").unwrap();
+        let parent = owner[..split]
+            .replace(
+                "pub type Acquire<",
+                "pub type Outcome<T> = Success(T)\n    | Failure(Unit)\n\npub type Acquire<",
+            )
+            .replace(
+                "result Scope<Unit, Unit, Answer> for <Answer>",
+                "result Outcome<Answer> for <Answer>",
+            )
+            .replace("codec scope", "codec acquired_only")
+            .replace(
+                "    read : Access -> Int ! {ParentOps<Access, State>}\n",
+                "",
+            )
+            .replace("    read : Access -> Int\n", "")
+            .replace("        read access => resume data\n", "")
+            .replace(
+                "        let marked = Foreign.byte_write (state, 0, 99)\n",
+                "",
+            );
+        fs::write(
+            fixture.0.join("owner.ash"),
+            format!("{parent}{}", &owner[split..]),
+        )
+        .unwrap();
+        fs::write(fixture.0.join("entry.ash"), "import owner as Owner\neffect Pause {\n    pause : Unit -> Unit\n}\nmain : Unit -> Int\nmain () = handle {\n    let abandoned = resource Owner.Parent<ParentFresh> parent = 64 {\n        resource Owner.Child<ParentFresh, ChildFresh> child = (parent, 4) {\n            let paused = perform Pause.pause ()\n            123\n        }\n    }\n    111\n} with Pause {\n    pause ignored => {\n        let closed = discard\n        84\n    }\n}\n").unwrap();
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry: fixture.0.join("entry.ash"),
+            roots: crate::module::ModuleRoots::empty(),
+        })
+        .unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let mut preparation = TypeWorkBudget::default();
+        let build = super::super::encode_effect_for_build(
+            program,
+            provenance,
+            super::super::super::NATIVE_TARGET,
+            &mut preparation,
+        )
+        .unwrap();
+        let bytes = build.image.encode_bytes(&mut preparation).unwrap();
+        let expected = build
+            .image
+            .encode_native_expectations(&mut preparation)
+            .unwrap();
+        drop(build);
+        drop(compiled);
+        drop(fixture);
+        let restore = |work: &mut TypeWorkBudget| -> Result<(), ImageFailure> {
+            let image = PureImage::decode_bytes(&bytes, work)?;
+            let facts = image.admit_expected_native_facts(&expected, work)?;
+            let restored = image.restore_effect(work)?;
+            for (slot, record) in image.prepared_libraries.iter().enumerate() {
+                let slot = u32::try_from(slot).unwrap();
+                let expected = facts.library(slot, &restored, work)?;
+                let ordinal = image
+                    .native_symbols
+                    .iter()
+                    .find(|symbol| symbol.prepared_library == slot)
+                    .unwrap()
+                    .library_ordinal;
+                let identity = restored.relocate_library(record.module, ordinal, work)?;
+                crate::foreign::checked_source::check_executable_foreign_library_in_program(
+                    identity,
+                    Arc::clone(&restored.prepared[slot as usize]),
+                    &expected,
+                    super::super::super::NATIVE_TARGET,
+                    &restored.program,
+                    work,
+                )
+                .map_err(|_| ImageFailure::InvalidRecord)?;
+            }
+            Ok(())
+        };
+        let mut normal = TypeWorkBudget::default();
+        restore(&mut normal)
+            .expect("dependent discard and original libraries fit the unchanged allowance");
+        let cost = normal.used();
+        assert!(cost < normal.limit());
+        for prefix in [0, 11] {
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            assert!(restore(&mut short).is_err());
+            assert!(short.used() > prefix);
+            assert!(short.used() <= short.limit());
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                restore(&mut exact).unwrap();
+                assert_eq!(exact.used(), prefix + cost);
+            }
+        }
+        let mut forged = PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+        let child = forged
+            .resource_headers
+            .iter()
+            .position(|header| header.spelling.get(&forged.bytes).unwrap() == b"Child")
+            .unwrap();
+        let parent_state = forged
+            .resource_headers
+            .iter()
+            .find(|header| header.spelling.get(&forged.bytes).unwrap() == b"Parent")
+            .unwrap()
+            .state
+            .ty;
+        let header = forged.resource_headers[child];
+        let mut editing = TypeWorkBudget::default();
+        let tuple = forged.types[header.data.ty as usize];
+        assert_eq!(tuple.tag, super::super::TypeTag::Tuple);
+        let mut fields = tuple.children.get(&forged.type_children).unwrap().to_vec();
+        let state = forged.types[parent_state as usize];
+        let state_children = state.children.get(&forged.type_children).unwrap();
+        let access = forged.types[fields[0] as usize];
+        let access_children = access.children.get(&forged.type_children).unwrap();
+        assert_eq!(state.tag, super::super::TypeTag::Application);
+        assert_eq!(access.tag, super::super::TypeTag::Application);
+        // Use the child's already-scoped P, not the different formal belonging
+        // to the Parent declaration. The mutation stays well-kinded and scoped.
+        let state_children = [state_children[0], access_children[1]];
+        let children =
+            super::super::append(&mut forged.type_children, &state_children, &mut editing).unwrap();
+        fields[0] = super::super::push(
+            &mut forged.types,
+            super::super::TypeRecord {
+                tag: state.tag,
+                children,
+            },
+            &mut editing,
+        )
+        .unwrap();
+        let children =
+            super::super::append(&mut forged.type_children, &fields, &mut editing).unwrap();
+        let data = super::super::push(
+            &mut forged.types,
+            super::super::TypeRecord {
+                tag: tuple.tag,
+                children,
+            },
+            &mut editing,
+        )
+        .unwrap();
+        // Keep the declared Acquire<State,D,I> and D exactly coherent. Only the
+        // ordinary stored D role now contains the original enclosing State.
+        let result = forged.types[header.acquisition.ty as usize];
+        assert_eq!(result.tag, super::super::TypeTag::Application);
+        let mut result_children = result.children.get(&forged.type_children).unwrap().to_vec();
+        let applied = forged.types[result_children[0] as usize];
+        assert_eq!(applied.tag, super::super::TypeTag::Application);
+        let mut applied_children = applied
+            .children
+            .get(&forged.type_children)
+            .unwrap()
+            .to_vec();
+        applied_children[1] = data;
+        let children =
+            super::super::append(&mut forged.type_children, &applied_children, &mut editing)
+                .unwrap();
+        result_children[0] = super::super::push(
+            &mut forged.types,
+            super::super::TypeRecord {
+                tag: applied.tag,
+                children,
+            },
+            &mut editing,
+        )
+        .unwrap();
+        let children =
+            super::super::append(&mut forged.type_children, &result_children, &mut editing)
+                .unwrap();
+        let acquisition = super::super::push(
+            &mut forged.types,
+            super::super::TypeRecord {
+                tag: result.tag,
+                children,
+            },
+            &mut editing,
+        )
+        .unwrap();
+        forged.resource_headers[child].data.ty = data;
+        forged.resource_headers[child].acquisition.ty = acquisition;
+        // Added type records change the separately emitted fact inventory.
+        // The original expectation refuses before reconstruction. A mutually
+        // consistent malformed pair still cannot admit native State in D.
+        assert!(matches!(
+            forged.compare_native_expectations(&expected, &mut TypeWorkBudget::default()),
+            Err(ImageFailure::InvalidRecord)
+        ));
+        let malformed_expected = forged
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        forged
+            .compare_native_expectations(&malformed_expected, &mut TypeWorkBudget::default())
+            .unwrap();
+        assert!(
+            matches!(forged.restore_effect(&mut TypeWorkBudget::default()), Err(ImageFailure::Validation(error)) if error.reason() == crate::core::ValidationReason::Registry)
+        );
+        let forged_bytes = forged.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
+        let expected_static = Box::leak(malformed_expected.into_boxed_slice());
+        assert!(matches!(super::super::super::__run_private_effect_image(
+            &super::super::super::runtime_fingerprint(), &forged_bytes, expected_static, &[],
+        ), Err(super::super::super::PrivateProgramFailure(super::super::super::PrivateFailure::Image(ImageFailure::Validation(error)))) if error.reason() == crate::core::ValidationReason::Registry));
+        println!(
+            "dependent discard image: bytes={}, facts={}, cumulative checked-library work={cost}; exact/one-short/prefix/two fresh retries",
+            bytes.len(),
+            expected.len()
+        );
+    }
+
+    #[test]
+    fn source_template_registry_session_is_exact_input_only_and_budgeted() {
+        use crate::core::validate::{
+            SourceResourceStructureSession, check_source_resource_structure,
+        };
+        let image = scope_image();
+        let restored = image
+            .restore_effect(&mut TypeWorkBudget::default())
+            .unwrap();
+        let original = restored
+            .program
+            .nodes()
+            .iter()
+            .find_map(|node| match &node.kind {
+                crate::core::EffectExprKind::Operation(
+                    crate::core::EffectOperation::SourceResourceScope(scope),
+                ) => Some(scope.original()),
+                _ => None,
+            })
+            .unwrap();
+        let sources = restored.sources.iter().collect::<Vec<_>>();
+        let modules = restored
+            .modules
+            .iter()
+            .copied()
+            .zip(restored.sources.iter().map(crate::source::SourceFile::id))
+            .collect::<Vec<_>>();
+        let forests = [
+            (original.original_acquire(), false),
+            (original.original_finish(), false),
+            (original.original_handler(), true),
+        ];
+        let check = |work: &mut TypeWorkBudget| {
+            let mut session = SourceResourceStructureSession::default();
+            for (forest, answer) in forests {
+                session.check(
+                    forest,
+                    &original.header().original,
+                    answer,
+                    &sources,
+                    &modules,
+                    work,
+                )?;
+            }
+            Ok::<_, crate::core::ValidationError>(())
+        };
+        let mut measured = TypeWorkBudget::default();
+        check(&mut measured).unwrap();
+        let cost = measured.used();
+        let mut fresh = TypeWorkBudget::default();
+        for (forest, answer) in forests {
+            check_source_resource_structure(
+                forest,
+                &original.header().original,
+                answer,
+                &sources,
+                &modules,
+                &mut fresh,
+            )
+            .unwrap();
+        }
+        assert!(
+            cost < fresh.used(),
+            "only registry replay is removed; all three forests remain checked"
+        );
+        for prefix in [0, 13] {
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            assert_eq!(
+                check(&mut short).unwrap_err().reason(),
+                crate::core::ValidationReason::Resource
+            );
+            assert!(short.used() <= short.limit());
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                check(&mut exact).unwrap();
+                assert_eq!(exact.used(), prefix + cost);
+            }
+        }
+        let mut session = SourceResourceStructureSession::default();
+        session
+            .check(
+                forests[0].0,
+                &original.header().original,
+                false,
+                &sources,
+                &modules,
+                &mut TypeWorkBudget::default(),
+            )
+            .unwrap();
+        let moved_sources = restored.sources.clone();
+        let moved = moved_sources.iter().collect::<Vec<_>>();
+        assert_eq!(
+            session
+                .check(
+                    forests[1].0,
+                    &original.header().original,
+                    false,
+                    &moved,
+                    &modules,
+                    &mut TypeWorkBudget::default()
+                )
+                .unwrap_err()
+                .reason(),
+            crate::core::ValidationReason::Registry
+        );
+        // Identical source bytes and IDs at a new object address require a new
+        // proof. No pointer from the old receipt is dereferenced.
+        SourceResourceStructureSession::default()
+            .check(
+                forests[1].0,
+                &original.header().original,
+                false,
+                &moved,
+                &modules,
+                &mut TypeWorkBudget::default(),
+            )
+            .unwrap();
+        let mut changed_modules = modules.clone();
+        let first = changed_modules[0].1;
+        changed_modules[0].1 = changed_modules[1].1;
+        changed_modules[1].1 = first;
+        assert_eq!(
+            session
+                .check(
+                    forests[1].0,
+                    &original.header().original,
+                    false,
+                    &sources,
+                    &changed_modules,
+                    &mut TypeWorkBudget::default()
+                )
+                .unwrap_err()
+                .reason(),
+            crate::core::ValidationReason::Registry
+        );
+        let other = image
+            .restore_effect(&mut TypeWorkBudget::default())
+            .unwrap();
+        let recipient = other
+            .program
+            .nodes()
+            .iter()
+            .find_map(|node| match &node.kind {
+                crate::core::EffectExprKind::Operation(
+                    crate::core::EffectOperation::SourceResourceScope(scope),
+                ) => Some(scope.original()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            session
+                .check(
+                    forests[1].0,
+                    &recipient.header().original,
+                    false,
+                    &sources,
+                    &modules,
+                    &mut TypeWorkBudget::default()
+                )
+                .unwrap_err()
+                .reason(),
+            crate::core::ValidationReason::Registry
+        );
+        let other_sources = other.sources.iter().collect::<Vec<_>>();
+        let other_modules = other
+            .modules
+            .iter()
+            .copied()
+            .zip(other.sources.iter().map(crate::source::SourceFile::id))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            session
+                .check(
+                    recipient.original_acquire(),
+                    &recipient.header().original,
+                    false,
+                    &other_sources,
+                    &other_modules,
+                    &mut TypeWorkBudget::default()
+                )
+                .unwrap_err()
+                .reason(),
+            crate::core::ValidationReason::Registry
+        );
+        SourceResourceStructureSession::default()
+            .check(
+                recipient.original_acquire(),
+                &recipient.header().original,
+                false,
+                &other_sources,
+                &other_modules,
+                &mut TypeWorkBudget::default(),
+            )
+            .unwrap();
+        println!(
+            "original-template structure session work={cost}, three fresh registry passes work={}; exact/one-short/prefix/two fresh retries; moved source/module/header/registry refused",
+            fresh.used()
+        );
+    }
+
+    #[test]
+    fn authenticated_native_fact_view_rejects_same_value_executable_suffix_records() {
+        let image = scope_image();
+        let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
+        let original = PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+        let restored = original
+            .restore_effect(&mut TypeWorkBudget::default())
+            .unwrap();
+        for change in 0..4 {
+            let mut forged =
+                PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+            let effect_slot = forged
+                .effects
+                .iter()
+                .position(|effect| effect.native_symbol.is_some() && effect.parameters.len > 0)
+                .unwrap();
+            let effect = forged.effects[effect_slot];
+            let native = forged.native_symbols[effect.native_symbol.unwrap() as usize];
+            match change {
+                0 => {
+                    let operation = effect.operations.start as usize;
+                    let original = forged.operations[operation].annotation.ty as usize;
+                    let suffix = u32::try_from(forged.types.len()).unwrap();
+                    forged.types.push(forged.types[original]);
+                    forged.operations[operation].annotation.ty = suffix;
+                }
+                1 => {
+                    let text = effect.spelling.get(&forged.bytes).unwrap().to_vec();
+                    let suffix = u32::try_from(forged.bytes.len()).unwrap();
+                    forged.bytes.extend_from_slice(&text);
+                    forged.effects[effect_slot].spelling = Slice {
+                        start: suffix,
+                        len: u32::try_from(text.len()).unwrap(),
+                    };
+                }
+                2 => {
+                    let suffix = u32::try_from(forged.origins.len()).unwrap();
+                    forged.origins.push(forged.origins[effect.origin as usize]);
+                    forged.effects[effect_slot].origin = suffix;
+                }
+                _ => {
+                    let parameter = effect.parameters.start as usize;
+                    let original = forged.parameters[parameter].kind as usize;
+                    let suffix = u32::try_from(forged.kinds.len()).unwrap();
+                    forged.kinds.push(forged.kinds[original]);
+                    forged.parameters[parameter].kind = suffix;
+                }
+            }
+            // Even mutually consistent malformed passive bytes cannot enlarge
+            // original fact-table extents. Each suffix holds the SAME valid
+            // value, so rejection proves prefix authority rather than type shape.
+            let malformed_expected = forged
+                .encode_native_expectations(&mut TypeWorkBudget::default())
+                .unwrap();
+            let facts = forged
+                .admit_expected_native_facts(&malformed_expected, &mut TypeWorkBudget::default())
+                .unwrap();
+            assert!(
+                matches!(
+                    facts.library(
+                        native.prepared_library,
+                        &restored,
+                        &mut TypeWorkBudget::default()
+                    ),
+                    Err(ImageFailure::InvalidRecord)
+                ),
+                "suffix case {change}"
+            );
+        }
     }
 
     #[test]

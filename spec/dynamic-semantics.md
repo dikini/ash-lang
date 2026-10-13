@@ -596,14 +596,15 @@ obligation.
 
 The admitted product source resource scope combines an Ash initializer, acquire
 and finish functions, private data `D`, and an associated ordinary effect handler.
-This checkpoint supports dependency-free opaque and initialized byte foreign
-owners with Type-kind
-owner formals, scalar acquisition operands, one pointer acquisition result, and
-an unconditional consuming `void` teardown whose sole operand is the exact
-Current state. Each foreign symbol still retains its complete ordered Type and
-EffectRow arguments; the native Type-only projection does not replace them.
-Dependent owners, additional teardown operands and native
-retained-status outcomes are unsupported executable shapes in this checkpoint.
+This checkpoint supports opaque and initialized byte foreign owners with declared
+dependencies and Type-kind owner formals. Acquisition admits scalar and exact
+declared enclosing-State operands with one pointer result. Unconditional `void`
+finish and host-destruction contracts admit consumed or retained dispositions,
+using the exact Current State and declared Enclosing pointer operands. Each
+foreign symbol still retains its complete ordered Type and EffectRow arguments;
+the native Type-only projection does not replace them. Scalar teardown operands,
+status-conditioned owner teardown and native access/copy windows remain
+unsupported executable shapes in this checkpoint.
 
 Before any Ash expression runs, program admission checks both acquisition and
 teardown bindings for every source resource scope against their exact original
@@ -676,6 +677,11 @@ activation; ordinary constructor creation cannot create ownership authority.
 A successful publication binds a non-owning access handle for the body and
 retains `D` in the scope. The body receives neither an owning value nor direct
 access to `D`; the admitted Ash handler uses its saved state and private data.
+Private `D` contains no native State token or view. A local enclosing State used
+by admitted acquisition or finish is separate from ordinary stored payloads;
+the runtime's sealed dependency and destruction operands also remain separate.
+Ordinary declared-dependency access handles in `D` retain their original
+identity, liveness and revocation obligations.
 Acquisition refusal executes no body. If native acquisition already returned a
 non-null owner, refusal destroys that unpublished owner once before delivering
 `NotAcquired(error)` under `scope` or `Failure(error)` under `acquired_only`.
@@ -697,6 +703,13 @@ The recorded private data does not authorize access. Work or storage refusal
 enters no resource clause. This check does not add an outer resource requirement
 to a nearer ordinary handler.
 
+Quarantine denies ordinary resource operations. An already running admitted
+dependent finish can obtain the exact local native State of its declared direct
+dependency while that owner is physically live. The selected source handler,
+typed State result, finishing guard and dependency slot must all agree. This
+exception cannot recover an ordinary scalar read, create another owner or grant
+a transitive native operand merely from membership in the lifetime closure.
+
 The admitted resource clause uses its lexical state/data and ordinary
 clause-owned `resume`; resumption continues the same activation without repeating
 acquisition. Repeated executions allocate distinct activation keys. Nested source
@@ -704,8 +717,15 @@ resource scopes complete their own finish before their enclosing scope finishes.
 Outward capture moves the source boundary and its same unique owner into the
 continuation; resume restores that activation without acquisition or byte
 reinitialization. Ordinary outward rows survive exact native interpretation.
-Quarantine, dependent ownership and finite access/copy windows remain outside
-this checkpoint.
+Finite access/copy windows remain outside this checkpoint.
+
+Before native acquisition, complete declared dependency arguments select exact
+preceding activation slots. All dependency metadata, destruction operands,
+counters and result storage are admitted before the callback. Consuming a child
+removes its lifetime edges once and restores its enclosing owners' close
+readiness. A live retained child blocks a consuming enclosing call before C
+entry, independently of aliases or report values. Retention quarantines the same
+owner and its transitive dependency closure, revoking ordinary source access.
 
 Owned discard replaces abandoned source-body frames with their admitted finish
 computations, from inner to outer, retaining required outer resource handlers and
@@ -724,8 +744,8 @@ Normal body return saves its value and invokes the admitted Ash finish once.
 Before the Current teardown, the machine authenticates the state token's exact
 live activation and reserves its report storage while the scope still owns the
 guard. Only successful preflight can detach that guard for consumption. The
-unconditional native `void` call destroys the address once and produces a
-non-owning consumed receipt with the original authority, before Ash report
+consuming unconditional native `void` call destroys the address once and produces
+a non-owning consumed receipt with the original authority, before Ash report
 construction. Its returned-to-recorded transition is infallible. The prepaid
 report supplies `Foreign.Returned(Foreign.Consumed(()))`; source finish maps it
 to the resource codec's consumed completion. The scope records consumption
@@ -738,8 +758,19 @@ publishes no success or acquisition failure. Recorded consumption still prevents
 a second native release. On owned discard, a consumed finish returning
 `ConsumedFailure(error)` is terminal `runtime.resource-completion` under either
 codec and publishes no abandoned scope report. Normal `scope` completion instead
-retains `ConsumedError(error)` alongside the saved body result. This slice admits
-no native retained disposition.
+retains `ConsumedError(error)` alongside the saved body result. An admitted
+unconditional native retained disposition records the same owner before report
+construction and revokes its ordinary source access. Normal `scope` completion
+reports `Completed(body_value, RetainedError(error))`. On owned discard, witnessed
+`Retained(state, error)` is terminal `runtime.resource-completion`; it publishes
+no abandoned body or scope report and does not continue the discarding clause.
+The owner's separately admitted host destructor may later consume that same
+owner once. That host release cannot turn failed source completion into success.
+Host destruction attempts dependents before their enclosing owners. A successful
+host consumption removes the same recorded edges; a retained host disposition
+keeps those edges and blocks enclosing destruction. That incomplete destruction
+is terminal, is not retried and supplies no successful source cleanup report.
+Unresolved native objects remain protected until process termination.
 
 An internal failure after a native return never retries the call or recreates
 readiness. A live guard, including one not yet published to the body, invokes its

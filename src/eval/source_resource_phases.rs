@@ -68,6 +68,75 @@ impl Machine<'_> {
                 {
                     return Err(RuntimeFailure::InvalidControlState);
                 }
+                if boundary
+                    .owner
+                    .as_ref()
+                    .is_some_and(|owner| !owner.ordinary_live())
+                {
+                    // Quarantine revokes ordinary provider access. An already
+                    // admitted dependent Finish may still obtain the enclosing
+                    // owner's exact local State; this grants no ordinary read,
+                    // client access or transitive dependency operand.
+                    charge_effect_work(
+                        &mut self.instantiation_work,
+                        self.frames.len(),
+                        RuntimePhase::Access,
+                    )?;
+                    let completion = self
+                        .frames
+                        .iter()
+                        .rev()
+                        .find_map(|frame| match frame {
+                            Frame::SourceResourceBoundary(boundary) => Some(boundary),
+                            _ => None,
+                        })
+                        .ok_or(RuntimeFailure::InvalidControlState)?;
+                    if completion.phase != ProviderPhase::Finish || completion.consumed {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
+                    let Some(ExecutableNode::Effect(finishing)) = program.node(completion.node)
+                    else {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    };
+                    let EffectExprKind::Operation(EffectOperation::SourceResourceScope(finishing)) =
+                        &finishing.kind
+                    else {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    };
+                    let guard = completion
+                        .owner
+                        .as_ref()
+                        .ok_or(RuntimeFailure::InvalidControlState)?;
+                    if guard.completion_address().is_none()
+                        || !std::sync::Arc::ptr_eq(guard.owner(), &finishing.header().owner)
+                    {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
+                    let Some(ExecutableNode::Effect(request)) = program.node(request_node) else {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    };
+                    let state = crate::types::IterativeTypeOwner::new(
+                        caller.ty(&request.ty, &mut self.instantiation_work)?,
+                    );
+                    let dependency = self
+                        .source_bindings
+                        .ok_or(RuntimeFailure::ForeignBinding)?
+                        .borrowed_owner(
+                            key.0 as usize,
+                            &state,
+                            crate::foreign::source_runtime::NativeOwnerViewKind::State,
+                            Some(guard),
+                            &mut self.instantiation_work,
+                        )?;
+                    charge_effect_work(
+                        &mut self.instantiation_work,
+                        completion.dependencies.len(),
+                        RuntimePhase::Access,
+                    )?;
+                    if !guard.retains(&dependency) {
+                        return Err(RuntimeFailure::ForeignBinding);
+                    }
+                }
                 found = true;
             }
         }
@@ -113,9 +182,106 @@ impl Machine<'_> {
         mut environment: Environment,
         initializer: Value,
     ) -> Result<(), RuntimeFailure> {
-        let scope = self
-            .source_resource_scope(node)
-            .ok_or(RuntimeFailure::ForeignBinding)?;
+        let program = self.program.clone();
+        let Some(ExecutableNode::Effect(expression)) = program.node(node) else {
+            return Err(RuntimeFailure::ForeignBinding);
+        };
+        let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+            &expression.kind
+        else {
+            return Err(RuntimeFailure::ForeignBinding);
+        };
+        let input = crate::types::IterativeTypeOwner::new(
+            environment
+                .instantiation
+                .ty(scope.acquire.parameter.ty(), &mut self.instantiation_work)?,
+        );
+        // Declared lifetime roles are interpreted before introducing the new
+        // identity. A phantom retained role still keeps its original owner live,
+        // while a runtime value cannot add an undeclared dependency or donor.
+        let mut declared = Vec::new();
+        let mut dependencies = Vec::new();
+        for dependency in &scope.header().dependencies {
+            charge_effect_work(
+                &mut self.instantiation_work,
+                scope.header().original.parameters.len(),
+                RuntimePhase::Acquisition,
+            )?;
+            let position = scope
+                .header()
+                .original
+                .parameters
+                .iter()
+                .position(|parameter| parameter.id == *dependency)
+                .ok_or(RuntimeFailure::ForeignBinding)?;
+            let argument = environment.instantiation.argument(
+                scope
+                    .arguments()
+                    .get(position)
+                    .ok_or(RuntimeFailure::ForeignBinding)?,
+                &mut self.instantiation_work,
+            )?;
+            let crate::types::KindedArgument::TypeArg(crate::types::Type::Inference(identity)) =
+                &*argument
+            else {
+                return Err(RuntimeFailure::ForeignBinding);
+            };
+            let key = ActivationKey(identity.value());
+            charge_effect_work(
+                &mut self.instantiation_work,
+                declared.len(),
+                RuntimePhase::Acquisition,
+            )?;
+            if declared.contains(&key) {
+                continue;
+            }
+            let bindings = self.source_bindings.ok_or(RuntimeFailure::ForeignBinding)?;
+            let receipt =
+                bindings.declared_owner_dependency(key.0 as usize, &mut self.instantiation_work)?;
+            charge_effect_work(&mut self.instantiation_work, 2, RuntimePhase::Acquisition)?;
+            declared
+                .try_reserve(1)
+                .map_err(|_| RuntimeFailure::EnvironmentCapacity)?;
+            dependencies
+                .try_reserve(1)
+                .map_err(|_| RuntimeFailure::EnvironmentCapacity)?;
+            declared.push(key);
+            dependencies.push(receipt);
+        }
+        visit_typed_source_values(
+            &self.heap,
+            program.registry(),
+            input,
+            &initializer,
+            &mut self.instantiation_work,
+            |ty, value, work| {
+                let (key, kind) = match value {
+                    Value::NativeStateView(key) => (
+                        *key,
+                        crate::foreign::source_runtime::NativeOwnerViewKind::State,
+                    ),
+                    Value::ResourceHandle(key) => (
+                        *key,
+                        crate::foreign::source_runtime::NativeOwnerViewKind::Access,
+                    ),
+                    _ => return Ok(false),
+                };
+                charge_effect_work(work, declared.len(), RuntimePhase::Acquisition)?;
+                if !declared.contains(&key) {
+                    return Err(RuntimeFailure::ForeignBinding);
+                }
+                let bindings = self.source_bindings.ok_or(RuntimeFailure::ForeignBinding)?;
+                let dependency = bindings.borrowed_owner(key.0 as usize, ty, kind, None, work)?;
+                charge_effect_work(work, dependencies.len(), RuntimePhase::Acquisition)?;
+                if !dependencies
+                    .iter()
+                    .any(|recorded| recorded.same_slot(&dependency))
+                {
+                    return Err(RuntimeFailure::ForeignBinding);
+                }
+                Ok(true)
+            },
+        )?;
         let acquire_parameter = scope.acquire.parameter.id();
         let acquire_body = scope.acquire.body;
         let identity = scope.identity();
@@ -147,6 +313,7 @@ impl Machine<'_> {
             key,
             environment,
             owner: None,
+            dependencies,
             phase: ProviderPhase::Acquire,
             payload: None,
             saved: None,
@@ -308,22 +475,46 @@ impl Machine<'_> {
             ProviderPhase::Finish => {
                 // Ordinary source constructors cannot consume an owner. The
                 // native transition recorded consumption before this report.
-                if !boundary.consumed || boundary.owner.is_some() {
-                    return Err(RuntimeFailure::ForeignBinding);
-                }
                 let (constructor, payload) = self.foreign_report(&value, RuntimePhase::Cleanup)?;
                 let consumed = constructor == protocol.finish[0] && payload.is_none();
                 let consumed_failure = constructor == protocol.finish[1] && payload.is_some();
-                if !consumed && !consumed_failure {
-                    return Err(RuntimeFailure::ForeignBinding);
-                }
+                let retained = constructor == protocol.finish[2] && payload.is_some();
+                let error = if retained {
+                    if boundary.consumed {
+                        return Err(RuntimeFailure::ForeignBinding);
+                    }
+                    let [state, error] = self.source_pair(
+                        payload.ok_or(RuntimeFailure::ForeignBinding)?,
+                        RuntimePhase::Cleanup,
+                    )?;
+                    if !matches!(state, Value::NativeStateView(actual) if actual == key) {
+                        return Err(RuntimeFailure::ForeignBinding);
+                    }
+                    let owner = boundary
+                        .owner
+                        .as_mut()
+                        .ok_or(RuntimeFailure::ForeignBinding)?;
+                    owner.quarantine();
+                    Some(error)
+                } else {
+                    if !boundary.consumed
+                        || boundary.owner.is_some()
+                        || (!consumed && !consumed_failure)
+                    {
+                        return Err(RuntimeFailure::ForeignBinding);
+                    }
+                    payload
+                };
                 if boundary.discarded {
                     self.live_resources = self
                         .live_resources
                         .checked_sub(1)
                         .ok_or(RuntimeFailure::InvalidControlState)?;
                     self.trace_effect(EffectTraceEvent::ResourceReleased(key.0));
-                    if consumed_failure {
+                    if consumed_failure || retained {
+                        // Owned discard has no body value to report. Quarantine
+                        // was recorded above; later host destruction cannot turn
+                        // this failed source completion into cleanup success.
                         return Err(RuntimeFailure::ResourceCompletion);
                     }
                     // No abandoned body value or Scope report exists on discard.
@@ -340,8 +531,12 @@ impl Machine<'_> {
                         completion,
                     } => {
                         let completion = self.foreign_constructor(
-                            completion[usize::from(consumed_failure)],
-                            payload,
+                            completion[if retained {
+                                2
+                            } else {
+                                usize::from(consumed_failure)
+                            }],
+                            error,
                             RuntimePhase::Cleanup,
                         )?;
                         let fields =
@@ -355,7 +550,7 @@ impl Machine<'_> {
                     crate::core::source_resource::SourceResourceReportCodec::AcquiredOnly {
                         report,
                     } => {
-                        if consumed_failure {
+                        if consumed_failure || retained {
                             None
                         } else {
                             Some(self.foreign_constructor(
@@ -399,6 +594,34 @@ fn authenticate_typed_access(
     value: &Value,
     work: &mut crate::types::TypeWorkBudget,
 ) -> Result<(), RuntimeFailure> {
+    visit_typed_source_values(heap, registry, operand, value, work, |ty, value, work| {
+        if crate::types::same_type_with_budget(ty, access, work)
+            .map_err(|_| super::effect_work_failure(work, None, RuntimePhase::Access))?
+        {
+            if !matches!(value, Value::ResourceHandle(actual) if *actual == key) {
+                return Err(RuntimeFailure::InvalidControlState);
+            }
+            return Ok(true);
+        }
+        if matches!(value, Value::ResourceHandle(_) | Value::NativeStateView(_)) {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        Ok(false)
+    })
+}
+
+fn visit_typed_source_values(
+    heap: &[HeapCell],
+    registry: &crate::resolved::ResolvedRegistry,
+    operand: crate::types::IterativeTypeOwner,
+    value: &Value,
+    work: &mut crate::types::TypeWorkBudget,
+    mut visit: impl FnMut(
+        &crate::types::Type,
+        &Value,
+        &mut crate::types::TypeWorkBudget,
+    ) -> Result<bool, RuntimeFailure>,
+) -> Result<(), RuntimeFailure> {
     use crate::types::{
         IterativeTypeOwner, Type, clone_type_with_budget, substitute_type_variables_with,
     };
@@ -410,16 +633,8 @@ fn authenticate_typed_access(
     pending.push((operand, value));
     while let Some((ty, value)) = pending.pop() {
         charge_effect_work(work, 1, RuntimePhase::Access)?;
-        if crate::types::same_type_with_budget(&ty, access, work)
-            .map_err(|_| super::effect_work_failure(work, None, RuntimePhase::Access))?
-        {
-            if !matches!(value, Value::ResourceHandle(actual) if *actual == key) {
-                return Err(RuntimeFailure::InvalidControlState);
-            }
+        if visit(&ty, value, work)? {
             continue;
-        }
-        if matches!(value, Value::ResourceHandle(_) | Value::NativeStateView(_)) {
-            return Err(RuntimeFailure::InvalidControlState);
         }
         let Value::Location(location) = value else {
             // Tuple and nominal values require their ordinary heap shape. A
@@ -1160,16 +1375,26 @@ mod source_handler_entry_tests {
         DESTROYED.set(0);
     }
 
-    fn destroy_sentinel(address: *mut core::ffi::c_void) {
+    fn destroy_sentinel(arguments: &[crate::foreign::source_runtime::NativeOwnerOperand]) {
+        let [crate::foreign::source_runtime::NativeOwnerOperand::Address(address)] = arguments
+        else {
+            panic!("admitted sentinel address");
+        };
+        let address = *address;
         assert_eq!(address, NonNull::<u8>::dangling().as_ptr().cast());
         DESTROYED.set(DESTROYED.get() + 1);
     }
 
     fn acquire_sentinel(
-        arguments: &[NativeScalarValue],
+        arguments: &[crate::foreign::source_runtime::NativeOwnerOperand],
         readiness: NativeOwnerGuardReady,
     ) -> Result<NativeOwnerCallReturned, NativeScalarCallError> {
-        let [NativeScalarValue::USize(42)] = arguments else {
+        let [
+            crate::foreign::source_runtime::NativeOwnerOperand::Scalar(NativeScalarValue::USize(
+                42,
+            )),
+        ] = arguments
+        else {
             return Err(NativeScalarCallError::ArgumentContract);
         };
         ARMED.set(ARMED.get() + 1);
@@ -1180,7 +1405,9 @@ mod source_handler_entry_tests {
         // This is the existing post-record test model: the address is never
         // dereferenced and the safe destructor counts one ownership edge.
         acquire_sentinel(
-            &[NativeScalarValue::USize(42)],
+            &[crate::foreign::source_runtime::NativeOwnerOperand::Scalar(
+                NativeScalarValue::USize(42),
+            )],
             NativeOwnerGuardReady::new(owner, destroy_sentinel),
         )
         .expect("the injected acquisition receives its declared scalar")
@@ -1222,11 +1449,16 @@ mod source_handler_entry_tests {
             write: write_byte_sentinel,
         });
         ready.prepare_initialized_bytes(Some(1));
-        let guard = acquire_sentinel(&[NativeScalarValue::USize(42)], ready)
-            .unwrap()
-            .record()
-            .into_guard()
-            .unwrap();
+        let guard = acquire_sentinel(
+            &[crate::foreign::source_runtime::NativeOwnerOperand::Scalar(
+                NativeScalarValue::USize(42),
+            )],
+            ready,
+        )
+        .unwrap()
+        .record()
+        .into_guard()
+        .unwrap();
         assert_eq!(guard.initialized_bytes(), Some(1));
         assert!(guard.byte_access(1).is_none());
         assert!(guard.byte_access(usize::MAX).is_none());
@@ -1314,11 +1546,16 @@ mod source_handler_entry_tests {
                 write: write_byte_sentinel,
             });
             ready.prepare_initialized_bytes(extent);
-            let guard = acquire_sentinel(&[NativeScalarValue::USize(42)], ready)
-                .unwrap()
-                .record()
-                .into_guard()
-                .unwrap();
+            let guard = acquire_sentinel(
+                &[crate::foreign::source_runtime::NativeOwnerOperand::Scalar(
+                    NativeScalarValue::USize(42),
+                )],
+                ready,
+            )
+            .unwrap()
+            .record()
+            .into_guard()
+            .unwrap();
             assert_eq!(guard.initialized_bytes(), extent);
             assert!(guard.byte_access(0).is_none());
             assert_eq!((BYTE_READS.get(), BYTE_WRITES.get()), (0, 0));
@@ -1327,11 +1564,16 @@ mod source_handler_entry_tests {
         }
         let mut missing_callbacks = NativeOwnerGuardReady::new(Arc::clone(owner), destroy_sentinel);
         missing_callbacks.prepare_initialized_bytes(Some(1));
-        let guard = acquire_sentinel(&[NativeScalarValue::USize(42)], missing_callbacks)
-            .unwrap()
-            .record()
-            .into_guard()
-            .unwrap();
+        let guard = acquire_sentinel(
+            &[crate::foreign::source_runtime::NativeOwnerOperand::Scalar(
+                NativeScalarValue::USize(42),
+            )],
+            missing_callbacks,
+        )
+        .unwrap()
+        .record()
+        .into_guard()
+        .unwrap();
         assert!(guard.byte_access(0).is_none());
         drop(guard);
         let mut null = NativeOwnerGuardReady::new(Arc::clone(owner), destroy_sentinel);
@@ -1697,6 +1939,7 @@ mod source_handler_entry_tests {
                                     phase: super::super::ProviderPhase::Body,
                                     environment: Environment::new(),
                                     owner: Some(injected_guard(Arc::clone(&metadata))),
+                                    dependencies: Vec::new(),
                                     consumed: false,
                                     payload: Some(integer(42)),
                                     saved: None,
@@ -1852,6 +2095,7 @@ mod source_handler_entry_tests {
                         owner: Some(injected_guard(Arc::clone(
                             original.owner.as_ref().unwrap().owner(),
                         ))),
+                        dependencies: Vec::new(),
                         phase: ProviderPhase::Body,
                         payload: original.payload.clone(),
                         saved: None,

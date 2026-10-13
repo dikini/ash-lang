@@ -11,8 +11,8 @@ use crate::{
     driver::{RunConfiguration, compile_path},
     eval::{RuntimeFailure, source_owner_post_record_test},
     foreign::source_runtime::{
-        NativeOwnerCallReturned, NativeOwnerGuardReady, NativeScalarCallError, NativeScalarReply,
-        NativeScalarValue,
+        NativeOwnerCallReturned, NativeOwnerGuardReady, NativeOwnerOperand, NativeScalarCallError,
+        NativeScalarReply, NativeScalarValue,
     },
     module::ModuleRoots,
     types::TypeWorkBudget,
@@ -31,10 +31,10 @@ thread_local! {
     static RELEASES:Cell<usize>=const {Cell::new(0)};
 }
 fn injected_acquire(
-    arguments: &[NativeScalarValue],
+    arguments: &[NativeOwnerOperand],
     readiness: NativeOwnerGuardReady,
 ) -> Result<NativeOwnerCallReturned, NativeScalarCallError> {
-    let [NativeScalarValue::USize(42)] = arguments else {
+    let [NativeOwnerOperand::Scalar(NativeScalarValue::USize(42))] = arguments else {
         return Err(NativeScalarCallError::ArgumentContract);
     };
     ACQUIRES.set(ACQUIRES.get() + 1);
@@ -42,7 +42,10 @@ fn injected_acquire(
     // exact ownership edge and counted destructor behind the sealed test gate.
     Ok(readiness.returned(std::ptr::NonNull::<u8>::dangling().as_ptr().cast()))
 }
-fn injected_release(address: *mut core::ffi::c_void) {
+fn injected_release(arguments: &[NativeOwnerOperand]) {
+    let [NativeOwnerOperand::Address(address)] = arguments else {
+        panic!("admitted sentinel address");
+    };
     assert!(!address.is_null());
     RELEASES.set(RELEASES.get() + 1);
 }

@@ -10,12 +10,14 @@ use std::{error::Error, fmt};
 mod owner;
 
 pub(crate) use owner::{
-    NativeByteAccess, NativeByteCallbacks, NativeOwnerConsumed, NativeOwnerGuard,
+    NativeByteAccess, NativeByteCallbacks, NativeOwnerAdmissionError, NativeOwnerDependency,
+    NativeOwnerDisposition, NativeOwnerGuard, NativeOwnerStorage, NativeOwnerViewKind,
 };
 #[doc(hidden)]
 pub use owner::{
     NativeByteReadCallback, NativeByteWriteCallback, NativeOwnerAcquireCallback,
-    NativeOwnerCallReturned, NativeOwnerGuardReady, NativeOwnerTeardownCallback,
+    NativeOwnerCallReturned, NativeOwnerGuardReady, NativeOwnerOperand,
+    NativeOwnerTeardownCallback,
 };
 
 use crate::{
