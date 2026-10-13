@@ -987,10 +987,21 @@ Each symbol has one outer pure source arrow and a complete ordered parameter
 vector containing only `Type` and `EffectRow` parameters. Omitted kinds are
 `Type`. Parameters are retained even when they contribute no ABI operand.
 Native symbol names are nonempty strings without NUL. Every scalar ABI input maps
-exactly once to a source position whose selected type is mathematical `Int`;
+exactly once to a source position whose selected type is mathematical `Int`, or
+to a checked scalar constant from the same original library with the exact
+declared representation;
 negative or out-of-range source positions and missing or repeated ABI input
 mappings reject. The source domain may contain a product, and dotted positions
 select its nested leaves.
+
+A scalar constant's mathematical literal must fit its declared representation.
+It publishes an ordinary `Int` value under the library declaration's publication
+mode; qualified, selected and re-exported references retain its defining binder.
+Its value requires no C or header evaluation. A native constant operand retains
+the original constant member, representation and value, independently of an
+ordinary source reference to that value. Equal values or spellings do not make
+another member interchangeable. Arbitrary constant expressions, header macro
+evaluation and non-callable sentinel roles remain outside this checkpoint.
 
 An owner declaration introduces an opaque nominal state family without source
 constructors. Its explicit owned position selects a `Type` formal. Canonical
@@ -1016,9 +1027,10 @@ literals, with one final `otherwise`. Each alternative gives exactly one
 consumed/retained fact for that Current position and exactly one readable
 Result fact; a bare scalar cannot be unreadable. Repeated or contradictory
 selectors, missing coverage and
-mismatched positions reject. Owner libraries retain these checked literal facts
-without an ordinary value binder; constant value publication, constant native
-operands and header evaluation remain outside this checkpoint. Byte-owner
+mismatched positions reject. Owner libraries retain these original checked
+literal facts separately from ordinary constant binders and native operand
+selection. A result predicate grants neither source value nor operand authority.
+Header evaluation remains outside this checkpoint. Byte-owner
 preparation also checks its initialized extent against the selected
 mathematical `Int` source leaf. This passive check supplies no byte access or
 executable owner activation; an admitted resource scope supplies the separate
@@ -1206,8 +1218,9 @@ guard without inventing private data or a source finish input. A consumed
 `ConsumedFailure(E)` during owned discard is terminal `ResourceCompletion` for
 both codecs. Normal `scope` return still reports `ConsumedError(E)`.
 
-Callable lifecycle helpers, source `given` forwarding, scalar teardown operands,
-native access/copy windows and library migrations remain unsupported. These
+Callable lifecycle helpers, source `given` forwarding, source-projected scalar
+teardown operands, native access/copy windows and library migrations remain
+unsupported. These
 are checkpoint restrictions, not additional language rules for all resources;
 the broader obligations remain in
 [CP-0022](../docs/proposals/CP-0022-ash-authored-foreign-interfaces.md).

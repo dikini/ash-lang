@@ -347,15 +347,9 @@ impl Resolver {
                 .members
                 .iter()
                 .any(|member| matches!(member, SurfaceForeignMember::Owner(_)));
-            // Owner status contracts retain checked literal facts in their
-            // original descriptor. They create no ordinary value binder or
-            // executable constant operand. General constant publication still
-            // needs the separate ordinary term bridge.
+            // Scalar literals share ordinary Int publication. Native operands
+            // keep their original checked representation and member coordinate.
             if let Some((span, message)) = library.members.iter().find_map(|member| match member {
-                SurfaceForeignMember::Constant(constant) if !has_owner => Some((
-                    constant.span,
-                    "source foreign constant publication is not implemented yet",
-                )),
                 SurfaceForeignMember::Representation(representation)
                     if !has_owner
                         && matches!(
@@ -644,6 +638,230 @@ impl Resolver {
         Ok(())
     }
 
+    pub(super) fn append_source_constant_definitions(
+        &mut self,
+        surface: &SurfaceModule,
+        binders: Vec<crate::resolved::Binder>,
+        definitions: &mut super::ResolvedDefinitionBuffer,
+    ) -> Result<(), ResolveError> {
+        use crate::resolved::{
+            ResolvedDefinition, ResolvedDefinitionKind, ResolvedEquation, ResolvedEquationHead,
+            ResolvedEquationalGlobal, ResolvedExpr, ResolvedExprKind, ResolvedExternalInterface,
+            ResolvedType, ResolvedTypeProvenance, ResolvedTypeProvenanceNode,
+        };
+        self.type_work
+            .charge(binders.len().saturating_mul(5))
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    surface.span,
+                    "foreign constant lowering exceeded its budget",
+                )
+            })?;
+        definitions
+            .0
+            .try_reserve_exact(binders.len())
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    surface.span,
+                    "foreign constant definition storage could not be reserved",
+                )
+            })?;
+        let mut binders = binders.into_iter();
+        for library in &self.source_foreign_libraries {
+            for constant in library.constants() {
+                let binder = binders.next().ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        surface.span,
+                        "foreign constant binder is missing",
+                    )
+                })?;
+                let span = constant.origin().primary_span();
+                let scalar = constant.value();
+                let value = scalar.checked_integer().ok_or_else(|| {
+                    error(
+                        ResolveReason::ForeignContract,
+                        span,
+                        "checked foreign constant value is invalid",
+                    )
+                })?;
+                self.type_work.charge(constant.name().len()).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "foreign constant spelling copy exceeded its budget",
+                    )
+                })?;
+                let mut spelling = String::new();
+                spelling
+                    .try_reserve_exact(constant.name().len())
+                    .map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            span,
+                            "foreign constant spelling storage could not be reserved",
+                        )
+                    })?;
+                spelling.push_str(constant.name());
+                let mut provenance = Vec::new();
+                provenance.try_reserve_exact(1).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "foreign constant provenance storage could not be reserved",
+                    )
+                })?;
+                provenance.push(ResolvedTypeProvenanceNode::Fact(span));
+                let mut equations = Vec::new();
+                equations.try_reserve_exact(1).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "foreign constant equation storage could not be reserved",
+                    )
+                })?;
+                equations.push(ResolvedEquation {
+                    name: ResolvedEquationHead {
+                        binder: binder.id,
+                        spelling,
+                        origin: binder.origin.clone(),
+                    },
+                    patterns: Vec::new(),
+                    body: ResolvedExpr {
+                        kind: ResolvedExprKind::Integer(value),
+                        span,
+                    },
+                    span,
+                });
+                definitions.0.push(ResolvedDefinition {
+                    kind: ResolvedDefinitionKind::ForeignConstant(ResolvedEquationalGlobal {
+                        interface: ResolvedExternalInterface {
+                            name: binder,
+                            annotation: ResolvedType {
+                                ty: crate::types::Type::Int,
+                                provenance: ResolvedTypeProvenance::new(provenance, 0),
+                                origin: constant.origin().clone(),
+                                span,
+                            },
+                            requirements: Box::new([]),
+                            type_parameters: Box::new([]),
+                            span,
+                        },
+                        equations,
+                    }),
+                    span,
+                });
+            }
+        }
+        if binders.next().is_some() {
+            return Err(error(
+                ResolveReason::InternalState,
+                surface.span,
+                "foreign constant binders disagree",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn order_source_constant_definitions(
+        &mut self,
+        surface: &SurfaceModule,
+        definitions: &mut super::ResolvedDefinitionBuffer,
+    ) -> Result<(), ResolveError> {
+        if definitions.0.len() == surface.definitions.len() {
+            return Ok(());
+        }
+        let count = definitions.0.len();
+        self.type_work
+            .charge(
+                count
+                    .checked_mul(4)
+                    .and_then(|n| n.checked_add(surface.declaration_order.len()))
+                    .ok_or_else(|| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            surface.span,
+                            "foreign constant ordering exceeded its bound",
+                        )
+                    })?,
+            )
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    surface.span,
+                    "foreign constant ordering exceeded its budget",
+                )
+            })?;
+        let mut destinations = Vec::new();
+        destinations.try_reserve_exact(count).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                surface.span,
+                "foreign constant ordering storage could not be reserved",
+            )
+        })?;
+        destinations.resize(count, usize::MAX);
+        let mut next = 0;
+        let mut constant = surface.definitions.len();
+        for declaration in &surface.declaration_order {
+            let mut place = |original: usize| -> Result<(), ResolveError> {
+                let slot = destinations.get_mut(original).ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        surface.span,
+                        "foreign constant declaration index is invalid",
+                    )
+                })?;
+                if *slot != usize::MAX {
+                    return Err(error(
+                        ResolveReason::InternalState,
+                        surface.span,
+                        "foreign constant declaration index repeats",
+                    ));
+                }
+                *slot = next;
+                next += 1;
+                Ok(())
+            };
+            match *declaration {
+                SurfaceDeclarationIndex::Global(index) => place(index)?,
+                SurfaceDeclarationIndex::ForeignLibrary(index) => {
+                    let library = self.source_foreign_libraries.get(index).ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            surface.span,
+                            "foreign constant library index is invalid",
+                        )
+                    })?;
+                    for _ in library.constants() {
+                        place(constant)?;
+                        constant += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if next != count || destinations.iter().any(|position| *position >= count) {
+            return Err(error(
+                ResolveReason::InternalState,
+                surface.span,
+                "foreign constant declaration order is incomplete",
+            ));
+        }
+        // Each swap settles at least one destination; at most count swaps.
+        // This moves existing owners without recursive copies or disposal.
+        for original in 0..count {
+            while destinations[original] != original {
+                let target = destinations[original];
+                definitions.0.swap(original, target);
+                destinations.swap(original, target);
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn effect_sources<'a>(
         &mut self,
         surface: &'a SurfaceModule,
@@ -759,6 +977,7 @@ pub(super) fn retain_module_declaration_order(
     let mut next_ordinary = 0;
     let mut next_effect = 0;
     let mut next_owner = surface.type_declarations.len();
+    let mut next_global = 0;
     for declaration in &surface.declaration_order {
         if let SurfaceDeclarationIndex::ForeignLibrary(index) = *declaration {
             work.charge(1).map_err(|()| {
@@ -800,6 +1019,7 @@ pub(super) fn retain_module_declaration_order(
                 .effects
                 .len()
                 .checked_add(library.prepared.owners().len())
+                .and_then(|n| n.checked_add(library.prepared.constants().len()))
                 .ok_or_else(|| {
                     error(
                         ResolveReason::TypeResourceExhausted,
@@ -837,6 +1057,18 @@ pub(super) fn retain_module_declaration_order(
                         })?;
                         owners += 1;
                     }
+                    SurfaceForeignMember::Constant(_) => {
+                        result.push(crate::resolved::ResolvedDeclarationIndex::Global(
+                            next_global,
+                        ));
+                        next_global = next_global.checked_add(1).ok_or_else(|| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                written.span,
+                                "foreign constant order exceeded its bound",
+                            )
+                        })?;
+                    }
                     SurfaceForeignMember::Symbol(_) => {
                         result.push(crate::resolved::ResolvedDeclarationIndex::Effect(effect));
                         effect += 1;
@@ -858,6 +1090,16 @@ pub(super) fn retain_module_declaration_order(
             // remapping its source-vector index into the combined inventory.
             let mut ordinary =
                 retain_declaration_order(std::slice::from_ref(declaration), surface.span, work)?;
+            if let SurfaceDeclarationIndex::Global(_) = *declaration {
+                ordinary[0] = crate::resolved::ResolvedDeclarationIndex::Global(next_global);
+                next_global = next_global.checked_add(1).ok_or_else(|| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        surface.span,
+                        "foreign constant order exceeded its bound",
+                    )
+                })?;
+            }
             if let SurfaceDeclarationIndex::Effect(index) = *declaration {
                 if index != next_ordinary || index >= surface.effects.len() {
                     return Err(error(

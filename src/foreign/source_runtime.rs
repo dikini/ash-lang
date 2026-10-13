@@ -153,6 +153,28 @@ pub(crate) fn narrow_gnu_scalar(
     narrowed.ok_or(NativeScalarConversionError::OutOfRange)
 }
 
+/// Selects only the original descriptor's already checked scalar literal.
+/// Range, tags and finite magnitude work are still admitted before C.
+pub(crate) fn narrow_gnu_declared_constant(
+    library: &super::source_contract::PreparedForeignLibrary,
+    index: usize,
+    representation: PreparedScalarRepresentation,
+    work: &mut TypeWorkBudget,
+) -> Result<NativeScalarValue, NativeScalarConversionError> {
+    charge_scalar_conversion(work, 1)?;
+    require_gnu_scalar_host()?;
+    let constant = library
+        .constants()
+        .get(index)
+        .filter(|constant| constant.representation() == representation)
+        .ok_or(NativeScalarConversionError::InvalidRepresentation)?;
+    let integer = constant
+        .value()
+        .checked_integer()
+        .ok_or(NativeScalarConversionError::InvalidRepresentation)?;
+    narrow_gnu_scalar(&integer, representation, work)
+}
+
 fn charge_reply_magnitude(
     magnitude: u64,
     work: &mut TypeWorkBudget,
@@ -274,3 +296,74 @@ pub(crate) fn widen_gnu_reply(
 
 pub(crate) use super::source_bindings::admit_source_native_program;
 pub use super::source_bindings::{AdmittedSourceNativeProgram, SourceNativeBindings};
+
+#[cfg(test)]
+mod declared_constant_tests {
+    use super::*;
+    use crate::{
+        foreign::source_contract::prepare_foreign_library,
+        lexer::lex,
+        module::ModuleId,
+        parser::{parse, project_module},
+        source::SourceFile,
+    };
+
+    #[test]
+    fn declared_constant_narrowing_has_atomic_exact_short_prefix_and_fresh_retry() {
+        let source = SourceFile::new("constant-work", "foreign library Limits {\n    profile \"x86_64-unknown-linux-gnu\"\n    repr I8 = signed(8)\n    const Value : I8 = -7\n}\n").unwrap();
+        let tree = parse(lex(&source).unwrap());
+        let surface = project_module(&source, &tree).unwrap();
+        let library =
+            prepare_foreign_library(ModuleId::new(0), &surface.foreign_libraries[0]).unwrap();
+        let mut work = TypeWorkBudget::default();
+        assert_eq!(
+            narrow_gnu_declared_constant(
+                &library,
+                0,
+                PreparedScalarRepresentation::Signed(8),
+                &mut work
+            ),
+            Ok(NativeScalarValue::I8(-7))
+        );
+        assert_eq!(work.used(), 3); // member lookup, host/tag preflight, one magnitude byte.
+        for prefix in [0, 5] {
+            let mut short = TypeWorkBudget::with_limit(prefix + 2);
+            short.charge(prefix).unwrap();
+            assert_eq!(
+                narrow_gnu_declared_constant(
+                    &library,
+                    0,
+                    PreparedScalarRepresentation::Signed(8),
+                    &mut short
+                ),
+                Err(NativeScalarConversionError::WorkExhausted)
+            );
+            assert_eq!(short.used(), prefix + 2);
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + 3);
+                exact.charge(prefix).unwrap();
+                assert_eq!(
+                    narrow_gnu_declared_constant(
+                        &library,
+                        0,
+                        PreparedScalarRepresentation::Signed(8),
+                        &mut exact
+                    ),
+                    Ok(NativeScalarValue::I8(-7))
+                );
+                assert_eq!(exact.used(), prefix + 3);
+            }
+        }
+        for (index, representation) in [
+            (1, PreparedScalarRepresentation::Signed(8)),
+            (0, PreparedScalarRepresentation::Unsigned(8)),
+        ] {
+            let mut work = TypeWorkBudget::default();
+            assert_eq!(
+                narrow_gnu_declared_constant(&library, index, representation, &mut work),
+                Err(NativeScalarConversionError::InvalidRepresentation)
+            );
+            assert_eq!(work.used(), 1);
+        }
+    }
+}

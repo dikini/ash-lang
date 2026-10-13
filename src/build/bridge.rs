@@ -124,7 +124,6 @@ pub(crate) enum ForeignBridgeReason {
     UnsupportedTarget,
     UnsupportedProfile,
     UnsupportedRepresentation,
-    UnsupportedConstant,
     InvalidAuthority,
     Resource,
 }
@@ -153,9 +152,6 @@ impl fmt::Display for ForeignBridgeFailure {
             ForeignBridgeReason::UnsupportedProfile => "foreign bridge profile is unsupported",
             ForeignBridgeReason::UnsupportedRepresentation => {
                 "foreign bridge ABI representation is unsupported"
-            }
-            ForeignBridgeReason::UnsupportedConstant => {
-                "foreign bridge constant operands are not implemented"
             }
             ForeignBridgeReason::InvalidAuthority => {
                 "foreign bridge source authority does not match its registry"
@@ -417,10 +413,22 @@ fn plan_target_bridge(
         .try_reserve_exact(source.operands().len())
         .map_err(|_| fail(ForeignBridgeReason::Resource, span))?;
     for operand in source.operands() {
-        if matches!(operand.source(), PreparedOperandSource::Constant(_)) {
-            return Err(fail(ForeignBridgeReason::UnsupportedConstant, span));
-        }
         let target = match (operand.source(), operand.representation()) {
+            (
+                PreparedOperandSource::Constant(index),
+                PreparedRepresentation::Scalar(representation),
+            ) => {
+                if symbol
+                    .prepared()
+                    .constants()
+                    .get(*index)
+                    .is_none_or(|constant| constant.representation() != representation)
+                {
+                    return Err(fail(ForeignBridgeReason::InvalidAuthority, span));
+                }
+                TargetOperand::Scalar(target_scalar(representation, span)?)
+            }
+
             (PreparedOperandSource::Source(_), PreparedRepresentation::Scalar(_))
                 if call == TargetBridgeCall::OwnerTeardown =>
             {

@@ -2768,7 +2768,7 @@ impl ResolvedModuleProgram {
                     .iter_mut()
                     .filter_map(|definition| definition.source.as_mut())
                     .find_map(|definition| match &mut definition.kind {
-                        ResolvedDefinitionKind::Equational(global) => global.equations.first_mut()
+                        ResolvedDefinitionKind::Equational(global) | ResolvedDefinitionKind::ForeignConstant(global) => global.equations.first_mut()
                             .and_then(|equation| match &mut equation.body.kind {
                                 ResolvedExprKind::Block(block) => Some(block),
                                 _ => None,
@@ -3591,7 +3591,8 @@ impl ResolvedModuleProgram {
             .and_then(|group| group.definitions.first_mut())
             .and_then(|definition| definition.source.as_mut())
             .and_then(|definition| match &mut definition.kind {
-                ResolvedDefinitionKind::Equational(global) => global.equations.first_mut(),
+                ResolvedDefinitionKind::Equational(global)
+                | ResolvedDefinitionKind::ForeignConstant(global) => global.equations.first_mut(),
                 ResolvedDefinitionKind::InlineOperational(_) => None,
             })
             .and_then(|equation| match &mut equation.body.kind {
@@ -3999,7 +4000,8 @@ impl ResolvedModuleProgram {
             .first()
             .and_then(|definition| definition.source.as_ref())
             .and_then(|definition| match &definition.kind {
-                ResolvedDefinitionKind::Equational(global) => global
+                ResolvedDefinitionKind::Equational(global)
+                | ResolvedDefinitionKind::ForeignConstant(global) => global
                     .interface
                     .type_parameters
                     .iter()
@@ -25453,6 +25455,9 @@ pub struct ResolvedImplementationMethodGroup {
 pub enum ResolvedDefinitionKind {
     /// An external interface followed by an equation.
     Equational(ResolvedEquationalGlobal),
+    /// One checked foreign scalar literal published as an ordinary Int value.
+    /// It has an empty interface and exactly one zero-pattern literal body.
+    ForeignConstant(ResolvedEquationalGlobal),
     /// An inline operational function definition.
     InlineOperational(ResolvedInlineOperationalGlobal),
 }
@@ -26279,7 +26284,8 @@ pub(crate) fn discard_resolved_definition_iteratively(definition: ResolvedDefini
     let mut expressions = Vec::new();
     let mut patterns = Vec::new();
     match definition.kind {
-        ResolvedDefinitionKind::Equational(global) => {
+        ResolvedDefinitionKind::Equational(global)
+        | ResolvedDefinitionKind::ForeignConstant(global) => {
             discard_external_interface(global.interface);
             for equation in global.equations {
                 discard_equation_into_work(equation, &mut expressions, &mut patterns);

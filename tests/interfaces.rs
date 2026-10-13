@@ -195,7 +195,8 @@ fn reachable_core_nodes(program: &ValidatedProgram) -> Vec<ash::core::NodeId> {
 fn method_occurrences(definition: &CheckedDefinition, method: MethodId) -> Vec<&EvidenceSlot> {
     let mut expressions = Vec::new();
     match definition.kind() {
-        ash::resolved::ResolvedDefinitionKind::Equational(global) => {
+        ash::resolved::ResolvedDefinitionKind::Equational(global)
+        | ash::resolved::ResolvedDefinitionKind::ForeignConstant(global) => {
             expressions.extend(global.equations.iter().map(|equation| &equation.body));
         }
         ash::resolved::ResolvedDefinitionKind::InlineOperational(global) => {
@@ -344,7 +345,8 @@ fn ordinary_multi_parameter_relation_selects_and_evaluates() {
         .definitions()
         .iter()
         .find(|definition| match definition.kind() {
-            ash::resolved::ResolvedDefinitionKind::Equational(global) => {
+            ash::resolved::ResolvedDefinitionKind::Equational(global)
+            | ash::resolved::ResolvedDefinitionKind::ForeignConstant(global) => {
                 global.interface.name.spelling == "main"
             }
             ash::resolved::ResolvedDefinitionKind::InlineOperational(_) => false,
@@ -578,7 +580,8 @@ fn polymorphic_method_occurrence_instantiates_all_binders_once() {
         .definitions()
         .iter()
         .find(|definition| match definition.kind() {
-            ash::resolved::ResolvedDefinitionKind::Equational(global) => {
+            ash::resolved::ResolvedDefinitionKind::Equational(global)
+            | ash::resolved::ResolvedDefinitionKind::ForeignConstant(global) => {
                 global.interface.name.spelling == "use_pairing"
             }
             ash::resolved::ResolvedDefinitionKind::InlineOperational(_) => false,
@@ -639,7 +642,8 @@ fn linked_polymorphic_method_evidence_evaluates() {
         .definitions()
         .iter()
         .find(|definition| match definition.kind() {
-            ash::resolved::ResolvedDefinitionKind::Equational(global) => {
+            ash::resolved::ResolvedDefinitionKind::Equational(global)
+            | ash::resolved::ResolvedDefinitionKind::ForeignConstant(global) => {
                 global.interface.name.spelling == "map_pair"
             }
             ash::resolved::ResolvedDefinitionKind::InlineOperational(_) => false,

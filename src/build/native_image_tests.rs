@@ -24,10 +24,12 @@ const NATIVE: &str = r#"import @builtin.foreign as Foreign
 pub foreign library Arithmetic {
     profile "x86_64-unknown-linux-gnu"
     repr I32 = signed(32)
-    symbol PlusOne : Int -> Foreign.Call<Int> {
+    const Input : I32 = 40
+    const Donor : I32 = 40
+    symbol PlusOne : Unit -> Foreign.Call<Int> {
         name "ash_native_gate_plus_one"
         abi (I32) -> I32
-        operand 0 from 0 scalar
+        operand 0 from constant Input
         output result as scalar
         outcome otherwise { readable result }
     }
@@ -44,7 +46,7 @@ const ENTRY: &str = r#"import @builtin.foreign as Foreign
 import native as Native
 
 main : Unit -> Int ! {Native.PlusOne, Native.PlusTwo}
-main () = match perform Native.PlusOne.call 40 {
+main () = match perform Native.PlusOne.call () {
     Foreign.Returned(first) => match perform Native.PlusTwo.call first {
         Foreign.Returned(second) => second
         Foreign.ConversionFailed(error) => 902
@@ -311,6 +313,43 @@ fn native_image_startup_rejects_swapped_providers_stale_facts_and_missing_bindin
     assert_eq!(CALLBACKS.load(Ordering::SeqCst), 0);
 
     // The refused attempts do not poison a subsequent fresh admitted execution.
+    assert_eq!(run(emitted.expected, &selected).unwrap().to_string(), "43");
+    assert_eq!(CALLBACKS.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn native_constant_image_correspondence_rejects_value_sign_representation_and_equal_value_donor() {
+    let emitted = emitted_fixture();
+    let selected = members();
+    for mutation in 0..4 {
+        let library = PrivateNativeLibrary {
+            image_library: emitted.plus_one.image_library,
+            module: emitted.plus_one.library_module,
+            ordinal: emitted.plus_one.library_ordinal,
+            members: &selected,
+        };
+        let mut work = TypeWorkBudget::default();
+        let mut image = image::PureImage::decode_bytes(&emitted.image, &mut work).unwrap();
+        assert!(image.corrupt_declared_constant_for_test(mutation));
+        let bytes = image.encode_bytes(&mut work).unwrap();
+        CALLBACKS.store(0, Ordering::SeqCst);
+        let refusal = __run_private_effect_image(
+            &runtime_fingerprint(),
+            &bytes,
+            emitted.expected,
+            &[library],
+        )
+        .unwrap_err();
+        assert!(
+            matches!(
+                refusal.0,
+                PrivateFailure::Image(_) | PrivateFailure::ForeignAdmission(_)
+            ),
+            "{refusal}"
+        );
+        assert_eq!(CALLBACKS.load(Ordering::SeqCst), 0);
+    }
+    CALLBACKS.store(0, Ordering::SeqCst);
     assert_eq!(run(emitted.expected, &selected).unwrap().to_string(), "43");
     assert_eq!(CALLBACKS.load(Ordering::SeqCst), 2);
 }

@@ -211,18 +211,15 @@ fn generated_status_dependent_retention_blocks_parent_before_c_and_host_recovers
 }
 
 #[test]
-fn source_status_literal_does_not_publish_an_ordinary_constant_value() {
+fn checked_source_status_literal_also_publishes_an_ordinary_int_value() {
     let fixture = Fixture::new("import owner as Owner\nmain : Unit -> Int\nmain () = Owner.Held\n");
     fs::write(
         fixture.0.join("owner.ash"),
         owner_with_conditional_status_teardown(),
     )
     .unwrap();
-    let failure = compile_path(fixture.configuration()).unwrap_err();
-    assert!(matches!(
-        failure.pipeline_failure(),
-        Some(ash::driver::PipelineFailure::Resolution(_))
-    ));
+    let value = ash::driver::run_path(fixture.configuration()).unwrap();
+    assert_eq!(value.value_display(), "7");
 }
 
 fn status_native_consuming() -> String {
@@ -1609,4 +1606,31 @@ fn generated_owner_execution_with_native(
     } else {
         assert_eq!(observed_trace, expected_trace);
     }
+}
+
+#[test]
+fn generated_owner_calls_use_fixed_original_constants_in_all_native_phases() {
+    let owner = include_str!("fixtures/source-owner/owner.ash")
+        .replace("    repr Size = size_t", "    repr Size = size_t\n    repr Flag = signed(32)\n    const AllocateFlag : Flag = 7\n    const ReleaseFlag : Flag = -7")
+        .replace("abi (Size) -> pointer(Address)", "abi (Size, Flag) -> pointer(Address)")
+        .replace("operand 0 from 0 scalar", "operand 0 from 0 scalar\n        operand 1 from constant AllocateFlag")
+        .replace("abi (pointer(Address)) -> void", "abi (pointer(Address), Flag) -> void")
+        .replace("operand 0 from 0 current", "operand 0 from 0 current\n        operand 1 from constant ReleaseFlag");
+    let native = include_str!("fixtures/source-owner/native_owner.c")
+        .replace(
+            "void *ash_owner_acquire(size_t size) {",
+            "void *ash_owner_acquire(size_t size, int32_t flag) {\n    if (flag != 7) abort();",
+        )
+        .replace(
+            "void ash_owner_release(void *raw) {",
+            "void ash_owner_release(void *raw, int32_t flag) {\n    if (flag != -7) abort();",
+        );
+    generated_owner_program_with_native(
+        &owner,
+        "import owner as Owner\nmain : Unit -> (Owner.Scope<Unit, Unit, Int>, Owner.Scope<Unit, Unit, Int>)\nmain () = (resource Owner.Probe<{}, First, {}> owner = 42 {\n    Owner.read owner\n}, resource Owner.Probe<{}, Second, {}> owner = 9 {\n    Owner.read owner\n})\n",
+        None,
+        "(Completed(42, Closed), NotAcquired(()))",
+        "acquire:42\nrelease:42\nacquire:9\nrelease:9\n",
+        &native,
+    );
 }

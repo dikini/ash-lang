@@ -300,3 +300,67 @@ fn generated_scalar_hosts_preserve_real_native_counts_and_exact_results_with_bot
         }
     }
 }
+
+#[test]
+fn generated_native_constant_operands_keep_declared_signed_values() {
+    let fixture = Fixture::new();
+    let inputs = fixture.native_inputs();
+    let contract = r#"import @builtin.foreign as Foreign
+pub foreign library Counter {
+    profile "x86_64-unknown-linux-gnu"
+    repr I8 = signed(8)
+    repr U64 = unsigned(64)
+    const Negative : I8 = -7
+    const Maximum : U64 = 18446744073709551615
+    symbol Wide : Unit -> Foreign.Call<Int> {
+        name "ash_counter_echo_u64"
+        abi (U64) -> U64
+        operand 0 from constant Maximum
+        output result as scalar
+        outcome otherwise { readable result }
+    }
+    symbol Fixed : Unit -> Foreign.Call<Int> {
+        name "ash_counter_echo_i8"
+        abi (I8) -> I8
+        operand 0 from constant Negative
+        output result as scalar
+        outcome otherwise { readable result }
+    }
+}
+"#;
+    for (index, native) in inputs.into_iter().enumerate() {
+        let directory = fixture.0.join(format!("constant-{index}"));
+        fs::create_dir(&directory).unwrap();
+        fs::write(directory.join("native.ash"), contract).unwrap();
+        fs::write(directory.join("entry.ash"), "import @builtin.foreign as Foreign\nimport native as Native\nmain : Unit -> (Int, Int, Foreign.Call<Int>, Foreign.Call<Int>) ! {Native.Fixed, Native.Wide}\nmain () = (Native.Negative, Native.Maximum, perform Native.Fixed.call (), perform Native.Wide.call ())\n").unwrap();
+        let compiled = compile_path(RunConfiguration {
+            entry: directory.join("entry.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap();
+        fs::remove_file(directory.join("entry.ash")).unwrap();
+        fs::remove_file(directory.join("native.ash")).unwrap();
+        let mut configuration = BuildConfiguration::new(directory.join("program"));
+        configuration.native_inputs = vec![native];
+        configuration.cargo_target_directory = Some(
+            PathBuf::from(std::env::var_os("CARGO_TARGET_DIR").unwrap()).join("ffi-native-hosts"),
+        );
+        let prepared = prepare_program(&compiled, configuration).unwrap();
+        drop(compiled);
+        let built = build_prepared(prepared).unwrap();
+        let generated = built.generated_source();
+        fs::remove_file(generated.parent().unwrap().join("program-image.bin")).unwrap();
+        fs::remove_file(generated.parent().unwrap().join("expected-facts.bin")).unwrap();
+        let (output, calls) = run_host(built.executable(), &fixture, true);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            output.stdout,
+            b"(-7, 18446744073709551615, Returned(-7), Returned(18446744073709551615))\n"
+        );
+        assert_eq!(calls, b"iw");
+    }
+}

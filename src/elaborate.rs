@@ -5415,7 +5415,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .map_err(|_| type_resource())?;
         for definition in definitions {
             let (name, parameters, requirements) = match &definition.kind {
-                ResolvedDefinitionKind::Equational(equational) => (
+                ResolvedDefinitionKind::Equational(equational)
+                | ResolvedDefinitionKind::ForeignConstant(equational) => (
                     &equational.interface.name,
                     equational.interface.type_parameters.as_ref(),
                     equational.interface.requirements.as_ref(),
@@ -5455,7 +5456,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 });
             }
             let body = match &definition.kind {
-                ResolvedDefinitionKind::Equational(equational) => {
+                ResolvedDefinitionKind::Equational(equational)
+                | ResolvedDefinitionKind::ForeignConstant(equational) => {
                     self.clone_type(&equational.interface.annotation.ty)?
                 }
                 ResolvedDefinitionKind::InlineOperational(operational) => {
@@ -10785,20 +10787,45 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     .0
                     .try_reserve(members.0.len())
                     .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                let mut constants = ElaboratedBindingBuffer(Vec::new());
                 members.0.reverse();
                 while let Some(member) = members.0.pop() {
-                    core_members.0.push((member.binder, member.initializer));
+                    if member.foreign_constant {
+                        self.type_work.charge(1).map_err(|_| type_resource())?;
+                        constants.0.try_reserve(1).map_err(|_| type_resource())?;
+                        constants.0.push(member);
+                    } else {
+                        core_members.0.push((member.binder, member.initializer));
+                    }
                 }
-                let result_type = self.clone_type(&result.ty)?;
-                result.node = self.builder.recursive_binding(
-                    core_members.into_vec(),
-                    result.node,
-                    result_type,
-                    Origin::Generated {
-                        cause: Box::new(Origin::Source(span)),
-                        reason: GeneratedReason::RecursiveBindingLowering,
-                    },
-                )?;
+                if !core_members.0.is_empty() {
+                    let result_type = self.clone_type(&result.ty)?;
+                    result.node = self.builder.recursive_binding(
+                        core_members.into_vec(),
+                        result.node,
+                        result_type,
+                        Origin::Generated {
+                            cause: Box::new(Origin::Source(span)),
+                            reason: GeneratedReason::RecursiveBindingLowering,
+                        },
+                    )?;
+                }
+                // Literal definitions are independent, nonrecursive values.
+                // Their binders enclose both this module's function group and
+                // the already-assembled client modules.
+                while let Some(member) = constants.0.pop() {
+                    let result_type = self.clone_type(&result.ty)?;
+                    result.node = self.builder.binding(
+                        member.binder,
+                        member.initializer,
+                        result.node,
+                        result_type,
+                        Origin::Generated {
+                            cause: Box::new(Origin::Source(span)),
+                            reason: GeneratedReason::TypeChecking,
+                        },
+                    )?;
+                }
             }
             Ok(())
         })();
@@ -11330,6 +11357,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         prepared.globals.push(ElaboratedBinding {
             binder,
             initializer: function.node,
+            foreign_constant: false,
         });
         Ok(())
     }
@@ -11379,13 +11407,19 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
 
         for definition in definitions.clone() {
             let (name, function_type, type_parameters, requirements) = match definition.kind() {
-                ResolvedDefinitionKind::Equational(equational) => {
+                ResolvedDefinitionKind::Equational(equational)
+                | ResolvedDefinitionKind::ForeignConstant(equational) => {
                     let function_type =
                         ProvenancedTypeOwner::new(ProvenancedType::from_resolved_with_budget(
                             &equational.interface.annotation,
                             &mut self.type_work,
                         )?);
-                    if function_type.ty.function_view().is_none() {
+                    if matches!(
+                        definition.kind(),
+                        ResolvedDefinitionKind::ForeignConstant(_)
+                    ) {
+                        check_foreign_constant_shape(equational)?;
+                    } else if function_type.ty.function_view().is_none() {
                         return Err(equation_interface_not_function(
                             &equational.interface.annotation,
                             &equational.equations.first().ok_or_else(invalid_state)?.name,
@@ -11662,7 +11696,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         D: DefinitionView,
     {
         let recursive_binder = match definition.kind() {
-            ResolvedDefinitionKind::Equational(equational) => equational.interface.name.id,
+            ResolvedDefinitionKind::Equational(equational)
+            | ResolvedDefinitionKind::ForeignConstant(equational) => equational.interface.name.id,
             ResolvedDefinitionKind::InlineOperational(operational) => operational.header.name.id,
         };
         if !self.monomorphic_recursive.insert(recursive_binder) {
@@ -11676,7 +11711,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             };
         let mut lowered_evidence = if self.purpose == ElaborationPurpose::FinalSynthesis {
             let cause = match definition.kind() {
-                ResolvedDefinitionKind::Equational(equational) => &equational.interface.name.origin,
+                ResolvedDefinitionKind::Equational(equational)
+                | ResolvedDefinitionKind::ForeignConstant(equational) => {
+                    &equational.interface.name.origin
+                }
                 ResolvedDefinitionKind::InlineOperational(operational) => {
                     &operational.header.name.origin
                 }
@@ -11687,6 +11725,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         };
         let definition_result: Result<_, TypeError> = (|| {
             Ok(match definition.kind() {
+                ResolvedDefinitionKind::ForeignConstant(equational) => (
+                    &equational.interface.name,
+                    self.elaborate_foreign_constant(equational, &mut prepared.context)?,
+                ),
                 ResolvedDefinitionKind::Equational(equational) => {
                     let function_type =
                         ProvenancedTypeOwner::new(ProvenancedType::from_resolved_with_budget(
@@ -11846,8 +11888,32 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         prepared.globals.push(ElaboratedBinding {
             binder,
             initializer: function.node,
+            foreign_constant: matches!(
+                definition.kind(),
+                ResolvedDefinitionKind::ForeignConstant(_)
+            ),
         });
         Ok(())
+    }
+
+    fn elaborate_foreign_constant(
+        &mut self,
+        equational: &crate::resolved::ResolvedEquationalGlobal,
+        context: &mut TypeContext,
+    ) -> Result<TypedNode, TypeError> {
+        let expected = ProvenancedTypeOwner::new(ProvenancedType::from_resolved_with_budget(
+            &equational.interface.annotation,
+            &mut self.type_work,
+        )?);
+        check_foreign_constant_shape(equational)?;
+        self.elaborate_expression_with_context(
+            ElaborationTask::Check {
+                expression: &equational.equations[0].body,
+                expected: expected.into_inner(),
+                kind: CheckKind::General,
+            },
+            context,
+        )
     }
 
     fn finish_prepared_definitions(
@@ -19536,7 +19602,10 @@ fn preflight_application_arities(
             ResolvedDeclarationIndex::Global(index) => {
                 let definition = module.definitions().get(index).ok_or_else(invalid_state)?;
                 let requirements = match &definition.kind {
-                    ResolvedDefinitionKind::Equational(global) => &global.interface.requirements,
+                    ResolvedDefinitionKind::Equational(global)
+                    | ResolvedDefinitionKind::ForeignConstant(global) => {
+                        &global.interface.requirements
+                    }
                     ResolvedDefinitionKind::InlineOperational(global) => {
                         &global.header.requirements
                     }
@@ -19786,7 +19855,8 @@ fn check_global_requirements(
 ) -> Result<(), TypeError> {
     for definition in module.definitions() {
         let (name, requirements, value_type_count) = match &definition.kind {
-            ResolvedDefinitionKind::Equational(global) => {
+            ResolvedDefinitionKind::Equational(global)
+            | ResolvedDefinitionKind::ForeignConstant(global) => {
                 (&global.interface.name, &global.interface.requirements, 1)
             }
             ResolvedDefinitionKind::InlineOperational(global) => (
@@ -19821,7 +19891,8 @@ fn check_global_requirements(
             .try_reserve(value_type_count)
             .map_err(|_| constraint_resource())?;
         match &definition.kind {
-            ResolvedDefinitionKind::Equational(global) => {
+            ResolvedDefinitionKind::Equational(global)
+            | ResolvedDefinitionKind::ForeignConstant(global) => {
                 value_types.push(&global.interface.annotation.ty);
             }
             ResolvedDefinitionKind::InlineOperational(global) => {
@@ -23002,6 +23073,7 @@ struct CheckedPattern {
 struct ElaboratedBinding {
     binder: TypedBinder,
     initializer: NodeId,
+    foreign_constant: bool,
 }
 
 struct ElaboratedBindingBuffer(Vec<ElaboratedBinding>);
@@ -24480,6 +24552,24 @@ fn not_applicable(
     diagnostic.expected = Some("function".to_owned());
     diagnostic.found = Some(registry.display_source_type(found));
     TypeError::source(diagnostic)
+}
+
+fn check_foreign_constant_shape(
+    global: &crate::resolved::ResolvedEquationalGlobal,
+) -> Result<(), TypeError> {
+    let [equation] = global.equations.as_slice() else {
+        return Err(invalid_state());
+    };
+    if global.interface.annotation.ty != Type::Int
+        || !global.interface.requirements.is_empty()
+        || !global.interface.type_parameters.is_empty()
+        || !equation.patterns.is_empty()
+        || equation.name.binder != global.interface.name.id
+        || !matches!(equation.body.kind, ResolvedExprKind::Integer(_))
+    {
+        return Err(invalid_state());
+    }
+    Ok(())
 }
 
 fn equation_interface_not_function(
@@ -28144,7 +28234,8 @@ pub(crate) fn checked_program_contains_effect_syntax(
         }
         for definition in group.definitions() {
             match definition.kind() {
-                ResolvedDefinitionKind::Equational(global) => {
+                ResolvedDefinitionKind::Equational(global)
+                | ResolvedDefinitionKind::ForeignConstant(global) => {
                     for equation in &global.equations {
                         schedule(&mut work, &equation.body, budget)?;
                     }
@@ -28379,7 +28470,8 @@ fn collect_definition_kind_binders<'a>(
     expressions: &mut Vec<&'a ResolvedExpr>,
 ) {
     match kind {
-        ResolvedDefinitionKind::Equational(equational) => {
+        ResolvedDefinitionKind::Equational(equational)
+        | ResolvedDefinitionKind::ForeignConstant(equational) => {
             binders.push(equational.interface.name.id);
             for equation in &equational.equations {
                 for pattern in &equation.patterns {

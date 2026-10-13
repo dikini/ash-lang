@@ -12,7 +12,7 @@ use crate::{
         },
         source_runtime::{
             NativeOwnerCallReturned, NativeOwnerDisposition, NativeOwnerGuard, NativeOwnerOperand,
-            NativeScalarCallError, NativeScalarValue,
+            NativeScalarCallError, NativeScalarConversionError, NativeScalarValue,
         },
     },
     types::{ConstructorId, TypeWorkBudget},
@@ -560,7 +560,7 @@ impl<'runtime> super::Machine<'runtime> {
                 PreparedOperandSource, PreparedOwnerCall, PreparedRepresentation,
                 PreparedScalarRepresentation,
             },
-            source_runtime::{NativeScalarConversionError, narrow_gnu_scalar},
+            source_runtime::narrow_gnu_scalar,
         };
         if self.pending_source_owner_call.is_some()
             || self.pending_source_call.is_some()
@@ -704,6 +704,16 @@ impl<'runtime> super::Machine<'runtime> {
                     .try_reserve_exact(source.operands().len())
                     .map_err(|_| operand_storage(source.operands().len()))?;
                 for operand in source.operands() {
+                    if let PreparedOperandSource::Constant(position) = operand.source() {
+                        operands.push(NativeOwnerOperand::Scalar(admit_constant_operand(
+                            invocation.symbol(),
+                            *position,
+                            operand.representation(),
+                            &mut self.instantiation_work,
+                            super::RuntimePhase::Access,
+                        )?));
+                        continue;
+                    }
                     if let PreparedOperandSource::Enclosing(path) = operand.source() {
                         operands.push(
                             self.enclosing_owner_operand(index, request, &value, path, false)?,
@@ -827,6 +837,15 @@ impl<'runtime> super::Machine<'runtime> {
                     .map_err(|_| operand_storage(symbol.symbol().operands().len()))?;
                 for (position, operand) in symbol.symbol().operands().iter().enumerate() {
                     let native = match operand.source() {
+                        PreparedOperandSource::Constant(index) => {
+                            NativeOwnerOperand::Scalar(admit_constant_operand(
+                                symbol,
+                                *index,
+                                operand.representation(),
+                                &mut self.instantiation_work,
+                                super::RuntimePhase::Access,
+                            )?)
+                        }
                         PreparedOperandSource::Current(path) if position == *current_operand => {
                             if current_key(&self.heap, &value, path, &mut self.instantiation_work)?
                                 != key
@@ -1217,6 +1236,15 @@ fn prepare_destruction_operands(
         .map_err(|_| operand_storage(destructor.symbol().operands().len()))?;
     for (position, operand) in destructor.symbol().operands().iter().enumerate() {
         let native = match operand.source() {
+            PreparedOperandSource::Constant(index) => {
+                NativeOwnerOperand::Scalar(admit_constant_operand(
+                    destructor,
+                    *index,
+                    operand.representation(),
+                    work,
+                    super::RuntimePhase::Acquisition,
+                )?)
+            }
             PreparedOperandSource::Current(_) if position == *current_operand => {
                 NativeOwnerOperand::Address(std::ptr::null_mut())
             }
@@ -1256,6 +1284,30 @@ fn prepare_destruction_operands(
         operands.push(native);
     }
     Ok(operands)
+}
+
+fn admit_constant_operand(
+    symbol: &crate::foreign::checked_source::CheckedForeignSymbol,
+    index: usize,
+    representation: crate::foreign::source_contract::PreparedRepresentation,
+    work: &mut TypeWorkBudget,
+    phase: super::RuntimePhase,
+) -> Result<NativeScalarValue, super::RuntimeFailure> {
+    let crate::foreign::source_contract::PreparedRepresentation::Scalar(representation) =
+        representation
+    else {
+        return Err(super::RuntimeFailure::ForeignBinding);
+    };
+    crate::foreign::source_runtime::narrow_gnu_declared_constant(
+        symbol.prepared(),
+        index,
+        representation,
+        work,
+    )
+    .map_err(|error| match error {
+        NativeScalarConversionError::WorkExhausted => super::effect_work_failure(work, None, phase),
+        _ => super::RuntimeFailure::ForeignBinding,
+    })
 }
 
 fn current_key<'value>(

@@ -600,10 +600,13 @@ This checkpoint supports opaque and initialized byte foreign owners with declare
 dependencies and Type-kind owner formals. Acquisition admits scalar and exact
 declared enclosing-State operands with one pointer result. Finish and host
 destruction contracts use the exact Current State and declared Enclosing pointer
-operands. A `void` result has one unconditional disposition; a scalar result
+operands, with checked original scalar constants at declared scalar ABI positions.
+The machine narrows these fixed operands and admits the complete call before
+entering C. A `void` result has one unconditional disposition; a scalar result
 selects consumed or retained from the original total status alternatives. Each
 foreign symbol still retains its complete ordered Type and EffectRow arguments;
-the native Type-only projection does not replace them. Scalar teardown operands
+the native Type-only projection does not replace them. Source-projected scalar
+teardown operands
 and native access/copy windows remain unsupported executable shapes in this
 checkpoint.
 

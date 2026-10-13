@@ -104,14 +104,16 @@ explicit checked Core interpretation for admitted owner-free native entry
 instances, leaving an empty outward row. Ordinary source handlers cannot
 install a native symbol's interpreter. Source contracts and checked Core supply
 no executable binding; default execution refuses missing bindings before Ash
-runs. Ordinary constant values, constant operands and copy windows remain
-outside the admitted subset. Source resource declarations admit opaque and
+runs. Checked scalar literal constants publish ordinary mathematical `Int`
+values and supply exact declared native operands. Copy windows remain outside
+the admitted subset. Source resource declarations admit opaque and
 initialized byte owners with declared dependencies, private data and checked
 `scope` or `acquired_only` reports. Their Type-only owner families support one
 acquisition and `void` or scalar-status finish and host-destruction contracts
 with total consumed or retained dispositions. Scalar status predicates use
-checked literal facts from the original owner library without publishing
-ordinary values. Retention revokes ordinary access and quarantines the same
+checked literal facts from the original owner library; the predicate itself
+grants no value or operand authority. Retention revokes ordinary access and
+quarantines the same
 owner and dependency closure; safe host destruction preserves dependency order.
 Callable lifecycle helpers and library migrations remain unsupported. Checked
 lexical forwarding supports the associated interface methods and ordinary

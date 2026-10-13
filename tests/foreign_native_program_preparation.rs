@@ -143,3 +143,23 @@ fn native_preparation_preserves_core_row_metadata_depth() {
         assert_eq!(*compiled.compilation_work(), compilation_work);
     }
 }
+
+#[test]
+fn full_unsigned_foreign_literal_has_a_matching_compiler_image() {
+    let fixture = Fixture::new(
+        r#"pub foreign library Limits {
+    profile "x86_64-unknown-linux-gnu"
+    repr U64 = unsigned(64)
+    const Maximum : U64 = 18446744073709551615
+}
+main : Unit -> Int
+main () = Maximum
+"#,
+    );
+    let compiled = compile_path(fixture.configuration()).unwrap();
+    prepare_program(
+        &compiled,
+        BuildConfiguration::new(fixture.0.join("program")),
+    )
+    .unwrap();
+}

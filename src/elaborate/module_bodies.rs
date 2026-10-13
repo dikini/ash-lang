@@ -916,7 +916,8 @@ fn declaration_source_items<'a>(
         ResolvedDeclarationIndex::Global(index) => {
             let definition = module.definitions().get(index).ok_or_else(invalid_state)?;
             match &definition.kind {
-                ResolvedDefinitionKind::Equational(global) => {
+                ResolvedDefinitionKind::Equational(global)
+                | ResolvedDefinitionKind::ForeignConstant(global) => {
                     for equation in &global.equations {
                         push_source(
                             &mut pending,

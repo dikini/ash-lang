@@ -761,7 +761,10 @@ impl<'a> SourceBinderInventory<'a, '_> {
         while let Some(node) = self.pending.pop() {
             self.work.charge(1).map_err(|_| type_resource())?;
             match node {
-                Node::Definition(ResolvedDefinitionKind::Equational(definition)) => {
+                Node::Definition(
+                    ResolvedDefinitionKind::Equational(definition)
+                    | ResolvedDefinitionKind::ForeignConstant(definition),
+                ) => {
                     self.binder(definition.interface.name.id)?;
                     self.push(definition.equations.iter().map(Node::Equation))?;
                 }

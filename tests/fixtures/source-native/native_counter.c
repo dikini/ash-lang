@@ -32,3 +32,8 @@ uint64_t ash_counter_max_u64(void) {
 void ash_counter_void(void) {
     record_call('v');
 }
+
+uint64_t ash_counter_echo_u64(uint64_t value) {
+    record_call('w');
+    return value;
+}

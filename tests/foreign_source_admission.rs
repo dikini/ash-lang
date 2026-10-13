@@ -61,6 +61,38 @@ pub foreign library C {
 "#;
 
 #[test]
+fn checked_foreign_literal_constants_publish_through_imported_aliases() {
+    let contract = r#"pub foreign library Status {
+    profile "x86_64-unknown-linux-gnu"
+    repr CInt = signed(32)
+    const Held : CInt = 7
+}
+"#;
+    for (entry, facade) in [
+        (
+            "import native as Native\nmain : Unit -> Int\nmain () = Native.Held\n",
+            None,
+        ),
+        (
+            "import native (Held as Answer)\nmain : Unit -> Int\nmain () = Answer\n",
+            None,
+        ),
+        (
+            "import facade as Facade\nmain : Unit -> Int\nmain () = Facade.Answer\n",
+            Some("pub import native (Held as Answer)\n"),
+        ),
+    ] {
+        let fixture = Fixture::new(entry);
+        fs::write(fixture.0.join("native.ash"), contract).unwrap();
+        if let Some(facade) = facade {
+            fs::write(fixture.0.join("facade.ash"), facade).unwrap();
+        }
+        let observation = run_path(fixture.configuration()).unwrap();
+        assert_eq!(observation.value_display(), "7");
+    }
+}
+
+#[test]
 fn source_native_declarations_are_passive_and_check_complete_parameter_vectors() {
     let fixture = Fixture::new(&format!("{CONTRACT}main : Unit -> Int\nmain () = 42\n"));
     let observation = run_path(fixture.configuration()).unwrap();
@@ -328,4 +360,56 @@ fn opaque_non_abi_domain_leaves_keep_their_canonical_kinds_through_imports() {
             "an actual opaque ABI leaf or unsaturated domain must still reject: {failure:?}"
         );
     }
+}
+
+#[test]
+fn declared_literal_constant_ranges_and_term_visibility_remain_exact() {
+    for (repr, value, expected) in [
+        ("signed(8)", "-128", "-128"),
+        ("signed(8)", "127", "127"),
+        ("signed(64)", "-9223372036854775808", "-9223372036854775808"),
+        (
+            "unsigned(64)",
+            "18446744073709551615",
+            "18446744073709551615",
+        ),
+        ("unsigned(8)", "-0", "0"),
+    ] {
+        let fixture = Fixture::new(&format!(
+            "foreign library Limits {{\n    profile \"x86_64-unknown-linux-gnu\"\n    repr Scalar = {repr}\n    const Value : Scalar = {value}\n}}\nmain : Unit -> Int\nmain () = Value\n"
+        ));
+        assert_eq!(
+            run_path(fixture.configuration()).unwrap().value_display(),
+            expected
+        );
+    }
+    for (repr, value) in [
+        ("signed(8)", "128"),
+        ("signed(8)", "-129"),
+        ("unsigned(8)", "-1"),
+        ("unsigned(64)", "18446744073709551616"),
+        ("signed(64)", "-9223372036854775809"),
+    ] {
+        let fixture = Fixture::new(&format!(
+            "foreign library Limits {{\n    profile \"x86_64-unknown-linux-gnu\"\n    repr Scalar = {repr}\n    const Value : Scalar = {value}\n}}\nmain : Unit -> Int\nmain () = Value\n"
+        ));
+        assert!(
+            matches!(run_path(fixture.configuration()).unwrap_err().pipeline_failure(), Some(PipelineFailure::Resolution(error)) if error.reason == ResolveReason::ForeignContract)
+        );
+    }
+    for entry in [
+        "import native (Hidden)\nmain : Unit -> Int\nmain () = Hidden\n",
+        "import native as Native\nmain : Unit -> Int\nmain () = Native.Hidden\n",
+    ] {
+        let fixture = Fixture::new(entry);
+        fs::write(fixture.0.join("native.ash"), "foreign library Limits {\n    profile \"x86_64-unknown-linux-gnu\"\n    repr I8 = signed(8)\n    const Hidden : I8 = 7\n}\n").unwrap();
+        assert!(run_path(fixture.configuration()).is_err());
+    }
+    let fixture = Fixture::new(
+        "foreign library Limits {\n    profile \"x86_64-unknown-linux-gnu\"\n    repr I8 = signed(8)\n    const Present : I8 = 7\n}\ntype Tag = Present\nmain : Unit -> Int\nmain () = 0\n",
+    );
+    assert!(
+        run_path(fixture.configuration()).is_err(),
+        "a literal and constructor cannot share a term name"
+    );
 }
