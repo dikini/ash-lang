@@ -98,6 +98,7 @@ foreign_symbol ::=
 abi_representation ::= upper_identifier | "pointer" "(" upper_identifier ")" ;
 foreign_call_contract ::=
     "operand" integer "from" source_position ("scalar" | "current" | "enclosing")
+  | "operand" integer "from" "constant" foreign_reference
   | "output" "result" "as" ("scalar" | "owner" "(" type ")")
   | "outcome" outcome_test "{" [ outcome_fact { "," outcome_fact } ] "}"
   | "retained_dependents" "block" ;
