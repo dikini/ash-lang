@@ -27,6 +27,7 @@ thread_local! {
     static PROVIDERS:Cell<Option<([PrivateNativeCoordinates;2], &'static [u8])>>=const { Cell::new(None) };
     static BYTE_OWNER: Cell<bool> = const { Cell::new(false) };
     static STATUS_OWNER: Cell<bool> = const { Cell::new(false) };
+    static RETAIN_FIRST: Cell<bool> = const { Cell::new(false) };
     static NEGATIVE_PROVIDER:Cell<Option<(PrivateNativeCoordinates, &'static [u8])>>=const { Cell::new(None) };
     static ACQUIRES:Cell<usize>=const {Cell::new(0)};
     static RELEASES:Cell<usize>=const {Cell::new(0)};
@@ -69,7 +70,13 @@ fn teardown_provider() -> PrivateNativeBridge {
     if STATUS_OWNER.get() {
         __private_native_owner_status_teardown_bridge(coordinates[1], facts, |arguments| {
             injected_release(arguments);
-            NativeScalarReply::Scalar(NativeScalarValue::I32(i32::MIN))
+            NativeScalarReply::Scalar(NativeScalarValue::I32(
+                if RETAIN_FIRST.get() && RELEASES.get() > 1 {
+                    0
+                } else {
+                    i32::MIN
+                },
+            ))
         })
     } else {
         __private_native_owner_teardown_bridge(coordinates[1], facts, injected_release)
@@ -116,7 +123,11 @@ main () = resource Owner.Probe<{}, Fresh, {}> owner = 42 {
 #[test]
 fn injected_status_owner_complete_report_admission_precedes_callback_and_recording_survives_zero_work()
  {
-    let owner = include_str!("../../tests/fixtures/source-owner/owner.ash")
+    owner_post_record_case(&status_owner_source(), None, ExtentOutcome::Ready);
+}
+
+fn status_owner_source() -> String {
+    include_str!("../../tests/fixtures/source-owner/owner.ash")
         .replace(
             "    repr Size = size_t",
             "    repr Size = size_t\n    repr Status = signed(32)",
@@ -131,8 +142,20 @@ fn injected_status_owner_complete_report_admission_precedes_callback_and_recordi
             "output result as scalar\n        outcome otherwise { readable result, consumed 0 }",
         )
         .replace("Foreign.Consumed(())", "Foreign.Consumed(_)")
-        .replace("Foreign.Retained(())", "Foreign.Retained(_)");
-    owner_post_record_case(&owner, None, ExtentOutcome::Ready);
+        .replace("Foreign.Retained(())", "Foreign.Retained(_)")
+}
+
+#[test]
+fn injected_status_owner_post_call_extraction_failure_is_terminal_after_each_disposition() {
+    for retained in [false, true] {
+        let mut owner = status_owner_source();
+        if retained {
+            owner = owner
+                .replace("repr Status = signed(32)", "repr Status = signed(32)\n    const Held : Status = -2147483648")
+                .replace("outcome otherwise { readable result, consumed 0 }", "outcome result == Held { readable result, retained 0 }\n        outcome otherwise { readable result, consumed 0 }");
+        }
+        owner_post_record_case(&owner, None, ExtentOutcome::ExtractionRefused { retained });
+    }
 }
 
 #[test]
@@ -212,6 +235,7 @@ enum ExtentOutcome {
     Ready,
     ConversionRefused,
     WorkRefused,
+    ExtractionRefused { retained: bool },
 }
 
 #[test]
@@ -309,6 +333,10 @@ fn owner_post_record_case_with_entry(
     PROVIDERS.set(Some((coordinates, facts)));
     BYTE_OWNER.set(byte_owner);
     STATUS_OWNER.set(status_owner);
+    RETAIN_FIRST.set(matches!(
+        outcome,
+        ExtentOutcome::ExtractionRefused { retained: true }
+    ));
     NEGATIVE_PROVIDER.set(negative_coordinates.map(|coordinates| (coordinates, facts)));
     ACQUIRES.set(0);
     RELEASES.set(0);
@@ -318,6 +346,7 @@ fn owner_post_record_case_with_entry(
             PROVIDERS.set(None);
             BYTE_OWNER.set(false);
             STATUS_OWNER.set(false);
+            RETAIN_FIRST.set(false);
             NEGATIVE_PROVIDER.set(None);
         }
     }
@@ -344,6 +373,47 @@ fn owner_post_record_case_with_entry(
         ordinal: coordinates[0].library_ordinal,
         members: &members,
     }];
+    if let ExtentOutcome::ExtractionRefused { retained } = outcome {
+        let (refused, observed) =
+            source_owner_post_record_test::observe_teardown_extraction(|| {
+                __run_private_effect_image(&runtime_fingerprint(), &bytes, facts, &libraries)
+            });
+        assert!(matches!(
+            refused,
+            Err(PrivateProgramFailure(PrivateFailure::Evaluation(
+                RuntimeFailure::ForeignBinding
+            )))
+        ));
+        assert_eq!(observed.teardown_returned, 1);
+        assert_eq!(observed.teardown_recorded, 1);
+        assert_eq!(observed.teardown_recorded_retained, retained);
+        assert_eq!(observed.teardown_reported, 0);
+        assert!(observed.teardown_failed_without_report);
+        assert_eq!(ACQUIRES.get(), 1);
+        assert_eq!(
+            RELEASES.get(),
+            1 + usize::from(retained),
+            "source callback runs once; only a retained owner has one later original host destructor"
+        );
+        // Fresh invocation retains the same facts and has no injected failure.
+        // Successful host cleanup cannot turn the previous failure into a result.
+        ACQUIRES.set(0);
+        RELEASES.set(0);
+        let fresh =
+            __run_private_effect_image(&runtime_fingerprint(), &bytes, facts, &libraries).unwrap();
+        assert_eq!(
+            fresh.to_string(),
+            if retained {
+                "Completed(42, RetainedError(()))"
+            } else {
+                "Completed(42, Closed)"
+            }
+        );
+        assert_eq!(ACQUIRES.get(), 1);
+        assert_eq!(RELEASES.get(), 1 + usize::from(retained));
+        drop(providers);
+        return;
+    }
     if matches!(outcome, ExtentOutcome::ConversionRefused) {
         let (refused, observed) = source_owner_post_record_test::observe(false, || {
             __run_private_effect_image(&runtime_fingerprint(), &bytes, facts, &libraries)
@@ -498,10 +568,10 @@ fn owner_post_record_case_with_entry(
     );
     assert_eq!(RELEASES.get(), 4, "fresh activation consumes exactly once");
     if status_owner {
-        // Eleven units: one live-dependent check, five reply units for I32,
-        // and three cells plus two fixed recording/authority units.
+        // Ten units: one live-dependent check, five reply units for I32,
+        // and two cells plus two fixed recording/authority units.
         for prefix in [0, 13] {
-            for allowance in [10, 11, 11] {
+            for allowance in [9, 10, 10] {
                 ACQUIRES.set(0);
                 RELEASES.set(0);
                 let (result, observed) = source_owner_post_record_test::observe_teardown_preflight(
@@ -528,12 +598,12 @@ fn owner_post_record_case_with_entry(
                 );
                 assert_eq!(
                     observed.teardown_preflight_used,
-                    Some(prefix + if allowance == 10 { 6 } else { 11 })
+                    Some(prefix + if allowance == 9 { 6 } else { 10 })
                 );
-                assert_eq!(observed.teardown_returned, usize::from(allowance == 11));
-                assert_eq!(observed.teardown_recorded, usize::from(allowance == 11));
-                assert_eq!(observed.teardown_reported, usize::from(allowance == 11));
-                assert_eq!(observed.teardown_consumed_report_published, allowance == 11);
+                assert_eq!(observed.teardown_returned, usize::from(allowance == 10));
+                assert_eq!(observed.teardown_recorded, usize::from(allowance == 10));
+                assert_eq!(observed.teardown_reported, usize::from(allowance == 10));
+                assert_eq!(observed.teardown_consumed_report_published, allowance == 10);
             }
         }
     }

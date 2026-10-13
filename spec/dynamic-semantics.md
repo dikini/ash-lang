@@ -776,14 +776,19 @@ Unresolved native objects remain protected until process termination.
 
 For scalar-status teardown, readiness prepays the complete raw-status
 traversal, reply conversion and recording/report work, and reserves both the
-successful report cells and opaque conversion-error cell before C. The typed
+successful report cells before C. The typed
 callback returns a raw scalar; only the original finite alternatives select
 consumed or retained. The machine records that disposition and dependency-edge
 changes before converting or reporting the result. A readable result produces
 `Foreign.Returned(Foreign.Consumed(status))` or
-`Foreign.Returned(Foreign.Retained(status))`. An unreadable result produces
-`Foreign.ConversionFailed(error)` after recording; it cannot restore consumed
-State or replay teardown. Complete reply storage is admitted before entry;
+`Foreign.Returned(Foreign.Retained(status))`. Raw scalar results must always be
+readable; a contract declaring an unreadable scalar rejects before execution.
+A post-call extraction failure preserves the witnessed disposition and
+terminates without a raw reply, `ConversionFailed`, or source continuation.
+It cannot restore consumed State or replay teardown. The same retained owner
+remains subject to its separately admitted safe host destruction. Pre-call
+conversion refusal remains an ordinary `Foreign.ConversionFailed` with no C
+entry. Complete reply storage is admitted before entry;
 converting the admitted GNU64 scalar to mathematical `Int` requires no later
 allocation. Work or storage exhaustion remains terminal.
 

@@ -2041,6 +2041,12 @@ fn prepare_owner_status_outcomes(
             .ok_or_else(|| failure(ForeignContractReason::OutcomeCoverage, *outcome_span))?;
         let (readable, readability_span) = readability
             .ok_or_else(|| failure(ForeignContractReason::Readability, *outcome_span))?;
+        if !readable {
+            return Err(failure(
+                ForeignContractReason::Readability,
+                readability_span,
+            ));
+        }
         outcomes.push(PreparedOwnerStatusOutcome {
             predicates,
             consumes,
@@ -2532,6 +2538,12 @@ fn private_owner_call(
                         .saturating_add(5),
                     symbol.span,
                 )?;
+                if !outcome.readable {
+                    return Err(failure(
+                        ForeignContractReason::Readability,
+                        outcome.readability_span,
+                    ));
+                }
                 if !private_span_within(symbol.span, outcome.outcome_span)
                     || !private_span_within(outcome.outcome_span, outcome.disposition_span)
                     || !private_span_within(outcome.outcome_span, outcome.readability_span)
@@ -3712,7 +3724,7 @@ mod owner_normalization_tests {
         OWNED_BYTES.replace("    repr Size = size_t", "    repr Size = size_t\n    repr Status = signed(32)\n    const Held : Status = 7")
             .replace("Foreign.Disposition<Unit>", "Foreign.Disposition<Int>")
             .replace("abi (pointer(Address)) -> void", "abi (pointer(Address)) -> Status")
-            .replace("outcome otherwise { consumed 0 }", "output result as scalar\n        outcome result == Held { readable result, retained 0 }\n        outcome otherwise { unreadable result, consumed 0 }")
+            .replace("outcome otherwise { consumed 0 }", "output result as scalar\n        outcome result == Held { readable result, retained 0 }\n        outcome otherwise { readable result, consumed 0 }")
     }
 
     #[test]
@@ -3778,7 +3790,7 @@ mod owner_normalization_tests {
                 !same_prepared_library_parts(&original, &forged, &mut TypeWorkBudget::default())
                     .unwrap()
             );
-            if field >= 2 {
+            if field >= 1 {
                 assert!(restore_prepared_library(forged, &mut TypeWorkBudget::default()).is_err());
             }
         }
@@ -3788,8 +3800,10 @@ mod owner_normalization_tests {
     fn status_owner_outcomes_require_total_unambiguous_original_result_facts() {
         let text = status_owner_source();
         for malformed in [
-            text.replace("        outcome otherwise { unreadable result, consumed 0 }\n", ""),
-            text.replace("outcome otherwise { unreadable result, consumed 0 }", "outcome result == Held { readable result, consumed 0 }\n        outcome otherwise { unreadable result, consumed 0 }"),
+            text.replace("        outcome otherwise { readable result, consumed 0 }\n", ""),
+            text.replace("outcome otherwise { readable result, consumed 0 }", "outcome result == Held { readable result, consumed 0 }\n        outcome otherwise { readable result, consumed 0 }"),
+            text.replace("readable result, retained 0", "unreadable result, retained 0"),
+            text.replace("readable result, consumed 0", "unreadable result, consumed 0"),
             text.replace("readable result, retained 0", "retained 0"),
             text.replace("retained 0", "retained 1"),
             text.replace("result == Held", "result == One"),

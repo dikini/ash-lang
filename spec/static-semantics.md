@@ -1013,8 +1013,9 @@ teardown with `T = Int`. Scalar teardown requires `output result as scalar`,
 exactly one Current operand, and `retained_dependents block`. Its total finite
 alternatives test the raw Result against original same-representation declared
 literals, with one final `otherwise`. Each alternative gives exactly one
-consumed/retained fact for that Current position and one readable/unreadable
-Result fact. Repeated or contradictory selectors, missing coverage and
+consumed/retained fact for that Current position and exactly one readable
+Result fact; a bare scalar cannot be unreadable. Repeated or contradictory
+selectors, missing coverage and
 mismatched positions reject. Owner libraries retain these checked literal facts
 without an ordinary value binder; constant value publication, constant native
 operands and header evaluation remain outside this checkpoint. Byte-owner

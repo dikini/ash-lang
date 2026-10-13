@@ -2149,20 +2149,18 @@ fn eval_flow<'a>(
                         continue;
                     }
                     for (consumes, readable) in role.dispositions() {
+                        if !readable {
+                            return Err(invalid());
+                        }
                         let mut recorded = path.copy(work)?;
                         recorded.consumed = consumes;
-                        if readable {
-                            let disposition = facts.wrapped(
-                                codec.disposition_constructors()[usize::from(!consumes)],
-                                0,
-                                work,
-                            )?;
-                            let returned = facts.wrapped(call.returned, disposition, work)?;
-                            push(&mut results, (returned, recorded), work)?;
-                        } else {
-                            let refusal = facts.wrapped(call.conversion_failed, 0, work)?;
-                            push(&mut results, (refusal, recorded), work)?;
-                        }
+                        let disposition = facts.wrapped(
+                            codec.disposition_constructors()[usize::from(!consumes)],
+                            0,
+                            work,
+                        )?;
+                        let returned = facts.wrapped(call.returned, disposition, work)?;
+                        push(&mut results, (returned, recorded), work)?;
                     }
                 }
             }

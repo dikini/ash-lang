@@ -133,8 +133,9 @@ interpreted acquisition and one Current finish member of the same original
 owner, with that owner's original host destructor authenticated separately. The
 `void` or scalar-status finish and destruction contracts admit total consumed
 or retained dispositions and exact declared Current/Enclosing pointer operands.
-Scalar status alternatives retain their original checked literals, readability
-and disposition facts; they grant no ordinary constant value or operand.
+Scalar status alternatives retain their original checked literals, readable
+raw result and disposition facts; they grant no ordinary constant value or
+operand.
 Resource and native instances retain all ordered Type/EffectRow arguments,
 including an owned slot that is not first. The resource handle's value type
 uses a saturated nominal application for a Type-only family and the resource

@@ -3680,10 +3680,12 @@ main () = match perform Measure.call 42 {
                     .compare_native_expectations(expected, &mut TypeWorkBudget::default())
                     .is_err()
             );
-            // Well-formed foreign disposition/readability assertions are
+            // Well-formed foreign disposition assertions are
             // authenticated by the separately generated complete facts, not
             // inferred from structural Core validity or native observations.
-            if mutation >= 2 {
+            // A bare raw scalar is always readable, so that mutation also
+            // violates independently checked result shape.
+            if mutation >= 1 {
                 assert!(
                     corrupt
                         .restore_effect(&mut TypeWorkBudget::default())

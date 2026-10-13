@@ -90,9 +90,6 @@ struct TeardownReportSlots {
 #[derive(Debug)]
 struct StatusReportStorage {
     prepaid: crate::foreign::source_runtime::PrepaidScalarReport,
-    error: Location,
-    hidden_error: ConstructorId,
-    conversion_failed: ConstructorId,
 }
 
 /// Report and recording storage are prepared while the boundary still owns its
@@ -348,23 +345,11 @@ impl<'binding> OwnerTeardownPrepared<'binding> {
                 }
                 _ => OwnerPhaseFailure::Authority,
             })?;
-            Some((
-                prepaid,
-                invocation.hidden_error_constructor(),
-                invocation.conversion_failed_constructor(),
-            ))
+            Some(StatusReportStorage { prepaid })
         } else {
             None
         };
-        let first = reserve_slots(heap, work, if status.is_some() { 3 } else { 2 })?;
-        let status = status.map(
-            |(prepaid, hidden_error, conversion_failed)| StatusReportStorage {
-                prepaid,
-                error: first + 2,
-                hidden_error,
-                conversion_failed,
-            },
-        );
+        let first = reserve_slots(heap, work, 2)?;
         Ok(Self {
             invocation,
             recording: PrepaidOwnerRecord,
@@ -404,7 +389,7 @@ impl<'binding> OwnerTeardownPrepared<'binding> {
 
 impl<'binding> OwnerTeardownReady<'binding> {
     /// The unique guard holds the exact teardown sealed before acquisition.
-    /// Its unconditional void call consumes once and yields a non-Clone receipt.
+    /// Its original void/status call records disposition and yields a non-Clone receipt.
     pub(super) fn invoke(self) -> OwnerTeardownReturned<'binding> {
         let Self {
             invocation,
@@ -448,32 +433,15 @@ impl OwnerTeardownRecorded<'_> {
         self,
         heap: &mut [HeapCell],
     ) -> Result<OwnerTeardownReported, OwnerPhaseFailure> {
-        if !empty_slots(
-            heap,
-            self.slots.disposition,
-            if self.slots.status.is_some() { 3 } else { 2 },
-        ) {
+        if !empty_slots(heap, self.slots.disposition, 2) {
             return Err(OwnerPhaseFailure::HeapSlotInvariant);
         }
         let mut payload = Value::Unit;
         if !self.consumed.is_blocked() {
             match (self.status, self.slots.status) {
                 (Some(raw), Some(report)) => {
-                    if !raw.valid {
+                    if !raw.valid || !raw.readable {
                         return Err(OwnerPhaseFailure::Authority);
-                    }
-                    if !raw.readable {
-                        heap[report.error] = HeapCell::Constructor(report.hidden_error, None);
-                        heap[self.slots.returned] = HeapCell::Constructor(
-                            report.conversion_failed,
-                            Some(Value::Location(report.error)),
-                        );
-                        return Ok(OwnerTeardownReported {
-                            boundary: self.slots.boundary,
-                            activation: self.slots.activation,
-                            value: Value::Location(self.slots.returned),
-                            consumed: self.consumed,
-                        });
                     }
                     let value =
                         crate::foreign::source_runtime::widen_gnu_reply(raw.reply, report.prepaid)
@@ -1366,6 +1334,8 @@ pub(crate) mod post_record_test {
         pub(crate) teardown_recorded_with_zero_shared_work: bool,
         pub(crate) teardown_consumed_report_published: bool,
         pub(crate) teardown_preflight_used: Option<usize>,
+        pub(crate) teardown_recorded_retained: bool,
+        pub(crate) teardown_failed_without_report: bool,
     }
 
     #[derive(Clone, Copy)]
@@ -1384,6 +1354,7 @@ pub(crate) mod post_record_test {
     enum Phase {
         AcquireReturn,
         TeardownReturn,
+        TeardownExtraction,
         InitializedExtentPreflight,
         TeardownPreflight { prefix: usize, allowance: usize },
     }
@@ -1394,6 +1365,10 @@ pub(crate) mod post_record_test {
 
     pub(crate) fn observe_teardown<T>(inject: bool, run: impl FnOnce() -> T) -> (T, Observation) {
         observe_phase(inject, Phase::TeardownReturn, run)
+    }
+
+    pub(crate) fn observe_teardown_extraction<T>(run: impl FnOnce() -> T) -> (T, Observation) {
+        observe_phase(true, Phase::TeardownExtraction, run)
     }
 
     pub(crate) fn observe_teardown_preflight<T>(
@@ -1516,7 +1491,7 @@ pub(crate) mod post_record_test {
     }
 
     pub(super) fn teardown_returned<'binding>(
-        returned: OwnerTeardownReturned<'binding>,
+        mut returned: OwnerTeardownReturned<'binding>,
         work: &mut TypeWorkBudget,
     ) -> OwnerTeardownReturned<'binding> {
         if let Some(mut state) = STATE.get() {
@@ -1528,6 +1503,12 @@ pub(crate) mod post_record_test {
             ));
             if state.inject && state.phase == Phase::TeardownReturn {
                 *work = TypeWorkBudget::with_limit(0);
+            }
+            if state.inject && state.phase == Phase::TeardownExtraction {
+                // The original scalar selected and recorded disposition before
+                // this injection. A generated typed scalar cannot return Void.
+                returned.status.as_mut().unwrap().reply =
+                    crate::foreign::source_runtime::NativeScalarReply::Void;
             }
             STATE.set(Some(state));
         }
@@ -1554,6 +1535,7 @@ pub(crate) mod post_record_test {
             // contains original authority and no destructor callback.
             let _consumed_authority = recorded.consumed.owner();
             state.observation.teardown_recorded += 1;
+            state.observation.teardown_recorded_retained = recorded.consumed.is_retained();
             state.observation.teardown_recorded_with_zero_shared_work = work.remaining() == 0;
             STATE.set(Some(state));
         }
@@ -1578,6 +1560,11 @@ pub(crate) mod post_record_test {
                     heap.get(disposition),
                     Some(HeapCell::Constructor(actual, Some(Value::Unit | Value::Integer(_)))) if *actual == consumed
                 );
+            } else {
+                let (returned, disposition, _) = state.teardown_slots.unwrap();
+                state.observation.teardown_failed_without_report =
+                    empty_slots(heap, disposition, 2)
+                        && matches!(heap.get(returned), Some(HeapCell::Uninitialized));
             }
             STATE.set(Some(state));
         }

@@ -129,36 +129,6 @@ fn generated_status_owner_incomplete_host_teardown_does_not_retry() {
 }
 
 #[test]
-fn generated_status_owner_unreadable_reply_reports_after_consumption_without_host_retry() {
-    let owner = owner_with_scalar_teardown_result()
-        .replace(
-            "outcome otherwise { readable result, consumed 0 }",
-            "outcome otherwise { unreadable result, consumed 0 }",
-        )
-        .replace(
-            "Foreign.ConversionFailed(_) => Retained(state, 1)",
-            "Foreign.ConversionFailed(_) => ConsumedFailure(1)",
-        );
-    let native = include_str!("fixtures/source-owner/native_owner.c")
-        .replace(
-            "void ash_owner_release(void *raw)",
-            "int32_t ash_owner_release(void *raw)",
-        )
-        .replace(
-            "record(\"release\", owner->size);\n    free(owner);",
-            "record(\"release\", owner->size);\n    free(owner);\n    return 0;",
-        );
-    generated_owner_program_with_native(
-        &owner,
-        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Int, Int>\nmain () = resource Owner.Probe<{}, Fresh, {}> owner = 42 {\n    Owner.read owner\n}\n",
-        None,
-        "Completed(42, ConsumedError(1))",
-        "acquire:42\nrelease:42\n",
-        &native,
-    );
-}
-
-#[test]
 fn generated_status_dependent_retention_blocks_parent_before_c_and_host_recovers_in_order() {
     let owner = include_str!("fixtures/source-owner/dependent_owner.ash")
         .replace(
@@ -297,20 +267,27 @@ fn generated_status_owner_retained_discard_is_terminal_even_when_host_later_cons
 }
 
 #[test]
-fn source_status_unreadable_consumed_result_cannot_retain_revoked_state() {
-    let fixture = Fixture::new(
-        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Int, Int>\nmain () = resource Owner.Probe<{}, Fresh, {}> owner = 42 {\n    Owner.read owner\n}\n",
-    );
-    let owner = owner_with_scalar_teardown_result().replace(
-        "outcome otherwise { readable result, consumed 0 }",
-        "outcome otherwise { unreadable result, consumed 0 }",
-    );
-    fs::write(fixture.0.join("owner.ash"), owner).unwrap();
-    let failure = compile_path(fixture.configuration()).unwrap_err();
-    assert!(matches!(
-        failure.pipeline_failure(),
-        Some(ash::driver::PipelineFailure::Typing(_))
-    ));
+fn source_status_unreadable_scalar_contract_is_refused_before_execution() {
+    for disposition in ["consumed", "retained"] {
+        let fixture = Fixture::new(
+            "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Int, Int>\nmain () = resource Owner.Probe<{}, Fresh, {}> owner = 42 {\n    Owner.read owner\n}\n",
+        );
+        let owner = owner_with_scalar_teardown_result().replace(
+            "outcome otherwise { readable result, consumed 0 }",
+            &format!("outcome otherwise {{ unreadable result, {disposition} 0 }}"),
+        );
+        fs::write(fixture.0.join("owner.ash"), owner).unwrap();
+        let failure = compile_path(fixture.configuration()).unwrap_err();
+        let Some(ash::driver::PipelineFailure::Resolution(error)) = failure.pipeline_failure()
+        else {
+            panic!("expected scalar contract admission refusal: {failure:?}");
+        };
+        assert_eq!(error.reason, ash::resolve::ResolveReason::ForeignContract);
+        assert!(
+            error.to_string().contains("readable exactly once"),
+            "{error}"
+        );
+    }
 }
 
 #[test]
@@ -334,6 +311,21 @@ fn generated_status_owner_widens_full_unsigned_native_range_after_recording() {
         "acquire:42\nrelease:42\n",
         &native,
     );
+}
+
+#[test]
+fn source_status_readable_consumed_result_cannot_restore_revoked_state() {
+    let fixture = Fixture::new(
+        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Int, Int>\nmain () = resource Owner.Probe<{}, Fresh, {}> owner = 42 {\n    Owner.read owner\n}\n",
+    );
+    let owner = owner_with_scalar_teardown_result()
+        .replace("true => Consumed", "true => Retained(state, 1)");
+    fs::write(fixture.0.join("owner.ash"), owner).unwrap();
+    let failure = compile_path(fixture.configuration()).unwrap_err();
+    assert!(matches!(
+        failure.pipeline_failure(),
+        Some(ash::driver::PipelineFailure::Typing(_))
+    ));
 }
 
 #[test]

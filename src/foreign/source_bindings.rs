@@ -741,13 +741,6 @@ impl<'bindings> AdmittedSourceOwnerTeardownInvocation<'bindings> {
     pub(crate) fn result(&self) -> super::source_contract::PreparedAbiResult {
         self.symbol.symbol().result()
     }
-    pub(crate) fn conversion_failed_constructor(&self) -> ConstructorId {
-        self.symbol.call_codec().ids().conversion_failed
-    }
-    pub(crate) fn hidden_error_constructor(&self) -> ConstructorId {
-        ConstructorId::new(self.symbol.call_codec().ids().conversion_error, 0)
-    }
-
     pub(crate) fn owner(&self) -> &Arc<super::source_owner::CheckedForeignOwner> {
         self.symbol.owner().expect("admitted owner identity")
     }
