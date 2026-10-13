@@ -596,14 +596,15 @@ obligation.
 
 The admitted product source resource scope combines an Ash initializer, acquire
 and finish functions, private data `D`, and an associated ordinary effect handler.
-This checkpoint supports dependency-free opaque and initialized byte foreign
-owners with Type-kind
-owner formals, scalar acquisition operands, one pointer acquisition result, and
-an unconditional consuming `void` teardown whose sole operand is the exact
-Current state. Each foreign symbol still retains its complete ordered Type and
-EffectRow arguments; the native Type-only projection does not replace them.
-Dependent owners, additional teardown operands and native
-retained-status outcomes are unsupported executable shapes in this checkpoint.
+This checkpoint supports opaque and initialized byte foreign owners with declared
+dependencies and Type-kind owner formals. Acquisition admits scalar and exact
+declared enclosing-State operands with one pointer result. Unconditional `void`
+finish and host-destruction contracts admit consumed or retained dispositions,
+using the exact Current State and declared Enclosing pointer operands. Each
+foreign symbol still retains its complete ordered Type and EffectRow arguments;
+the native Type-only projection does not replace them. Scalar teardown operands,
+status-conditioned owner teardown and native access/copy windows remain
+unsupported executable shapes in this checkpoint.
 
 Before any Ash expression runs, program admission checks both acquisition and
 teardown bindings for every source resource scope against their exact original

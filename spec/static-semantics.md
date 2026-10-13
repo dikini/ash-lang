@@ -978,7 +978,7 @@ main () = true + 1
 ## Source foreign declarations
 
 Foreign declarations are passive. The admitted subset contains owner-free
-scalar calls and dependency-free owner contracts. Each library
+scalar calls and owner contracts with declared dependencies. Each library
 has exactly one profile, `"x86_64-unknown-linux-gnu"`. Scalar representations
 are signed or unsigned 8-, 32- or 64-bit integers, or `size_t`. These ABI
 representations introduce no ordinary fixed-width Ash integer type.
@@ -997,8 +997,9 @@ constructors. Its explicit owned position selects a `Type` formal. Canonical
 admission retains every original parameter identity, kind and defining origin;
 the current owner checkpoint rejects `EffectRow` and function-kind formals.
 An owner address uses an `opaque` or `bytes` representation and one authenticated
-teardown symbol from the same defining library. Dependency-bearing owners remain
-outside this checkpoint.
+teardown symbol from the same defining library. Declared dependencies retain
+their original owner roles and exact preceding state applications; a same-shaped
+or same-spelled state supplies no dependency authority.
 
 An acquisition symbol maps its pointer result to the exact saturated state
 family and returns the canonical `Foreign.Call<Foreign.Output<Foreign.Nullable<State>>>`
