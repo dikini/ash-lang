@@ -755,6 +755,7 @@ struct SourceResourceBoundary {
     key: ActivationKey,
     environment: Environment,
     owner: Option<crate::foreign::source_runtime::NativeOwnerGuard>,
+    dependencies: Vec<crate::foreign::source_runtime::NativeOwnerDependency>,
     phase: ProviderPhase,
     payload: Option<Value>,
     saved: Option<Value>,

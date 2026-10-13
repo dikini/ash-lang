@@ -1082,10 +1082,19 @@ it creates no activation. A foreign state family remains an ordinary opaque
 nominal application and is distinct from a resource instance's access family.
 
 The `owned` formal has kind `Type` and coincides with the foreign state family's
-declared owned argument. Input and private data cannot contain that identity or
-controlled native state. Every native interpretation must match the original
-state owner and its complete symbol arguments. The admitted list contains one
-acquisition and the same owner's teardown. A same-spelled symbol, swapped
+declared owned argument. Input and private data cannot contain the current owned
+identity, and borrowed owner identities must be declared dependencies. Private
+`D` cannot contain any current, provisional or enclosing native State token or
+view, including inside tuples, ordinary ADT wrappers or a generic application.
+This prohibition is checked in the defining header and after complete Type/Row
+specialization. A permitted local enclosing State in acquisition or finish does
+not authorize storing it in `D`. Ordinary declared-dependency access handles are
+distinct and remain subject to exact identity, liveness and revocation checks.
+Every native interpretation must match the original state owner and its complete
+symbol arguments. This profile's admitted list
+contains one acquisition and one Current finish member. The owner's original
+declared host destructor is authenticated separately, even when source finish
+selects a retaining member. A same-spelled symbol, swapped
 argument, ordinary state ADT or ordinary effect cannot replace those facts.
 Incorrect authored headers report `type.argument`.
 
@@ -1149,11 +1158,13 @@ Type or Row tags. The handle is a non-owning access value available inside the
 body. The report type, outward effects, evidence and stored dependencies cannot
 expose the fresh identity; an escape reports `type.resource-escape`.
 
-This implementation checkpoint executes dependency-free opaque and initialized
-byte owners with Type-only state-family arguments, one Current operand for a
-consuming `void` teardown and either report codec. Associated interfaces may
-contain multiple methods with the exact operation types and rows described
-above; method-local type parameters remain unsupported by this carrier.
+This implementation checkpoint executes opaque and initialized byte owners,
+including declared retained dependencies, with Type-only state-family arguments
+and either report codec. Its unconditional `void` finish and host-destruction
+contracts admit consumed or retained dispositions. A Current call can also be
+blocked before native entry while a retained dependent remains live. Associated
+interfaces may contain multiple methods with the exact operation types and rows
+described above; method-local type parameters remain unsupported by this carrier.
 Resource and symbol arguments retain their complete Type/Row vectors. The
 lifecycle checker admits native requests, ordinary constructor and product
 assembly, sequential bindings, matches and sealed byte calls. A byte call must
@@ -1183,11 +1194,22 @@ guard without inventing private data or a source finish input. A consumed
 both codecs. Normal `scope` return still reports `ConsumedError(E)`.
 
 Callable lifecycle helpers, source `given` forwarding, native access/copy windows,
-dependent ownership and quarantine remain unsupported. These are checkpoint
-restrictions, not additional language rules for all resources; the broader
-obligations remain in
+status-returning owner teardown and library migrations remain unsupported. These
+are checkpoint restrictions, not additional language rules for all resources;
+the broader obligations remain in
 [CP-0022](../docs/proposals/CP-0022-ash-authored-foreign-interfaces.md).
 Compiler-owned cell and native-buffer rules below remain unchanged.
+
+Dependency roles come from the original foreign owner declaration and are
+instantiated before introducing the new owned identity. Input and private-data
+traversal checks all typed access positions, including ordinary constructor
+payloads, against these exact preceding activations. A same-typed donor,
+undeclared identity or stale access is not a dependency witness. Retaining an
+owner revokes ordinary source access and protects the same transitive dependency
+closure. Required finish may obtain a physically live declared enclosing State;
+this does not restore ordinary access or grant another native operand role.
+Independent source, Core, specialization and image checks retain original header,
+forest and complete Type/Row correspondence.
 
 ## Effects
 

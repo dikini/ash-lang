@@ -46,6 +46,538 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn source_owner_retained_disposition_is_admitted() {
+    let fixture = Fixture::new(
+        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Unit, Int>\nmain () = resource Owner.Probe<{}, Fresh, {}> owner = 42 {\n    Owner.read owner\n}\n",
+    );
+    let owner = include_str!("fixtures/source-owner/owner.ash").replace(
+        "outcome otherwise { consumed 0 }",
+        "outcome otherwise { retained 0 }",
+    );
+    fs::write(fixture.0.join("owner.ash"), owner).unwrap();
+    compile_path(fixture.configuration())
+        .expect("declared retained native disposition must reach source-resource admission");
+}
+
+#[test]
+fn source_owner_declared_enclosing_dependency_is_admitted() {
+    let fixture = Fixture::new(
+        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Unit, Owner.Scope<Unit, Unit, Int>>\nmain () = resource Owner.Parent<ParentFresh> parent = 64 {\n    resource Owner.Child<ParentFresh, ChildFresh> child = (parent, 4) {\n        Owner.child_read child\n    }\n}\n",
+    );
+    fs::write(
+        fixture.0.join("owner.ash"),
+        include_str!("fixtures/source-owner/dependent_owner.ash"),
+    )
+    .unwrap();
+    compile_path(fixture.configuration()).unwrap_or_else(|error| {
+        panic!(
+            "declared enclosing dependency: {} {:?}",
+            error.reason_code(),
+            error.pipeline_failure()
+        );
+    });
+}
+
+fn dependent_owner_with_wrapped_access() -> String {
+    let owner = include_str!("fixtures/source-owner/dependent_owner.ash").replace(
+        "pub type Acquire<",
+        "pub type Wrapped<T> = Wrapped(T)\n\npub type Acquire<",
+    );
+    let start = owner.find("pub resource Child<P, R>").unwrap();
+    let child = owner[start..]
+        .replace("(Parent<P>, Int)", "(Wrapped<Parent<P>>, Int)")
+        .replace(
+            "acquire (parent, label)",
+            "acquire (Wrapped(parent), label)",
+        )
+        .replace(
+            "Acquired(state, (parent, label))",
+            "Acquired(state, (Wrapped(parent), label))",
+        )
+        .replace(
+            "finish (state, (parent, label))",
+            "finish (state, (Wrapped(parent), label))",
+        )
+        .replace(
+            "handlers (state, (parent, label))",
+            "handlers (state, (Wrapped(parent), label))",
+        );
+    format!("{}{child}", &owner[..start])
+}
+
+#[test]
+fn source_owner_wrapped_access_dependency_is_admitted() {
+    let fixture = Fixture::new(
+        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Unit, Owner.Scope<Unit, Unit, Int>>\nmain () = resource Owner.Parent<ParentFresh> parent = 64 {\n    resource Owner.Child<ParentFresh, ChildFresh> child = (Owner.Wrapped parent, 4) {\n        Owner.child_read child\n    }\n}\n",
+    );
+    fs::write(
+        fixture.0.join("owner.ash"),
+        dependent_owner_with_wrapped_access(),
+    )
+    .unwrap();
+    compile_path(fixture.configuration()).unwrap_or_else(|error| {
+        panic!(
+            "wrapped access dependency: {} {:?}",
+            error.reason_code(),
+            error.pipeline_failure()
+        );
+    });
+}
+
+#[test]
+fn source_owner_rejects_enclosing_native_state_in_private_data() {
+    let original = include_str!("fixtures/source-owner/dependent_owner.ash");
+    let start = original.find("pub resource Child<P, R>").unwrap();
+    let child = original[start..]
+        .replace("Parent<P>", "ParentState<P>")
+        .replace(
+            "        let dependency = perform ParentOps<ParentState<P>, ParentState<P>>.borrow parent\n",
+            "",
+        )
+        .replace("(dependency, label)", "(parent, label)")
+        .replace("(state, dependency)", "(state, parent)");
+    let tuple = format!("{}{child}", &original[..start]);
+    let fixture = Fixture::new("import owner as Owner\nmain : Unit -> Int\nmain () = 42\n");
+    let prefix = original[..start].replace(
+        "pub type Acquire<",
+        "pub type Wrapped<T> = Wrapped(T)\n\npub type Acquire<",
+    );
+    let wrapped_child = child
+        .replace("(ParentState<P>, Int)", "(Wrapped<ParentState<P>>, Int)")
+        .replace(
+            "acquire (parent, label)",
+            "acquire (Wrapped(parent), label)",
+        )
+        .replace(
+            "finish (state, (parent, label))",
+            "finish (state, (Wrapped(parent), label))",
+        )
+        .replace(
+            "handlers (state, (parent, label))",
+            "handlers (state, (Wrapped(parent), label))",
+        )
+        .replace(
+            "Acquired(state, (parent, label))",
+            "Acquired(state, (Wrapped parent, label))",
+        );
+    let wrapped = format!("{prefix}{wrapped_child}");
+    let hidden = original[..start].replace(
+        "pub type Acquire<",
+        "pub type Hidden<P> = Hidden(ParentState<P>)\n\npub type Acquire<",
+    );
+    let hidden_child = child
+        .replace("(ParentState<P>, Int)", "(Hidden<P>, Int)")
+        .replace("acquire (parent, label)", "acquire (Hidden(parent), label)")
+        .replace(
+            "finish (state, (parent, label))",
+            "finish (state, (Hidden(parent), label))",
+        )
+        .replace(
+            "handlers (state, (parent, label))",
+            "handlers (state, (Hidden(parent), label))",
+        )
+        .replace(
+            "Acquired(state, (parent, label))",
+            "Acquired(state, (Hidden parent, label))",
+        );
+    let hidden = format!("{hidden}{hidden_child}");
+    for (position, owner) in [tuple, wrapped, hidden].into_iter().enumerate() {
+        fs::write(fixture.0.join("owner.ash"), owner).unwrap();
+        let failure = match compile_path(fixture.configuration()) {
+            Err(failure) => failure,
+            Ok(_) => panic!("an enclosing native State cannot become ordinary private D"),
+        };
+        assert_eq!(failure.reason_code(), "type.argument");
+        println!(
+            "private native State refusal {position}: {:?}",
+            failure.pipeline_failure()
+        );
+    }
+    // The same declared dependency still admits ordinary handles in D and
+    // locally authenticated native State in acquisition and finish.
+    fs::write(fixture.0.join("owner.ash"), original).unwrap();
+    compile_path(fixture.configuration()).expect("local lifecycle State is not private storage");
+}
+
+#[test]
+fn source_owner_rejects_undeclared_dependency_inside_ordinary_adt_payload() {
+    let owner = dependent_owner_with_wrapped_access();
+    let start = owner.find("pub resource Child<P, R>").unwrap();
+    let child = owner[start..]
+        .replace("Child<P, R>", "Child<P, Q, R>")
+        .replace(
+            "(Wrapped<Parent<P>>, Int)",
+            "(Wrapped<Parent<P>>, Wrapped<Parent<Q>>, Int)",
+        )
+        .replace(
+            "(Wrapped(parent), label)",
+            "(Wrapped(parent), Wrapped(other), label)",
+        );
+    let fixture = Fixture::new(
+        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Unit, Owner.Scope<Unit, Unit, Int>>\nmain () = resource Owner.Parent<First> first = 64 {\n    resource Owner.Parent<Second> second = 65 {\n        let child_report = resource Owner.Child<First, Second, ChildFresh> child = (Owner.Wrapped first, Owner.Wrapped second, 4) {\n            Owner.child_read child\n        }\n        0\n    }\n}\n",
+    );
+    let owner = format!("{}{child}", &owner[..start]);
+    fs::write(fixture.0.join("owner.ash"), &owner).unwrap();
+    let failure = match compile_path(fixture.configuration()) {
+        Err(failure) => failure,
+        Ok(_) => panic!("an ordinary ADT cannot add an undeclared owner dependency"),
+    };
+    assert_eq!(failure.reason_code(), "type.argument");
+    println!(
+        "undeclared wrapped dependency refusal: {} {:?}",
+        failure.reason_code(),
+        failure.pipeline_failure()
+    );
+    // Keep the same source payload/patterns/provider, while making Q a genuine
+    // declared owner role. This positive control isolates the dependency census
+    // from ordinary ADT shape or a malformed source method signature.
+    let declared = owner
+        .replace("ChildState<P, R>", "ChildState<P, Q, R>")
+        .replace("retains P", "retains P, Q")
+        .replace("ChildAllocate<P, R>", "ChildAllocate<P, Q, R>")
+        .replace("ChildHold<P, R>", "ChildHold<P, Q, R>")
+        .replace("ChildFree<P, R>", "ChildFree<P, Q, R>");
+    fs::write(fixture.0.join("owner.ash"), declared).unwrap();
+    compile_path(fixture.configuration())
+        .expect("declared ordinary ADT access roles admit the same well-typed payload");
+}
+
+#[test]
+fn generated_dependent_non_nearest_same_family_owner_keeps_exact_parent_activation() {
+    generated_owner_program_with_native(
+        include_str!("fixtures/source-owner/dependent_owner.ash"),
+        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Unit, Owner.Scope<Unit, Unit, Owner.Scope<Unit, Unit, Int>>>\nmain () = resource Owner.Parent<First> first = 64 {\n    resource Owner.Parent<Second> second = 65 {\n        resource Owner.Child<First, ChildFresh> child = (first, 4) {\n            Owner.child_read child\n        }\n    }\n}\n",
+        None,
+        "Completed(Completed(Completed(4, RetainedError(())), Closed), RetainedError(()))",
+        "parent-acquire:64\nparent-acquire:65\nchild-acquire:4\nchild-retain:4\nparent-release:65\nchild-release:4\nparent-final-byte:99\nparent-release:64\n",
+        include_str!("fixtures/source-owner/native_dependent_owner.c"),
+    );
+}
+
+#[test]
+fn generated_dependent_wrapped_access_keeps_native_views_out_of_private_data() {
+    generated_owner_program_with_native(
+        &dependent_owner_with_wrapped_access(),
+        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Unit, Owner.Scope<Unit, Unit, Int>>\nmain () = resource Owner.Parent<ParentFresh> parent = 64 {\n    resource Owner.Child<ParentFresh, ChildFresh> child = (Owner.Wrapped parent, 4) {\n        Owner.child_read child\n    }\n}\n",
+        None,
+        "Completed(Completed(4, RetainedError(())), RetainedError(()))",
+        "parent-acquire:64\nchild-acquire:4\nchild-retain:4\nchild-release:4\nparent-final-byte:99\nparent-release:64\n",
+        include_str!("fixtures/source-owner/native_dependent_owner.c"),
+    );
+}
+
+#[test]
+fn generated_dependent_retained_child_blocks_parent_until_host_destruction() {
+    generated_owner_program_with_native(
+        include_str!("fixtures/source-owner/dependent_owner.ash"),
+        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Unit, Owner.Scope<Unit, Unit, Int>>\nmain () = resource Owner.Parent<ParentFresh> parent = 64 {\n    resource Owner.Child<ParentFresh, ChildFresh> child = (parent, 4) {\n        Owner.child_read child\n    }\n}\n",
+        None,
+        "Completed(Completed(4, RetainedError(())), RetainedError(()))",
+        "parent-acquire:64\nchild-acquire:4\nchild-retain:4\nchild-release:4\nparent-final-byte:99\nparent-release:64\n",
+        include_str!("fixtures/source-owner/native_dependent_owner.c"),
+    );
+}
+
+fn dependent_owner_with_consumed_finish() -> String {
+    include_str!("fixtures/source-owner/dependent_owner.ash")
+        .replace(
+            "interpret ChildAllocate<P, R>, ChildHold<P, R>",
+            "interpret ChildAllocate<P, R>, ChildFree<P, R>",
+        )
+        .replace(
+            "match perform ChildHold<P, R>.call",
+            "match perform ChildFree<P, R>.call",
+        )
+}
+
+#[test]
+fn generated_transitive_retention_keeps_pending_dependency_cleanup_and_host_order() {
+    let owner = include_str!("fixtures/source-owner/dependent_owner.ash")
+        .replace("repr ParentBytes = bytes", "repr ParentBytes = opaque")
+        .replace(
+            "readable result, initialized_bytes result from 0",
+            "readable result",
+        )
+        .replace("    read : Access -> Int ! {ParentOps<Access, State>}\n", "")
+        .replace("    read : Access -> Int\n", "")
+        .replace("        read access => resume data\n", "")
+        .replace("        let marked = Foreign.byte_write (state, 0, 99)\n", "")
+        .replace("ChildHold<P, R>", "ChildFree<P, R>")
+        .replace("pub interface ChildProvider<Access>", "pub interface ChildProvider<Access, State>")
+        .replace("ChildOps<Access>", "ChildOps<Access, State>")
+        .replace("ChildProvider<Child<P, R>>", "ChildProvider<Child<P, R>, ChildState<P, R>>")
+        .replace("ChildOps<Child<P, R>>", "ChildOps<Child<P, R>, ChildState<P, R>>")
+        .replace("    child_read : Access -> Int ! {ChildOps<Access, State>}", "    child_borrow : Access -> State ! {ChildOps<Access, State>}\n    child_read : Access -> Int ! {ChildOps<Access, State>}")
+        .replace("    child_read : Access -> Int\n", "    child_borrow : Access -> State\n    child_read : Access -> Int\n")
+        .replace("        child_read access => resume label", "        child_borrow access => resume state\n        child_read access => resume label")
+        .replace("    symbol ParentAllocate<P>", concat!(
+            "    owner GrandState<P, R, G> {\n        representation Address\n        owned G\n        retains R\n        teardown GrandFree\n    }\n",
+            "    symbol GrandAllocate<P, R, G> : (ChildState<P, R>, Int) -> Foreign.Call<Foreign.Output<Foreign.Nullable<GrandState<P, R, G>>>> {\n",
+            "        name \"ash_grand_acquire\"\n        abi (pointer(Address), Size) -> pointer(Address)\n        operand 0 from 0 enclosing\n        operand 1 from 1 scalar\n        output result as owner(GrandState<P, R, G>)\n        outcome result nonnull { readable result }\n        outcome otherwise { readable result }\n    }\n",
+            "    symbol GrandFree<P, R, G> : (GrandState<P, R, G>, ChildState<P, R>) -> Foreign.Call<Foreign.Disposition<Unit>> {\n",
+            "        name \"ash_grand_release\"\n        abi (pointer(Address), pointer(Address)) -> void\n        operand 0 from 0 current\n        operand 1 from 1 enclosing\n        retained_dependents block\n        outcome otherwise { consumed 0 }\n    }\n",
+            "    symbol GrandHold<P, R, G> : (GrandState<P, R, G>, ChildState<P, R>) -> Foreign.Call<Foreign.Disposition<Unit>> {\n",
+            "        name \"ash_grand_hold\"\n        abi (pointer(Address), pointer(Address)) -> void\n        operand 0 from 0 current\n        operand 1 from 1 enclosing\n        retained_dependents block\n        outcome otherwise { retained 0 }\n    }\n",
+            "    symbol ParentAllocate<P>"
+        ));
+    // Child finish is blocked by the live grandchild; its ordinary consuming
+    // symbol and the separate host destructor therefore share one contract.
+    // Drop the now-duplicate unused symbol, not any lifecycle obligation.
+    let mut owner = owner;
+    let last = owner.rfind("    symbol ChildFree<P, R>").unwrap();
+    let end = last + owner[last..].find("    }\n").unwrap() + "    }\n".len();
+    owner.replace_range(last..end, "");
+    let owner = owner
+        .replace(
+            "    child_read : Access -> Int ! {ChildOps<Access, State>}\n",
+            "",
+        )
+        .replace("    child_read : Access -> Int\n", "")
+        .replace("        child_read access => resume label\n", "");
+    let owner = format!(
+        "{owner}\n{}",
+        include_str!("fixtures/source-owner/grandchild_resource.ash")
+    );
+    let mut owner = owner;
+    for indent in ["        ", "            "] {
+        owner = owner.replace(
+            &format!("{indent}Foreign.Returned(Foreign.Readable(Foreign.Null)) => Refused ()\n{indent}Foreign.Returned(Foreign.Unreadable) => Refused ()\n{indent}Foreign.ConversionFailed(_) => Refused ()"),
+            &format!("{indent}_ => Refused ()"),
+        ).replace(
+            &format!("{indent}Foreign.Returned(Foreign.Retained(())) => Retained(state, ())\n{indent}Foreign.Returned(Foreign.BlockedDependent) => Retained(state, ())\n{indent}Foreign.ConversionFailed(_) => Retained(state, ())"),
+            &format!("{indent}_ => Retained(state, ())"),
+        );
+    }
+    let native = include_str!("fixtures/source-owner/native_dependent_owner.c")
+        .replace(
+            "    struct ash_parent *parent;",
+            "    struct ash_parent *parent;\n    size_t children;",
+        )
+        .replace(
+            "    child->parent = parent;",
+            "    child->parent = parent;\n    child->children = 0;",
+        )
+        .replace(
+            "    record(\"child-release\", child->identity);",
+            "    assert(child->children == 0);\n    record(\"child-release\", child->identity);",
+        );
+    let native = format!(
+        "{native}\n{}",
+        include_str!("fixtures/source-owner/native_grandchild.c")
+    );
+    generated_owner_execution_with_native(
+        &owner,
+        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Unit, Owner.Scope<Unit, Unit, Owner.Scope<Unit, Unit, Int>>>\nmain () = resource Owner.Parent<P> parent = 64 {\n    resource Owner.Child<P, R> child = (parent, 4) {\n        resource Owner.Grand<P, R, G> grand = (child, 5) {\n            5\n        }\n    }\n}\n",
+        None,
+        Ok(
+            "Completed(Completed(Completed(5, RetainedError(())), RetainedError(())), RetainedError(()))",
+        ),
+        "parent-acquire:64\nchild-acquire:4\ngrand-acquire:5\ngrand-retain:5\ngrand-release:5\nchild-release:4\nparent-final-byte:0\nparent-release:64\n",
+        &native,
+    );
+}
+
+fn pending_sibling_owner() -> String {
+    let original = include_str!("fixtures/source-owner/dependent_owner.ash");
+    let split = original.find("pub interface ChildProvider").unwrap();
+    let sibling = original[split..]
+        .replace("ChildProvider", "SiblingProvider")
+        .replace("ChildOps", "SiblingOps")
+        .replace("Child<P, R>", "Sibling<P, R>")
+        .replace("child_read", "sibling_read")
+        .replace("ChildHold<P, R>", "ChildFree<P, R>");
+    format!("{original}\n{sibling}")
+        .replace("repr ParentBytes = bytes", "repr ParentBytes = opaque")
+        .replace(
+            "readable result, initialized_bytes result from 0",
+            "readable result",
+        )
+        .replace(
+            "    read : Access -> Int ! {ParentOps<Access, State>}\n",
+            "",
+        )
+        .replace("    read : Access -> Int\n", "")
+        .replace("        read access => resume data\n", "")
+        .replace(
+            "        let marked = Foreign.byte_write (state, 0, 99)\n",
+            "",
+        )
+}
+
+#[test]
+fn generated_retained_sibling_keeps_pending_enclosing_state_cleanup_live() {
+    let owner = pending_sibling_owner();
+    generated_owner_program_with_native(
+        &owner,
+        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Unit, Owner.Scope<Unit, Unit, Owner.Scope<Unit, Unit, Int>>>\nmain () = resource Owner.Parent<P> parent = 64 {\n    resource Owner.Sibling<P, R> sibling = (parent, 4) {\n        resource Owner.Child<P, T> child = (parent, 5) {\n            5\n        }\n    }\n}\n",
+        None,
+        "Completed(Completed(Completed(5, RetainedError(())), Closed), RetainedError(()))",
+        "parent-acquire:64\nchild-acquire:4\nchild-acquire:5\nchild-retain:5\nchild-release:4\nparent-final-byte:0\nchild-release:5\nparent-final-byte:0\nparent-release:64\n",
+        include_str!("fixtures/source-owner/native_dependent_owner.c"),
+    );
+}
+
+#[test]
+fn generated_retained_sibling_cleanup_cannot_restore_ordinary_parent_read() {
+    let owner = pending_sibling_owner()
+        .replace("    borrow : Access -> State ! {ParentOps<Access, State>}\n", "    borrow : Access -> State ! {ParentOps<Access, State>}\n    read : Access -> Int ! {ParentOps<Access, State>}\n")
+        .replace("    borrow : Access -> State\n", "    borrow : Access -> State\n    read : Access -> Int\n")
+        .replace("        borrow access => resume state\n", "        borrow access => resume state\n        read access => resume data\n");
+    let split = owner.find("pub resource Sibling<P, R>").unwrap();
+    let sibling = owner[split..].replace(
+        "    finish (state, (parent, label)) => {\n",
+        "    finish (state, (parent, label)) => {\n        let forbidden = perform ParentOps<Parent<P>, ParentState<P>>.read parent\n",
+    );
+    let owner = format!("{}{sibling}", &owner[..split]);
+    // The extra ordinary operation is the discriminating negative. Equivalent
+    // refusal/retention alternatives keep its independent fixture within the
+    // normal cumulative image allowance without changing any native contract.
+    let mut owner = owner;
+    for indent in ["        ", "            "] {
+        owner = owner.replace(
+            &format!("{indent}Foreign.Returned(Foreign.Readable(Foreign.Null)) => Refused ()\n{indent}Foreign.Returned(Foreign.Unreadable) => Refused ()\n{indent}Foreign.ConversionFailed(_) => Refused ()"),
+            &format!("{indent}_ => Refused ()"),
+        ).replace(
+            &format!("{indent}Foreign.Returned(Foreign.Retained(())) => Retained(state, ())\n{indent}Foreign.Returned(Foreign.BlockedDependent) => Retained(state, ())\n{indent}Foreign.ConversionFailed(_) => Retained(state, ())"),
+            &format!("{indent}_ => Retained(state, ())"),
+        );
+    }
+    // A refused ordinary read unwinds the still-unquarantined sibling guard.
+    // Its host destructor may run before the retained child: neither sibling
+    // depends on the other, and their shared parent remains protected.
+    generated_owner_execution_with_native(
+        &owner,
+        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Unit, Owner.Scope<Unit, Unit, Owner.Scope<Unit, Unit, Int>>>\nmain () = resource Owner.Parent<P> parent = 64 {\n    resource Owner.Sibling<P, R> sibling = (parent, 4) {\n        resource Owner.Child<P, T> child = (parent, 5) {\n            5\n        }\n    }\n}\n",
+        None,
+        Err("executable foreign binding or conversion contract failed"),
+        "parent-acquire:64\nchild-acquire:4\nchild-acquire:5\nchild-retain:5\nchild-release:4\nparent-final-byte:0\nchild-release:5\nparent-final-byte:0\nparent-release:64\n",
+        include_str!("fixtures/source-owner/native_dependent_owner.c"),
+    );
+}
+
+#[test]
+fn generated_dependent_consumed_child_restores_parent_close_readiness() {
+    generated_owner_program_with_native(
+        &dependent_owner_with_consumed_finish(),
+        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Unit, Int>\nmain () = resource Owner.Parent<ParentFresh> parent = 64 {\n    let child_report = resource Owner.Child<ParentFresh, ChildFresh> child = (parent, 4) {\n        Owner.child_read child\n    }\n    let state : Owner.ParentState<ParentFresh> = Owner.borrow parent\n    64\n}\n",
+        None,
+        "Completed(64, Closed)",
+        "parent-acquire:64\nchild-acquire:4\nchild-release:4\nparent-final-byte:0\nparent-release:64\n",
+        include_str!("fixtures/source-owner/native_dependent_owner.c"),
+    );
+}
+
+#[test]
+fn generated_dependent_retained_child_revokes_ordinary_parent_access() {
+    generated_owner_execution_with_native(
+        include_str!("fixtures/source-owner/dependent_owner.ash"),
+        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Unit, Int>\nmain () = resource Owner.Parent<ParentFresh> parent = 64 {\n    let child_report = resource Owner.Child<ParentFresh, ChildFresh> child = (parent, 4) {\n        Owner.child_read child\n    }\n    let state : Owner.ParentState<ParentFresh> = Owner.borrow parent\n    64\n}\n",
+        None,
+        Err("runtime machine control state is inconsistent"),
+        "parent-acquire:64\nchild-acquire:4\nchild-retain:4\nchild-release:4\nparent-final-byte:0\nparent-release:64\n",
+        include_str!("fixtures/source-owner/native_dependent_owner.c"),
+    );
+}
+
+#[test]
+fn generated_dependent_incomplete_host_destruction_does_not_close_parent_or_retry() {
+    let owner = include_str!("fixtures/source-owner/dependent_owner.ash").replace(
+        "name \"ash_child_release\"\n        abi (pointer(Address), pointer(ParentBytes)) -> void\n        operand 0 from 0 current\n        operand 1 from 1 enclosing\n        retained_dependents block\n        outcome otherwise { consumed 0 }",
+        "name \"ash_child_release\"\n        abi (pointer(Address), pointer(ParentBytes)) -> void\n        operand 0 from 0 current\n        operand 1 from 1 enclosing\n        retained_dependents block\n        outcome otherwise { retained 0 }",
+    );
+    let native = include_str!("fixtures/source-owner/native_dependent_owner.c").replace(
+        "record(\"child-release\", child->identity);\n    record(\"parent-final-byte\", parent->bytes[0]);\n    parent->children -= 1;\n    free(child);",
+        "record(\"host-child-retain\", child->identity);",
+    );
+    generated_owner_execution_with_native(
+        &owner,
+        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Unit, Owner.Scope<Unit, Unit, Int>>\nmain () = resource Owner.Parent<ParentFresh> parent = 64 {\n    resource Owner.Child<ParentFresh, ChildFresh> child = (parent, 4) {\n        Owner.child_read child\n    }\n}\n",
+        None,
+        Err("source resource completion failed"),
+        "parent-acquire:64\nchild-acquire:4\nchild-retain:4\nhost-child-retain:4\n",
+        &native,
+    );
+}
+
+#[test]
+fn generated_dependent_discard_retained_closure_is_terminal_before_outer_finish() {
+    // The discarded child still uses the scope codec. Its parent report is
+    // never observed; acquired_only removes unused outer report metadata while
+    // preserving required parent lifetime/completion and the fixed image budget.
+    let owner = include_str!("fixtures/source-owner/dependent_owner.ash");
+    let split = owner.find("pub interface ChildProvider").unwrap();
+    let parent = owner[..split]
+        .replace(
+            "pub type Acquire<",
+            "pub type Outcome<T> = Success(T)\n    | Failure(Unit)\n\npub type Acquire<",
+        )
+        .replace(
+            "result Scope<Unit, Unit, Answer> for <Answer>",
+            "result Outcome<Answer> for <Answer>",
+        )
+        .replace("codec scope", "codec acquired_only")
+        .replace(
+            "    read : Access -> Int ! {ParentOps<Access, State>}\n",
+            "",
+        )
+        .replace("    read : Access -> Int\n", "")
+        .replace("        read access => resume data\n", "")
+        .replace(
+            "        let marked = Foreign.byte_write (state, 0, 99)\n",
+            "",
+        );
+    let owner = format!("{parent}{}", &owner[split..]);
+    generated_owner_execution_with_native(
+        &owner,
+        "import owner as Owner\neffect Pause {\n    pause : Unit -> Unit\n}\nmain : Unit -> Int\nmain () = handle {\n    let abandoned = resource Owner.Parent<ParentFresh> parent = 64 {\n        resource Owner.Child<ParentFresh, ChildFresh> child = (parent, 4) {\n            let paused = perform Pause.pause ()\n            123\n        }\n    }\n    111\n} with Pause {\n    pause ignored => {\n        let closed = discard\n        84\n    }\n}\n",
+        None,
+        Err("source resource completion failed"),
+        "parent-acquire:64\nchild-acquire:4\nchild-retain:4\nchild-release:4\nparent-final-byte:0\nparent-release:64\n",
+        include_str!("fixtures/source-owner/native_dependent_owner.c"),
+    );
+}
+
+fn owner_with_retained_finish() -> String {
+    include_str!("fixtures/source-owner/owner.ash")
+        .replace("    symbol Free<", "    symbol Hold<Before : EffectRow, R, After : EffectRow> : State<R> -> Foreign.Call<Foreign.Disposition<Unit>> {\n        name \"ash_owner_hold\"\n        abi (pointer(Address)) -> void\n        operand 0 from 0 current\n        retained_dependents block\n        outcome otherwise { retained 0 }\n    }\n    symbol Free<")
+        .replace("interpret Allocate<{| Before}, R, {| After}>, Free<", "interpret Allocate<{| Before}, R, {| After}>, Hold<")
+        .replace("match perform Free<", "match perform Hold<")
+}
+
+fn native_with_retained_finish() -> String {
+    format!(
+        "{}\nvoid ash_owner_hold(struct ash_owner *owner) {{ record(\"retain\", owner->size); }}\n",
+        include_str!("fixtures/source-owner/native_owner.c")
+    )
+}
+
+#[test]
+fn generated_source_owner_retained_finish_uses_separate_host_destructor() {
+    let owner = owner_with_retained_finish();
+    let native = native_with_retained_finish();
+    generated_owner_program_with_native(
+        &owner,
+        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Unit, Int>\nmain () = resource Owner.Probe<{}, Fresh, {}> owner = 42 {\n    Owner.read owner\n}\n",
+        None,
+        "Completed(42, RetainedError(()))",
+        "acquire:42\nretain:42\nrelease:42\n",
+        &native,
+    );
+}
+
+#[test]
+fn generated_source_owner_retained_failure_on_discard_is_terminal() {
+    generated_owner_execution_with_native(
+        &owner_with_retained_finish(),
+        "import owner as Owner\neffect Pause {\n    pause : Unit -> Unit\n}\nmain : Unit -> Int\nmain () = handle {\n    let abandoned = resource Owner.Probe<{}, Fresh, {}> owner = 42 {\n        let paused = perform Pause.pause ()\n        Owner.read owner\n    }\n    111\n} with Pause {\n    pause ignored => {\n        let closed = discard\n        84\n    }\n}\n",
+        None,
+        Err("source resource completion failed"),
+        "acquire:42\nretain:42\nrelease:42\n",
+        &native_with_retained_finish(),
+    );
+}
+
+#[test]
 fn source_owner_outward_capture_and_resume_is_admitted() {
     let fixture = Fixture::new(
         "import owner as Owner\neffect Pause {\n    pause : Unit -> Unit\n}\nmain : Unit -> Owner.Scope<Unit, Unit, Int>\nmain () = handle (resource Owner.Probe<{}, Fresh, {}> owner = 42 {\n    let paused = perform Pause.pause ()\n    Owner.read owner\n}) with Pause {\n    pause ignored => resume ()\n}\n",
@@ -753,6 +1285,14 @@ fn generated_owner_execution_with_native(
         thread::sleep(Duration::from_millis(20));
     }
     let output = child.wait_with_output().unwrap();
+    // Preserve the native-entry/cleanup frontier even when the child refuses
+    // before the result assertions and fixture cleanup removes its files.
+    let observed_trace = match fs::read_to_string(&trace) {
+        Ok(trace) => trace,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => panic!("cannot read native trace: {error}"),
+    };
+    println!("owner/native actual trace:\n{observed_trace}");
     match expected_result {
         Ok(expected) => {
             assert!(
@@ -784,6 +1324,6 @@ fn generated_owner_execution_with_native(
             "refused extents must not enter native owner code"
         );
     } else {
-        assert_eq!(fs::read_to_string(trace).unwrap(), expected_trace);
+        assert_eq!(observed_trace, expected_trace);
     }
 }

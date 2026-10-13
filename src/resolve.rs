@@ -21377,6 +21377,27 @@ impl Resolver {
             )
         })?;
         for id in nominal_ids {
+            // A codec payload may borrow an enclosing source access family.
+            // Its original header/kind is passive metadata, not an ordinary
+            // ADT constructor family and not native execution authority.
+            if let Some((spelling, dependency)) = summary
+                .source_resource_by_family(id, &mut self.type_work)
+                .map_err(|failure| imported_fact_comparison_error(failure, span))?
+            {
+                self.type_work.charge(spelling.len()).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "source resource codec dependency retention exceeded its budget",
+                    )
+                })?;
+                self.retain_source_resource_type(
+                    Self::clone_imported_string_after_precharge(spelling, span)?,
+                    Arc::clone(dependency),
+                    span,
+                )?;
+                continue;
+            }
             let owner = Self::scheme_nominal_fact(summary, id, span)?;
             if owner.access == ImportedTypeAccess::Transparent {
                 self.retain_imported_constructor_family(owner, summary, span)?;

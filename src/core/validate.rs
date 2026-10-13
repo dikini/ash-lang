@@ -3616,6 +3616,124 @@ pub(crate) fn check_source_resource_structure(
     result
 }
 
+/// A single reconstruction may contain several original forests sharing the
+/// same immutable registry. This private receipt retains the complete registry
+/// proof and exact source objects; it never admits a forest or executable node.
+#[derive(Default)]
+pub(crate) struct SourceResourceStructureSession {
+    admitted: Option<OriginalTemplateRegistryAdmission>,
+}
+
+struct OriginalTemplateRegistryAdmission {
+    registry: std::sync::Arc<crate::resolved::ResolvedRegistry>,
+    sources: HashMap<SourceId, *const SourceFile>,
+    modules: HashMap<ModuleId, SourceId>,
+    parameters: RegistryParameterOwners,
+    abstract_nominals: HashSet<crate::types::NominalTypeId>,
+}
+
+impl SourceResourceStructureSession {
+    pub(crate) fn check(
+        &mut self,
+        program: &UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
+        original: &std::sync::Arc<crate::resolved::SourceResourceTypeFact>,
+        answer: bool,
+        sources: &[&SourceFile],
+        module_sources: &[(ModuleId, SourceId)],
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
+        // Registry parameter ordering can depend on lexical method owners and
+        // their graph-local provider instances. Those contexts keep their full
+        // fresh registry check; the receipt carries no lexical exemption.
+        if !program.method_evidence.lexical_owners().is_empty() {
+            return check_source_resource_structure(
+                program,
+                original,
+                answer,
+                sources,
+                module_sources,
+                work,
+            );
+        }
+        let mut validator = Validator::new_modules(program, sources, module_sources)?;
+        if !program
+            .registry
+            .source_resource_fact(original.id)
+            .is_some_and(|registered| std::sync::Arc::ptr_eq(registered, original))
+        {
+            return Err(ValidationError::new(ValidationReason::Registry, None));
+        }
+        validator.source_resource_context = SourceResourceValidationContext::OriginalTemplate {
+            resource: original.id,
+            answer,
+        };
+        let capacity = validator.type_work_limit;
+        let prefix = capacity - work.remaining().min(capacity);
+        validator.type_work.set(prefix);
+        let result = (|| {
+            if let Some(admitted) = &self.admitted {
+                validator.charge_type_work(1 + sources.len() + module_sources.len())?;
+                if !std::sync::Arc::ptr_eq(&admitted.registry, &program.registry)
+                    || admitted.sources.len() != sources.len()
+                    || admitted.modules.len() != module_sources.len()
+                    || sources.iter().any(|source| {
+                        admitted
+                            .sources
+                            .get(&source.id())
+                            .is_none_or(|old| !std::ptr::eq(*old, *source))
+                    })
+                    || module_sources
+                        .iter()
+                        .any(|(module, source)| admitted.modules.get(module) != Some(source))
+                {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+                // Only copied scalar category IDs require new storage. The
+                // original parameter-owner map is borrowed without cloning.
+                validator.charge_type_work(admitted.abstract_nominals.len())?;
+                let mut inventory = validator.authenticated_abstract_nominals.borrow_mut();
+                inventory
+                    .try_reserve(admitted.abstract_nominals.len())
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                inventory.extend(admitted.abstract_nominals.iter().copied());
+                drop(inventory);
+                let native = AuthenticatedNativeRegistry {
+                    registry: &program.registry,
+                };
+                validator.run_effect_with_registry(&admitted.parameters, &native)
+            } else {
+                let (parameters, native) = validator.authenticate_effect_registry_phase()?;
+                validator.run_effect_with_registry(&parameters, &native)?;
+                validator.charge_type_work(1 + sources.len())?;
+                let mut source_objects = HashMap::new();
+                source_objects
+                    .try_reserve(sources.len())
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                for source in sources {
+                    // Compare addresses only; this receipt never dereferences
+                    // them. Immutable SourceFile IDs additionally prevent a
+                    // moved or replaced source object from granting authority.
+                    source_objects.insert(source.id(), *source as *const SourceFile);
+                }
+                self.admitted = Some(OriginalTemplateRegistryAdmission {
+                    registry: std::sync::Arc::clone(&program.registry),
+                    sources: source_objects,
+                    modules: validator
+                        .module_sources
+                        .take()
+                        .expect("original template admission has a complete module relation"),
+                    parameters,
+                    abstract_nominals: validator.authenticated_abstract_nominals.take(),
+                });
+                Ok(())
+            }
+        })();
+        work.charge(validator.type_work.get() - prefix)
+            .map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
+        result
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn check_ordinary_effect_modules_with_budget_for_test(
     program: &UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
@@ -11997,21 +12115,70 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     }
 
     fn original_source_phase_function(&self, id: NodeId) -> Result<bool, ValidationError> {
-        if !matches!(
-            self.source_resource_context,
-            SourceResourceValidationContext::OriginalTemplate { .. }
-        ) {
+        let SourceResourceValidationContext::OriginalTemplate { answer, .. } =
+            self.source_resource_context
+        else {
             return Ok(false);
-        }
+        };
         // The private context authenticates the original header Arc; the earlier
         // type-binder pass authenticates this exact root's full parameter vector.
-        // Only its immediate lifecycle wrapper is a callable phase boundary.
+        // Its immediate lifecycle wrapper and the handler's synthetic callback
+        // are phase boundaries. Template admission separately checks that exact
+        // callback's Unit domain, answer type and provided/continuation row;
+        // executable scopes copy the callback's body, never the callback value.
+        self.charge_type_work(1)?;
+        let Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) =
+            F::pure(&self.node(self.program.root)?.kind)
+        else {
+            return Ok(false);
+        };
+        if abstraction.body() == id {
+            return Ok(true);
+        }
+        if !answer {
+            return Ok(false);
+        }
         self.charge_type_work(1)?;
         Ok(matches!(
-            F::pure(&self.node(self.program.root)?.kind),
-            Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)))
-                if abstraction.body() == id
+            F::pure(&self.node(abstraction.body())?.kind),
+            Some(PureExprKind::Value(PureValue::Function(wrapper)))
+                if wrapper.body() == id
         ))
+    }
+
+    fn source_forwarding_function(&self, id: NodeId) -> Result<bool, ValidationError> {
+        // Only the defining scope's exact generated lexical bindings qualify.
+        // Independent scope admission later reconstructs their original method,
+        // operation, operand, complete effect instance and specialized signature.
+        // A compatible ordinary function type supplies no such authority.
+        let mut found = false;
+        for stored in &self.program.nodes {
+            self.charge_type_work(1)?;
+            let Some(scope) = F::source_scope(&stored.kind) else {
+                continue;
+            };
+            let mut current = scope.handler.body();
+            for forwarding in &scope.forwardings {
+                self.charge_type_work(1)?;
+                let Some(PureExprKind::Computation(PureComputation::Bind(binding))) =
+                    F::pure(&self.node(current)?.kind)
+                else {
+                    return Err(ValidationError::new(
+                        ValidationReason::Registry,
+                        Some(current),
+                    ));
+                };
+                if binding.binder().id() != forwarding.binder {
+                    return Err(ValidationError::new(
+                        ValidationReason::Registry,
+                        Some(current),
+                    ));
+                }
+                found |= binding.initializer() == id;
+                current = binding.body();
+            }
+        }
+        Ok(found)
     }
 
     // Keep original-fact comparison temporaries out of the shared value frame.
@@ -12205,6 +12372,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             PureValue::Function(function) => {
                 if !self.original_source_phase_function(id)?
                     && self.function_contains_source_owner_state(&node.ty)?
+                    && !self.source_forwarding_function(id)?
                 {
                     return Err(ValidationError::new(
                         ValidationReason::ResourceEscape,
@@ -15116,19 +15284,27 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
     fn run_effect(&mut self) -> Result<(), ValidationError> {
         let (nominal_parameter_owners, native_registry) =
             self.authenticate_effect_registry_phase()?;
+        self.run_effect_with_registry(&nominal_parameter_owners, &native_registry)
+    }
+
+    fn run_effect_with_registry(
+        &mut self,
+        nominal_parameter_owners: &RegistryParameterOwners,
+        native_registry: &AuthenticatedNativeRegistry<'_>,
+    ) -> Result<(), ValidationError> {
         let authenticated_method_evidence = self.validate_method_evidence_authority()?;
         self.validate_envelopes(&authenticated_method_evidence)?;
         self.validate_graph()?;
         let abstraction_owners = self.collect_binders(&authenticated_method_evidence)?;
         let type_binders =
-            self.collect_type_binders(&nominal_parameter_owners, &abstraction_owners)?;
+            self.collect_type_binders(nominal_parameter_owners, &abstraction_owners)?;
         self.validate_method_evidence_type_owners(&type_binders)?;
         self.validate_node_types(
-            &nominal_parameter_owners,
+            nominal_parameter_owners,
             &type_binders,
             &authenticated_method_evidence,
         )?;
-        let has_discard = self.validate_effect_nodes(&type_binders, &native_registry)?;
+        let has_discard = self.validate_effect_nodes(&type_binders, native_registry)?;
         if self.source_resource_context == SourceResourceValidationContext::FinalProgram {
             self.validate_source_owner_request_coverage()?;
             self.validate_source_byte_call_coverage()?;

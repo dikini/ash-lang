@@ -118,7 +118,10 @@ fn emitted_fixture() -> &'static EmittedFixture {
                 .unwrap();
             // The counterexample is not caught by operand/result tag checks:
             // these distinct original symbols deliberately have identical ABIs.
-            assert_eq!(bridge.plan.operands(), &[bridge::TargetScalar::I32]);
+            assert_eq!(
+                bridge.plan.operands(),
+                &[bridge::TargetOperand::Scalar(bridge::TargetScalar::I32)]
+            );
             assert_eq!(
                 bridge.plan.result(),
                 bridge::TargetResult::Scalar(bridge::TargetScalar::I32)
@@ -185,7 +188,7 @@ fn plus_one_provider() -> PrivateNativeBridge {
     __private_native_bridge(emitted.plus_one, emitted.expected, plus_one_callback)
 }
 fn wrong_owner_role_callback(
-    _arguments: &[NativeScalarValue],
+    _arguments: &[crate::foreign::source_runtime::NativeOwnerOperand],
     _readiness: crate::foreign::source_runtime::NativeOwnerGuardReady,
 ) -> Result<crate::foreign::source_runtime::NativeOwnerCallReturned, NativeScalarCallError> {
     CALLBACKS.fetch_add(1, Ordering::SeqCst);

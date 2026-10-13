@@ -1271,6 +1271,7 @@ impl<T> CoordinateStorage<'_, T> {
 
 struct Decoder<'a> {
     image: &'a PureImage,
+    expected_fact_prefixes: Option<NativeFactPrefixes>,
     sources: CoordinateStorage<'a, SourceFile>,
     modules: CoordinateStorage<'a, ModuleId>,
     work: &'a mut TypeWorkBudget,
@@ -2345,6 +2346,7 @@ impl PureImage {
         }
         let mut decoder = Decoder {
             image: self,
+            expected_fact_prefixes: None,
             sources: CoordinateStorage::Owned(Vec::new()),
             modules: CoordinateStorage::Owned(Vec::new()),
             work,
@@ -2445,8 +2447,21 @@ impl PureImage {
 }
 
 impl Decoder<'_> {
+    /// Expected declarations can borrow the authenticated construction tables,
+    /// but can never read executable suffix records as original fact metadata.
+    fn fact_table<'records, T>(
+        &self,
+        records: &'records [T],
+        prefix: fn(NativeFactPrefixes) -> u32,
+    ) -> Result<&'records [T], ImageFailure> {
+        match self.expected_fact_prefixes {
+            Some(prefixes) => native_fact_table(records, prefix(prefixes), false),
+            None => Ok(records),
+        }
+    }
+
     fn text(&mut self, range: Slice) -> Result<String, ImageFailure> {
-        let bytes = range.get(&self.image.bytes)?;
+        let bytes = range.get(self.fact_table(&self.image.bytes, |p| p.bytes)?)?;
         // Charge both copying and the UTF-8 admission scan.
         charge(
             self.work,
@@ -2498,7 +2513,10 @@ impl Decoder<'_> {
             if depth > crate::core::CORE_PAYLOAD_DEPTH_LIMIT {
                 return Err(ImageFailure::Resource);
             }
-            let record = *get(&self.image.origins, current)?;
+            let record = *get(
+                self.fact_table(&self.image.origins, |p| p.origins)?,
+                current,
+            )?;
             match record {
                 OriginRecord::Source(span) => {
                     break OriginOwner(Some(Origin::Source(self.span(span)?)));
@@ -2522,7 +2540,7 @@ impl Decoder<'_> {
                 },
                 OriginRecord::Related { related, .. } => {
                     let mut spans = Vec::new();
-                    for record in related.get(&self.image.spans)? {
+                    for record in related.get(self.fact_table(&self.image.spans, |p| p.spans)?)? {
                         let span = self.span(*record)?;
                         push(&mut spans, span, self.work)?;
                     }
@@ -2728,7 +2746,9 @@ impl Decoder<'_> {
                     return Err(ImageFailure::Unsupported(Unsupported::ErasedTypeOperation));
                 };
                 let original = *get(&self.modules, module)?;
-                let [parameter] = parameters.get(&self.image.quantifiers)? else {
+                let [parameter] =
+                    parameters.get(self.fact_table(&self.image.quantifiers, |p| p.quantifiers)?)?
+                else {
                     return Err(ImageFailure::InvalidRecord);
                 };
                 let identity = self.type_variable(parameter.id)?;
@@ -2774,7 +2794,7 @@ impl Decoder<'_> {
                 builder.unit(ty.into_inner(), origin.take())
             }),
             NodeTag::String(range) => {
-                let bytes = range.get(&self.image.bytes)?;
+                let bytes = range.get(self.fact_table(&self.image.bytes, |p| p.bytes)?)?;
                 charge(self.work, bytes.len())?;
                 let mut copy = Vec::new();
                 copy.try_reserve_exact(bytes.len())
@@ -3281,6 +3301,7 @@ mod tests {
             let wire = PureImage::decode_bytes(&bytes, &mut work)?;
             let mut decoder = Decoder {
                 image: &wire,
+                expected_fact_prefixes: None,
                 sources: CoordinateStorage::Borrowed(&[]),
                 modules: CoordinateStorage::Borrowed(modules),
                 work: &mut work,
@@ -4336,6 +4357,7 @@ struct PreparedOwnerRecord {
     name: Slice,
     parameters: Slice,
     owned_parameter: u32,
+    retains: Slice,
     bytes: bool,
     teardown_member: u32,
     representation_span: SpanRecord,
@@ -4376,7 +4398,8 @@ enum PreparedOwnerCallRecord {
     Teardown {
         application: PreparedOwnerApplicationRecord,
         current_operand: u32,
-        consumed_span: SpanRecord,
+        consumes: bool,
+        disposition_span: SpanRecord,
         block_span: SpanRecord,
         outcome_span: SpanRecord,
     },
@@ -4387,6 +4410,7 @@ enum PreparedOperandRecordSource {
     Source(Slice),
     Constant(u32),
     Current(Slice),
+    Enclosing(Slice),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -4544,11 +4568,12 @@ wire_struct!(
 wire_struct!(PreparedParameterRecord, 21, name, row, span);
 wire_struct!(
     PreparedOwnerRecord,
-    77,
+    85,
     member_index,
     name,
     parameters,
     owned_parameter,
+    retains,
     bytes,
     teardown_member,
     representation_span,
@@ -4747,6 +4772,10 @@ impl Wire for PreparedOperandRecordSource {
                 2u8.write(writer)?;
                 path.write(writer)
             }
+            Self::Enclosing(path) => {
+                3u8.write(writer)?;
+                path.write(writer)
+            }
         }
     }
     fn read(reader: &mut WireReader<'_>) -> Result<Self, ImageFailure> {
@@ -4754,6 +4783,7 @@ impl Wire for PreparedOperandRecordSource {
             0 => Ok(Self::Source(Wire::read(reader)?)),
             1 => Ok(Self::Constant(Wire::read(reader)?)),
             2 => Ok(Self::Current(Wire::read(reader)?)),
+            3 => Ok(Self::Enclosing(Wire::read(reader)?)),
             _ => Err(ImageFailure::InvalidEncoding),
         }
     }
@@ -4805,14 +4835,16 @@ impl Wire for PreparedOwnerCallRecord {
             Self::Teardown {
                 application,
                 current_operand,
-                consumed_span,
+                consumes,
+                disposition_span,
                 block_span,
                 outcome_span,
             } => {
                 1u8.write(writer)?;
                 application.write(writer)?;
                 current_operand.write(writer)?;
-                consumed_span.write(writer)?;
+                consumes.write(writer)?;
+                disposition_span.write(writer)?;
                 block_span.write(writer)?;
                 outcome_span.write(writer)
             }
@@ -4831,7 +4863,8 @@ impl Wire for PreparedOwnerCallRecord {
             1 => Ok(Self::Teardown {
                 application: Wire::read(reader)?,
                 current_operand: Wire::read(reader)?,
-                consumed_span: Wire::read(reader)?,
+                consumes: Wire::read(reader)?,
+                disposition_span: Wire::read(reader)?,
                 block_span: Wire::read(reader)?,
                 outcome_span: Wire::read(reader)?,
             }),
@@ -5396,7 +5429,9 @@ impl Decoder<'_> {
             return Ok(false);
         };
         charge(self.work, 2)?;
-        let [parameter] = parameters.get(&self.image.quantifiers)? else {
+        let [parameter] =
+            parameters.get(self.fact_table(&self.image.quantifiers, |p| p.quantifiers)?)?
+        else {
             return Ok(false);
         };
         let TypeVariableIdentity::Resolved {
@@ -5407,7 +5442,13 @@ impl Decoder<'_> {
             return Ok(false);
         };
         Ok(get(&self.modules, module)?.is_builtin_foreign()
-            && matches!(get(&self.image.kinds, parameter.kind)?, KindRecord::Type))
+            && matches!(
+                get(
+                    self.fact_table(&self.image.kinds, |p| p.kinds)?,
+                    parameter.kind
+                )?,
+                KindRecord::Type
+            ))
     }
 
     fn type_variable(
@@ -5451,7 +5492,7 @@ impl Decoder<'_> {
                     if depth > crate::core::CORE_PAYLOAD_DEPTH_LIMIT {
                         return Err(ImageFailure::Resource);
                     }
-                    match *get(&self.image.kinds, slot)? {
+                    match *get(self.fact_table(&self.image.kinds, |p| p.kinds)?, slot)? {
                         KindRecord::Type => {
                             push(&mut results, crate::types::Kind::Type, self.work)?;
                         }
@@ -5500,7 +5541,7 @@ impl Decoder<'_> {
                     if depth > crate::core::CORE_PAYLOAD_DEPTH_LIMIT {
                         return Err(ImageFailure::Resource);
                     }
-                    let record = *get(&self.image.types, slot)?;
+                    let record = *get(self.fact_table(&self.image.types, |p| p.types)?, slot)?;
                     if !self.image.effect_dialect
                         && !matches!(
                             record.tag,
@@ -5520,7 +5561,9 @@ impl Decoder<'_> {
                     {
                         return Err(ImageFailure::Unsupported(Unsupported::Type));
                     }
-                    let children = record.children.get(&self.image.type_children)?;
+                    let children = record
+                        .children
+                        .get(self.fact_table(&self.image.type_children, |p| p.type_children)?)?;
                     let count = children.len();
                     let valid = match record.tag {
                         TypeTag::Function | TypeTag::Application => count == 2,
@@ -5727,7 +5770,11 @@ impl Decoder<'_> {
                                 TypeTag::Forall { parameters } => {
                                     let body =
                                         results.pop().ok_or(ImageFailure::InvalidRecord)?.ty()?;
-                                    let records = parameters.get(&self.image.quantifiers)?;
+                                    let records = parameters.get(
+                                        self.fact_table(&self.image.quantifiers, |p| {
+                                            p.quantifiers
+                                        })?,
+                                    )?;
                                     if records.is_empty() {
                                         return Err(ImageFailure::InvalidRecord);
                                     }
@@ -5945,13 +5992,15 @@ impl Encoder<'_> {
             PreparedOwnerCall::Teardown {
                 application,
                 current_operand,
-                consumed_span,
+                consumes,
+                disposition_span,
                 block_span,
                 outcome_span,
             } => Ok(PreparedOwnerCallRecord::Teardown {
                 application: self.encode_prepared_owner_application(application)?,
                 current_operand: index(*current_operand)?,
-                consumed_span: self.span(*consumed_span)?,
+                consumes: *consumes,
+                disposition_span: self.span(*disposition_span)?,
                 block_span: self.span(*block_span)?,
                 outcome_span: self.span(*outcome_span)?,
             }),
@@ -6025,11 +6074,21 @@ impl Encoder<'_> {
             charge(self.work, 1)?;
             let name = append(&mut self.image.bytes, owner.name().as_bytes(), self.work)?;
             let parameters = self.encode_prepared_parameters(owner.parameters())?;
+            let retain_start = self.image.prepared_projections.len();
+            for parameter in owner.retained_parameters() {
+                push(
+                    &mut self.image.prepared_projections,
+                    index(*parameter)?,
+                    self.work,
+                )?;
+            }
+            let retains = Slice::of(&self.image.prepared_projections, retain_start)?;
             let record = PreparedOwnerRecord {
                 member_index: index(owner.member_index())?,
                 name,
                 parameters,
                 owned_parameter: index(owner.owned_parameter())?,
+                retains,
                 bytes: owner.representation()
                     == crate::foreign::source_contract::PreparedAddressRepresentation::Bytes,
                 teardown_member: index(owner.teardown_member())?,
@@ -6069,7 +6128,9 @@ impl Encoder<'_> {
                     PreparedOperandSource::Constant(position) => {
                         PreparedOperandRecordSource::Constant(index(*position)?)
                     }
-                    PreparedOperandSource::Source(path) | PreparedOperandSource::Current(path) => {
+                    PreparedOperandSource::Source(path)
+                    | PreparedOperandSource::Current(path)
+                    | PreparedOperandSource::Enclosing(path) => {
                         let path_start = self.image.prepared_paths.len();
                         for position in path {
                             push(&mut self.image.prepared_paths, index(*position)?, self.work)?;
@@ -6077,6 +6138,8 @@ impl Encoder<'_> {
                         let path = Slice::of(&self.image.prepared_paths, path_start)?;
                         if matches!(operand.source(), PreparedOperandSource::Current(_)) {
                             PreparedOperandRecordSource::Current(path)
+                        } else if matches!(operand.source(), PreparedOperandSource::Enclosing(_)) {
+                            PreparedOperandRecordSource::Enclosing(path)
                         } else {
                             PreparedOperandRecordSource::Source(path)
                         }
@@ -6680,7 +6743,10 @@ impl Encoder<'_> {
                                     Unsupported::ConstantOperand,
                                 ));
                             }
-                            crate::foreign::source_contract::PreparedOperandSource::Current(_) => {
+                            crate::foreign::source_contract::PreparedOperandSource::Current(_)
+                            | crate::foreign::source_contract::PreparedOperandSource::Enclosing(
+                                _,
+                            ) => {
                                 return Err(ImageFailure::Unsupported(
                                     Unsupported::RegistryMetadata,
                                 ));
@@ -6809,7 +6875,10 @@ impl Decoder<'_> {
     ) -> Result<crate::resolved::ResolvedTypeVariable, ImageFailure> {
         charge(self.work, 1)?;
         if !matches!(
-            get(&self.image.origins, record.origin)?,
+            get(
+                self.fact_table(&self.image.origins, |p| p.origins)?,
+                record.origin
+            )?,
             OriginRecord::Source(_)
         ) {
             return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
@@ -6834,7 +6903,7 @@ impl Decoder<'_> {
     }
 
     fn parameters(&mut self, records: Slice) -> Result<ParameterBuffer, ImageFailure> {
-        let records = records.get(&self.image.parameters)?;
+        let records = records.get(self.fact_table(&self.image.parameters, |p| p.parameters)?)?;
         let mut parameters = ParameterBuffer(Vec::new());
         charge(self.work, records.len())?;
         parameters
@@ -6849,7 +6918,7 @@ impl Decoder<'_> {
     }
 
     fn global_parameters(&mut self, records: Slice) -> Result<ParameterBuffer, ImageFailure> {
-        let records = records.get(&self.image.parameters)?;
+        let records = records.get(self.fact_table(&self.image.parameters, |p| p.parameters)?)?;
         let mut parameters = ParameterBuffer(Vec::new());
         charge(self.work, records.len())?;
         parameters
@@ -7063,14 +7132,16 @@ impl Decoder<'_> {
             PreparedOwnerCallRecord::Teardown {
                 application,
                 current_operand,
-                consumed_span,
+                consumes,
+                disposition_span,
                 block_span,
                 outcome_span,
             } => PreparedOwnerCall::Teardown {
                 application: self.prepared_owner_application(application)?,
                 current_operand: usize::try_from(current_operand)
                     .map_err(|_| ImageFailure::InvalidRecord)?,
-                consumed_span: self.span(consumed_span)?,
+                consumes,
+                disposition_span: self.span(disposition_span)?,
                 block_span: self.span(block_span)?,
                 outcome_span: self.span(outcome_span)?,
             },
@@ -7117,6 +7188,14 @@ impl Decoder<'_> {
         }
         let mut owners = Vec::new();
         for record in record.owners.get(&self.image.prepared_owners)? {
+            let mut retains = Vec::new();
+            for parameter in record.retains.get(&self.image.prepared_projections)? {
+                push(
+                    &mut retains,
+                    usize::try_from(*parameter).map_err(|_| ImageFailure::InvalidRecord)?,
+                    self.work,
+                )?;
+            }
             let value = PrivatePreparedOwnerParts {
                 member_index: usize::try_from(record.member_index)
                     .map_err(|_| ImageFailure::InvalidRecord)?,
@@ -7124,6 +7203,7 @@ impl Decoder<'_> {
                 parameters: self.prepared_parameters(record.parameters)?,
                 owned_parameter: usize::try_from(record.owned_parameter)
                     .map_err(|_| ImageFailure::InvalidRecord)?,
+                retains,
                 representation: if record.bytes {
                     PreparedAddressRepresentation::Bytes
                 } else {
@@ -7179,7 +7259,8 @@ impl Decoder<'_> {
                         )
                     }
                     PreparedOperandRecordSource::Source(path)
-                    | PreparedOperandRecordSource::Current(path) => {
+                    | PreparedOperandRecordSource::Current(path)
+                    | PreparedOperandRecordSource::Enclosing(path) => {
                         let mut restored = Vec::new();
                         for component in path.get(&self.image.prepared_paths)? {
                             push(
@@ -7191,6 +7272,9 @@ impl Decoder<'_> {
                         }
                         if matches!(record.source, PreparedOperandRecordSource::Current(_)) {
                             PreparedOperandSource::Current(restored)
+                        } else if matches!(record.source, PreparedOperandRecordSource::Enclosing(_))
+                        {
+                            PreparedOperandSource::Enclosing(restored)
                         } else {
                             PreparedOperandSource::Source(restored)
                         }
@@ -7284,14 +7368,20 @@ impl Decoder<'_> {
             self.image
                 .nominal_parameters
                 .len()
-                .checked_add(self.image.parameters.len())
+                .checked_add(
+                    self.fact_table(&self.image.parameters, |p| p.parameters)?
+                        .len(),
+                )
                 .ok_or(ImageFailure::Resource)?,
         )?;
         nominal_owners
             .try_reserve(self.image.nominal_parameters.len())
             .map_err(|_| ImageFailure::Resource)?;
         parameter_ids
-            .try_reserve(self.image.parameters.len())
+            .try_reserve(
+                self.fact_table(&self.image.parameters, |p| p.parameters)?
+                    .len(),
+            )
             .map_err(|_| ImageFailure::Resource)?;
         for record in &self.image.nominal_parameters {
             charge(self.work, 1)?;
@@ -7299,7 +7389,10 @@ impl Decoder<'_> {
             if nominal_owners.insert(owner, ()).is_some() {
                 return Err(ImageFailure::InvalidRecord);
             }
-            for parameter in record.parameters.get(&self.image.parameters)? {
+            for parameter in record
+                .parameters
+                .get(self.fact_table(&self.image.parameters, |p| p.parameters)?)?
+            {
                 charge(self.work, 1)?;
                 let id = self.type_variable(parameter.id)?;
                 if id.module() != Some(owner.module()) || parameter_ids.insert(id, ()).is_some() {
@@ -7309,7 +7402,10 @@ impl Decoder<'_> {
         }
         for record in &self.image.effects {
             let owner = self.effect_identity(record.id)?;
-            for parameter in record.parameters.get(&self.image.parameters)? {
+            for parameter in record
+                .parameters
+                .get(self.fact_table(&self.image.parameters, |p| p.parameters)?)?
+            {
                 charge(self.work, 1)?;
                 let id = self.type_variable(parameter.id)?;
                 if id.module() != Some(owner.module()) || parameter_ids.insert(id, ()).is_some() {
@@ -7328,7 +7424,10 @@ impl Decoder<'_> {
             {
                 return Err(ImageFailure::InvalidRecord);
             }
-            for parameter in record.parameters.get(&self.image.parameters)? {
+            for parameter in record
+                .parameters
+                .get(self.fact_table(&self.image.parameters, |p| p.parameters)?)?
+            {
                 charge(self.work, 1)?;
                 let id = self.type_variable(parameter.id)?;
                 if id.module() != Some(module) || parameter_ids.insert(id, ()).is_some() {
@@ -7337,7 +7436,10 @@ impl Decoder<'_> {
             }
         }
         for record in &self.image.interface_owners {
-            for parameter in record.parameters().get(&self.image.parameters)? {
+            for parameter in record
+                .parameters()
+                .get(self.fact_table(&self.image.parameters, |p| p.parameters)?)?
+            {
                 charge(self.work, 1)?;
                 let id = self.type_variable(parameter.id)?;
                 if parameter_ids.insert(id, ()).is_some() {
@@ -7346,14 +7448,21 @@ impl Decoder<'_> {
             }
         }
         for slot in &self.image.source_parameters {
-            let parameter = *get(&self.image.parameters, *slot)?;
+            let parameter = *get(
+                self.fact_table(&self.image.parameters, |p| p.parameters)?,
+                *slot,
+            )?;
             let id = self.type_variable(parameter.id)?;
             if parameter_ids.insert(id, ()).is_some() {
                 return Err(ImageFailure::InvalidRecord);
             }
         }
         charge(self.work, 1)?;
-        if parameter_ids.len() != self.image.parameters.len() {
+        if parameter_ids.len()
+            != self
+                .fact_table(&self.image.parameters, |p| p.parameters)?
+                .len()
+        {
             return Err(ImageFailure::InvalidRecord);
         }
         drop(parameter_ids);
@@ -7482,7 +7591,7 @@ impl Decoder<'_> {
         // Contexts authenticate each original codec allocation once. All symbol
         // descriptors are built while this immutable registry borrow is live.
         let mut contexts = Vec::new();
-        for record in &self.image.call_codecs {
+        for record in self.fact_table(&self.image.call_codecs, |p| p.call_codecs)? {
             let module = *get(&self.modules, record.module)?;
             let source = self.span(record.source)?;
             let ids = ForeignCallCodecIds {
@@ -7723,6 +7832,7 @@ impl PureImage {
         }
         let mut decoder = Decoder {
             image: self,
+            expected_fact_prefixes: None,
             sources: CoordinateStorage::Owned(Vec::new()),
             modules: CoordinateStorage::Owned(Vec::new()),
             work,
@@ -7989,7 +8099,10 @@ impl Decoder<'_> {
                                     Unsupported::ConstantOperand,
                                 ));
                             }
-                            crate::foreign::source_contract::PreparedOperandSource::Current(_) => {
+                            crate::foreign::source_contract::PreparedOperandSource::Current(_)
+                            | crate::foreign::source_contract::PreparedOperandSource::Enclosing(
+                                _,
+                            ) => {
                                 return Err(ImageFailure::Unsupported(
                                     Unsupported::RegistryMetadata,
                                 ));
@@ -8023,7 +8136,9 @@ impl Decoder<'_> {
             NodeTag::TypeAbstraction { parameters, body } => {
                 let body = *get(nodes, body)?;
                 let mut restored = Vec::new();
-                for parameter in parameters.get(&self.image.quantifiers)? {
+                for parameter in
+                    parameters.get(self.fact_table(&self.image.quantifiers, |p| p.quantifiers)?)?
+                {
                     let value = (
                         self.type_variable(parameter.id)?,
                         self.kind(parameter.kind)?,
@@ -8041,7 +8156,8 @@ impl Decoder<'_> {
             } => {
                 let function = *get(nodes, function)?;
                 let mut restored = TypeBuffer(Vec::new());
-                let arguments = arguments.get(&self.image.type_children)?;
+                let arguments = arguments
+                    .get(self.fact_table(&self.image.type_children, |p| p.type_children)?)?;
                 charge(self.work, arguments.len())?;
                 restored
                     .0
@@ -8052,7 +8168,9 @@ impl Decoder<'_> {
                     restored.0.push(argument.into_inner());
                 }
                 let mut rows = Vec::new();
-                for row in row_arguments.get(&self.image.type_children)? {
+                for row in row_arguments
+                    .get(self.fact_table(&self.image.type_children, |p| p.type_children)?)?
+                {
                     let row = self.structural(*row)?.row()?;
                     push(&mut rows, row, self.work)?;
                 }
@@ -8183,10 +8301,12 @@ impl RestoredEffectImage {
     }
 }
 
-/// Independently emitted fact payload, checked once against the construction
-/// image. Flat records own no source/provenance arena; views borrow restoration's.
-pub(crate) struct ExpectedNativeFacts {
-    image: PureImage,
+/// Original fact records borrowed only after their complete independently emitted
+/// payload matches. Declaration-prefix bounds exclude executable suffix records;
+/// source/provenance coordinates still borrow the independently restored arena.
+pub(crate) struct ExpectedNativeFacts<'image> {
+    image: &'image PureImage,
+    prefixes: NativeFactPrefixes,
     effects_by_library: Vec<Vec<Option<u32>>>,
 }
 impl PureImage {
@@ -8194,12 +8314,17 @@ impl PureImage {
         &self,
         expected: &[u8],
         work: &mut TypeWorkBudget,
-    ) -> Result<ExpectedNativeFacts, ImageFailure> {
+    ) -> Result<ExpectedNativeFacts<'_>, ImageFailure> {
         self.compare_native_expectations(expected, work)?;
-        // Decode ORIGINAL emitted facts; their byte-exact correspondence above
-        // authenticates use of the already restored source/provenance coordinates.
-        // No SourceFile or origin/provenance arena is reconstructed here.
-        let image = Self::decode_bytes(expected, work)?;
+        // Only the complete independent byte comparison above admits this view.
+        // The flat declaration records already decoded from the construction
+        // image are now byte-identical to the separately emitted original facts.
+        // Borrow them without a duplicate decode/allocation. Prefix-bounded reads
+        // below preserve the absent executable records of the original payload.
+        let prefixes = self
+            .native_fact_prefixes
+            .ok_or(ImageFailure::InvalidRecord)?;
+        let image = self;
         let mut effects_by_library = Vec::new();
         for library in &image.prepared_libraries {
             let count = library.symbols.get(&image.prepared_symbols)?.len();
@@ -8232,11 +8357,12 @@ impl PureImage {
         }
         Ok(ExpectedNativeFacts {
             image,
+            prefixes,
             effects_by_library,
         })
     }
 }
-impl ExpectedNativeFacts {
+impl ExpectedNativeFacts<'_> {
     pub(crate) fn library(
         &self,
         slot: u32,
@@ -8248,7 +8374,8 @@ impl ExpectedNativeFacts {
         charge(work, 1)?;
         let record = *get(&self.image.prepared_libraries, slot)?;
         let mut decoder = Decoder {
-            image: &self.image,
+            image: self.image,
+            expected_fact_prefixes: Some(self.prefixes),
             sources: CoordinateStorage::Borrowed(&restored.sources),
             modules: CoordinateStorage::Borrowed(&restored.modules),
             work,
@@ -8340,8 +8467,29 @@ pub(crate) fn encode_effect_for_build(
     let encoder = encode_program(program, provenance, work, true, |encoder, kind| {
         encoder.encode_effect_node(kind)
     })?;
-    // The image already contains every descriptor. Generate callbacks only for
-    // interpreter members, each selected once from the original allocation.
+    // Descriptors are already encoded. Source interpretations select their
+    // exact callbacks and each original owner's separately declared destructor.
+    // The latter grants host destruction only; it is not another source effect
+    // interpretation or permission to invoke it from a lifecycle template.
+    let mut callback_symbols = Vec::new();
+    for interpretation in &encoder.image.interpretations {
+        push(&mut callback_symbols, interpretation.symbol, encoder.work)?;
+        let original = get(&encoder.original_native_symbols, interpretation.symbol)?;
+        if let Some(owner) = original.owner() {
+            charge(encoder.work, encoder.original_native_symbols.len())?;
+            let destructor = encoder
+                .original_native_symbols
+                .iter()
+                .position(|candidate| {
+                    candidate
+                        .owner()
+                        .is_some_and(|other| Arc::ptr_eq(other, owner))
+                        && candidate.symbol().member_index() == owner.owner().teardown_member()
+                })
+                .ok_or(ImageFailure::InvalidRecord)?;
+            push(&mut callback_symbols, index(destructor)?, encoder.work)?;
+        }
+    }
     let mut selected: Vec<Option<usize>> = Vec::new();
     charge(encoder.work, encoder.image.native_symbols.len())?;
     selected
@@ -8356,10 +8504,9 @@ pub(crate) fn encode_effect_for_build(
     library_slots.resize(encoder.image.prepared_libraries.len(), None);
     let mut bridges = Vec::new();
     let mut libraries: Vec<NativeLibraryEmission> = Vec::new();
-    for interpretation in &encoder.image.interpretations {
+    for symbol_slot in callback_symbols {
         charge(encoder.work, 4)?;
-        let slot =
-            usize::try_from(interpretation.symbol).map_err(|_| ImageFailure::InvalidRecord)?;
+        let slot = usize::try_from(symbol_slot).map_err(|_| ImageFailure::InvalidRecord)?;
         if selected
             .get(slot)
             .ok_or(ImageFailure::InvalidRecord)?
@@ -8375,7 +8522,7 @@ pub(crate) fn encode_effect_for_build(
             .native_symbols
             .get(&original.operation())
             .ok_or(ImageFailure::InvalidRecord)?;
-        if *pointer != Arc::as_ptr(original) || *original_slot != interpretation.symbol {
+        if *pointer != Arc::as_ptr(original) || *original_slot != symbol_slot {
             return Err(ImageFailure::InvalidRecord.into());
         }
         let record = *encoder
@@ -8395,7 +8542,7 @@ pub(crate) fn encode_effect_for_build(
             &mut bridges,
             NativeBridgeEmission {
                 plan,
-                image_symbol: interpretation.symbol,
+                image_symbol: symbol_slot,
                 symbol_index: index(original.symbol_index())?,
                 operation_module: record.operation.owner.module,
                 operation_effect: record.operation.owner.local,

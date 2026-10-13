@@ -35,6 +35,22 @@ const REPLY: &str = "ash::foreign::source_runtime::NativeScalarReply";
 const ERROR: &str = "ash::foreign::source_runtime::NativeScalarCallError";
 const OWNER_READY: &str = "ash::foreign::source_runtime::NativeOwnerGuardReady";
 const OWNER_RETURNED: &str = "ash::foreign::source_runtime::NativeOwnerCallReturned";
+const OWNER_OPERAND: &str = "ash::foreign::source_runtime::NativeOwnerOperand";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TargetOperand {
+    Scalar(TargetScalar),
+    Address,
+}
+
+impl TargetOperand {
+    const fn rust_type(self) -> &'static str {
+        match self {
+            Self::Scalar(scalar) => scalar.rust_type(),
+            Self::Address => "*mut core::ffi::c_void",
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ForeignBridgeTarget {
@@ -179,7 +195,7 @@ fn target_scalar(
 pub(crate) struct TargetResolvedForeignBridge {
     symbol: Arc<CheckedForeignSymbol>,
     target: ForeignBridgeTarget,
-    operands: Box<[TargetScalar]>,
+    operands: Box<[TargetOperand]>,
     result: TargetResult,
     call: TargetBridgeCall,
     rust_function_name: String,
@@ -223,7 +239,7 @@ impl TargetResolvedForeignBridge {
         self.target
     }
     #[cfg(test)]
-    pub(crate) fn operands(&self) -> &[TargetScalar] {
+    pub(crate) fn operands(&self) -> &[TargetOperand] {
         &self.operands
     }
     #[cfg(test)]
@@ -371,17 +387,19 @@ fn plan_target_bridge(
                 PreparedOwnerCall::Teardown {
                     current_operand, ..
                 } => {
-                    // Safe host destruction must need no new scalar preparation.
-                    // This bounded profile has exactly one current owner address.
-                    if *current_operand != 0
-                        || source.operands().len() != 1
-                        || source.result() != PreparedAbiResult::Void
-                        || !matches!(
-                            source.operands()[0].source(),
-                            PreparedOperandSource::Current(_)
-                        )
-                        || source.operands()[0].representation()
-                            != PreparedRepresentation::Address(owner.owner().representation())
+                    // Host destruction uses pre-admitted Current/Enclosing
+                    // addresses; it performs no late scalar narrowing.
+                    if source.result() != PreparedAbiResult::Void
+                        || !source
+                            .operands()
+                            .get(*current_operand)
+                            .is_some_and(|operand| {
+                                matches!(operand.source(), PreparedOperandSource::Current(_))
+                                    && operand.representation()
+                                        == PreparedRepresentation::Address(
+                                            owner.owner().representation(),
+                                        )
+                            })
                     {
                         return Err(fail(ForeignBridgeReason::UnsupportedRepresentation, span));
                     }
@@ -395,19 +413,35 @@ fn plan_target_bridge(
         .try_reserve_exact(source.operands().len())
         .map_err(|_| fail(ForeignBridgeReason::Resource, span))?;
     for operand in source.operands() {
-        if call == TargetBridgeCall::OwnerTeardown {
-            continue;
-        }
         if matches!(operand.source(), PreparedOperandSource::Constant(_)) {
             return Err(fail(ForeignBridgeReason::UnsupportedConstant, span));
         }
-        if !matches!(operand.source(), PreparedOperandSource::Source(_)) {
-            return Err(fail(ForeignBridgeReason::InvalidAuthority, span));
-        }
-        let PreparedRepresentation::Scalar(representation) = operand.representation() else {
-            return Err(fail(ForeignBridgeReason::UnsupportedRepresentation, span));
+        let target = match (operand.source(), operand.representation()) {
+            (PreparedOperandSource::Source(_), PreparedRepresentation::Scalar(_))
+                if call == TargetBridgeCall::OwnerTeardown =>
+            {
+                // The source contract is valid, but this target's infallible
+                // host destructor has only pre-admitted guarded addresses.
+                return Err(fail(ForeignBridgeReason::UnsupportedRepresentation, span));
+            }
+            (PreparedOperandSource::Source(_), PreparedRepresentation::Scalar(representation))
+                if call != TargetBridgeCall::OwnerTeardown =>
+            {
+                TargetOperand::Scalar(target_scalar(representation, span)?)
+            }
+            (PreparedOperandSource::Enclosing(_), PreparedRepresentation::Address(_))
+                if call != TargetBridgeCall::Scalar =>
+            {
+                TargetOperand::Address
+            }
+            (PreparedOperandSource::Current(_), PreparedRepresentation::Address(_))
+                if call == TargetBridgeCall::OwnerTeardown =>
+            {
+                TargetOperand::Address
+            }
+            _ => return Err(fail(ForeignBridgeReason::InvalidAuthority, span)),
         };
-        operands.push(target_scalar(representation, span)?);
+        operands.push(target);
     }
     let result = match source.result() {
         PreparedAbiResult::Void => TargetResult::Void,
@@ -540,15 +574,6 @@ fn render_bridge(output: &mut impl Write, plan: &TargetResolvedForeignBridge) ->
         }
     }
     write!(output, "\"]\n    fn {}__ffi(", plan.rust_function_name)?;
-    if plan.call == TargetBridgeCall::OwnerTeardown {
-        output.write_str("address: *mut core::ffi::c_void);\n}\n")?;
-        write!(
-            output,
-            "pub fn {}(address: *mut core::ffi::c_void) {{\n    // SAFETY: Only the admitted unique guard supplies this original owner.\n    // The authored teardown contract consumes it unconditionally.\n    unsafe {{ {}__ffi(address) }};\n}}\n",
-            plan.rust_function_name, plan.rust_function_name
-        )?;
-        return Ok(());
-    }
     for (index, scalar) in plan.operands.iter().enumerate() {
         if index > 0 {
             output.write_str(", ")?;
@@ -569,20 +594,40 @@ fn render_bridge(output: &mut impl Write, plan: &TargetResolvedForeignBridge) ->
         )?,
         TargetBridgeCall::OwnerAcquire => write!(
             output,
-            ";\n}}\npub fn {}(arguments: &[{VALUE}], readiness: {OWNER_READY}) -> Result<{OWNER_RETURNED}, {ERROR}> {{\n    let [",
+            ";\n}}\npub fn {}(arguments: &[{OWNER_OPERAND}], readiness: {OWNER_READY}) -> Result<{OWNER_RETURNED}, {ERROR}> {{\n    let [",
             plan.rust_function_name
         )?,
-        TargetBridgeCall::OwnerTeardown => return Err(fmt::Error),
+        TargetBridgeCall::OwnerTeardown => write!(
+            output,
+            ";\n}}\npub fn {}(arguments: &[{OWNER_OPERAND}]) {{\n    let [",
+            plan.rust_function_name
+        )?,
     }
     for (index, scalar) in plan.operands.iter().enumerate() {
         if index > 0 {
             output.write_str(", ")?;
         }
-        write!(output, "{VALUE}::{}(arg{index})", scalar.value_variant())?;
+        match scalar {
+            TargetOperand::Scalar(scalar) if plan.call == TargetBridgeCall::Scalar => {
+                write!(output, "{VALUE}::{}(arg{index})", scalar.value_variant())?
+            }
+            TargetOperand::Scalar(scalar) => write!(
+                output,
+                "{OWNER_OPERAND}::Scalar({VALUE}::{}(arg{index}))",
+                scalar.value_variant()
+            )?,
+            TargetOperand::Address => write!(output, "{OWNER_OPERAND}::Address(arg{index})")?,
+        }
+    }
+    output.write_str("] = arguments else {\n")?;
+    if plan.call == TargetBridgeCall::OwnerTeardown {
+        output.write_str("        unreachable!(\"pre-admitted destruction operands\");\n")?;
+    } else {
+        writeln!(output, "        return Err({ERROR}::ArgumentContract);")?;
     }
     write!(
         output,
-        "] = arguments else {{\n        return Err({ERROR}::ArgumentContract);\n    }};\n    // SAFETY: These values have the declared scalar ABI types. Linking\n    // this symbol assumes the authored native ABI contract.\n    let value = unsafe {{ {}__ffi(",
+        "    }};\n    // SAFETY: Exact preflight supplies these ABI values and live guarded addresses.\n    // Linking assumes the authored synchronous native contract.\n    let value = unsafe {{ {}__ffi(",
         plan.rust_function_name
     )?;
     for index in 0..plan.operands.len() {
@@ -593,6 +638,8 @@ fn render_bridge(output: &mut impl Write, plan: &TargetResolvedForeignBridge) ->
     }
     output.write_str(") };\n")?;
     match plan.result {
+        TargetResult::Void if plan.call == TargetBridgeCall::OwnerTeardown =>
+            output.write_str("    let () = value;\n}\n"),
         TargetResult::Void => write!(output, "    let () = value;\n    Ok({REPLY}::Void)\n}}\n"),
         TargetResult::Scalar(scalar) => write!(
             output,
@@ -856,8 +903,9 @@ main () = 42
         assert_eq!(teardown.call(), TargetBridgeCall::OwnerTeardown);
         assert_eq!(teardown.native_type_projection(), &[0, 2]);
         let emitted = emit_rust_bridge(&teardown, &mut work).unwrap();
-        assert!(emitted.contains("address: *mut core::ffi::c_void);"));
-        assert!(emitted.contains("__ffi(address)"));
+        assert!(emitted.contains("arg0: *mut core::ffi::c_void);"));
+        assert!(emitted.contains("__ffi(*arg0)"));
+        assert!(emitted.contains("arguments: &[ash::foreign::source_runtime::NativeOwnerOperand]"));
         assert!(!emitted.contains("NativeScalarValue"));
         assert!(!emitted.contains("NativeScalarReply"));
     }
@@ -949,13 +997,13 @@ main () = 42
         assert_eq!(
             plan.operands(),
             &[
-                TargetScalar::I8,
-                TargetScalar::U8,
-                TargetScalar::I32,
-                TargetScalar::U32,
-                TargetScalar::I64,
-                TargetScalar::U64,
-                TargetScalar::USize64
+                TargetOperand::Scalar(TargetScalar::I8),
+                TargetOperand::Scalar(TargetScalar::U8),
+                TargetOperand::Scalar(TargetScalar::I32),
+                TargetOperand::Scalar(TargetScalar::U32),
+                TargetOperand::Scalar(TargetScalar::I64),
+                TargetOperand::Scalar(TargetScalar::U64),
+                TargetOperand::Scalar(TargetScalar::USize64)
             ]
         );
         assert_eq!(plan.result(), TargetResult::Scalar(TargetScalar::USize64));

@@ -44,7 +44,14 @@ and escape. Observe actual native acquisition, refusal, partial-owner cleanup,
 window copies, completion order, resume/discard and retained-dependent blocking
 through TASK-0037 bindings. Retain the open-Delta case and separate captured-control
 witness. Run connected compiler/Core/evaluator regressions with one Cargo job;
-run the full architecture/workspace gate at integrated delivery.
+keep milestone-wide regression pending between the named checkpoint gates in
+the [agent workflow](../project/agent-workflow.md). The last full gate was run at
+`868d0b43` and transferred by authenticated equality to retained `9fae971`; no
+delivery has intervened. The next gate belongs to the PM after shared
+ownership/control/runtime support is complete, including declared dependencies,
+retained-owner quarantine, control and required-completion failure matrices
+through source, Core, copying, image, bindings and guard storage. Focused PRs may
+contribute toward that boundary without making each PR a full-gate checkpoint.
 
 ## Discoveries
 
@@ -58,16 +65,79 @@ required outside interpreters. The 2026-10-12 human clarification makes a consum
 `ConsumedFailure(E)` terminal on owned discard for the scope codec; normal
 `Scope.ConsumedError(E)` is unchanged.
 
+The 2026-10-13 human clarification makes witnessed `Retained(State,E)` terminal
+on owned discard after ordinary access revocation and quarantine of the same
+owner/dependency closure. No discarding clause or fallback continues, and no
+abandoned body value or scope report is fabricated. Source finish remains a
+single attempt. Later successful host destruction is distinct from failed
+source completion; normal `Scope.Completed(value, RetainedError(E))` is unchanged.
+
+The 2026-10-13 human clarification separates local lifecycle use from storage:
+no current, provisional or enclosing native State belongs in ordinary `D`,
+including tuples, ADT wrappers and instantiated generic payloads. Defining header
+admission and final independent specialization both check this boundary.
+Declared dependency access handles remain ordinary payloads; acquisition and
+finish derive permitted local State from their authenticated enclosing resource.
+Sealed runtime dependency/destructor operands are not `D`. Earlier State-in-`D`
+prototype traces are authority-limited evidence, not admitted language behavior.
+
+A source finish member can retain an owner while its original declared host
+destructor consumes it. Generated callback selection therefore retains that
+destructor independently of the resource's exact interpretation list; it grants
+no extra source call permission. The connected native witness removes source,
+image and facts before execution and distinguishes one source retain from one
+later host release. The owned-discard variant remains terminal despite that
+successful host release. The dependency-free witnesses alone do not establish
+retained-child blocking or dependency-order host destruction; the ownership
+delivery adds separate access-handle payload and real dependent-native witnesses.
+
+The ownership store keeps flat slots and scalar dependency indices. Metadata,
+complete typed views, destructor operands and counter storage are admitted before
+native acquisition. A consumed child removes its edges once; a retained child
+quarantines its same owner and transitive closure, denies ordinary access and
+blocks parent consumption before C. Host destruction preserves dependency order
+and makes one attempt. Incomplete destruction protects unresolved native objects
+without leaking recursively owned Rust type metadata or releasing their parents.
+Lifetime closure membership supplies no additional native operand role.
+
+An admitted pending finish can locally borrow its exact, physically live direct
+dependency's State despite quarantine. The source-handler hook checks the
+selected original owner, complete State result and active finishing guard before
+the unchanged typed-operand check. Ordinary operations remain revoked. The true
+three-family native fixture retains Grand, blocks Child and Parent source
+consumption, then consumes Grand, Child and Parent in host order. The separate
+sibling witness distinguishes pending State borrowing from ordinary access.
+
+One normal-budget phase observation found nine original-template registry passes
+of 6,740 work units each before final Core validation. All original forests
+passed, but final structural validation exhausted the remaining startup ledger;
+preparation work was not that ledger. A private session now retains one complete
+registry admission for the same immutable registry and exact source/module
+objects. Every template still checks its graph, method evidence, binders, kinds,
+rows, lineage and capture obligations; linked final Core authenticates its
+registry afresh. Graph-dependent lexical method-owner contexts keep a fresh
+registry check. A changed source object, module relation, header or registry
+cannot reuse the receipt. Exact/one-short/prefix/fresh-retry tests protect this
+boundary, and the unchanged true three-owner fixture now reaches native execution
+within the original allowance. No policy limit or stack depth changed.
+
+The next delivery carries the human-approved checkpoint-gating delta from the
+root workflow and milestone launch template. Existing retained one-branch,
+one-checkout/shared-cache, timing and cleanup clauses remain. The linked skills
+and support were already adopted from `f961470`; this is policy reconciliation,
+not an isolated documentation import or a new runtime authority.
+
 The connected control witnesses distinguish source/Core admission, real generated
 native execution and injected transfer/disposal checkpoints. Native traces use
 independent owner identities and byte storage, proving inner-before-outer finish,
 outer access during inner finish, discarded-body nonexecution and pending-guard
-revocation without invented data. A two-original-library fixture fits compiler
-checking but exceeds the unchanged cumulative image allowance; sharing one
-original template provides the bounded native witness without raising policy
-limits. The Core and image witnesses compare exact continuation substitutions,
-output rows and native interpretation order. Image mutation refuses before native
-provider selection. Exact/one-short/prefix/fresh-retry tests retain cumulative
+revocation without invented data. At PR20's retained pin, a two-original-library
+fixture fit compiler checking but exceeded the unchanged cumulative image
+allowance; its passing shared-template native case was a narrower witness, not a
+two-library native claim. The Core and image witnesses compare exact continuation
+substitutions, output rows and native interpretation order. Image mutation refuses
+before native provider selection. Exact/one-short/prefix/fresh-retry tests retain
+cumulative
 costs; injected source guards dispose iteratively at 32,768 depth on 64 KiB.
 
 Imported original source headers must be inventoried by defining identity, not
@@ -116,9 +186,9 @@ Selected source-handler entry authenticates the unique live guard, original
 owner and exact activation before traversing every typed access position,
 including nominal payloads. Ordinary handler selection precedes this check.
 Modeled guard/frame tests and real generated-native lifecycle tests establish
-different boundaries. Source capture/resume and owned discard now retain those
-same guard and selection checks; retained dependencies and quarantine remain
-subsequent obligations.
+different boundaries. At the PR20 pin, source capture/resume and owned discard
+retained those guard and selection checks; retained dependencies and quarantine
+were subsequent obligations addressed by the current ownership delivery.
 
 The acquired_only delivery authenticates the instantiated nominal report fields
 in defining constructor order: body answer first, acquisition error second.
@@ -128,7 +198,9 @@ Capture-value analysis must preserve that result shape while retaining finish
 as a cleanup obligation; reusing Scope/Completion assembly would fabricate a
 completion field. A source consumed-completion error becomes terminal after
 native consumption and cannot publish success or retry release. Native retained
-outcomes remain subsequent CP-0022 obligations.
+outcomes were subsequent CP-0022 obligations at that acquired-only delivery,
+addressed by the current ownership profile without changing its terminal
+consumed-error rule.
 
 Initialized-byte acquisition projects the original declared source leaf before
 native entry, independently of ABI operands and private data. Readiness retains
@@ -179,9 +251,10 @@ canonical alias branches under distinct phantom Type/Row applications, nested
 ordinary overrides, both report codecs and null/zero-extent disposition. Source,
 image and facts files are removed before standalone execution. Injected guard,
 storage and ledger refusals establish separate pre-callback boundaries; they are
-not external-library failures. Copy windows, dependencies, quarantine and finite-window
-control remain later CP-0022 work; byte primitives alone complete no original
-issue criterion or library migration.
+not external-library failures. At PR19, copy windows, dependencies, quarantine
+and finite-window control remained later CP-0022 work; byte primitives alone
+completed no original issue criterion or library migration. The current ownership
+delivery adds the declared-dependency and quarantine profile separately.
 
 A self-consistent image can reconstruct a different valid integer source path;
 reconstruction alone does not prove correspondence to a generated call site.
@@ -343,10 +416,12 @@ Source template preparation now pays for one iterative module inventory and
 reuses its immutable identities for each forest's fallible, collision-checked
 reservation. Independent final validation remains a separate obligation.
 
-Current bounded execution admits dependency-free opaque and initialized-byte
+Current bounded execution admits opaque and initialized-byte
 owners, both report codecs, complete associated-method forwarding and ordinary
-outward capture/resume/owned discard. Native windows, dependent owners, quarantine,
-retained completion and library migrations remain CP-0022 work. These are
+outward capture/resume/owned discard, declared dependencies, retained completion
+and quarantine under unconditional void owner contracts. Native windows,
+status-returning owner teardown, callable lifecycle helpers, source `given`
+forwarding and library migrations remain CP-0022 work. These are
 implementation boundaries, not amendments to the broader accepted contract.
 
 A public source resource currently needs a public provider interface. Retaining

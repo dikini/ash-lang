@@ -385,9 +385,72 @@ fn source_leaf<'a>(
     Ok(selected)
 }
 
-fn teardown_domain(
+/// Authenticate a nonowning enclosing state against its original constructor-
+/// free declaration and this output owner's explicit retained identity roles.
+/// Compatible nominal shapes or an ordinary Type variable do not grant a borrow.
+pub(crate) fn enclosing_identity(
+    state: &Type,
+    owner: &CheckedForeignOwner,
+    application: &PreparedOwnerApplication,
+    effect: &ResolvedEffectDeclaration,
+    registry: &ResolvedRegistry,
+    span: Span,
+    work: &mut TypeWorkBudget,
+) -> Result<TypeVariableId, ForeignAdmissionError> {
+    let mut arguments = Vec::new();
+    let mut head = state;
+    while let Type::Application(function, argument) = head {
+        charge(work, 1, span)?;
+        arguments
+            .try_reserve(1)
+            .map_err(|_| failure(ForeignAdmissionReason::StorageRefused, span))?;
+        arguments.push(argument.as_ref());
+        head = function;
+    }
+    arguments.reverse();
+    let Type::Nominal(nominal) = head else {
+        return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
+    };
+    charge(work, registry.source_owner_candidate_count(), span)?;
+    let (prepared, index, _, parameters) = registry
+        .source_owner_candidates()
+        .find(|(_, _, candidate, _)| candidate == nominal)
+        .ok_or_else(|| failure(ForeignAdmissionReason::InvalidSignature, span))?;
+    authenticate_source_owner_candidate(prepared, index, *nominal, parameters, registry, work)?;
+    let enclosing = &prepared.owners()[index];
+    if arguments.len() != parameters.len() {
+        return Err(failure(ForeignAdmissionReason::InvalidParameters, span));
+    }
+    let Some(Type::Variable(identity)) = arguments.get(enclosing.owned_parameter()).copied() else {
+        return Err(failure(ForeignAdmissionReason::InvalidParameters, span));
+    };
+    charge(work, owner.owner().retained_parameters().len(), span)?;
+    for retained in owner.owner().retained_parameters() {
+        let Some(PreparedOwnerArgument::Type(position)) = application.arguments().get(*retained)
+        else {
+            return Err(failure(ForeignAdmissionReason::InvalidParameters, span));
+        };
+        let parameter = effect
+            .parameters
+            .get(*position)
+            .ok_or_else(|| failure(ForeignAdmissionReason::InvalidParameters, span))?;
+        if parameter.kind == Kind::Type && parameter.id == *identity {
+            return Ok(*identity);
+        }
+    }
+    Err(failure(ForeignAdmissionReason::InvalidParameters, span))
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "original owner, application and full declaration actuals remain separate from domain traversal"
+)]
+fn owner_domain(
     domain: &Type,
-    current: &Type,
+    current: Option<&Type>,
+    owner: &CheckedForeignOwner,
+    application: &PreparedOwnerApplication,
+    effect: &ResolvedEffectDeclaration,
     parameters: &HashSet<TypeVariableId>,
     registry: &ResolvedRegistry,
     span: Span,
@@ -401,7 +464,7 @@ fn teardown_domain(
     pending.push(domain);
     while let Some(ty) = pending.pop() {
         charge(work, 1, span)?;
-        if std::ptr::eq(ty, current) {
+        if current.is_some_and(|current| std::ptr::eq(ty, current)) {
             continue;
         }
         if let Type::Tuple(fields) = ty {
@@ -413,6 +476,8 @@ fn teardown_domain(
                 .try_reserve(fields.len())
                 .map_err(|_| failure(ForeignAdmissionReason::StorageRefused, span))?;
             pending.extend(fields.iter());
+        } else if matches!(ty, Type::Application(_, _)) {
+            enclosing_identity(ty, owner, application, effect, registry, span, work)?;
         } else {
             check_domain(ty, parameters, registry, work, span)?;
         }
@@ -543,7 +608,17 @@ pub(super) fn validate_owner_symbol(
             let output = unary_payload(payload, codec.output, span, work)?;
             let state = unary_payload(output, codec.nullable, span, work)?;
             check_state_application(state, owner, application, effect, work)?;
-            check_domain(domain, &formal_ids, registry, work, span)?;
+            owner_domain(
+                domain,
+                None,
+                owner,
+                application,
+                effect,
+                &formal_ids,
+                registry,
+                span,
+                work,
+            )?;
             if let Some(initialized) = initialized_bytes {
                 check_source_path(domain, initialized.extent(), work, initialized.span())?;
             }
@@ -568,7 +643,17 @@ pub(super) fn validate_owner_symbol(
             };
             let state = source_leaf(domain, path, span, work)?;
             check_state_application(state, owner, application, effect, work)?;
-            teardown_domain(domain, state, &formal_ids, registry, span, work)?;
+            owner_domain(
+                domain,
+                Some(state),
+                owner,
+                application,
+                effect,
+                &formal_ids,
+                registry,
+                span,
+                work,
+            )?;
             Some(*current_operand)
         }
     };
@@ -577,6 +662,33 @@ pub(super) fn validate_owner_symbol(
         match (operand.source(), operand.representation()) {
             (PreparedOperandSource::Source(path), PreparedRepresentation::Scalar(_)) => {
                 check_source_path(domain, path, work, span)?
+            }
+            (
+                PreparedOperandSource::Enclosing(path),
+                PreparedRepresentation::Address(representation),
+            ) => {
+                let state = source_leaf(domain, path, span, work)?;
+                let application = match symbol.owner_call().expect("checked owner role") {
+                    PreparedOwnerCall::Acquire { application, .. }
+                    | PreparedOwnerCall::Teardown { application, .. } => application,
+                };
+                enclosing_identity(state, owner, application, effect, registry, span, work)?;
+                let mut head = state;
+                while let Type::Application(function, _) = head {
+                    charge(work, 1, span)?;
+                    head = function;
+                }
+                let Type::Nominal(nominal) = head else {
+                    return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
+                };
+                charge(work, registry.source_owner_candidate_count(), span)?;
+                let (prepared, index, _, _) = registry
+                    .source_owner_candidates()
+                    .find(|(_, _, candidate, _)| candidate == nominal)
+                    .ok_or_else(|| failure(ForeignAdmissionReason::InvalidSignature, span))?;
+                if representation != prepared.owners()[index].representation() {
+                    return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
+                }
             }
             (
                 PreparedOperandSource::Current(_),

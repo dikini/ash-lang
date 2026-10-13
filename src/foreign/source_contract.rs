@@ -306,6 +306,7 @@ pub enum PreparedOperandSource {
     Source(Vec<usize>),
     Constant(usize),
     Current(Vec<usize>),
+    Enclosing(Vec<usize>),
 }
 
 /// One ABI input in exact native order.
@@ -433,7 +434,8 @@ pub enum PreparedOwnerCall {
     Teardown {
         application: PreparedOwnerApplication,
         current_operand: usize,
-        consumed_span: Span,
+        consumes: bool,
+        disposition_span: Span,
         block_span: Span,
         outcome_span: Span,
     },
@@ -447,6 +449,7 @@ pub struct PreparedForeignOwner {
     name: String,
     parameters: Vec<PreparedForeignParameter>,
     owned_parameter: usize,
+    retains: Vec<usize>,
     representation: PreparedAddressRepresentation,
     teardown_member: usize,
     representation_span: Span,
@@ -468,6 +471,9 @@ impl PreparedForeignOwner {
     }
     pub const fn owned_parameter(&self) -> usize {
         self.owned_parameter
+    }
+    pub fn retained_parameters(&self) -> &[usize] {
+        &self.retains
     }
     pub const fn representation(&self) -> PreparedAddressRepresentation {
         self.representation
@@ -1350,12 +1356,6 @@ fn prepare_owner(
     source: &SurfaceForeignOwner,
     work: &mut TypeWorkBudget,
 ) -> Result<PreparedForeignOwner, ForeignContractError> {
-    if !source.retains.is_empty() {
-        return Err(failure(
-            ForeignContractReason::UnimplementedContract,
-            source.span,
-        ));
-    }
     let PreparedRepresentation::Address(representation) =
         representation(library, &source.representation, work)?
     else {
@@ -1379,6 +1379,29 @@ fn prepare_owner(
     }
     let owned_parameter = owned_parameter
         .ok_or_else(|| failure(ForeignContractReason::InvalidParameters, source.owned.span))?;
+    let mut retains = Vec::new();
+    reserve(&mut retains, source.retains.len(), source.span)?;
+    for dependency in &source.retains {
+        let mut selected = None;
+        for (index, parameter) in parameters.iter().enumerate() {
+            if names_equal(&parameter.name, &dependency.text, dependency.span, work)? {
+                selected = Some(index);
+            }
+        }
+        let index = selected
+            .ok_or_else(|| failure(ForeignContractReason::InvalidParameters, dependency.span))?;
+        charge(work, retains.len().saturating_add(1), dependency.span)?;
+        if index == owned_parameter
+            || parameters[index].kind != Kind::Type
+            || retains.contains(&index)
+        {
+            return Err(failure(
+                ForeignContractReason::InvalidParameters,
+                dependency.span,
+            ));
+        }
+        retains.push(index);
+    }
     let teardown_name = local_reference(&source.teardown)?;
     let mut teardown_member = None;
     for (index, member) in surface.members.iter().enumerate() {
@@ -1394,6 +1417,7 @@ fn prepare_owner(
         name: text(&source.name.text, source.name.span, work)?,
         parameters,
         owned_parameter,
+        retains,
         representation,
         representation_span: source.representation.span,
         owned_span: source.owned.span,
@@ -1633,6 +1657,18 @@ fn prepare_owner_symbol_body(
                         PreparedOperandSource::Current(path),
                     )
                 }
+                (
+                    PreparedAbiResult::Address(representation),
+                    SurfaceForeignOperandSource::Source { position, role },
+                ) if matches!(role.kind, SurfaceForeignOperandRoleKind::Enclosing) => {
+                    let (path, _ty) = owner_source_path(position, domain, work)?;
+                    // Defining owner/type/kind and dependency-role correspondence
+                    // is authenticated against the resolved original signature.
+                    (
+                        PreparedRepresentation::Address(representation),
+                        PreparedOperandSource::Enclosing(path),
+                    )
+                }
                 (PreparedAbiResult::Void, _) => {
                     return Err(failure(ForeignContractReason::VoidPosition, operand.span));
                 }
@@ -1756,25 +1792,30 @@ fn prepare_owner_symbol_body(
         if facts.len() != 1 {
             return Err(failure(ForeignContractReason::OutcomeCoverage, cases[0].2));
         }
-        let SurfaceForeignOutcomeFactKind::Consumed(position) = &facts[0].kind else {
-            return Err(failure(
-                ForeignContractReason::UnimplementedContract,
-                facts[0].span,
-            ));
+        let (position, consumes) = match &facts[0].kind {
+            SurfaceForeignOutcomeFactKind::Consumed(position) => (position, true),
+            SurfaceForeignOutcomeFactKind::Retained(position) => (position, false),
+            _ => {
+                return Err(failure(
+                    ForeignContractReason::OutcomeCoverage,
+                    facts[0].span,
+                ));
+            }
         };
-        let (consumed, _) = owner_source_path(position, domain, work)?;
+        let (disposition_path, _) = owner_source_path(position, domain, work)?;
         let PreparedOperandSource::Current(current_path) = &symbol.operands[current_operand].source
         else {
             return Err(failure(ForeignContractReason::OperandRole, source.span));
         };
         charge(work, current_path.len(), facts[0].span)?;
-        if consumed != *current_path {
+        if disposition_path != *current_path {
             return Err(failure(ForeignContractReason::OperandRole, facts[0].span));
         }
         symbol.call = PreparedForeignCall::Owner(PreparedOwnerCall::Teardown {
             application,
             current_operand,
-            consumed_span: facts[0].span,
+            consumes,
+            disposition_span: facts[0].span,
             block_span,
             outcome_span: cases[0].2,
         });
@@ -1995,6 +2036,7 @@ pub(crate) struct PrivatePreparedOwnerParts {
     pub(crate) name: String,
     pub(crate) parameters: Vec<PrivatePreparedParameterParts>,
     pub(crate) owned_parameter: usize,
+    pub(crate) retains: Vec<usize>,
     pub(crate) representation: PreparedAddressRepresentation,
     pub(crate) teardown_member: usize,
     pub(crate) representation_span: Span,
@@ -2181,7 +2223,8 @@ fn private_owner_call(
         PreparedOwnerCall::Teardown {
             application,
             current_operand,
-            consumed_span,
+            consumes: _,
+            disposition_span,
             block_span,
             outcome_span,
         } => {
@@ -2210,7 +2253,7 @@ fn private_owner_call(
                     != 1
                 || !private_span_within(symbol.span, *block_span)
                 || !private_span_within(symbol.span, *outcome_span)
-                || !private_span_within(*outcome_span, *consumed_span)
+                || !private_span_within(*outcome_span, *disposition_span)
             {
                 return Err(failure(ForeignContractReason::OperandRole, symbol.span));
             }
@@ -2287,20 +2330,23 @@ fn same_owner_call(
             Some(PreparedOwnerCall::Teardown {
                 application: la,
                 current_operand: lp,
-                consumed_span: lc,
+                consumes: ld,
+                disposition_span: lc,
                 block_span: lb,
                 outcome_span: lo,
             }),
             Some(PreparedOwnerCall::Teardown {
                 application: ra,
                 current_operand: rp,
-                consumed_span: rc,
+                consumes: rd,
+                disposition_span: rc,
                 block_span: rb,
                 outcome_span: ro,
             }),
         ) => {
-            charge(work, 4, span)?;
+            charge(work, 5, span)?;
             Ok(lp == rp
+                && ld == rd
                 && lc == rc
                 && lb == rb
                 && lo == ro
@@ -2502,6 +2548,20 @@ pub(crate) fn restore_prepared_library(
         {
             return Err(failure(ForeignContractReason::OperandRole, owner.span));
         }
+        for (index, dependency) in owner.retains.iter().enumerate() {
+            charge(work, index.saturating_add(1), owner.span)?;
+            if *dependency == owner.owned_parameter
+                || owner.parameters.get(*dependency).is_none_or(|parameter| {
+                    !matches!(parameter.kind, PrivatePreparedParameterKind::Type)
+                })
+                || owner.retains[..index].contains(dependency)
+            {
+                return Err(failure(
+                    ForeignContractReason::InvalidParameters,
+                    owner.span,
+                ));
+            }
+        }
         for (index, parameter) in owner.parameters.iter().enumerate() {
             charge(work, 1, parameter.span)?;
             if parameter.name.is_empty() || !private_span_within(owner.span, parameter.span) {
@@ -2614,6 +2674,15 @@ pub(crate) fn restore_prepared_library(
                     })?;
                     if PreparedRepresentation::Scalar(constant.representation)
                         != operand.representation
+                    {
+                        return Err(failure(ForeignContractReason::OperandRole, operand.span));
+                    }
+                }
+                PreparedOperandSource::Enclosing(path) => {
+                    charge(work, path.len().saturating_add(1), operand.span)?;
+                    if path.is_empty()
+                        || !matches!(operand.representation, PreparedRepresentation::Address(_))
+                        || !matches!(symbol.call, PrivatePreparedCall::Owner(_))
                     {
                         return Err(failure(ForeignContractReason::OperandRole, operand.span));
                     }
@@ -2820,6 +2889,7 @@ pub(crate) fn restore_prepared_library(
             name: value.name,
             parameters,
             owned_parameter: value.owned_parameter,
+            retains: value.retains,
             representation: value.representation,
             teardown_member: value.teardown_member,
             representation_span: value.representation_span,
@@ -2948,8 +3018,9 @@ pub(crate) fn same_prepared_library_parts(
         }
     }
     for (left, right) in original.owners.iter().zip(&candidate.owners) {
-        charge(work, 8, right.span)?;
-        if left.member_index != right.member_index
+        charge(work, right.retains.len().saturating_add(8), right.span)?;
+        if left.retains != right.retains
+            || left.member_index != right.member_index
             || left.owned_parameter != right.owned_parameter
             || left.representation_span != right.representation_span
             || left.owned_span != right.owned_span
@@ -3031,7 +3102,11 @@ pub(crate) fn same_prepared_library_parts(
                     left == right
                 }
                 (PreparedOperandSource::Source(left), PreparedOperandSource::Source(right))
-                | (PreparedOperandSource::Current(left), PreparedOperandSource::Current(right)) => {
+                | (PreparedOperandSource::Current(left), PreparedOperandSource::Current(right))
+                | (
+                    PreparedOperandSource::Enclosing(left),
+                    PreparedOperandSource::Enclosing(right),
+                ) => {
                     if left.len() != right.len() {
                         false
                     } else {
@@ -3151,13 +3226,15 @@ mod owner_normalization_tests {
             PreparedOwnerCall::Teardown {
                 application: value,
                 current_operand,
-                consumed_span,
+                consumes,
+                disposition_span,
                 block_span,
                 outcome_span,
             } => PreparedOwnerCall::Teardown {
                 application: application(value),
                 current_operand: *current_operand,
-                consumed_span: *consumed_span,
+                consumes: *consumes,
+                disposition_span: *disposition_span,
                 block_span: *block_span,
                 outcome_span: *outcome_span,
             },
@@ -3198,6 +3275,7 @@ mod owner_normalization_tests {
                     name: value.name.clone(),
                     parameters: parameters(&value.parameters),
                     owned_parameter: value.owned_parameter,
+                    retains: value.retains.clone(),
                     representation: value.representation,
                     teardown_member: value.teardown_member,
                     representation_span: value.representation_span,
@@ -3229,6 +3307,9 @@ mod owner_normalization_tests {
                                 }
                                 PreparedOperandSource::Current(value) => {
                                     PreparedOperandSource::Current(value.clone())
+                                }
+                                PreparedOperandSource::Enclosing(value) => {
+                                    PreparedOperandSource::Enclosing(value.clone())
                                 }
                                 PreparedOperandSource::Constant(value) => {
                                     PreparedOperandSource::Constant(*value)
@@ -3413,11 +3494,10 @@ mod owner_normalization_tests {
     }
 
     #[test]
-    fn incomplete_initialization_dependency_and_nonconsuming_teardown_refuse() {
+    fn incomplete_initialization_self_dependency_and_invalid_teardown_refuse() {
         for text in [
             OWNED_BYTES.replace(", initialized_bytes result from 0", ""),
             OWNED_BYTES.replace("owned R", "owned R\n        retains R"),
-            OWNED_BYTES.replace("consumed 0", "retained 0"),
             OWNED_BYTES.replace("        retained_dependents block\n", ""),
             OWNED_BYTES.replace("-> pointer(Address)", "-> Address"),
             OWNED_BYTES.replace(
@@ -3435,6 +3515,41 @@ mod owner_normalization_tests {
                 .is_err()
             );
         }
+    }
+
+    #[test]
+    fn unconditional_retained_teardown_prepares_and_restores_passive_disposition() {
+        let text = OWNED_BYTES.replace("consumed 0", "retained 0");
+        let (module, surface) = source(&text);
+        let prepared = prepare_foreign_library_with_budget(
+            module,
+            &surface.foreign_libraries[0],
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        let retained = |library: &PreparedForeignLibrary| {
+            assert!(matches!(
+                library.symbols()[1].call(),
+                PreparedForeignCall::Owner(PreparedOwnerCall::Teardown {
+                    consumes: false,
+                    ..
+                })
+            ));
+        };
+        retained(&prepared);
+        let restored =
+            restore_prepared_library(parts(&prepared), &mut TypeWorkBudget::default()).unwrap();
+        retained(&restored);
+        // Preparation and restoration retain the promised disposition; they
+        // do not supply an executable callback or witnessed native retention.
+        assert!(
+            same_prepared_library_parts(
+                &prepared,
+                &parts(&restored),
+                &mut TypeWorkBudget::default()
+            )
+            .unwrap()
+        );
     }
     #[test]
     fn opaque_acquisition_requires_no_byte_extent_and_restores_without_authority() {

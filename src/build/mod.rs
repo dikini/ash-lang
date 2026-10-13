@@ -400,7 +400,10 @@ pub fn __run_private_effect_image(
     drop(image);
     let admitted =
         admit_source_native_program(&program, &mut bindings, &mut work).map_err(runtime_error)?;
-    crate::eval::evaluate_effect_with_source_native_program(admitted)
+    let evaluated = crate::eval::evaluate_effect_with_source_native_program(admitted);
+    let destruction = bindings.close_source_owners();
+    evaluated
+        .and_then(|value| destruction.map(|()| value))
         .map(PrivateProgramOutput)
         .map_err(runtime_error)
 }

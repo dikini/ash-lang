@@ -266,6 +266,17 @@ impl super::Machine<'_> {
                 || owner.initialized_bytes().is_none()
                 || !scope
                     .contains_byte_call(
+                        match boundary.phase {
+                            super::ProviderPhase::Acquire => {
+                                crate::core::source_resource::SourceResourcePhase::Acquire
+                            }
+                            super::ProviderPhase::Body => {
+                                crate::core::source_resource::SourceResourcePhase::Handler
+                            }
+                            super::ProviderPhase::Finish => {
+                                crate::core::source_resource::SourceResourcePhase::Finish
+                            }
+                        },
                         apply,
                         callable.application,
                         function,
@@ -433,9 +444,12 @@ impl super::Machine<'_> {
         let index = match operands {
             ByteOperands::Read(index) | ByteOperands::Write(index, _) => index,
         };
-        let access = owner
-            .byte_access(index)
-            .ok_or(RuntimeFailure::ForeignBinding)?;
+        let access = if boundary.phase == super::ProviderPhase::Finish {
+            owner.completion_byte_access(index)
+        } else {
+            owner.byte_access(index)
+        }
+        .ok_or(RuntimeFailure::ForeignBinding)?;
         let ready = ByteReplyReady::admit(
             &mut self.heap,
             &mut self.instantiation_work,
