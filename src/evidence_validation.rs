@@ -1156,7 +1156,8 @@ fn validate_global_scheme<'a>(
 ) -> Result<(), EvidenceValidationFailure> {
     let span = definition.span();
     let (name, parameters, requirements) = match definition.kind() {
-        ResolvedDefinitionKind::Equational(global) => (
+        ResolvedDefinitionKind::Equational(global)
+        | ResolvedDefinitionKind::ForeignConstant(global) => (
             &global.interface.name,
             global.interface.type_parameters.as_ref(),
             global.interface.requirements.as_ref(),
@@ -1223,6 +1224,17 @@ fn validate_global_scheme<'a>(
     }
     let value_matches = match definition.kind() {
         ResolvedDefinitionKind::Equational(_) => true,
+        ResolvedDefinitionKind::ForeignConstant(global) => {
+            charge(budget, 1, span)?;
+            checked.scheme.value_type == Type::Int
+                && global.interface.annotation.ty == Type::Int
+                && global.interface.requirements.is_empty()
+                && global.interface.type_parameters.is_empty()
+                && matches!(global.equations.as_slice(), [equation]
+                    if equation.patterns.is_empty()
+                        && equation.name.binder == global.interface.name.id
+                        && matches!(equation.body.kind, ResolvedExprKind::Integer(_)))
+        }
         ResolvedDefinitionKind::InlineOperational(global) => {
             validate_linked_value_structure(
                 &checked.scheme.value_type,
@@ -2034,7 +2046,8 @@ fn validate_linked_value_schemes<'a>(
                 span,
             )?;
             match definition.kind() {
-                ResolvedDefinitionKind::Equational(global) => {
+                ResolvedDefinitionKind::Equational(global)
+                | ResolvedDefinitionKind::ForeignConstant(global) => {
                     validate_linked_paired_value_type_with_kind_mirrors(
                         &scheme.scheme.value_type,
                         &global.interface.annotation.ty,
@@ -5863,7 +5876,8 @@ fn collect_method_evidence_occurrences(
         for (definition, checked) in group.definitions().iter().zip(group.schemes()) {
             let owner = Some(MethodEvidenceOwner::Global(checked.binder));
             match definition.kind() {
-                ResolvedDefinitionKind::Equational(global) => {
+                ResolvedDefinitionKind::Equational(global)
+                | ResolvedDefinitionKind::ForeignConstant(global) => {
                     for equation in &global.equations {
                         collect_method_evidence_expression_occurrences(
                             program,
@@ -7360,7 +7374,8 @@ fn validate_definition<'a>(
     headers_only: bool,
 ) -> Result<(), EvidenceValidationFailure> {
     let binder = match definition.kind() {
-        ResolvedDefinitionKind::Equational(global) => global.interface.name.id,
+        ResolvedDefinitionKind::Equational(global)
+        | ResolvedDefinitionKind::ForeignConstant(global) => global.interface.name.id,
         ResolvedDefinitionKind::InlineOperational(global) => global.header.name.id,
     };
     let scheme = registry
@@ -7376,7 +7391,8 @@ fn validate_definition<'a>(
         variables: &variables,
     };
     match definition.kind() {
-        ResolvedDefinitionKind::Equational(global) => {
+        ResolvedDefinitionKind::Equational(global)
+        | ResolvedDefinitionKind::ForeignConstant(global) => {
             for equation_index in 0..global.equations.len() {
                 charge(budget, 1, definition.span())?;
                 let equation = global
@@ -11725,7 +11741,8 @@ Memory.AllocationRefused(error) => 0
                         GENERATED_ORIGIN_DEPTH,
                     );
                     let source_origin = match program.groups()[0].definitions()[0].kind() {
-                        ResolvedDefinitionKind::Equational(global) => {
+                        ResolvedDefinitionKind::Equational(global)
+                        | ResolvedDefinitionKind::ForeignConstant(global) => {
                             &global.interface.type_parameters[0].origin
                         }
                         ResolvedDefinitionKind::InlineOperational(_) => {

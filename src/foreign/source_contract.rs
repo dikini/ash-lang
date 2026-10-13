@@ -217,6 +217,23 @@ pub struct PreparedScalarValue {
     pub magnitude: u64,
 }
 
+impl PreparedScalarValue {
+    /// Exact mathematical value of an admitted scalar literal. This does not
+    /// supply a representation, original member or execution permission.
+    pub(crate) fn checked_integer(self) -> Option<crate::integer::Integer> {
+        if self.negative {
+            let value = if self.magnitude == 1_u64 << 63 {
+                i64::MIN
+            } else {
+                -i64::try_from(self.magnitude).ok()?
+            };
+            Some(crate::integer::Integer::from_i64(value))
+        } else {
+            Some(crate::integer::Integer::from_u64(self.magnitude))
+        }
+    }
+}
+
 /// One unresolved representation declaration after profile checking.
 #[derive(Debug)]
 pub struct PreparedForeignRepresentation {

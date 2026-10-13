@@ -1285,7 +1285,8 @@ fn resolution_binder_policies_are_executable_and_ordered() {
     let mut operational_parameters = None;
     for definition in resolved.definitions() {
         match &definition.kind {
-            ResolvedDefinitionKind::Equational(global) => {
+            ResolvedDefinitionKind::Equational(global)
+            | ResolvedDefinitionKind::ForeignConstant(global) => {
                 equational_parameters.push((
                     global.interface.name.spelling.as_str(),
                     global
@@ -1697,11 +1698,13 @@ fn elaboration_distinguishes_structural_application_from_simultaneous_instantiat
         .iter()
         .find_map(|definition| match &definition.kind {
             ResolvedDefinitionKind::Equational(global)
+            | ResolvedDefinitionKind::ForeignConstant(global)
                 if global.interface.name.spelling == "keep" =>
             {
                 Some(&global.interface)
             }
             ResolvedDefinitionKind::Equational(_)
+            | ResolvedDefinitionKind::ForeignConstant(_)
             | ResolvedDefinitionKind::InlineOperational(_) => None,
         })
         .expect("keep should resolve");

@@ -300,7 +300,10 @@ fn main_body(module: &ResolvedModule) -> &ResolvedExpr {
         .definitions()
         .iter()
         .find(|definition| match &definition.kind {
-            ResolvedDefinitionKind::Equational(global) => global.interface.name.spelling == "main",
+            ResolvedDefinitionKind::Equational(global)
+            | ResolvedDefinitionKind::ForeignConstant(global) => {
+                global.interface.name.spelling == "main"
+            }
             ResolvedDefinitionKind::InlineOperational(global) => {
                 global.header.name.spelling == "main"
             }

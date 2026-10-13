@@ -676,6 +676,14 @@ pub(super) fn validate_owner_symbol(
     charge(work, symbol.operands().len(), span)?;
     for (index, operand) in symbol.operands().iter().enumerate() {
         match (operand.source(), operand.representation()) {
+            (
+                PreparedOperandSource::Constant(position),
+                PreparedRepresentation::Scalar(representation),
+            ) if owner
+                .prepared()
+                .constants()
+                .get(*position)
+                .is_some_and(|constant| constant.representation() == representation) => {}
             (PreparedOperandSource::Source(path), PreparedRepresentation::Scalar(_)) => {
                 check_source_path(domain, path, work, span)?
             }

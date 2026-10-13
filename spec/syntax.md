@@ -306,10 +306,11 @@ semantics](static-semantics.md#source-foreign-declarations) requires exact ABI
 coverage, owner roles and result shape. Pointer representations are restricted
 to admitted owner addresses. Owner status alternatives may reference checked
 literal facts in the original library. A passive `const` has a mathematical
-integer literal with an optional minus sign, not a value expression or ordinary
-term binder. Scalar-result alternatives declare that bare result readable.
-Ordinary constant values and operands,
-output slots, access members and copy windows remain outside this implementation
+integer literal with an optional minus sign, not a value expression. Its checked
+scalar value introduces an ordinary `Int` term binder and may supply an exact
+declared native operand. Scalar-result alternatives declare that bare result
+readable.
+Output slots, access members and copy windows remain outside this implementation
 checkpoint. A byte owner requires an
 explicit `initialized_bytes` fact for execution through an admitted resource
 scope; preparing its contract alone grants no activation or byte access. Effect arguments

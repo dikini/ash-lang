@@ -45,7 +45,8 @@ where
             .charge(1)
             .map_err(|()| EvidenceAuditFailure::ConstraintResource)?;
         match &definition.kind {
-            ResolvedDefinitionKind::Equational(global) => {
+            ResolvedDefinitionKind::Equational(global)
+            | ResolvedDefinitionKind::ForeignConstant(global) => {
                 reserve_and_push_equations(&mut pending, &global.equations, budget)?;
             }
             ResolvedDefinitionKind::InlineOperational(global) => {

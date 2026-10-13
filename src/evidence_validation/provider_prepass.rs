@@ -65,7 +65,8 @@ fn resource_occurrences<'a>(
         work.charge(1).map_err(|()| type_resource(group.span()))?;
         for definition in group.definitions() {
             match definition.kind() {
-                ResolvedDefinitionKind::Equational(global) => {
+                ResolvedDefinitionKind::Equational(global)
+                | ResolvedDefinitionKind::ForeignConstant(global) => {
                     for equation in &global.equations {
                         push(
                             &mut pending,

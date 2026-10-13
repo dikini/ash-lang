@@ -168,6 +168,7 @@ impl SourceNativeBindings {
             !matches!(
                 operand.source(),
                 super::source_contract::PreparedOperandSource::Source(_)
+                    | super::source_contract::PreparedOperandSource::Constant(_)
             ) || !matches!(
                 operand.representation(),
                 super::source_contract::PreparedRepresentation::Scalar(_)
@@ -228,7 +229,8 @@ impl SourceNativeBindings {
                         matches!(
                             (operand.source(), operand.representation()),
                             (
-                                PreparedOperandSource::Source(_),
+                                PreparedOperandSource::Source(_)
+                                    | PreparedOperandSource::Constant(_),
                                 PreparedRepresentation::Scalar(_)
                             ) | (
                                 PreparedOperandSource::Enclosing(_),
@@ -251,7 +253,8 @@ impl SourceNativeBindings {
                         matches!(
                             (operand.source(), operand.representation()),
                             (
-                                PreparedOperandSource::Source(_),
+                                PreparedOperandSource::Source(_)
+                                    | PreparedOperandSource::Constant(_),
                                 PreparedRepresentation::Scalar(_)
                             ) | (
                                 PreparedOperandSource::Enclosing(_),
@@ -303,6 +306,9 @@ impl SourceNativeBindings {
                                     (
                                         PreparedOperandSource::Enclosing(_),
                                         PreparedRepresentation::Address(_)
+                                    ) | (
+                                        PreparedOperandSource::Constant(_),
+                                        PreparedRepresentation::Scalar(_)
                                     )
                                 )
                         })

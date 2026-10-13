@@ -32,7 +32,6 @@ pub(crate) enum Unsupported {
     LargeIntegerLiteral,
     EffectOperation,
     OpenNativeInstance,
-    ConstantOperand,
 }
 
 #[derive(Debug)]
@@ -264,6 +263,7 @@ enum NodeTag {
         row_arguments: Slice,
     },
     Integer(i64),
+    UnsignedInteger(u64),
     Bool(bool),
     Unit,
     String(Slice),
@@ -1018,42 +1018,47 @@ impl Encoder<'_> {
 
     fn encode_node(&mut self, kind: &PureExprKind) -> Result<NodeTag, ImageFailure> {
         Ok(match kind {
-            PureExprKind::Value(value) => match value {
-                PureValue::Integer(value) => NodeTag::Integer(
-                    value
-                        .value()
-                        .to_i64()
-                        .ok_or(ImageFailure::Unsupported(Unsupported::LargeIntegerLiteral))?,
-                ),
-                PureValue::Boolean(value) => NodeTag::Bool(value.value()),
-                PureValue::Unit(_) => NodeTag::Unit,
-                PureValue::String(value) => {
-                    NodeTag::String(append(&mut self.image.bytes, value.bytes(), self.work)?)
-                }
-                PureValue::Constructor(value) => {
-                    NodeTag::Constructor(self.constructor(value.constructor())?)
-                }
-                PureValue::Function(function) => NodeTag::Function {
-                    parameter: self.encode_binder(function.parameter())?,
-                    body: self.node(function.body())?,
-                },
-                PureValue::Intrinsic(value) => {
-                    use crate::core::packed::Intrinsic;
-                    use crate::foreign::scalar_preflight::ForeignScalarPreflightRole as Role;
-                    let (function, role) = match value.operation() {
-                        Intrinsic::ForeignCheckedI64 { function } => (function, Role::I64),
-                        Intrinsic::ForeignCheckedSizeT { function } => (function, Role::SizeT),
-                        Intrinsic::ForeignByteRead { function } => (function, Role::ByteRead),
-                        Intrinsic::ForeignByteWrite { function } => (function, Role::ByteWrite),
-                        _ => return Err(ImageFailure::Unsupported(Unsupported::Intrinsic)),
-                    };
-                    NodeTag::ScalarPreflight {
-                        function: self.binder_id(function)?,
-                        role,
-                        module: self.module(value.module())?,
+            PureExprKind::Value(value) => {
+                match value {
+                    PureValue::Integer(value) => {
+                        if let Some(value) = value.value().to_i64() {
+                            NodeTag::Integer(value)
+                        } else {
+                            NodeTag::UnsignedInteger(value.value().to_u64().ok_or(
+                                ImageFailure::Unsupported(Unsupported::LargeIntegerLiteral),
+                            )?)
+                        }
+                    }
+                    PureValue::Boolean(value) => NodeTag::Bool(value.value()),
+                    PureValue::Unit(_) => NodeTag::Unit,
+                    PureValue::String(value) => {
+                        NodeTag::String(append(&mut self.image.bytes, value.bytes(), self.work)?)
+                    }
+                    PureValue::Constructor(value) => {
+                        NodeTag::Constructor(self.constructor(value.constructor())?)
+                    }
+                    PureValue::Function(function) => NodeTag::Function {
+                        parameter: self.encode_binder(function.parameter())?,
+                        body: self.node(function.body())?,
+                    },
+                    PureValue::Intrinsic(value) => {
+                        use crate::core::packed::Intrinsic;
+                        use crate::foreign::scalar_preflight::ForeignScalarPreflightRole as Role;
+                        let (function, role) = match value.operation() {
+                            Intrinsic::ForeignCheckedI64 { function } => (function, Role::I64),
+                            Intrinsic::ForeignCheckedSizeT { function } => (function, Role::SizeT),
+                            Intrinsic::ForeignByteRead { function } => (function, Role::ByteRead),
+                            Intrinsic::ForeignByteWrite { function } => (function, Role::ByteWrite),
+                            _ => return Err(ImageFailure::Unsupported(Unsupported::Intrinsic)),
+                        };
+                        NodeTag::ScalarPreflight {
+                            function: self.binder_id(function)?,
+                            role,
+                            module: self.module(value.module())?,
+                        }
                     }
                 }
-            },
+            }
             PureExprKind::Variable(variable) => {
                 NodeTag::Variable(self.binder_id(variable.binder())?)
             }
@@ -1812,6 +1817,10 @@ impl Wire for NodeTag {
                 1u8.write(writer)?;
                 value.write(writer)
             }
+            Self::UnsignedInteger(value) => {
+                22u8.write(writer)?;
+                value.write(writer)
+            }
             Self::Bool(value) => {
                 2u8.write(writer)?;
                 value.write(writer)
@@ -1896,6 +1905,7 @@ impl Wire for NodeTag {
             20 => Self::SourceScope(Wire::read(reader)?),
             0 => Self::Unit,
             1 => Self::Integer(Wire::read(reader)?),
+            22 => Self::UnsignedInteger(Wire::read(reader)?),
             2 => Self::Bool(Wire::read(reader)?),
             3 => Self::String(Wire::read(reader)?),
             4 => Self::Constructor(Wire::read(reader)?),
@@ -2184,6 +2194,28 @@ impl PureImage {
         })?;
         (if executable { self.root } else { 0 }).write(writer)?;
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn corrupt_declared_constant_for_test(&mut self, mutation: u8) -> bool {
+        let Some(constant) = self.prepared_constants.first_mut() else {
+            return false;
+        };
+        match mutation {
+            0 => constant.value.magnitude += 1,
+            1 => constant.value.negative = !constant.value.negative,
+            2 => constant.representation.bits = 64,
+            3 => {
+                let Some(operand) = self.prepared_operands.iter_mut().find(|operand| {
+                    matches!(operand.source, PreparedOperandRecordSource::Constant(0))
+                }) else {
+                    return false;
+                };
+                operand.source = PreparedOperandRecordSource::Constant(1);
+            }
+            _ => return false,
+        }
+        true
     }
 
     pub(crate) fn decode_bytes(
@@ -2791,6 +2823,14 @@ impl Decoder<'_> {
             NodeTag::Integer(value) => builder.with_caller_type_work(self.work, |builder| {
                 builder.integer(Integer::from_i64(value), ty.into_inner(), origin.take())
             }),
+            NodeTag::UnsignedInteger(value) => {
+                if value <= i64::MAX as u64 {
+                    return Err(ImageFailure::InvalidRecord);
+                }
+                builder.with_caller_type_work(self.work, |builder| {
+                    builder.integer(Integer::from_u64(value), ty.into_inner(), origin.take())
+                })
+            }
             NodeTag::Bool(value) => builder.with_caller_type_work(self.work, |builder| {
                 builder.boolean(value, ty.into_inner(), origin.take())
             }),
@@ -6977,11 +7017,6 @@ impl Encoder<'_> {
                     }
                     for operand in interpretation.symbol().symbol().operands() {
                         match operand.source() {
-                            crate::foreign::source_contract::PreparedOperandSource::Constant(_) => {
-                                return Err(ImageFailure::Unsupported(
-                                    Unsupported::ConstantOperand,
-                                ));
-                            }
                             crate::foreign::source_contract::PreparedOperandSource::Current(_)
                             | crate::foreign::source_contract::PreparedOperandSource::Enclosing(
                                 _,
@@ -6990,7 +7025,9 @@ impl Encoder<'_> {
                                     Unsupported::RegistryMetadata,
                                 ));
                             }
-                            crate::foreign::source_contract::PreparedOperandSource::Source(_) => {}
+                            crate::foreign::source_contract::PreparedOperandSource::Source(_)
+                            | crate::foreign::source_contract::PreparedOperandSource::Constant(_) =>
+                                {}
                         }
                         if !matches!(
                             operand.representation(),
@@ -8376,11 +8413,6 @@ impl Decoder<'_> {
                     }
                     for operand in symbol.symbol().operands() {
                         match operand.source() {
-                            crate::foreign::source_contract::PreparedOperandSource::Constant(_) => {
-                                return Err(ImageFailure::Unsupported(
-                                    Unsupported::ConstantOperand,
-                                ));
-                            }
                             crate::foreign::source_contract::PreparedOperandSource::Current(_)
                             | crate::foreign::source_contract::PreparedOperandSource::Enclosing(
                                 _,
@@ -8389,7 +8421,9 @@ impl Decoder<'_> {
                                     Unsupported::RegistryMetadata,
                                 ));
                             }
-                            crate::foreign::source_contract::PreparedOperandSource::Source(_) => {}
+                            crate::foreign::source_contract::PreparedOperandSource::Source(_)
+                            | crate::foreign::source_contract::PreparedOperandSource::Constant(_) =>
+                                {}
                         }
                         if !matches!(
                             operand.representation(),

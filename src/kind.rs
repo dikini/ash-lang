@@ -6832,7 +6832,8 @@ fn check_interface_application_kinds_in_owner_environments<'a>(
                     KindFailure::internal_cause(module.span, KindInternalCause::KindPreflightGlobal)
                 })?;
                 let (parameters, requirements) = match &definition.kind {
-                    ResolvedDefinitionKind::Equational(global) => (
+                    ResolvedDefinitionKind::Equational(global)
+                    | ResolvedDefinitionKind::ForeignConstant(global) => (
                         &global.interface.type_parameters,
                         &global.interface.requirements,
                     ),
@@ -6932,7 +6933,10 @@ fn visit_interface_applications(
                     KindFailure::internal_cause(module.span, KindInternalCause::PreflightGlobal)
                 })?;
                 let requirements = match &definition.kind {
-                    ResolvedDefinitionKind::Equational(global) => &global.interface.requirements,
+                    ResolvedDefinitionKind::Equational(global)
+                    | ResolvedDefinitionKind::ForeignConstant(global) => {
+                        &global.interface.requirements
+                    }
                     ResolvedDefinitionKind::InlineOperational(global) => {
                         &global.header.requirements
                     }
@@ -6971,7 +6975,8 @@ fn check_definition<'a>(
     budget: &mut TypeWorkBudget,
 ) -> Result<DeclarationKindOutcome, KindFailure> {
     match &definition.kind {
-        ResolvedDefinitionKind::Equational(global) => {
+        ResolvedDefinitionKind::Equational(global)
+        | ResolvedDefinitionKind::ForeignConstant(global) => {
             authenticate_owner_parameters(registry, &global.interface.type_parameters, budget)?;
             environments.install_scheme_parameters(&global.interface.type_parameters, budget)?;
             environments.expect_value_type(&global.interface.annotation, budget)?;

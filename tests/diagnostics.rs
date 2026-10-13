@@ -128,6 +128,7 @@ fn main_body(module: &ResolvedModule) -> &ResolvedExpr {
         .iter()
         .find_map(|definition| match &definition.kind {
             ResolvedDefinitionKind::Equational(definition)
+            | ResolvedDefinitionKind::ForeignConstant(definition)
                 if definition.interface.name.spelling == "main" =>
             {
                 Some(
@@ -139,6 +140,7 @@ fn main_body(module: &ResolvedModule) -> &ResolvedExpr {
                 )
             }
             ResolvedDefinitionKind::Equational(_)
+            | ResolvedDefinitionKind::ForeignConstant(_)
             | ResolvedDefinitionKind::InlineOperational(_) => None,
         })
         .expect("fixture should declare equational main")

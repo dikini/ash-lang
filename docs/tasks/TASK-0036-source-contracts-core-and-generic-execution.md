@@ -48,7 +48,8 @@ with one Cargo job; keep milestone-wide regression pending between the named
 checkpoint gates in the [agent workflow](../project/agent-workflow.md). The
 last full gate was run at `868d0b43` and transferred by authenticated equality
 to retained `9fae971`. PR21's focused ownership delivery is retained at
-`d44138f`; milestone-wide regression verification remains pending. The next
+`d44138f`, and PR22's focused scalar teardown delivery at `3435d62`;
+milestone-wide regression verification remains pending. The next
 gate belongs to the PM after shared ownership/control/runtime support is
 complete, including declared dependencies, retained-owner quarantine, control
 and required-completion failure matrices through source, Core, copying, image,
@@ -56,6 +57,34 @@ bindings and guard storage. Focused PRs may contribute toward that boundary
 without making each PR a full-gate checkpoint.
 
 ## Discoveries
+
+Checked foreign scalar constants occupy the ordinary term namespace and inherit
+the defining library's publication mode. Qualified, selected and re-exported
+uses retain the defining binder. Their exact mathematical literals lower as
+nonrecursive `Int` bindings outside the existing function-only recursive groups;
+ordinary global definitions retain their function restriction. Constant binders,
+spelling copies and declaration-order permutation use precharged fallible
+storage. Keeping the original declaration order preserves independent kind and
+evidence checks rather than relaxing their correspondence.
+
+Native constant operands select the original library's checked member and exact
+representation before narrowing and complete call admission. Equal-valued
+members are not interchangeable under executable EXPECTED_FACTS authentication.
+The same selection works in owner acquisition, source finish and separate host
+destruction. Static/shared scalar hosts observe signed values and full unsigned
+64-bit values after sources and image/facts files are removed. An owner witness
+separately observes normal finish and partial-owner host destruction with fixed
+original operands; this does not generalize source-projected scalar teardown
+inputs or lifecycle callable privilege.
+
+The private image keeps signed i64 literal encoding and adds a canonical u64
+payload only above `i64::MAX`, retaining the full range of admitted scalar
+constants. This is not general arbitrary-precision literal serialization.
+Literal elaboration initially enlarged a shared debug frame enough to overflow
+the unchanged 256 KiB cleanup witness while compiling its fixture. Isolating
+the literal-only routine reduces that shared closure from 8,456 to 7,464 bytes;
+the ordinary equation path, work charges, guarded ownership and stack policy
+remain unchanged.
 
 Scalar teardown uses a separate immutable status descriptor alongside the
 existing void descriptor. It retains total original literal predicates,
@@ -88,9 +117,10 @@ without retry, blocked status teardown before C, dependency-order recovery,
 full unsigned widening, capture/resume/ordinary override and terminal retained
 discard. Injected readiness witnesses distinguish the I32 reply's ten-unit
 exact allowance from one-short atomic refusal (six units spent), prefixed
-allowances and two fresh retries. Ordinary constant terms and native constant
-operands are separate work; this slice needs only checked passive status
-literals. Scalar teardown inputs and callable lifecycle helpers remain outside
+allowances and two fresh retries. That status delivery required only checked
+passive status literals; ordinary exports and fixed native operands have their
+separate declaration and admission evidence above. Source-projected scalar
+teardown inputs and callable lifecycle helpers remain outside
 the current executable profile, so the shared-runtime checkpoint is not yet
 ready.
 
@@ -560,11 +590,11 @@ without teardown. Symbolic patterns now distinguish possible from definite
 matches. Only a definite match stops the arm walk; the public pipeline rejects
 the mixed scalar/state counterexample without enumerating scalar variant products.
 
-Ordinary source does not currently spell negative numeric literals, and source
-foreign constants remain unimplemented. Boundary evidence obtains negative
-integers through the existing owner-free scalar reply path. Image fixtures use
-ordinary mathematical arithmetic on admitted i64 literal payloads for larger
-values, preserving the private image's existing literal limitation.
+Before checked constant publication, boundary evidence obtained negative integers
+through owner-free scalar replies and larger values through ordinary arithmetic
+on admitted i64 image payloads. Checked foreign literals now supply signed values
+and the complete u64 range directly, while ordinary negative-literal expression
+syntax and general arbitrary-precision image literals remain outside this slice.
 
 ## Deviations
 

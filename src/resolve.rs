@@ -1801,6 +1801,10 @@ fn resolve_module_names_with_budget(
             &mut resolver.type_work,
         )?;
         let mut declarations = declarations;
+        let mut ordered_definitions =
+            ResolvedDefinitionBuffer(std::mem::take(&mut declarations.definitions));
+        resolver.order_source_constant_definitions(surface, &mut ordered_definitions)?;
+        declarations.definitions = ordered_definitions.into_vec();
         let resources = std::mem::take(&mut declarations.resources);
         let source_resources = std::mem::take(&mut declarations.source_resources);
         if let Some(foreign) = loaded.foreign_source() {
@@ -2132,6 +2136,58 @@ fn build_export_candidate(
             })?;
     }
 
+    let mut constant_definitions = definitions.iter().skip(surface.definitions.len());
+    for library in &surface.foreign_libraries {
+        for member in &library.members {
+            let crate::surface::SurfaceForeignMember::Constant(source) = member else {
+                continue;
+            };
+            let resolved = constant_definitions.next().ok_or_else(|| {
+                error(
+                    ResolveReason::InternalState,
+                    source.span,
+                    "foreign constant definition is missing",
+                )
+            })?;
+            let binder = definition_binder(resolved);
+            if library.public {
+                candidate.try_insert_term(
+                    binder.spelling.clone(),
+                    CandidateGlobal {
+                        binder: binder.id,
+                        source: CandidateFactSource::Local,
+                        origin: binder.origin.clone(),
+                    },
+                    type_work,
+                )
+            } else {
+                candidate.try_insert_withheld(
+                    WithheldNamespace::Term,
+                    binder.spelling.clone(),
+                    WithheldExport {
+                        kind: WithheldExportKind::Private,
+                        owner: None,
+                        origin: Some(binder.origin.clone()),
+                    },
+                    type_work,
+                )
+            }
+            .map_err(|_| {
+                export_candidate_resource_error(
+                    source.span,
+                    "foreign constant export exceeded its budget",
+                )
+            })?;
+        }
+    }
+    if constant_definitions.next().is_some() {
+        return Err(error(
+            ResolveReason::InternalState,
+            surface.span,
+            "foreign constant definition inventory disagrees",
+        ));
+    }
+
     for (source, resolved) in surface.type_declarations.iter().zip(registry.nominals()) {
         if source.visibility == SurfaceTypeVisibility::Private {
             candidate
@@ -2414,7 +2470,8 @@ fn export_candidate_resource_error(span: crate::source::Span, message: &str) -> 
 
 fn definition_binder(definition: &ResolvedDefinition) -> &Binder {
     match &definition.kind {
-        ResolvedDefinitionKind::Equational(global) => &global.interface.name,
+        ResolvedDefinitionKind::Equational(global)
+        | ResolvedDefinitionKind::ForeignConstant(global) => &global.interface.name,
         ResolvedDefinitionKind::InlineOperational(global) => &global.header.name,
     }
 }
@@ -2622,6 +2679,7 @@ struct PreparedDeclarationSetup {
     effects: ResolvedEffectBuffer,
     global_type_parameters: ImportedTypeVariableRows,
     global_binders: ResolvedBinderIterator,
+    foreign_constant_binders: Vec<Binder>,
     pending_implementations: PendingImplementationBuffer,
 }
 
@@ -2937,6 +2995,13 @@ impl Resolver {
                         )
                     })?;
                     for member in &library.members {
+                        if let crate::surface::SurfaceForeignMember::Constant(constant) = member {
+                            self.validate_local_term_name(
+                                &constant.name,
+                                Some(constant.span),
+                                &mut term_names,
+                            )?;
+                        }
                         if let crate::surface::SurfaceForeignMember::Owner(owner) = member {
                             self.validate_local_type_name(
                                 &owner.name,
@@ -7622,6 +7687,56 @@ impl Resolver {
                 operational.header.name.span,
             ),
         };
+        let requirement_count = match &definition.kind {
+            SurfaceDefinitionKind::Equational(global) => global.interface.requirements.len(),
+            SurfaceDefinitionKind::InlineOperational(global) => global.header.requirements.len(),
+        };
+        self.allocate_global_name(
+            global_name,
+            global_name_span,
+            definition.span,
+            requirement_count,
+        )
+    }
+
+    fn allocate_global_name(
+        &mut self,
+        global_name: &str,
+        global_name_span: Span,
+        definition_span: Span,
+        requirement_count: usize,
+    ) -> Result<Binder, ResolveError> {
+        self.check_global_name(global_name, global_name_span)?;
+        let global = self.allocate_binder(global_name, global_name_span)?;
+        self.global_requirement_counts
+            .insert(global.id, requirement_count);
+        let Some(file_scope) = self.scopes.first_mut() else {
+            return Err(error(
+                ResolveReason::InternalState,
+                definition_span,
+                "the resolver lost the file scope",
+            )
+            .with_context(ResolveContext::MissingFileScope));
+        };
+        file_scope.insert(
+            global.spelling.clone(),
+            ResolvedTermBinding::local(ResolvedTermName::Global(global.id)),
+        );
+        self.globals.insert(
+            global_name.to_owned(),
+            GlobalFact {
+                name_span: global_name_span,
+                definition_span,
+            },
+        );
+        Ok(global)
+    }
+
+    fn check_global_name(
+        &self,
+        global_name: &str,
+        global_name_span: Span,
+    ) -> Result<(), ResolveError> {
         if let Some(first) = self.globals.get(global_name) {
             let mut diagnostic = Diagnostic::new(
                 ResolveReason::DuplicateGlobal,
@@ -7641,33 +7756,75 @@ impl Resolver {
         if self.expression_name_is_bound(global_name) {
             return Err(import_conflict(global_name_span, global_name));
         }
-        let global = self.allocate_binder(global_name, global_name_span)?;
-        let requirement_count = match &definition.kind {
-            SurfaceDefinitionKind::Equational(global) => global.interface.requirements.len(),
-            SurfaceDefinitionKind::InlineOperational(global) => global.header.requirements.len(),
-        };
-        self.global_requirement_counts
-            .insert(global.id, requirement_count);
-        let Some(file_scope) = self.scopes.first_mut() else {
-            return Err(error(
-                ResolveReason::InternalState,
-                definition.span,
-                "the resolver lost the file scope",
+        Ok(())
+    }
+
+    fn allocate_source_constant_binder(
+        &mut self,
+        name: &str,
+        name_span: Span,
+        span: Span,
+    ) -> Result<Binder, ResolveError> {
+        self.check_global_name(name, name_span)?;
+        let resource = || {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "foreign constant binder admission exceeded its work or storage budget",
             )
-            .with_context(ResolveContext::MissingFileScope));
         };
-        file_scope.insert(
-            global.spelling.clone(),
-            ResolvedTermBinding::local(ResolvedTermName::Global(global.id)),
-        );
+        self.type_work
+            .charge(
+                name.len()
+                    .checked_mul(3)
+                    .and_then(|n| n.checked_add(6))
+                    .ok_or_else(resource)?,
+            )
+            .map_err(|_| resource())?;
+        self.globals.try_reserve(1).map_err(|_| resource())?;
+        self.global_requirement_counts
+            .try_reserve(1)
+            .map_err(|_| resource())?;
+        self.scopes
+            .first_mut()
+            .ok_or_else(|| {
+                error(
+                    ResolveReason::InternalState,
+                    span,
+                    "missing foreign constant file scope",
+                )
+            })?
+            .try_reserve(1)
+            .map_err(|_| resource())?;
+        let mut names = [String::new(), String::new(), String::new()];
+        for text in &mut names {
+            text.try_reserve_exact(name.len()).map_err(|_| resource())?;
+            text.push_str(name);
+        }
+        let [binder_name, file_name, global_name] = names;
+        let binder = self.allocate_binder_with_spelling(binder_name, name_span)?;
+        self.global_requirement_counts.insert(binder.id, 0);
+        self.scopes
+            .first_mut()
+            .ok_or_else(|| {
+                error(
+                    ResolveReason::InternalState,
+                    span,
+                    "missing foreign constant file scope",
+                )
+            })?
+            .insert(
+                file_name,
+                ResolvedTermBinding::local(ResolvedTermName::Global(binder.id)),
+            );
         self.globals.insert(
-            global_name.to_owned(),
+            global_name,
             GlobalFact {
-                name_span: global_name_span,
-                definition_span: definition.span,
+                name_span,
+                definition_span: span,
             },
         );
-        Ok(global)
+        Ok(binder)
     }
 
     fn install_source_owner_candidates(
@@ -8488,9 +8645,64 @@ impl Resolver {
                     "effect-argument storage exceeded its type-work budget",
                 )
             })?;
+        let constant_count = self
+            .source_foreign_libraries
+            .iter()
+            .map(|library| library.constants().len())
+            .sum::<usize>();
+        self.type_work.charge(constant_count).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                surface.span,
+                "foreign constant binder inventory exceeded its budget",
+            )
+        })?;
+        let mut foreign_constant_binders = Vec::new();
+        foreign_constant_binders
+            .try_reserve_exact(constant_count)
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    surface.span,
+                    "foreign constant binder storage could not be reserved",
+                )
+            })?;
         let mut global_binders = vec![None; surface_definitions.len()];
         for declaration in &surface.declaration_order {
             match *declaration {
+                SurfaceDeclarationIndex::ForeignLibrary(index) => {
+                    let library =
+                        Arc::clone(self.source_foreign_libraries.get(index).ok_or_else(|| {
+                            error(
+                                ResolveReason::InternalState,
+                                surface.span,
+                                "foreign constant library is missing",
+                            )
+                        })?);
+                    for constant in library.constants() {
+                        let written = surface.foreign_libraries[index]
+                            .members
+                            .get(constant.member_index())
+                            .and_then(|member| match member {
+                                crate::surface::SurfaceForeignMember::Constant(value) => {
+                                    Some(value)
+                                }
+                                _ => None,
+                            })
+                            .ok_or_else(|| {
+                                error(
+                                    ResolveReason::InternalState,
+                                    surface.span,
+                                    "original foreign constant is missing",
+                                )
+                            })?;
+                        foreign_constant_binders.push(self.allocate_source_constant_binder(
+                            constant.name(),
+                            written.name.span,
+                            written.span,
+                        )?);
+                    }
+                }
                 SurfaceDeclarationIndex::Global(index) => {
                     let definition = surface_definitions.get(index).ok_or_else(|| {
                         error(
@@ -8562,8 +8774,7 @@ impl Resolver {
                     }
                 }
                 SurfaceDeclarationIndex::SourceResource(_) => {}
-                SurfaceDeclarationIndex::ForeignLibrary(_)
-                | SurfaceDeclarationIndex::Resource(_)
+                SurfaceDeclarationIndex::Resource(_)
                 | SurfaceDeclarationIndex::Type(_)
                 | SurfaceDeclarationIndex::Interface(_)
                 | SurfaceDeclarationIndex::Effect(_) => {}
@@ -8594,6 +8805,7 @@ impl Resolver {
             effects,
             global_type_parameters: ImportedTypeVariableRows(global_type_parameters.into_iter()),
             global_binders: ResolvedBinderIterator(global_binders.into_iter()),
+            foreign_constant_binders,
             pending_implementations: PendingImplementationBuffer(pending_implementations),
         })
     }
@@ -8608,6 +8820,7 @@ impl Resolver {
             effects,
             mut global_type_parameters,
             mut global_binders,
+            foreign_constant_binders,
             pending_implementations,
         } = self.prepare_declaration_setup(surface)?;
         let surface_definitions = &surface.definitions;
@@ -8856,6 +9069,12 @@ impl Resolver {
                 span: definition.span,
             });
         }
+
+        self.append_source_constant_definitions(
+            surface,
+            foreign_constant_binders,
+            &mut definitions,
+        )?;
 
         let implementations = ResolvedImplementationBuffer(self.resolve_implementations(
             &surface.implementations,
@@ -10689,6 +10908,14 @@ impl Resolver {
         spelling: &str,
         span: crate::source::Span,
     ) -> Result<Binder, ResolveError> {
+        self.allocate_binder_with_spelling(spelling.to_owned(), span)
+    }
+
+    fn allocate_binder_with_spelling(
+        &mut self,
+        spelling: String,
+        span: Span,
+    ) -> Result<Binder, ResolveError> {
         let id = BinderId::resolved(self.module, self.next_binder);
         self.next_binder = self.next_binder.checked_add(1).ok_or_else(|| {
             identity_error(
@@ -10699,7 +10926,7 @@ impl Resolver {
         })?;
         Ok(Binder {
             id,
-            spelling: spelling.to_owned(),
+            spelling,
             origin: Origin::Source(span),
         })
     }

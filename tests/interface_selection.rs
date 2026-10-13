@@ -180,7 +180,8 @@ fn checked_definition<'a>(checked: &'a CheckedModule, spelling: &str) -> &'a Che
         .definitions()
         .iter()
         .find(|definition| match definition.kind() {
-            ResolvedDefinitionKind::Equational(global) => {
+            ResolvedDefinitionKind::Equational(global)
+            | ResolvedDefinitionKind::ForeignConstant(global) => {
                 global.interface.name.spelling == spelling
             }
             ResolvedDefinitionKind::InlineOperational(global) => {
@@ -196,7 +197,8 @@ fn occurrence_selections(
 ) -> Vec<&ResolvedOccurrence> {
     let mut expressions = Vec::new();
     match definition.kind() {
-        ResolvedDefinitionKind::Equational(global) => {
+        ResolvedDefinitionKind::Equational(global)
+        | ResolvedDefinitionKind::ForeignConstant(global) => {
             expressions.extend(global.equations.iter().map(|equation| &equation.body));
         }
         ResolvedDefinitionKind::InlineOperational(global) => {
@@ -821,7 +823,8 @@ fn link_modules_retains_the_checked_occurrences_evidence_selection() {
             .definitions()
             .iter()
             .find(|definition| match definition.kind() {
-                ResolvedDefinitionKind::Equational(global) => {
+                ResolvedDefinitionKind::Equational(global)
+                | ResolvedDefinitionKind::ForeignConstant(global) => {
                     global.interface.name.spelling == "main"
                 }
                 ResolvedDefinitionKind::InlineOperational(global) => {

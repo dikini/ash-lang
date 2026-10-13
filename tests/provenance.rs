@@ -110,6 +110,7 @@ fn main_body(module: &ResolvedModule) -> &ResolvedExpr {
         .iter()
         .find_map(|definition| match &definition.kind {
             ResolvedDefinitionKind::Equational(global)
+            | ResolvedDefinitionKind::ForeignConstant(global)
                 if global.interface.name.spelling == "main" =>
             {
                 Some(&global.equations[0].body)
@@ -221,7 +222,8 @@ fn successful_definition_checks_retain_the_body_and_declared_result_origins() {
         let body = core.node(function_node.body()).expect("function body");
 
         match &program.definitions()[0].kind {
-            ResolvedDefinitionKind::Equational(definition) => assert_check_origin(
+            ResolvedDefinitionKind::Equational(definition)
+            | ResolvedDefinitionKind::ForeignConstant(definition) => assert_check_origin(
                 &body.origin,
                 definition.equations[0].body.span,
                 definition
@@ -283,7 +285,8 @@ fn both_global_presentations_retain_exact_binding_function_parameter_and_applica
         );
 
         match &definition.kind {
-            ResolvedDefinitionKind::Equational(equational) => {
+            ResolvedDefinitionKind::Equational(equational)
+            | ResolvedDefinitionKind::ForeignConstant(equational) => {
                 assert_eq!(
                     global.members()[0].binder().id(),
                     equational.interface.name.id

@@ -2731,6 +2731,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::ResolvedConstructorBuffer.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::ResolvedDefinition.kind", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolved.rs::ResolvedDefinitionKind.Equational.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
+    kind_site!("src/resolved.rs::ResolvedDefinitionKind.ForeignConstant.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolved.rs::ResolvedDefinitionKind.InlineOperational.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolved.rs::ResolvedEquation.body", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolved.rs::ResolvedEffectDeclaration.operations", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),

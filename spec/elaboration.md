@@ -134,15 +134,18 @@ owner, with that owner's original host destructor authenticated separately. The
 `void` or scalar-status finish and destruction contracts admit total consumed
 or retained dispositions and exact declared Current/Enclosing pointer operands.
 Scalar status alternatives retain their original checked literals, readable
-raw result and disposition facts; they grant no ordinary constant value or
-operand.
+raw result and disposition facts. Checked scalar constant declarations lower to
+ordinary nonrecursive `Int` bindings. Native operands retain the exact original
+constant member, representation and mathematical value; status predicates alone
+grant no constant value or operand authority.
 Resource and native instances retain all ordered Type/EffectRow arguments,
 including an owned slot that is not first. The resource handle's value type
 uses a saturated nominal application for a Type-only family and the resource
 application carrier for a row-bearing family; the scope retains the same
 complete tagged instance in either case. Higher-kinded resource formals,
-row-bearing owner state families, callable lifecycle helpers, scalar teardown
-operands, native access/copy windows and library migrations remain unsupported
+row-bearing owner state families, callable lifecycle helpers, source-projected
+scalar teardown operands, native access/copy windows and library migrations
+remain unsupported
 by this profile. Exact native interpretation preserves ordinary outward handler
 rows and ordinary override precedence. Passive foreign-owner declarations have
 a separate admission boundary and supply no execution permission.

@@ -51,6 +51,7 @@ fn main_body(program: &ResolvedModule) -> &ash::resolved::ResolvedExpr {
         .iter()
         .find_map(|definition| match &definition.kind {
             ResolvedDefinitionKind::Equational(global)
+            | ResolvedDefinitionKind::ForeignConstant(global)
                 if global.interface.name.spelling == "main" =>
             {
                 Some(global)
