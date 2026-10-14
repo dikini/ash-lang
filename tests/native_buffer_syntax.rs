@@ -19,9 +19,9 @@ fn parses(expression: &str) -> bool {
 #[test]
 fn native_buffer_acquisition_uses_the_existing_resource_shape() {
     for expression in [
-        "resource native_buffer<R> b = 4 {\n42\n}",
-        "resource native_buffer<R> b = (2 + 2) {\nb\n}",
-        "resource native_buffer<R> b = 4 {\nresource cell<S> c = 42 {\nc\n}\n}",
+        "resource Buffer.Buffer<R> b = 4 {\n42\n}",
+        "resource Buffer.Buffer<R> b = (2 + 2) {\nb\n}",
+        "resource Buffer.Buffer<R> b = 4 {\nresource cell<S> c = 42 {\nc\n}\n}",
     ] {
         assert!(parses(expression), "{expression}");
     }
@@ -37,10 +37,7 @@ fn native_buffer_remains_contextual_and_cell_is_unchanged() {
 fn projection_retains_the_selected_resource_kind() {
     use ash::surface::{SurfaceDefinitionKind, SurfaceExprKind, SurfaceResourceKind};
 
-    for (designator, expected) in [
-        ("cell", SurfaceResourceKind::Cell),
-        ("native_buffer", SurfaceResourceKind::NativeBuffer),
-    ] {
+    for designator in ["cell", "Buffer.Buffer"] {
         let source = SourceFile::new(
             "resource-kind.ash",
             format!("main : Unit -> Int\nmain () = resource {designator}<R> b = 4 {{\n42\n}}\n"),
@@ -51,23 +48,31 @@ fn projection_retains_the_selected_resource_kind() {
         let SurfaceDefinitionKind::Equational(main) = &module.definitions[0].kind else {
             panic!("expected main equation")
         };
-        let SurfaceExprKind::Resource(resource) = &main.equations[0].body.kind else {
-            panic!("expected resource carrier")
-        };
-        assert_eq!(resource.kind, expected);
-        assert!(resource.initializer.span.range().end() < resource.body.span.range().start());
+        match &main.equations[0].body.kind {
+            SurfaceExprKind::Resource(resource) if designator == "cell" => {
+                assert_eq!(resource.kind, SurfaceResourceKind::Cell);
+                assert!(
+                    resource.initializer.span.range().end() < resource.body.span.range().start()
+                );
+            }
+            SurfaceExprKind::ProviderResource(resource) if designator == "Buffer.Buffer" => {
+                assert!(
+                    resource.initializer.span.range().end() < resource.body.span.range().start()
+                );
+            }
+            _ => panic!("expected the exact cell/source carrier"),
+        }
     }
 }
 
 #[test]
 fn malformed_native_buffer_acquisitions_reject() {
     for expression in [
-        "resource native_buffer<r> b = 4 {\n42\n}",
-        "resource native_buffer<R, S> b = 4 {\n42\n}",
-        "resource native_buffer<R> _ = 4 {\n42\n}",
-        "resource native_buffer<R> b = 2 + 2 {\n42\n}",
-        "resource native_buffer<R> b = 4 42",
-        "resource other<R> b = 4 {\n42\n}",
+        "resource Buffer.Buffer<r> b = 4 {\n42\n}",
+        "resource Buffer.Buffer<R> _ = 4 {\n42\n}",
+        "resource Buffer.Buffer<R> b = 2 + 2 {\n42\n}",
+        "resource Buffer.Buffer<R> b = 4 42",
+        "resource native_buffer<R> b = 4 {\n42\n}",
     ] {
         assert!(!parses(expression), "{expression}");
     }

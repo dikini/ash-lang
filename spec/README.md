@@ -148,15 +148,17 @@ Each execution has a fresh activation, and capture/resume moves the owned
 scope without duplication. Normal completion or owned abandonment releases it
 once.
 
-`resource native_buffer<R> b = length { body }` uses the fixed
-`@builtin.native_buffer` API to acquire zeroed native bytes. Checked length,
-read and write operations preserve the same scoped authority and activation
-rules as cells. Acquisition returns ordinary `Failure(Error)` without entering
-the body, or releases on normal completion and returns `Success(body_value)`.
-Nested outcomes remain nested. Owned discard skips the abandoned wrapper;
-internal host teardown invokes no source cleanup and reports detectable resource
-failure without claiming incomplete cleanup succeeded.
-This provider adds no source pointers or general FFI.
+The ordinary passive [native-buffer library](../libraries/native_buffer.ash)
+uses `resource Buffer.Buffer<R> b = length { body }` after an explicit import.
+Its Ash acquisition, associated handlers and finish use common checked foreign
+contracts, bytes, guards and the `acquired_only` codec. Positive lengths acquire
+zeroed writable bytes; invalid lengths refuse before C. Acquisition returns
+ordinary `Failure(Error)` without a body, or releases normally and returns
+`Success(body_value)`. Nested outcomes remain nested. Capture/resume moves the
+same owner; owned discard completes it once without the abandoned wrapper.
+Generated hosts execute the native calls. The old builtin module, lowercase
+resource designator and fixed evaluator adapter are removed; cell semantics
+remain unchanged.
 
 `hook H { body }` supplies the empty identity chain for an exact effect API
 with one endomorphic `publish` operation. `register H transformer { body }`

@@ -2817,12 +2817,7 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
         },
         Some(EffectOperation::Resource(resource)) => {
             let api = resource.acquisition.api().ok_or(Failure::Invalid)?;
-            let fallible = api.is_native_buffer();
-            charge(budget, usize::from(fallible))?;
-            graph
-                .code
-                .try_reserve(1 + usize::from(fallible))
-                .map_err(|_| Failure::Resource)?;
+            graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
             let scope = graph.code.len();
             data.position(scope, id, budget)?;
             let mut arguments = Vec::new();
@@ -2834,20 +2829,8 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
                 body: index(resource.body) + 1,
                 effect: Request::effect(&effect, resource.acquisition.span, budget)?,
             });
-            let acquisition = if fallible {
-                // Initializer completion precedes this choice. Failure
-                // returns without installing a resource frame or owner.
-                let choice = graph.code.len();
-                data.position(choice, id, budget)?;
-                graph
-                    .code
-                    .push(Control::Choice(copy_slice(&[0, scope], budget)?));
-                choice
-            } else {
-                scope
-            };
             Control::Sequence(copy_slice(
-                &[index(resource.initializer) + 1, acquisition],
+                &[index(resource.initializer) + 1, scope],
                 budget,
             )?)
         }
@@ -2862,6 +2845,14 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
                     .ok_or(Failure::Resource)?,
             )?;
             graph.code.try_reserve(7).map_err(|_| Failure::Resource)?;
+            let positions = if matches!(
+                scope.header().codec.report,
+                super::source_resource::SourceResourceReportCodec::AcquiredOnly { .. }
+            ) {
+                Some(data.source_resource_positions(id, budget)?)
+            } else {
+                None
+            };
             let mut clauses = Vec::new();
             clauses
                 .try_reserve_exact(scope.handler.clauses().len())
@@ -2877,15 +2868,11 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
                 });
             }
             let handler = graph.code.len();
-            data.position_provider_handler(
-                handler,
-                id,
-                matches!(
-                    scope.header().codec.report,
-                    super::source_resource::SourceResourceReportCodec::Scope { .. }
-                ),
-                budget,
-            )?;
+            if let Some(positions) = positions {
+                data.position(handler, positions.handler, budget)?;
+            } else {
+                data.position_provider_handler(handler, id, true, budget)?;
+            }
             graph.code.push(Control::Handler {
                 body: index(scope.handler.body()) + 1,
                 effect: Request::effect(scope.handler.effect(), source, budget)?,
@@ -2894,7 +2881,10 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
             });
             let mut phases = Vec::new();
             phases.try_reserve_exact(2).map_err(|_| Failure::Resource)?;
-            for root in [scope.acquire.body, scope.finish.body] {
+            for (root, value) in [
+                (scope.acquire.body, positions.map_or(id, |p| p.acquire)),
+                (scope.finish.body, positions.map_or(id, |p| p.finish)),
+            ] {
                 let mut effects = Vec::new();
                 charge(budget, scope.native_interpretations().len())?;
                 effects
@@ -2906,7 +2896,7 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
                     effects.push(effect);
                 }
                 let position = graph.code.len();
-                data.position(position, id, budget)?;
+                data.position(position, value, budget)?;
                 graph.code.push(Control::NativeInterpret {
                     body: index(root) + 1,
                     effects,
@@ -2914,7 +2904,7 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
                 phases.push(position);
             }
             let successful = graph.code.len();
-            data.position(successful, id, budget)?;
+            data.position(successful, positions.map_or(id, |p| p.cleanup), budget)?;
             // Finish is an armed structural obligation, not a body suffix that
             // discard may skip. Its running frame is nonabandonable under the
             // same independent capture rules as an ordinary cleanup action.
@@ -2951,12 +2941,12 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
                 source,
             });
             let outcome = graph.code.len();
-            data.position(outcome, id, budget)?;
+            data.position(outcome, positions.map_or(id, |p| p.body), budget)?;
             graph
                 .code
                 .push(Control::Choice(copy_slice(&[0, successful], budget)?));
             let acquisition = graph.code.len();
-            data.position(acquisition, id, budget)?;
+            data.position(acquisition, positions.map_or(id, |p| p.body), budget)?;
             graph.code.push(Control::Sequence(copy_slice(
                 &[phases[0], outcome],
                 budget,
@@ -3557,11 +3547,18 @@ fn analyze_nodes_with_methods<F: CoreOperationFamily>(
     if let Some(rows) = rows {
         *rows = cleanup_requirements(&graph, &roots, budget)?;
     } else if summary_roots.is_none() {
-        if has_discard {
-            let requirements = cleanup_requirements(&graph, &roots, budget)?;
+        if has_discard && cleanup_rows_may_be_nonempty(&graph, budget)? {
+            // Strict discovery already visits the original control paths. Keep
+            // its passive row observations instead of constructing a second
+            // inference-only solver; all safety checks still run in strict mode.
+            let requirements = check_control_roots_with_rows(&graph, roots, true, budget)?;
             check_cleanup_rows(nodes, operation, &requirements, budget)?;
+        } else {
+            if has_discard {
+                check_cleanup_rows(nodes, operation, &[], budget)?;
+            }
+            check_control_roots(&graph, roots, budget)?;
         }
-        check_control_roots(&graph, roots, budget)?;
     }
     let graph = Arc::new(graph);
     let mut summaries = Vec::new();
@@ -5616,21 +5613,42 @@ fn cleanup_requirements(
     roots: &[usize],
     budget: &mut TypeWorkBudget,
 ) -> Result<Vec<CleanupRequirement>, Failure> {
-    charge(budget, graph.code.len())?;
-    // Only Cleanup nodes contribute inferred close rows. The complete graph
-    // includes imported callable bodies; absence proves the empty row without
-    // another control fixed point. Safety and row authentication still run.
-    if !graph
-        .code
-        .iter()
-        .any(|code| matches!(code, Control::Cleanup { .. }))
-    {
+    if !cleanup_rows_may_be_nonempty(graph, budget)? {
         return Ok(Vec::new());
     }
     let mut analysis = Analysis::new(graph, None, budget)?;
     analysis.infer_cleanup_rows = true;
     analysis.check(roots, budget)?;
     Ok(std::mem::take(&mut analysis.cleanup_rows))
+}
+
+fn cleanup_rows_may_be_nonempty(
+    graph: &SummaryGraph,
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, Failure> {
+    charge(budget, graph.code.len())?;
+    // Only Cleanup actions contribute inferred close rows. Inspect the complete
+    // graph, including imported callable bodies: if every action's checked row
+    // is literally closed and empty, every possible union is empty. This does
+    // not admit a control path: discard-row authentication and the independent
+    // control-safety fixed point still run below. Open/nonempty rows retain the
+    // full contextual inference; no substitution is guessed here.
+    let mut potentially_nonempty = false;
+    for code in &graph.code {
+        if let Control::Cleanup { row_type, .. } = code {
+            charge(budget, 1)?;
+            let function = graph
+                .types
+                .0
+                .get(*row_type)
+                .and_then(Type::function_view)
+                .ok_or(Failure::Invalid)?;
+            // The canonical pure Function form represents the empty row as
+            // None; an effectful view retains every open/nonempty row.
+            potentially_nonempty |= function.effects().is_some_and(|row| !row.is_empty());
+        }
+    }
+    Ok(potentially_nonempty)
 }
 
 fn check_cleanup_rows<F: CoreOperationFamily>(
@@ -5709,6 +5727,15 @@ fn check_control_roots(
     roots: Vec<usize>,
     budget: &mut TypeWorkBudget,
 ) -> Result<(), Failure> {
+    check_control_roots_with_rows(graph, roots, false, budget).map(|_| ())
+}
+
+fn check_control_roots_with_rows(
+    graph: &SummaryGraph,
+    roots: Vec<usize>,
+    collect_cleanup_rows: bool,
+    budget: &mut TypeWorkBudget,
+) -> Result<Vec<CleanupRequirement>, Failure> {
     charge(budget, graph.code.len())?;
     if graph.code.iter().any(|code| {
         matches!(
@@ -5721,15 +5748,20 @@ fn check_control_roots(
     }) {
         let mut queries = Vec::new();
         for root in roots {
-            if query_required(graph, root, budget)? {
+            // Row authentication needs every original root, including roots
+            // whose only observation is a cleanup row. The strict checker keeps
+            // its existing query pruning when no row collection is requested.
+            if collect_cleanup_rows || query_required(graph, root, budget)? {
                 queries.try_reserve(1).map_err(|_| Failure::Resource)?;
                 queries.push(root);
             }
         }
         let mut analysis = Analysis::new(graph, None, budget)?;
+        analysis.collect_cleanup_rows = collect_cleanup_rows;
         analysis.check(&queries, budget)?;
+        return Ok(std::mem::take(&mut analysis.cleanup_rows));
     }
-    Ok(())
+    Ok(Vec::new())
 }
 
 #[cfg(test)]
@@ -7265,6 +7297,92 @@ mod tests {
     }
 
     #[test]
+    fn strict_discovery_retains_the_complete_inferred_cleanup_rows_with_exact_retries() {
+        use super::super::EffectExprKind;
+        let (core, _, _, _) = checked_core_text(concat!(
+            "effect A {\nask : Unit -> Unit\n}\neffect B {\nask : Unit -> Unit\n}\n",
+            "good : Unit -> Unit ! {B}\ngood () = perform B.ask ()\n",
+            "bad : Unit -> Unit ! {B}\nbad () = perform B.ask ()\n",
+            "main : Unit -> Unit\nmain () = handle (handle (cleanup good {\nperform A.ask ()\n}) with A {\nask ignored => discard\n}) with B {\nask ignored => resume ()\n}\n",
+        ));
+        let operation: fn(&EffectExprKind) -> Option<&EffectOperation> = |kind| match kind {
+            EffectExprKind::Operation(operation) => Some(operation),
+            _ => None,
+        };
+        let built = build_capture_graph(
+            &core.nodes,
+            &[],
+            &[],
+            operation,
+            &[],
+            &[],
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            ProviderCapturePhase::Executable,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap()
+        .unwrap();
+        let inferred =
+            cleanup_requirements(&built.graph, &built.roots, &mut TypeWorkBudget::default())
+                .unwrap();
+        assert!(!inferred.is_empty());
+        let query = |budget: &mut TypeWorkBudget| {
+            check_control_roots_with_rows(&built.graph, built.roots.clone(), true, budget)
+        };
+        let mut observed = TypeWorkBudget::default();
+        let collected = query(&mut observed).unwrap();
+        assert_eq!(inferred.len(), collected.len());
+        for (old, actual) in inferred.iter().zip(&collected) {
+            assert_eq!(
+                (
+                    old.discard,
+                    old.local,
+                    old.code,
+                    old.source,
+                    old.context,
+                    old.request
+                ),
+                (
+                    actual.discard,
+                    actual.local,
+                    actual.code,
+                    actual.source,
+                    actual.context,
+                    actual.request
+                )
+            );
+            assert_eq!(old.row, actual.row);
+            assert_eq!(old.expected, actual.expected);
+            assert_eq!(old.retained, actual.retained);
+        }
+        let required = observed.used();
+        for prefix in [0, 23] {
+            let mut short = TypeWorkBudget::with_limit(prefix + required - 1);
+            short.charge(prefix).unwrap();
+            assert!(matches!(query(&mut short), Err(Failure::Resource)));
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + required);
+                exact.charge(prefix).unwrap();
+                assert_eq!(query(&mut exact).unwrap().len(), inferred.len());
+                assert_eq!(exact.used(), prefix + required);
+            }
+        }
+        check_cleanup_rows(
+            &core.nodes,
+            operation,
+            &collected,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn empty_cleanup_query_charges_the_complete_graph_before_returning() {
         for width in [1, 4096] {
             let graph = SummaryGraph {
@@ -7287,6 +7405,74 @@ mod tests {
                 );
                 assert_eq!(exact.used(), width);
             }
+        }
+    }
+
+    #[test]
+    fn closed_empty_cleanup_rows_have_exact_prefixed_admission_and_open_rows_do_not() {
+        let source = crate::source::SourceFile::new("closed cleanup", "x").unwrap();
+        let span = source
+            .span(crate::source::ByteRange::new(0, 1).unwrap())
+            .unwrap();
+        let mut graph = SummaryGraph {
+            effects: true,
+            data: None,
+            callables: CallableSlots::default(),
+            types: TypeArguments(vec![Type::function_computation(
+                Type::Unit,
+                crate::types::ComputationType::new(Type::Unit, EffectRow::empty()),
+            )]),
+            code: vec![
+                Control::Return,
+                Control::Cleanup {
+                    body: 0,
+                    action: 0,
+                    row_type: 0,
+                    source: span,
+                },
+            ],
+        };
+        let required = graph.code.len() + 1;
+        for prefix in [0, 23] {
+            let mut short = TypeWorkBudget::with_limit(prefix + required - 1);
+            short.charge(prefix).unwrap();
+            assert!(matches!(
+                cleanup_requirements(&graph, &[1], &mut short),
+                Err(Failure::Resource)
+            ));
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + required);
+                exact.charge(prefix).unwrap();
+                assert!(
+                    cleanup_requirements(&graph, &[1], &mut exact)
+                        .unwrap()
+                        .is_empty()
+                );
+                assert_eq!(exact.used(), prefix + required);
+            }
+        }
+        let effect = crate::types::EffectId::new(crate::module::ModuleId::new(0), 0);
+        for row in [
+            EffectRow::closed(Box::new([crate::types::EffectInstance::new(
+                effect,
+                Box::new([]),
+            )])),
+            EffectRow::open(
+                crate::types::EffectRowVariable::Rigid(crate::types::TypeVariableId::new(42)),
+                Box::new([]),
+            ),
+        ] {
+            graph.types.0[0] = Type::function_computation(
+                Type::Unit,
+                crate::types::ComputationType::new(Type::Unit, row),
+            );
+            assert!(
+                matches!(
+                    cleanup_requirements(&graph, &[1], &mut TypeWorkBudget::default()),
+                    Err(Failure::Invalid)
+                ),
+                "an open/outward action requires full contextual inference and its data graph"
+            );
         }
     }
 

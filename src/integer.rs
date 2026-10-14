@@ -45,7 +45,8 @@ impl Integer {
         usize::try_from(&self.0).ok()
     }
 
-    pub(crate) fn to_u8(&self) -> Option<u8> {
+    #[cfg(test)]
+    fn to_u8(&self) -> Option<u8> {
         u8::try_from(&self.0).ok()
     }
 

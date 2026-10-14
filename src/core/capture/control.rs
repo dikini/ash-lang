@@ -1077,6 +1077,7 @@ pub(super) struct Analysis<'a> {
     focusing: bool,
     payloads: Vec<(usize, usize, usize)>,
     pub(super) infer_cleanup_rows: bool,
+    pub(super) collect_cleanup_rows: bool,
     pub(super) authenticate_actual_captures: bool,
     pub(super) actual_captures: Vec<super::ActualDiscardCapture>,
     pub(super) cleanup_rows: Vec<super::CleanupRequirement>,
@@ -1610,6 +1611,7 @@ impl<'a> Analysis<'a> {
             focusing: false,
             payloads: Vec::new(),
             infer_cleanup_rows: false,
+            collect_cleanup_rows: false,
             authenticate_actual_captures: false,
             actual_captures: Vec::new(),
             cleanup_rows: Vec::new(),
@@ -2430,6 +2432,9 @@ impl<'a> Analysis<'a> {
         self.candidates.clear();
         self.payloads.clear();
         self.discover(roots, None, budget)?;
+        // Passive row records describe the whole original discovery. Focused
+        // safety queries remain strict and do not invent additional row sites.
+        self.collect_cleanup_rows = false;
         if self.infer_cleanup_rows {
             return Ok(());
         }
@@ -3968,7 +3973,7 @@ impl<'a> Analysis<'a> {
         discard: usize,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
-        if !self.infer_cleanup_rows {
+        if !self.infer_cleanup_rows && !self.collect_cleanup_rows {
             return Ok(());
         }
         let Control::Cleanup { row_type, .. } = self.graph.code[code] else {

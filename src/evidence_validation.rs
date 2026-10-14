@@ -2859,13 +2859,21 @@ pub(crate) fn validate_interface_evidence_with_budget(
                     .type_variable(identity)
                     .ok_or_else(|| unknown(span))?;
                 binder_owners.try_reserve(1).map_err(|_| resource(span))?;
-                if canonical.kind != Kind::Type
-                    || identity.module() != Some(provider.module())
-                    || binder_owners
-                        .insert(identity, LinkedBinderOwner::Resource(provider))
-                        .is_some()
-                {
+                if canonical.kind != Kind::Type || identity.module() != Some(provider.module()) {
                     return Err(unknown(span));
+                }
+                // Source-resource preadmission already authenticates its
+                // exact identity/provider pair. A mixed builtin/source program
+                // still needs this contextual pass for the builtin binder;
+                // observing that same source pair cannot introduce a second
+                // owner. A different owner remains an identity collision.
+                match binder_owners.entry(identity) {
+                    std::collections::hash_map::Entry::Vacant(slot) => {
+                        slot.insert(LinkedBinderOwner::Resource(provider));
+                    }
+                    std::collections::hash_map::Entry::Occupied(slot)
+                        if *slot.get() == LinkedBinderOwner::Resource(provider) => {}
+                    _ => return Err(unknown(span)),
                 }
             }
             let method = method_evidence
@@ -9707,7 +9715,57 @@ fn authenticate_lexical_header(
             .lexical_sources
             .get(index)
             .ok_or_else(|| invalid_root(source.span))?;
-        let earlier = earlier.application(source.span)?;
+        // Source-owned providers have no experimental forwarding plan. Their
+        // original resource header and original lexical row context supply the
+        // application; a prepared/shape-compatible dictionary is not authority.
+        let original_application =
+            if let LinkedLexicalSource::Provider(resource, original, occurrence) = *earlier
+                && program
+                    .registry()
+                    .source_resource_fact(resource.definition)
+                    .is_some()
+            {
+                let header = provider_sources::authenticate_source_resource_identity(
+                    program, resource, budget, type_work, occurrence,
+                )?;
+                if header.original.provider.interface.id != interface.id {
+                    head = *parent;
+                    continue;
+                }
+                let expected = provider_sources::preceding_equation_row(
+                    program,
+                    registry,
+                    EvidenceScope {
+                        expected_equation: original.equation,
+                        owner: original.owner,
+                        ..scope
+                    },
+                    locals,
+                    original.local_head,
+                    budget,
+                    type_work,
+                    source.span,
+                )?;
+                let (actuals, application) = provider_sources::source_resource_application(
+                    program,
+                    resource,
+                    expected.as_ref(),
+                    budget,
+                    type_work,
+                    occurrence,
+                    source.span,
+                )?;
+                for argument in actuals.into_vec() {
+                    crate::types::discard_kinded_argument_iteratively(argument);
+                }
+                Some(application)
+            } else {
+                None
+            };
+        let earlier = match original_application.as_ref() {
+            Some(application) => application,
+            None => earlier.application(source.span)?,
+        };
         if earlier.interface() == interface.id {
             let earlier_keys =
                 linked_selection_key_types(interface, earlier.arguments(), budget, source.span)?;
@@ -12182,22 +12240,20 @@ Memory.AllocationRefused(error) => 0
     }
 
     #[test]
-    fn native_buffer_linked_authority_rejects_independent_acquisition_forgeries() {
+    fn cell_linked_authority_rejects_independent_acquisition_forgeries() {
         use crate::resolved::LinkedResourceMutationForTest as Mutation;
         for mutation in [
             Mutation::Provider,
             Mutation::DetachedOwner,
             Mutation::Builtin,
             Mutation::MethodOrder,
-            Mutation::MethodKind,
             Mutation::Handle,
             Mutation::Brand,
             Mutation::Origin,
             Mutation::Operation,
         ] {
-            crate::eval::reset_native_buffer_counters_for_test();
             let fixture = ValidationFixture::create(
-                "import @builtin.native_buffer as Buffer\nmain : Unit -> Buffer.Outcome<Int>\nmain () = resource native_buffer<R> b = 4 {\nBuffer.length b\n}\n",
+                "import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = resource cell<R> c = 4 {\nCell.read c\n}\n",
             );
             let graph = fixture.graph();
             let mut program =
@@ -12207,62 +12263,6 @@ Memory.AllocationRefused(error) => 0
                 validate_interface_evidence(program).is_err(),
                 "mutation={mutation:?}"
             );
-            assert_eq!(
-                crate::eval::native_buffer_counters_for_test(),
-                [0; 6],
-                "mutation={mutation:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn native_buffer_linked_registry_authenticates_ordinary_constructor_payloads() {
-        for error_payload in [false, true] {
-            crate::eval::reset_native_buffer_counters_for_test();
-            let fixture = ValidationFixture::create(
-                "import @builtin.native_buffer as Buffer\nmain : Unit -> Int\nmain () = 42\n",
-            );
-            let graph = fixture.graph();
-            let mut program =
-                crate::elaborate::link_modules(check_graph(&graph), graph.entry()).unwrap();
-            program.corrupt_native_constructor_for_test(error_payload);
-            assert!(validate_interface_evidence(program).is_err());
-            assert_eq!(crate::eval::native_buffer_counters_for_test(), [0; 6]);
-        }
-    }
-
-    #[test]
-    fn native_buffer_linked_authority_has_exact_one_short_and_fresh_budgets() {
-        let fixture = ValidationFixture::create(
-            "import @builtin.native_buffer as Buffer\nmain : Unit -> Buffer.Outcome<Buffer.Outcome<Int>>\nmain () = resource native_buffer<R> b = 4 {\nBuffer.read (b, 0)\n}\n",
-        );
-        let graph = fixture.graph();
-        let run = |constraint_limit, type_limit| {
-            let program =
-                crate::elaborate::link_modules(check_graph(&graph), graph.entry()).unwrap();
-            let mut constraints = InterfaceConstraintBudget::with_limit(constraint_limit);
-            let mut types = TypeWorkBudget::with_limit(type_limit);
-            let result =
-                validate_interface_evidence_with_budget(program, &mut constraints, &mut types);
-            (result, constraints.used(), types.used())
-        };
-        let (result, constraints, types) = run(
-            crate::interface::INTERFACE_CONSTRAINT_WORK_LIMIT,
-            crate::types::TYPE_WORK_LIMIT,
-        );
-        result.unwrap();
-        assert_eq!(
-            run(constraints - 1, types).0.unwrap_err().reason(),
-            EvidenceValidationReason::ConstraintResourceExhausted
-        );
-        assert_eq!(
-            run(constraints, types - 1).0.unwrap_err().reason(),
-            EvidenceValidationReason::TypeResourceExhausted
-        );
-        for _ in 0..2 {
-            let (result, used_constraints, used_types) = run(constraints, types);
-            result.unwrap();
-            assert_eq!((used_constraints, used_types), (constraints, types));
         }
     }
 

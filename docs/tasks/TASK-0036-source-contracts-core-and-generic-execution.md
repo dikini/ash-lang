@@ -50,7 +50,8 @@ last full gate was run at `868d0b43` and transferred by authenticated equality
 to retained `9fae971`. PR21's focused ownership delivery is retained at
 `d44138f`, PR22's focused scalar teardown delivery at `3435d62`, and PR23's
 checked scalar constants at `d09b99f`, and PR24's non-callable sentinels at
-`5323aee`;
+`5323aee`, and PR25's pure payload helpers at `ea93b87`.
+The TASK38 buffer port supplies additional focused evidence;
 milestone-wide regression verification remains pending. The next
 gate belongs to the PM after shared ownership/control/runtime support is
 complete, including declared dependencies, retained-owner quarantine, control
@@ -69,6 +70,20 @@ Typed State transport and hidden native requests remain refused. These focused
 checks do not complete the shared-runtime regression checkpoint.
 
 ## Discoveries
+
+TASK38 exposed common source-resource boundaries without requiring privileged
+lifecycle helpers or source-given forwarding. Exported source access kinds retain
+the original checked family header. Ordinary lexical-header duplicate checks
+use that original source application/context, never an experimental forwarding
+plan. Exact acquired-only restore cuts keep acquisition/body/cleanup/handler/
+finish positions separate, preserving live captured-cell dependencies while
+freezing completed acquisition once. Strict control discovery can retain the
+same passive close rows used for independent row authentication instead of
+running a duplicate inference solver. Current positive/negative and exact-work
+witnesses remain distinct from actual generated C executions. Canonical cell,
+cleanup and hook/registration image records cover the port-used structures;
+ordinary local-newtype/non-resource dictionaries retain their existing native
+image exclusion. These findings do not complete the shared-runtime checkpoint.
 
 Ordinary pure module-global helpers now transform independent acquire/finish
 payloads, including same-module and imported polymorphic definitions. Source

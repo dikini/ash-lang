@@ -905,7 +905,7 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
         NodeKind::ResourceExpression => {
             shape.token(&TokenKind::Resource)?;
             shape.token_matching(
-                |kind| matches!(kind, TokenKind::Identifier(name) if name == "cell" || name == "native_buffer"),
+                |kind| matches!(kind, TokenKind::Identifier(name) if name == "cell"),
             )?;
             shape.token(&TokenKind::Less)?;
             shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
@@ -2123,9 +2123,6 @@ fn project_expression(
                             }
                         }) {
                             Some("cell") => crate::surface::SurfaceResourceKind::Cell,
-                            Some("native_buffer") => {
-                                crate::surface::SurfaceResourceKind::NativeBuffer
-                            }
                             _ => return malformed(InternalReason::UnexpectedShape),
                         },
                         identity: surface_name(identity)?,

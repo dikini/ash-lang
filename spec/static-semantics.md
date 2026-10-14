@@ -1242,7 +1242,8 @@ unsupported. These
 are checkpoint restrictions, not additional language rules for all resources;
 the broader obligations remain in
 [CP-0022](../docs/proposals/CP-0022-ash-authored-foreign-interfaces.md).
-Compiler-owned cell and native-buffer rules below remain unchanged.
+The compiler-owned cell rules below remain unchanged. Ordinary buffers use the
+declared-source resource rules.
 
 Dependency roles come from the original foreign owner declaration and are
 instantiated before introducing the new owned identity. Input and private-data
@@ -1687,43 +1688,43 @@ not acquire a resource or its sealed authority.
 
 ## Scoped native buffers
 
-The compiler-owned `@builtin.native_buffer` API has these exact families:
+`libraries/native_buffer.ash` declares a passive `calloc`/`free` library for the
+supported GNU x86-64 profile. Its source contracts use the ordinary checked
+resource, effect and foreign declarations; the compiler grants no authority to
+the module's filename or exported spellings.
 
 | Name | Contract |
 | --- | --- |
-| `Handle<R>` | Opaque, duplicable non-owning access while the owner is live. |
-| `Provider<R>` | Sealed exact relation introduced only for the acquired body. |
+| `Buffer<R>` | Declared resource family; its access value is duplicable while that exact owner is live. |
+| `Provider<Buffer<R>>` | Sealed exact provider supplied by acquisition. |
 | `Outcome<T>` | Ordinary data `Success(T)` or `Failure(Error)`. |
 | `Error` | Ordinary nullary `InvalidLength`, `AllocationFailed`, `InvalidIndex`, `InvalidByte`. |
-| `Ops<R>` | `length : Handle<R> -> Int`, `read : (Handle<R>, Int) -> Outcome<Int>`, `write : (Handle<R>, Int, Int) -> Outcome<Unit>`. |
-| `length`, `read`, `write` | Corresponding methods requiring exact `Provider<R>` and requesting `Ops<R>`. |
+| `Ops<Buffer<R>>` | `length : Buffer<R> -> Int`, `read : (Buffer<R>, Int) -> Outcome<Int>`, `write : (Buffer<R>, Int, Int) -> Outcome<Unit>`. |
+| `length`, `read`, `write` | Ordinary associated methods requiring the exact provider and operation instance. |
 
-In `resource native_buffer<R> b = length { body }`, the initializer checks as
-`Int` in the preceding scope. The body checks under fresh rigid `R`,
-`b : Handle<R>`, sealed `Provider<R>` and the exact builtin interpreter. A body
-of type `T` gives the acquisition type `Outcome<T>`, including when `T` is
-itself an `Outcome`. Its outward row is the initializer row union the body row
-after removing exactly `Ops<R>`.
+After importing the source module as `Buffer`,
+`resource Buffer.Buffer<R> b = length { body }` checks its initializer as `Int`
+in the preceding scope. The checked header introduces fresh rigid `R`, local
+private native State, ordinary length data, the access value `b : Buffer<R>` and
+its associated provider. No native State is stored in ordinary data. The
+`acquired_only` codec yields `Outcome<T>` for body type `T`, including nested
+`Outcome` values. The outward row retains ordinary effects after removing only
+the exact associated/native instances listed by the original header.
 
-The cell resource-dependency and continuation rules apply unchanged: the result,
-outward row, stored captures, evidence and operation metadata cannot export this
-acquisition. An inner scope may return an outer dependency while its owner
-remains live. Success projection retains its body's dependencies; allocation
-failure carries none of this scope's authority. The failure continuation is
-reachable after initializer completion even when the body cannot return.
-Resuming a captured successful body preserves its result wrapper without
-reacquiring the resource.
+Results, outward rows, stored captures, evidence and operation metadata cannot
+export the acquired identity. An inner scope may return an outer dependency
+whose owner remains live. Success projection preserves body dependencies;
+allocation refusal supplies no access value. Capture and resume move the same
+owner without reacquisition. Exact ordinary handlers retain precedence,
+including generic coincidence and imported callbacks; ordinary row/lacks rules
+continue to apply. Cleanup cannot replace a removed override with a default
+source handler.
 
-Exact source handlers retain precedence, including through generic coincidence
-and imported callbacks. Ordinary row and lacks checking continues to apply;
-native access imposes no universal closed-row restriction. A cleanup action may
-use a still-live builtin buffer, but cannot silently replace a removed exact
-source override with that builtin interpreter.
-
-`Provider<R>` establishes neither allocation success on every execution nor
-numeric bounds, disjointness or eventual release. Bounds are checked at runtime.
-No source pointer, manual release, general FFI, library-defined acquisition or
-existential ownership transfer is introduced.
+The provider proves neither allocation success nor numeric bounds. The library
+and common checked primitives enforce those at runtime. Its current native
+build does not add support for ordinary local-newtype/non-resource lexical
+dictionary image records: those source/Core programs retain their independent
+rules and receive the existing unsupported-build diagnostic.
 
 ## Interfaces and constrained schemes
 

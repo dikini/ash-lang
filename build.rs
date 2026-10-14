@@ -11,9 +11,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         root.join("Cargo.toml"),
         root.join("Cargo.lock"),
         root.join("rust-toolchain.toml"),
-        root.join("native-buffer/Cargo.toml"),
     ];
-    let mut pending = vec![root.join("src"), root.join("native-buffer/src")];
+    let mut pending = vec![root.join("src")];
     while let Some(directory) = pending.pop() {
         // Directory receipts also invalidate the identity when a file is added.
         println!("cargo:rerun-if-changed={}", directory.display());

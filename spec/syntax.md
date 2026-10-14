@@ -204,7 +204,7 @@ handler_clause ::= identifier pattern "=>" expression ;
 resume_expression ::= "resume" expression ;
 discard_expression ::= "discard" ;
 resource_expression ::=
-    "resource" ("cell" | "native_buffer") "<" upper_identifier ">" identifier
+    "resource" "cell" "<" upper_identifier ">" identifier
       "=" primary_expression block
   | "resource" nominal_type_reference type_arguments identifier
       "=" primary_expression block ;
@@ -478,7 +478,7 @@ name, one pattern, and one expression body. `resume` consumes one expression;
 `discard` is a nullary primary expression. Name resolution and static semantics
 restrict both completion forms to their owning operation clause.
 
-A builtin resource expression selects `cell` or `native_buffer` and writes one
+A builtin resource expression selects `cell` and writes one
 uppercase identity binder. A source resource expression names a declared family,
 possibly qualified by a module alias, and writes its complete argument vector.
 The family's explicit `owned` position contains the fresh uppercase binder;
@@ -487,7 +487,9 @@ one ordinary value binder, one primary-expression initializer and a block body.
 The value binder is not a pattern or wildcard. A non-primary initializer, such
 as `40 + 1` or `make ()`, must be parenthesized. The initializer precedes the
 identity and value binders' scope; both binders are visible only in the body.
-The builtin designators remain ordinary identifiers outside this position.
+The builtin designator remains an ordinary identifier outside this position.
+The ordinary buffer library uses the source form, for example
+`resource Buffer.Buffer<R> b = length { body }` after an explicit import.
 
 A source resource declaration retains its complete header and the patterns for
 acquisition, completion and handlers. `result` introduces one body-result

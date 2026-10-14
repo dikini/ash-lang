@@ -41,7 +41,7 @@ select the first reported failure deterministically.
 or filesystem source. `builtin` is a reserved root name: configuring it as a
 filesystem root fails with `invocation.reserved-root` before filesystem
 inspection. The modules specified beneath that root are `@builtin.cell`,
-`@builtin.native_buffer` and `@builtin.foreign`. Unknown paths, including
+`@builtin.bytes`, `@builtin.string` and `@builtin.foreign`. Unknown paths, including
 `@builtin.cell.extra`, fail
 with `module.unknown-builtin`.
 
@@ -62,19 +62,19 @@ local `with` declarations cannot introduce the exact builtin `Provider`
 relation. Acquisition introduces its authenticated lexical evidence; ordinary
 name resolution or copied signatures cannot grant that authority.
 
-### Compiler-owned native-buffer module
+### Ordinary native-buffer library
 
-`@builtin.native_buffer` follows the same defining-identity, alias, facade and
-sealed-authority rules. It exports `Handle`, `Provider`, `Ops`, `length`, `read`,
-`write`, `Outcome`, `Error`, and the ordinary constructors `Success`, `Failure`,
-`InvalidLength`, `AllocationFailed`, `InvalidIndex` and `InvalidByte`.
-Only the opaque `Handle` constructor remains unavailable to source expressions
-and patterns. `Outcome` and `Error` are ordinary data families.
+`libraries/native_buffer.ash` is an ordinary passive source module. A configured
+root may expose it as `@ffi.native_buffer`; the root name and file basename grant
+no compiler authority. Imports, renaming and public re-exports preserve its
+original resource family, sealed provider and ordinary result identities.
+`resource Buffer.Buffer<R> b = length { body }` resolves that declared family
+through the imported alias. A facade may re-export the original declaration;
+no direct builtin import is required. Copied API names or equal function shapes
+do not supply the original resource header or provider.
 
-A `resource native_buffer` expression requires a direct complete or targeted
-import of this module. A cell import, facade-only import, source file or copied
-API cannot authorize native acquisition. Helpers may forward the exact API
-through ordinary imports without themselves acquiring a buffer.
+The former `@builtin.native_buffer` path is unknown. The lowercase
+`resource native_buffer` designator is no longer a builtin resource form.
 
 ### Compiler-owned foreign result module
 

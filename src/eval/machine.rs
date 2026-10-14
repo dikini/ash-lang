@@ -26,36 +26,16 @@ pub(crate) use source_owner_phases::post_record_test as source_owner_post_record
 #[path = "source_resource_phases.rs"]
 mod source_resource_phases;
 
-#[path = "native_buffer.rs"]
-mod native_buffer;
-
 #[cfg(test)]
-pub(crate) fn reset_native_buffer_counters_for_test() {
-    native_buffer::tests::reset();
-}
-
-#[cfg(test)]
-pub(crate) fn native_buffer_counters_for_test() -> [usize; 6] {
-    use native_buffer::tests::{ADAPTER_CALLS, ATTEMPTS, OWNERS, READS, RELEASES, WRITES};
-    [
-        ATTEMPTS.get(),
-        ADAPTER_CALLS.get(),
-        READS.get(),
-        WRITES.get(),
-        OWNERS.get(),
-        RELEASES.get(),
-    ]
-}
-use native_buffer::NativeOwner;
-
+#[path = "machine_test_hooks.rs"]
+mod machine_test_hooks;
 #[cfg(test)]
 pub(super) fn refuse_disposal_growth() -> bool {
-    native_buffer::tests::FAIL_DISPOSAL_GROWTH.replace(false)
+    machine_test_hooks::FAIL_DISPOSAL_GROWTH.replace(false)
 }
-
 #[cfg(test)]
-#[path = "native_buffer_tests.rs"]
-mod native_buffer_tests;
+#[path = "machine_storage_tests.rs"]
+mod machine_storage_tests;
 
 use super::disposal::{self, Pending};
 use super::{
@@ -149,13 +129,6 @@ impl Drop for EnvironmentEntry {
 impl EnvironmentEntry {
     fn take_owned_edges(&mut self, pending: &mut Pending<Arc<Self>>) {
         if let Some(parent) = self.parent.take() {
-            #[cfg(test)]
-            if native_buffer::tests::REFUSAL_PROBE_ACTIVE.get()
-                && pending.len() == pending.capacity()
-            {
-                native_buffer::tests::REFUSAL_ENV_GROWTH
-                    .set(native_buffer::tests::REFUSAL_ENV_GROWTH.get() + 1);
-            }
             pending.push(parent);
         }
         if let EnvironmentEntryKind::Binding { value, .. } = &mut self.kind {
@@ -165,13 +138,6 @@ impl EnvironmentEntry {
                 _ => return,
             };
             if let Some(captured) = environment.head.take() {
-                #[cfg(test)]
-                if native_buffer::tests::REFUSAL_PROBE_ACTIVE.get()
-                    && pending.len() == pending.capacity()
-                {
-                    native_buffer::tests::REFUSAL_ENV_GROWTH
-                        .set(native_buffer::tests::REFUSAL_ENV_GROWTH.get() + 1);
-                }
                 pending.push(captured);
             }
             environment.len = 0;
@@ -790,12 +756,6 @@ enum ProviderFinish {
 #[derive(Debug)]
 enum ResourcePayload {
     Cell(crate::integer::Integer),
-    NativeBuffer {
-        owner: NativeOwner,
-        // A real, unreachable heap cell reserved before native allocation.
-        // Owned discard clears only this owner's normal completion.
-        completion: Option<(Location, ConstructorId)>,
-    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -989,11 +949,6 @@ impl Drop for CapturedContinuation {
             if let Frame::ClauseBoundary { continuation, .. } = &mut frame
                 && let Some(mut nested) = continuation.take()
             {
-                #[cfg(test)]
-                if nested.frames.len() > pending.capacity() - pending.len() {
-                    let growth = &native_buffer::tests::CAPTURE_DISPOSAL_GROWTH;
-                    growth.set(growth.get() + 1);
-                }
                 for child in nested.frames.drain(..) {
                     pending.push(child);
                 }
@@ -1421,27 +1376,8 @@ impl<'runtime> Machine<'runtime> {
                     .live_resources
                     .checked_sub(1)
                     .ok_or(RuntimeFailure::InvalidControlState)?;
-                let result = match payload {
-                    ResourcePayload::Cell(_) => value,
-                    ResourcePayload::NativeBuffer { owner, completion } => {
-                        // Release precedes publication. The reserved completion
-                        // cell and work cannot be consumed by the body.
-                        drop(owner);
-                        if let Some((location, success)) = completion {
-                            let cell = self
-                                .heap
-                                .get_mut(location)
-                                .ok_or(RuntimeFailure::InvalidControlState)?;
-                            if !matches!(cell, HeapCell::Uninitialized) {
-                                return Err(RuntimeFailure::InvalidControlState);
-                            }
-                            *cell = HeapCell::Constructor(success, Some(value));
-                            Value::Location(location)
-                        } else {
-                            value
-                        }
-                    }
-                };
+                drop(payload);
+                let result = value;
                 self.trace_effect(EffectTraceEvent::ResourceReleased(key.0));
                 self.control = Some(Control::Return(result));
             }
@@ -1867,128 +1803,58 @@ impl<'runtime> Machine<'runtime> {
         if !api.registry(self.program.registry()) {
             return Err(RuntimeFailure::InvalidControlState);
         }
-        let native_length = if api.is_native_buffer() {
-            charge_runtime_work(&mut self.instantiation_work, 1, RuntimePhase::Acquisition)?;
-            let Some(len) = cell
-                .to_usize()
-                .filter(|len| *len != 0 && *len <= isize::MAX as usize)
-            else {
-                let result = self.prepare_native_result(api, Some(0), RuntimePhase::Acquisition)?;
-                self.control = Some(Control::Return(Value::Location(result)));
-                return Ok(());
-            };
-            // Initialization is proportional to the byte count. Fixed native
-            // publication and disposal are prepaid with the owner.
-            let charge = len.checked_add(2).ok_or_else(|| {
-                resource_failure(
-                    ResourceFailureCause::WorkBudgetExhausted,
-                    RuntimePhase::Acquisition,
-                    RuntimeResource::WorkUnits,
-                    None,
-                    Some(self.instantiation_work.remaining()),
-                )
-            })?;
-            charge_runtime_work(
-                &mut self.instantiation_work,
-                charge,
-                RuntimePhase::Acquisition,
-            )?;
-            Some(len)
-        } else {
-            None
-        };
         let live = self
             .live_resources
             .checked_add(1)
             .filter(|live| *live <= self.resource_limit)
             .ok_or_else(|| {
-                if native_length.is_some() {
-                    resource_failure(
-                        ResourceFailureCause::ConfiguredCapacity,
-                        RuntimePhase::Acquisition,
-                        RuntimeResource::ResourceOwners,
-                        Some(1),
-                        Some(self.resource_limit.saturating_sub(self.live_resources)),
-                    )
-                } else {
-                    legacy_failure(
-                        RuntimeFailure::ResourceCapacity,
-                        ResourceFailureCause::ConfiguredCapacity,
-                        RuntimePhase::Acquisition,
-                        RuntimeResource::ResourceOwners,
-                        Some(1),
-                        Some(self.resource_limit.saturating_sub(self.live_resources)),
-                    )
-                }
-            })?;
-        let next = self.next_activation.checked_add(1).ok_or_else(|| {
-            if native_length.is_some() {
-                resource_failure(
-                    ResourceFailureCause::ConfiguredCapacity,
-                    RuntimePhase::Acquisition,
-                    RuntimeResource::ActivationKeys,
-                    Some(1),
-                    Some(0),
-                )
-            } else {
                 legacy_failure(
                     RuntimeFailure::ResourceCapacity,
                     ResourceFailureCause::ConfiguredCapacity,
                     RuntimePhase::Acquisition,
-                    RuntimeResource::ActivationKeys,
+                    RuntimeResource::ResourceOwners,
                     Some(1),
-                    Some(0),
+                    Some(self.resource_limit.saturating_sub(self.live_resources)),
                 )
-            }
+            })?;
+        let next = self.next_activation.checked_add(1).ok_or_else(|| {
+            legacy_failure(
+                RuntimeFailure::ResourceCapacity,
+                ResourceFailureCause::ConfiguredCapacity,
+                RuntimePhase::Acquisition,
+                RuntimeResource::ActivationKeys,
+                Some(1),
+                Some(0),
+            )
         })?;
         let key = ActivationKey(self.next_activation);
         self.frames.try_reserve(1).map_err(|_| {
-            if native_length.is_some() {
-                resource_failure(
-                    ResourceFailureCause::StorageReservationFailed,
-                    RuntimePhase::Acquisition,
-                    RuntimeResource::FrameStorage,
-                    Some(1),
-                    None,
-                )
-            } else {
+            legacy_failure(
+                RuntimeFailure::ResourceCapacity,
+                ResourceFailureCause::StorageReservationFailed,
+                RuntimePhase::Acquisition,
+                RuntimeResource::FrameStorage,
+                Some(1),
+                None,
+            )
+        })?;
+        if let Some(trace) = &mut self.effect_trace {
+            trace.try_reserve(1).map_err(|_| {
                 legacy_failure(
                     RuntimeFailure::ResourceCapacity,
                     ResourceFailureCause::StorageReservationFailed,
                     RuntimePhase::Acquisition,
-                    RuntimeResource::FrameStorage,
+                    RuntimeResource::EffectTrace,
                     Some(1),
                     None,
                 )
-            }
-        })?;
-        if let Some(trace) = &mut self.effect_trace {
-            trace.try_reserve(1).map_err(|_| {
-                if native_length.is_some() {
-                    resource_failure(
-                        ResourceFailureCause::StorageReservationFailed,
-                        RuntimePhase::Acquisition,
-                        RuntimeResource::EffectTrace,
-                        Some(1),
-                        None,
-                    )
-                } else {
-                    legacy_failure(
-                        RuntimeFailure::ResourceCapacity,
-                        ResourceFailureCause::StorageReservationFailed,
-                        RuntimePhase::Acquisition,
-                        RuntimeResource::EffectTrace,
-                        Some(1),
-                        None,
-                    )
-                }
             })?;
         }
         environment.instantiation = environment.instantiation.acquire(
             acquisition.identity,
             key,
             &mut self.instantiation_work,
-            native_length.map(|_| RuntimePhase::Acquisition),
+            None,
         )?;
         disposal::check()?;
         environment = environment.extend_in_phase(
@@ -1996,44 +1862,7 @@ impl<'runtime> Machine<'runtime> {
             Value::ResourceHandle(key),
             RuntimePhase::Acquisition,
         )?;
-        let payload = if let Some(len) = native_length {
-            // Reserve both outcomes before C. The failure data is unreachable
-            // on success; the completion cell remains owned by this frame.
-            let result = self.prepare_native_result(api, Some(1), RuntimePhase::Acquisition)?;
-            let success =
-                ConstructorId::new(api.outcome().ok_or(RuntimeFailure::InvalidControlState)?, 0);
-            disposal::check()?;
-            let owner = match NativeOwner::allocate(len) {
-                Ok(owner) => owner,
-                Err(ash_native_buffer::AllocationError::AllocationFailed) => {
-                    let _delivery = disposal::NoGrowth::enter();
-                    drop(environment);
-                    disposal::check()?;
-                    self.control = Some(Control::Return(Value::Location(result)));
-                    return Ok(());
-                }
-                Err(ash_native_buffer::AllocationError::InvalidLength) => {
-                    return Err(RuntimeFailure::InvalidControlState);
-                }
-            };
-            #[cfg(test)]
-            if native_buffer::tests::FAIL_PUBLICATION.replace(false) {
-                return Err(resource_failure(
-                    ResourceFailureCause::AllocatorRefused,
-                    RuntimePhase::Acquisition,
-                    RuntimeResource::FrameStorage,
-                    Some(1),
-                    None,
-                ));
-            }
-            self.heap[result] = HeapCell::Uninitialized;
-            ResourcePayload::NativeBuffer {
-                owner,
-                completion: Some((result, success)),
-            }
-        } else {
-            ResourcePayload::Cell(cell)
-        };
+        let payload = ResourcePayload::Cell(cell);
         // Publish only after every fallible preflight. The frame is the sole
         // payload owner; handles and lexical metadata carry only its key.
         self.frames
@@ -2044,44 +1873,6 @@ impl<'runtime> Machine<'runtime> {
         self.trace_effect(EffectTraceEvent::ResourceAcquired(key.0));
         self.control = Some(Control::Evaluate(body, environment));
         Ok(())
-    }
-
-    // A prepared Success contains Unit until a copied read result replaces it.
-    // Failure data has no native dependency. No fallible heap growth follows
-    // an admitted write or successful native allocation.
-    fn prepare_native_result(
-        &mut self,
-        api: crate::resolved::ResourceApi,
-        error: Option<u32>,
-        phase: RuntimePhase,
-    ) -> Result<Location, RuntimeFailure> {
-        let outcome = api.outcome().ok_or(RuntimeFailure::InvalidControlState)?;
-        let error_type = api.error().ok_or(RuntimeFailure::InvalidControlState)?;
-        let cells = if error.is_some() { 2 } else { 1 };
-        charge_runtime_work(&mut self.instantiation_work, cells, phase)?;
-        self.heap.try_reserve(cells).map_err(|_| {
-            resource_failure(
-                ResourceFailureCause::StorageReservationFailed,
-                phase,
-                RuntimeResource::ResultHeapCells,
-                Some(cells),
-                None,
-            )
-        })?;
-        let (constructor, value) = if let Some(error) = error {
-            let location = self.heap.len();
-            self.heap.push(HeapCell::Constructor(
-                ConstructorId::new(error_type, error),
-                None,
-            ));
-            (ConstructorId::new(outcome, 1), Value::Location(location))
-        } else {
-            (ConstructorId::new(outcome, 0), Value::Unit)
-        };
-        let location = self.heap.len();
-        self.heap
-            .push(HeapCell::Constructor(constructor, Some(value)));
-        Ok(location)
     }
 
     fn return_type_application(
@@ -2231,11 +2022,7 @@ impl<'runtime> Machine<'runtime> {
                 if effect.effect() == api.ops() && Instantiation::activation(&effect) == Some(*key)
                 {
                     self.trace_effect(EffectTraceEvent::Request(operation));
-                    return if api.is_native_buffer() {
-                        self.interpret_native_buffer(index, operation, value)
-                    } else {
-                        self.interpret_cell(index, operation, value)
-                    };
+                    return self.interpret_cell(index, operation, value);
                 }
                 continue;
             }
@@ -2465,117 +2252,6 @@ impl<'runtime> Machine<'runtime> {
         };
         self.trace_effect(event);
         self.control = Some(Control::Return(result));
-        Ok(())
-    }
-
-    fn interpret_native_buffer(
-        &mut self,
-        selected: usize,
-        operation: OperationId,
-        value: Value,
-    ) -> Result<(), RuntimeFailure> {
-        disposal::check()?;
-        let Some(Frame::ResourceBoundary {
-            node,
-            key,
-            payload: ResourcePayload::NativeBuffer { owner, .. },
-        }) = self.frames.get(selected)
-        else {
-            return Err(RuntimeFailure::InvalidControlState);
-        };
-        let api = self
-            .resource(*node)
-            .and_then(|resource| resource.acquisition.api())
-            .filter(|api| api.is_native_buffer())
-            .ok_or(RuntimeFailure::InvalidControlState)?;
-        if operation.owner() != api.ops() || operation.operation() > 2 {
-            return Err(RuntimeFailure::InvalidControlState);
-        }
-        let key = *key;
-        let len = owner.len();
-        charge_runtime_work(&mut self.instantiation_work, 3, RuntimePhase::Access)?;
-        let (handle, index, byte) = match operation.operation() {
-            0 => (&value, None, None),
-            ordinal => {
-                let Value::Location(location) = value else {
-                    return Err(RuntimeFailure::InvalidControlState);
-                };
-                let location =
-                    resolve_location_with_work(&self.heap, location, &mut self.instantiation_work)?;
-                let Some(HeapCell::Tuple(elements)) = self.heap.get(location) else {
-                    return Err(RuntimeFailure::InvalidControlState);
-                };
-                match (ordinal, elements.as_ref()) {
-                    (1, [handle, Value::Integer(index)]) => (handle, Some(index), None),
-                    (2, [handle, Value::Integer(index), Value::Integer(byte)]) => {
-                        (handle, Some(index), Some(byte))
-                    }
-                    _ => return Err(RuntimeFailure::InvalidControlState),
-                }
-            }
-        };
-        if !matches!(handle, Value::ResourceHandle(found) if *found == key) {
-            return Err(RuntimeFailure::InvalidControlState);
-        }
-        let Some(index) = index else {
-            self.control = Some(Control::Return(Value::Integer(
-                crate::integer::Integer::from_usize(len),
-            )));
-            return Ok(());
-        };
-        let Some(index) = index.to_usize().filter(|index| *index < len) else {
-            let result = self.prepare_native_result(api, Some(2), RuntimePhase::Access)?;
-            self.control = Some(Control::Return(Value::Location(result)));
-            return Ok(());
-        };
-        let byte = match byte {
-            Some(byte) => {
-                let Some(byte) = byte.to_u8() else {
-                    let result = self.prepare_native_result(api, Some(3), RuntimePhase::Access)?;
-                    self.control = Some(Control::Return(Value::Location(result)));
-                    return Ok(());
-                };
-                Some(byte)
-            }
-            None => None,
-        };
-        let result = self.prepare_native_result(api, None, RuntimePhase::Access)?;
-        #[cfg(test)]
-        if byte.is_some() && native_buffer::tests::FAIL_WRITE_RESULT.replace(false) {
-            return Err(resource_failure(
-                ResourceFailureCause::AllocatorRefused,
-                RuntimePhase::Access,
-                RuntimeResource::ResultHeapCells,
-                Some(1),
-                None,
-            ));
-        }
-        let Frame::ResourceBoundary {
-            payload: ResourcePayload::NativeBuffer { owner, .. },
-            ..
-        } = &mut self.frames[selected]
-        else {
-            return Err(RuntimeFailure::InvalidControlState);
-        };
-        let event = if let Some(byte) = byte {
-            if !owner.write(index, byte) {
-                return Err(RuntimeFailure::InvalidControlState);
-            }
-            EffectTraceEvent::ResourceWritten(key.0)
-        } else {
-            let byte = owner
-                .read(index)
-                .ok_or(RuntimeFailure::InvalidControlState)?;
-            let HeapCell::Constructor(_, payload) = &mut self.heap[result] else {
-                return Err(RuntimeFailure::InvalidControlState);
-            };
-            *payload = Some(Value::Integer(crate::integer::Integer::from_usize(
-                usize::from(byte),
-            )));
-            EffectTraceEvent::ResourceRead(key.0)
-        };
-        self.trace_effect(event);
-        self.control = Some(Control::Return(Value::Location(result)));
         Ok(())
     }
 
@@ -2982,12 +2658,7 @@ impl<'runtime> Machine<'runtime> {
                     *pending_invocations = 0;
                     closing.push(frame);
                 }
-                Frame::ResourceBoundary { payload, .. } => {
-                    if let ResourcePayload::NativeBuffer { completion, .. } = payload {
-                        *completion = None;
-                    }
-                    closing.push(frame)
-                }
+                Frame::ResourceBoundary { .. } => closing.push(frame),
                 Frame::ProviderBoundary(boundary) => {
                     debug_assert_eq!(boundary.phase, ProviderPhase::Body);
                     boundary.discarded = true;
@@ -3140,7 +2811,7 @@ fn reserve_control<T>(
         ));
     }
     #[cfg(test)]
-    if let Some(cause) = native_buffer::tests::FAIL_CONTROL_RESERVATION.take() {
+    if let Some(cause) = machine_test_hooks::FAIL_CONTROL_RESERVATION.take() {
         return Err(control_failure(cause, resource, Some(additional), None));
     }
     let reservation = if exact {

@@ -235,7 +235,19 @@ enum ExtentOutcome {
     Ready,
     ConversionRefused,
     WorkRefused,
+    ProportionalReservation,
     ExtractionRefused { retained: bool },
+}
+
+#[test]
+fn initialized_byte_admission_prepays_length_release_and_report_before_native_entry() {
+    for extent in [0, 7, 42] {
+        owner_post_record_case(
+            &byte_owner_source(&extent.to_string()),
+            Some(extent),
+            ExtentOutcome::ProportionalReservation,
+        );
+    }
 }
 
 #[test]
@@ -373,6 +385,66 @@ fn owner_post_record_case_with_entry(
         ordinal: coordinates[0].library_ordinal,
         members: &members,
     }];
+    if matches!(outcome, ExtentOutcome::ProportionalReservation) {
+        let extent = initialized_bytes.unwrap();
+        // One exact fact/shape check, len+2 initialization/release work, and
+        // three report slots plus two fixed recording/publication obligations.
+        let required = 1 + extent + 2 + 3 + 2;
+        for prefix in [0, 23] {
+            for _ in 0..2 {
+                let acquires = ACQUIRES.get();
+                let releases = RELEASES.get();
+                let (refused, observed) =
+                    source_owner_post_record_test::observe_initialized_bytes_admission(
+                        prefix,
+                        required - 1,
+                        || {
+                            __run_private_effect_image(
+                                &runtime_fingerprint(),
+                                &bytes,
+                                facts,
+                                &libraries,
+                            )
+                        },
+                    );
+                assert!(
+                    matches!(
+                        refused,
+                        Err(PrivateProgramFailure(PrivateFailure::Evaluation(
+                            RuntimeFailure::Report(_)
+                        )))
+                    ),
+                    "one-short initialized admission must refuse before C: {refused:?}"
+                );
+                assert_eq!(observed.initialized_admission_used, None);
+                assert_eq!(observed.returned, 0);
+                assert_eq!(observed.recorded, 0);
+                assert_eq!(ACQUIRES.get(), acquires);
+                assert_eq!(RELEASES.get(), releases);
+
+                let (fresh, observed) =
+                    source_owner_post_record_test::observe_initialized_bytes_admission(
+                        prefix,
+                        required,
+                        || {
+                            __run_private_effect_image(
+                                &runtime_fingerprint(),
+                                &bytes,
+                                facts,
+                                &libraries,
+                            )
+                        },
+                    );
+                assert_eq!(fresh.unwrap().to_string(), "Completed(42, Closed)");
+                assert_eq!(observed.initialized_admission_used, Some(prefix + required));
+                assert_eq!(observed.initialized_bytes, Some(extent));
+                assert_eq!(ACQUIRES.get(), acquires + 1);
+                assert_eq!(RELEASES.get(), releases + 1);
+            }
+        }
+        drop(providers);
+        return;
+    }
     if let ExtentOutcome::ExtractionRefused { retained } = outcome {
         let (refused, observed) =
             source_owner_post_record_test::observe_teardown_extraction(|| {

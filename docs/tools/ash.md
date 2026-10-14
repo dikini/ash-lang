@@ -151,9 +151,10 @@ intrinsics and integer literal payloads outside signed 64-bit range. Evaluated
 integer arithmetic and widened native results retain their mathematical
 semantics. These are build-path limitations, not changes to ordinary non-foreign
 execution. The source [arena library](../../libraries/README.md) provides the
-minimal allocation/usage/release lifecycle. SQLite and native-buffer ports,
-complete ownership/access execution, constant publication and the separate
-optional `ash check-ffi` authoring tool remain work in the `ffi-ash` milestone.
+minimal allocation/usage/release lifecycle. The ordinary source buffer library
+supplies checked zeroed bytes and scoped access through the same generated path.
+SQLite, temporary copy windows and the separate optional `ash check-ffi`
+authoring tool remain work in the `ffi-ash` milestone.
 
 ## Diagnostic formats and locales
 
@@ -201,7 +202,7 @@ once.
 `import @builtin.cell as Cell` loads the compiler-owned cell API without a
 `--root` option or filesystem lookup. `builtin` cannot be configured as a root:
 `--root builtin=path` reports `invocation.reserved-root` before inspecting
-configured paths. `@builtin.cell`, `@builtin.native_buffer` and
+configured paths. `@builtin.cell`, `@builtin.bytes`, `@builtin.string` and
 `@builtin.foreign` are the fixed modules beneath this root; another path
 reports `module.unknown-builtin`. Ordinary aliases, targeted imports and
 facade re-exports preserve the API's identity, but a module that acquires a
@@ -346,24 +347,37 @@ The executable test `native_buffer_documentation_example_has_exact_cli_output`
 checks this complete native-buffer program:
 
 ```ash
-import @builtin.native_buffer as Buffer
+import @ffi.native_buffer as Buffer
 
 main : Unit -> Buffer.Outcome<Buffer.Outcome<Int>>
-main () = resource native_buffer<R> b = 4 {
-match Buffer.write (b, 0, 42) {
-Buffer.Success(()) => Buffer.read (b, 0)
-Buffer.Failure(error) => Buffer.Failure error
-}
+main () = resource Buffer.Buffer<R> b = 4 {
+    match Buffer.write (b, 0, 42) {
+        Buffer.Success(()) => Buffer.read (b, 0)
+        Buffer.Failure(error) => Buffer.Failure error
+    }
 }
 ```
 
-On successful allocation, `ash entry.ash` prints
-`Success(Success(42)) : Outcome<Outcome<Int>>` and a newline. The outer success
+From the repository root, build and run it with:
+
+```sh
+CARGO_BUILD_JOBS=1 cargo run --bin ash -- build --root ffi=libraries \
+    --cargo-target-dir target/ffi-native-hosts --output ./program entry.ash
+./program
+```
+
+On successful allocation, the generated program prints
+`Success(Success(42))` and a newline. The outer success
 records acquisition and normal body completion; the inner result is the body's
 ordinary read outcome. Allocation failure skips the body. Length must be
 positive and fit the bridge's addressable bound; indices and byte values are
 checked before access or mutation. Release occurs before the outer success is
-observed. This fixed byte-buffer provider is not a general FFI or file API.
+observed. The library owns this policy; no compiler dispatch depends on its
+filename. The former `@builtin.native_buffer` import and lowercase builtin
+resource form are removed. See the [migration table](../../libraries/README.md#native-buffer-migration)
+for explicit source type and effect spellings. The ordinary local-newtype and
+non-resource lexical-dictionary native-image limitation remains; source/Core
+capture checks still apply to those programs.
 
 The executable test `synchronous_hooks_documentation_example_has_exact_cli_output`
 checks this complete hook program:

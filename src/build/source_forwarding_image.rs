@@ -252,34 +252,41 @@ impl Encoder<'_> {
         let mut data = Vec::new();
         put(&mut data, index(catalog.lexical_owners().len())?, self.work)?;
         for owner in catalog.lexical_owners() {
-            let Some(crate::core::dialect::MethodEvidenceResourceOwner::Provider(resource)) =
-                &owner.resource
-            else {
-                return Err(ImageFailure::Unsupported(Unsupported::MethodEvidence));
-            };
             if !owner.source_parameters.is_empty() || !owner.captures.is_empty() {
                 return Err(ImageFailure::Unsupported(Unsupported::MethodEvidence));
             }
             let source = self.lexical_identity(owner.source)?;
             let method = self.method_identity(owner.method)?;
             let binder = self.binder_id(owner.binder)?;
-            let definition = self.resource_identity(resource.definition)?;
-            let family = self.nominal(resource.family)?;
-            let identity = self.type_variable(resource.identity)?;
-            let start = self.image.source_arguments.len();
-            for argument in &resource.arguments {
-                let argument = self.encode_structural(StructuralInput::Argument(argument))?;
-                push(&mut self.image.source_arguments, argument, self.work)?;
-            }
-            let arguments = Slice::of(&self.image.source_arguments, start)?;
             let (interface, application) = self.method_application(&owner.application)?;
             put(&mut data, source, self.work)?;
             put(&mut data, method, self.work)?;
             put(&mut data, binder, self.work)?;
-            put(&mut data, definition, self.work)?;
-            put(&mut data, family, self.work)?;
-            put(&mut data, identity, self.work)?;
-            put(&mut data, arguments, self.work)?;
+            match &owner.resource {
+                Some(crate::core::dialect::MethodEvidenceResourceOwner::Provider(resource)) => {
+                    put(&mut data, 0u8, self.work)?;
+                    let definition = self.resource_identity(resource.definition)?;
+                    let family = self.nominal(resource.family)?;
+                    let identity = self.type_variable(resource.identity)?;
+                    let start = self.image.source_arguments.len();
+                    for argument in &resource.arguments {
+                        let argument =
+                            self.encode_structural(StructuralInput::Argument(argument))?;
+                        push(&mut self.image.source_arguments, argument, self.work)?;
+                    }
+                    let arguments = Slice::of(&self.image.source_arguments, start)?;
+                    put(&mut data, definition, self.work)?;
+                    put(&mut data, family, self.work)?;
+                    put(&mut data, identity, self.work)?;
+                    put(&mut data, arguments, self.work)?;
+                }
+                Some(crate::core::dialect::MethodEvidenceResourceOwner::Builtin(acquisition)) => {
+                    put(&mut data, 1u8, self.work)?;
+                    let acquisition = self.encode_cell_acquisition(*acquisition)?;
+                    put(&mut data, acquisition, self.work)?;
+                }
+                None => return Err(ImageFailure::Unsupported(Unsupported::MethodEvidence)),
+            }
             put(&mut data, interface, self.work)?;
             put(&mut data, application, self.work)?;
         }
@@ -667,8 +674,31 @@ impl Decoder<'_> {
     pub(super) fn source_method_evidence(
         &mut self,
         record: Slice,
-        methods: Vec<crate::core::dialect::MethodEvidenceMethod>,
+        mut methods: Vec<crate::core::dialect::MethodEvidenceMethod>,
     ) -> Result<Arc<MethodEvidenceCatalog>, ImageFailure> {
+        // Restored ordinary modules use DirectCoreSource identities, whereas
+        // the sealed cell retains its builtin namespace. Relocation can reverse
+        // their original ordering. Rebuild the identity-keyed lookup order with
+        // paid comparisons, retaining all original IDs, types and duplicates
+        // for the ordinary independent authentication below.
+        charge(self.work, methods.len().saturating_sub(1))?;
+        if methods.windows(2).any(|pair| pair[0].id >= pair[1].id) {
+            for index in 1..methods.len() {
+                let mut cursor = index;
+                while cursor > 0 {
+                    charge(self.work, 1)?;
+                    if methods[cursor - 1].id <= methods[cursor].id {
+                        break;
+                    }
+                    methods.swap(cursor - 1, cursor);
+                    cursor -= 1;
+                }
+            }
+            charge(self.work, methods.len().saturating_sub(1))?;
+            if methods.windows(2).any(|pair| pair[0].id >= pair[1].id) {
+                return Err(ImageFailure::InvalidRecord);
+            }
+        }
         let bytes = record.get(&self.image.source_method_evidence)?;
         let mut offset = 0;
         let count: u32 = take(bytes, &mut offset, self.work)?;
@@ -677,20 +707,31 @@ impl Decoder<'_> {
             let source = take(bytes, &mut offset, self.work)?;
             let method = take(bytes, &mut offset, self.work)?;
             let binder = take(bytes, &mut offset, self.work)?;
-            let definition = take(bytes, &mut offset, self.work)?;
-            let family = take(bytes, &mut offset, self.work)?;
-            let identity = take(bytes, &mut offset, self.work)?;
-            let arguments = take(bytes, &mut offset, self.work)?;
+            let resource = match take::<u8>(bytes, &mut offset, self.work)? {
+                0 => {
+                    let definition = take(bytes, &mut offset, self.work)?;
+                    let family = take(bytes, &mut offset, self.work)?;
+                    let identity = take(bytes, &mut offset, self.work)?;
+                    let arguments = take(bytes, &mut offset, self.work)?;
+                    crate::core::dialect::MethodEvidenceResourceOwner::Provider(
+                        crate::core::dialect::ProviderEvidenceOwner {
+                            definition: self.resource_identity(definition)?,
+                            family: self.nominal(family)?,
+                            identity: self.type_variable(identity)?,
+                            arguments: self.method_arguments(arguments)?,
+                        },
+                    )
+                }
+                1 => {
+                    let acquisition = take(bytes, &mut offset, self.work)?;
+                    crate::core::dialect::MethodEvidenceResourceOwner::Builtin(
+                        self.cell_acquisition(acquisition)?,
+                    )
+                }
+                _ => return Err(ImageFailure::InvalidRecord),
+            };
             let interface = take(bytes, &mut offset, self.work)?;
             let application = take(bytes, &mut offset, self.work)?;
-            let resource = crate::core::dialect::MethodEvidenceResourceOwner::Provider(
-                crate::core::dialect::ProviderEvidenceOwner {
-                    definition: self.resource_identity(definition)?,
-                    family: self.nominal(family)?,
-                    identity: self.type_variable(identity)?,
-                    arguments: self.method_arguments(arguments)?,
-                },
-            );
             let owner = crate::core::dialect::MethodEvidenceLexicalOwner {
                 resource: Some(resource),
                 source_parameters: Box::new([]),

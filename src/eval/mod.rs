@@ -15,8 +15,6 @@ pub use machine::{
     evaluate_effect, evaluate_effect_with_foreign_runtime,
     evaluate_effect_with_source_native_program,
 };
-#[cfg(test)]
-pub(crate) use machine::{native_buffer_counters_for_test, reset_native_buffer_counters_for_test};
 pub(crate) use value::ObservedHeap;
 pub use value::{Closure, ExecutableNode, ExecutableProgram, ObservedValue, Value};
 

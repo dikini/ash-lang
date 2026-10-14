@@ -12532,17 +12532,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             EffectInstance::new(api.ops(), Box::new([Type::Variable(resource.identity.id)]));
         let outward = self.remove_cleanup_effect(&body_effects, &instance, span, true)?;
         let body_type = IterativeTypeOwner::new(self.zonk(&body.ty)?);
-        let ty = IterativeTypeOwner::new(if let Some(outcome) = api.outcome() {
-            self.type_work
-                .charge(2)
-                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            Type::Application(
-                Box::new(Type::Nominal(outcome)),
-                Box::new(body_type.into_inner()),
-            )
-        } else {
-            body_type.into_inner()
-        });
+        let ty = body_type;
         let effects = self.union_effects(&initializer.effects, &outward, span)?;
         let row_type = IterativeTypeOwner::new(Type::function_computation(
             Type::Unit,
@@ -12608,11 +12598,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }
         let core_type = IterativeTypeOwner::new(self.clone_type(&ty)?);
         let core_effects = self.core_effect_row(&effects)?;
-        let provenance = if api.is_native_buffer() {
-            self.at_span_provenance(&ty, span)?
-        } else {
-            body.provenance.clone()
-        };
+        let provenance = body.provenance.clone();
         let node = self.push_effect_core(
             core_type.into_inner(),
             core_effects,

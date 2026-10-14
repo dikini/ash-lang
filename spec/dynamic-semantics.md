@@ -499,7 +499,7 @@ This section describes source-native scalar operands/results and zero-operand
 `void` calls in the admitted Linux x86-64 GNU profile. Supported integer
 representations are signed/unsigned 8-, 32- and 64-bit scalars and 64-bit
 `size_t`. These calls create no resource activation or owning source value.
-The ordinary scoped `native_buffer` behavior remains described separately.
+The ordinary source buffer library behavior remains described separately.
 
 `NativeInterpret(S, body)` is a checked Core boundary installed for the program's
 required owner-free native effects. It is not a source expression. Independent
@@ -1118,69 +1118,58 @@ resource frame or live cell.
 
 ## Scoped native-buffer execution
 
-`resource native_buffer<R> b = length { body }` evaluates `length` exactly once
-before introducing the scope. The length must be positive and representable
-within both the host size type and valid pointer-offset bound. Invalid lengths
-produce `Failure(InvalidLength)` without calling the native allocator.
+The passive Ash library `libraries/native_buffer.ash` supplies buffer policy.
+`resource Buffer.Buffer<R> b = length { body }` uses the common declared-source
+resource machine and the checked `acquired_only` codec, not a fixed evaluator
+adapter. The current generated bridge profile is `x86_64-unknown-linux-gnu`.
+Native execution requires the generated linked host; ordinary interpreted
+execution refuses the missing binding before running Ash.
 
-For a valid length, the machine charges proportional initialization work and
-fixed release work, checks shared live-owner capacity, and reserves fallible
-scope, activation and outcome storage before the private C `calloc` call.
-A null allocation returns the prepared `Failure(AllocationFailed)` only when
-delivery requires no further allocation, observable Ash state change, body
-execution or published handle, activation or provider authority. Otherwise
-delivery fails terminally. Earlier initializer effects remain committed; the
-condition applies to the allocation attempt, not the enclosing effect row.
-Internal exhaustion is not an allocation-error constructor. There is no
-implicit allocation retry.
+The initializer runs once before acquisition. Length must be positive and at
+most `2^63 - 1`, within the selected host size/pointer-offset bounds. The
+library's checked conversions and native operand preflight return
+`Failure(InvalidLength)` without entering C for an invalid length. For a valid
+initialized extent `n`, common readiness charges its proportional `n + 2`
+initialization/fixed-release work before calling C, in addition to ordinary
+extent validation and complete guard/report/publication admission. Arithmetic
+overflow or insufficient internal work/storage is terminal, with no native
+entry, publication, retry or limit increase. Earlier initializer effects remain
+committed.
 
-A successful allocation is zero-initialized. An unpublished guard owns it until
-the prepared scope and handle are installed together. Failure during publication
-releases the guard once and remains an internal failure. The existing resource
-activation key distinguishes every successful execution, including reentrant
-executions at one source site. A handle contains that key, not a native address;
-address reuse cannot restore a retired activation.
+`calloc(n, 1)` returning null yields `Failure(AllocationFailed)` without a body
+or access activation. Its checked successful outcome promises initialized,
+writable zeroed bytes; this is a foreign assumption tested with real libc, not
+an allocator guarantee inferred by the compiler. The admitted guard owns the
+same native allocation through acquisition, body and finish until consumption.
+Original source header, copied call/Type/Row correspondence, live activation and
+the selected exact guard remain separate authorities. Address reuse or a
+same-shaped donor never revives access.
 
-Request selection retains ordinary exact source-handler precedence. Only the
-selected authenticated builtin interpreter can use the native owner, and the
-operand handle must match its activation before access. `length` copies the
-length as `Int`. `read (b, index)` returns `Success(byte)` for a zero-based valid
-index, otherwise `Failure(InvalidIndex)`. `write (b, index, byte)` first checks
-the index, then the byte range `[0, 255]`; failure returns `InvalidIndex` or
-`InvalidByte` respectively inside `Failure`. Rejected writes leave bytes
-unchanged. Successful writes return `Success(())`. Validation, conversions,
-work admission and result preparation precede mutation. Malformed Core or
-activation disagreement is an internal failure, never one of these errors.
+Ordinary exact operation overrides retain precedence. The selected associated
+source handler obtains local authenticated State; common byte primitives check
+extent, initialization and write permission. `length` returns the stored `Int`.
+`read` returns `Success(byte)` in `[0, 255]` or `Failure(InvalidIndex)`.
+`write` checks the index before byte conversion, returning `InvalidIndex` or
+`InvalidByte` inside `Failure` as appropriate. It prepares the ordinary success
+value and the common complete reply before mutation. Refusal leaves bytes
+unchanged; success returns `Success(())`. Invalid Core/activation authority and
+internal exhaustion are terminal, never ordinary library errors.
 
-Normal completion runs structurally inner cleanup while the buffer remains
-live, frees the native block once, and publishes `Success(body_value)` using
-reserved result storage. A body returning an error or another `Outcome` remains
-nested inside that `Success`; there is no flattening or automatic report.
-Capture and resume move the same owner. Owned discard releases it at its
-structural closing position, skips abandoned body suffixes and result wrapping,
-and continues the discarding clause. Acquisitions inside a running cleanup
-still complete normally and produce their own wrappers. Native ownership
-does not permit skipping an outside owner or running cleanup obligation.
+Normal completion runs inner cleanup with required outer resources live, then
+calls the checked `free` finish once and returns `Success(body_value)`. A body
+error or nested `Outcome` remains inside that success. Capture/resume moves the
+same owner. Owned discard skips the abandoned suffix and wrapper, runs admitted
+finish in structural order, then continues the discarding clause. An acquisition
+inside running cleanup completes normally with its own wrapper. Neither running
+cleanup nor required outside completion may be abandoned.
 
-Native owners share the existing resource capacity, including captured owners;
-release makes capacity reusable but not activation keys. Fixed native `free`
-has no source failure result, source callback or retry. Internal host teardown
-uses safe host destruction without invoking source cleanup or rolling back
-earlier writes. Detectable runtime capacity, allocator and work-budget failures
-terminate evaluation without retries, limit increases or recovery. Diagnostics
-identify the cause and phase; a teardown failure preserves the original failure
-and does not claim cleanup completed. The fixed native deallocator requires no
-allocation; preallocation of traversal storage is a mitigation, not an
-unconditional teardown guarantee. Divergence and external process
-termination carry no eventual-release guarantee. Pure and provider-free
-execution create no native-owner state.
-
-The foreign boundary is one private safe-owning adapter over C `calloc`/`free`;
-pointers stay inside it. The bridge supports eight-bit-byte Linux x86-64 and
-ARM64 builds; unsupported targets fail compilation rather than substituting a
-simulated provider. Compile support does not itself establish native target
-conformance. These rules define no general ABI, library acquisition, manual
-release, filesystem policy or fallible file-close semantics.
+Internal failure uses the common safe host-destruction/dependency rules without
+replaying source finish or undoing earlier writes. A destruction failure
+preserves the primary error and reports incomplete cleanup. Fixed release
+reservation does not promise eventual release under divergence, process death
+or a dishonest foreign contract. Common runtime guards remain; the former
+handwritten native-buffer adapter and special dispatch are absent. Cell behavior
+is unchanged.
 
 ## Synchronous hook execution
 

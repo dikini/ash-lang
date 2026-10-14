@@ -154,6 +154,18 @@ enum BinderIdentity {
     Generated(u32),
 }
 
+#[derive(Clone, Copy, Debug)]
+struct CellAcquisitionRecord {
+    module: u32,
+    identity: TypeVariableIdentity,
+    handle: BinderIdentity,
+    provider_module: u32,
+    provider_local: u32,
+    read: BinderIdentity,
+    write: BinderIdentity,
+    span: SpanRecord,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 enum TypeTag {
     Resource(ResourceIdentity),
@@ -226,6 +238,25 @@ struct RecursiveMemberRecord {
 
 #[derive(Clone, Copy, Debug)]
 enum NodeTag {
+    CellScope {
+        acquisition: CellAcquisitionRecord,
+        handle: u32,
+        initializer: u32,
+        body: u32,
+    },
+    Cleanup {
+        callback: BinderIdentity,
+        body: u32,
+        action: u32,
+        span: SpanRecord,
+        action_span: SpanRecord,
+    },
+    Registration {
+        handler: u32,
+        callback: BinderIdentity,
+        body: u32,
+        span: SpanRecord,
+    },
     Handler(u32),
     Resume {
         handler: u32,
@@ -626,11 +657,7 @@ fn encode_program<'work, F: crate::core::dialect::CoreOperationFamily>(
         .map_err(|_| ImageFailure::Resource)?;
     for (module, source) in provenance {
         // This first slice never converts a builtin role into ordinary authority.
-        if module.is_builtin_cell()
-            || module.is_builtin_native_buffer()
-            || module.is_builtin_bytes()
-            || module.is_builtin_string()
-        {
+        if module.is_builtin_bytes() || module.is_builtin_string() {
             return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
         }
         let path = append(
@@ -648,6 +675,8 @@ fn encode_program<'work, F: crate::core::dialect::CoreOperationFamily>(
             SourceRecord {
                 role: if module.is_builtin_foreign() {
                     ModuleRoleRecord::BuiltinForeign
+                } else if module.is_builtin_cell() {
+                    ModuleRoleRecord::BuiltinCell
                 } else {
                     ModuleRoleRecord::Ordinary
                 },
@@ -739,6 +768,26 @@ fn encode_program<'work, F: crate::core::dialect::CoreOperationFamily>(
 }
 
 impl Encoder<'_> {
+    fn encode_cell_acquisition(
+        &mut self,
+        acquisition: crate::resolved::ResourceAcquisition,
+    ) -> Result<CellAcquisitionRecord, ImageFailure> {
+        let crate::resolved::ResourceMethods::Cell([read, write]) = acquisition.methods;
+        if !acquisition.builtin.is_builtin_cell() {
+            return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
+        }
+        Ok(CellAcquisitionRecord {
+            module: self.module(acquisition.builtin)?,
+            identity: self.type_variable(acquisition.identity)?,
+            handle: self.binder_id(acquisition.handle)?,
+            provider_module: self.module(acquisition.provider.module())?,
+            provider_local: acquisition.provider.declaration(),
+            read: self.binder_id(read)?,
+            write: self.binder_id(write)?,
+            span: self.span(acquisition.span)?,
+        })
+    }
+
     fn module(&mut self, module: ModuleId) -> Result<u32, ImageFailure> {
         charge(self.work, 1)?;
         self.modules
@@ -1517,6 +1566,18 @@ wire_struct!(NominalId, 8, module, local);
 wire_struct!(ConstructorIdentity, 12, owner, local);
 wire_struct!(TypeRecord, 9, tag, children);
 wire_struct!(BinderRecord, 13, id, ty, origin);
+wire_struct!(
+    CellAcquisitionRecord,
+    44,
+    module,
+    identity,
+    handle,
+    provider_module,
+    provider_local,
+    read,
+    write,
+    span
+);
 wire_struct!(PatternRecord, 17, tag, children, ty, origin);
 wire_struct!(ArmRecord, 12, pattern, body, origin);
 wire_struct!(RecursiveMemberRecord, 8, binder, initializer);
@@ -1740,6 +1801,44 @@ impl Wire for NodeTag {
     const MINIMUM: usize = 1;
     fn write(&self, writer: &mut WireWriter<'_>) -> Result<(), ImageFailure> {
         match self {
+            Self::CellScope {
+                acquisition,
+                handle,
+                initializer,
+                body,
+            } => {
+                23u8.write(writer)?;
+                acquisition.write(writer)?;
+                handle.write(writer)?;
+                initializer.write(writer)?;
+                body.write(writer)
+            }
+            Self::Cleanup {
+                callback,
+                body,
+                action,
+                span,
+                action_span,
+            } => {
+                24u8.write(writer)?;
+                callback.write(writer)?;
+                body.write(writer)?;
+                action.write(writer)?;
+                span.write(writer)?;
+                action_span.write(writer)
+            }
+            Self::Registration {
+                handler,
+                callback,
+                body,
+                span,
+            } => {
+                25u8.write(writer)?;
+                handler.write(writer)?;
+                callback.write(writer)?;
+                body.write(writer)?;
+                span.write(writer)
+            }
             Self::Handler(slot) => {
                 17u8.write(writer)?;
                 slot.write(writer)
@@ -1886,6 +1985,25 @@ impl Wire for NodeTag {
     }
     fn read(reader: &mut WireReader<'_>) -> Result<Self, ImageFailure> {
         Ok(match u8::read(reader)? {
+            23 => Self::CellScope {
+                acquisition: Wire::read(reader)?,
+                handle: Wire::read(reader)?,
+                initializer: Wire::read(reader)?,
+                body: Wire::read(reader)?,
+            },
+            24 => Self::Cleanup {
+                callback: Wire::read(reader)?,
+                body: Wire::read(reader)?,
+                action: Wire::read(reader)?,
+                span: Wire::read(reader)?,
+                action_span: Wire::read(reader)?,
+            },
+            25 => Self::Registration {
+                handler: Wire::read(reader)?,
+                callback: Wire::read(reader)?,
+                body: Wire::read(reader)?,
+                span: Wire::read(reader)?,
+            },
             17 => Self::Handler(Wire::read(reader)?),
             18 => Self::Resume {
                 handler: Wire::read(reader)?,
@@ -2428,6 +2546,9 @@ impl PureImage {
                 .map_err(|_| ImageFailure::SourceAdmission)?;
             let role = match record.role {
                 ModuleRoleRecord::Ordinary => crate::module::ImageModuleRole::Ordinary,
+                ModuleRoleRecord::BuiltinCell => {
+                    return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
+                }
                 ModuleRoleRecord::BuiltinForeign => {
                     if std::mem::replace(&mut seen_common, true) {
                         return Err(ImageFailure::InvalidRecord);
@@ -2795,7 +2916,10 @@ impl Decoder<'_> {
         origin: OriginOwner,
     ) -> Result<NodeId, ImageFailure> {
         let node = match record {
-            NodeTag::Handler(_)
+            NodeTag::CellScope { .. }
+            | NodeTag::Cleanup { .. }
+            | NodeTag::Registration { .. }
+            | NodeTag::Handler(_)
             | NodeTag::Resume { .. }
             | NodeTag::Discard { .. }
             | NodeTag::SourceScope(_)
@@ -4379,6 +4503,7 @@ main () = match perform Measure.call 42 {
 enum ModuleRoleRecord {
     Ordinary,
     BuiltinForeign,
+    BuiltinCell,
 }
 
 // Add role: ModuleRoleRecord to SourceRecord. Never infer it from the path.
@@ -4949,6 +5074,7 @@ impl Wire for ModuleRoleRecord {
         match self {
             Self::Ordinary => 0u8,
             Self::BuiltinForeign => 1,
+            Self::BuiltinCell => 2,
         }
         .write(writer)
     }
@@ -4956,6 +5082,7 @@ impl Wire for ModuleRoleRecord {
         match u8::read(reader)? {
             0 => Ok(Self::Ordinary),
             1 => Ok(Self::BuiltinForeign),
+            2 => Ok(Self::BuiltinCell),
             _ => Err(ImageFailure::InvalidEncoding),
         }
     }
@@ -7049,6 +7176,27 @@ impl Encoder<'_> {
         use crate::core::{EffectExprKind, EffectOperation};
         match kind {
             EffectExprKind::Pure(kind) => self.encode_node(kind),
+            EffectExprKind::Operation(EffectOperation::Resource(scope)) => Ok(NodeTag::CellScope {
+                acquisition: self.encode_cell_acquisition(scope.acquisition)?,
+                handle: self.encode_binder(scope.handle())?,
+                initializer: self.node(scope.initializer())?,
+                body: self.node(scope.body())?,
+            }),
+            EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => Ok(NodeTag::Cleanup {
+                callback: self.binder_id(scope.callback)?,
+                body: self.node(scope.body)?,
+                action: self.node(scope.action)?,
+                span: self.span(scope.span)?,
+                action_span: self.span(scope.action_span)?,
+            }),
+            EffectExprKind::Operation(EffectOperation::Registration(scope)) => {
+                Ok(NodeTag::Registration {
+                    handler: scope.handler.value(),
+                    callback: self.binder_id(scope.callback)?,
+                    body: self.node(scope.body)?,
+                    span: self.span(scope.span)?,
+                })
+            }
             EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
                 Ok(NodeTag::SourceScope(self.encode_source_scope(scope)?))
             }
@@ -8208,6 +8356,13 @@ impl Decoder<'_> {
             let id = self.type_variable(scope.identity)?;
             push(&mut identities, id, self.work)?;
         }
+        for node in &self.image.nodes {
+            charge(self.work, 1)?;
+            if let NodeTag::CellScope { acquisition, .. } = node.tag {
+                let acquisition = self.cell_acquisition(acquisition)?;
+                push(&mut identities, acquisition.identity, self.work)?;
+            }
+        }
         if !registry
             .native_image_subset_with_source_scopes(&identities, self.work)
             .map_err(|_| ImageFailure::RegistryAdmission)?
@@ -8259,6 +8414,7 @@ impl PureImage {
             work,
         };
         let mut seen_common = false;
+        let mut seen_cell = false;
         for record in &self.sources {
             charge(decoder.work, 1)?;
             let path = decoder.text(record.path)?;
@@ -8267,6 +8423,12 @@ impl PureImage {
                 .map_err(|_| ImageFailure::SourceAdmission)?;
             let role = match record.role {
                 ModuleRoleRecord::Ordinary => crate::module::ImageModuleRole::Ordinary,
+                ModuleRoleRecord::BuiltinCell => {
+                    if std::mem::replace(&mut seen_cell, true) {
+                        return Err(ImageFailure::InvalidRecord);
+                    }
+                    crate::module::ImageModuleRole::BuiltinCell
+                }
                 ModuleRoleRecord::BuiltinForeign => {
                     if std::mem::replace(&mut seen_common, true) {
                         return Err(ImageFailure::InvalidRecord);
@@ -8375,6 +8537,30 @@ impl PureImage {
 }
 
 impl Decoder<'_> {
+    fn cell_acquisition(
+        &mut self,
+        record: CellAcquisitionRecord,
+    ) -> Result<crate::resolved::ResourceAcquisition, ImageFailure> {
+        let builtin = *get(&self.modules, record.module)?;
+        if !builtin.is_builtin_cell() {
+            return Err(ImageFailure::InvalidRecord);
+        }
+        Ok(crate::resolved::ResourceAcquisition {
+            builtin,
+            identity: self.type_variable(record.identity)?,
+            handle: self.binder_id(record.handle)?,
+            provider: crate::interface::LexicalEvidenceId::new(
+                *get(&self.modules, record.provider_module)?,
+                record.provider_local,
+            ),
+            methods: crate::resolved::ResourceMethods::Cell([
+                self.binder_id(record.read)?,
+                self.binder_id(record.write)?,
+            ]),
+            span: self.span(record.span)?,
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn effect_node(
         &mut self,
@@ -8388,6 +8574,70 @@ impl Decoder<'_> {
         origin: OriginOwner,
     ) -> Result<NodeId, ImageFailure> {
         let node = match tag {
+            NodeTag::CellScope {
+                acquisition,
+                handle,
+                initializer,
+                body,
+            } => {
+                let acquisition = self.cell_acquisition(acquisition)?;
+                let handle = self.binder(builder, handle)?;
+                let initializer = *get(nodes, initializer)?;
+                let body = *get(nodes, body)?;
+                return builder
+                    .with_caller_type_work(self.work, |builder| {
+                        builder.resource_scope(
+                            Box::new(crate::core::effect::ResourceScopeNode::new(
+                                acquisition,
+                                handle,
+                                initializer,
+                                body,
+                            )),
+                            ty.into_inner(),
+                            effects,
+                            origin.take(),
+                        )
+                    })
+                    .map_err(ImageFailure::from);
+            }
+            NodeTag::Cleanup {
+                callback,
+                body,
+                action,
+                span,
+                action_span,
+            } => {
+                let scope = crate::core::effect::CleanupScopeNode {
+                    callback: self.binder_id(callback)?,
+                    body: *get(nodes, body)?,
+                    action: *get(nodes, action)?,
+                    span: self.span(span)?,
+                    action_span: self.span(action_span)?,
+                };
+                return builder
+                    .with_caller_type_work(self.work, |builder| {
+                        builder.cleanup_scope(scope, ty.into_inner(), effects, origin.take())
+                    })
+                    .map_err(ImageFailure::from);
+            }
+            NodeTag::Registration {
+                handler,
+                callback,
+                body,
+                span,
+            } => {
+                let scope = crate::core::effect::RegistrationScopeNode {
+                    handler: crate::core::HandlerId::new(handler),
+                    callback: self.binder_id(callback)?,
+                    body: *get(nodes, body)?,
+                    span: self.span(span)?,
+                };
+                return builder
+                    .with_caller_type_work(self.work, |builder| {
+                        builder.registration_scope(scope, ty.into_inner(), effects, origin.take())
+                    })
+                    .map_err(ImageFailure::from);
+            }
             NodeTag::SourceScope(slot) => {
                 let scope = self.source_scope(builder, nodes, symbols, templates, slot)?;
                 return builder
@@ -8404,9 +8654,10 @@ impl Decoder<'_> {
             NodeTag::Handler(slot) => {
                 let (id, body, effect, clauses) =
                     self.source_handler_parts(builder, nodes, slot)?;
+                let (root, registration) = self.handler_contracts(slot)?;
                 return builder
                     .with_caller_type_work(self.work, |builder| {
-                        builder.handler(
+                        builder.handler_with_contracts(
                             id,
                             body,
                             effect,
@@ -8414,6 +8665,8 @@ impl Decoder<'_> {
                             ty.into_inner(),
                             effects,
                             origin.take(),
+                            root,
+                            registration,
                         )
                     })
                     .map_err(ImageFailure::from);
@@ -8861,11 +9114,21 @@ pub(crate) fn encode_effect_for_build(
     let mut identities = Vec::new();
     charge(work, program.node_count())?;
     for node in program.nodes() {
-        if let crate::core::EffectExprKind::Operation(
-            crate::core::EffectOperation::SourceResourceScope(scope),
-        ) = &node.kind
-        {
-            push(&mut identities, scope.identity(), work)?;
+        match &node.kind {
+            crate::core::EffectExprKind::Operation(
+                crate::core::EffectOperation::SourceResourceScope(scope),
+            ) => {
+                push(&mut identities, scope.identity(), work)?;
+            }
+            crate::core::EffectExprKind::Operation(crate::core::EffectOperation::Resource(
+                scope,
+            )) => {
+                if !scope.acquisition.builtin.is_builtin_cell() {
+                    return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata).into());
+                }
+                push(&mut identities, scope.acquisition.identity, work)?;
+            }
+            _ => {}
         }
     }
     if !program
