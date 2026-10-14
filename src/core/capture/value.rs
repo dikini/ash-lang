@@ -285,6 +285,15 @@ struct EvidenceIndex {
     first: HashMap<EvidenceKey, usize>,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct SourceResourcePositions {
+    pub(super) acquire: usize,
+    pub(super) body: usize,
+    pub(super) cleanup: usize,
+    pub(super) handler: usize,
+    pub(super) finish: usize,
+}
+
 #[derive(Debug)]
 pub(super) struct Graph {
     expressions: Vec<Expr>,
@@ -1891,26 +1900,19 @@ impl Graph {
                 action: index(scope.action),
             },
             Some(EffectOperation::Registration(scope)) => Expr::Alias(index(scope.body)),
-            Some(EffectOperation::Resource(resource)) => Expr::Resource {
-                success: resource
-                    .acquisition
-                    .api()
-                    .ok_or(Failure::Invalid)?
-                    .outcome()
-                    .map(|outcome| ConstructorId::new(outcome, 0)),
-                failure: resource
-                    .acquisition
-                    .api()
-                    .ok_or(Failure::Invalid)?
-                    .outcome()
-                    .map(|outcome| ConstructorId::new(outcome, 1)),
-                failure_payload: None,
-                handle: self.symbol(symbols, resource.handle.id(), source, budget)?,
-                identity: self.symbol(types, resource.acquisition.identity, source, budget)?,
-                initializer: index(resource.initializer),
-                body: index(resource.body),
-                source: resource.acquisition.span,
-            },
+            Some(EffectOperation::Resource(resource)) => {
+                resource.acquisition.api().ok_or(Failure::Invalid)?;
+                Expr::Resource {
+                    success: None,
+                    failure: None,
+                    failure_payload: None,
+                    handle: self.symbol(symbols, resource.handle.id(), source, budget)?,
+                    identity: self.symbol(types, resource.acquisition.identity, source, budget)?,
+                    initializer: index(resource.initializer),
+                    body: index(resource.body),
+                    source: resource.acquisition.span,
+                }
+            }
             Some(
                 selected_operation @ (EffectOperation::Handler(_)
                 | EffectOperation::ProviderScope(_)),
@@ -2787,6 +2789,50 @@ impl Graph {
             .map_err(|_| Failure::Resource)?;
         self.positions.insert(code, expression);
         Ok(())
+    }
+
+    /// Distinct existing value equations for the acquired-only source-control
+    /// phases. No cut may substitute the enclosing report for a completed
+    /// acquisition or for a still-live cleanup/handler result.
+    pub(super) fn source_resource_positions(
+        &self,
+        scope: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<SourceResourcePositions, Failure> {
+        charge(budget, 1)?;
+        let Expr::Resource {
+            initializer, body, ..
+        } = self.expressions.get(scope).ok_or(Failure::Invalid)?
+        else {
+            return Err(Failure::Invalid);
+        };
+        let (acquire, raw_body) = (*initializer, *body);
+        charge(budget, 1)?;
+        if !matches!(self.expressions.get(acquire), Some(Expr::Bind { .. })) {
+            return Err(Failure::Invalid);
+        }
+        let mut cleanup = raw_body;
+        loop {
+            charge(budget, 1)?;
+            cleanup = match self.expressions.get(cleanup).ok_or(Failure::Invalid)? {
+                Expr::Bind { body, .. } => *body,
+                Expr::Match { arms, .. } if arms.len() == 1 => arms[0].1,
+                Expr::Cleanup { body, action } => {
+                    charge(budget, 1)?;
+                    if !matches!(self.expressions.get(*body), Some(Expr::Handler { .. })) {
+                        return Err(Failure::Invalid);
+                    }
+                    return Ok(SourceResourcePositions {
+                        acquire,
+                        body: raw_body,
+                        cleanup,
+                        handler: *body,
+                        finish: *action,
+                    });
+                }
+                _ => return Err(Failure::Invalid),
+            };
+        }
     }
 
     /// A resource's control handler corresponds to the exact handler equation
@@ -10994,6 +11040,117 @@ mod tests {
             run(&mut TypeWorkBudget::with_limit(measured.used() - 1)),
             Err(Failure::Resource)
         ));
+    }
+
+    #[test]
+    fn source_resource_restored_cuts_keep_live_cell_marker_and_acquire_once() {
+        let success = ConstructorId::new(
+            crate::types::NominalTypeId::new(crate::module::ModuleId::new(77), 1),
+            0,
+        );
+        let mut graph = graph(vec![
+            Expr::Scalar, // native/initializer scalar, never replayed
+            Expr::Slot,   // resumed body value carrying the clause-created cell
+            Expr::Slot,   // original owner handle
+            Expr::Slot,   // original owned identity
+            Expr::Handler {
+                body: 1,
+                clauses: Vec::new(),
+            },
+            Expr::Cleanup { body: 4, action: 0 },
+            Expr::Slot, // local handler-state binder
+            Expr::Bind {
+                binder: 6,
+                initializer: 0,
+                body: 5,
+            },
+            Expr::Slot, // acquisition parameter
+            Expr::Bind {
+                binder: 8,
+                initializer: 0,
+                body: 0,
+            },
+        ]);
+        graph.expressions.push(Expr::Resource {
+            success: Some(success),
+            failure: Some(ConstructorId::new(success.owner(), 1)),
+            failure_payload: None,
+            handle: 2,
+            identity: 3,
+            initializer: 9,
+            body: 7,
+            source: graph.sources[0],
+        });
+        graph.expressions.push(Expr::Project {
+            value: 10,
+            field: 0,
+            constructor: Some(success),
+        });
+        graph.sources.extend([graph.sources[0]; 2]);
+        for value in 0..graph.expressions.len() {
+            graph.positions.insert(value, value);
+        }
+        for (code, value) in [(100, 10), (101, 9), (102, 5), (103, 7), (104, 7), (105, 4)] {
+            graph.positions.insert(code, value);
+        }
+        let run = |budget: &mut TypeWorkBudget| {
+            let positions = graph.source_resource_positions(10, budget)?;
+            assert_eq!(
+                (
+                    positions.acquire,
+                    positions.body,
+                    positions.cleanup,
+                    positions.handler,
+                    positions.finish
+                ),
+                (9, 7, 5, 4, 0)
+            );
+            let mut analysis = Analysis::new(&graph, budget)?;
+            analysis.slot(10, 0, budget)?;
+            analysis.close(budget)?;
+            analysis.frozen_contexts = 1;
+            let focus = analysis.context(0, Transition::Focus, budget)?;
+            analysis.focus = Some((99, focus));
+            let marker = Atom::Resource(99, focus);
+            let handler = analysis.restore_cut(0, 105, usize::MAX - 1, 1, &[], true, budget)?;
+            analysis.atom(handler.input, marker, budget)?;
+            let cleanup = analysis.restore_cut(0, 102, usize::MAX - 2, 105, &[], false, budget)?;
+            analysis.join_ports(cleanup.input, handler.result, budget)?;
+            let next = analysis.restore_cut(0, 104, 1, 103, &[101], false, budget)?;
+            analysis.join_ports(next.input, cleanup.result, budget)?;
+            let owner = analysis.restore_cut(0, 100, usize::MAX - 1, 104, &[], true, budget)?;
+            analysis.join_ports(owner.input, next.result, budget)?;
+            let projected = analysis.slot(11, owner.context, budget)?;
+            analysis.close(budget)?;
+            assert!(
+                analysis.dependencies(projected, budget)?.contains(&marker),
+                "the Success projection retains the cell captured in the live resumed closure"
+            );
+            assert!(
+                !analysis.indices.contains_key(&(10, next.context)),
+                "the completed prefix freezes acquisition, never the outer report"
+            );
+            for value in [0, 2, 3, 9] {
+                assert!(
+                    !analysis.indices.contains_key(&(value, owner.context)),
+                    "restoring the report must not reacquire its owner: {value}"
+                );
+            }
+            Ok::<(), Failure>(())
+        };
+        let mut measured = TypeWorkBudget::unbounded();
+        run(&mut measured).unwrap();
+        for prefix in [0, 23] {
+            let mut short = TypeWorkBudget::with_limit(prefix + measured.used() - 1);
+            short.charge(prefix).unwrap();
+            assert!(matches!(run(&mut short), Err(Failure::Resource)));
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + measured.used());
+                exact.charge(prefix).unwrap();
+                run(&mut exact).unwrap();
+                assert_eq!(exact.used(), prefix + measured.used());
+            }
+        }
     }
 
     #[test]

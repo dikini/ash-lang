@@ -428,8 +428,6 @@ pub enum SurfaceExprKind {
 pub enum SurfaceResourceKind {
     /// A scoped mutable integer cell.
     Cell,
-    /// A checked native byte-buffer allocation.
-    NativeBuffer,
 }
 
 /// Source ownership of one builtin acquisition.

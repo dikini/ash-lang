@@ -189,6 +189,8 @@ impl<'binding> OwnerAcquireReady<'binding> {
         heap: &mut Vec<HeapCell>,
         work: &mut TypeWorkBudget,
     ) -> Result<Self, OwnerPhaseFailure> {
+        #[cfg(test)]
+        let admission_budget = post_record_test::initialized_bytes_admission_begin(work);
         let invocation = invocation
             .prepare_initialized_bytes(initialized_bytes, work)
             .map_err(|error| {
@@ -202,6 +204,8 @@ impl<'binding> OwnerAcquireReady<'binding> {
         let readable = invocation.readable_constructor();
         let returned_constructor = invocation.returned_constructor();
         let first = reserve_slots(heap, work, 3)?;
+        #[cfg(test)]
+        post_record_test::initialized_bytes_admission_end(work, admission_budget);
         Ok(Self {
             invocation,
             operands,
@@ -1428,6 +1432,7 @@ pub(crate) mod post_record_test {
         pub(crate) recorded_with_zero_shared_work: bool,
         pub(crate) recorded_live_owner: bool,
         pub(crate) initialized_bytes: Option<usize>,
+        pub(crate) initialized_admission_used: Option<usize>,
         pub(crate) report_slot_published: bool,
         pub(crate) teardown_returned: usize,
         pub(crate) teardown_recorded: usize,
@@ -1457,6 +1462,7 @@ pub(crate) mod post_record_test {
         TeardownReturn,
         TeardownExtraction,
         InitializedExtentPreflight,
+        InitializedBytesAdmission { prefix: usize, allowance: usize },
         TeardownPreflight { prefix: usize, allowance: usize },
     }
 
@@ -1500,6 +1506,52 @@ pub(crate) mod post_record_test {
 
     pub(crate) fn observe_extent_preflight<T>(run: impl FnOnce() -> T) -> (T, Observation) {
         observe_phase(true, Phase::InitializedExtentPreflight, run)
+    }
+
+    pub(crate) fn observe_initialized_bytes_admission<T>(
+        prefix: usize,
+        allowance: usize,
+        run: impl FnOnce() -> T,
+    ) -> (T, Observation) {
+        observe_phase(
+            true,
+            Phase::InitializedBytesAdmission { prefix, allowance },
+            run,
+        )
+    }
+
+    pub(super) fn initialized_bytes_admission_begin(
+        work: &mut TypeWorkBudget,
+    ) -> Option<TypeWorkBudget> {
+        let State {
+            phase: Phase::InitializedBytesAdmission { prefix, allowance },
+            ..
+        } = STATE.get()?
+        else {
+            return None;
+        };
+        let original = work.clone();
+        *work = TypeWorkBudget::with_limit(prefix + allowance);
+        work.charge(prefix).unwrap();
+        Some(original)
+    }
+
+    pub(super) fn initialized_bytes_admission_end(
+        work: &mut TypeWorkBudget,
+        original: Option<TypeWorkBudget>,
+    ) {
+        if let Some(mut original) = original {
+            let mut state = STATE.get().unwrap();
+            let Phase::InitializedBytesAdmission { prefix, .. } = state.phase else {
+                unreachable!();
+            };
+            state.observation.initialized_admission_used = Some(work.used());
+            STATE.set(Some(state));
+            // Isolate this admission boundary, then retain its actual charge
+            // under the original unchanged limit for the source continuation.
+            original.charge(work.used() - prefix).unwrap();
+            *work = original;
+        }
     }
 
     pub(super) fn initialized_extent_preflight(work: &mut TypeWorkBudget) {

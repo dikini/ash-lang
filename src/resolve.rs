@@ -1702,9 +1702,6 @@ fn resolve_module_names_with_budget(
             if dependency.edge.target().is_builtin_cell() {
                 resolver.builtin_cell = Some(dependency.edge.target());
             }
-            if dependency.edge.target().is_builtin_native_buffer() {
-                resolver.builtin_native_buffer = Some(dependency.edge.target());
-            }
             DirectDependencyRoute::new(dependency.edge.target(), dependency.edge.import_span())
         }));
         for dependency in dependencies {
@@ -2486,7 +2483,6 @@ fn surface_definition_name(definition: &SurfaceDefinition) -> &crate::surface::S
 struct Resolver {
     module: ModuleId,
     builtin_cell: Option<ModuleId>,
-    builtin_native_buffer: Option<ModuleId>,
     resource_families: HashMap<NominalTypeId, crate::resolved::ResourceDefinitionId>,
     source_resource_owned_positions: HashMap<NominalTypeId, usize>,
     source_foreign_libraries: Vec<Arc<crate::foreign::source_contract::PreparedForeignLibrary>>,
@@ -2908,7 +2904,6 @@ impl Resolver {
     fn resource_builtin(&self, kind: crate::surface::SurfaceResourceKind) -> Option<ModuleId> {
         match kind {
             crate::surface::SurfaceResourceKind::Cell => self.builtin_cell,
-            crate::surface::SurfaceResourceKind::NativeBuffer => self.builtin_native_buffer,
         }
     }
     #[cfg(test)]
@@ -2941,7 +2936,6 @@ impl Resolver {
             resource_origins: HashMap::new(),
             next_binder: 0,
             builtin_cell: None,
-            builtin_native_buffer: None,
             next_type_variable: 0,
             next_lexical_nominal: 0,
             next_lexical_evidence: 0,
@@ -11463,11 +11457,7 @@ impl Resolver {
             identity: identity.id,
             handle: handle.id,
             provider,
-            methods: if api.is_native_buffer() {
-                crate::resolved::ResourceMethods::NativeBuffer(method_binders)
-            } else {
-                crate::resolved::ResourceMethods::Cell([method_binders[0], method_binders[1]])
-            },
+            methods: crate::resolved::ResourceMethods::Cell([method_binders[0], method_binders[1]]),
             span,
         };
         let generated = crate::resolved::ResolvedLexicalEvidence {
@@ -12966,10 +12956,6 @@ impl Resolver {
                     crate::surface::SurfaceResourceKind::Cell => (
                         "@builtin.cell",
                         "resource acquisition requires a direct import of @builtin.cell",
-                    ),
-                    crate::surface::SurfaceResourceKind::NativeBuffer => (
-                        "@builtin.native_buffer",
-                        "resource acquisition requires a direct import of @builtin.native_buffer",
                     ),
                 };
                 let mut failure = error(

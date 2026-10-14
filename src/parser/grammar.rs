@@ -1630,8 +1630,7 @@ fn resource_expression(parser: &mut Parser<'_>) {
     }
     parser.start(NodeKind::ResourceExpression);
     let _ = parser.bump();
-    if matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "cell" || name == "native_buffer")
-    {
+    if matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "cell") {
         let _ = parser.bump();
     } else {
         parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);

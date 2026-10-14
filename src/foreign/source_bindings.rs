@@ -696,6 +696,21 @@ impl<'bindings> AdmittedSourceOwnerAcquireInvocation<'bindings> {
         if extent.is_some() != initialized_bytes.is_some() {
             return Err(RuntimeFailure::ForeignBinding);
         }
+        if let Some(extent) = extent {
+            // The exact original initialization fact carries proportional
+            // native initialization and fixed release work. Admit both before
+            // acquisition; recording the returned owner cannot charge or fail.
+            let units = extent.checked_add(2).ok_or_else(|| {
+                RuntimeFailure::resource(ResourceFailure::new(
+                    ResourceFailureCause::WorkBudgetExhausted,
+                    RuntimePhase::Access,
+                    RuntimeResource::WorkUnits,
+                    None,
+                    Some(work.remaining()),
+                ))
+            })?;
+            paid(work, units)?;
+        }
         self.readiness.prepare_initialized_bytes(extent);
         Ok(self)
     }

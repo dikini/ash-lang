@@ -97,13 +97,13 @@ the authenticated lexical provider, whose ordinary method functions request
 the corresponding `Ops<R>` operations. This is not a generic provider registry
 or an ordinary source `with` declaration. Pure Core admits no resource carrier.
 
-The carrier selects the closed cell or native-buffer API. Cell acquisition
-retains the body's result type; native acquisition has the exact builtin
-`Outcome<body_type>` while its body remains unwrapped. Independent linked and
-Core validation authenticate the builtin kind, ordinary Outcome/Error
-constructors, sealed provider, generated methods, ownership, origins and exact
-result/row relation. Both transforms re-establish those checks. Core contains
-neither a native address nor an allocated owner.
+The carrier selects the closed cell API and retains the body's result type.
+Independent linked and Core validation authenticate the exact builtin cell,
+sealed provider, generated methods, ownership, origins and result/row relation.
+Both transforms re-establish those checks. Core contains no allocated owner.
+The ordinary native-buffer library instead uses the declared-source carrier
+below and its checked `acquired_only` codec; no buffer-specific Core operation
+or result wrapping remains.
 
 A declared source resource uses a separate Effect `SourceResourceScope` carrier.
 It retains the exact original resource header and checked acquire, finish and

@@ -295,6 +295,9 @@ impl HandlerNode {
     pub const fn hook_root(&self) -> Option<&crate::resolved::HookRootContract> {
         self.hook_root.as_ref()
     }
+    pub(crate) fn hook_registration(&self) -> Option<&crate::resolved::HookRegistrationContract> {
+        self.hook_registration.as_deref()
+    }
     pub(crate) fn has_hook_contracts(&self) -> bool {
         self.hook_root.is_some() || self.hook_registration.is_some()
     }
@@ -364,6 +367,10 @@ pub struct ResourceScopeNode {
 }
 
 impl ResourceScopeNode {
+    pub(crate) fn handle(&self) -> &super::TypedBinder {
+        &self.handle
+    }
+
     pub(crate) fn initializer(&self) -> NodeId {
         self.initializer
     }

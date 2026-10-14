@@ -86,6 +86,31 @@ pub(super) struct HandlerRecord {
     body: u32,
     effect: u32,
     clauses: Slice,
+    root: Option<HookRootRecord>,
+    registration: Option<HookRegistrationRecord>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct HookRootRecord {
+    target: u32,
+    span: SpanRecord,
+    target_span: SpanRecord,
+    operation: OperationIdentity,
+    input: BinderIdentity,
+    resume: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct HookRegistrationRecord {
+    target: u32,
+    span: SpanRecord,
+    target_span: SpanRecord,
+    operation: OperationIdentity,
+    callback: BinderIdentity,
+    input: BinderIdentity,
+    previous: BinderIdentity,
+    next: BinderIdentity,
+    resume: u32,
 }
 #[derive(Clone, Copy, Debug)]
 pub(super) struct ClauseRecord {
@@ -206,7 +231,39 @@ wire_struct!(
     interpreted,
     origin
 );
-wire_struct!(HandlerRecord, 20, id, body, effect, clauses);
+wire_struct!(
+    HandlerRecord,
+    22,
+    id,
+    body,
+    effect,
+    clauses,
+    root,
+    registration
+);
+wire_struct!(
+    HookRootRecord,
+    49,
+    target,
+    span,
+    target_span,
+    operation,
+    input,
+    resume
+);
+wire_struct!(
+    HookRegistrationRecord,
+    64,
+    target,
+    span,
+    target_span,
+    operation,
+    callback,
+    input,
+    previous,
+    next,
+    resume
+);
 wire_struct!(ClauseRecord, 28, operation, resume, arm);
 wire_struct!(TemplateGraphRecord, 16, nodes, root, catalog);
 wire_struct!(
@@ -539,9 +596,36 @@ impl Encoder<'_> {
         &mut self,
         handler: &crate::core::HandlerNode,
     ) -> Result<u32, ImageFailure> {
-        if handler.has_hook_contracts() {
-            return Err(ImageFailure::Unsupported(Unsupported::EffectOperation));
-        }
+        let root = handler
+            .hook_root()
+            .map(|root| -> Result<_, ImageFailure> {
+                Ok(HookRootRecord {
+                    target: self.encode_structural(StructuralInput::Instance(&root.target))?,
+                    span: self.span(root.span)?,
+                    target_span: self.span(root.target_span)?,
+                    operation: self.operation_identity(root.operation)?,
+                    input: self.binder_id(root.input)?,
+                    resume: root.resume.value(),
+                })
+            })
+            .transpose()?;
+        let registration = handler
+            .hook_registration()
+            .map(|registration| -> Result<_, ImageFailure> {
+                Ok(HookRegistrationRecord {
+                    target: self
+                        .encode_structural(StructuralInput::Instance(&registration.target))?,
+                    span: self.span(registration.span)?,
+                    target_span: self.span(registration.target_span)?,
+                    operation: self.operation_identity(registration.operation)?,
+                    callback: self.binder_id(registration.callback)?,
+                    input: self.binder_id(registration.input)?,
+                    previous: self.binder_id(registration.previous)?,
+                    next: self.binder_id(registration.next)?,
+                    resume: registration.resume.value(),
+                })
+            })
+            .transpose()?;
         let start = self.image.source_clauses.len();
         for clause in handler.clauses() {
             let record = ClauseRecord {
@@ -560,6 +644,8 @@ impl Encoder<'_> {
             body: self.node(handler.body())?,
             effect: self.encode_structural(StructuralInput::Instance(handler.effect()))?,
             clauses: Slice::of(&self.image.source_clauses, start)?,
+            root,
+            registration,
         };
         push(&mut self.image.source_handlers, record, self.work)
     }
@@ -1163,8 +1249,57 @@ impl Decoder<'_> {
         nodes: &[NodeId],
         slot: u32,
     ) -> Result<crate::core::HandlerNode, ImageFailure> {
+        let record = get(&self.image.source_handlers, slot)?;
+        if record.root.is_some() || record.registration.is_some() {
+            return Err(ImageFailure::InvalidRecord);
+        }
         let (id, body, effect, clauses) = self.source_handler_parts(builder, nodes, slot)?;
         Ok(crate::core::HandlerNode::new(id, body, effect, clauses))
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub(super) fn handler_contracts(
+        &mut self,
+        slot: u32,
+    ) -> Result<
+        (
+            Option<crate::resolved::HookRootContract>,
+            Option<Box<crate::resolved::HookRegistrationContract>>,
+        ),
+        ImageFailure,
+    > {
+        let record = *get(&self.image.source_handlers, slot)?;
+        let root = record
+            .root
+            .map(|root| -> Result<_, ImageFailure> {
+                Ok(crate::resolved::HookRootContract {
+                    target: self.structural(root.target)?.instance()?,
+                    span: self.span(root.span)?,
+                    target_span: self.span(root.target_span)?,
+                    operation: self.operation_identity(root.operation)?,
+                    input: self.binder_id(root.input)?,
+                    resume: crate::resolved::ResumeId::new(root.resume),
+                })
+            })
+            .transpose()?;
+        let registration = record
+            .registration
+            .map(|registration| -> Result<_, ImageFailure> {
+                charge(self.work, 1)?;
+                Ok(Box::new(crate::resolved::HookRegistrationContract {
+                    target: self.structural(registration.target)?.instance()?,
+                    span: self.span(registration.span)?,
+                    target_span: self.span(registration.target_span)?,
+                    operation: self.operation_identity(registration.operation)?,
+                    callback: self.binder_id(registration.callback)?,
+                    input: self.binder_id(registration.input)?,
+                    previous: self.binder_id(registration.previous)?,
+                    next: self.binder_id(registration.next)?,
+                    resume: crate::resolved::ResumeId::new(registration.resume),
+                }))
+            })
+            .transpose()?;
+        Ok((root, registration))
     }
     pub(super) fn source_binder_reservations(
         &mut self,
@@ -1654,11 +1789,47 @@ impl Decoder<'_> {
             self.fact_table(&self.image.method_catalogs, |p| p.method_catalogs)?,
             slot,
         )?;
-        let mut methods = Vec::new();
-        for record in catalog
+        let original_methods = catalog
             .methods
-            .get(self.fact_table(&self.image.source_methods, |p| p.source_methods)?)?
+            .get(self.fact_table(&self.image.source_methods, |p| p.source_methods)?)?;
+        let mut enclosing_cell_methods = Vec::new();
+        charge(self.work, self.modules.len())?;
+        if self.modules.iter().any(|module| module.is_builtin_cell())
+            && self.image.main_method_catalog != Some(slot)
         {
+            let main = get(
+                self.fact_table(&self.image.method_catalogs, |p| p.method_catalogs)?,
+                self.image
+                    .main_method_catalog
+                    .ok_or(ImageFailure::InvalidRecord)?,
+            )?;
+            // An original library forest can predate its caller's cell import,
+            // while reconstruction deliberately shares the whole registry.
+            // Retain only missing declarations from that SAME program's cell
+            // catalog, not lexical owners, occurrences or permissions. Normal
+            // Core admission still checks every canonical cell signature.
+            for method in main
+                .methods
+                .get(self.fact_table(&self.image.source_methods, |p| p.source_methods)?)?
+            {
+                charge(self.work, 1)?;
+                if !get(&self.modules, method.interface.module)?.is_builtin_cell() {
+                    continue;
+                }
+                let mut present = false;
+                for original in original_methods {
+                    charge(self.work, 1)?;
+                    present |= original.interface.module == method.interface.module
+                        && original.interface.local == method.interface.local
+                        && original.local == method.local;
+                }
+                if !present {
+                    push(&mut enclosing_cell_methods, *method, self.work)?;
+                }
+            }
+        }
+        let mut methods = Vec::new();
+        for record in original_methods.iter().chain(enclosing_cell_methods.iter()) {
             let id = crate::interface::MethodId::new(
                 self.interface_identity(record.interface)?,
                 record.local,
@@ -1744,6 +1915,444 @@ mod tests {
     impl Drop for Fixture {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    #[test]
+    fn buffer_acquisition_inside_discard_cleanup_has_normal_startup_budget() {
+        let root = std::env::temp_dir().join(format!(
+            "ash-buffer-nested-finish-image-{}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        let fixture = Fixture(root);
+        fs::write(
+            fixture.0.join("native_buffer.ash"),
+            include_str!("../../libraries/native_buffer.ash"),
+        )
+        .unwrap();
+        fs::write(
+            fixture.0.join("entry.ash"),
+            include_str!("../../tests/fixtures/native-buffer/discard_cleanup.ash"),
+        )
+        .unwrap();
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry: fixture.0.join("entry.ash"),
+            roots: crate::module::ModuleRoots::new([("ffi", &fixture.0)]).unwrap(),
+        })
+        .unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let build = super::super::encode_effect_for_build(
+            program,
+            provenance,
+            super::super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        let bytes = build
+            .image
+            .encode_bytes(&mut TypeWorkBudget::default())
+            .unwrap();
+        let expected = build
+            .image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        let mut work = TypeWorkBudget::default();
+        let decoded = PureImage::decode_bytes(&bytes, &mut work).unwrap();
+        println!("buffer nested cleanup startup decoded: {}", work.used());
+        let _facts = decoded
+            .admit_expected_native_facts(&expected, &mut work)
+            .unwrap();
+        println!(
+            "buffer nested cleanup startup authenticated facts: {}",
+            work.used()
+        );
+        let result = decoded.restore_effect(&mut work);
+        println!("buffer nested cleanup startup total: {}", work.used());
+        result.unwrap();
+    }
+    #[test]
+    fn buffer_source_forests_and_byte_calls_survive_both_core_transforms() {
+        let root =
+            std::env::temp_dir().join(format!("ash-buffer-copy-image-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        let fixture = Fixture(root);
+        fs::write(
+            fixture.0.join("native_buffer.ash"),
+            include_str!("../../libraries/native_buffer.ash"),
+        )
+        .unwrap();
+        fs::write(fixture.0.join("entry.ash"), "import native_buffer as Buffer\nmain : Unit -> Buffer.Outcome<Buffer.Outcome<Int>>\nmain () = resource Buffer.Buffer<R> buffer = 2 {\n    let _ = Buffer.write (buffer, 0, 42)\n    Buffer.read (buffer, 0)\n}\n").unwrap();
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry: fixture.0.join("entry.ash"),
+            roots: crate::module::ModuleRoots::empty(),
+        })
+        .unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let relation = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        for transformed in [
+            crate::core::transform::identity_effect_traversal(program),
+            crate::core::transform::fold_effect_literal_primitives(program),
+        ] {
+            crate::core::validate_effect_modules(transformed.unwrap(), &sources, &relation)
+                .unwrap();
+        }
+    }
+    #[test]
+    fn buffer_registration_image_keeps_hook_contracts_and_completion_edges() {
+        let root =
+            std::env::temp_dir().join(format!("ash-buffer-register-image-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        let fixture = Fixture(root);
+        fs::write(
+            fixture.0.join("native_buffer.ash"),
+            include_str!("../../libraries/native_buffer.ash"),
+        )
+        .unwrap();
+        fs::write(
+            fixture.0.join("entry.ash"),
+            include_str!("../../tests/fixtures/native-buffer/registration.ash"),
+        )
+        .unwrap();
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry: fixture.0.join("entry.ash"),
+            roots: crate::module::ModuleRoots::empty(),
+        })
+        .unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let build = super::super::encode_effect_for_build(
+            program,
+            provenance,
+            super::super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        let bytes = build
+            .image
+            .encode_bytes(&mut TypeWorkBudget::default())
+            .unwrap();
+        let expected = build
+            .image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        drop(build);
+        drop(compiled);
+        drop(fixture);
+        let restore = |work: &mut TypeWorkBudget| {
+            let decoded = PureImage::decode_bytes(&bytes, work)?;
+            let _facts = decoded.admit_expected_native_facts(&expected, work)?;
+            decoded.restore_effect(work)
+        };
+        let mut work = TypeWorkBudget::default();
+        restore(&mut work).unwrap();
+        let required = work.used();
+        for prefix in [0, 23] {
+            let mut short = TypeWorkBudget::with_limit(prefix + required - 1);
+            short.charge(prefix).unwrap();
+            assert!(restore(&mut short).is_err());
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + required);
+                exact.charge(prefix).unwrap();
+                restore(&mut exact).unwrap();
+                assert_eq!(exact.used(), prefix + required);
+            }
+        }
+        // Each record remains a passive claim. Independent Core checks the
+        // original hook target, generated clause identities and structural
+        // completion edges even when decoding a well-formed private record.
+        for mutation in 0..17 {
+            let mut image =
+                PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+            if mutation < 6 {
+                let donor = image
+                    .source_handlers
+                    .iter()
+                    .find(|handler| handler.root.is_none() && handler.registration.is_none())
+                    .unwrap()
+                    .effect;
+                let root = image
+                    .source_handlers
+                    .iter_mut()
+                    .find_map(|handler| handler.root.as_mut())
+                    .unwrap();
+                match mutation {
+                    0 => root.target = donor,
+                    1 => root.operation.local = u32::MAX,
+                    2 => root.input = super::super::BinderIdentity::Generated(u32::MAX),
+                    3 => root.resume = u32::MAX,
+                    4 => root.span.end += 1,
+                    5 => root.target_span.end += 1,
+                    _ => unreachable!(),
+                }
+            } else if mutation < 14 {
+                let donor = image
+                    .source_handlers
+                    .iter()
+                    .find(|handler| handler.root.is_none() && handler.registration.is_none())
+                    .unwrap()
+                    .effect;
+                let registration = image
+                    .source_handlers
+                    .iter_mut()
+                    .find_map(|handler| handler.registration.as_mut())
+                    .unwrap();
+                match mutation {
+                    6 => registration.target = donor,
+                    7 => registration.callback = super::super::BinderIdentity::Generated(u32::MAX),
+                    8 => registration.input = registration.previous,
+                    9 => registration.previous = registration.next,
+                    10 => registration.operation.local = u32::MAX,
+                    11 => registration.resume = u32::MAX,
+                    12 => registration.span.end += 1,
+                    13 => registration.target_span.end += 1,
+                    _ => unreachable!(),
+                }
+            } else {
+                let (handler, callback, span) = image
+                    .nodes
+                    .iter_mut()
+                    .find_map(|node| match &mut node.tag {
+                        super::super::NodeTag::Registration {
+                            handler,
+                            callback,
+                            span,
+                            ..
+                        } => Some((handler, callback, span)),
+                        _ => None,
+                    })
+                    .unwrap();
+                match mutation {
+                    14 => *handler = u32::MAX,
+                    15 => *callback = super::super::BinderIdentity::Generated(u32::MAX),
+                    16 => span.end += 1,
+                    _ => unreachable!(),
+                }
+            }
+            assert!(
+                image
+                    .restore_effect(&mut TypeWorkBudget::default())
+                    .is_err(),
+                "registration mutation {mutation} must fail before any callback"
+            );
+        }
+    }
+    #[test]
+    fn buffer_cell_cleanup_image_keeps_scope_binders_and_canonical_origin() {
+        let root =
+            std::env::temp_dir().join(format!("ash-buffer-cell-image-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        let fixture = Fixture(root);
+        fs::write(
+            fixture.0.join("native_buffer.ash"),
+            include_str!("../../libraries/native_buffer.ash"),
+        )
+        .unwrap();
+        fs::write(
+            fixture.0.join("entry.ash"),
+            include_str!("../../tests/fixtures/native-buffer/cell_cleanup.ash"),
+        )
+        .unwrap();
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry: fixture.0.join("entry.ash"),
+            roots: crate::module::ModuleRoots::empty(),
+        })
+        .unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let build = super::super::encode_effect_for_build(
+            program,
+            provenance,
+            super::super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        let bytes = build
+            .image
+            .encode_bytes(&mut TypeWorkBudget::default())
+            .unwrap();
+        let expected = build
+            .image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        drop(build);
+        drop(compiled);
+        drop(fixture);
+        let mut work = TypeWorkBudget::default();
+        let decoded = PureImage::decode_bytes(&bytes, &mut work).unwrap();
+        let _facts = decoded
+            .admit_expected_native_facts(&expected, &mut work)
+            .unwrap();
+        if let Err(error) = decoded.restore_effect(&mut work) {
+            panic!(
+                "cell buffer reconstruction after {} units: {error:?}",
+                work.used()
+            );
+        }
+        let required = work.used();
+        let restore = |work: &mut TypeWorkBudget| {
+            let decoded = PureImage::decode_bytes(&bytes, work)?;
+            let _facts = decoded.admit_expected_native_facts(&expected, work)?;
+            decoded.restore_effect(work)
+        };
+        for prefix in [0, 23] {
+            let mut short = TypeWorkBudget::with_limit(prefix + required - 1);
+            short.charge(prefix).unwrap();
+            assert!(restore(&mut short).is_err());
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + required);
+                exact.charge(prefix).unwrap();
+                restore(&mut exact).unwrap();
+                assert_eq!(exact.used(), prefix + required);
+            }
+        }
+        for mutation in 0..8 {
+            let mut image =
+                PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+            if mutation < 4 {
+                let scope = image
+                    .nodes
+                    .iter_mut()
+                    .find_map(|node| match &mut node.tag {
+                        super::super::NodeTag::CellScope {
+                            acquisition,
+                            handle,
+                            ..
+                        } => Some((acquisition, handle)),
+                        _ => None,
+                    })
+                    .unwrap();
+                match mutation {
+                    0 => scope.0.provider_local = u32::MAX,
+                    1 => std::mem::swap(&mut scope.0.read, &mut scope.0.write),
+                    2 => scope.0.identity = super::super::TypeVariableIdentity::Generated(u32::MAX),
+                    3 => {
+                        image.binders[usize::try_from(*scope.1).unwrap()].id =
+                            super::super::BinderIdentity::Generated(u32::MAX)
+                    }
+                    _ => unreachable!(),
+                }
+            } else if mutation < 6 {
+                let cell = image
+                    .sources
+                    .iter_mut()
+                    .find(|source| {
+                        matches!(source.role, super::super::ModuleRoleRecord::BuiltinCell)
+                    })
+                    .unwrap();
+                if mutation == 4 {
+                    // Identical source bytes in an ordinary module grant no
+                    // compiler-owned cell role or acquisition permission.
+                    cell.role = super::super::ModuleRoleRecord::Ordinary;
+                } else {
+                    image.bytes[usize::try_from(cell.text.start).unwrap()] ^= 1;
+                }
+            } else {
+                let (callback, action_span) = image
+                    .nodes
+                    .iter_mut()
+                    .find_map(|node| match &mut node.tag {
+                        super::super::NodeTag::Cleanup {
+                            callback,
+                            action_span,
+                            ..
+                        } => Some((callback, action_span)),
+                        _ => None,
+                    })
+                    .unwrap();
+                if mutation == 6 {
+                    *callback = super::super::BinderIdentity::Generated(u32::MAX);
+                } else {
+                    action_span.end += 1;
+                }
+            }
+            assert!(
+                image
+                    .restore_effect(&mut TypeWorkBudget::default())
+                    .is_err(),
+                "cell/cleanup mutation {mutation} must fail independent reconstruction before any callback"
+            );
+        }
+    }
+    #[test]
+    fn imported_buffer_two_owner_discard_has_normal_startup_budget() {
+        let root = std::env::temp_dir().join(format!("ash-buffer-image-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        let fixture = Fixture(root);
+        fs::write(
+            fixture.0.join("native_buffer.ash"),
+            include_str!("../../libraries/native_buffer.ash"),
+        )
+        .unwrap();
+        fs::write(
+            fixture.0.join("entry.ash"),
+            r#"import native_buffer as Buffer
+effect Stop {
+    stop : Unit -> Unit
+}
+main : Unit -> Buffer.Outcome<Buffer.Outcome<Int>>
+main () = handle (resource Buffer.Buffer<R> outer = 2 {
+    resource Buffer.Buffer<S> inner = 3 {
+        let _ = Buffer.write (outer, 0, 42)
+        let _ = Buffer.write (inner, 0, 57)
+        let _ = perform Stop.stop ()
+        match (Buffer.read (outer, 0), Buffer.read (inner, 0)) {
+            (Buffer.Success(a), Buffer.Success(b)) => a + b
+            _ => 999
+        }
+    }
+}) with Stop {
+    stop ignored => {
+let _ = discard
+Buffer.Success (Buffer.Success 7)
+}
+}
+"#,
+        )
+        .unwrap();
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry: fixture.0.join("entry.ash"),
+            roots: crate::module::ModuleRoots::empty(),
+        })
+        .unwrap();
+        println!(
+            "buffer diagnostic compilation: {:?}",
+            compiled.compilation_work()
+        );
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let build = super::super::encode_effect_for_build(
+            program,
+            provenance,
+            super::super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        let bytes = build
+            .image
+            .encode_bytes(&mut TypeWorkBudget::default())
+            .unwrap();
+        let expected = build
+            .image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        let mut work = TypeWorkBudget::default();
+        let decoded = PureImage::decode_bytes(&bytes, &mut work).unwrap();
+        println!("buffer startup after decode: {}", work.used());
+        let _facts = decoded
+            .admit_expected_native_facts(&expected, &mut work)
+            .unwrap();
+        println!(
+            "buffer startup after complete fact authentication: {}",
+            work.used()
+        );
+        let result = decoded.restore_effect(&mut work);
+        println!("buffer startup after reconstruction: {}", work.used());
+        if let Err(error) = result {
+            panic!("buffer startup: {error:?}");
         }
     }
     #[test]

@@ -1818,7 +1818,7 @@ mod source_handler_entry_tests {
             assert_eq!(machine.frames.len(), 2);
             assert_eq!(machine.captured_cells, 0);
             machine.capture_limit = 2;
-            super::super::native_buffer::tests::FAIL_CONTROL_RESERVATION.set(Some(cause));
+            super::super::machine_test_hooks::FAIL_CONTROL_RESERVATION.set(Some(cause));
             assert!(machine.capture_from(0).is_err());
             assert_eq!(machine.frames.len(), 2);
             assert_eq!(machine.captured_cells, 0);
@@ -1835,7 +1835,7 @@ mod source_handler_entry_tests {
                 registration: None,
             });
             for discard in [false, true] {
-                super::super::native_buffer::tests::FAIL_CONTROL_RESERVATION.set(Some(cause));
+                super::super::machine_test_hooks::FAIL_CONTROL_RESERVATION.set(Some(cause));
                 let failed = if discard {
                     machine.discard(handler, owner)
                 } else {

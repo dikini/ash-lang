@@ -1897,17 +1897,33 @@ fn resource_cell_documentation_example_has_exact_cli_output() {
 
 #[test]
 fn native_buffer_documentation_example_has_exact_cli_output() {
-    let text = "import @builtin.native_buffer as Buffer\n\nmain : Unit -> Buffer.Outcome<Buffer.Outcome<Int>>\nmain () = resource native_buffer<R> b = 4 {\nmatch Buffer.write (b, 0, 42) {\nBuffer.Success(()) => Buffer.read (b, 0)\nBuffer.Failure(error) => Buffer.Failure error\n}\n}\n";
+    let text = "import @ffi.native_buffer as Buffer\n\nmain : Unit -> Buffer.Outcome<Buffer.Outcome<Int>>\nmain () = resource Buffer.Buffer<R> b = 4 {\n    match Buffer.write (b, 0, 42) {\n        Buffer.Success(()) => Buffer.read (b, 0)\n        Buffer.Failure(error) => Buffer.Failure error\n    }\n}\n";
     let source = TempFile::write(text);
-    let output = Command::new(env!("CARGO_BIN_EXE_ash"))
+    let output_path = source.path().with_extension("program");
+    let target = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"))
+        .join("ffi-native-hosts");
+    let build = Command::new(env!("CARGO_BIN_EXE_ash"))
+        .args(["build", "--root"])
+        .arg(format!("ffi={}/libraries", env!("CARGO_MANIFEST_DIR")))
+        .arg("--output")
+        .arg(&output_path)
+        .arg("--cargo-target-dir")
+        .arg(target)
         .arg(source.path())
         .output()
-        .expect("the documented native-buffer executable should start");
-    assert_eq!(output.status.code(), Some(0));
-    assert_eq!(
-        output.stdout,
-        b"Success(Success(42)) : Outcome<Outcome<Int>>\n"
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
     );
+    fs::remove_file(source.path()).unwrap();
+    let output = Command::new(&output_path).output().unwrap();
+    fs::remove_file(output_path).unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, b"Success(Success(42))\n");
     assert!(output.stderr.is_empty());
     assert_documented("docs/tools/ash.md", text);
 }

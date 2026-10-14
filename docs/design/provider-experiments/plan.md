@@ -146,7 +146,7 @@ existing effects, handlers, resource completion, and data representations where
 their contracts suffice; explain any new primitive or retained Core metadata.
 
 The main crate forbids unsafe Rust. Follow the existing
-[native-buffer boundary](../../../native-buffer/README.md) when isolating foreign
+[native-buffer boundary](https://github.com/dikini/ash-lang/blob/ea93b8701649806ab22b916fa0a5a9a91ebc5fd4/native-buffer/README.md) when isolating foreign
 calls: private pointers, explicit ABI and layout assumptions, and audited native
 operations behind a safe Rust API. Add a small adapter crate to the root
 workspace only if needed for that boundary. Its role is foreign calls and native

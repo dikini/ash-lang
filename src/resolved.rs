@@ -44,34 +44,14 @@ impl ResourceApi {
         module.is_builtin_resource().then_some(Self { module })
     }
 
-    pub(crate) fn is_native_buffer(self) -> bool {
-        self.module.is_builtin_native_buffer()
-    }
-
     pub(crate) fn method_names(self) -> &'static [&'static str] {
-        if self.is_native_buffer() {
-            &["length", "read", "write"]
-        } else {
-            &["read", "write"]
-        }
+        &["read", "write"]
     }
-
     pub(crate) fn nominal_count(self) -> usize {
-        if self.is_native_buffer() { 3 } else { 1 }
+        1
     }
-
     pub(crate) fn constructor_count(self) -> usize {
-        if self.is_native_buffer() { 7 } else { 1 }
-    }
-
-    pub(crate) fn outcome(self) -> Option<NominalTypeId> {
-        self.is_native_buffer()
-            .then(|| NominalTypeId::new(self.module, 1))
-    }
-
-    pub(crate) fn error(self) -> Option<NominalTypeId> {
-        self.is_native_buffer()
-            .then(|| NominalTypeId::new(self.module, 2))
+        1
     }
 
     pub(crate) fn hides_constructor(self, id: ConstructorId) -> bool {
@@ -85,13 +65,6 @@ impl ResourceApi {
     ) -> Option<(&'static str, &'static [u32])> {
         if id == self.handle() && self.parameter(parameters, 0) {
             Some(("Handle", &[0]))
-        } else if Some(id) == self.outcome()
-            && matches!(parameters, [parameter] if parameter.id == TypeVariableId::resolved(self.module, 1)
-                && parameter.kind == Kind::Type && parameter.spelling == "T")
-        {
-            Some(("Outcome", &[0, 1]))
-        } else if Some(id) == self.error() && parameters.is_empty() {
-            Some(("Error", &[0, 1, 2, 3]))
         } else {
             None
         }
@@ -146,29 +119,6 @@ impl ResourceApi {
     fn constructor_parts(self, id: ConstructorId, spelling: &str, payload: Option<&Type>) -> bool {
         if id == ConstructorId::new(self.handle(), 0) {
             spelling == "Hidden" && payload.is_none()
-        } else if Some(id.owner()) == self.outcome() {
-            if id == ConstructorId::new(id.owner(), 0) {
-                spelling == "Success"
-                    && matches!(payload, Some(Type::Variable(parameter)) if *parameter == TypeVariableId::resolved(self.module, 1))
-            } else {
-                id == ConstructorId::new(id.owner(), 1)
-                    && spelling == "Failure"
-                    && matches!(payload, Some(Type::Nominal(owner)) if Some(*owner) == self.error())
-            }
-        } else if Some(id.owner()) == self.error() {
-            [
-                "InvalidLength",
-                "AllocationFailed",
-                "InvalidIndex",
-                "InvalidByte",
-            ]
-            .iter()
-            .enumerate()
-            .any(|(ordinal, name)| {
-                id == ConstructorId::new(id.owner(), ordinal as u32)
-                    && spelling == *name
-                    && payload.is_none()
-            })
         } else {
             false
         }
@@ -193,23 +143,7 @@ impl ResourceApi {
         {
             return false;
         }
-        [self.outcome(), self.error()]
-            .into_iter()
-            .flatten()
-            .all(|id| {
-                let Some(nominal) = registry.nominal(id) else {
-                    return false;
-                };
-                let Some(parameters) = registry.nominal_parameters(id) else {
-                    return false;
-                };
-                self.nominal(nominal, parameters)
-                    && nominal.constructors.iter().all(|id| {
-                        registry
-                            .constructor(*id)
-                            .is_some_and(|constructor| self.constructor(constructor))
-                    })
-            })
+        true
     }
 
     fn exported_nominal(self, nominal: &ExportedType) -> bool {
@@ -288,21 +222,7 @@ impl ResourceApi {
         } else if function.effects().is_some() {
             return false;
         }
-        if self.is_native_buffer() && ordinal > 0 {
-            let domain = match function.domain() {
-                Type::Tuple(fields) if ordinal == 1 => {
-                    matches!(fields.as_ref(), [handle, Type::Int] if self.handle_type(handle, parameter))
-                }
-                Type::Tuple(fields) if ordinal == 2 => {
-                    matches!(fields.as_ref(), [handle, Type::Int, Type::Int] if self.handle_type(handle, parameter))
-                }
-                _ => false,
-            };
-            domain
-                && matches!(function.value(), Type::Application(head, argument)
-                if matches!(head.as_ref(), Type::Nominal(id) if Some(*id) == self.outcome())
-                    && if ordinal == 1 { matches!(argument.as_ref(), Type::Int) } else { matches!(argument.as_ref(), Type::Unit) })
-        } else if ordinal == 1 {
+        if ordinal == 1 {
             matches!(function.domain(), Type::Tuple(fields) if matches!(fields.as_ref(), [handle, Type::Int] if self.handle_type(handle, parameter)))
                 && matches!(function.value(), Type::Unit)
         } else {
@@ -314,10 +234,7 @@ impl ResourceApi {
         effect.id == self.ops()
             && effect.public
             && effect.spelling == "Ops"
-            && self.parameter(
-                &effect.parameters,
-                if self.is_native_buffer() { 2 } else { 1 },
-            )
+            && self.parameter(&effect.parameters, 1)
             && effect.operations.len() == self.method_names().len()
             && effect
                 .operations
@@ -338,10 +255,7 @@ impl ResourceApi {
     pub(crate) fn interface(self, interface: &CheckedInterfaceFact) -> bool {
         interface.id == self.provider()
             && interface.spelling == "Provider"
-            && self.parameter(
-                &interface.parameters,
-                if self.is_native_buffer() { 3 } else { 2 },
-            )
+            && self.parameter(&interface.parameters, 2)
             && interface.determination().is_none()
             && interface.methods.len() == self.method_names().len()
             && interface.methods.iter().enumerate().all(|(index, method)| {
@@ -359,8 +273,7 @@ impl ResourceApi {
         parameters: &[(TypeVariableId, Kind)],
         value_type: &Type,
     ) -> bool {
-        let parameter =
-            TypeVariableId::resolved(self.module, if self.is_native_buffer() { 3 } else { 2 });
+        let parameter = TypeVariableId::resolved(self.module, 2);
         interface_parameters == [parameter]
             && parameters.is_empty()
             && self.method_names().iter().enumerate().any(|(ordinal, _)| {
@@ -1985,7 +1898,6 @@ pub(crate) enum LinkedResourceMutationForTest {
     DetachedOwner,
     Builtin,
     MethodOrder,
-    MethodKind,
     Handle,
     Brand,
     Origin,
@@ -2134,13 +2046,6 @@ impl ResolvedModuleProgram {
     }
 
     #[cfg(test)]
-    pub(crate) fn corrupt_native_constructor_for_test(&mut self, error_payload: bool) {
-        Arc::get_mut(&mut self.registry)
-            .unwrap()
-            .corrupt_native_constructor_for_test(error_payload);
-    }
-
-    #[cfg(test)]
     pub(crate) fn corrupt_first_direct_resource_owner_for_test(&mut self, detach: bool) -> bool {
         self.corrupt_first_direct_resource_for_test(if detach {
             LinkedResourceMutationForTest::DetachedOwner
@@ -2186,13 +2091,7 @@ impl ResolvedModuleProgram {
                                     crate::interface::LexicalEvidenceId::new(group.module, u32::MAX)
                             }
                             Mutation::Builtin => resource.acquisition.builtin = self.entry,
-                            Mutation::MethodOrder => resource.acquisition.methods.swap(0, 2),
-                            Mutation::MethodKind => {
-                                resource.acquisition.methods = ResourceMethods::Cell([
-                                    resource.acquisition.methods[0],
-                                    resource.acquisition.methods[1],
-                                ])
-                            }
+                            Mutation::MethodOrder => resource.acquisition.methods.swap(0, 1),
                             Mutation::Handle => {
                                 resource.acquisition.handle = resource.acquisition.methods[0]
                             }
@@ -10357,8 +10256,6 @@ pub(crate) enum BuiltinCellSummaryMutationForTest {
     MissingHandle,
     MissingOps,
     HandleKind,
-    NativeSuccessPayload,
-    NativeErrorPayload,
 }
 
 impl ExportSummary {
@@ -10520,34 +10417,6 @@ impl ExportSummary {
         mutation: BuiltinCellSummaryMutationForTest,
     ) {
         match mutation {
-            BuiltinCellSummaryMutationForTest::NativeSuccessPayload
-            | BuiltinCellSummaryMutationForTest::NativeErrorPayload => {
-                let name = if matches!(
-                    mutation,
-                    BuiltinCellSummaryMutationForTest::NativeSuccessPayload
-                ) {
-                    "Success"
-                } else {
-                    "InvalidByte"
-                };
-                let constructor = self.constructors.get_mut(name).unwrap();
-                if let Some(payload) = constructor.payload.replace(Type::Bool) {
-                    discard_type_iteratively(payload);
-                }
-                let owner = constructor.id.owner();
-                let parameters = if let Some(name) = self.nominal_names_by_id.get(&owner) {
-                    &self.nominals[name].parameters
-                } else {
-                    &self.hidden_nominals[&owner].parameters
-                };
-                constructor.scheme = canonical_constructor_scheme(
-                    owner,
-                    parameters,
-                    constructor.payload.as_ref(),
-                    &mut TypeWorkBudget::default(),
-                )
-                .unwrap();
-            }
             BuiltinCellSummaryMutationForTest::OperationResult => {
                 let operation = &mut self.effects[0].operations[0];
                 let Type::Function(_, result) = &mut operation.annotation.ty else {
@@ -10897,6 +10766,40 @@ impl ExportSummary {
                         )
                         .map_err(map_summary_kind_failure)?;
                 }
+            }
+        }
+        // An exported ordinary function can mention an imported resource's
+        // access family without re-exporting that resource's spelling. Retain
+        // its kind from the complete original-header inventory, as the
+        // resolver does, rather than requiring a public alias. This supplies
+        // no acquisition, provider selection or native-call permission.
+        type_work
+            .charge(self.source_resource_facts.len())
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        for fact in self.source_resource_facts.values() {
+            if fact
+                .parameters
+                .iter()
+                .any(|parameter| parameter.kind == Kind::EffectRow)
+            {
+                environments
+                    .insert_row_resource_family(
+                        fact.family,
+                        fact.id,
+                        &fact.parameters,
+                        fact.origin.primary_span(),
+                        type_work,
+                    )
+                    .map_err(map_summary_kind_failure)?;
+            } else {
+                environments
+                    .insert_nominal(
+                        fact.family,
+                        &fact.parameters,
+                        fact.origin.primary_span(),
+                        type_work,
+                    )
+                    .map_err(map_summary_kind_failure)?;
             }
         }
         let mut named_effects = HashSet::new();
@@ -14726,16 +14629,6 @@ impl ExportSummary {
                     .nominals
                     .get("Handle")
                     .is_none_or(|nominal| !api.exported_nominal(nominal))
-                || api.outcome().is_some_and(|id| {
-                    self.nominals
-                        .get("Outcome")
-                        .is_none_or(|nominal| nominal.id != id || !api.exported_nominal(nominal))
-                })
-                || api.error().is_some_and(|id| {
-                    self.nominals
-                        .get("Error")
-                        .is_none_or(|nominal| nominal.id != id || !api.exported_nominal(nominal))
-                })
                 || self.interface_names.len() != 1
                 || self.interface_names.get("Provider") != Some(&api.provider())
                 || self.effect_names.len() != 1
@@ -14772,15 +14665,8 @@ impl ExportSummary {
     }
 
     fn has_resource_nominals(&self, api: ResourceApi) -> bool {
-        // Provider signatures require these families. Error follows ordinary
-        // constructor-payload reachability; linked validation authenticates the
-        // complete defining registry even when a facade exposes only length.
-        [Some(api.handle()), api.outcome()]
-            .into_iter()
-            .flatten()
-            .all(|id| {
-                self.nominal_names_by_id.contains_key(&id) || self.hidden_nominals.contains_key(&id)
-            })
+        self.nominal_names_by_id.contains_key(&api.handle())
+            || self.hidden_nominals.contains_key(&api.handle())
     }
 
     pub(crate) fn nominal(&self, spelling: &str) -> Option<&ExportedType> {
@@ -21405,26 +21291,6 @@ impl ResolvedRegistry {
         self.foreign_modules.insert(fact.admission.module_id, fact);
     }
 
-    #[cfg(test)]
-    pub(crate) fn corrupt_native_constructor_for_test(&mut self, error_payload: bool) {
-        let constructor = self
-            .constructors
-            .iter_mut()
-            .find(|constructor| {
-                constructor.owner.module().is_builtin_native_buffer()
-                    && constructor.spelling
-                        == if error_payload {
-                            "InvalidByte"
-                        } else {
-                            "Success"
-                        }
-            })
-            .unwrap();
-        if let Some(payload) = constructor.payload.replace(Type::Bool) {
-            discard_type_iteratively(payload);
-        }
-    }
-
     /// Constructs one closed registry after two-pass resolution.
     #[must_use]
     pub fn new(nominals: Vec<ResolvedNominalType>, constructors: Vec<ResolvedConstructor>) -> Self {
@@ -25916,7 +25782,6 @@ pub struct ResolvedCleanupExpr {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ResourceMethods {
     Cell([BinderId; 2]),
-    NativeBuffer([BinderId; 3]),
 }
 
 impl std::ops::Deref for ResourceMethods {
@@ -25924,7 +25789,6 @@ impl std::ops::Deref for ResourceMethods {
     fn deref(&self) -> &Self::Target {
         match self {
             Self::Cell(methods) => methods,
-            Self::NativeBuffer(methods) => methods,
         }
     }
 }
@@ -25934,7 +25798,6 @@ impl std::ops::DerefMut for ResourceMethods {
     fn deref_mut(&mut self) -> &mut Self::Target {
         match self {
             Self::Cell(methods) => methods,
-            Self::NativeBuffer(methods) => methods,
         }
     }
 }

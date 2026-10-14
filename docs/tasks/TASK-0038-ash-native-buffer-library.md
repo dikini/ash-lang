@@ -41,12 +41,46 @@ calls and connected regression evidence precede the retaining-branch merge.
 
 ## Discoveries
 
-Multiple source provider methods now have the associated operations' exact
-value types and effect row, with checked lexical forwarding and selected-handler
-access authentication. This supplies a common provider prerequisite for the
-buffer port. Byte read/write policy and primitives, outward owned discard,
-accounting parity and removal of builtin buffer authority remain unimplemented
-by this delivery.
+The ordinary `libraries/native_buffer.ash` module now declares `calloc`/`free`,
+positive-length policy, initialized writable bytes, bounds/byte conversion and
+associated source handlers. Its `acquired_only` codec preserves nested results.
+Public callers use explicit imports and `Buffer.Buffer<R>`; the old builtin
+module/designator, special compiler/evaluator dispatch and adapter crate are
+removed. Common byte operations and runtime guards remain generic, and cell
+semantics are unchanged.
+
+Initialized-byte readiness admits proportional `length + 2` work plus complete
+report/guard publication before native entry. Injected exact, one-short,
+prefixed and fresh-retry checks establish that accounting boundary; real C
+fixtures separately observe allocation, zeroing, refused writes and releases.
+No normal-runtime size cap or work/depth/stack increase is introduced.
+
+Source acquired-only restoration needs distinct acquisition, raw body, cleanup,
+handler and finish value positions. Mapping every administrative node to the
+outer report either rejects a legal restored cut or loses captured cell
+lineage. The exact checked graph supplies each position; completed acquisition
+freezes once, the raw body stays live through cleanup, and the report wraps it
+once. Held-cell capture remains rejected. Independent control discovery also
+collects passive cleanup-row records, avoiding a duplicate inference solver;
+row authentication, strict payload/focused safety and fresh final Core checks
+remain intact. Nonempty-row correspondence and exact refusal/retry tests cover
+this sharing without weakening authority.
+
+The matching private image now carries canonical cell origins, cell acquisition,
+cleanup and hook/registration contracts used by buffer interactions. Corrupted
+original identities, binder/edge metadata and source roles remain refused after
+reconstruction. Source access-family kinds come from the original checked
+resource headers in exported summaries. Local dictionary duplicate-header
+checks reconstruct a source resource's original application instead of asking
+it for an experimental forwarding plan.
+
+The inherited local-newtype/ordinary `Read<Token>` witness retains its exact
+source/Core identity-free positive and captured-owner refusal. Its existing
+`Unsupported(RegistryMetadata)` native-build exclusion remains explicit; general
+newtype/non-resource lexical-dictionary image support is not part of this port.
+This limit is not reported as passing native parity or complete common support.
+See [library migration/build instructions](../../libraries/README.md#native-buffer-migration)
+and the current issue/PR receipts for scoped native and injected observations.
 
 Preserving result shape requires the accepted acquired_only codec; wrapping
 builtin behavior in Scope would be an unintended semantic change.
