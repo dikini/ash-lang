@@ -72,16 +72,19 @@ foreign_member ::=
     "profile" string_literal
   | "repr" upper_identifier "=" foreign_representation
   | foreign_constant
+  | foreign_sentinel
   | foreign_owner
   | foreign_symbol ;
 foreign_constant ::=
   "const" upper_identifier ":" foreign_reference "=" foreign_integer ;
+foreign_sentinel ::=
+  "sentinel" upper_identifier ":" foreign_reference "=" "all_bits_one" ;
 foreign_integer ::= [ "-" ] integer ;
 foreign_reference ::= upper_identifier [ "." upper_identifier ] ;
 foreign_representation ::=
     "signed" "(" integer ")"
   | "unsigned" "(" integer ")"
-  | "size_t" | "opaque" | "bytes" ;
+  | "size_t" | "opaque" | "bytes" | "function_address" ;
 foreign_owner ::=
   "owner" upper_identifier type_parameters
   "{" line_end "representation" upper_identifier line_end
@@ -299,8 +302,9 @@ be empty. A private import may be complete or targeted. A public import must be
 targeted. A targeted import list contains at least one item. Neither a module
 nor a block uses a trailing semicolon.
 
-The foreign productions describe scalar declarations and owner contracts with
-declared dependencies. `source_position` selects a zero-based leaf of the source
+The foreign productions describe scalar declarations, fixed non-callable
+sentinels and owner contracts with declared dependencies. `source_position`
+selects a zero-based leaf of the source
 argument product. Quoted declaration strings follow [lexical
 structure](lexical-structure.md#tokens). [Static
 semantics](static-semantics.md#source-foreign-declarations) requires exact ABI

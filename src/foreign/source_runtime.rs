@@ -27,7 +27,7 @@ use crate::{
     types::TypeWorkBudget,
 };
 
-/// One already narrowed native scalar in the admitted ABI profile.
+/// One admitted native input. Fixed sentinel tokens carry no ordinary value.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NativeScalarValue {
     /// Signed 8-bit scalar.
@@ -44,6 +44,8 @@ pub enum NativeScalarValue {
     U64(u64),
     /// The bounded profile's native size_t.
     USize(usize),
+    /// Non-callable all-one function-address bits, only for a checked fixed operand.
+    FunctionAddressAllBitsOne,
 }
 
 /// The direct native reply before common Ash reporting.
@@ -99,6 +101,31 @@ fn require_gnu_scalar_host() -> Result<(), NativeScalarConversionError> {
     } else {
         Err(NativeScalarConversionError::UnsupportedHost)
     }
+}
+
+/// Admit the fixed non-callable literal without creating an Int or pointer value.
+pub(crate) fn admit_gnu_declared_sentinel(
+    library: &crate::foreign::source_contract::PreparedForeignLibrary,
+    index: usize,
+    work: &mut TypeWorkBudget,
+) -> Result<NativeScalarValue, NativeScalarConversionError> {
+    charge_scalar_conversion(work, 1)?;
+    require_gnu_scalar_host()?;
+    let sentinel = library
+        .sentinels()
+        .get(index)
+        .ok_or(NativeScalarConversionError::InvalidRepresentation)?;
+    if library
+        .representations()
+        .get(sentinel.representation_index())
+        .is_none_or(|value| {
+            value.representation()
+                != crate::foreign::source_contract::PreparedRepresentation::FunctionAddressSentinel
+        })
+    {
+        return Err(NativeScalarConversionError::InvalidRepresentation);
+    }
+    Ok(NativeScalarValue::FunctionAddressAllBitsOne)
 }
 
 /// Borrows a mathematical Int and narrows it for the admitted GNU64 profile.
@@ -365,5 +392,49 @@ mod declared_constant_tests {
             );
             assert_eq!(work.used(), 1);
         }
+    }
+
+    #[test]
+    fn sentinel_transport_is_fixed_noncallable_and_preadmitted_with_atomic_budget() {
+        let source = SourceFile::new("sentinel-work", "foreign library Fixed {\n    profile \"x86_64-unknown-linux-gnu\"\n    repr Destructor = function_address\n    sentinel Transient : Destructor = all_bits_one\n}\n").unwrap();
+        let tree = parse(lex(&source).unwrap());
+        let surface = project_module(&source, &tree).unwrap();
+        let library =
+            prepare_foreign_library(ModuleId::new(0), &surface.foreign_libraries[0]).unwrap();
+        for prefix in [0, 5] {
+            let mut short = TypeWorkBudget::with_limit(prefix);
+            short.charge(prefix).unwrap();
+            assert_eq!(
+                admit_gnu_declared_sentinel(&library, 0, &mut short),
+                Err(NativeScalarConversionError::WorkExhausted)
+            );
+            assert_eq!(short.used(), prefix);
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + 1);
+                exact.charge(prefix).unwrap();
+                assert_eq!(
+                    admit_gnu_declared_sentinel(&library, 0, &mut exact),
+                    Ok(NativeScalarValue::FunctionAddressAllBitsOne)
+                );
+                assert_eq!(exact.used(), prefix + 1);
+            }
+        }
+        let mut work = TypeWorkBudget::default();
+        assert_eq!(
+            admit_gnu_declared_sentinel(&library, 1, &mut work),
+            Err(NativeScalarConversionError::InvalidRepresentation)
+        );
+        let prepaid = PrepaidScalarReport::admit(
+            PreparedAbiResult::Scalar(PreparedScalarRepresentation::Unsigned(64)),
+            &mut work,
+        )
+        .unwrap();
+        assert!(
+            widen_gnu_reply(
+                NativeScalarReply::Scalar(NativeScalarValue::FunctionAddressAllBitsOne),
+                prepaid
+            )
+            .is_err()
+        );
     }
 }

@@ -410,6 +410,7 @@ pub(crate) struct PureImage {
     operations: Vec<EffectOperationRecord>,
     prepared_representations: Vec<PreparedRepresentationRecord>,
     prepared_constants: Vec<PreparedConstantRecord>,
+    prepared_sentinels: Vec<PreparedSentinelRecord>,
     prepared_parameters: Vec<PreparedParameterRecord>,
     prepared_owners: Vec<PreparedOwnerRecord>,
     prepared_owner_arguments: Vec<PreparedOwnerArgumentRecord>,
@@ -2076,6 +2077,7 @@ impl PureImage {
         writer.table(&self.operations)?;
         writer.table(&self.prepared_representations)?;
         writer.table(&self.prepared_constants)?;
+        writer.table(&self.prepared_sentinels)?;
         writer.table(&self.prepared_parameters)?;
         writer.table(&self.prepared_owners)?;
         writer.table(&self.prepared_owner_arguments)?;
@@ -2197,6 +2199,31 @@ impl PureImage {
     }
 
     #[cfg(test)]
+    pub(crate) fn corrupt_declared_sentinel_for_test(&mut self, mutation: u8) -> bool {
+        if self.prepared_sentinels.len() < 2 {
+            return false;
+        }
+        match mutation {
+            0 => self.prepared_sentinels[0].representation_index = u32::MAX,
+            1..=3 => {
+                let Some(operand) = self.prepared_operands.iter_mut().find(|operand| {
+                    matches!(operand.source, PreparedOperandRecordSource::Sentinel(0))
+                }) else {
+                    return false;
+                };
+                match mutation {
+                    1 => operand.source = PreparedOperandRecordSource::Sentinel(1),
+                    2 => operand.source = PreparedOperandRecordSource::Constant(0),
+                    _ => operand.representation = RepresentationRecord::Opaque,
+                }
+            }
+            4 => self.prepared_sentinels[0].member_index = self.prepared_sentinels[1].member_index,
+            _ => return false,
+        }
+        true
+    }
+
+    #[cfg(test)]
     pub(crate) fn corrupt_declared_constant_for_test(&mut self, mutation: u8) -> bool {
         let Some(constant) = self.prepared_constants.first_mut() else {
             return false;
@@ -2262,6 +2289,7 @@ impl PureImage {
             operations: reader.table()?,
             prepared_representations: reader.table()?,
             prepared_constants: reader.table()?,
+            prepared_sentinels: reader.table()?,
             prepared_parameters: reader.table()?,
             prepared_owners: reader.table()?,
             prepared_owner_arguments: reader.table()?,
@@ -2337,6 +2365,7 @@ impl PureImage {
             || !self.operations.is_empty()
             || !self.prepared_representations.is_empty()
             || !self.prepared_constants.is_empty()
+            || !self.prepared_sentinels.is_empty()
             || !self.prepared_parameters.is_empty()
             || !self.prepared_owners.is_empty()
             || !self.prepared_owner_arguments.is_empty()
@@ -4507,6 +4536,7 @@ enum RepresentationRecord {
     Scalar(ScalarRepresentationRecord),
     Opaque,
     Bytes,
+    FunctionAddressSentinel,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -4523,6 +4553,14 @@ struct PreparedConstantRecord {
     name: Slice,
     representation: ScalarRepresentationRecord,
     value: ScalarValueRecord,
+    span: SpanRecord,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PreparedSentinelRecord {
+    member_index: u32,
+    name: Slice,
+    representation_index: u32,
     span: SpanRecord,
 }
 
@@ -4598,6 +4636,7 @@ enum PreparedOwnerCallRecord {
 enum PreparedOperandRecordSource {
     Source(Slice),
     Constant(u32),
+    Sentinel(u32),
     Current(Slice),
     Enclosing(Slice),
 }
@@ -4653,6 +4692,7 @@ struct PreparedLibraryRecord {
     public: bool,
     representations: Slice,
     constants: Slice,
+    sentinels: Slice,
     owners: Slice,
     symbols: Slice,
     span: SpanRecord,
@@ -4748,6 +4788,14 @@ wire_struct!(
 wire_struct!(ScalarRepresentationRecord, 3, signed, bits, size_t);
 wire_struct!(ScalarValueRecord, 9, negative, magnitude);
 wire_struct!(
+    PreparedSentinelRecord,
+    28,
+    member_index,
+    name,
+    representation_index,
+    span
+);
+wire_struct!(
     PreparedRepresentationRecord,
     25,
     member_index,
@@ -4812,12 +4860,13 @@ wire_struct!(
 );
 wire_struct!(
     PreparedLibraryRecord,
-    57,
+    65,
     module,
     name,
     public,
     representations,
     constants,
+    sentinels,
     owners,
     symbols,
     span
@@ -4985,6 +5034,10 @@ impl Wire for PreparedOperandRecordSource {
                 3u8.write(writer)?;
                 path.write(writer)
             }
+            Self::Sentinel(index) => {
+                4u8.write(writer)?;
+                index.write(writer)
+            }
         }
     }
     fn read(reader: &mut WireReader<'_>) -> Result<Self, ImageFailure> {
@@ -4993,6 +5046,7 @@ impl Wire for PreparedOperandRecordSource {
             1 => Ok(Self::Constant(Wire::read(reader)?)),
             2 => Ok(Self::Current(Wire::read(reader)?)),
             3 => Ok(Self::Enclosing(Wire::read(reader)?)),
+            4 => Ok(Self::Sentinel(Wire::read(reader)?)),
             _ => Err(ImageFailure::InvalidEncoding),
         }
     }
@@ -5008,6 +5062,7 @@ impl Wire for RepresentationRecord {
             }
             Self::Opaque => 1u8.write(writer),
             Self::Bytes => 2u8.write(writer),
+            Self::FunctionAddressSentinel => 3u8.write(writer),
         }
     }
     fn read(reader: &mut WireReader<'_>) -> Result<Self, ImageFailure> {
@@ -5015,6 +5070,7 @@ impl Wire for RepresentationRecord {
             0 => Ok(Self::Scalar(Wire::read(reader)?)),
             1 => Ok(Self::Opaque),
             2 => Ok(Self::Bytes),
+            3 => Ok(Self::FunctionAddressSentinel),
             _ => Err(ImageFailure::InvalidEncoding),
         }
     }
@@ -6120,6 +6176,7 @@ impl Encoder<'_> {
             ))),
             R::Address(A::Opaque) => Ok(RepresentationRecord::Opaque),
             R::Address(A::Bytes) => Ok(RepresentationRecord::Bytes),
+            R::FunctionAddressSentinel => Ok(RepresentationRecord::FunctionAddressSentinel),
         }
     }
 
@@ -6348,6 +6405,23 @@ impl Encoder<'_> {
             )?;
         }
         let constants = Slice::of(&self.image.prepared_constants, start)?;
+        let start = self.image.prepared_sentinels.len();
+        for sentinel in original.sentinels() {
+            charge(self.work, 1)?;
+            let name = append(&mut self.image.bytes, sentinel.name().as_bytes(), self.work)?;
+            let span = self.prepared_span(sentinel.origin())?;
+            push(
+                &mut self.image.prepared_sentinels,
+                PreparedSentinelRecord {
+                    member_index: index(sentinel.member_index())?,
+                    name,
+                    representation_index: index(sentinel.representation_index())?,
+                    span,
+                },
+                self.work,
+            )?;
+        }
+        let sentinels = Slice::of(&self.image.prepared_sentinels, start)?;
         let start = self.image.prepared_owners.len();
         for owner in original.owners() {
             charge(self.work, 1)?;
@@ -6404,6 +6478,9 @@ impl Encoder<'_> {
             for operand in symbol.operands() {
                 charge(self.work, 1)?;
                 let source = match operand.source() {
+                    PreparedOperandSource::Sentinel(position) => {
+                        PreparedOperandRecordSource::Sentinel(index(*position)?)
+                    }
                     PreparedOperandSource::Constant(position) => {
                         PreparedOperandRecordSource::Constant(index(*position)?)
                     }
@@ -6506,6 +6583,7 @@ impl Encoder<'_> {
                 public: original.public(),
                 representations,
                 constants,
+                sentinels,
                 owners,
                 symbols,
                 span,
@@ -7004,8 +7082,8 @@ impl Encoder<'_> {
                 for interpretation in boundary.interpretations() {
                     charge(self.work, 1)?;
                     admit_closed_native_instance(interpretation.effect(), self.work)?;
-                    // Preserve unused constant metadata, but do not admit active
-                    // constant native operands before the scalar bridge supports them.
+                    // Fixed literals retain their original role; they cannot
+                    // introduce an ordinary address or owner interpreter.
                     charge(self.work, interpretation.symbol().symbol().operands().len())?;
                     if interpretation.symbol().owner().is_some()
                         || !matches!(
@@ -7026,12 +7104,14 @@ impl Encoder<'_> {
                                 ));
                             }
                             crate::foreign::source_contract::PreparedOperandSource::Source(_)
+                            | crate::foreign::source_contract::PreparedOperandSource::Sentinel(_)
                             | crate::foreign::source_contract::PreparedOperandSource::Constant(_) =>
                                 {}
                         }
                         if !matches!(
                             operand.representation(),
                             crate::foreign::source_contract::PreparedRepresentation::Scalar(_)
+                            | crate::foreign::source_contract::PreparedRepresentation::FunctionAddressSentinel
                         ) {
                             return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
                         }
@@ -7316,6 +7396,7 @@ impl Decoder<'_> {
             RepresentationRecord::Scalar(value) => R::Scalar(Self::scalar_representation(value)?),
             RepresentationRecord::Opaque => R::Address(A::Opaque),
             RepresentationRecord::Bytes => R::Address(A::Bytes),
+            RepresentationRecord::FunctionAddressSentinel => R::FunctionAddressSentinel,
         })
     }
 
@@ -7505,6 +7586,18 @@ impl Decoder<'_> {
             };
             push(&mut constants, value, self.work)?;
         }
+        let mut sentinels = Vec::new();
+        for record in record.sentinels.get(&self.image.prepared_sentinels)? {
+            let value = PrivatePreparedSentinelParts {
+                member_index: usize::try_from(record.member_index)
+                    .map_err(|_| ImageFailure::InvalidRecord)?,
+                name: self.text(record.name)?,
+                representation_index: usize::try_from(record.representation_index)
+                    .map_err(|_| ImageFailure::InvalidRecord)?,
+                span: self.span(record.span)?,
+            };
+            push(&mut sentinels, value, self.work)?;
+        }
         let mut owners = Vec::new();
         for record in record.owners.get(&self.image.prepared_owners)? {
             let mut retains = Vec::new();
@@ -7572,6 +7665,11 @@ impl Decoder<'_> {
                 let span = self.span(record.span)?;
                 let representation = Self::representation(record.representation)?;
                 let source = match record.source {
+                    PreparedOperandRecordSource::Sentinel(index) => {
+                        PreparedOperandSource::Sentinel(
+                            usize::try_from(index).map_err(|_| ImageFailure::InvalidRecord)?,
+                        )
+                    }
                     PreparedOperandRecordSource::Constant(index) => {
                         PreparedOperandSource::Constant(
                             usize::try_from(index).map_err(|_| ImageFailure::InvalidRecord)?,
@@ -7613,6 +7711,9 @@ impl Decoder<'_> {
                 Some(result) => match Self::representation(result)? {
                     PreparedRepresentation::Scalar(value) => PreparedAbiResult::Scalar(value),
                     PreparedRepresentation::Address(value) => PreparedAbiResult::Address(value),
+                    PreparedRepresentation::FunctionAddressSentinel => {
+                        return Err(ImageFailure::InvalidRecord);
+                    }
                 },
                 None => PreparedAbiResult::Void,
             };
@@ -7670,6 +7771,7 @@ impl Decoder<'_> {
             public: record.public,
             representations,
             constants,
+            sentinels,
             owners,
             symbols,
             span,
@@ -8422,12 +8524,14 @@ impl Decoder<'_> {
                                 ));
                             }
                             crate::foreign::source_contract::PreparedOperandSource::Source(_)
+                            | crate::foreign::source_contract::PreparedOperandSource::Sentinel(_)
                             | crate::foreign::source_contract::PreparedOperandSource::Constant(_) =>
                                 {}
                         }
                         if !matches!(
                             operand.representation(),
                             crate::foreign::source_contract::PreparedRepresentation::Scalar(_)
+                            | crate::foreign::source_contract::PreparedRepresentation::FunctionAddressSentinel
                         ) {
                             return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
                         }
