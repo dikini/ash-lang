@@ -22,11 +22,33 @@ determine the general mechanism.
 
 ## Current boundary
 
-The current [specification](../../spec/README.md) defines a pure, rank-1
-language with passive statically linked modules. It has no effect operations,
-handlers, providers, compiler macros, annotations, staged evaluation, native
-code backend, array or tensor type, floating-point type, or fixed-width machine
-integer type. This note must not be read as adding any of them.
+The current [specification](../../spec/README.md) defines a rank-1 language
+with passive statically linked modules, nominal data and `newtype`, interfaces,
+and scoped exact evidence. It includes exact effect rows, requests, lexical
+handlers, non-escaping one-shot resume/discard, scoped cells and native buffers,
+synchronous runtime hooks, and cleanup. The builtin resources are closed
+compiler-owned APIs; they do not establish general library-defined providers
+or FFI.
+
+Compiler macros, declarative compiler hooks, optimization annotations, staged
+evaluation, a native code backend, arrays/tensors, floating-point types, and
+fixed-width source integer types remain outside the specification. In
+particular, synchronous runtime hooks do not supply compiler-phase hooks, and
+lexical handlers do not have the compile/link behavior hypothesized below.
+
+[DN-0036](DN-0036-foreign-library-and-memory-provider-experiments.md) retains
+bounded provider, SQLite, and scalar Arena experiments on `main`, using
+Rust-authored contracts and native adapters. They are experimental evidence,
+not product adoption. [DN-0019](DN-0019-primitive-feature-composition.md)
+retains a separate Float composition prototype. Neither experiment implements
+this note's macro or staged-handler model.
+
+The implemented foundation is typed Core with independent validation and the
+specified effect/resource contracts. This note's transformations,
+registrations, selection policy, phase behavior, and specialized kernels
+remain open design work. No macro prototype or product implementation is
+claimed. See the [scope summary](README.md#implementation-and-evidence-boundaries)
+for related notes' implementation and evidence boundaries.
 
 [AD-0001](../decisions/AD-0001-implementation-environment.md) permits MLIR as a
 future lowering target but requires LLVM, MLIR, Cranelift, and other backend

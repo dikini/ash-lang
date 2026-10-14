@@ -5,9 +5,10 @@ lessons from historical Ash while rebuilding the language from a small,
 coherent base. Historical Ash is evidence for design work, not authority for
 this project.
 
-Ash is currently a pure, rank-1 language whose programs are acyclic graphs of
-passive source modules. Each `.ash` file contains imports and declarations. The
-entry module supplies a local `main` function:
+Ash is currently a rank-1 language with nominal data, interfaces, effects,
+lexical handlers, and scoped resources. Programs are acyclic graphs of passive
+source modules. Each `.ash` file contains imports and declarations. The entry
+module supplies a local `main` function with an empty outward effect row:
 
 ```ash
 main : Unit -> Int
@@ -18,10 +19,21 @@ The [canonical specification](spec/README.md) defines the current language.
 The [`ash` tool guide](docs/tools/ash.md) explains module roots, invocation,
 output, and failures. The earlier single-file Mini-Ash milestone remains
 available at the annotated `mini-ash` Git tag. The annotated `modular-ash` Git
-tag on the final closure commit retains the completed current milestone with
-passive source modules and method-only interfaces. Current source contains no
+tag retains the earlier passive-module and method-only interface milestone.
+The completed library and effect increments add explicit implementation
+selection, higher-kinded parameters, relational interfaces, module and local
+`newtype`, scoped evidence, checked one-shot resume/discard, cells, native
+buffers, synchronous hooks, and cleanup. Current source contains no
 dialect selector; the tags retain historical milestone states rather than
 selectable compiler modes.
+
+The [feature inventory](docs/project/implemented-features.md) separates
+specified capabilities from bounded foreign-provider experiments retained on
+`main`. Those experiments include SQLite and scalar Arena storage through
+Rust-authored native adapters; they do not establish general FFI or
+Ash-authored bindings. The
+[design-note scope summary](docs/design/README.md#implementation-and-evidence-boundaries)
+identifies implemented slices, experimental evidence, and open directions.
 
 Project artifacts answer different questions:
 
