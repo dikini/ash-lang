@@ -684,6 +684,23 @@ pub(super) fn validate_owner_symbol(
                 .constants()
                 .get(*position)
                 .is_some_and(|constant| constant.representation() == representation) => {}
+            (
+                PreparedOperandSource::Sentinel(position),
+                PreparedRepresentation::FunctionAddressSentinel,
+            ) if owner
+                .prepared()
+                .sentinels()
+                .get(*position)
+                .is_some_and(|sentinel| {
+                    owner
+                        .prepared()
+                        .representations()
+                        .get(sentinel.representation_index())
+                        .is_some_and(|value| {
+                            value.representation()
+                                == PreparedRepresentation::FunctionAddressSentinel
+                        })
+                }) => {}
             (PreparedOperandSource::Source(path), PreparedRepresentation::Scalar(_)) => {
                 check_source_path(domain, path, work, span)?
             }

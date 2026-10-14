@@ -364,3 +364,67 @@ pub foreign library Counter {
         assert_eq!(calls, b"iw");
     }
 }
+
+#[test]
+fn generated_noncallable_sentinel_preserves_exact_bits_with_both_linkages() {
+    let fixture = Fixture::new();
+    let contract = r#"import @builtin.foreign as Foreign
+pub foreign library Sentinels {
+    profile "x86_64-unknown-linux-gnu"
+    repr I32 = signed(32)
+    repr Destructor = function_address
+    sentinel Transient : Destructor = all_bits_one
+    symbol Check<Before : EffectRow, T, After : EffectRow> : Unit -> Foreign.Call<Int> {
+        name "ash_counter_noncallable_sentinel"
+        abi (Destructor) -> I32
+        operand 0 from constant Transient
+        output result as scalar
+        outcome otherwise { readable result }
+    }
+}
+"#;
+    for (index, native) in fixture.native_inputs().into_iter().enumerate() {
+        let directory = fixture.0.join(format!("sentinel-{index}"));
+        fs::create_dir(&directory).unwrap();
+        fs::write(directory.join("native.ash"), contract).unwrap();
+        fs::write(directory.join("entry.ash"), "import @builtin.foreign as Foreign\nimport native (Check as Inspect)\ninvoke<T> : T -> Foreign.Call<Int> ! {Inspect<{}, T, {}>}\ninvoke value = perform Inspect<{}, T, {}>.call ()\nmain : Unit -> (Foreign.Call<Int>, Foreign.Call<Int>) ! {Inspect<{}, Int, {}>, Inspect<{}, Unit, {}>}\nmain () = (invoke 1, invoke ())\n").unwrap();
+        let compiled = compile_path(RunConfiguration {
+            entry: directory.join("entry.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap();
+        fs::remove_file(directory.join("entry.ash")).unwrap();
+        fs::remove_file(directory.join("native.ash")).unwrap();
+        let mut configuration = BuildConfiguration::new(directory.join("program"));
+        configuration.native_inputs = vec![native];
+        configuration.cargo_target_directory = Some(
+            PathBuf::from(std::env::var_os("CARGO_TARGET_DIR").unwrap()).join("ffi-native-hosts"),
+        );
+        let prepared = prepare_program(&compiled, configuration).unwrap();
+        assert!(
+            prepared
+                .generated_rust()
+                .contains("usize::MAX as *mut core::ffi::c_void")
+        );
+        assert!(!prepared.generated_rust().contains("transmute"));
+        drop(compiled);
+        let built = build_prepared(prepared).unwrap_or_else(|error| {
+            let log = error
+                .build_log()
+                .and_then(|path| fs::read_to_string(path).ok())
+                .unwrap_or_default();
+            panic!("{error}\n{log}");
+        });
+        let generated = built.generated_source();
+        fs::remove_file(generated.parent().unwrap().join("program-image.bin")).unwrap();
+        fs::remove_file(generated.parent().unwrap().join("expected-facts.bin")).unwrap();
+        let (output, calls) = run_host(built.executable(), &fixture, true);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.stdout, b"(Returned(7), Returned(7))\n");
+        assert_eq!(calls, b"ss");
+    }
+}

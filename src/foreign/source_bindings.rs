@@ -166,12 +166,15 @@ impl SourceNativeBindings {
         paid(work, symbol.symbol().operands().len())?;
         if symbol.symbol().operands().iter().any(|operand| {
             !matches!(
-                operand.source(),
-                super::source_contract::PreparedOperandSource::Source(_)
-                    | super::source_contract::PreparedOperandSource::Constant(_)
-            ) || !matches!(
-                operand.representation(),
-                super::source_contract::PreparedRepresentation::Scalar(_)
+                (operand.source(), operand.representation()),
+                (
+                    super::source_contract::PreparedOperandSource::Source(_)
+                        | super::source_contract::PreparedOperandSource::Constant(_),
+                    super::source_contract::PreparedRepresentation::Scalar(_)
+                ) | (
+                    super::source_contract::PreparedOperandSource::Sentinel(_),
+                    super::source_contract::PreparedRepresentation::FunctionAddressSentinel
+                )
             )
         }) {
             return Err(RuntimeFailure::ForeignBinding);
@@ -233,6 +236,9 @@ impl SourceNativeBindings {
                                     | PreparedOperandSource::Constant(_),
                                 PreparedRepresentation::Scalar(_)
                             ) | (
+                                PreparedOperandSource::Sentinel(_),
+                                PreparedRepresentation::FunctionAddressSentinel
+                            ) | (
                                 PreparedOperandSource::Enclosing(_),
                                 PreparedRepresentation::Address(_)
                             )
@@ -256,6 +262,9 @@ impl SourceNativeBindings {
                                 PreparedOperandSource::Source(_)
                                     | PreparedOperandSource::Constant(_),
                                 PreparedRepresentation::Scalar(_)
+                            ) | (
+                                PreparedOperandSource::Sentinel(_),
+                                PreparedRepresentation::FunctionAddressSentinel
                             ) | (
                                 PreparedOperandSource::Enclosing(_),
                                 PreparedRepresentation::Address(_)
@@ -309,6 +318,9 @@ impl SourceNativeBindings {
                                     ) | (
                                         PreparedOperandSource::Constant(_),
                                         PreparedRepresentation::Scalar(_)
+                                    ) | (
+                                        PreparedOperandSource::Sentinel(_),
+                                        PreparedRepresentation::FunctionAddressSentinel
                                     )
                                 )
                         })

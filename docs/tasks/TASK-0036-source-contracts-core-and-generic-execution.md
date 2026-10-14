@@ -48,7 +48,8 @@ with one Cargo job; keep milestone-wide regression pending between the named
 checkpoint gates in the [agent workflow](../project/agent-workflow.md). The
 last full gate was run at `868d0b43` and transferred by authenticated equality
 to retained `9fae971`. PR21's focused ownership delivery is retained at
-`d44138f`, and PR22's focused scalar teardown delivery at `3435d62`;
+`d44138f`, PR22's focused scalar teardown delivery at `3435d62`, and PR23's
+checked scalar constants at `d09b99f`;
 milestone-wide regression verification remains pending. The next
 gate belongs to the PM after shared ownership/control/runtime support is
 complete, including declared dependencies, retained-owner quarantine, control
@@ -57,6 +58,16 @@ bindings and guard storage. Focused PRs may contribute toward that boundary
 without making each PR a full-gate checkpoint.
 
 ## Discoveries
+
+Non-callable sentinels use a separate prepared table from ordinary scalar
+constants. An all-bits-one declaration retains its exact original representation
+coordinate and member identity through source admission, Core, copies and private
+images. It publishes no ordinary value or callable symbol. The GNU64 generated
+bridge passes the target bit pattern without constructing a Rust function value;
+real static/shared C observations inspect its bits without calling it. Native
+owner acquisition, source finish and separate partial-owner host destruction use
+the same fixed-operand admission. This supplies a SQLite prerequisite without
+implementing SQLite, temporary copy windows, nullable roles or general macros.
 
 Checked foreign scalar constants occupy the ordinary term namespace and inherit
 the defining library's publication mode. Qualified, selected and re-exported

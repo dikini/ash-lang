@@ -592,6 +592,16 @@ constructor cell. A terminal refusal publishes no partial result. These checks
 create no resource activation, state token, native readiness or destructor
 obligation.
 
+A fixed non-callable sentinel is admitted from its original checked member and
+representation before native invocation. The GNU64 bridge passes all-one
+function-address bits as data in the declared ABI position, never forming or
+invoking a Rust function value. This target ABI is a foreign assumption; the
+declaration does not prove
+external C behavior. Work, operand storage and the
+complete ordinary reply remain admitted before C. Admission refusal publishes no sentinel
+value, grants no callable permission and makes no native call. Scalar reply and
+owner-disposition rules are unchanged.
+
 ## Source resource execution with native owners
 
 The admitted product source resource scope combines an Ash initializer, acquire
@@ -600,7 +610,8 @@ This checkpoint supports opaque and initialized byte foreign owners with declare
 dependencies and Type-kind owner formals. Acquisition admits scalar and exact
 declared enclosing-State operands with one pointer result. Finish and host
 destruction contracts use the exact Current State and declared Enclosing pointer
-operands, with checked original scalar constants at declared scalar ABI positions.
+operands, with checked original scalar constants at declared scalar ABI positions
+and fixed non-callable sentinels at their exact function-address ABI positions.
 The machine narrows these fixed operands and admits the complete call before
 entering C. A `void` result has one unconditional disposition; a scalar result
 selects consumed or retained from the original total status alternatives. Each

@@ -1634,3 +1634,34 @@ fn generated_owner_calls_use_fixed_original_constants_in_all_native_phases() {
         &native,
     );
 }
+
+#[test]
+fn generated_owner_calls_use_noncallable_sentinels_in_all_native_phases() {
+    let owner = include_str!("fixtures/source-owner/owner.ash")
+        .replace("    repr Size = size_t", "    repr Size = size_t\n    repr Destructor = function_address\n    sentinel Transient : Destructor = all_bits_one")
+        .replace("abi (Size) -> pointer(Address)", "abi (Size, Destructor) -> pointer(Address)")
+        .replace("operand 0 from 0 scalar", "operand 0 from 0 scalar\n        operand 1 from constant Transient")
+        .replace("abi (pointer(Address)) -> void", "abi (pointer(Address), Destructor) -> void")
+        .replace("operand 0 from 0 current", "operand 0 from 0 current\n        operand 1 from constant Transient");
+    let check = "uintptr_t bits = 0;\n    _Static_assert(sizeof(sentinel) == sizeof(bits), \"GNU64 function-address width\");\n    memcpy(&bits, &sentinel, sizeof(bits));\n    if (bits != UINTPTR_MAX) abort();";
+    let native = format!(
+        "#include <string.h>\n{}",
+        include_str!("fixtures/source-owner/native_owner.c")
+    )
+    .replace(
+        "void *ash_owner_acquire(size_t size) {",
+        &format!("void *ash_owner_acquire(size_t size, void (*sentinel)(void *)) {{\n    {check}"),
+    )
+    .replace(
+        "void ash_owner_release(void *raw) {",
+        &format!("void ash_owner_release(void *raw, void (*sentinel)(void *)) {{\n    {check}"),
+    );
+    generated_owner_program_with_native(
+        &owner,
+        "import owner as Owner\nmain : Unit -> (Owner.Scope<Unit, Unit, Int>, Owner.Scope<Unit, Unit, Int>)\nmain () = (resource Owner.Probe<{}, First, {}> owner = 42 {\n    Owner.read owner\n}, resource Owner.Probe<{}, Second, {}> owner = 9 {\n    Owner.read owner\n})\n",
+        None,
+        "(Completed(42, Closed), NotAcquired(()))",
+        "acquire:42\nrelease:42\nacquire:9\nrelease:9\n",
+        &native,
+    );
+}

@@ -353,3 +353,135 @@ fn native_constant_image_correspondence_rejects_value_sign_representation_and_eq
     assert_eq!(run(emitted.expected, &selected).unwrap().to_string(), "43");
     assert_eq!(CALLBACKS.load(Ordering::SeqCst), 2);
 }
+
+struct SentinelFixture {
+    image: Vec<u8>,
+    expected: &'static [u8],
+    coordinates: PrivateNativeCoordinates,
+}
+static SENTINEL_FIXTURE: OnceLock<SentinelFixture> = OnceLock::new();
+static SENTINEL_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
+fn sentinel_fixture() -> &'static SentinelFixture {
+    SENTINEL_FIXTURE.get_or_init(|| {
+        let sources = Sources::new();
+        fs::write(sources.0.join("native.ash"), r#"import @builtin.foreign as Foreign
+pub foreign library Fixed {
+    profile "x86_64-unknown-linux-gnu"
+    repr I32 = signed(32)
+    repr Destructor = function_address
+    sentinel Transient : Destructor = all_bits_one
+    sentinel SameBits : Destructor = all_bits_one
+    symbol Check<Before : EffectRow, T, After : EffectRow> : Unit -> Foreign.Call<Int> {
+        name "ash_counter_noncallable_sentinel"
+        abi (Destructor) -> I32
+        operand 0 from constant Transient
+        output result as scalar
+        outcome otherwise { readable result }
+    }
+}
+"#).unwrap();
+        fs::write(sources.0.join("entry.ash"), "import @builtin.foreign as Foreign\nimport native as Native\nmain : Unit -> Foreign.Call<Int> ! {Native.Check<{}, Int, {}>}\nmain () = perform Native.Check<{}, Int, {}>.call ()\n").unwrap();
+        let compiled = compile_path(RunConfiguration { entry: sources.0.join("entry.ash"), roots: ModuleRoots::empty() }).unwrap();
+        let (core, provenance) = compiled.effect_build_input().unwrap();
+        let mut work = TypeWorkBudget::default();
+        let build = image::encode_effect_for_build(core, provenance, NATIVE_TARGET, &mut work).unwrap();
+        let library = &build.libraries[0];
+        let bridge = &build.bridges[0];
+        let coordinates = PrivateNativeCoordinates {
+            image_library: library.image_library,
+            library_module: library.module,
+            library_ordinal: library.ordinal,
+            image_symbol: bridge.image_symbol,
+            symbol_index: bridge.symbol_index,
+            operation_module: bridge.operation_module,
+            operation_effect: bridge.operation_effect,
+            operation_local: bridge.operation_local,
+        };
+        let bytes = build.image.encode_bytes(&mut work).unwrap();
+        let expected = Box::leak(build.image.encode_native_expectations(&mut work).unwrap().into_boxed_slice());
+        SentinelFixture { image: bytes, expected, coordinates }
+    })
+}
+fn sentinel_callback(
+    arguments: &[NativeScalarValue],
+) -> Result<NativeScalarReply, NativeScalarCallError> {
+    let [NativeScalarValue::FunctionAddressAllBitsOne] = arguments else {
+        return Err(NativeScalarCallError::ArgumentContract);
+    };
+    SENTINEL_CALLBACKS.fetch_add(1, Ordering::SeqCst);
+    Ok(NativeScalarReply::Scalar(NativeScalarValue::I32(7)))
+}
+fn sentinel_provider() -> PrivateNativeBridge {
+    let fixture = sentinel_fixture();
+    __private_native_bridge(fixture.coordinates, fixture.expected, sentinel_callback)
+}
+
+#[test]
+fn sentinel_image_refuses_same_bits_donor_role_representation_and_coordinate_before_callback() {
+    let fixture = sentinel_fixture();
+    let members = [PrivateNativeMember {
+        coordinates: fixture.coordinates,
+        provider: sentinel_provider,
+    }];
+    let library = || PrivateNativeLibrary {
+        image_library: fixture.coordinates.image_library,
+        module: fixture.coordinates.library_module,
+        ordinal: fixture.coordinates.library_ordinal,
+        members: &members,
+    };
+    SENTINEL_CALLBACKS.store(0, Ordering::SeqCst);
+    assert_eq!(
+        __run_private_effect_image(
+            &runtime_fingerprint(),
+            &fixture.image,
+            fixture.expected,
+            &[library()]
+        )
+        .unwrap()
+        .to_string(),
+        "Returned(7)"
+    );
+    assert_eq!(SENTINEL_CALLBACKS.load(Ordering::SeqCst), 1);
+    for mutation in 0..5 {
+        let mut work = TypeWorkBudget::default();
+        let mut image = image::PureImage::decode_bytes(&fixture.image, &mut work).unwrap();
+        assert!(image.corrupt_declared_sentinel_for_test(mutation));
+        let bytes = image.encode_bytes(&mut work).unwrap();
+        // A same-representation donor is structurally well formed. It changes
+        // a passive original-member claim, so the independent canonical facts
+        // gate below must refuse it before any generated callback can run.
+        let structural = image.restore_effect(&mut TypeWorkBudget::default());
+        if mutation == 1 {
+            assert!(structural.is_ok());
+        } else {
+            assert!(
+                structural.is_err(),
+                "malformed sentinel mutation {mutation}"
+            );
+        }
+        SENTINEL_CALLBACKS.store(0, Ordering::SeqCst);
+        assert!(
+            __run_private_effect_image(
+                &runtime_fingerprint(),
+                &bytes,
+                fixture.expected,
+                &[library()]
+            )
+            .is_err()
+        );
+        assert_eq!(SENTINEL_CALLBACKS.load(Ordering::SeqCst), 0);
+    }
+    SENTINEL_CALLBACKS.store(0, Ordering::SeqCst);
+    assert_eq!(
+        __run_private_effect_image(
+            &runtime_fingerprint(),
+            &fixture.image,
+            fixture.expected,
+            &[library()]
+        )
+        .unwrap()
+        .to_string(),
+        "Returned(7)"
+    );
+    assert_eq!(SENTINEL_CALLBACKS.load(Ordering::SeqCst), 1);
+}

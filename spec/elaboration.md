@@ -137,7 +137,15 @@ Scalar status alternatives retain their original checked literals, readable
 raw result and disposition facts. Checked scalar constant declarations lower to
 ordinary nonrecursive `Int` bindings. Native operands retain the exact original
 constant member, representation and mathematical value; status predicates alone
-grant no constant value or operand authority.
+grant no constant value or operand authority. Non-callable all-bits-one sentinels
+retain a separate original member and representation coordinate. Fixed native
+operands select that sentinel table, never an ordinary constant binder or source
+value. Core transformations, copying and private image reconstruction preserve
+the selection. Independent generated-fact correspondence rejects equal-bit
+donor substitutions before callbacks, including structurally well-formed changed
+passive contracts. Malformed roles and coordinates reject independently. The
+generated GNU64 bridge carries bits as
+a non-callable ABI operand, never as a Rust function value.
 Resource and native instances retain all ordered Type/EffectRow arguments,
 including an owned slot that is not first. The resource handle's value type
 uses a saturated nominal application for a Type-only family and the resource

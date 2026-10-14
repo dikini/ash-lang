@@ -704,6 +704,16 @@ impl<'runtime> super::Machine<'runtime> {
                     .try_reserve_exact(source.operands().len())
                     .map_err(|_| operand_storage(source.operands().len()))?;
                 for operand in source.operands() {
+                    if let PreparedOperandSource::Sentinel(position) = operand.source() {
+                        operands.push(NativeOwnerOperand::Scalar(admit_sentinel_operand(
+                            invocation.symbol(),
+                            *position,
+                            operand.representation(),
+                            &mut self.instantiation_work,
+                            super::RuntimePhase::Access,
+                        )?));
+                        continue;
+                    }
                     if let PreparedOperandSource::Constant(position) = operand.source() {
                         operands.push(NativeOwnerOperand::Scalar(admit_constant_operand(
                             invocation.symbol(),
@@ -837,6 +847,15 @@ impl<'runtime> super::Machine<'runtime> {
                     .map_err(|_| operand_storage(symbol.symbol().operands().len()))?;
                 for (position, operand) in symbol.symbol().operands().iter().enumerate() {
                     let native = match operand.source() {
+                        PreparedOperandSource::Sentinel(index) => {
+                            NativeOwnerOperand::Scalar(admit_sentinel_operand(
+                                symbol,
+                                *index,
+                                operand.representation(),
+                                &mut self.instantiation_work,
+                                super::RuntimePhase::Access,
+                            )?)
+                        }
                         PreparedOperandSource::Constant(index) => {
                             NativeOwnerOperand::Scalar(admit_constant_operand(
                                 symbol,
@@ -1236,6 +1255,15 @@ fn prepare_destruction_operands(
         .map_err(|_| operand_storage(destructor.symbol().operands().len()))?;
     for (position, operand) in destructor.symbol().operands().iter().enumerate() {
         let native = match operand.source() {
+            PreparedOperandSource::Sentinel(index) => {
+                NativeOwnerOperand::Scalar(admit_sentinel_operand(
+                    destructor,
+                    *index,
+                    operand.representation(),
+                    work,
+                    super::RuntimePhase::Acquisition,
+                )?)
+            }
             PreparedOperandSource::Constant(index) => {
                 NativeOwnerOperand::Scalar(admit_constant_operand(
                     destructor,
@@ -1284,6 +1312,27 @@ fn prepare_destruction_operands(
         operands.push(native);
     }
     Ok(operands)
+}
+
+fn admit_sentinel_operand(
+    symbol: &crate::foreign::checked_source::CheckedForeignSymbol,
+    index: usize,
+    representation: crate::foreign::source_contract::PreparedRepresentation,
+    work: &mut TypeWorkBudget,
+    phase: super::RuntimePhase,
+) -> Result<NativeScalarValue, super::RuntimeFailure> {
+    if representation
+        != crate::foreign::source_contract::PreparedRepresentation::FunctionAddressSentinel
+    {
+        return Err(super::RuntimeFailure::ForeignBinding);
+    }
+    crate::foreign::source_runtime::admit_gnu_declared_sentinel(symbol.prepared(), index, work)
+        .map_err(|error| match error {
+            NativeScalarConversionError::WorkExhausted => {
+                super::effect_work_failure(work, None, phase)
+            }
+            _ => super::RuntimeFailure::ForeignBinding,
+        })
 }
 
 fn admit_constant_operand(

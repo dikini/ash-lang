@@ -37,3 +37,14 @@ uint64_t ash_counter_echo_u64(uint64_t value) {
     record_call('w');
     return value;
 }
+
+/* Inspect the declared non-callable bit pattern; never invoke it. This checks
+   the bounded GNU64 function-address ABI assumption against the real C type. */
+#include <string.h>
+int32_t ash_counter_noncallable_sentinel(void (*sentinel)(void *)) {
+    uintptr_t bits = 0;
+    _Static_assert(sizeof(sentinel) == sizeof(bits), "GNU64 function-address width");
+    memcpy(&bits, &sentinel, sizeof(bits));
+    record_call('s');
+    return bits == UINTPTR_MAX ? 7 : -1;
+}

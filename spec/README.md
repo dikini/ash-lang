@@ -95,7 +95,7 @@ live captures in structural order, then continues the clause with `Unit`.
 Inference proves safe closure without skipping outside or running completion
 owners. Its effect row includes invoked cleanup actions.
 
-An owner-free scalar `foreign library` declaration supplies passive ABI facts
+An owner-free `foreign library` declaration supplies passive ABI facts
 and exact native effects with one `call` operation each. Complete ordered
 `Type` and `EffectRow` parameters and original contracts survive publication
 and imports. `@builtin.foreign` supplies ordinary common result types,
@@ -105,7 +105,9 @@ instances, leaving an empty outward row. Ordinary source handlers cannot
 install a native symbol's interpreter. Source contracts and checked Core supply
 no executable binding; default execution refuses missing bindings before Ash
 runs. Checked scalar literal constants publish ordinary mathematical `Int`
-values and supply exact declared native operands. Copy windows remain outside
+values and supply exact declared native operands. A declared `function_address`
+sentinel supplies only a fixed all-bits-one native operand; it publishes no
+ordinary value and grants no call permission. Copy windows remain outside
 the admitted subset. Source resource declarations admit opaque and
 initialized byte owners with declared dependencies, private data and checked
 `scope` or `acquired_only` reports. Their Type-only owner families support one

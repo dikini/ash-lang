@@ -208,6 +208,8 @@ pub enum PreparedAddressRepresentation {
 pub enum PreparedRepresentation {
     Scalar(PreparedScalarRepresentation),
     Address(PreparedAddressRepresentation),
+    /// Function-address bits in a non-callable, fixed-operand role only.
+    FunctionAddressSentinel,
 }
 
 /// A source-authored scalar value retained without mathematical narrowing.
@@ -295,6 +297,34 @@ impl PreparedForeignConstant {
     }
 }
 
+/// A checked all-bits-one literal. It is neither an ordinary value nor callable.
+#[derive(Debug)]
+pub struct PreparedForeignSentinel {
+    member_index: usize,
+    name: String,
+    representation_index: usize,
+    origin: Origin,
+}
+impl PreparedForeignSentinel {
+    #[must_use]
+    pub const fn member_index(&self) -> usize {
+        self.member_index
+    }
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    /// Exact declaration coordinate in the original representation table.
+    #[must_use]
+    pub const fn representation_index(&self) -> usize {
+        self.representation_index
+    }
+    #[must_use]
+    pub const fn origin(&self) -> &Origin {
+        &self.origin
+    }
+}
+
 /// One complete source parameter; native projection never reinterprets a row.
 #[derive(Debug)]
 pub struct PreparedForeignParameter {
@@ -322,6 +352,7 @@ impl PreparedForeignParameter {
 pub enum PreparedOperandSource {
     Source(Vec<usize>),
     Constant(usize),
+    Sentinel(usize),
     Current(Vec<usize>),
     Enclosing(Vec<usize>),
 }
@@ -659,6 +690,7 @@ pub struct PreparedForeignLibrary {
     public: bool,
     representations: Vec<PreparedForeignRepresentation>,
     constants: Vec<PreparedForeignConstant>,
+    sentinels: Vec<PreparedForeignSentinel>,
     owners: Vec<PreparedForeignOwner>,
     symbols: Vec<PreparedForeignSymbol>,
     origin: Origin,
@@ -687,6 +719,10 @@ impl PreparedForeignLibrary {
     #[must_use]
     pub fn constants(&self) -> &[PreparedForeignConstant] {
         &self.constants
+    }
+    #[must_use]
+    pub fn sentinels(&self) -> &[PreparedForeignSentinel] {
+        &self.sentinels
     }
     #[must_use]
     pub fn owners(&self) -> &[PreparedForeignOwner] {
@@ -723,6 +759,7 @@ pub(crate) fn prepare_foreign_library_with_budget(
     let mut profile = false;
     let mut representation_count = 0;
     let mut constant_count = 0;
+    let mut sentinel_count = 0;
     let mut symbol_count = 0;
     let mut owner_count = 0;
     let mut names: Vec<&str> = Vec::new();
@@ -750,7 +787,10 @@ pub(crate) fn prepare_foreign_library_with_budget(
                 constant_count += 1;
                 &value.name
             }
-            SurfaceForeignMember::Sentinel(value) => &value.name,
+            SurfaceForeignMember::Sentinel(value) => {
+                sentinel_count += 1;
+                &value.name
+            }
             SurfaceForeignMember::Owner(value) => {
                 owner_count += 1;
                 &value.name
@@ -777,6 +817,7 @@ pub(crate) fn prepare_foreign_library_with_budget(
         public: source.public,
         representations: Vec::new(),
         constants: Vec::new(),
+        sentinels: Vec::new(),
         owners: Vec::new(),
         symbols: Vec::new(),
         origin: Origin::Source(source.span),
@@ -787,6 +828,7 @@ pub(crate) fn prepare_foreign_library_with_budget(
         source.span,
     )?;
     reserve(&mut prepared.constants, constant_count, source.span)?;
+    reserve(&mut prepared.sentinels, sentinel_count, source.span)?;
     reserve(&mut prepared.symbols, symbol_count, source.span)?;
     reserve(&mut prepared.owners, owner_count, source.span)?;
     for (member_index, member) in source.members.iter().enumerate() {
@@ -823,11 +865,8 @@ pub(crate) fn prepare_foreign_library_with_budget(
                     SurfaceForeignRepresentation::Bytes(_) => {
                         PreparedRepresentation::Address(PreparedAddressRepresentation::Bytes)
                     }
-                    _ => {
-                        return Err(failure(
-                            ForeignContractReason::UnimplementedContract,
-                            value.span,
-                        ));
+                    SurfaceForeignRepresentation::FunctionAddress(_) => {
+                        PreparedRepresentation::FunctionAddressSentinel
                     }
                 };
                 prepared
@@ -839,12 +878,7 @@ pub(crate) fn prepare_foreign_library_with_budget(
                         origin: Origin::Source(value.span),
                     });
             }
-            SurfaceForeignMember::Sentinel(value) => {
-                return Err(failure(
-                    ForeignContractReason::UnimplementedContract,
-                    value.span,
-                ));
-            }
+            SurfaceForeignMember::Sentinel(_) => {}
             SurfaceForeignMember::Owner(_) => {}
             SurfaceForeignMember::Access(value) => {
                 return Err(failure(
@@ -857,6 +891,29 @@ pub(crate) fn prepare_foreign_library_with_budget(
     }
     for (member_index, member) in source.members.iter().enumerate() {
         charge(work, 1, source.span)?;
+        if let SurfaceForeignMember::Sentinel(value) = member {
+            let name = local_reference(&value.representation)?;
+            let mut selected = None;
+            for (index, declaration) in prepared.representations.iter().enumerate() {
+                if names_equal(declaration.name(), name, value.representation.span, work)? {
+                    if declaration.representation()
+                        != PreparedRepresentation::FunctionAddressSentinel
+                    {
+                        return Err(failure(ForeignContractReason::OperandRole, value.span));
+                    }
+                    selected = Some(index);
+                    break;
+                }
+            }
+            let representation_index = selected
+                .ok_or_else(|| failure(ForeignContractReason::UnknownMember, value.span))?;
+            prepared.sentinels.push(PreparedForeignSentinel {
+                member_index,
+                name: text(&value.name.text, value.name.span, work)?,
+                representation_index,
+                origin: Origin::Source(value.span),
+            });
+        }
         if let SurfaceForeignMember::Constant(value) = member {
             let PreparedRepresentation::Scalar(representation) =
                 representation(&prepared, &value.representation, work)?
@@ -934,6 +991,48 @@ fn constant<'a>(
         reference.span,
     ))
 }
+fn sentinel_operand(
+    library: &PreparedForeignLibrary,
+    abi: &SurfaceForeignAbiRepresentation,
+    input: Option<&SurfaceForeignOperandSource>,
+    work: &mut TypeWorkBudget,
+) -> Result<Option<PreparedOperandSource>, ForeignContractError> {
+    let SurfaceForeignAbiRepresentation::Member(reference) = abi else {
+        return Ok(None);
+    };
+    // Preserve existing scalar/owner ledger prefixes when this role is absent.
+    if library.sentinels.is_empty() {
+        return Ok(None);
+    }
+    let name = local_reference(reference)?;
+    let mut representation_index = None;
+    for (index, declaration) in library.representations.iter().enumerate() {
+        if names_equal(declaration.name(), name, reference.span, work)? {
+            if declaration.representation() != PreparedRepresentation::FunctionAddressSentinel {
+                return Ok(None);
+            }
+            representation_index = Some(index);
+            break;
+        }
+    }
+    let Some(representation_index) = representation_index else {
+        return Ok(None);
+    };
+    let Some(SurfaceForeignOperandSource::Constant(member)) = input else {
+        return Err(failure(ForeignContractReason::OperandRole, reference.span));
+    };
+    let member_name = local_reference(member)?;
+    for (index, sentinel) in library.sentinels.iter().enumerate() {
+        if names_equal(sentinel.name(), member_name, member.span, work)? {
+            if sentinel.representation_index != representation_index {
+                return Err(failure(ForeignContractReason::OperandRole, member.span));
+            }
+            return Ok(Some(PreparedOperandSource::Sentinel(index)));
+        }
+    }
+    Err(failure(ForeignContractReason::UnknownMember, member.span))
+}
+
 fn position_integer(
     value: &SurfaceForeignInteger,
     work: &mut TypeWorkBudget,
@@ -1002,7 +1101,8 @@ fn abi_result(
         SurfaceForeignAbiRepresentation::Member(reference) => {
             match representation(library, reference, work)? {
                 PreparedRepresentation::Scalar(value) => Ok(PreparedAbiResult::Scalar(value)),
-                PreparedRepresentation::Address(_) => Err(failure(
+                PreparedRepresentation::Address(_)
+                | PreparedRepresentation::FunctionAddressSentinel => Err(failure(
                     ForeignContractReason::UnsupportedRepresentation,
                     reference.span,
                 )),
@@ -1017,7 +1117,8 @@ fn abi_result(
             }
             match representation(library, reference, work)? {
                 PreparedRepresentation::Address(value) => Ok(PreparedAbiResult::Address(value)),
-                PreparedRepresentation::Scalar(_) => {
+                PreparedRepresentation::Scalar(_)
+                | PreparedRepresentation::FunctionAddressSentinel => {
                     Err(failure(ForeignContractReason::UnimplementedContract, *span))
                 }
             }
@@ -1192,6 +1293,16 @@ fn prepare_symbol(
                 ForeignContractReason::UnimplementedContract,
                 operand.span,
             ));
+        }
+        if let Some(mapping) =
+            sentinel_operand(library, &operand.representation, mappings[index], work)?
+        {
+            symbol.operands.push(PreparedForeignOperand {
+                representation: PreparedRepresentation::FunctionAddressSentinel,
+                source: mapping,
+                origin: Origin::Source(operand.span),
+            });
+            continue;
         }
         let PreparedAbiResult::Scalar(representation) =
             abi_result(library, &operand.representation, work)?
@@ -1692,6 +1803,16 @@ fn prepare_owner_symbol_body(
         }
         let input = mappings[index]
             .ok_or_else(|| failure(ForeignContractReason::OperandCoverage, operand.span))?;
+        if let Some(mapping) =
+            sentinel_operand(library, &operand.representation, Some(input), work)?
+        {
+            symbol.operands.push(PreparedForeignOperand {
+                representation: PreparedRepresentation::FunctionAddressSentinel,
+                source: mapping,
+                origin: Origin::Source(operand.span),
+            });
+            continue;
+        }
         let (representation, mapping) =
             match (abi_result(library, &operand.representation, work)?, input) {
                 (
@@ -2255,6 +2376,7 @@ pub(crate) struct PrivatePreparedLibraryParts {
     pub(crate) public: bool,
     pub(crate) representations: Vec<PrivatePreparedRepresentationParts>,
     pub(crate) constants: Vec<PrivatePreparedConstantParts>,
+    pub(crate) sentinels: Vec<PrivatePreparedSentinelParts>,
     pub(crate) owners: Vec<PrivatePreparedOwnerParts>,
     pub(crate) symbols: Vec<PrivatePreparedSymbolParts>,
     pub(crate) span: Span,
@@ -2272,6 +2394,13 @@ pub(crate) struct PrivatePreparedConstantParts {
     pub(crate) name: String,
     pub(crate) representation: PreparedScalarRepresentation,
     pub(crate) value: PreparedScalarValue,
+    pub(crate) span: Span,
+}
+
+pub(crate) struct PrivatePreparedSentinelParts {
+    pub(crate) member_index: usize,
+    pub(crate) name: String,
+    pub(crate) representation_index: usize,
     pub(crate) span: Span,
 }
 
@@ -2360,7 +2489,9 @@ fn private_representation(
 ) -> Result<(), ForeignContractError> {
     match value {
         PreparedRepresentation::Scalar(value) => private_scalar_representation(value, span),
-        PreparedRepresentation::Address(_) => Ok(()),
+        PreparedRepresentation::Address(_) | PreparedRepresentation::FunctionAddressSentinel => {
+            Ok(())
+        }
     }
 }
 
@@ -2794,6 +2925,7 @@ pub(crate) fn restore_prepared_library(
         .representations
         .len()
         .checked_add(parts.constants.len())
+        .and_then(|count| count.checked_add(parts.sentinels.len()))
         .and_then(|count| count.checked_add(parts.symbols.len()))
         .and_then(|count| count.checked_add(parts.owners.len()))
         .ok_or_else(|| failure(ForeignContractReason::WorkExhausted, span))?;
@@ -2813,6 +2945,12 @@ pub(crate) fn restore_prepared_library(
         .chain(
             parts
                 .constants
+                .iter()
+                .map(|value| (value.name.as_str(), value.member_index, value.span)),
+        )
+        .chain(
+            parts
+                .sentinels
                 .iter()
                 .map(|value| (value.name.as_str(), value.member_index, value.span)),
         )
@@ -2877,6 +3015,13 @@ pub(crate) fn restore_prepared_library(
             .map(|value| (value.member_index, value.span)),
         work,
     )?;
+    private_member_order(
+        parts
+            .sentinels
+            .iter()
+            .map(|value| (value.member_index, value.span)),
+        work,
+    )?;
     for representation in &parts.representations {
         charge(work, 1, representation.span)?;
         private_representation(representation.representation, representation.span)?;
@@ -2896,6 +3041,18 @@ pub(crate) fn restore_prepared_library(
             value.representation == PreparedRepresentation::Scalar(constant.representation)
         }) {
             return Err(failure(ForeignContractReason::UnknownMember, constant.span));
+        }
+    }
+    for sentinel in &parts.sentinels {
+        charge(work, 1, sentinel.span)?;
+        if parts
+            .representations
+            .get(sentinel.representation_index)
+            .is_none_or(|value| {
+                value.representation != PreparedRepresentation::FunctionAddressSentinel
+            })
+        {
+            return Err(failure(ForeignContractReason::OperandRole, sentinel.span));
         }
     }
     for (owner_index, owner) in parts.owners.iter().enumerate() {
@@ -3049,6 +3206,13 @@ pub(crate) fn restore_prepared_library(
                     })?;
                     if PreparedRepresentation::Scalar(constant.representation)
                         != operand.representation
+                    {
+                        return Err(failure(ForeignContractReason::OperandRole, operand.span));
+                    }
+                }
+                PreparedOperandSource::Sentinel(index) => {
+                    if parts.sentinels.get(*index).is_none()
+                        || operand.representation != PreparedRepresentation::FunctionAddressSentinel
                     {
                         return Err(failure(ForeignContractReason::OperandRole, operand.span));
                     }
@@ -3218,6 +3382,7 @@ pub(crate) fn restore_prepared_library(
         public: parts.public,
         representations: Vec::new(),
         constants: Vec::new(),
+        sentinels: Vec::new(),
         owners: Vec::new(),
         symbols: Vec::new(),
         origin: Origin::Source(span),
@@ -3229,6 +3394,7 @@ pub(crate) fn restore_prepared_library(
         span,
     )?;
     reserve(&mut result.constants, parts.constants.len(), span)?;
+    reserve(&mut result.sentinels, parts.sentinels.len(), span)?;
     reserve(&mut result.symbols, parts.symbols.len(), span)?;
     reserve(&mut result.owners, parts.owners.len(), span)?;
     for value in parts.representations {
@@ -3245,6 +3411,14 @@ pub(crate) fn restore_prepared_library(
             name: value.name,
             representation: value.representation,
             value: value.value,
+            origin: Origin::Source(value.span),
+        });
+    }
+    for value in parts.sentinels {
+        result.sentinels.push(PreparedForeignSentinel {
+            member_index: value.member_index,
+            name: value.name,
+            representation_index: value.representation_index,
             origin: Origin::Source(value.span),
         });
     }
@@ -3360,6 +3534,12 @@ pub(crate) fn same_prepared_library_parts(
             return Ok(false);
         }
     }
+    if !original.sentinels.is_empty() || !candidate.sentinels.is_empty() {
+        charge(work, 1, span)?;
+        if original.sentinels.len() != candidate.sentinels.len() {
+            return Ok(false);
+        }
+    }
     if original.module != candidate.module
         || original.public != candidate.public
         || original.representations.len() != candidate.representations.len()
@@ -3389,6 +3569,16 @@ pub(crate) fn same_prepared_library_parts(
         if left.member_index != right.member_index
             || left.representation != right.representation
             || left.value != right.value
+            || !names_equal(&left.name, &right.name, right.span, work)?
+            || !private_same_source_origin(&left.origin, right.span, work)?
+        {
+            return Ok(false);
+        }
+    }
+    for (left, right) in original.sentinels.iter().zip(&candidate.sentinels) {
+        charge(work, 2, right.span)?;
+        if left.member_index != right.member_index
+            || left.representation_index != right.representation_index
             || !names_equal(&left.name, &right.name, right.span, work)?
             || !private_same_source_origin(&left.origin, right.span, work)?
         {
@@ -3476,7 +3666,8 @@ pub(crate) fn same_prepared_library_parts(
             }
             let operand_span = right.span;
             let matches = match (&left.source, &right.source) {
-                (PreparedOperandSource::Constant(left), PreparedOperandSource::Constant(right)) => {
+                (PreparedOperandSource::Sentinel(left), PreparedOperandSource::Sentinel(right))
+                | (PreparedOperandSource::Constant(left), PreparedOperandSource::Constant(right)) => {
                     left == right
                 }
                 (PreparedOperandSource::Source(left), PreparedOperandSource::Source(right))
@@ -3668,6 +3859,16 @@ mod owner_normalization_tests {
                     span: value.origin.primary_span(),
                 })
                 .collect(),
+            sentinels: value
+                .sentinels
+                .iter()
+                .map(|value| PrivatePreparedSentinelParts {
+                    member_index: value.member_index,
+                    name: value.name.clone(),
+                    representation_index: value.representation_index,
+                    span: value.origin.primary_span(),
+                })
+                .collect(),
             owners: value
                 .owners
                 .iter()
@@ -3711,6 +3912,9 @@ mod owner_normalization_tests {
                                 }
                                 PreparedOperandSource::Enclosing(value) => {
                                     PreparedOperandSource::Enclosing(value.clone())
+                                }
+                                PreparedOperandSource::Sentinel(value) => {
+                                    PreparedOperandSource::Sentinel(*value)
                                 }
                                 PreparedOperandSource::Constant(value) => {
                                     PreparedOperandSource::Constant(*value)
@@ -4091,5 +4295,139 @@ mod owner_normalization_tests {
         };
         *initialized_bytes = None;
         assert!(restore_prepared_library(no_extent, &mut TypeWorkBudget::default()).is_err());
+    }
+
+    const SENTINELS: &str = r#"foreign library Sentinels {
+    profile "x86_64-unknown-linux-gnu"
+    repr I32 = signed(32)
+    repr Destructor = function_address
+    repr OtherDestructor = function_address
+    sentinel Transient : Destructor = all_bits_one
+    sentinel SameBits : Destructor = all_bits_one
+    sentinel OtherRole : OtherDestructor = all_bits_one
+    symbol Check<Before : EffectRow, T, After : EffectRow> : Unit -> Foreign.Call<Int> {
+        name "ash_counter_noncallable_sentinel"
+        abi (Destructor) -> I32
+        operand 0 from constant Transient
+        output result as scalar
+        outcome otherwise { readable result }
+    }
+}
+"#;
+
+    #[test]
+    fn sentinel_original_tables_have_exact_short_prefix_retry_and_donor_correspondence() {
+        let (module, surface) = source(SENTINELS);
+        let authored = &surface.foreign_libraries[0];
+        let mut measured = TypeWorkBudget::default();
+        let original =
+            prepare_foreign_library_with_budget(module, authored, &mut measured).unwrap();
+        assert!(original.constants().is_empty());
+        assert_eq!(original.sentinels().len(), 3);
+        let prepare_work = measured.used();
+        let mut restored_work = TypeWorkBudget::default();
+        restore_prepared_library(parts(&original), &mut restored_work).unwrap();
+        let restore_work = restored_work.used();
+        let mut correspondence = TypeWorkBudget::default();
+        assert!(
+            same_prepared_library_parts(&original, &parts(&original), &mut correspondence).unwrap()
+        );
+        for prefix in [0, 13] {
+            for (operation, exact) in [
+                (0, prepare_work),
+                (1, restore_work),
+                (2, correspondence.used()),
+            ] {
+                let mut short = TypeWorkBudget::with_limit(prefix + exact - 1);
+                short.charge(prefix).unwrap();
+                let error = match operation {
+                    0 => prepare_foreign_library_with_budget(module, authored, &mut short)
+                        .unwrap_err(),
+                    1 => restore_prepared_library(parts(&original), &mut short).unwrap_err(),
+                    _ => same_prepared_library_parts(&original, &parts(&original), &mut short)
+                        .unwrap_err(),
+                };
+                assert_eq!(error.reason(), ForeignContractReason::WorkExhausted);
+                assert!(short.used() >= prefix && short.used() < prefix + exact);
+                let refused_usage = short.used();
+                // The failing charge was atomic, with no ledger overshoot.
+                assert!(refused_usage < prefix + exact);
+                for _ in 0..2 {
+                    let mut work = TypeWorkBudget::with_limit(prefix + exact);
+                    work.charge(prefix).unwrap();
+                    match operation {
+                        0 => {
+                            prepare_foreign_library_with_budget(module, authored, &mut work)
+                                .unwrap();
+                        }
+                        1 => {
+                            restore_prepared_library(parts(&original), &mut work).unwrap();
+                        }
+                        _ => {
+                            assert!(
+                                same_prepared_library_parts(
+                                    &original,
+                                    &parts(&original),
+                                    &mut work
+                                )
+                                .unwrap()
+                            );
+                        }
+                    }
+                    assert_eq!(work.used(), prefix + exact);
+                }
+            }
+        }
+        for mutation in 0..5 {
+            let mut changed = parts(&original);
+            match mutation {
+                0 => changed.symbols[0].operands[0].source = PreparedOperandSource::Sentinel(1), // same bits, distinct original member
+                1 => {
+                    changed.sentinels[0].representation_index =
+                        changed.sentinels[2].representation_index
+                }
+                2 => changed.symbols[0].operands[0].source = PreparedOperandSource::Constant(0),
+                3 => {
+                    changed.symbols[0].operands[0].representation =
+                        PreparedRepresentation::Address(PreparedAddressRepresentation::Opaque)
+                }
+                _ => changed.sentinels[0].member_index = changed.sentinels[1].member_index,
+            }
+            assert!(
+                !same_prepared_library_parts(&original, &changed, &mut TypeWorkBudget::default())
+                    .unwrap()
+            );
+            if mutation >= 2 {
+                assert!(restore_prepared_library(changed, &mut TypeWorkBudget::default()).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn sentinel_role_rejects_scalar_null_source_pointer_result_and_wrong_representation() {
+        for text in [
+            SENTINELS.replace("from constant Transient", "from constant OtherRole"),
+            SENTINELS.replace("from constant Transient", "from null"),
+            SENTINELS.replace("from constant Transient", "from 0 scalar"),
+            SENTINELS.replace(
+                "abi (Destructor) -> I32",
+                "abi (pointer(Destructor)) -> I32",
+            ),
+            SENTINELS.replace("abi (Destructor) -> I32", "abi (Destructor) -> Destructor"),
+            SENTINELS.replace(
+                "sentinel Transient : Destructor",
+                "sentinel Transient : I32",
+            ),
+            SENTINELS.replace(
+                "sentinel Transient : Destructor = all_bits_one",
+                "const Transient : Destructor = -1",
+            ),
+        ] {
+            let (module, surface) = source(&text);
+            assert!(
+                prepare_foreign_library(module, &surface.foreign_libraries[0]).is_err(),
+                "{text}"
+            );
+        }
     }
 }

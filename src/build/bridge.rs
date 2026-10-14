@@ -41,13 +41,14 @@ const OWNER_OPERAND: &str = "ash::foreign::source_runtime::NativeOwnerOperand";
 pub(crate) enum TargetOperand {
     Scalar(TargetScalar),
     Address,
+    FunctionAddressSentinel,
 }
 
 impl TargetOperand {
     const fn rust_type(self) -> &'static str {
         match self {
             Self::Scalar(scalar) => scalar.rust_type(),
-            Self::Address => "*mut core::ffi::c_void",
+            Self::Address | Self::FunctionAddressSentinel => "*mut core::ffi::c_void",
         }
     }
 }
@@ -415,6 +416,27 @@ fn plan_target_bridge(
     for operand in source.operands() {
         let target = match (operand.source(), operand.representation()) {
             (
+                PreparedOperandSource::Sentinel(index),
+                PreparedRepresentation::FunctionAddressSentinel,
+            ) => {
+                let sentinel = symbol
+                    .prepared()
+                    .sentinels()
+                    .get(*index)
+                    .ok_or_else(|| fail(ForeignBridgeReason::InvalidAuthority, span))?;
+                if symbol
+                    .prepared()
+                    .representations()
+                    .get(sentinel.representation_index())
+                    .is_none_or(|value| {
+                        value.representation() != PreparedRepresentation::FunctionAddressSentinel
+                    })
+                {
+                    return Err(fail(ForeignBridgeReason::InvalidAuthority, span));
+                }
+                TargetOperand::FunctionAddressSentinel
+            }
+            (
                 PreparedOperandSource::Constant(index),
                 PreparedRepresentation::Scalar(representation),
             ) => {
@@ -626,6 +648,13 @@ fn render_bridge(output: &mut impl Write, plan: &TargetResolvedForeignBridge) ->
             output.write_str(", ")?;
         }
         match scalar {
+            TargetOperand::FunctionAddressSentinel if plan.call == TargetBridgeCall::Scalar => {
+                write!(output, "{VALUE}::FunctionAddressAllBitsOne")?
+            }
+            TargetOperand::FunctionAddressSentinel => write!(
+                output,
+                "{OWNER_OPERAND}::Scalar({VALUE}::FunctionAddressAllBitsOne)"
+            )?,
             TargetOperand::Scalar(scalar) if plan.call == TargetBridgeCall::Scalar => {
                 write!(output, "{VALUE}::{}(arg{index})", scalar.value_variant())?
             }
@@ -652,7 +681,13 @@ fn render_bridge(output: &mut impl Write, plan: &TargetResolvedForeignBridge) ->
         if index > 0 {
             output.write_str(", ")?;
         }
-        write!(output, "*arg{index}")?;
+        if plan.operands[index] == TargetOperand::FunctionAddressSentinel {
+            // GNU64 represents this non-callable sentinel in the pointer ABI.
+            // Never materialize an invalid Rust function pointer or invoke it.
+            output.write_str("usize::MAX as *mut core::ffi::c_void")?;
+        } else {
+            write!(output, "*arg{index}")?;
+        }
     }
     output.write_str(") };\n")?;
     match plan.result {

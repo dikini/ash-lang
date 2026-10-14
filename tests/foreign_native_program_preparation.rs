@@ -163,3 +163,32 @@ main () = Maximum
     )
     .unwrap();
 }
+
+#[test]
+fn declared_noncallable_sentinel_operand_reaches_native_program_preparation() {
+    let fixture = Fixture::new(
+        r#"import @builtin.foreign as Foreign
+pub foreign library Sentinels {
+    profile "x86_64-unknown-linux-gnu"
+    repr I32 = signed(32)
+    repr Destructor = function_address
+    sentinel Transient : Destructor = all_bits_one
+    symbol Check<Before : EffectRow, T, After : EffectRow> : Unit -> Foreign.Call<Int> {
+        name "ash_check_noncallable_sentinel"
+        abi (Destructor) -> I32
+        operand 0 from constant Transient
+        output result as scalar
+        outcome otherwise { readable result }
+    }
+}
+main : Unit -> Foreign.Call<Int> ! {Check<{}, Int, {}>}
+main () = perform Check<{}, Int, {}>.call ()
+"#,
+    );
+    let compiled = compile_path(fixture.configuration()).unwrap();
+    prepare_program(
+        &compiled,
+        BuildConfiguration::new(fixture.0.join("program")),
+    )
+    .unwrap();
+}

@@ -413,3 +413,37 @@ fn declared_literal_constant_ranges_and_term_visibility_remain_exact() {
         "a literal and constructor cannot share a term name"
     );
 }
+
+#[test]
+fn noncallable_sentinels_never_publish_ordinary_values_or_callable_symbols() {
+    let contract = r#"pub foreign library Sentinels {
+    profile "x86_64-unknown-linux-gnu"
+    repr I32 = signed(32)
+    repr Destructor = function_address
+    repr OtherDestructor = function_address
+    sentinel Transient : Destructor = all_bits_one
+    sentinel SameBits : Destructor = all_bits_one
+    sentinel OtherRole : OtherDestructor = all_bits_one
+    symbol Check<Before : EffectRow, T, After : EffectRow> : Unit -> Foreign.Call<Int> {
+        name "ash_counter_noncallable_sentinel"
+        abi (Destructor) -> I32
+        operand 0 from constant Transient
+        output result as scalar
+        outcome otherwise { readable result }
+    }
+}
+"#;
+    for entry in [
+        "import native as Native\nmain : Unit -> Int\nmain () = Native.Transient\n",
+        "import native (Transient as Value)\nmain : Unit -> Int\nmain () = Value\n",
+        "import native as Native\nmain : Unit -> Unit ! {Native.Transient}\nmain () = perform Native.Transient.call ()\n",
+    ] {
+        let fixture = Fixture::new(entry);
+        fs::write(
+            fixture.0.join("native.ash"),
+            format!("import @builtin.foreign as Foreign\n{contract}"),
+        )
+        .unwrap();
+        assert!(run_path(fixture.configuration()).is_err(), "{entry}");
+    }
+}

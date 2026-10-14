@@ -862,9 +862,16 @@ fn validate_foreign_symbol_source<'effect>(
     check_domain(domain, &seen, registry, work, span)?;
     for operand in symbol.operands() {
         charge(work, 1, span)?;
-        if !matches!(operand.representation(), PreparedRepresentation::Scalar(_))
-            || matches!(operand.source(), PreparedOperandSource::Current(_))
-        {
+        if !matches!(
+            (operand.source(), operand.representation()),
+            (
+                PreparedOperandSource::Source(_) | PreparedOperandSource::Constant(_),
+                PreparedRepresentation::Scalar(_)
+            ) | (
+                PreparedOperandSource::Sentinel(_),
+                PreparedRepresentation::FunctionAddressSentinel
+            )
+        ) {
             return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
         }
         if let PreparedOperandSource::Source(path) = operand.source() {

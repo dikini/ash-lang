@@ -978,7 +978,7 @@ main () = true + 1
 ## Source foreign declarations
 
 Foreign declarations are passive. The admitted subset contains owner-free
-scalar calls and owner contracts with declared dependencies. Each library
+calls with scalar or void results, and owner contracts with declared dependencies. Each library
 has exactly one profile, `"x86_64-unknown-linux-gnu"`. Scalar representations
 are signed or unsigned 8-, 32- or 64-bit integers, or `size_t`. These ABI
 representations introduce no ordinary fixed-width Ash integer type.
@@ -1000,8 +1000,18 @@ mode; qualified, selected and re-exported references retain its defining binder.
 Its value requires no C or header evaluation. A native constant operand retains
 the original constant member, representation and value, independently of an
 ordinary source reference to that value. Equal values or spellings do not make
-another member interchangeable. Arbitrary constant expressions, header macro
-evaluation and non-callable sentinel roles remain outside this checkpoint.
+another member interchangeable. Arbitrary constant expressions and header macro
+evaluation remain outside this checkpoint.
+
+A `sentinel Name : Representation = all_bits_one` declaration requires an exact
+`function_address` representation in the same original library. It supplies
+only the non-callable fixed operand role selected by
+`operand N from constant Name`. That ABI input must name the sentinel's exact representation declaration;
+another representation or equal-bit member is not interchangeable. Sentinel
+members publish no ordinary term, `Int`, pointer, function or callable symbol.
+They cannot supply a source-projected argument, an owner address, a scalar
+predicate or a native result. `from null` does not provide this role and remains
+outside the admitted profile. A sentinel grants no access or window permission.
 
 An owner declaration introduces an opaque nominal state family without source
 constructors. Its explicit owned position selects a `Type` formal. Canonical

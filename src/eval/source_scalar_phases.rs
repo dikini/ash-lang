@@ -232,6 +232,20 @@ impl<'runtime> super::Machine<'runtime> {
             .try_reserve_exact(source.operands().len())
             .map_err(|_| operand_storage(source.operands().len()))?;
         for operand in source.operands() {
+            if let PreparedOperandSource::Sentinel(index) = operand.source() {
+                if operand.representation() != crate::foreign::source_contract::PreparedRepresentation::FunctionAddressSentinel {
+                    return Err(super::RuntimeFailure::ForeignBinding);
+                }
+                operands.push(
+                    crate::foreign::source_runtime::admit_gnu_declared_sentinel(
+                        invocation.symbol().prepared(),
+                        *index,
+                        &mut self.instantiation_work,
+                    )
+                    .map_err(|error| conversion_failure(error, &self.instantiation_work))?,
+                );
+                continue;
+            }
             if let PreparedOperandSource::Constant(index) = operand.source() {
                 let crate::foreign::source_contract::PreparedRepresentation::Scalar(representation) =
                     operand.representation()
