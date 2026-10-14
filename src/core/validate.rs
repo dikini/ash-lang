@@ -3586,6 +3586,7 @@ pub(in crate::core) fn check_provider_external_structure(
     result
 }
 
+#[cfg(test)]
 pub(crate) fn check_source_resource_structure(
     program: &UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
     original: &std::sync::Arc<crate::resolved::SourceResourceTypeFact>,
@@ -3594,7 +3595,29 @@ pub(crate) fn check_source_resource_structure(
     module_sources: &[(ModuleId, SourceId)],
     work: &mut TypeWorkBudget,
 ) -> Result<(), ValidationError> {
+    check_source_resource_structure_with_globals(
+        program,
+        original,
+        answer,
+        sources,
+        module_sources,
+        None,
+        work,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_source_resource_structure_with_globals(
+    program: &UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
+    original: &std::sync::Arc<crate::resolved::SourceResourceTypeFact>,
+    answer: bool,
+    sources: &[&SourceFile],
+    module_sources: &[(ModuleId, SourceId)],
+    globals: Option<&super::source_resource::SourceResourceGlobals>,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ValidationError> {
     let mut validator = Validator::new_modules(program, sources, module_sources)?;
+    validator.provider_external_types = globals.map(|globals| &**globals);
     if !program
         .registry
         .source_resource_fact(original.id)
@@ -3625,6 +3648,7 @@ pub(crate) struct SourceResourceStructureSession {
 }
 
 struct OriginalTemplateRegistryAdmission {
+    globals: Option<std::sync::Arc<super::source_resource::SourceResourceGlobals>>,
     registry: std::sync::Arc<crate::resolved::ResolvedRegistry>,
     sources: HashMap<SourceId, *const SourceFile>,
     modules: HashMap<ModuleId, SourceId>,
@@ -3633,6 +3657,7 @@ struct OriginalTemplateRegistryAdmission {
 }
 
 impl SourceResourceStructureSession {
+    #[cfg(test)]
     pub(crate) fn check(
         &mut self,
         program: &UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
@@ -3642,20 +3667,44 @@ impl SourceResourceStructureSession {
         module_sources: &[(ModuleId, SourceId)],
         work: &mut TypeWorkBudget,
     ) -> Result<(), ValidationError> {
+        self.check_with_globals(
+            program,
+            original,
+            answer,
+            sources,
+            module_sources,
+            &std::sync::Arc::new(super::source_resource::SourceResourceGlobals::new()),
+            work,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn check_with_globals(
+        &mut self,
+        program: &UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
+        original: &std::sync::Arc<crate::resolved::SourceResourceTypeFact>,
+        answer: bool,
+        sources: &[&SourceFile],
+        module_sources: &[(ModuleId, SourceId)],
+        globals: &std::sync::Arc<super::source_resource::SourceResourceGlobals>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
         // Registry parameter ordering can depend on lexical method owners and
         // their graph-local provider instances. Those contexts keep their full
         // fresh registry check; the receipt carries no lexical exemption.
         if !program.method_evidence.lexical_owners().is_empty() {
-            return check_source_resource_structure(
+            return check_source_resource_structure_with_globals(
                 program,
                 original,
                 answer,
                 sources,
                 module_sources,
+                Some(globals),
                 work,
             );
         }
         let mut validator = Validator::new_modules(program, sources, module_sources)?;
+        validator.provider_external_types = Some(globals);
         if !program
             .registry
             .source_resource_fact(original.id)
@@ -3688,20 +3737,30 @@ impl SourceResourceStructureSession {
                 {
                     return Err(ValidationError::new(ValidationReason::Registry, None));
                 }
-                // Only copied scalar category IDs require new storage. The
-                // original parameter-owner map is borrowed without cloning.
-                validator.charge_type_work(admitted.abstract_nominals.len())?;
-                let mut inventory = validator.authenticated_abstract_nominals.borrow_mut();
-                inventory
-                    .try_reserve(admitted.abstract_nominals.len())
-                    .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
-                inventory.extend(admitted.abstract_nominals.iter().copied());
-                drop(inventory);
-                let native = AuthenticatedNativeRegistry {
-                    registry: &program.registry,
+                let same_globals = match (&admitted.globals, globals.is_empty()) {
+                    (None, true) => true,
+                    (Some(previous), false) => std::sync::Arc::ptr_eq(previous, globals),
+                    _ => false,
                 };
-                validator.run_effect_with_registry(&admitted.parameters, &native)
-            } else {
+                // Scheme kinds may participate in contextual kind checks. Reuse
+                // only the same retained immutable loan context; a changed
+                // context receives complete fresh registry authentication.
+                validator.charge_type_work(1)?;
+                if same_globals {
+                    validator.charge_type_work(admitted.abstract_nominals.len())?;
+                    let mut inventory = validator.authenticated_abstract_nominals.borrow_mut();
+                    inventory
+                        .try_reserve(admitted.abstract_nominals.len())
+                        .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                    inventory.extend(admitted.abstract_nominals.iter().copied());
+                    drop(inventory);
+                    let native = AuthenticatedNativeRegistry {
+                        registry: &program.registry,
+                    };
+                    return validator.run_effect_with_registry(&admitted.parameters, &native);
+                }
+            }
+            {
                 let (parameters, native) = validator.authenticate_effect_registry_phase()?;
                 validator.run_effect_with_registry(&parameters, &native)?;
                 validator.charge_type_work(1 + sources.len())?;
@@ -3716,6 +3775,7 @@ impl SourceResourceStructureSession {
                     source_objects.insert(source.id(), *source as *const SourceFile);
                 }
                 self.admitted = Some(OriginalTemplateRegistryAdmission {
+                    globals: (!globals.is_empty()).then(|| std::sync::Arc::clone(globals)),
                     registry: std::sync::Arc::clone(&program.registry),
                     sources: source_objects,
                     modules: validator
@@ -16091,6 +16151,18 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 )?;
             }
             EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
+                // Original forests borrow ordinary global schemes only. Every
+                // loan must close against the actual lexical executable binder;
+                // it is never an exemption in final Core scope validation.
+                for (global, expected) in scope.original().globals().iter() {
+                    self.charge_type_work(1)?;
+                    let actual = self.binders.get(global).ok_or_else(|| {
+                        ValidationError::new(ValidationReason::Registry, Some(id))
+                    })?;
+                    if !self.same_type_charged(actual.ty(), expected)? {
+                        return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                    }
+                }
                 let mut budget = TypeWorkBudget::with_limit(
                     self.type_work_limit.saturating_sub(self.type_work.get()),
                 );

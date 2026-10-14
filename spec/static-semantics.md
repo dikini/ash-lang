@@ -1228,7 +1228,15 @@ guard without inventing private data or a source finish input. A consumed
 `ConsumedFailure(E)` during owned discard is terminal `ResourceCompletion` for
 both codecs. Normal `scope` return still reports `ConsumedError(E)`.
 
-Callable lifecycle helpers, source `given` forwarding, source-projected scalar
+Ordinary pure module-global helpers may consume and return independent lifecycle
+payloads. Same-module and imported definitions preserve their complete ordered
+Type/Row schemes and actual instances, including explicit ordinary annotations
+that close an inferred effect row. Helper arguments and results cannot transport
+native State or its view; a compatible function type grants no descriptor or
+native-effect permission. Original and copied calls remain independently checked
+against the same defining global.
+
+Privileged lifecycle wrappers, source `given` forwarding, source-projected scalar
 teardown operands, native access/copy windows and library migrations remain
 unsupported. These
 are checkpoint restrictions, not additional language rules for all resources;

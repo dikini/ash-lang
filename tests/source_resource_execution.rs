@@ -1665,3 +1665,102 @@ fn generated_owner_calls_use_noncallable_sentinels_in_all_native_phases() {
         &native,
     );
 }
+
+#[test]
+fn lifecycle_payload_helper_identity_is_admitted() {
+    // CP22 permits pure ordinary payload helpers. Native calls and State stay
+    // in the descriptor's original lifecycle body.
+    let fixture = Fixture::new(
+        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Int, Int>\nmain () = resource Owner.Probe<{}, Fresh, {}> owner = 42 {\n    Owner.read owner\n}\n",
+    );
+    let owner = include_str!("fixtures/source-owner/status_owner.ash").replace(
+        "false => Acquired(state, size)",
+        "false => Acquired(state, payload_copy size)",
+    ) + "\npayload_copy<T> : T -> T\npayload_copy value = value\n";
+    fs::write(fixture.0.join("owner.ash"), owner).unwrap();
+    let result = compile_path(fixture.configuration());
+    assert!(
+        result.is_ok(),
+        "independent payload-only helper admission: {:?}",
+        result.err().and_then(|error| error
+            .pipeline_failure()
+            .map(|failure| format!("{failure:?}")))
+    );
+}
+
+#[test]
+fn lifecycle_payload_helpers_execute_local_and_imported_originals() {
+    for imported in [false, true] {
+        let (helper, prefix, suffix, helpers) = if imported {
+            (
+                "Payload.copy",
+                "import helpers as Payload\n",
+                "",
+                Some("pub copy<Before : EffectRow, T> : T -> T ! {| Before}\ncopy value = value\n"),
+            )
+        } else {
+            (
+                "payload_copy",
+                "",
+                "\npayload_copy<Before : EffectRow, T> : T -> T ! {| Before}\npayload_copy value = value\n",
+                None,
+            )
+        };
+        let owner = include_str!("fixtures/source-owner/owner.ash")
+            .replace("false => Acquired(state, size)", &format!("false => {{\n                let copy : Int -> Int = match size == 42 {{\n                    true => {helper}\n                    false => {helper}\n                }}\n                Acquired(state, copy (size + 1))\n            }}"))
+            .replace("Foreign.Returned(Foreign.Consumed(())) => Consumed", &format!("Foreign.Returned(Foreign.Consumed(())) => {{\n            let copy : Int -> Int = {helper}\n            match copy data == data {{\n                true => Consumed\n                false => ConsumedFailure(())\n            }}\n        }}"));
+        let owner = format!("{prefix}{owner}{suffix}");
+        assert!(owner.contains("copy (size + 1)"));
+        generated_owner_program_with_native(
+            &owner,
+            "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Unit, Int>\nmain () = resource Owner.Probe<{}, Fresh, {}> owner = 42 {\n    Owner.read owner\n}\n",
+            helpers,
+            "Completed(43, Closed)",
+            "acquire:42\nrelease:42\n",
+            include_str!("fixtures/source-owner/native_owner.c"),
+        );
+    }
+}
+
+#[test]
+fn lifecycle_payload_helpers_do_not_transport_native_state() {
+    for expression in [
+        "Acquired(payload_copy state, size)",
+        "{\n                let discarded = payload_ignore state\n                Acquired(state, size)\n            }",
+    ] {
+        let fixture = Fixture::new(
+            "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Unit, Int>\nmain () = resource Owner.Probe<{}, Fresh, {}> owner = 42 {\n    Owner.read owner\n}\n",
+        );
+        let owner = include_str!("fixtures/source-owner/owner.ash").replace(
+            "false => Acquired(state, size)",
+            &format!("false => {expression}"),
+        ) + "\npayload_copy<T> : T -> T\npayload_copy value = value\npayload_ignore<T> : T -> Unit\npayload_ignore value = ()\n";
+        fs::write(fixture.0.join("owner.ash"), owner).unwrap();
+        let error = compile_path(fixture.configuration())
+            .expect_err("native State must not cross an ordinary helper");
+        let failure = format!("{:?}", error.pipeline_failure().unwrap());
+        assert!(
+            failure.starts_with("Typing("),
+            "expected a checked State refusal, not an invalid source fixture: {failure}; {expression}"
+        );
+    }
+}
+
+#[test]
+fn lifecycle_payload_helpers_cannot_hide_native_requests() {
+    let fixture = Fixture::new(
+        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Unit, Int>\nmain () = resource Owner.Probe<{}, Fresh, {}> owner = 42 {\n    Owner.read owner\n}\n",
+    );
+    let owner = include_str!("fixtures/source-owner/owner.ash").replace(
+        "false => Acquired(state, size)",
+        "false => Acquired(state, payload_native size)",
+    ) + "\npayload_native : Int -> Int ! {Allocate<{}, Unit, {}>}\npayload_native value = {\n    let output = perform Allocate<{}, Unit, {}>.call value\n    value\n}\n";
+    fs::write(fixture.0.join("owner.ash"), owner).unwrap();
+    let error = compile_path(fixture.configuration())
+        .expect_err("an ordinary payload helper grants no native request permission");
+    let failure = format!("{:?}", error.pipeline_failure().unwrap());
+    assert!(
+        failure.starts_with("Typing("),
+        "expected checked hidden-effect refusal: {failure}"
+    );
+}

@@ -951,6 +951,7 @@ pub(super) fn compile(
     module: &ResolvedModule,
     registry: &Arc<ResolvedRegistry>,
     interfaces: &[SharedCheckedInterfaceFact],
+    schemes: &[crate::resolved::CheckedGlobalScheme],
     work: &mut TypeWorkBudget,
     coverage: &mut UsefulnessBudget,
     constraints: &mut InterfaceConstraintBudget,
@@ -984,6 +985,43 @@ pub(super) fn compile(
         coverage.clone(),
     )?;
     let result = (|| {
+        // These original declaration headers were checked by the caller.
+        // Their bodies still cross the ordinary callable barrier separately.
+        // No unused Core binders are allocated just to seed this type context.
+        // Refusal stays inside the transaction that returns the consumed meter.
+        for scheme in schemes {
+            compiler.type_work.charge(1).map_err(|_| type_resource())?;
+            let parameters = clone_kinded_type_parameters_with_budget(
+                &scheme.scheme.type_parameters,
+                &mut compiler.type_work,
+            )
+            .map_err(|_| type_resource())?
+            .into_boxed_slice();
+            let body = IterativeTypeOwner::new(
+                crate::types::clone_type_with_budget(
+                    &scheme.scheme.value_type,
+                    &mut compiler.type_work,
+                )
+                .map_err(|_| type_resource())?,
+            );
+            let provenance = super::at_span_provenance_with_budget(
+                &body,
+                scheme.origin.primary_span(),
+                &mut compiler.type_work,
+            )
+            .map_err(|_| type_resource())?;
+            if compiler.base_context.insert_with_provenance(
+                scheme.binder,
+                body.into_inner(),
+                provenance,
+            )? {
+                return Err(invalid_state());
+            }
+            compiler
+                .base_context
+                .set_quantified(scheme.binder, parameters)?;
+        }
+        let globals = Arc::new(compiler.source_global_schemes(module)?);
         compiler
             .type_work
             .charge(
@@ -1036,14 +1074,16 @@ pub(super) fn compile(
             let handler =
                 compiler.compile_source_handler(&binders, &catalog, definition, &header)?;
             records.push(Arc::new(
-                CheckedSourceResourceTemplate::admit(
+                CheckedSourceResourceTemplate::admit_with_globals(
                     header,
                     acquire,
                     finish,
                     handler,
+                    Arc::clone(&globals),
                     &sources,
                     &module_sources,
                     &mut compiler.type_work,
+                    &mut crate::core::validate::SourceResourceStructureSession::default(),
                 )
                 .map_err(|error| template_validation(error, definition.span))?,
             ));
@@ -1067,6 +1107,58 @@ impl CoreElaborator<EffectOperationFamily> {
     ) -> Result<Self, TypeError> {
         let builder = CoreBuilder::with_registry_for_family(Arc::clone(&registry));
         Self::for_module_with_prepared_builder(module, registry, work, coverage, builder)
+    }
+
+    fn source_global_schemes(
+        &mut self,
+        module: &ResolvedModule,
+    ) -> Result<crate::core::source_resource::SourceResourceGlobals, TypeError> {
+        let mut globals = crate::core::source_resource::SourceResourceGlobals::new();
+        for binder in module
+            .imported_facts()
+            .globals()
+            .map(|fact| fact.binder)
+            .chain(
+                module
+                    .definitions()
+                    .iter()
+                    .map(|definition| match &definition.kind {
+                        ResolvedDefinitionKind::Equational(definition)
+                        | ResolvedDefinitionKind::ForeignConstant(definition) => {
+                            definition.interface.name.id
+                        }
+                        ResolvedDefinitionKind::InlineOperational(definition) => {
+                            definition.header.name.id
+                        }
+                    }),
+            )
+        {
+            self.type_work.charge(1).map_err(|_| type_resource())?;
+            if self.registry.scalar_preflight(binder).is_some() {
+                continue;
+            }
+            let fact = self.base_context.fact(binder).ok_or_else(invalid_state)?;
+            let ty = IterativeTypeOwner::new(
+                crate::types::clone_type_with_budget(&fact.ty, &mut self.type_work)
+                    .map_err(|_| type_resource())?,
+            );
+            let parameters =
+                clone_kinded_type_parameters_with_budget(&fact.quantified, &mut self.type_work)
+                    .map_err(|_| type_resource())?;
+            let mut ty = IterativeTypeOwner::new(self.pure_core_type(&ty)?);
+            if !parameters.is_empty() {
+                self.type_work.charge(1).map_err(|_| type_resource())?;
+                ty = IterativeTypeOwner::new(Type::Forall(
+                    parameters.into_boxed_slice(),
+                    Box::new(ty.into_inner()),
+                ));
+            }
+            globals.try_reserve(1).map_err(|_| type_resource())?;
+            if globals.insert(binder, ty).is_some() {
+                return Err(invalid_state());
+            }
+        }
+        Ok(globals)
     }
 
     fn begin_source_program(

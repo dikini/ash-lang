@@ -621,6 +621,12 @@ teardown operands
 and native access/copy windows remain unsupported executable shapes in this
 checkpoint.
 
+Ordinary pure module-global helpers transform only independent payloads inside
+these lifecycle computations. Same-module and imported calls use the ordinary
+function application rules and their complete Type/Row instances. Calling a
+helper neither transfers native State nor changes the selected source phase,
+owner or guard, and supplies no native-call permission.
+
 Before any Ash expression runs, program admission checks both acquisition and
 teardown bindings for every source resource scope against their exact original
 checked symbols. Reconstructed executable images must independently admit the

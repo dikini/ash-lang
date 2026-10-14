@@ -318,6 +318,11 @@ define_kind_site_profiles! {
     // Immutable template forests own Core beside those shared allocations;
     // copying claims borrow them while final scopes retain exact substitutions.
     FieldSourceHeaderShared => (Field, Shared, Core, CarrierRetention, PreservedCarrier, CoreValidation, CoreType, TypeTreeAndResolvedTreeAndRegistryTree),
+    // Ordinary global schemes are owned iteratively and loaned to original
+    // source forests; final Core closes each loan against its lexical binder.
+    FieldSourceGlobalOwned => (Field, Owned, Canonical, CarrierRetention, PreservedCarrier, CoreValidation, CoreType, TypeTree),
+    FieldSourceGlobalShared => (Field, Shared, Canonical, CarrierRetention, PreservedCarrier, CoreValidation, CoreType, TypeTree),
+    FieldSourceGlobalBorrow => (Field, Borrowed, Canonical, CarrierRetention, PreservedCarrier, CoreValidation, CoreType, TypeTree),
     FieldSourceTemplateShared => (Field, Shared, Core, CarrierRetention, PreservedCarrier, CoreValidation, CoreType, CoreTreeAndResolvedTreeAndRegistryTree),
     FieldSourceTemplateMixed => (Field, Mixed, Core, CarrierRetention, PreservedCarrier, CoreValidation, CoreType, CoreTreeAndResolvedTreeAndRegistryTree),
     FieldSourceElaborationTemplateShared => (Field, Shared, Transient, CarrierRetention, PreservedCarrier, Elaboration, InferenceType, CoreTreeAndResolvedTreeAndRegistryTree),
@@ -527,6 +532,8 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/source_resource.rs::CheckedSourceResourceTemplate.handler", FieldSourceTemplateMixed),
     kind_site!("src/core/source_resource.rs::CheckedSourceResourceTemplate.handler_entry", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/source_resource.rs::CheckedSourceResourceTemplate.header", FieldSourceHeaderShared),
+    kind_site!("src/core/source_resource.rs::CheckedSourceResourceTemplate.globals", FieldSourceGlobalShared),
+    kind_site!("src/core/source_resource.rs::SourceResourceGlobals.types", FieldSourceGlobalOwned),
     kind_site!("src/core/source_resource.rs::CheckedSourceResourceTemplates.records", FieldSourceTemplateShared),
     kind_site!("src/core/source_resource.rs::PatternGuard.0", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/source_resource.rs::SourceResourceCopy.rows", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
@@ -689,6 +696,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/source_resource.rs::$impl_FlowFacts::$fn_input::Task.Visit.0", FieldTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeTransientWork, Borrowed),
     kind_site!("src/core/source_resource.rs::FlowFact.InputNominal.0", FieldTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeTransientWork, Borrowed),
     kind_site!("src/core/source_resource.rs::FlowFacts.values", FieldTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeTransientWork, Borrowed),
+    kind_site!("src/core/source_resource.rs::FlowFacts.globals", FieldSourceGlobalBorrow),
     kind_site!("src/eval/machine.rs::SourceResourceBoundary.dependencies", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
     kind_site!("src/eval/source_owner_phases.rs::OwnerTypeReplacements.0", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationTransientWork),
     kind_site!("src/foreign/source_bindings.rs::AdmittedSourceOwnerAcquireInvocation.destructor", FieldNativeBindingBorrow),
@@ -748,6 +756,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/effect.rs::$impl_CoreBuilder::$fn_replay_effect_rows_in_range::Equation.NativeInterpret.1", FieldNativeReplayMixed),
     kind_site!("src/core/validate.rs::AuthenticatedNativeRegistry.registry", FieldProviderRegistryBorrow),
     kind_site!("src/core/validate.rs::OriginalTemplateRegistryAdmission.registry", FieldProviderRegistryShared),
+    kind_site!("src/core/validate.rs::OriginalTemplateRegistryAdmission.globals", FieldSourceGlobalShared),
     kind_site!("src/core/validate.rs::SourceResourceStructureSession.admitted", FieldProviderRegistryShared),
     kind_site!("src/core/capture/control.rs::Control.NativeInterpret.effects", FieldSummaryCarrierRetentionPreservedCarrierElaborationInferenceTypeSummaryTree, Shared),
     kind_site!("src/eval/machine.rs::Frame.NativeInterpretBoundary.environment", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
