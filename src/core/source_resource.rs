@@ -778,11 +778,42 @@ impl CheckedSourceResourceHeader {
     }
 }
 
+/// Ordinary global scheme loans. Final Core must close every loan with its
+/// actual lexical global binder; this table grants no lifecycle permission.
+#[derive(Default)]
+pub(crate) struct SourceResourceGlobals {
+    types: HashMap<crate::resolved::BinderId, crate::types::IterativeTypeOwner>,
+}
+impl SourceResourceGlobals {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+}
+impl std::fmt::Debug for SourceResourceGlobals {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SourceResourceGlobals")
+            .field("schemes", &self.types.len())
+            .finish()
+    }
+}
+impl std::ops::Deref for SourceResourceGlobals {
+    type Target = HashMap<crate::resolved::BinderId, crate::types::IterativeTypeOwner>;
+    fn deref(&self) -> &Self::Target {
+        &self.types
+    }
+}
+impl std::ops::DerefMut for SourceResourceGlobals {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.types
+    }
+}
+
 /// Immutable defining forests. This certificate grants compiler copying input,
 /// and cannot be converted to a validated executable program.
 #[derive(Debug)]
 pub(crate) struct CheckedSourceResourceTemplate {
     header: Arc<CheckedSourceResourceHeader>,
+    globals: Arc<SourceResourceGlobals>,
     acquire: UnvalidatedEffectProgram,
     finish: UnvalidatedEffectProgram,
     handler: UnvalidatedEffectProgram,
@@ -896,50 +927,62 @@ fn entry(
 }
 
 impl CheckedSourceResourceTemplate {
-    pub(crate) fn admit(
-        header: Arc<CheckedSourceResourceHeader>,
-        acquire: UnvalidatedEffectProgram,
-        finish: UnvalidatedEffectProgram,
-        handler: UnvalidatedEffectProgram,
-        sources: &[&crate::source::SourceFile],
-        module_sources: &[(crate::module::ModuleId, crate::source::SourceId)],
-        work: &mut TypeWorkBudget,
-    ) -> Result<Self, ValidationError> {
-        Self::admit_with_structure_session(
-            header,
-            acquire,
-            finish,
-            handler,
-            sources,
-            module_sources,
-            work,
-            &mut super::validate::SourceResourceStructureSession::default(),
-        )
-    }
-
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn admit_with_structure_session(
+    pub(crate) fn admit_with_globals(
         header: Arc<CheckedSourceResourceHeader>,
         acquire: UnvalidatedEffectProgram,
         finish: UnvalidatedEffectProgram,
         handler: UnvalidatedEffectProgram,
+        globals: Arc<SourceResourceGlobals>,
         sources: &[&crate::source::SourceFile],
         module_sources: &[(crate::module::ModuleId, crate::source::SourceId)],
         work: &mut TypeWorkBudget,
         session: &mut super::validate::SourceResourceStructureSession,
     ) -> Result<Self, ValidationError> {
+        // Retain only loans actually referenced by these original forests.
+        // Their caller/definition Type and Row vectors remain on ordinary Core
+        // variable/application nodes and close again against final globals.
+        let mut used = HashMap::new();
+        for program in [&acquire, &finish, &handler]
+            .into_iter()
+            .filter(|_| !globals.is_empty())
+        {
+            for stored in &program.nodes {
+                charge(work, 1)?;
+                if let EffectExprKind::Pure(PureExprKind::Variable(variable)) = &stored.kind
+                    && let Some(ty) = globals.get(&variable.binder())
+                    && !used.contains_key(&variable.binder())
+                {
+                    if variable.binder().module().is_none()
+                        || program
+                            .registry
+                            .scalar_preflight(variable.binder())
+                            .is_some()
+                    {
+                        return Err(invalid());
+                    }
+                    let ty = crate::types::IterativeTypeOwner::new(
+                        crate::types::clone_type_with_budget(ty, work).map_err(|_| resource())?,
+                    );
+                    used.try_reserve(1).map_err(|_| resource())?;
+                    used.insert(variable.binder(), ty);
+                }
+            }
+        }
+        let globals = Arc::new(SourceResourceGlobals { types: used });
         // Ordinary graph, kind, scope, effect, registry and provenance checking
         // precedes the resource-specific phase and owner-lineage proof.
         for (program, answer) in [(&acquire, false), (&finish, false), (&handler, true)] {
             if !Arc::ptr_eq(&program.registry, &acquire.registry) {
                 return Err(invalid());
             }
-            session.check(
+            session.check_with_globals(
                 program,
                 &header.original,
                 answer,
                 sources,
                 module_sources,
+                &globals,
                 work,
             )?;
         }
@@ -1037,6 +1080,7 @@ impl CheckedSourceResourceTemplate {
             &header,
             &acquire_entry,
             SourceResourcePhase::Acquire,
+            &globals,
             work,
         )?;
         let finish_calls = check_flow(
@@ -1044,6 +1088,7 @@ impl CheckedSourceResourceTemplate {
             &header,
             &finish_entry,
             SourceResourcePhase::Finish,
+            &globals,
             work,
         )?;
         let handler_calls = check_handler(
@@ -1052,10 +1097,12 @@ impl CheckedSourceResourceTemplate {
             &handler_entry.0,
             handler_body,
             placeholder_binder,
+            &globals,
             work,
         )?;
         Ok(Self {
             header,
+            globals,
             acquire,
             finish,
             handler,
@@ -1068,6 +1115,9 @@ impl CheckedSourceResourceTemplate {
     }
     pub(crate) fn header(&self) -> &Arc<CheckedSourceResourceHeader> {
         &self.header
+    }
+    pub(crate) fn globals(&self) -> &SourceResourceGlobals {
+        &self.globals
     }
     pub(crate) fn methods(&self) -> &[(crate::interface::MethodId, crate::types::OperationId)] {
         &self.methods
@@ -1195,10 +1245,12 @@ enum FlowFact<'a> {
     Constructor(ConstructorId, Option<usize>),
     Callable(ConstructorId),
     ScalarPreflight,
+    PayloadCallable,
     ByteCallable(crate::resolved::BinderId, Option<NodeId>),
 }
 #[derive(Default)]
 struct FlowFacts<'a> {
+    globals: Option<&'a SourceResourceGlobals>,
     values: Vec<FlowFact<'a>>,
     byte_calls: Vec<SourceByteCall>,
 }
@@ -1235,7 +1287,7 @@ impl<'a> FlowFacts<'a> {
         while let Some(id) = pending.pop() {
             charge(work, 1)?;
             match self.fact(id)? {
-                FlowFact::Independent => {}
+                FlowFact::Independent | FlowFact::PayloadCallable => {}
                 FlowFact::InputNominal(_, identities) if identities.is_empty() => {}
                 FlowFact::Tuple(fields) => {
                     charge(work, fields.len())?;
@@ -1657,6 +1709,22 @@ fn eval_flow<'a>(
             charge(work, 1)?;
             let value = if let Some(value) = path.locals.get(&local.binder()) {
                 *value
+            } else if let Some(ty) = facts
+                .globals
+                .and_then(|globals| globals.get(&local.binder()))
+            {
+                if !same(&stored.ty, ty, work)? {
+                    return Err(invalid());
+                }
+                if matches!(&stored.ty, Type::Forall(_, _)) || stored.ty.function_view().is_some() {
+                    facts.add(FlowFact::PayloadCallable, work)?
+                } else {
+                    let value = facts.input(&stored.ty, &program.registry, work)?;
+                    if !facts.independent(value, work)? {
+                        return Err(invalid());
+                    }
+                    value
+                }
             } else {
                 // A completed compiler-owned scalar fact admits only this pure
                 // callable. It does not open the ordinary helper barrier.
@@ -1811,7 +1879,9 @@ fn eval_flow<'a>(
             )? {
                 let constructor = match facts.fact(function)? {
                     FlowFact::Callable(constructor) => Some(*constructor),
-                    FlowFact::ScalarPreflight | FlowFact::ByteCallable(_, Some(_)) => None,
+                    FlowFact::ScalarPreflight
+                    | FlowFact::PayloadCallable
+                    | FlowFact::ByteCallable(_, Some(_)) => None,
                     _ => return Err(invalid()),
                 };
                 for (argument, path) in eval_flow(
@@ -1826,6 +1896,23 @@ fn eval_flow<'a>(
                 )? {
                     let value = if let Some(constructor) = constructor {
                         facts.wrapped(constructor, argument, work)?
+                    } else if matches!(facts.fact(function)?, FlowFact::PayloadCallable) {
+                        let callable = node(program, application.function())?;
+                        let signature = callable.ty.function_view().ok_or_else(invalid)?;
+                        if signature.effects().is_some_and(|row| !row.is_empty())
+                            || !facts.independent(argument, work)?
+                        {
+                            return Err(invalid());
+                        }
+                        if stored.ty.function_view().is_some() {
+                            facts.add(FlowFact::PayloadCallable, work)?
+                        } else {
+                            let value = facts.input(&stored.ty, &program.registry, work)?;
+                            if !facts.independent(value, work)? {
+                                return Err(invalid());
+                            }
+                            value
+                        }
                     } else {
                         if let FlowFact::ByteCallable(function, Some(application)) =
                             facts.fact(function)?
@@ -2214,9 +2301,11 @@ fn check_flow(
     header: &CheckedSourceResourceHeader,
     entry: &(TypedBinder, NodeId),
     phase: SourceResourcePhase,
+    globals: &SourceResourceGlobals,
     work: &mut TypeWorkBudget,
 ) -> Result<Box<[SourceByteCall]>, ValidationError> {
     let mut facts = facts(work)?;
+    facts.globals = Some(globals);
     let value = if phase == SourceResourcePhase::Acquire {
         facts.input(&header.original.input.ty, &program.registry, work)?
     } else {
@@ -2295,9 +2384,11 @@ fn check_handler(
     state: &TypedBinder,
     body: NodeId,
     answer: crate::resolved::BinderId,
+    globals: &SourceResourceGlobals,
     work: &mut TypeWorkBudget,
 ) -> Result<Box<[SourceByteCall]>, ValidationError> {
     let mut facts = facts(work)?;
+    facts.globals = Some(globals);
     let mut path = FlowPath::new(work)?;
     path.bind(
         state.id(),
@@ -5758,5 +5849,261 @@ main () = resource Owner.Probe<{}, Outer, {}> outer = 64 {
             .expect_err("malformed final interpretation metadata cannot publish checked Core");
             assert_eq!(failure.reason(), ValidationReason::Registry);
         }
+    }
+
+    fn payload_helper_fixture(polymorphic: bool) -> Fixture {
+        let fixture = Fixture::new();
+        let name = if polymorphic {
+            "payload_copy"
+        } else {
+            "payload_mono"
+        };
+        let expression = if polymorphic {
+            "false => {\n                let copy : Int -> Int = match size == 42 {\n                    true => payload_copy\n                    false => payload_copy\n                }\n                Acquired(state, copy size)\n            }".to_owned()
+        } else {
+            format!("false => Acquired(state, {name} size)")
+        };
+        let owner = include_str!("../../tests/fixtures/source-owner/owner.ash")
+            .replace("false => Acquired(state, size)", &expression)
+            + "\n"
+            + include_str!("../../tests/fixtures/source-owner/payload_helpers.ash");
+        fs::write(fixture.0.join("owner.ash"), owner).unwrap();
+        fixture
+    }
+
+    #[test]
+    fn payload_helper_complete_rows_and_core_budget_are_preserved() {
+        use crate::core::{PureComputation, PureExprKind};
+        let fixture = payload_helper_fixture(true);
+        let compiled = fixture.compile();
+        let (checked, provenance) = compiled.effect_build_input().unwrap();
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let modules = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let fresh = || super::super::transform::identity_effect_traversal(checked).unwrap();
+        let validate = |program, work: &mut TypeWorkBudget| {
+            super::super::validate::validate_effect_modules_with_work(
+                program, &sources, &modules, work,
+            )
+        };
+        let mut measured = TypeWorkBudget::default();
+        validate(fresh(), &mut measured).unwrap();
+        let cost = measured.used();
+        assert_eq!(
+            validate(fresh(), &mut TypeWorkBudget::with_limit(cost - 1))
+                .unwrap_err()
+                .reason(),
+            ValidationReason::Resource
+        );
+        for prefix in [0, 11] {
+            for _ in 0..2 {
+                let mut work = TypeWorkBudget::with_limit(prefix + cost);
+                work.charge(prefix).unwrap();
+                validate(fresh(), &mut work).unwrap();
+                assert_eq!(work.used(), prefix + cost);
+            }
+        }
+        let mut forged = fresh();
+        let scope = forged
+            .nodes
+            .iter()
+            .find_map(|node| match &node.kind {
+                EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
+                    Some(scope)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let provided = scope.handler.effect().clone();
+        let copied = scope.copy_claims()[0].nodes.iter().find_map(|(_, copied)| {
+            matches!(&forged.nodes[copied.index().unwrap()].kind,
+                EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(application)))
+                if application.row_arguments().len() == 1).then_some(*copied)
+        }).expect("complete ordered Row/Type helper application");
+        let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(
+            application,
+        ))) = &mut forged.nodes[copied.index().unwrap()].kind
+        else {
+            unreachable!()
+        };
+        let arguments = application.arguments().to_vec();
+        let mut rows = application.row_arguments().to_vec();
+        assert!(rows[0].is_empty());
+        rows[0] = crate::types::EffectRow::singleton(provided);
+        *application = crate::core::type_ops::TypeApplicationNode::new_with_row_arguments(
+            application.function(),
+            arguments,
+            rows,
+        );
+        // Only the copied complete Row actual changes; the original remains.
+        // Check correspondence directly before ordinary Core type validation.
+        let (scope_id, scope) = forged
+            .nodes
+            .iter()
+            .enumerate()
+            .find_map(|(index, node)| match &node.kind {
+                EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
+                    Some((index, scope))
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            scope
+                .authenticate(
+                    NodeId::new(forged.arena, scope_id as u32),
+                    &forged,
+                    &mut TypeWorkBudget::default()
+                )
+                .is_err()
+        );
+        assert!(validate(forged, &mut TypeWorkBudget::default()).is_err());
+        println!(
+            "payload helper independent Core exact work={cost}; one-short, prefix, two fresh retries and copied Row refusal"
+        );
+    }
+
+    #[test]
+    fn payload_helper_same_type_donor_cannot_replace_a_copied_call() {
+        use crate::core::{PureComputation, PureExprKind};
+        let fixture = payload_helper_fixture(false);
+        let compiled = fixture.compile();
+        let (checked, provenance) = compiled.effect_build_input().unwrap();
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let modules = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let mut forged = super::super::transform::identity_effect_traversal(checked).unwrap();
+        let scope = forged
+            .nodes
+            .iter()
+            .find_map(|node| match &node.kind {
+                EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
+                    Some(scope)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let (helper, signature) = scope.original().globals().iter().next().unwrap();
+        let helper = *helper;
+        let donor = forged
+            .nodes
+            .iter()
+            .find_map(|node| match &node.kind {
+                EffectExprKind::Pure(PureExprKind::Computation(
+                    PureComputation::RecursiveBind(group),
+                )) => group.members().iter().find_map(|member| {
+                    (member.binder().id() != helper && member.binder().ty() == &**signature)
+                        .then_some(member.binder().id())
+                }),
+                _ => None,
+            })
+            .expect("distinct ordinary same-type donor");
+        let copied = scope.copy_claims()[0].nodes.iter().find_map(|(_, copied)| {
+            matches!(&forged.nodes[copied.index().unwrap()].kind,
+                EffectExprKind::Pure(PureExprKind::Variable(variable)) if variable.binder() == helper).then_some(*copied)
+        }).unwrap();
+        forged.nodes[copied.index().unwrap()].kind = EffectExprKind::Pure(PureExprKind::Variable(
+            crate::core::variable::VariableNode::new(donor),
+        ));
+        assert!(
+            super::super::validate::validate_effect_modules_with_work(
+                forged,
+                &sources,
+                &modules,
+                &mut TypeWorkBudget::default()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn payload_helper_registry_proof_is_bound_to_its_immutable_scheme_context() {
+        let fixture = payload_helper_fixture(false);
+        let compiled = fixture.compile();
+        let (checked, provenance) = compiled.effect_build_input().unwrap();
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let modules = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let program = super::super::transform::identity_effect_traversal(checked).unwrap();
+        let original = program
+            .nodes
+            .iter()
+            .find_map(|node| match &node.kind {
+                EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
+                    Some(Arc::clone(scope.original()))
+                }
+                _ => None,
+            })
+            .unwrap();
+        let mut session = super::super::validate::SourceResourceStructureSession::default();
+        let check = |session: &mut super::super::validate::SourceResourceStructureSession,
+                     globals: &Arc<super::SourceResourceGlobals>,
+                     work: &mut TypeWorkBudget| {
+            session.check_with_globals(
+                original.original_acquire(),
+                &original.header.original,
+                false,
+                &sources,
+                &modules,
+                globals,
+                work,
+            )
+        };
+        let mut work = TypeWorkBudget::default();
+        check(&mut session, &original.globals, &mut work).unwrap();
+        let first = work.used();
+        check(&mut session, &original.globals, &mut work).unwrap();
+        let reused = work.used() - first;
+        assert!(reused < first);
+        let mut moved = super::SourceResourceGlobals::new();
+        for (binder, ty) in original.globals.iter() {
+            moved.insert(
+                *binder,
+                crate::types::IterativeTypeOwner::new(
+                    crate::types::clone_type_with_budget(ty, &mut TypeWorkBudget::default())
+                        .unwrap(),
+                ),
+            );
+        }
+        let moved = Arc::new(moved);
+        let before = work.used();
+        check(&mut session, &moved, &mut work).unwrap();
+        let fresh_context = work.used() - before;
+        assert!(
+            fresh_context > reused,
+            "a different immutable context must reauthenticate the registry"
+        );
+        let before = work.used();
+        check(&mut session, &moved, &mut work).unwrap();
+        assert_eq!(work.used() - before, reused);
+        assert!(
+            check(
+                &mut session,
+                &Arc::new(super::SourceResourceGlobals::new()),
+                &mut TypeWorkBudget::default()
+            )
+            .is_err()
+        );
+        for _ in 0..2 {
+            check(&mut session, &moved, &mut TypeWorkBudget::default()).unwrap();
+        }
+        println!(
+            "payload helper registry context: first={first}, same={reused}, moved={fresh_context}; missing-loan refusal and two retries"
+        );
     }
 }

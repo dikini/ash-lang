@@ -49,7 +49,8 @@ checkpoint gates in the [agent workflow](../project/agent-workflow.md). The
 last full gate was run at `868d0b43` and transferred by authenticated equality
 to retained `9fae971`. PR21's focused ownership delivery is retained at
 `d44138f`, PR22's focused scalar teardown delivery at `3435d62`, and PR23's
-checked scalar constants at `d09b99f`;
+checked scalar constants at `d09b99f`, and PR24's non-callable sentinels at
+`5323aee`;
 milestone-wide regression verification remains pending. The next
 gate belongs to the PM after shared ownership/control/runtime support is
 complete, including declared dependencies, retained-owner quarantine, control
@@ -57,7 +58,29 @@ and required-completion failure matrices through source, Core, copying, image,
 bindings and guard storage. Focused PRs may contribute toward that boundary
 without making each PR a full-gate checkpoint.
 
+Payload-helper evidence distinguishes complete copied Type/Row actuals,
+same-typed global donors, missing or duplicate image loans and a changed immutable
+scheme context. Independent Core and image restoration have exact, one-short,
+prefixed and fresh-retry witnesses. Current local and imported row-polymorphic
+helpers execute in acquisition and finish, including a branch-selected closed
+alias, while each actual native owner is acquired and released once. Ash source
+is removed before host building and image/facts files before child execution.
+Typed State transport and hidden native requests remain refused. These focused
+checks do not complete the shared-runtime regression checkpoint.
+
 ## Discoveries
+
+Ordinary pure module-global helpers now transform independent acquire/finish
+payloads, including same-module and imported polymorphic definitions. Source
+template preparation reuses checked declaration headers instead of allocating
+unused Core binders or inlining helper bodies. Original forests retain only used
+global scheme loans. Independent final Core closes every loan against its actual
+lexical binder and complete scheme; copied calls retain their original defining
+context and all ordered Type/Row actuals. Immutable registry-session reuse also
+requires the same retained global context; moving it triggers fresh registry
+authentication. Private images encode the loans canonically and reconstruct them
+under the ordinary final Core gate. Each owning type is held by iterative storage.
+These scheme loans grant no native permission, State transport or phase privilege.
 
 Non-callable sentinels use a separate prepared table from ordinary scalar
 constants. An all-bits-one declaration retains its exact original representation
@@ -131,7 +154,7 @@ exact allowance from one-short atomic refusal (six units spent), prefixed
 allowances and two fresh retries. That status delivery required only checked
 passive status literals; ordinary exports and fixed native operands have their
 separate declaration and admission evidence above. Source-projected scalar
-teardown inputs and callable lifecycle helpers remain outside
+teardown inputs and privileged lifecycle wrappers remain outside
 the current executable profile, so the shared-runtime checkpoint is not yet
 ready.
 
@@ -201,7 +224,7 @@ cannot reuse the receipt. Exact/one-short/prefix/fresh-retry tests protect this
 boundary, and the unchanged true three-owner fixture now reaches native execution
 within the original allowance. No policy limit or stack depth changed.
 
-The next delivery carries the human-approved checkpoint-gating delta from the
+PR21 carried the human-approved checkpoint-gating delta from the
 root workflow and milestone launch template. Existing retained one-branch,
 one-checkout/shared-cache, timing and cleanup clauses remain. The linked skills
 and support were already adopted from `f961470`; this is policy reconciliation,
@@ -500,7 +523,7 @@ Current bounded execution admits opaque and initialized-byte
 owners, both report codecs, complete associated-method forwarding and ordinary
 outward capture/resume/owned discard, declared dependencies, retained completion
 and quarantine under void or scalar-status owner contracts. Native windows,
-callable lifecycle helpers, source `given` forwarding and library migrations
+privileged lifecycle wrappers, source `given` forwarding and library migrations
 remain CP-0022 work. These are
 implementation boundaries, not amendments to the broader accepted contract.
 

@@ -105,6 +105,7 @@ pub(super) struct SourceTemplateRecord {
     acquire: u32,
     finish: u32,
     handler: u32,
+    globals: Slice,
 }
 #[derive(Clone, Copy, Debug)]
 pub(super) struct NodePairRecord {
@@ -208,7 +209,15 @@ wire_struct!(
 wire_struct!(HandlerRecord, 20, id, body, effect, clauses);
 wire_struct!(ClauseRecord, 28, operation, resume, arm);
 wire_struct!(TemplateGraphRecord, 16, nodes, root, catalog);
-wire_struct!(SourceTemplateRecord, 16, header, acquire, finish, handler);
+wire_struct!(
+    SourceTemplateRecord,
+    24,
+    header,
+    acquire,
+    finish,
+    handler,
+    globals
+);
 wire_struct!(NodePairRecord, 8, original, copied);
 wire_struct!(BinderPairRecord, 10, original, copied);
 wire_struct!(FreshTypeRecord, 14, original, copied, kind);
@@ -661,6 +670,43 @@ impl Encoder<'_> {
         let (acquire, acquire_mapping) = self.encode_template_graph(original.original_acquire())?;
         let (finish, finish_mapping) = self.encode_template_graph(original.original_finish())?;
         let (handler, handler_mapping) = self.encode_template_graph(original.original_handler())?;
+        let mut ordered: Vec<(
+            &crate::resolved::BinderId,
+            &crate::types::IterativeTypeOwner,
+        )> = Vec::new();
+        charge(self.work, original.globals().len())?;
+        ordered
+            .try_reserve_exact(original.globals().len())
+            .map_err(|_| ImageFailure::Resource)?;
+        ordered.extend(original.globals().iter());
+        // Selection order spends the same comparisons and swaps for every
+        // hash iteration order, keeping canonical bytes and work reproducible.
+        for position in 0..ordered.len() {
+            let mut selected = position;
+            for candidate in position + 1..ordered.len() {
+                charge(self.work, 1)?;
+                if ordered[candidate].0 < ordered[selected].0 {
+                    selected = candidate;
+                }
+            }
+            charge(self.work, 1)?;
+            ordered.swap(position, selected);
+        }
+        let mut globals = Vec::new();
+        for (binder, ty) in ordered {
+            let id = self.binder_id(*binder)?;
+            let ty = self.encode_type(ty)?;
+            // This passive loan uses its resource's causal origin. It never
+            // materializes a binder or replaces the global's defining origin.
+            let origin = self.encode_origin(&original.header().original.origin)?;
+            let slot = push(
+                &mut self.image.binders,
+                super::BinderRecord { id, ty, origin },
+                self.work,
+            )?;
+            push(&mut globals, slot, self.work)?;
+        }
+        let globals = append(&mut self.image.node_children, &globals, self.work)?;
         let slot = push(
             &mut self.image.source_templates,
             SourceTemplateRecord {
@@ -668,6 +714,7 @@ impl Encoder<'_> {
                 acquire,
                 finish,
                 handler,
+                globals,
             },
             self.work,
         )?;
@@ -1204,23 +1251,42 @@ impl Decoder<'_> {
                 self.source_graph(registry, symbols, binders, record.finish)?;
             let (handler, handler_nodes) =
                 self.source_graph(registry, symbols, binders, record.handler)?;
+            let mut globals = crate::core::source_resource::SourceResourceGlobals::new();
+            for slot in record.globals.get(&self.image.node_children)? {
+                let binding = *get(&self.image.binders, *slot)?;
+                let binder = self.binder_id(binding.id)?;
+                if binder.module().is_none() || registry.scalar_preflight(binder).is_some() {
+                    return Err(ImageFailure::InvalidRecord);
+                }
+                let ty = self.ty(binding.ty)?;
+                charge(self.work, 1)?;
+                globals.try_reserve(1).map_err(|_| ImageFailure::Resource)?;
+                if globals.insert(binder, ty).is_some() {
+                    return Err(ImageFailure::InvalidRecord);
+                }
+            }
             let mut sources = Vec::new();
             let mut module_sources = Vec::new();
             for (module, source) in self.modules.iter().zip(self.sources.iter()) {
                 push(&mut sources, source, self.work)?;
                 push(&mut module_sources, (*module, source.id()), self.work)?;
             }
-            let template = CheckedSourceResourceTemplate::admit_with_structure_session(
+            let declared_globals = globals.len();
+            let template = CheckedSourceResourceTemplate::admit_with_globals(
                 Arc::new(header),
                 acquire,
                 finish,
                 handler,
+                Arc::new(globals),
                 &sources,
                 &module_sources,
                 self.work,
                 &mut structure_session,
             )
             .map_err(ImageFailure::Validation)?;
+            if template.globals().len() != declared_globals {
+                return Err(ImageFailure::InvalidRecord);
+            }
             let record = RestoredSourceTemplate {
                 template: Arc::new(template),
                 nodes: [acquire_nodes, finish_nodes, handler_nodes],
@@ -2527,6 +2593,124 @@ mod tests {
                 .restore_effect(&mut TypeWorkBudget::default())
                 .is_err(),
             "scope request interpretations retain exact ordered original symbols"
+        );
+    }
+
+    #[test]
+    fn payload_helper_image_closes_global_loans_and_rejects_copied_donors() {
+        use super::super::{BinderIdentity, NodeTag};
+        let root =
+            std::env::temp_dir().join(format!("ash-payload-helper-image-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        let fixture = Fixture(root);
+        let owner = include_str!("../../tests/fixtures/source-owner/owner.ash").replace(
+            "false => Acquired(state, size)",
+            "false => Acquired(state, payload_mono size)",
+        ) + "\n"
+            + include_str!("../../tests/fixtures/source-owner/payload_helpers.ash");
+        fs::write(fixture.0.join("owner.ash"), owner).unwrap();
+        fs::write(
+            fixture.0.join("entry.ash"),
+            include_str!("../../tests/fixtures/source-owner/entry.ash"),
+        )
+        .unwrap();
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry: fixture.0.join("entry.ash"),
+            roots: crate::module::ModuleRoots::empty(),
+        })
+        .unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let build = super::super::encode_effect_for_build(
+            program,
+            provenance,
+            super::super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        let bytes = build
+            .image
+            .encode_bytes(&mut TypeWorkBudget::default())
+            .unwrap();
+        let expected = build
+            .image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        drop(build);
+        drop(compiled);
+        drop(fixture);
+        let decode = || PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+        let image = decode();
+        let mut measured = TypeWorkBudget::default();
+        image.restore_effect(&mut measured).unwrap();
+        let cost = measured.used();
+        assert!(matches!(
+            image.restore_effect(&mut TypeWorkBudget::with_limit(cost - 1)),
+            Err(ImageFailure::Resource) | Err(ImageFailure::Validation(_))
+        ));
+        for prefix in [0, 17] {
+            for _ in 0..2 {
+                let mut work = TypeWorkBudget::with_limit(prefix + cost);
+                work.charge(prefix).unwrap();
+                image.restore_effect(&mut work).unwrap();
+                assert_eq!(work.used(), prefix + cost);
+            }
+        }
+        let slot = image.source_templates[0]
+            .globals
+            .get(&image.node_children)
+            .unwrap()[0] as usize;
+        let loan = image.binders[slot];
+        let binder_key = |id| match id {
+            BinderIdentity::Resolved { module, local } => (0, module, local),
+            BinderIdentity::Generated(local) => (1, 0, local),
+        };
+        let donor = image
+            .binders
+            .iter()
+            .find(|record| {
+                binder_key(record.id) != binder_key(loan.id)
+                    && record.ty == loan.ty
+                    && matches!(record.id, BinderIdentity::Resolved { .. })
+            })
+            .unwrap()
+            .id;
+        for change in 0..4 {
+            let mut image = decode();
+            match change {
+                0 => image.source_templates[0].globals.len = 0,
+                1 => image.binders[slot].id = donor,
+                2 => {
+                    let copy = image.source_copies[image.source_scopes[0].acquire_copy as usize];
+                    let copied = copy
+                        .nodes
+                        .get(&image.source_node_pairs)
+                        .unwrap()
+                        .iter()
+                        .map(|pair| pair.copied as usize)
+                        .find(|&node| matches!(image.nodes[node].tag, NodeTag::Variable(id) if binder_key(id) == binder_key(loan.id)))
+                        .unwrap();
+                    image.nodes[copied].tag = NodeTag::Variable(donor);
+                }
+                _ => {
+                    let start = image.node_children.len() as u32;
+                    image.node_children.extend([slot as u32, slot as u32]);
+                    image.source_templates[0].globals = Slice { start, len: 2 };
+                }
+            }
+            // These are executable/loan corruptions, not changed passive native
+            // contracts. Independent restoration must refuse before a provider.
+            image
+                .compare_native_expectations(&expected, &mut TypeWorkBudget::default())
+                .unwrap();
+            assert!(
+                image
+                    .restore_effect(&mut TypeWorkBudget::default())
+                    .is_err(),
+                "payload helper image mutation {change}"
+            );
+        }
+        println!(
+            "payload helper image restoration exact work={cost}; prefix/one-short/two retries and four loan/copy refusals"
         );
     }
 }

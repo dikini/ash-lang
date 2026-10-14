@@ -22121,6 +22121,7 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
             &resolved,
             &elaborator.registry,
             &interface_facts,
+            &schemes,
             &mut elaborator.type_work,
             &mut elaborator.coverage_work,
             constraint_work,

@@ -117,7 +117,11 @@ checked literal facts from the original owner library; the predicate itself
 grants no value or operand authority. Retention revokes ordinary access and
 quarantines the same
 owner and dependency closure; safe host destruction preserves dependency order.
-Callable lifecycle helpers and library migrations remain unsupported. Checked
+Ordinary pure module-global helpers may transform independent lifecycle payloads,
+including through same-module and imported polymorphic definitions. Their complete
+Type/Row instances and original copied calls remain checked; they cannot carry
+native State or acquire native permission. Privileged lifecycle wrappers and
+library migrations remain unsupported. Checked
 lexical forwarding supports the associated interface methods and ordinary
 constrained helpers, preserving exact operation types, effect rows and typed
 access operands. Sealed common byte reads and writes borrow the exact
