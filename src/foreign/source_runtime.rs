@@ -8,6 +8,10 @@ use std::{error::Error, fmt};
 
 #[path = "source_owner_runtime.rs"]
 mod owner;
+#[path = "source_view_runtime.rs"]
+mod view;
+#[doc(hidden)]
+pub use view::{NativeViewCallback, NativeViewReadCallback, NativeViewReturned};
 
 pub(crate) use owner::{
     NativeByteAccess, NativeByteCallbacks, NativeOwnerAdmissionError, NativeOwnerDependency,

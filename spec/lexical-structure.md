@@ -2,7 +2,7 @@
 
 An Ash source file is UTF-8 text. Ash identifiers, reserved words,
 punctuation, module paths, and integer spellings use ASCII characters. Quoted
-foreign-declaration strings may contain UTF-8 text. A byte
+strings may contain UTF-8 text. A byte
 order mark is not part of the source language.
 
 ## Tokens
@@ -18,8 +18,8 @@ syntactic position and scope.
 
 The reserved words `fn`, `let`, `rec`, `and`, `type`, `newtype`, `interface`,
 `impl`, `effect`, `perform`, `handle`, `with`, `resume`, `discard`, `resource`,
-`hook`, `register`, `cleanup`, `where`,
-`match`, `import`, `as`, `pub`, `opaque`, `Int`, `Bool`, `Unit`, `true`, and
+`hook`, `register`, `cleanup`, `copy_window`, `where`,
+`match`, `import`, `as`, `pub`, `opaque`, `Int`, `Bool`, `Unit`, `String`, `Bytes`, `true`, and
 `false` cannot be identifiers. The single spelling `_` is the
 wildcard token rather than an ordinary identifier; spellings such as `_tail`
 remain ordinary identifiers.
@@ -53,14 +53,17 @@ written angle-bracketed parameter or argument list is nonempty. The longest
 token wins where one spelling prefixes another.
 Semicolon is recognized only to provide its specified source rejection; no
 grammar production admits it as source punctuation.
-The lexer also recognizes a standalone minus, but no production in the admitted
-subset uses it.
+The lexer also recognizes a standalone minus for foreign constant integers;
+ordinary negative integer expressions remain outside the syntax.
 
-Foreign profile and native-symbol names use double-quoted strings. Their
+Ordinary `String` literals, foreign profiles and native-symbol names use
+double-quoted strings. Their
 contents admit `\"`, `\\`, `\n`, `\r`, `\t` and `\0` escapes; other escapes,
 unescaped ASCII control characters and a missing closing quote reject. These
-declaration strings specify profile and native-symbol data. This checkpoint
-does not standardize the experimental ordinary `String` expressions. Ash has no
+declaration strings specify profile and native-symbol data. An ordinary string
+literal has type `String` and contains its decoded UTF-8 text, including escaped
+NUL. Interior NUL rejection belongs to the selected native input conversion,
+not to string lexing. Ash has no
 comments, character literals, Unicode identifiers,
 floating-point literals, or negative integer expressions.
 

@@ -681,3 +681,137 @@ fn owner_post_record_case_with_entry(
     }
     drop(providers);
 }
+
+thread_local! {
+    static BORROW_PROVIDER: Cell<Option<(PrivateNativeCoordinates, &'static [u8])>> = const { Cell::new(None) };
+    static BORROWS: Cell<usize> = const { Cell::new(0) };
+}
+fn injected_borrow(
+    arguments: &[NativeOwnerOperand],
+) -> Result<NativeScalarReply, NativeScalarCallError> {
+    assert!(matches!(arguments, [NativeOwnerOperand::Address(address)] if !address.is_null()));
+    BORROWS.set(BORROWS.get() + 1);
+    Ok(NativeScalarReply::Scalar(NativeScalarValue::I64(7)))
+}
+fn borrow_provider() -> PrivateNativeBridge {
+    let (coordinates, facts) = BORROW_PROVIDER.get().unwrap();
+    super::__private_native_owner_borrow_bridge(coordinates, facts, injected_borrow)
+}
+#[test]
+fn blocked_owner_scalar_borrow_refuses_before_callback_with_completion_address_retained() {
+    let fixture = Fixture::new();
+    let owner = include_str!("../../tests/fixtures/source-owner/owner.ash")
+        .replace("    owner State<R>", "    repr Code = signed(64)\n    symbol Peek<Before : EffectRow, R, After : EffectRow> : State<R> -> Foreign.Call<Int> {\n        name \"ash_owner_peek\"\n        abi (pointer(Address)) -> Code\n        operand 0 from 0 current\n        output result as scalar\n        outcome otherwise { readable result }\n    }\n    owner State<R>")
+        .replace("interpret Allocate<{| Before}, R, {| After}>,", "interpret Peek<{| Before}, R, {| After}>, Allocate<{| Before}, R, {| After}>,")
+        .replace("finish (state, data) => match perform", "finish (state, data) => {\n        let _ = perform Peek<{| Before}, R, {| After}>.call state\n        match perform")
+        .replace("    handlers (state, data) {", "    }\n    handlers (state, data) {");
+    fs::write(fixture.0.join("owner.ash"), owner).unwrap();
+    fs::write(fixture.0.join("entry.ash"), ENTRY).unwrap();
+    let compiled = compile_path(RunConfiguration {
+        entry: fixture.0.join("entry.ash"),
+        roots: ModuleRoots::empty(),
+    })
+    .unwrap();
+    let (program, provenance) = compiled.effect_build_input().unwrap();
+    let mut work = TypeWorkBudget::default();
+    let build =
+        image::encode_effect_for_build(program, provenance, NATIVE_TARGET, &mut work).unwrap();
+    let library = &build.libraries[0];
+    let coordinates = [
+        bridge::TargetBridgeCall::OwnerAcquire,
+        bridge::TargetBridgeCall::OwnerTeardown,
+        bridge::TargetBridgeCall::OwnerBorrow,
+    ]
+    .map(|role| {
+        let selected = build
+            .bridges
+            .iter()
+            .find(|entry| entry.plan.call() == role)
+            .unwrap();
+        PrivateNativeCoordinates {
+            image_library: library.image_library,
+            library_module: library.module,
+            library_ordinal: library.ordinal,
+            image_symbol: selected.image_symbol,
+            symbol_index: selected.symbol_index,
+            operation_module: selected.operation_module,
+            operation_effect: selected.operation_effect,
+            operation_local: selected.operation_local,
+        }
+    });
+    let bytes = build.image.encode_bytes(&mut work).unwrap();
+    let facts: &'static [u8] = Box::leak(
+        build
+            .image
+            .encode_native_expectations(&mut work)
+            .unwrap()
+            .into_boxed_slice(),
+    );
+    PROVIDERS.set(Some(([coordinates[0], coordinates[1]], facts)));
+    BORROW_PROVIDER.set(Some((coordinates[2], facts)));
+    BYTE_OWNER.set(false);
+    STATUS_OWNER.set(false);
+    RETAIN_FIRST.set(false);
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            PROVIDERS.set(None);
+            BORROW_PROVIDER.set(None);
+        }
+    }
+    let _reset = Reset;
+    let libraries = [PrivateNativeLibrary {
+        image_library: library.image_library,
+        module: library.module,
+        ordinal: library.ordinal,
+        members: &[
+            PrivateNativeMember {
+                coordinates: coordinates[0],
+                provider: acquire_provider,
+            },
+            PrivateNativeMember {
+                coordinates: coordinates[1],
+                provider: teardown_provider,
+            },
+            PrivateNativeMember {
+                coordinates: coordinates[2],
+                provider: borrow_provider,
+            },
+        ],
+    }];
+    for blocked in [false, true, false] {
+        ACQUIRES.set(0);
+        RELEASES.set(0);
+        BORROWS.set(0);
+        let run = || __run_private_effect_image(&runtime_fingerprint(), &bytes, facts, &libraries);
+        if blocked {
+            let (result, observed) = source_owner_post_record_test::observe_blocked_borrow(run);
+            assert_eq!(observed.marked, 1);
+            assert!(observed.completion_address_retained);
+            assert!(!observed.ordinary_live);
+            assert_eq!(
+                BORROWS.get(),
+                0,
+                "blocked finish must refuse before the native callback"
+            );
+            assert!(
+                matches!(
+                    result,
+                    Err(PrivateProgramFailure(PrivateFailure::Evaluation(
+                        RuntimeFailure::ForeignBinding
+                    )))
+                ),
+                "{result:?}"
+            );
+        } else {
+            assert_eq!(run().unwrap().to_string(), "Completed(42, Closed)");
+            assert_eq!(BORROWS.get(), 1);
+        }
+        assert_eq!(ACQUIRES.get(), 1);
+        assert_eq!(
+            RELEASES.get(),
+            1,
+            "the same owner is destroyed once, including terminal refusal"
+        );
+    }
+}

@@ -890,6 +890,15 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
                 _ => return malformed(InternalReason::UnexpectedShape),
             }
         }
+        NodeKind::CopyWindowExpression => {
+            shape.token(&TokenKind::CopyWindow)?;
+            shape.node(NodeKind::Type)?;
+            shape.token_matching(
+                |kind| matches!(kind, TokenKind::Identifier(word) if word == "from"),
+            )?;
+            shape.node(NodeKind::PrimaryExpression)?;
+            shape.node(NodeKind::Block)?;
+        }
         NodeKind::ProviderResourceExpression => {
             shape.token(&TokenKind::Resource)?;
             let instance = only_child_of_kind(node, NodeKind::EffectInstance)?;
@@ -2083,6 +2092,22 @@ fn project_expression(
                     )?));
                     tasks.push(ExpressionTask::Visit(value));
                 }
+                NodeKind::CopyWindowExpression => {
+                    let family =
+                        project_type(source, only_child_of_kind(node, NodeKind::Type)?, tokens)?;
+                    tasks.push(ExpressionTask::FinishCopyWindow {
+                        family,
+                        span: node_span(source, node, tokens)?,
+                    });
+                    tasks.push(ExpressionTask::Visit(only_child_of_kind(
+                        node,
+                        NodeKind::Block,
+                    )?));
+                    tasks.push(ExpressionTask::Visit(only_child_of_kind(
+                        node,
+                        NodeKind::PrimaryExpression,
+                    )?));
+                }
                 NodeKind::ProviderResourceExpression => {
                     let family = project_effect_instance(
                         source,
@@ -2364,6 +2389,22 @@ fn project_expression(
                     span,
                 });
             }
+            ExpressionTask::FinishCopyWindow { family, span } => {
+                let (state, body) = take_expression_pair(&mut projected)?;
+                let SurfaceExprKind::Block(body) = body.kind else {
+                    return malformed(InternalReason::UnexpectedShape);
+                };
+                projected.push(SurfaceExpr {
+                    kind: SurfaceExprKind::CopyWindow(Box::new(
+                        crate::surface::SurfaceCopyWindowExpr {
+                            family,
+                            state,
+                            body,
+                        },
+                    )),
+                    span,
+                });
+            }
             ExpressionTask::FinishProviderResource {
                 family,
                 arguments,
@@ -2627,6 +2668,10 @@ enum ExpressionTask<'a> {
     },
     FinishResume(Span),
     FinishCleanup(Span),
+    FinishCopyWindow {
+        family: SurfaceType,
+        span: Span,
+    },
     FinishProviderResource {
         family: SurfaceReference,
         arguments: Vec<SurfaceType>,
@@ -3610,6 +3655,7 @@ const fn is_expression_kind(kind: NodeKind) -> bool {
             | NodeKind::HandlerExpression
             | NodeKind::ResumeExpression
             | NodeKind::ProviderResourceExpression
+            | NodeKind::CopyWindowExpression
             | NodeKind::ResourceExpression
             | NodeKind::HookExpression
             | NodeKind::RegistrationExpression

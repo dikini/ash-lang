@@ -62,6 +62,85 @@ fn prepares_scalar_abi_without_granting_resolved_operation_authority() {
 }
 
 #[test]
+fn prepares_sqlite_open_input_and_initialized_owner_output_contract() {
+    let prepared = prepare(include_str!("../libraries/sqlite.ash"))
+        .expect("the accepted SQLite call-borrow/out-owner contract is preparable");
+    let open = prepared
+        .symbols()
+        .iter()
+        .find(|symbol| symbol.name() == "Open")
+        .unwrap();
+    assert_eq!(open.native_name(), "sqlite3_open_v2");
+    assert_eq!(
+        open.result(),
+        PreparedAbiResult::Scalar(PreparedScalarRepresentation::Signed(32))
+    );
+    assert_eq!(open.operands().len(), 4);
+    assert!(open.owner_call().is_some());
+}
+
+#[test]
+fn sqlite_owner_output_contract_rejects_incomplete_or_mismatched_roles() {
+    let original = include_str!("../libraries/sqlite.ash");
+    for (label, changed) in [
+        (
+            "missing owner role",
+            original.replace("        output 1 as owner(ConnectionState<C>)\n", ""),
+        ),
+        (
+            "missing scalar role",
+            original.replace(
+                "        output result as scalar\n        output 1",
+                "        output 1",
+            ),
+        ),
+        (
+            "uninitialized owner",
+            original.replace(
+                "readable result, readable 1",
+                "readable result, unreadable 1",
+            ),
+        ),
+        (
+            "missing owner readability",
+            original.replace("readable result, readable 1", "readable result"),
+        ),
+        (
+            "wrong output position",
+            original.replace("output 1 as owner", "output 2 as owner"),
+        ),
+        (
+            "output is also an input",
+            original.replace(
+                "        output 1 as owner",
+                "        operand 1 from 0 nul call_borrow\n        output 1 as owner",
+            ),
+        ),
+        (
+            "wrong String leaf",
+            original.replace("symbol Open<C> : String", "symbol Open<C> : Int"),
+        ),
+        (
+            "scalar pointer role",
+            original.replace("from 0 nul call_borrow", "from 0 scalar"),
+        ),
+        (
+            "scalar null",
+            original.replace(
+                "operand 2 from constant ReadWriteCreate",
+                "operand 2 from null",
+            ),
+        ),
+        (
+            "unowned output",
+            original.replace("out(pointer(Address))", "pointer(Address)"),
+        ),
+    ] {
+        assert!(prepare(&changed).is_err(), "{label}");
+    }
+}
+
+#[test]
 fn interleaved_rows_preserve_complete_parameter_order_and_type_projection() {
     let text = SCALAR.replace(
         "Abs<T, Delta : EffectRow>",

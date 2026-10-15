@@ -308,7 +308,7 @@ impl CheckedForeignOwnerCodec {
     }
 }
 
-fn unary_payload<'a>(
+pub(super) fn unary_payload<'a>(
     ty: &'a Type,
     nominal: NominalTypeId,
     span: Span,
@@ -360,7 +360,7 @@ fn check_state_application(
     Ok(())
 }
 
-fn source_leaf<'a>(
+pub(super) fn source_leaf<'a>(
     domain: &'a Type,
     path: &[usize],
     span: Span,
@@ -448,6 +448,7 @@ pub(crate) fn enclosing_identity(
 fn owner_domain(
     domain: &Type,
     current: Option<&Type>,
+    view: Option<&Type>,
     owner: &CheckedForeignOwner,
     application: &PreparedOwnerApplication,
     effect: &ResolvedEffectDeclaration,
@@ -464,7 +465,9 @@ fn owner_domain(
     pending.push(domain);
     while let Some(ty) = pending.pop() {
         charge(work, 1, span)?;
-        if current.is_some_and(|current| std::ptr::eq(ty, current)) {
+        if current.is_some_and(|current| std::ptr::eq(ty, current))
+            || view.is_some_and(|view| std::ptr::eq(ty, view))
+        {
             continue;
         }
         if let Type::Tuple(fields) = ty {
@@ -597,6 +600,100 @@ pub(super) fn validate_owner_symbol(
         .owner_call()
         .ok_or_else(|| failure(ForeignAdmissionReason::InvalidSignature, span))?
     {
+        PreparedOwnerCall::Borrow {
+            application,
+            current_operand,
+            ..
+        } => {
+            let view = if let Some(access) = symbol.access_result() {
+                super::source_access::validate_result_signature(
+                    owner.prepared(),
+                    symbol,
+                    access,
+                    effect,
+                    payload,
+                    codec.output,
+                    codec.nullable,
+                    call_codec,
+                    registry,
+                    work,
+                )?
+            } else {
+                if payload != &Type::Int || !matches!(symbol.result(), PreparedAbiResult::Scalar(_))
+                {
+                    return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
+                }
+                None
+            };
+            let Some(PreparedOperandSource::Current(path)) = symbol
+                .operands()
+                .get(*current_operand)
+                .map(|operand| operand.source())
+            else {
+                return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
+            };
+            let current = source_leaf(domain, path, span, work)?;
+            check_state_application(current, owner, application, effect, work)?;
+            owner_domain(
+                domain,
+                Some(current),
+                view,
+                owner,
+                application,
+                effect,
+                &formal_ids,
+                registry,
+                span,
+                work,
+            )?;
+            Some(*current_operand)
+        }
+        PreparedOwnerCall::OutputAcquire {
+            application,
+            output_operand,
+            offset,
+            ..
+        } => {
+            let Type::Tuple(fields) = payload else {
+                return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
+            };
+            if fields.len() != 2 + usize::from(offset.is_some())
+                || fields[0] != Type::Int
+                || !matches!(symbol.result(), PreparedAbiResult::Scalar(_))
+                || owner.owner().representation()
+                    != super::source_contract::PreparedAddressRepresentation::Opaque
+                || !symbol
+                    .operands()
+                    .get(*output_operand)
+                    .is_some_and(|operand| {
+                        matches!(operand.source(), PreparedOperandSource::OwnerOutput)
+                    })
+            {
+                return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
+            }
+            let output = unary_payload(&fields[1], codec.output, span, work)?;
+            let state = unary_payload(output, codec.nullable, span, work)?;
+            check_state_application(state, owner, application, effect, work)?;
+            if offset.is_some() {
+                let output = unary_payload(&fields[2], codec.output, span, work)?;
+                if unary_payload(output, codec.nullable, span, work)? != &Type::Int {
+                    return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
+                }
+            }
+            owner_domain(
+                domain,
+                None,
+                None,
+                owner,
+                application,
+                effect,
+                &formal_ids,
+                registry,
+                span,
+                work,
+            )?;
+            None
+        }
         PreparedOwnerCall::Acquire {
             application,
             initialized_bytes,
@@ -610,6 +707,7 @@ pub(super) fn validate_owner_symbol(
             check_state_application(state, owner, application, effect, work)?;
             owner_domain(
                 domain,
+                None,
                 None,
                 owner,
                 application,
@@ -662,6 +760,7 @@ pub(super) fn validate_owner_symbol(
             owner_domain(
                 domain,
                 Some(state),
+                None,
                 owner,
                 application,
                 effect,
@@ -676,6 +775,52 @@ pub(super) fn validate_owner_symbol(
     charge(work, symbol.operands().len(), span)?;
     for (index, operand) in symbol.operands().iter().enumerate() {
         match (operand.source(), operand.representation()) {
+            (
+                PreparedOperandSource::Bytes { path, extent, .. },
+                PreparedRepresentation::Address(
+                    super::source_contract::PreparedAddressRepresentation::Bytes,
+                ),
+            ) if matches!(symbol.owner_call(), Some(PreparedOwnerCall::Borrow { .. })) => {
+                if !matches!(
+                    source_leaf(domain, path, span, work)?,
+                    Type::Bytes | Type::String
+                ) || source_leaf(domain, extent, span, work)? != &Type::Int
+                {
+                    return Err(failure(ForeignAdmissionReason::InvalidSourcePosition, span));
+                }
+            }
+            (
+                PreparedOperandSource::Nul(path),
+                PreparedRepresentation::Address(
+                    super::source_contract::PreparedAddressRepresentation::Bytes,
+                ),
+            ) if matches!(
+                symbol.owner_call(),
+                Some(PreparedOwnerCall::OutputAcquire { .. })
+            ) =>
+            {
+                if source_leaf(domain, path, span, work)? != &Type::String {
+                    return Err(failure(ForeignAdmissionReason::InvalidSourcePosition, span));
+                }
+            }
+            (PreparedOperandSource::Null, PreparedRepresentation::Address(_))
+                if matches!(
+                    symbol.owner_call(),
+                    Some(PreparedOwnerCall::OutputAcquire { .. })
+                ) => {}
+            (
+                PreparedOperandSource::OwnerOutput,
+                PreparedRepresentation::Address(representation),
+            ) if representation == owner.owner().representation()
+                && matches!(symbol.owner_call(), Some(PreparedOwnerCall::OutputAcquire { output_operand, .. }) if *output_operand == index) =>
+                {}
+            (
+                PreparedOperandSource::OffsetOutput,
+                PreparedRepresentation::Address(
+                    super::source_contract::PreparedAddressRepresentation::Bytes,
+                ),
+            ) if matches!(symbol.owner_call(), Some(PreparedOwnerCall::OutputAcquire { offset: Some(offset), .. }) if offset.operand == index) =>
+                {}
             (
                 PreparedOperandSource::Constant(position),
                 PreparedRepresentation::Scalar(representation),
@@ -711,6 +856,8 @@ pub(super) fn validate_owner_symbol(
                 let state = source_leaf(domain, path, span, work)?;
                 let application = match symbol.owner_call().expect("checked owner role") {
                     PreparedOwnerCall::Acquire { application, .. }
+                    | PreparedOwnerCall::Borrow { application, .. }
+                    | PreparedOwnerCall::OutputAcquire { application, .. }
                     | PreparedOwnerCall::Teardown { application, .. }
                     | PreparedOwnerCall::StatusTeardown { application, .. } => application,
                 };

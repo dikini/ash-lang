@@ -95,7 +95,7 @@ fn finalized_arguments(
     Ok(staged.into_boxed_slice())
 }
 
-fn finalize_arguments(
+pub(super) fn finalize_arguments(
     arguments: &mut Box<[KindedArgument]>,
     rewrite: &mut dyn FnMut(&Type) -> Result<Type, super::BuildError>,
     rewrite_row: &mut dyn FnMut(
@@ -110,7 +110,7 @@ fn finalize_arguments(
     Ok(())
 }
 
-fn finalize_instance(
+pub(super) fn finalize_instance(
     instance: &mut crate::types::EffectInstance,
     rewrite: &mut dyn FnMut(&Type) -> Result<Type, super::BuildError>,
     rewrite_row: &mut dyn FnMut(
@@ -456,10 +456,10 @@ fn admit_private_data(
 ) -> Result<(), ValidationError> {
     // Candidate identity is sufficient for rejection, never native permission.
     // Walk arguments and defining constructor payloads: a nominal with a fixed
-    // State field must not hide it merely because no constructor runs here.
+    // State or native-view field must not hide it merely because no constructor runs here.
     // Each declaration is visited once, so recursive ordinary ADTs terminate.
     // Their actual arguments are already visited in the enclosing type walk.
-    let candidates = registry.source_owner_candidate_count();
+    let candidates = registry.source_foreign_nominal_count();
     let mut pending = one(ty, work)?;
     let mut visited = std::collections::HashSet::new();
     while let Some(ty) = pending.pop() {
@@ -467,7 +467,7 @@ fn admit_private_data(
         let forbidden = crate::types::visit_type_structure_with_budget(ty, work, |node, work| {
             if let crate::types::TypeStructureNode::Type(Type::Nominal(nominal)) = node {
                 work.charge(candidates)?;
-                if registry.source_owner_nominal(*nominal) {
+                if registry.source_foreign_nominal(*nominal) {
                     return Ok(true);
                 }
                 work.charge(1)?;
@@ -600,6 +600,8 @@ impl CheckedSourceResourceHeader {
             };
             let arguments = match role {
                 PreparedOwnerCall::Acquire { application, .. }
+                | PreparedOwnerCall::Borrow { application, .. }
+                | PreparedOwnerCall::OutputAcquire { application, .. }
                 | PreparedOwnerCall::Teardown { application, .. }
                 | PreparedOwnerCall::StatusTeardown { application, .. } => application.arguments(),
             };
@@ -623,7 +625,10 @@ impl CheckedSourceResourceHeader {
                 }
             }
             match role {
-                PreparedOwnerCall::Acquire { .. } if acquiring.is_none() => {
+                PreparedOwnerCall::Borrow { .. } => {}
+                PreparedOwnerCall::Acquire { .. } | PreparedOwnerCall::OutputAcquire { .. }
+                    if acquiring.is_none() =>
+                {
                     acquiring = Some(Arc::clone(symbol))
                 }
                 PreparedOwnerCall::Teardown { .. } | PreparedOwnerCall::StatusTeardown { .. }
@@ -652,6 +657,9 @@ impl CheckedSourceResourceHeader {
                     initialized_bytes: None,
                     ..
                 })
+            ) | (
+                PreparedAddressRepresentation::Opaque,
+                Some(PreparedOwnerCall::OutputAcquire { .. })
             ) | (
                 PreparedAddressRepresentation::Bytes,
                 Some(PreparedOwnerCall::Acquire {
@@ -813,6 +821,7 @@ impl std::ops::DerefMut for SourceResourceGlobals {
 #[derive(Debug)]
 pub(crate) struct CheckedSourceResourceTemplate {
     header: Arc<CheckedSourceResourceHeader>,
+    module_sources: Box<[(crate::module::ModuleId, crate::source::SourceId)]>,
     globals: Arc<SourceResourceGlobals>,
     acquire: UnvalidatedEffectProgram,
     finish: UnvalidatedEffectProgram,
@@ -822,6 +831,7 @@ pub(crate) struct CheckedSourceResourceTemplate {
     handler_entry: (TypedBinder, NodeId),
     methods: Box<[(crate::interface::MethodId, crate::types::OperationId)]>,
     byte_calls: [Box<[SourceByteCall]>; 3],
+    window_calls: [Box<[SourceWindowCall]>; 3],
 }
 
 #[derive(Debug)]
@@ -926,6 +936,63 @@ fn entry(
     Ok((retained, function.body()))
 }
 
+/// Declaration categories never stand in for a graph's lexical binding proof.
+/// Match the complete original phase inventory before any registry admission.
+fn check_original_window_declarations(
+    declarations: &[crate::resolved::SourceWindowDeclaration],
+    acquire: &UnvalidatedEffectProgram,
+    finish: &UnvalidatedEffectProgram,
+    handler: &UnvalidatedEffectProgram,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ValidationError> {
+    use crate::resolved::SourceWindowPhase;
+    charge(work, declarations.len())?;
+    let mut seen = Vec::new();
+    seen.try_reserve_exact(declarations.len())
+        .map_err(|_| resource())?;
+    seen.resize(declarations.len(), false);
+    for (phase, program) in [
+        (SourceWindowPhase::Acquire, acquire),
+        (SourceWindowPhase::Finish, finish),
+        (SourceWindowPhase::Handler, handler),
+    ] {
+        for node in &program.nodes {
+            charge(work, 1)?;
+            if let EffectExprKind::Operation(EffectOperation::SourceCopyWindow(window)) = &node.kind
+            {
+                charge(work, declarations.len())?;
+                let index = declarations
+                    .iter()
+                    .position(|declaration| declaration.identity == window.identity())
+                    .ok_or_else(invalid)?;
+                let declaration = &declarations[index];
+                let parameter = program
+                    .registry
+                    .type_variable(declaration.identity)
+                    .ok_or_else(invalid)?;
+                if std::mem::replace(&mut seen[index], true)
+                    || declaration.phase != phase
+                    || declaration.family != window.family().nominal()
+                    || node
+                        .origin
+                        .as_ref()
+                        .map(crate::source::Origin::primary_span)
+                        != Some(declaration.span)
+                    || declaration.identity_span != parameter.origin.primary_span()
+                    || parameter.kind != Kind::Type
+                {
+                    return Err(invalid());
+                }
+            }
+        }
+    }
+    charge(work, seen.len())?;
+    if seen.iter().any(|seen| !seen) {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
 impl CheckedSourceResourceTemplate {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn admit_with_globals(
@@ -939,6 +1006,13 @@ impl CheckedSourceResourceTemplate {
         work: &mut TypeWorkBudget,
         session: &mut super::validate::SourceResourceStructureSession,
     ) -> Result<Self, ValidationError> {
+        check_original_window_declarations(
+            &header.original.windows,
+            &acquire,
+            &finish,
+            &handler,
+            work,
+        )?;
         // Retain only loans actually referenced by these original forests.
         // Their caller/definition Type and Row vectors remain on ordinary Core
         // variable/application nodes and close again against final globals.
@@ -1100,8 +1174,15 @@ impl CheckedSourceResourceTemplate {
             &globals,
             work,
         )?;
+        charge(work, module_sources.len())?;
+        let mut retained_sources = Vec::new();
+        retained_sources
+            .try_reserve_exact(module_sources.len())
+            .map_err(|_| resource())?;
+        retained_sources.extend_from_slice(module_sources);
         Ok(Self {
             header,
+            module_sources: retained_sources.into_boxed_slice(),
             globals,
             acquire,
             finish,
@@ -1110,11 +1191,26 @@ impl CheckedSourceResourceTemplate {
             finish_entry,
             handler_entry: (handler_entry.0, handler_body),
             methods,
-            byte_calls: [acquire_calls, finish_calls, handler_calls],
+            byte_calls: [
+                acquire_calls.byte_calls,
+                finish_calls.byte_calls,
+                handler_calls.byte_calls,
+            ],
+            window_calls: [
+                acquire_calls.window_calls,
+                finish_calls.window_calls,
+                handler_calls.window_calls,
+            ],
         })
     }
     pub(crate) fn header(&self) -> &Arc<CheckedSourceResourceHeader> {
         &self.header
+    }
+    pub(crate) fn module_sources(&self) -> &[(crate::module::ModuleId, crate::source::SourceId)] {
+        &self.module_sources
+    }
+    pub(crate) fn original_registry(&self) -> &Arc<ResolvedRegistry> {
+        &self.acquire.registry
     }
     pub(crate) fn globals(&self) -> &SourceResourceGlobals {
         &self.globals
@@ -1197,6 +1293,38 @@ impl CheckedSourceResourceTemplate {
         };
         matching.arms()[0].pattern()
     }
+    /// Original, independently checked lexical window binders for the linked
+    /// registry inventory. This exposes no mutable graph or admission bypass.
+    pub(crate) fn original_window_binders(
+        &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Vec<(NodeId, &crate::resolved::ResolvedTypeVariable)>, ValidationError> {
+        let mut result = Vec::new();
+        for original in [
+            self.original_acquire(),
+            self.original_finish(),
+            self.original_handler(),
+        ] {
+            charge(work, original.nodes.len())?;
+            for (index, node) in original.nodes.iter().enumerate() {
+                if let EffectExprKind::Operation(EffectOperation::SourceCopyWindow(window)) =
+                    &node.kind
+                {
+                    let canonical = original
+                        .registry
+                        .type_variable(window.identity())
+                        .ok_or_else(invalid)?;
+                    let id = NodeId::new(
+                        original.arena,
+                        u32::try_from(index).map_err(|_| resource())?,
+                    );
+                    push(&mut result, (id, canonical), work)?;
+                }
+            }
+        }
+        Ok(result)
+    }
+
     pub(crate) fn original_handler_node(&self) -> &super::HandlerNode {
         let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Match(matching))) =
             &node(&self.handler, self.handler_entry.1)
@@ -1231,12 +1359,30 @@ pub(crate) struct SourceByteCall {
     pub(crate) function: crate::resolved::BinderId,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SourceWindowCall {
+    request: NodeId,
+    window: NodeId,
+}
+struct SourcePhaseCalls {
+    byte_calls: Box<[SourceByteCall]>,
+    window_calls: Box<[SourceWindowCall]>,
+}
 #[derive(Debug)]
 enum FlowFact<'a> {
     Independent,
+    ScalarLiteral(&'a crate::integer::Integer),
     Fresh,
     Current,
     Enclosing(crate::types::TypeVariableId),
+    WindowView {
+        window: NodeId,
+        producer: NodeId,
+        keys: Box<[usize]>,
+    },
+    WindowExtent {
+        view: usize,
+    },
     // A typed but constructor-unknown ordinary input. The original forest owns
     // the Type; narrowing a checked constructor pattern preserves its payload
     // roles without manufacturing an enclosing state or cloning Type storage.
@@ -1247,12 +1393,14 @@ enum FlowFact<'a> {
     ScalarPreflight,
     PayloadCallable,
     ByteCallable(crate::resolved::BinderId, Option<NodeId>),
+    ViewCallable(crate::resolved::BinderId, Option<NodeId>),
 }
 #[derive(Default)]
 struct FlowFacts<'a> {
     globals: Option<&'a SourceResourceGlobals>,
     values: Vec<FlowFact<'a>>,
     byte_calls: Vec<SourceByteCall>,
+    window_calls: Vec<SourceWindowCall>,
 }
 fn push<T>(
     values: &mut Vec<T>,
@@ -1287,7 +1435,7 @@ impl<'a> FlowFacts<'a> {
         while let Some(id) = pending.pop() {
             charge(work, 1)?;
             match self.fact(id)? {
-                FlowFact::Independent | FlowFact::PayloadCallable => {}
+                FlowFact::Independent | FlowFact::PayloadCallable | FlowFact::ScalarLiteral(_) => {}
                 FlowFact::InputNominal(_, identities) if identities.is_empty() => {}
                 FlowFact::Tuple(fields) => {
                     charge(work, fields.len())?;
@@ -1312,7 +1460,9 @@ impl<'a> FlowFacts<'a> {
         while let Some(id) = pending.pop() {
             charge(work, 1)?;
             match self.fact(id)? {
-                FlowFact::Independent | FlowFact::Constructor(_, None) => {}
+                FlowFact::Independent
+                | FlowFact::ScalarLiteral(_)
+                | FlowFact::Constructor(_, None) => {}
                 FlowFact::Current if current => {}
                 FlowFact::InputNominal(_, identities) => {
                     for identity in identities {
@@ -1451,6 +1601,8 @@ struct FlowPath {
     acquired: bool,
     consumed: bool,
     attempted_teardown: bool,
+    blocked: bool,
+    windows: Vec<(NodeId, usize)>,
 }
 impl FlowPath {
     fn new(work: &mut TypeWorkBudget) -> Result<Self, ValidationError> {
@@ -1460,6 +1612,8 @@ impl FlowPath {
             acquired: false,
             consumed: false,
             attempted_teardown: false,
+            blocked: false,
+            windows: Vec::new(),
         })
     }
     fn bind(
@@ -1480,11 +1634,19 @@ impl FlowPath {
             .try_reserve(self.locals.len())
             .map_err(|_| resource())?;
         locals.extend(self.locals.iter().map(|(id, value)| (*id, *value)));
+        let mut windows = Vec::new();
+        charge(work, self.windows.len())?;
+        windows
+            .try_reserve_exact(self.windows.len())
+            .map_err(|_| resource())?;
+        windows.extend_from_slice(&self.windows);
         Ok(Self {
             locals,
             acquired: self.acquired,
             consumed: self.consumed,
             attempted_teardown: self.attempted_teardown,
+            blocked: self.blocked,
+            windows,
         })
     }
 }
@@ -1737,7 +1899,9 @@ fn eval_flow<'a>(
                     return Err(invalid());
                 }
                 facts.add(
-                    if fact.role().byte_parameter(fact.module()).is_some() {
+                    if fact.role().view_parameter(fact.module()).is_some() {
+                        FlowFact::ViewCallable(fact.function(), None)
+                    } else if fact.role().state_parameter(fact.module()).is_some() {
                         FlowFact::ByteCallable(fact.function(), None)
                     } else {
                         FlowFact::ScalarPreflight
@@ -1761,6 +1925,10 @@ fn eval_flow<'a>(
                 )?;
                 one((value, path), work)
             }
+            PureValue::Integer(value) => {
+                let value = facts.add(FlowFact::ScalarLiteral(value.value()), work)?;
+                one((value, path), work)
+            }
             PureValue::Function(_) => Err(invalid()),
             PureValue::Intrinsic(intrinsic) => {
                 use super::packed::Intrinsic;
@@ -1771,6 +1939,24 @@ fn eval_flow<'a>(
                     }
                     Intrinsic::ForeignCheckedSizeT { function } => {
                         (function, ForeignScalarPreflightRole::SizeT)
+                    }
+                    Intrinsic::ForeignCheckedNul { function } => {
+                        (function, ForeignScalarPreflightRole::Nul)
+                    }
+                    Intrinsic::ForeignDataOf { function } => {
+                        (function, ForeignScalarPreflightRole::DataOf)
+                    }
+                    Intrinsic::ForeignReplaceData { function } => {
+                        (function, ForeignScalarPreflightRole::ReplaceData)
+                    }
+                    Intrinsic::ForeignCopyBytes { function } => {
+                        (function, ForeignScalarPreflightRole::CopyBytes)
+                    }
+                    Intrinsic::ForeignCopyNul { function } => {
+                        (function, ForeignScalarPreflightRole::CopyNul)
+                    }
+                    Intrinsic::ForeignExtentValue { function } => {
+                        (function, ForeignScalarPreflightRole::ExtentValue)
                     }
                     Intrinsic::ForeignByteRead { function } => {
                         (function, ForeignScalarPreflightRole::ByteRead)
@@ -1793,7 +1979,9 @@ fn eval_flow<'a>(
                     return Err(invalid());
                 }
                 let value = facts.add(
-                    if role.byte_parameter(fact.module()).is_some() {
+                    if role.view_parameter(fact.module()).is_some() {
+                        FlowFact::ViewCallable(function, None)
+                    } else if role.state_parameter(fact.module()).is_some() {
                         FlowFact::ByteCallable(function, None)
                     } else {
                         FlowFact::ScalarPreflight
@@ -1881,7 +2069,8 @@ fn eval_flow<'a>(
                     FlowFact::Callable(constructor) => Some(*constructor),
                     FlowFact::ScalarPreflight
                     | FlowFact::PayloadCallable
-                    | FlowFact::ByteCallable(_, Some(_)) => None,
+                    | FlowFact::ByteCallable(_, Some(_))
+                    | FlowFact::ViewCallable(_, Some(_)) => None,
                     _ => return Err(invalid()),
                 };
                 for (argument, path) in eval_flow(
@@ -1896,6 +2085,22 @@ fn eval_flow<'a>(
                 )? {
                     let value = if let Some(constructor) = constructor {
                         facts.wrapped(constructor, argument, work)?
+                    } else if let FlowFact::ViewCallable(canonical, Some(selected_application)) =
+                        facts.fact(function)?
+                    {
+                        let canonical = *canonical;
+                        let selected_application = *selected_application;
+                        admit_view_primitive(program, canonical, argument, &path, facts, work)?;
+                        push(
+                            &mut facts.byte_calls,
+                            SourceByteCall {
+                                apply: Some(id),
+                                application: selected_application,
+                                function: canonical,
+                            },
+                            work,
+                        )?;
+                        0
                     } else if matches!(facts.fact(function)?, FlowFact::PayloadCallable) {
                         let callable = node(program, application.function())?;
                         let signature = callable.ty.function_view().ok_or_else(invalid)?;
@@ -1917,12 +2122,57 @@ fn eval_flow<'a>(
                         if let FlowFact::ByteCallable(function, Some(application)) =
                             facts.fact(function)?
                         {
+                            if !path.windows.is_empty() {
+                                return Err(invalid());
+                            }
                             let function = *function;
                             let selected_application = *application;
                             let fact = program
                                 .registry
                                 .scalar_preflight(function)
                                 .ok_or_else(invalid)?;
+                            if fact.role().data_parameter(fact.module()).is_some() {
+                                if phase == SourceResourcePhase::Acquire || path.consumed {
+                                    return Err(invalid());
+                                }
+                                let replace = fact.role() == crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ReplaceData;
+                                let state = if replace {
+                                    let FlowFact::Tuple(fields) = facts.fact(argument)? else {
+                                        return Err(invalid());
+                                    };
+                                    if fields.len() != 2
+                                        || !facts.borrowed(fields[1], false, header, work)?
+                                    {
+                                        return Err(invalid());
+                                    }
+                                    fields[0]
+                                } else {
+                                    argument
+                                };
+                                if !matches!(facts.fact(state)?, FlowFact::Current) {
+                                    return Err(invalid());
+                                }
+                                push(
+                                    &mut facts.byte_calls,
+                                    SourceByteCall {
+                                        apply: Some(id),
+                                        application: selected_application,
+                                        function,
+                                    },
+                                    work,
+                                )?;
+                                let result = if replace {
+                                    0
+                                } else {
+                                    facts.input(
+                                        &header.original.data.ty,
+                                        &program.registry,
+                                        work,
+                                    )?
+                                };
+                                push(&mut results, (result, path), work)?;
+                                continue;
+                            }
                             let FlowFact::Tuple(fields) = facts.fact(argument)? else {
                                 return Err(invalid());
                             };
@@ -2007,11 +2257,44 @@ fn eval_flow<'a>(
                 depth + 1,
                 work,
             )? {
-                let value = if let FlowFact::ByteCallable(function, None) = facts.fact(value)? {
+                let value = if let FlowFact::ViewCallable(function, None) = facts.fact(value)? {
                     let function = *function;
+                    let (window, _) = path.windows.last().copied().ok_or_else(invalid)?;
+                    let EffectExprKind::Operation(EffectOperation::SourceCopyWindow(window)) =
+                        &node(program, window)?.kind
+                    else {
+                        return Err(invalid());
+                    };
                     if application.arguments().len() != 1
                         || !application.row_arguments().is_empty()
+                        || !window
+                            .matches_view_type(&application.arguments()[0], work)
+                            .map_err(|()| resource())?
+                    {
+                        return Err(invalid());
+                    }
+                    push(
+                        &mut facts.byte_calls,
+                        SourceByteCall {
+                            apply: None,
+                            application: id,
+                            function,
+                        },
+                        work,
+                    )?;
+                    facts.add(FlowFact::ViewCallable(function, Some(id)), work)?
+                } else if let FlowFact::ByteCallable(function, None) = facts.fact(value)? {
+                    let function = *function;
+                    let fact = program
+                        .registry
+                        .scalar_preflight(function)
+                        .ok_or_else(invalid)?;
+                    let data = fact.role().data_parameter(fact.module()).is_some();
+                    if application.arguments().len() != 1 + usize::from(data)
+                        || !application.row_arguments().is_empty()
                         || !same(&application.arguments()[0], &header.original.state.ty, work)?
+                        || data
+                            && !same(&application.arguments()[1], &header.original.data.ty, work)?
                     {
                         return Err(invalid());
                     }
@@ -2080,7 +2363,69 @@ fn eval_flow<'a>(
             }
             Ok(results)
         }
+        EffectExprKind::Operation(EffectOperation::SourceCopyWindow(window)) => {
+            let mut results = Vec::new();
+            for (state, mut path) in eval_flow(
+                program,
+                header,
+                window.state(),
+                phase,
+                path,
+                facts,
+                depth + 1,
+                work,
+            )? {
+                let allowed = match facts.fact(state)? {
+                    FlowFact::Fresh => {
+                        phase == SourceResourcePhase::Acquire
+                            && path.acquired
+                            && !path.consumed
+                            && !path.blocked
+                    }
+                    FlowFact::Current => {
+                        phase != SourceResourcePhase::Acquire && !path.consumed && !path.blocked
+                    }
+                    FlowFact::Enclosing(identity) => {
+                        charge(work, header.dependencies.len())?;
+                        header.dependencies.contains(identity)
+                    }
+                    _ => false,
+                };
+                if !allowed {
+                    return Err(invalid());
+                }
+                push(&mut path.windows, (id, state), work)?;
+                for (value, mut path) in eval_flow(
+                    program,
+                    header,
+                    window.body(),
+                    phase,
+                    path,
+                    facts,
+                    depth + 1,
+                    work,
+                )? {
+                    if path.windows.pop() != Some((id, state)) || !facts.independent(value, work)? {
+                        return Err(invalid());
+                    }
+                    push(&mut results, (value, path), work)?;
+                }
+            }
+            Ok(results)
+        }
         EffectExprKind::Operation(EffectOperation::Request(request)) => {
+            if !path.windows.is_empty() {
+                return eval_window_request(
+                    program, header, id, request, phase, path, facts, depth, work,
+                );
+            }
+            if program
+                .registry
+                .native_symbol(request.operation())
+                .is_some_and(|symbol| symbol.symbol().access_result().is_some())
+            {
+                return Err(invalid());
+            }
             charge(work, header.original.interpreted.len())?;
             let controlled_native = header
                 .original
@@ -2109,10 +2454,21 @@ fn eval_flow<'a>(
                 }
                 return Ok(results);
             }
-            if phase == SourceResourcePhase::Handler {
+            let borrowed = program
+                .registry
+                .native_symbol(request.operation())
+                .filter(|symbol| {
+                    matches!(symbol.owner_role(), Some(PreparedOwnerCall::Borrow { .. }))
+                        && symbol
+                            .owner()
+                            .is_some_and(|owner| Arc::ptr_eq(owner, &header.owner))
+                });
+            if phase == SourceResourcePhase::Handler && borrowed.is_none() {
                 return Err(invalid());
             }
-            let expected = if phase == SourceResourcePhase::Acquire {
+            let expected = if let Some(borrowed) = borrowed {
+                borrowed
+            } else if phase == SourceResourcePhase::Acquire {
                 &header.acquire
             } else {
                 &header.teardown
@@ -2163,6 +2519,37 @@ fn eval_flow<'a>(
                         }
                     }
                 }
+                if let Some(PreparedOwnerCall::Borrow {
+                    current_operand, ..
+                }) = expected.owner_role()
+                {
+                    if path.consumed || path.blocked {
+                        return Err(invalid());
+                    }
+                    let crate::foreign::source_contract::PreparedOperandSource::Current(selection) =
+                        expected.symbol().operands()[*current_operand].source()
+                    else {
+                        return Err(invalid());
+                    };
+                    let selected = facts.selected(operand, selection, work)?;
+                    if !matches!(facts.fact(selected)?, FlowFact::Fresh if phase == SourceResourcePhase::Acquire && path.acquired)
+                        && !matches!(facts.fact(selected)?, FlowFact::Current if phase != SourceResourcePhase::Acquire)
+                    {
+                        return Err(invalid());
+                    }
+                    if expected.symbol().operands().iter().any(|operand| {
+                        matches!(
+                            operand.source(),
+                            crate::foreign::source_contract::PreparedOperandSource::Source(_)
+                        )
+                    }) {
+                        let refusal = facts.wrapped(call.conversion_failed, 0, work)?;
+                        push(&mut results, (refusal, path.copy(work)?), work)?;
+                    }
+                    let returned = facts.wrapped(call.returned, 0, work)?;
+                    push(&mut results, (returned, path), work)?;
+                    continue;
+                }
                 if phase == SourceResourcePhase::Acquire {
                     if path.acquired || !facts.borrowed(operand, false, header, work)? {
                         return Err(invalid());
@@ -2174,12 +2561,74 @@ fn eval_flow<'a>(
                         work,
                     )?;
                     let readable = facts.wrapped(codec.output_constructors()[1], null, work)?;
-                    let returned = facts.wrapped(call.returned, readable, work)?;
+                    let output = if matches!(
+                        expected.owner_role(),
+                        Some(PreparedOwnerCall::OutputAcquire { .. })
+                    ) {
+                        let mut fields = Vec::new();
+                        push(&mut fields, 0, work)?;
+                        push(&mut fields, readable, work)?;
+                        if matches!(
+                            expected.owner_role(),
+                            Some(PreparedOwnerCall::OutputAcquire {
+                                offset: Some(_),
+                                ..
+                            })
+                        ) {
+                            let Type::Application(_, payload) = &stored.ty else {
+                                return Err(invalid());
+                            };
+                            let Type::Tuple(types) = payload.as_ref() else {
+                                return Err(invalid());
+                            };
+                            let tail = facts.input(
+                                types.get(2).ok_or_else(invalid)?,
+                                &program.registry,
+                                work,
+                            )?;
+                            push(&mut fields, tail, work)?;
+                        }
+                        facts.add(FlowFact::Tuple(fields.into_boxed_slice()), work)?
+                    } else {
+                        readable
+                    };
+                    let returned = facts.wrapped(call.returned, output, work)?;
                     push(&mut results, (returned, path.copy(work)?), work)?;
                     path.acquired = true;
                     let nonnull = facts.wrapped(codec.nullable_constructors()[1], 1, work)?;
                     let readable = facts.wrapped(codec.output_constructors()[1], nonnull, work)?;
-                    let returned = facts.wrapped(call.returned, readable, work)?;
+                    let output = if matches!(
+                        expected.owner_role(),
+                        Some(PreparedOwnerCall::OutputAcquire { .. })
+                    ) {
+                        let mut fields = Vec::new();
+                        push(&mut fields, 0, work)?;
+                        push(&mut fields, readable, work)?;
+                        if matches!(
+                            expected.owner_role(),
+                            Some(PreparedOwnerCall::OutputAcquire {
+                                offset: Some(_),
+                                ..
+                            })
+                        ) {
+                            let Type::Application(_, payload) = &stored.ty else {
+                                return Err(invalid());
+                            };
+                            let Type::Tuple(types) = payload.as_ref() else {
+                                return Err(invalid());
+                            };
+                            let tail = facts.input(
+                                types.get(2).ok_or_else(invalid)?,
+                                &program.registry,
+                                work,
+                            )?;
+                            push(&mut fields, tail, work)?;
+                        }
+                        facts.add(FlowFact::Tuple(fields.into_boxed_slice()), work)?
+                    } else {
+                        readable
+                    };
+                    let returned = facts.wrapped(call.returned, output, work)?;
                     push(&mut results, (returned, path), work)?;
                 } else {
                     if path.consumed || path.attempted_teardown {
@@ -2223,7 +2672,11 @@ fn eval_flow<'a>(
                         work,
                     )?;
                     let blocked = facts.wrapped(call.returned, blocked, work)?;
-                    push(&mut results, (blocked, path.copy(work)?), work)?;
+                    let mut blocked_path = path.copy(work)?;
+                    // A blocked close preserves ownership but revokes native
+                    // access until the dependent closure has been resolved.
+                    blocked_path.blocked = true;
+                    push(&mut results, (blocked, blocked_path), work)?;
                     if let PreparedOwnerCall::Teardown { consumes, .. } = role {
                         path.consumed = *consumes;
                         let disposition = facts.wrapped(
@@ -2277,6 +2730,272 @@ fn eval_flow<'a>(
         _ => Err(invalid()),
     }
 }
+fn admit_view_primitive(
+    program: &UnvalidatedEffectProgram,
+    function: crate::resolved::BinderId,
+    argument: usize,
+    path: &FlowPath,
+    facts: &FlowFacts<'_>,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ValidationError> {
+    use crate::foreign::scalar_preflight::ForeignScalarPreflightRole as Role;
+    let fact = program
+        .registry
+        .scalar_preflight(function)
+        .ok_or_else(invalid)?;
+    let (window, _) = path.windows.last().copied().ok_or_else(invalid)?;
+    let (view, extent) = if fact.role() == Role::ExtentValue {
+        let FlowFact::WindowExtent { view } = facts.fact(argument)? else {
+            return Err(invalid());
+        };
+        (*view, None)
+    } else {
+        let FlowFact::Tuple(fields) = facts.fact(argument)? else {
+            return Err(invalid());
+        };
+        if fields.len() != 2 {
+            return Err(invalid());
+        }
+        match fact.role() {
+            Role::CopyBytes => {
+                let FlowFact::WindowExtent { view } = facts.fact(fields[1])? else {
+                    return Err(invalid());
+                };
+                if *view != fields[0] {
+                    return Err(invalid());
+                }
+                (
+                    fields[0],
+                    Some(crate::foreign::source_contract::PreparedForeignExtent::Bytes),
+                )
+            }
+            Role::CopyNul => {
+                if !facts.independent(fields[1], work)? {
+                    return Err(invalid());
+                }
+                (
+                    fields[0],
+                    Some(crate::foreign::source_contract::PreparedForeignExtent::Nul),
+                )
+            }
+            _ => return Err(invalid()),
+        }
+    };
+    let FlowFact::WindowView {
+        window: original, ..
+    } = facts.fact(view)?
+    else {
+        return Err(invalid());
+    };
+    if *original != window {
+        return Err(invalid());
+    }
+    let EffectExprKind::Operation(EffectOperation::SourceCopyWindow(scope)) =
+        &node(program, window)?.kind
+    else {
+        return Err(invalid());
+    };
+    if extent.is_some_and(|extent| scope.family().declaration().extent() != extent) {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn eval_window_request<'a>(
+    program: &'a UnvalidatedEffectProgram,
+    header: &'a CheckedSourceResourceHeader,
+    id: NodeId,
+    request: &'a super::RequestNode,
+    phase: SourceResourcePhase,
+    path: FlowPath,
+    facts: &mut FlowFacts<'a>,
+    depth: usize,
+    work: &mut TypeWorkBudget,
+) -> Result<Vec<(usize, FlowPath)>, ValidationError> {
+    use crate::foreign::source_contract::{PreparedAccessResult, PreparedOperandSource};
+    let symbol = program
+        .registry
+        .native_symbol(request.operation())
+        .ok_or_else(invalid)?;
+    let &(window_id, state) = path.windows.last().ok_or_else(invalid)?;
+    for (window, _) in &path.windows {
+        let EffectExprKind::Operation(EffectOperation::SourceCopyWindow(window)) =
+            &node(program, *window)?.kind
+        else {
+            return Err(invalid());
+        };
+        if !crate::foreign::source_access::window_operation_matches(
+            window.family(),
+            window.arguments(),
+            symbol,
+            request.effect(),
+            &program.registry,
+            work,
+        )
+        .map_err(|error| {
+            if error.is_resource_exhaustion() {
+                resource()
+            } else {
+                invalid()
+            }
+        })? {
+            return Err(invalid());
+        }
+    }
+    let Some(PreparedOwnerCall::Borrow {
+        current_operand, ..
+    }) = symbol.owner_role()
+    else {
+        return Err(invalid());
+    };
+    let PreparedOperandSource::Current(current) = symbol
+        .symbol()
+        .operands()
+        .get(*current_operand)
+        .ok_or_else(invalid)?
+        .source()
+    else {
+        return Err(invalid());
+    };
+    let codec = symbol.owner_codec().ok_or_else(invalid)?;
+    let call = symbol.call_codec().ids();
+    let mut results = Vec::new();
+    for (operand, path) in eval_flow(
+        program,
+        header,
+        request.operand(),
+        phase,
+        path,
+        facts,
+        depth + 1,
+        work,
+    )? {
+        if facts.selected(operand, current, work)? != state {
+            return Err(invalid());
+        }
+        for declared in symbol.symbol().operands() {
+            if let PreparedOperandSource::Source(path) | PreparedOperandSource::Nul(path) =
+                declared.source()
+            {
+                let selected = facts.selected(operand, path, work)?;
+                if !facts.independent(selected, work)? {
+                    return Err(invalid());
+                }
+            }
+        }
+        push(
+            &mut facts.window_calls,
+            SourceWindowCall {
+                request: id,
+                window: window_id,
+            },
+            work,
+        )?;
+        if symbol.symbol().operands().iter().any(|operand| {
+            matches!(
+                operand.source(),
+                PreparedOperandSource::Source(_) | PreparedOperandSource::Nul(_)
+            )
+        }) {
+            let refusal = facts.wrapped(call.conversion_failed, 0, work)?;
+            push(&mut results, (refusal, path.copy(work)?), work)?;
+        }
+        let output = match symbol.symbol().access_result() {
+            Some(PreparedAccessResult::View { keys, .. }) => {
+                let mut selected = Vec::new();
+                charge(work, keys.len())?;
+                selected
+                    .try_reserve_exact(keys.len())
+                    .map_err(|_| resource())?;
+                for key in keys {
+                    let key = facts.selected(operand, key, work)?;
+                    if !facts.independent(key, work)? {
+                        return Err(invalid());
+                    }
+                    selected.push(key);
+                }
+                let view = facts.add(
+                    FlowFact::WindowView {
+                        window: window_id,
+                        producer: id,
+                        keys: selected.into_boxed_slice(),
+                    },
+                    work,
+                )?;
+                let null = facts.add(
+                    FlowFact::Constructor(codec.nullable_constructors()[0], None),
+                    work,
+                )?;
+                let nullable = facts.wrapped(codec.output_constructors()[1], null, work)?;
+                let returned = facts.wrapped(call.returned, nullable, work)?;
+                push(&mut results, (returned, path.copy(work)?), work)?;
+                let nonnull = facts.wrapped(codec.nullable_constructors()[1], view, work)?;
+                facts.wrapped(codec.output_constructors()[1], nonnull, work)?
+            }
+            Some(PreparedAccessResult::Extent { view, keys, .. }) => {
+                let selected_view = facts.selected(operand, view, work)?;
+                let FlowFact::WindowView {
+                    window,
+                    producer,
+                    keys: produced_keys,
+                } = facts.fact(selected_view)?
+                else {
+                    return Err(invalid());
+                };
+                if *window != window_id || keys.len() != produced_keys.len() {
+                    return Err(invalid());
+                }
+                charge(work, facts.window_calls.len() + keys.len())?;
+                if !facts
+                    .window_calls
+                    .iter()
+                    .any(|call| call.request == *producer && call.window == window_id)
+                {
+                    return Err(invalid());
+                }
+                // Unknown keys retain mandatory exact dynamic comparison before
+                // native entry. This flow never certifies unknown keys equal.
+                for (query, produced) in keys.iter().zip(produced_keys) {
+                    let query = facts.selected(operand, query, work)?;
+                    if !facts.independent(query, work)? {
+                        return Err(invalid());
+                    }
+                    if let (FlowFact::ScalarLiteral(left), FlowFact::ScalarLiteral(right)) =
+                        (facts.fact(query)?, facts.fact(*produced)?)
+                    {
+                        let bytes = left
+                            .magnitude_byte_length()
+                            .checked_add(right.magnitude_byte_length())
+                            .ok_or_else(resource)?;
+                        charge(
+                            work,
+                            usize::try_from(bytes)
+                                .map_err(|_| resource())?
+                                .checked_add(1)
+                                .ok_or_else(resource)?,
+                        )?;
+                        if left != right {
+                            return Err(invalid());
+                        }
+                    }
+                }
+                facts.add(
+                    FlowFact::WindowExtent {
+                        view: selected_view,
+                    },
+                    work,
+                )?
+            }
+            None => 0,
+        };
+        let returned = facts.wrapped(call.returned, output, work)?;
+        push(&mut results, (returned, path), work)?;
+    }
+    Ok(results)
+}
+
 fn facts<'a>(work: &mut TypeWorkBudget) -> Result<FlowFacts<'a>, ValidationError> {
     let mut facts = FlowFacts::default();
     for value in [FlowFact::Independent, FlowFact::Fresh, FlowFact::Current] {
@@ -2303,7 +3022,7 @@ fn check_flow(
     phase: SourceResourcePhase,
     globals: &SourceResourceGlobals,
     work: &mut TypeWorkBudget,
-) -> Result<Box<[SourceByteCall]>, ValidationError> {
+) -> Result<SourcePhaseCalls, ValidationError> {
     let mut facts = facts(work)?;
     facts.globals = Some(globals);
     let value = if phase == SourceResourcePhase::Acquire {
@@ -2376,7 +3095,10 @@ fn check_flow(
             _ => return Err(invalid()),
         }
     }
-    Ok(facts.byte_calls.into_boxed_slice())
+    Ok(SourcePhaseCalls {
+        byte_calls: facts.byte_calls.into_boxed_slice(),
+        window_calls: facts.window_calls.into_boxed_slice(),
+    })
 }
 fn check_handler(
     program: &UnvalidatedEffectProgram,
@@ -2386,7 +3108,7 @@ fn check_handler(
     answer: crate::resolved::BinderId,
     globals: &SourceResourceGlobals,
     work: &mut TypeWorkBudget,
-) -> Result<Box<[SourceByteCall]>, ValidationError> {
+) -> Result<SourcePhaseCalls, ValidationError> {
     let mut facts = facts(work)?;
     facts.globals = Some(globals);
     let mut path = FlowPath::new(work)?;
@@ -2494,7 +3216,10 @@ fn check_handler(
             }
         }
     }
-    Ok(facts.byte_calls.into_boxed_slice())
+    Ok(SourcePhaseCalls {
+        byte_calls: facts.byte_calls.into_boxed_slice(),
+        window_calls: facts.window_calls.into_boxed_slice(),
+    })
 }
 
 /// Complete compiler claim for one immutable defining forest. This is not an
@@ -2732,11 +3457,13 @@ impl SourceResourceScopeNode {
                 effect.instance.effect(),
                 actuals.into_boxed_slice(),
             );
-            let symbol = if effect.instance.effect() == template.header.acquire.effect() {
-                Arc::clone(&template.header.acquire)
-            } else {
-                Arc::clone(&template.header.teardown)
-            };
+            let symbol = Arc::clone(
+                template
+                    .original_acquire()
+                    .registry
+                    .native_symbol(OperationId::new(effect.instance.effect(), 0))
+                    .ok_or_else(invalid)?,
+            );
             interpretations.push(super::NativeInterpretation::new(instance, symbol));
         }
         handler_output.value = output.into_inner();
@@ -2911,10 +3638,15 @@ impl SourceResourceScopeNode {
         &self,
         program: &super::dialect::CoreProgram<super::EffectOperationFamily>,
         request: NodeId,
-        acquire: bool,
+        phase: SourceResourcePhase,
         work: &mut TypeWorkBudget,
     ) -> Result<bool, ValidationError> {
-        let copy = &self.descriptor.copies[usize::from(!acquire)];
+        let index = match phase {
+            SourceResourcePhase::Acquire => 0,
+            SourceResourcePhase::Finish => 1,
+            SourceResourcePhase::Handler => 2,
+        };
+        let copy = &self.descriptor.copies[index];
         charge(work, copy.nodes.len())?;
         if !copy.nodes.iter().any(|(_, actual)| *actual == request) {
             return Ok(false);
@@ -2925,16 +3657,24 @@ impl SourceResourceScopeNode {
         let EffectExprKind::Operation(EffectOperation::Request(call)) = &node.kind else {
             return Ok(false);
         };
-        let expected = if acquire {
-            &self.header().acquire
-        } else {
-            &self.header().teardown
+        let Some(symbol) = program.registry().native_symbol(call.operation()) else {
+            return Ok(false);
         };
-        if call.operation() != expected.operation() {
+        let expected = match phase {
+            SourceResourcePhase::Acquire => Some(&self.header().acquire),
+            SourceResourcePhase::Finish => Some(&self.header().teardown),
+            SourceResourcePhase::Handler => None,
+        };
+        if !expected.is_some_and(|expected| Arc::ptr_eq(expected, symbol))
+            && !(matches!(symbol.owner_role(), Some(PreparedOwnerCall::Borrow { .. }))
+                && symbol
+                    .owner()
+                    .is_some_and(|owner| Arc::ptr_eq(owner, &self.header().owner)))
+        {
             return Ok(false);
         }
         for interpretation in self.native_interpretations() {
-            if Arc::ptr_eq(interpretation.symbol(), expected)
+            if Arc::ptr_eq(interpretation.symbol(), symbol)
                 && crate::types::compare_effect_instances_with_budget(
                     interpretation.effect(),
                     call.effect(),
@@ -2947,6 +3687,165 @@ impl SourceResourceScopeNode {
             }
         }
         Ok(false)
+    }
+
+    pub(crate) fn visit_windows(
+        &self,
+        mut visit: impl FnMut(NodeId, &mut TypeWorkBudget) -> Result<(), ValidationError>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
+        for (phase, copy) in self.descriptor.copies.iter().enumerate() {
+            let original = match phase {
+                0 => self.original().original_acquire(),
+                1 => self.original().original_finish(),
+                _ => self.original().original_handler(),
+            };
+            for (source, target) in &copy.nodes {
+                charge(work, 1)?;
+                if matches!(
+                    node(original, *source)?.kind,
+                    EffectExprKind::Operation(EffectOperation::SourceCopyWindow(_))
+                ) {
+                    visit(*target, work)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Exact mapped window occurrence in one defining lifecycle phase. The
+    /// final independent specialization check owns this map; runtime activation
+    /// and selected guard remain separate obligations.
+    pub(crate) fn contains_phase_window(
+        &self,
+        phase: SourceResourcePhase,
+        window: NodeId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ValidationError> {
+        let index = match phase {
+            SourceResourcePhase::Acquire => 0,
+            SourceResourcePhase::Finish => 1,
+            SourceResourcePhase::Handler => 2,
+        };
+        let original = match index {
+            0 => self.original().original_acquire(),
+            1 => self.original().original_finish(),
+            _ => self.original().original_handler(),
+        };
+        let copy = &self.descriptor.copies[index];
+        charge(work, copy.nodes.len())?;
+        for (source, target) in &copy.nodes {
+            if *target == window {
+                return Ok(matches!(
+                    node(original, *source)?.kind,
+                    EffectExprKind::Operation(EffectOperation::SourceCopyWindow(_))
+                ));
+            }
+        }
+        Ok(false)
+    }
+
+    /// An original flow-authenticated request under this particular window,
+    /// mapped through the same complete checked lifecycle copy.
+    pub(crate) fn contains_window_request(
+        &self,
+        phase: SourceResourcePhase,
+        window: NodeId,
+        request: NodeId,
+        symbol: &Arc<CheckedForeignSymbol>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ValidationError> {
+        let index = match phase {
+            SourceResourcePhase::Acquire => 0,
+            SourceResourcePhase::Finish => 1,
+            SourceResourcePhase::Handler => 2,
+        };
+        let original = match index {
+            0 => self.original().original_acquire(),
+            1 => self.original().original_finish(),
+            _ => self.original().original_handler(),
+        };
+        let copy = &self.descriptor.copies[index];
+        charge(work, copy.nodes.len())?;
+        let source_window = copy
+            .nodes
+            .iter()
+            .find_map(|(source, target)| (*target == window).then_some(*source));
+        let source_request = copy
+            .nodes
+            .iter()
+            .find_map(|(source, target)| (*target == request).then_some(*source));
+        let (Some(window), Some(request)) = (source_window, source_request) else {
+            return Ok(false);
+        };
+        charge(work, self.original().window_calls[index].len())?;
+        if !self.original().window_calls[index]
+            .iter()
+            .any(|call| call.window == window && call.request == request)
+        {
+            return Ok(false);
+        }
+        let EffectExprKind::Operation(EffectOperation::Request(call)) =
+            &node(original, request)?.kind
+        else {
+            return Err(invalid());
+        };
+        Ok(original
+            .registry
+            .native_symbol(call.operation())
+            .is_some_and(|original| Arc::ptr_eq(original, symbol)))
+    }
+
+    /// Exposes only original window requests mapped through this scope's
+    /// independently authenticated specialization forest. It is representation
+    /// lineage for capture analysis, not permission to execute a native call.
+    pub(in crate::core) fn visit_window_calls(
+        &self,
+        mut visit: impl FnMut(
+            NodeId,
+            NodeId,
+            &CheckedForeignSymbol,
+            &mut TypeWorkBudget,
+        ) -> Result<(), ValidationError>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
+        for (phase, copy) in self.descriptor.copies.iter().enumerate() {
+            let original = match phase {
+                0 => self.original().original_acquire(),
+                1 => self.original().original_finish(),
+                _ => self.original().original_handler(),
+            };
+            charge(work, self.original().window_calls[phase].len())?;
+            for relation in &self.original().window_calls[phase] {
+                let EffectExprKind::Operation(EffectOperation::Request(call)) =
+                    &node(original, relation.request)?.kind
+                else {
+                    return Err(invalid());
+                };
+                let symbol = original
+                    .registry
+                    .native_symbol(call.operation())
+                    .ok_or_else(invalid)?;
+                let mut request = None;
+                let mut window = None;
+                charge(work, copy.nodes.len())?;
+                for (source, target) in &copy.nodes {
+                    if *source == relation.request {
+                        request = Some(*target);
+                    }
+                    if *source == relation.window {
+                        window = Some(*target);
+                    }
+                }
+                visit(
+                    request.ok_or_else(invalid)?,
+                    window.ok_or_else(invalid)?,
+                    symbol,
+                    work,
+                )?;
+            }
+        }
+        Ok(())
     }
 
     /// Maps a flow-proved original call and its selected canonical type
@@ -3038,13 +3937,14 @@ impl SourceResourceScopeNode {
             (
                 0,
                 self.original().original_acquire(),
-                &self.header().acquire,
+                Some(&self.header().acquire),
             ),
             (
                 1,
                 self.original().original_finish(),
-                &self.header().teardown,
+                Some(&self.header().teardown),
             ),
+            (2, self.original().original_handler(), None),
         ] {
             let copy = &self.descriptor.copies[phase];
             charge(work, copy.nodes.len())?;
@@ -3070,15 +3970,66 @@ impl SourceResourceScopeNode {
                 else {
                     return Err(invalid());
                 };
-                if original_call.operation() != expected.operation()
-                    || call.operation() != expected.operation()
+                let symbol = original
+                    .registry
+                    .native_symbol(original_call.operation())
+                    .ok_or_else(invalid)?;
+                charge(work, self.original().window_calls[phase].len())?;
+                if let Some(window_call) = self.original().window_calls[phase]
+                    .iter()
+                    .find(|record| record.request == *source)
+                {
+                    let window = copy
+                        .nodes
+                        .iter()
+                        .find_map(|(original, actual)| {
+                            (*original == window_call.window).then_some(*actual)
+                        })
+                        .ok_or_else(invalid)?;
+                    let EffectExprKind::Operation(EffectOperation::SourceCopyWindow(window)) =
+                        &node(program, window)?.kind
+                    else {
+                        return Err(invalid());
+                    };
+                    let actual = program
+                        .registry
+                        .native_symbol(call.operation())
+                        .ok_or_else(invalid)?;
+                    if !Arc::ptr_eq(symbol, actual)
+                        || !crate::foreign::source_access::window_operation_matches(
+                            window.family(),
+                            window.arguments(),
+                            actual,
+                            call.effect(),
+                            &program.registry,
+                            work,
+                        )
+                        .map_err(|error| {
+                            if error.is_resource_exhaustion() {
+                                resource()
+                            } else {
+                                invalid()
+                            }
+                        })?
+                    {
+                        return Err(invalid());
+                    }
+                    visit(*target, work)?;
+                    continue;
+                }
+                if original_call.operation() != call.operation()
+                    || !(expected.is_some_and(|expected| Arc::ptr_eq(expected, symbol))
+                        || matches!(symbol.owner_role(), Some(PreparedOwnerCall::Borrow { .. }))
+                            && symbol
+                                .owner()
+                                .is_some_and(|owner| Arc::ptr_eq(owner, &self.header().owner)))
                 {
                     return Err(invalid());
                 }
                 let mut covered = false;
                 for interpretation in self.native_interpretations() {
                     charge(work, 1)?;
-                    if Arc::ptr_eq(interpretation.symbol(), expected)
+                    if Arc::ptr_eq(interpretation.symbol(), symbol)
                         && crate::types::compare_effect_instances_with_budget(
                             interpretation.effect(),
                             call.effect(),
@@ -3149,7 +4100,7 @@ impl SourceResourceScopeNode {
         {
             return Err(invalid());
         }
-        let inventories = [
+        let forests = [
             source_inventory(template, 0, &self.descriptor.copies[0], work)?,
             source_inventory(template, 1, &self.descriptor.copies[1], work)?,
             source_inventory(template, 2, &self.descriptor.copies[2], work)?,
@@ -3158,7 +4109,8 @@ impl SourceResourceScopeNode {
         let mut original_types = std::collections::HashSet::new();
         let mut original_handlers = std::collections::HashSet::new();
         let mut original_resumes = std::collections::HashSet::new();
-        for inventory in &inventories {
+        for forest in &forests {
+            let inventory = &forest.inventory;
             if !inventory.nominals.is_empty() || !inventory.lexicals.is_empty() {
                 return Err(invalid());
             }
@@ -3189,7 +4141,7 @@ impl SourceResourceScopeNode {
         let mut target_resumes = std::collections::HashSet::new();
         let mut copied_targets = std::collections::HashSet::new();
         for (phase, copy) in self.descriptor.copies.iter().enumerate() {
-            let inventory = &inventories[phase];
+            let inventory = &forests[phase].inventory;
             exact_fresh_pairs(
                 &inventory.binders,
                 &copy.binders,
@@ -3342,14 +4294,11 @@ impl SourceResourceScopeNode {
                     nominals: &HashMap::new(),
                 };
                 for (original, actual) in interpreted.iter().zip(self.native_interpretations()) {
-                    let expected_symbol =
-                        if original.instance.effect() == template.header.acquire.effect() {
-                            &template.header.acquire
-                        } else if original.instance.effect() == template.header.teardown.effect() {
-                            &template.header.teardown
-                        } else {
-                            return Err(invalid());
-                        };
+                    let expected_symbol = template
+                        .original_acquire()
+                        .registry
+                        .native_symbol(OperationId::new(original.instance.effect(), 0))
+                        .ok_or_else(invalid)?;
                     if original.instance.effect() != actual.effect().effect()
                         || !Arc::ptr_eq(expected_symbol, actual.symbol())
                         || original.instance.arguments().len() != actual.effect().arguments().len()
@@ -3389,31 +4338,11 @@ impl SourceResourceScopeNode {
                     }
                 }
             }
-            let mut reachable = std::collections::HashSet::new();
-            let mut pending_nodes = Vec::new();
-            if phase < 2 {
-                push(&mut pending_nodes, root, work)?;
-            } else {
-                for clause in template.original_handler_node().clauses() {
-                    push(&mut pending_nodes, clause.body(), work)?;
-                }
-            }
-            while let Some(source) = pending_nodes.pop() {
-                charge(work, 1)?;
-                reachable.try_reserve(1).map_err(|_| resource())?;
-                if !reachable.insert(source) {
-                    continue;
-                }
-                let stored = node(original, source)?;
-                for child in 0..stored.kind.child_count() {
-                    push(
-                        &mut pending_nodes,
-                        stored.kind.child_at(child).ok_or_else(invalid)?,
-                        work,
-                    )?;
-                }
-            }
-            if reachable.len() != copy.nodes.len() {
+            // Exact original IDs/projections were collected while deriving
+            // this phase's sigma-dependent inventory. Reuse that invocation-
+            // local representation rather than walking/projecting it again.
+            let originals = &forests[phase].projections;
+            if originals.len() != copy.nodes.len() {
                 return Err(invalid());
             }
             let mut mappings = HashMap::new();
@@ -3425,7 +4354,7 @@ impl SourceResourceScopeNode {
                 .map_err(|_| resource())?;
             for (source, target) in &copy.nodes {
                 charge(work, 1)?;
-                if !reachable.contains(source) {
+                if !originals.contains_key(source) {
                     return Err(invalid());
                 }
                 node(original, *source)?;
@@ -3455,20 +4384,25 @@ impl SourceResourceScopeNode {
             };
             let fresh = copy.fresh();
             fresh.authenticate(work)?;
+            let fresh_lookup = super::provider::specialization::SourceScopeFreshening::new(
+                &fresh, &variables, work,
+            )?;
             for (source, target) in &copy.nodes {
-                let expected =
-                    super::provider::projection::project(*source, node(original, *source)?, work)?;
-                let expected = super::provider::specialization::specialize_projection(
-                    &expected,
+                let expected = originals.get(source).ok_or_else(invalid)?;
+                let expected = super::provider::specialization::specialize_source_projection(
+                    expected,
                     &mappings,
-                    &fresh,
+                    &fresh_lookup,
                     &substitution,
                     &renaming,
                     work,
                 )?;
-                let actual =
-                    super::provider::projection::project(*target, node(program, *target)?, work)?;
-                if !expected.same(&actual, work)? {
+                let actual = super::provider::projection::project_borrowed(
+                    *target,
+                    node(program, *target)?,
+                    work,
+                )?;
+                if !expected.same_borrowed(&actual, work)? {
                     return Err(invalid());
                 }
             }
@@ -3490,10 +4424,10 @@ impl SourceResourceScopeNode {
             }
             mappings.insert(root, actual_root);
             let expected = super::provider::projection::project_binder(root, parameter, work)?;
-            let expected = super::provider::specialization::specialize_projection(
+            let expected = super::provider::specialization::specialize_source_projection(
                 &expected,
                 &mappings,
-                &fresh,
+                &fresh_lookup,
                 &substitution,
                 &renaming,
                 work,
@@ -3508,10 +4442,10 @@ impl SourceResourceScopeNode {
                     template.handler_pattern(),
                     work,
                 )?;
-                let expected = super::provider::specialization::specialize_projection(
+                let expected = super::provider::specialization::specialize_source_projection(
                     &expected,
                     &mappings,
-                    &fresh,
+                    &fresh_lookup,
                     &substitution,
                     &renaming,
                     work,
@@ -3573,10 +4507,10 @@ impl SourceResourceScopeNode {
                     .iter()
                     .zip(self.handler.clauses())
                 {
-                    let expected = super::provider::specialization::specialize_projection(
+                    let expected = super::provider::specialization::specialize_source_projection(
                         &super::provider::projection::project_clause(original, work)?,
                         &mappings,
-                        &fresh,
+                        &fresh_lookup,
                         &substitution,
                         &renaming,
                         work,
@@ -4037,12 +4971,12 @@ fn exact_fresh_pairs<T: Copy + Eq + std::hash::Hash>(
     }
     Ok(())
 }
-fn source_inventory(
-    template: &CheckedSourceResourceTemplate,
+fn source_inventory<'a>(
+    template: &'a CheckedSourceResourceTemplate,
     phase: usize,
     copy: &SourceResourceCopy,
     work: &mut TypeWorkBudget,
-) -> Result<super::provider::specialization::ProviderLocalInventory, ValidationError> {
+) -> Result<super::provider::specialization::SourceResourceOriginalForest<'a>, ValidationError> {
     let (program, parameter, root) = match phase {
         0 => (
             &template.acquire,
@@ -4075,7 +5009,7 @@ fn source_inventory(
         pending: &pending,
     };
     let handler_patterns = [template.handler_pattern()];
-    super::provider::source_resource_local_identities(
+    super::provider::specialization::source_resource_original_forest(
         program,
         &roots,
         &[parameter],
@@ -4136,6 +5070,92 @@ mod tests {
     impl Drop for Fixture {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn lexical_window_declarations_match_exact_original_phase_inventory_and_budget() {
+        let fixture = Fixture::new();
+        fs::write(
+            fixture.0.join("owner.ash"),
+            include_str!("../../libraries/sqlite.ash"),
+        )
+        .unwrap();
+        fs::write(fixture.0.join("entry.ash"), "import owner as Sqlite\nmain : Unit -> Sqlite.Scope<Sqlite.OpenError, Sqlite.CloseError, Bool> ! {Sqlite.Initialize}\nmain () = resource Sqlite.Connection<C> connection = Sqlite.InMemory {\n    true\n}\n").unwrap();
+        let compiled = fixture.compile();
+        let (program, _) = compiled.effect_build_input().unwrap();
+        let original = program
+            .nodes()
+            .iter()
+            .find_map(|node| match &node.kind {
+                EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
+                    Some(scope.original())
+                }
+                _ => None,
+            })
+            .unwrap();
+        let declarations = &original.header().original.windows;
+        assert_eq!(declarations.len(), 1);
+        assert_eq!(
+            declarations[0].phase,
+            crate::resolved::SourceWindowPhase::Handler
+        );
+        let check = |declarations: &[_], work: &mut TypeWorkBudget| {
+            super::check_original_window_declarations(
+                declarations,
+                original.original_acquire(),
+                original.original_finish(),
+                original.original_handler(),
+                work,
+            )
+        };
+        let mut measured = TypeWorkBudget::default();
+        check(declarations, &mut measured).unwrap();
+        let cost = measured.used();
+        for prefix in [0, 17] {
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                check(declarations, &mut exact).unwrap();
+                assert_eq!(exact.used(), prefix + cost);
+                let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+                short.charge(prefix).unwrap();
+                assert_eq!(
+                    check(declarations, &mut short).unwrap_err().reason(),
+                    ValidationReason::Resource
+                );
+            }
+            check(declarations, &mut TypeWorkBudget::default()).unwrap();
+        }
+        let mut phase = declarations.to_vec();
+        phase[0].phase = crate::resolved::SourceWindowPhase::Acquire;
+        let mut family = declarations.to_vec();
+        family[0].family = original.header().original.family;
+        let mut identity = declarations.to_vec();
+        identity[0].identity = original.header().original.answer.id;
+        let mut span = declarations.to_vec();
+        span[0].span = span[0].identity_span;
+        let donor = original
+            .original_registry()
+            .source_resource_facts()
+            .find(|header| header.id != original.header().original.id && !header.windows.is_empty())
+            .unwrap()
+            .windows[0];
+        for invalid in [
+            Vec::new(),
+            vec![declarations[0], declarations[0]],
+            phase,
+            family,
+            identity,
+            span,
+            vec![donor],
+        ] {
+            assert_eq!(
+                check(&invalid, &mut TypeWorkBudget::default())
+                    .unwrap_err()
+                    .reason(),
+                ValidationReason::Registry
+            );
         }
     }
 
@@ -4280,7 +5300,7 @@ mod tests {
                 assert_eq!(fields.len(), 2);
                 assert!(fields.iter().all(|field| matches!(
                     field,
-                    Type::Nominal(nominal) if !registry.source_owner_nominal(*nominal)
+                    Type::Nominal(nominal) if !registry.source_foreign_nominal(*nominal)
                 )));
             }
             let mut measured = TypeWorkBudget::unbounded();
@@ -5184,6 +6204,61 @@ main () = resource Owner.Probe<{}, Outer, {}> outer = 64 {
             current = binding.body();
         }
         requests
+    }
+
+    #[test]
+    fn source_forwarding_borrowed_projection_preserves_fields_and_rejects_changed_type() {
+        let fixture = source_forwarding_fixture();
+        let compiled = fixture.compile();
+        let (checked, _) = compiled.effect_build_input().unwrap();
+        let mut program = super::super::transform::identity_effect_traversal(checked).unwrap();
+        let mut compared = 0;
+        let mut changed = 0;
+        for ordinal in 0..program.nodes.len() {
+            let id = NodeId::new(program.arena, u32::try_from(ordinal).unwrap());
+            let owned = super::super::provider::projection::project(
+                id,
+                &program.nodes[ordinal],
+                &mut TypeWorkBudget::with_limit(327680),
+            );
+            let borrowed = super::super::provider::projection::project_borrowed(
+                id,
+                &program.nodes[ordinal],
+                &mut TypeWorkBudget::with_limit(327680),
+            );
+            match (owned, borrowed) {
+                (Ok(expected), Ok(actual)) => {
+                    assert!(
+                        expected
+                            .same_borrowed(&actual, &mut TypeWorkBudget::with_limit(327680))
+                            .unwrap()
+                    );
+                    drop(actual);
+                    compared += 1;
+                    if program.nodes[ordinal].ty != Type::Unit {
+                        let original =
+                            std::mem::replace(&mut program.nodes[ordinal].ty, Type::Unit);
+                        let altered = super::super::provider::projection::project_borrowed(
+                            id,
+                            &program.nodes[ordinal],
+                            &mut TypeWorkBudget::with_limit(327680),
+                        )
+                        .unwrap();
+                        assert!(
+                            !expected
+                                .same_borrowed(&altered, &mut TypeWorkBudget::with_limit(327680))
+                                .unwrap()
+                        );
+                        drop(altered);
+                        program.nodes[ordinal].ty = original;
+                        changed += 1;
+                    }
+                }
+                (Err(owned), Err(borrowed)) => assert_eq!(owned.reason(), borrowed.reason()),
+                _ => panic!("owned and borrowed canonical emitters disagree"),
+            }
+        }
+        assert!(compared > 20 && changed > 10);
     }
 
     #[test]

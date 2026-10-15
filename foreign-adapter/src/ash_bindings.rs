@@ -2,7 +2,7 @@
 
 use crate::{
     Column, Connection, CopyColumnKind, DiagnosticCopyFailure, Error, Event, InputError,
-    NativeError, Observations, ProtocolError, Statement, StatementState, Step,
+    NativeError, Observations, ProtocolError, Statement, StatementState, Step, sqlite_manifest,
 };
 use ash::{
     foreign::{
@@ -12,7 +12,6 @@ use ash::{
             ForeignDataNode, ForeignExecutionError, ForeignFinishContext, ForeignOperationKey,
             ForeignRuntimeBinding, NativeResourceOwner,
         },
-        sqlite_manifest,
     },
     types::{ConstructorId, TYPE_WORK_LIMIT},
 };

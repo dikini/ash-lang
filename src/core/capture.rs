@@ -1524,6 +1524,16 @@ fn retain_metadata_variables(
         }
         _ => {}
     }
+    retain_compound_metadata_variables(value, root, budget)
+}
+
+// Keep the full Type/Row worklist and Forall shielding off scalar-root frames.
+#[inline(never)]
+fn retain_compound_metadata_variables(
+    value: &mut MetadataVariables,
+    root: Metadata<'_>,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), Failure> {
     let mut pending = copy_slice(&[root], budget)?;
     let mut discovered = MetadataVariables::default();
     let mut bound = std::collections::HashSet::new();
@@ -2746,6 +2756,185 @@ fn compile_provider_capture_control<'a, F: CoreOperationFamily>(
 }
 
 #[inline(never)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "source-resource phase temporaries must not enlarge ordinary capture-control frames"
+)]
+fn compile_source_resource_capture_control<F: CoreOperationFamily>(
+    id: usize,
+    scope: &super::source_resource::SourceResourceScopeNode,
+    nodes: &[StoredNode<F>],
+    source: Span,
+    graph: &mut SummaryGraph,
+    data: &mut value::Graph,
+    owners: &HashMap<(super::effect::HandlerId, crate::resolved::ResumeId), usize>,
+    budget: &mut TypeWorkBudget,
+) -> Result<Control, Failure> {
+    charge(
+        budget,
+        scope
+            .handler
+            .clauses()
+            .len()
+            .checked_add(8)
+            .ok_or(Failure::Resource)?,
+    )?;
+    graph.code.try_reserve(7).map_err(|_| Failure::Resource)?;
+    let positions = if matches!(
+        scope.header().codec.report,
+        super::source_resource::SourceResourceReportCodec::AcquiredOnly { .. }
+    ) {
+        Some(data.source_resource_positions(id, budget)?)
+    } else {
+        None
+    };
+    let mut clauses = Vec::new();
+    clauses
+        .try_reserve_exact(scope.handler.clauses().len())
+        .map_err(|_| Failure::Resource)?;
+    for clause in scope.handler.clauses() {
+        clauses.push(Clause {
+            operation: Some(clause.operation()),
+            body: index(clause.body()) + 1,
+            owner: *owners
+                .get(&(scope.handler.id(), clause.resume()))
+                .ok_or(Failure::Invalid)?,
+            source: clause.origin().primary_span(),
+        });
+    }
+    let handler = graph.code.len();
+    if let Some(positions) = positions {
+        data.position(handler, positions.handler, budget)?;
+    } else {
+        data.position_provider_handler(handler, id, true, budget)?;
+    }
+    graph.code.push(Control::Handler {
+        body: index(scope.handler.body()) + 1,
+        effect: Request::effect(scope.handler.effect(), source, budget)?,
+        clauses,
+        owning_resource: None,
+    });
+    // The same exact native interpreter also encloses selected source
+    // clauses. A clause runs outside its ordinary handler boundary;
+    // its nonconsuming native result must not inherit the State operand.
+    let mut effects = Vec::new();
+    charge(budget, scope.native_interpretations().len())?;
+    effects
+        .try_reserve_exact(scope.native_interpretations().len())
+        .map_err(|_| Failure::Resource)?;
+    for interpretation in scope.native_interpretations() {
+        let mut effect = Request::effect(interpretation.effect(), source, budget)?;
+        effect.operation = Some(interpretation.symbol().operation());
+        effects.push(effect);
+    }
+    let native_handler = graph.code.len();
+    data.position(native_handler, positions.map_or(id, |p| p.handler), budget)?;
+    graph.code.push(Control::NativeInterpret {
+        body: handler,
+        effects,
+    });
+    let mut phases = Vec::new();
+    phases.try_reserve_exact(2).map_err(|_| Failure::Resource)?;
+    for (root, value) in [
+        (scope.acquire.body, positions.map_or(id, |p| p.acquire)),
+        (scope.finish.body, positions.map_or(id, |p| p.finish)),
+    ] {
+        let mut effects = Vec::new();
+        charge(budget, scope.native_interpretations().len())?;
+        effects
+            .try_reserve_exact(scope.native_interpretations().len())
+            .map_err(|_| Failure::Resource)?;
+        for interpretation in scope.native_interpretations() {
+            let mut effect = Request::effect(interpretation.effect(), source, budget)?;
+            effect.operation = Some(interpretation.symbol().operation());
+            effects.push(effect);
+        }
+        let position = graph.code.len();
+        data.position(position, value, budget)?;
+        graph.code.push(Control::NativeInterpret {
+            body: index(root) + 1,
+            effects,
+        });
+        phases.push(position);
+    }
+    let successful = graph.code.len();
+    data.position(successful, positions.map_or(id, |p| p.cleanup), budget)?;
+    // Finish is an armed structural obligation, not a body suffix that
+    // discard may skip. Its running frame is nonabandonable under the
+    // same independent capture rules as an ordinary cleanup action.
+    let mut effects = crate::types::clone_effect_row_with_budget(
+        F::effect_row(&nodes[index(scope.finish.body)].effects),
+        budget,
+    )
+    .map_err(|_| Failure::Resource)?;
+    for interpretation in scope.native_interpretations() {
+        effects = match effects
+            .remove_exact_with_budget(interpretation.effect(), budget)
+            .map_err(|_| Failure::Resource)?
+        {
+            Ok(row) => row,
+            Err(crate::types::EffectRowError::Missing) => effects,
+            Err(_) => return Err(Failure::Invalid),
+        };
+    }
+    charge(budget, 3)?;
+    graph
+        .types
+        .0
+        .try_reserve(1)
+        .map_err(|_| Failure::Resource)?;
+    let row_type = graph.types.0.len();
+    graph.types.0.push(Type::function_computation(
+        Type::Unit,
+        crate::types::ComputationType::new(Type::Unit, effects),
+    ));
+    graph.code.push(Control::Cleanup {
+        body: native_handler,
+        action: phases[1],
+        row_type,
+        source,
+    });
+    let outcome = graph.code.len();
+    data.position(outcome, positions.map_or(id, |p| p.body), budget)?;
+    graph
+        .code
+        .push(Control::Choice(copy_slice(&[0, successful], budget)?));
+    let acquisition = graph.code.len();
+    data.position(acquisition, positions.map_or(id, |p| p.body), budget)?;
+    graph.code.push(Control::Sequence(copy_slice(
+        &[phases[0], outcome],
+        budget,
+    )?));
+    let owner = graph.code.len();
+    data.position(owner, id, budget)?;
+    let mut native_owner = Request::effect(scope.handler.effect(), source, budget)?;
+    for interpretation in scope.native_interpretations() {
+        let other = Request::effect(interpretation.effect(), source, budget)?;
+        charge(budget, other.members.len())?;
+        native_owner
+            .members
+            .try_reserve(other.members.len())
+            .map_err(|_| Failure::Resource)?;
+        native_owner.members.extend(other.members);
+    }
+    let Control::Handler {
+        owning_resource, ..
+    } = &mut graph.code[handler]
+    else {
+        return Err(Failure::Invalid);
+    };
+    *owning_resource = Some(owner);
+    graph.code.push(Control::Resource {
+        body: acquisition,
+        effect: native_owner,
+    });
+    Ok(Control::Sequence(copy_slice(
+        &[index(scope.initializer) + 1, owner],
+        budget,
+    )?))
+}
+
+#[inline(never)]
 #[allow(
     clippy::too_many_arguments,
     reason = "borrowed operation inputs keep legacy control construction separate from provider-group temporaries"
@@ -2767,6 +2956,31 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
     budget: &mut TypeWorkBudget,
 ) -> Result<Control, Failure> {
     Ok(match operation {
+        Some(EffectOperation::SourceCopyWindow(window)) => {
+            charge(budget, window.interpretations().len() + 2)?;
+            let mut effects = Vec::new();
+            effects
+                .try_reserve_exact(window.interpretations().len())
+                .map_err(|_| Failure::Resource)?;
+            for interpretation in window.interpretations() {
+                let mut request = Request::effect(interpretation.effect(), source, budget)?;
+                request.operation = Some(interpretation.symbol().operation());
+                effects.push(request);
+            }
+            graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
+            let interpreted = graph.code.len();
+            // A completed state prefix is the state value. The interpreter's
+            // live cut forwards the raw body, never replays the whole window.
+            data.position(interpreted, index(window.body()), budget)?;
+            graph.code.push(Control::NativeInterpret {
+                body: index(window.body()) + 1,
+                effects,
+            });
+            Control::Sequence(copy_slice(
+                &[index(window.state()) + 1, interpreted],
+                budget,
+            )?)
+        }
         Some(EffectOperation::NativeInterpret(boundary)) => {
             charge(budget, boundary.interpretations().len())?;
             let mut effects = Vec::new();
@@ -2835,146 +3049,9 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
             )?)
         }
         Some(EffectOperation::SourceResourceScope(scope)) => {
-            charge(
-                budget,
-                scope
-                    .handler
-                    .clauses()
-                    .len()
-                    .checked_add(8)
-                    .ok_or(Failure::Resource)?,
-            )?;
-            graph.code.try_reserve(7).map_err(|_| Failure::Resource)?;
-            let positions = if matches!(
-                scope.header().codec.report,
-                super::source_resource::SourceResourceReportCodec::AcquiredOnly { .. }
-            ) {
-                Some(data.source_resource_positions(id, budget)?)
-            } else {
-                None
-            };
-            let mut clauses = Vec::new();
-            clauses
-                .try_reserve_exact(scope.handler.clauses().len())
-                .map_err(|_| Failure::Resource)?;
-            for clause in scope.handler.clauses() {
-                clauses.push(Clause {
-                    operation: Some(clause.operation()),
-                    body: index(clause.body()) + 1,
-                    owner: *owners
-                        .get(&(scope.handler.id(), clause.resume()))
-                        .ok_or(Failure::Invalid)?,
-                    source: clause.origin().primary_span(),
-                });
-            }
-            let handler = graph.code.len();
-            if let Some(positions) = positions {
-                data.position(handler, positions.handler, budget)?;
-            } else {
-                data.position_provider_handler(handler, id, true, budget)?;
-            }
-            graph.code.push(Control::Handler {
-                body: index(scope.handler.body()) + 1,
-                effect: Request::effect(scope.handler.effect(), source, budget)?,
-                clauses,
-                owning_resource: None,
-            });
-            let mut phases = Vec::new();
-            phases.try_reserve_exact(2).map_err(|_| Failure::Resource)?;
-            for (root, value) in [
-                (scope.acquire.body, positions.map_or(id, |p| p.acquire)),
-                (scope.finish.body, positions.map_or(id, |p| p.finish)),
-            ] {
-                let mut effects = Vec::new();
-                charge(budget, scope.native_interpretations().len())?;
-                effects
-                    .try_reserve_exact(scope.native_interpretations().len())
-                    .map_err(|_| Failure::Resource)?;
-                for interpretation in scope.native_interpretations() {
-                    let mut effect = Request::effect(interpretation.effect(), source, budget)?;
-                    effect.operation = Some(interpretation.symbol().operation());
-                    effects.push(effect);
-                }
-                let position = graph.code.len();
-                data.position(position, value, budget)?;
-                graph.code.push(Control::NativeInterpret {
-                    body: index(root) + 1,
-                    effects,
-                });
-                phases.push(position);
-            }
-            let successful = graph.code.len();
-            data.position(successful, positions.map_or(id, |p| p.cleanup), budget)?;
-            // Finish is an armed structural obligation, not a body suffix that
-            // discard may skip. Its running frame is nonabandonable under the
-            // same independent capture rules as an ordinary cleanup action.
-            let mut effects = crate::types::clone_effect_row_with_budget(
-                F::effect_row(&nodes[index(scope.finish.body)].effects),
-                budget,
-            )
-            .map_err(|_| Failure::Resource)?;
-            for interpretation in scope.native_interpretations() {
-                effects = match effects
-                    .remove_exact_with_budget(interpretation.effect(), budget)
-                    .map_err(|_| Failure::Resource)?
-                {
-                    Ok(row) => row,
-                    Err(crate::types::EffectRowError::Missing) => effects,
-                    Err(_) => return Err(Failure::Invalid),
-                };
-            }
-            charge(budget, 3)?;
-            graph
-                .types
-                .0
-                .try_reserve(1)
-                .map_err(|_| Failure::Resource)?;
-            let row_type = graph.types.0.len();
-            graph.types.0.push(Type::function_computation(
-                Type::Unit,
-                crate::types::ComputationType::new(Type::Unit, effects),
-            ));
-            graph.code.push(Control::Cleanup {
-                body: handler,
-                action: phases[1],
-                row_type,
-                source,
-            });
-            let outcome = graph.code.len();
-            data.position(outcome, positions.map_or(id, |p| p.body), budget)?;
-            graph
-                .code
-                .push(Control::Choice(copy_slice(&[0, successful], budget)?));
-            let acquisition = graph.code.len();
-            data.position(acquisition, positions.map_or(id, |p| p.body), budget)?;
-            graph.code.push(Control::Sequence(copy_slice(
-                &[phases[0], outcome],
-                budget,
-            )?));
-            let owner = graph.code.len();
-            data.position(owner, id, budget)?;
-            let mut native_owner = Request::effect(scope.handler.effect(), source, budget)?;
-            for interpretation in scope.native_interpretations() {
-                let other = Request::effect(interpretation.effect(), source, budget)?;
-                charge(budget, other.members.len())?;
-                native_owner
-                    .members
-                    .try_reserve(other.members.len())
-                    .map_err(|_| Failure::Resource)?;
-                native_owner.members.extend(other.members);
-            }
-            let Control::Handler {
-                owning_resource, ..
-            } = &mut graph.code[handler]
-            else {
-                return Err(Failure::Invalid);
-            };
-            *owning_resource = Some(owner);
-            graph.code.push(Control::Resource {
-                body: acquisition,
-                effect: native_owner,
-            });
-            Control::Sequence(copy_slice(&[index(scope.initializer) + 1, owner], budget)?)
+            compile_source_resource_capture_control(
+                id, scope, nodes, source, graph, data, owners, budget,
+            )?
         }
         Some(EffectOperation::ProviderScope(_)) => return Err(Failure::Invalid),
         Some(EffectOperation::Request(request)) => {

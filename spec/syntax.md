@@ -74,6 +74,7 @@ foreign_member ::=
   | foreign_constant
   | foreign_sentinel
   | foreign_owner
+  | foreign_access
   | foreign_symbol ;
 foreign_constant ::=
   "const" upper_identifier ":" foreign_reference "=" foreign_integer ;
@@ -82,37 +83,58 @@ foreign_sentinel ::=
 foreign_integer ::= [ "-" ] integer ;
 foreign_reference ::= upper_identifier [ "." upper_identifier ] ;
 foreign_representation ::=
-    "signed" "(" integer ")"
-  | "unsigned" "(" integer ")"
+    "signed" "(" foreign_integer ")"
+  | "unsigned" "(" foreign_integer ")"
   | "size_t" | "opaque" | "bytes" | "function_address" ;
 foreign_owner ::=
   "owner" upper_identifier type_parameters
-  "{" line_end "representation" upper_identifier line_end
+  "{" line_end "representation" foreign_reference line_end
   "owned" upper_identifier line_end
   [ "retains" upper_identifier { "," upper_identifier } line_end ]
-  "teardown" upper_identifier [ line_end ] "}" ;
+  "teardown" foreign_reference [ line_end ] "}" ;
+foreign_access ::=
+  "access" upper_identifier type_parameters
+  "{" line_end "window" upper_identifier line_end
+  "owner" type line_end "extent" ("bytes" | "nul") line_end
+  "preserves" foreign_reference { "," foreign_reference }
+  [ line_end ] "}" ;
 foreign_symbol ::=
   "symbol" upper_identifier [ type_parameters ] ":" type
   "{" line_end "name" string_literal line_end
-  "abi" "(" [ abi_representation { "," abi_representation } ] ")"
-  "->" (abi_representation | "void") line_end
+  "abi" "(" [ abi_operand { "," abi_operand } ] ")"
+  "->" abi_representation line_end
   foreign_call_contract { line_end foreign_call_contract }
   [ line_end ] "}" ;
-abi_representation ::= upper_identifier | "pointer" "(" upper_identifier ")" ;
+abi_operand ::= abi_representation | "out" "(" abi_representation ")" ;
+abi_representation ::=
+    foreign_reference | "pointer" "(" foreign_reference ")" | "void" ;
 foreign_call_contract ::=
-    "operand" integer "from" source_position ("scalar" | "current" | "enclosing")
-  | "operand" integer "from" "constant" foreign_reference
-  | "output" "result" "as" ("scalar" | "owner" "(" type ")")
+    "operand" native_position "from" source_position foreign_operand_role
+  | "operand" native_position "from" "constant" foreign_reference
+  | "operand" native_position "from" "null"
+  | "output" native_position "as" foreign_output_role
   | "outcome" outcome_test "{" [ outcome_fact { "," outcome_fact } ] "}"
   | "retained_dependents" "block" ;
 outcome_test ::=
-    "result" ("null" | "nonnull" | "==" foreign_reference)
+    outcome_atom { "and" outcome_atom }
   | "otherwise" ;
+outcome_atom ::= native_position ("null" | "nonnull" | "==" foreign_reference) ;
 outcome_fact ::=
-    ("readable" | "unreadable") "result"
+    ("readable" | "unreadable") native_position
   | ("consumed" | "retained") source_position
-  | "initialized_bytes" "result" "from" source_position ;
-source_position ::= integer { "." integer } ;
+  | "initialized_bytes" native_position "from" source_position ;
+foreign_operand_role ::=
+    "scalar" | "current" | "enclosing" | "view" | "sentinel"
+  | "bytes" "(" source_position ")" foreign_input_discipline
+  | "nul" foreign_input_discipline ;
+foreign_input_discipline ::= "call_borrow" | "copy" ;
+foreign_output_role ::=
+    "scalar" | "owner" "(" type ")"
+  | "view" "(" type { "," source_position } ")"
+  | "extent_of" "(" source_position { "," source_position } ")"
+  | "offset_into" "(" source_position ")" ;
+native_position ::= "result" | foreign_integer ;
+source_position ::= foreign_integer { "." foreign_integer } ;
 string_literal ::= /double-quoted-UTF-8-with-defined-escapes/ ;
 
 resource_declaration ::=
@@ -209,6 +231,9 @@ resource_expression ::=
   | "resource" nominal_type_reference type_arguments identifier
       "=" primary_expression block ;
 hook_expression ::= "hook" effect_instance block ;
+copy_window_expression ::=
+  "copy_window" nominal_type_reference type_arguments
+  "from" primary_expression block ;
 registration_expression ::=
   "register" effect_instance primary_expression block ;
 cleanup_expression ::= "cleanup" expression block ;
@@ -220,6 +245,7 @@ expression ::=
   | handler_expression
   | resume_expression
   | resource_expression
+  | copy_window_expression
   | equality_expression ;
 equality_expression ::= additive_expression [ "==" additive_expression ] ;
 additive_expression ::=
@@ -229,6 +255,7 @@ multiplicative_expression ::=
 application_expression ::= primary_expression { primary_expression } ;
 primary_expression ::=
   integer
+  | string_literal
   | boolean
   | unit
   | unqualified_term_reference
@@ -268,6 +295,8 @@ atomic_type ::=
   "Int"
   | "Bool"
   | "Unit"
+  | "String"
+  | "Bytes"
   | nominal_type_reference [ type_arguments ]
   | parenthesized_type ;
 nominal_type_reference ::=
@@ -303,20 +332,23 @@ targeted. A targeted import list contains at least one item. Neither a module
 nor a block uses a trailing semicolon.
 
 The foreign productions describe scalar declarations, fixed non-callable
-sentinels and owner contracts with declared dependencies. `source_position`
+sentinels, owner contracts and finite access families. `source_position`
 selects a zero-based leaf of the source
 argument product. Quoted declaration strings follow [lexical
 structure](lexical-structure.md#tokens). [Static
 semantics](static-semantics.md#source-foreign-declarations) requires exact ABI
-coverage, owner roles and result shape. Pointer representations are restricted
-to admitted owner addresses. Owner status alternatives may reference checked
+coverage, owner/access roles and result shape. Parsed positions and widths must
+be nonnegative; `void` is legal only as a result. Pointer representations require
+an admitted input, output, owner or access role. Owner status alternatives may reference checked
 literal facts in the original library. A passive `const` has a mathematical
 integer literal with an optional minus sign, not a value expression. Its checked
 scalar value introduces an ordinary `Int` term binder and may supply an exact
 declared native operand. Scalar-result alternatives declare that bare result
 readable.
-Output slots, access members and copy windows remain outside this implementation
-checkpoint. A byte owner requires an
+An `out` ABI operand is an initialized private output slot, not a source pointer.
+`copy_window` binds its family's fresh window identity only in its body;
+[static semantics](static-semantics.md#source-foreign-declarations) restricts its
+original family, direct provider phase and exact owner. A byte owner requires an
 explicit `initialized_bytes` fact for execution through an admitted resource
 scope; preparing its contract alone grants no activation or byte access. Effect arguments
 retain their written order; the declaring effect determines each argument's

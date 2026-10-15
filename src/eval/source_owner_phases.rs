@@ -1,4 +1,4 @@
-//! Consuming source-owner native phases. Guards remain outside ordinary Ash
+//! Guarded source-owner native phases. Guards remain outside ordinary Ash
 //! values and every reporting cell is reserved before irreversible native work.
 
 use std::sync::Arc;
@@ -7,8 +7,8 @@ use super::{ActivationKey, HeapCell, Location, Value};
 use crate::{
     foreign::{
         source_bindings::{
-            AdmittedSourceOwnerAcquireInvocation, AdmittedSourceOwnerTeardownInvocation,
-            SourceOwnerReturnedAuthority,
+            AdmittedSourceOwnerAcquireInvocation, AdmittedSourceOwnerBorrowInvocation,
+            AdmittedSourceOwnerTeardownInvocation, SourceOwnerReturnedAuthority,
         },
         source_runtime::{
             NativeOwnerCallReturned, NativeOwnerDisposition, NativeOwnerGuard, NativeOwnerOperand,
@@ -27,6 +27,76 @@ pub(super) enum OwnerPhaseFailure {
     Wrapper(NativeScalarCallError),
 }
 
+/// The live source boundary retains its guard while this single-use ticket
+/// owns all scalar reporting work/storage. It never moves or consumes an owner.
+#[derive(Debug)]
+pub(super) struct OwnerBorrowReady<'binding> {
+    invocation: AdmittedSourceOwnerBorrowInvocation<'binding>,
+    operands: Vec<NativeOwnerOperand>,
+    report: crate::foreign::source_runtime::PrepaidScalarReport,
+    returned: ConstructorId,
+    location: Location,
+    input_storage: Vec<Vec<u8>>,
+}
+impl<'binding> OwnerBorrowReady<'binding> {
+    fn admit(
+        invocation: AdmittedSourceOwnerBorrowInvocation<'binding>,
+        operands: Vec<NativeOwnerOperand>,
+        heap: &mut Vec<HeapCell>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, OwnerPhaseFailure> {
+        let report =
+            crate::foreign::source_runtime::PrepaidScalarReport::admit(invocation.result(), work)
+                .map_err(|error| match error {
+                NativeScalarConversionError::WorkExhausted => OwnerPhaseFailure::WorkReservation,
+                _ => OwnerPhaseFailure::Authority,
+            })?;
+        work.charge(2)
+            .map_err(|_| OwnerPhaseFailure::WorkReservation)?;
+        heap.try_reserve(1)
+            .map_err(|_| OwnerPhaseFailure::HeapReservation(1))?;
+        let location = heap.len();
+        heap.push(HeapCell::Uninitialized);
+        let returned = invocation.returned_constructor();
+        Ok(Self {
+            invocation,
+            operands,
+            report,
+            returned,
+            location,
+            input_storage: Vec::new(),
+        })
+    }
+    fn with_inputs(mut self, input_storage: Vec<Vec<u8>>) -> Self {
+        self.input_storage = input_storage;
+        self
+    }
+    fn invoke_and_report(self, heap: &mut [HeapCell]) -> Result<Value, OwnerPhaseFailure> {
+        let (_recorded_authority, raw) = self
+            .invocation
+            .invoke(&self.operands)
+            .map_err(OwnerPhaseFailure::Wrapper)?;
+        // Only the exact callback borrows these stable temporary addresses.
+        // They are released after C returns, including every failure path.
+        drop(self.input_storage);
+        // Bare raw status is retained before extraction. Post-call failure is
+        // terminal; neither this ticket nor a guard can be recovered for replay.
+        let integer = crate::foreign::source_runtime::widen_gnu_reply(raw, self.report)
+            .map_err(|_| OwnerPhaseFailure::Authority)?;
+        let cell = heap
+            .get_mut(self.location)
+            .ok_or(OwnerPhaseFailure::HeapSlotInvariant)?;
+        if !matches!(cell, HeapCell::Uninitialized) {
+            return Err(OwnerPhaseFailure::HeapSlotInvariant);
+        }
+        *cell = HeapCell::Constructor(
+            self.returned,
+            Some(integer.map_or(Value::Unit, Value::Integer)),
+        );
+        Ok(Value::Location(self.location))
+    }
+}
+
 #[derive(Debug)]
 struct PrepaidOwnerRecord;
 
@@ -41,6 +111,26 @@ struct AcquireReportSlots {
     readable: ConstructorId,
     returned_constructor: ConstructorId,
     activation: ActivationKey,
+    status: Option<AcquireStatusStorage>,
+    offset: Option<AcquireOffsetStorage>,
+}
+
+#[derive(Debug)]
+struct AcquireOffsetStorage {
+    location: Location,
+    nullable: Location,
+    unreadable: ConstructorId,
+    descriptor: crate::foreign::source_contract::PreparedOffsetOutput,
+    input_start: usize,
+    input_length: usize,
+    prepaid: crate::foreign::source_runtime::PrepaidScalarReport,
+}
+
+#[derive(Debug)]
+struct AcquireStatusStorage {
+    prepaid: crate::foreign::source_runtime::PrepaidScalarReport,
+    location: Location,
+    fields: Box<[Value]>,
 }
 
 #[derive(Debug)]
@@ -49,6 +139,7 @@ pub(super) struct OwnerAcquireReady<'binding> {
     operands: Vec<NativeOwnerOperand>,
     recording: PrepaidOwnerRecord,
     slots: AcquireReportSlots,
+    input_storage: Vec<Vec<u8>>,
 }
 
 #[derive(Debug)]
@@ -57,6 +148,7 @@ pub(super) struct OwnerAcquireReturned<'binding> {
     raw: NativeOwnerCallReturned,
     recording: PrepaidOwnerRecord,
     slots: AcquireReportSlots,
+    input_storage: Vec<Vec<u8>>,
 }
 
 #[derive(Debug)]
@@ -64,6 +156,9 @@ pub(super) struct OwnerAcquireRecorded<'binding> {
     _authority: SourceOwnerReturnedAuthority<'binding>,
     guard: Option<NativeOwnerGuard>,
     slots: AcquireReportSlots,
+    scalar: Option<crate::foreign::source_runtime::NativeScalarReply>,
+    offset: Option<*mut core::ffi::c_void>,
+    input_storage: Vec<Vec<u8>>,
 }
 
 #[derive(Debug)]
@@ -139,6 +234,7 @@ pub(super) struct OwnerTeardownReported {
 
 #[derive(Debug)]
 pub(super) enum SourceOwnerCallProgress<'binding> {
+    BorrowReady(OwnerBorrowReady<'binding>),
     AcquireReady(OwnerAcquireReady<'binding>),
     AcquireReturned(OwnerAcquireReturned<'binding>),
     AcquireRecorded(OwnerAcquireRecorded<'binding>),
@@ -203,7 +299,77 @@ impl<'binding> OwnerAcquireReady<'binding> {
         let nullable = invocation.nullable_constructors();
         let readable = invocation.readable_constructor();
         let returned_constructor = invocation.returned_constructor();
-        let first = reserve_slots(heap, work, 3)?;
+        let offset = match invocation.symbol().owner_role() {
+            Some(crate::foreign::source_contract::PreparedOwnerCall::OutputAcquire {
+                offset,
+                ..
+            }) => *offset,
+            _ => None,
+        };
+        let status = if matches!(
+            invocation.symbol().owner_role(),
+            Some(crate::foreign::source_contract::PreparedOwnerCall::OutputAcquire { .. })
+        ) {
+            let prepaid = crate::foreign::source_runtime::PrepaidScalarReport::admit(
+                invocation.symbol().symbol().result(),
+                work,
+            )
+            .map_err(|error| match error {
+                NativeScalarConversionError::WorkExhausted => OwnerPhaseFailure::WorkReservation,
+                _ => OwnerPhaseFailure::Authority,
+            })?;
+            let count = 2 + usize::from(offset.is_some());
+            work.charge(count)
+                .map_err(|()| OwnerPhaseFailure::WorkReservation)?;
+            let mut fields = Vec::new();
+            fields
+                .try_reserve_exact(count)
+                .map_err(|_| OwnerPhaseFailure::HeapReservation(count))?;
+            for _ in 0..count {
+                fields.push(Value::Unit);
+            }
+            Some((prepaid, fields.into_boxed_slice()))
+        } else {
+            None
+        };
+        let offset = offset
+            .map(|descriptor| {
+                // The extra fixed unit prepays the raw-result outcome comparison.
+                work.charge(1)
+                    .map_err(|()| OwnerPhaseFailure::WorkReservation)?;
+                let prepaid = crate::foreign::source_runtime::PrepaidScalarReport::admit(
+                    crate::foreign::source_contract::PreparedAbiResult::Scalar(
+                        crate::foreign::source_contract::PreparedScalarRepresentation::SizeT,
+                    ),
+                    work,
+                )
+                .map_err(|_| OwnerPhaseFailure::WorkReservation)?;
+                Ok((descriptor, prepaid))
+            })
+            .transpose()?;
+        let first = reserve_slots(
+            heap,
+            work,
+            3 + usize::from(status.is_some()) + 2 * usize::from(offset.is_some()),
+        )?;
+        let status = status.map(|(prepaid, fields)| AcquireStatusStorage {
+            prepaid,
+            fields,
+            location: first + 3,
+        });
+        let offset = offset.map(|(descriptor, prepaid)| AcquireOffsetStorage {
+            location: first + 5,
+            nullable: first + 4,
+            unreadable: invocation
+                .symbol()
+                .owner_codec()
+                .expect("admitted output codec")
+                .output_constructors()[0],
+            descriptor,
+            input_start: 0,
+            input_length: 0,
+            prepaid,
+        });
         #[cfg(test)]
         post_record_test::initialized_bytes_admission_end(work, admission_budget);
         Ok(Self {
@@ -220,8 +386,43 @@ impl<'binding> OwnerAcquireReady<'binding> {
                 readable,
                 returned_constructor,
                 activation,
+                status,
+                offset,
             },
+            input_storage: Vec::new(),
         })
+    }
+
+    fn with_inputs(
+        mut self,
+        inputs: Vec<Vec<u8>>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, OwnerPhaseFailure> {
+        if let Some(offset) = &mut self.slots.offset {
+            work.charge(inputs.len().saturating_add(1))
+                .map_err(|()| OwnerPhaseFailure::WorkReservation)?;
+            let Some(NativeOwnerOperand::Address(input)) =
+                self.operands.get(offset.descriptor.input_operand)
+            else {
+                return Err(OwnerPhaseFailure::Authority);
+            };
+            let mut selected = None;
+            for bytes in &inputs {
+                if bytes.as_ptr().cast_mut().cast::<core::ffi::c_void>() == *input
+                    && selected.replace(bytes).is_some()
+                {
+                    return Err(OwnerPhaseFailure::Authority);
+                }
+            }
+            let bytes = selected.ok_or(OwnerPhaseFailure::Authority)?;
+            offset.input_start = bytes.as_ptr() as usize;
+            offset.input_length = bytes
+                .len()
+                .checked_sub(1)
+                .ok_or(OwnerPhaseFailure::Authority)?;
+        }
+        self.input_storage = inputs;
+        Ok(self)
     }
 
     pub(super) fn invoke(self) -> Result<OwnerAcquireReturned<'binding>, OwnerPhaseFailure> {
@@ -230,6 +431,7 @@ impl<'binding> OwnerAcquireReady<'binding> {
             operands,
             recording,
             slots,
+            input_storage,
         } = self;
         let (authority, raw) = invocation
             .invoke(&operands)
@@ -239,6 +441,7 @@ impl<'binding> OwnerAcquireReady<'binding> {
             raw,
             recording,
             slots,
+            input_storage,
         })
     }
 }
@@ -252,14 +455,52 @@ impl<'binding> OwnerAcquireReturned<'binding> {
             raw,
             recording: PrepaidOwnerRecord,
             slots,
+            input_storage,
         } = self;
-        let guard = raw.record().into_guard();
+        let (guard, scalar, offset) = raw.record().into_parts();
         OwnerAcquireRecorded {
             _authority: authority,
             guard,
             slots,
+            scalar,
+            offset,
+            input_storage,
         }
     }
+}
+
+/// Integer-address comparison does not dereference an untrusted native pointer.
+/// The exact call's stable NUL input owns the inclusive end position.
+fn input_relative_offset(start: usize, length: usize, pointer: usize) -> Option<usize> {
+    pointer
+        .checked_sub(start)
+        .filter(|distance| *distance <= length)
+}
+
+fn raw_scalar_literal(
+    reply: crate::foreign::source_runtime::NativeScalarReply,
+) -> Option<crate::foreign::source_contract::PreparedScalarValue> {
+    use crate::foreign::source_runtime::NativeScalarReply;
+    let (negative, magnitude) = match reply {
+        NativeScalarReply::Scalar(NativeScalarValue::I8(value)) => {
+            (value < 0, i64::from(value).unsigned_abs())
+        }
+        NativeScalarReply::Scalar(NativeScalarValue::I32(value)) => {
+            (value < 0, i64::from(value).unsigned_abs())
+        }
+        NativeScalarReply::Scalar(NativeScalarValue::I64(value)) => {
+            (value < 0, value.unsigned_abs())
+        }
+        NativeScalarReply::Scalar(NativeScalarValue::U8(value)) => (false, u64::from(value)),
+        NativeScalarReply::Scalar(NativeScalarValue::U32(value)) => (false, u64::from(value)),
+        NativeScalarReply::Scalar(NativeScalarValue::U64(value)) => (false, value),
+        NativeScalarReply::Scalar(NativeScalarValue::USize(value)) => (false, value as u64),
+        _ => return None,
+    };
+    Some(crate::foreign::source_contract::PreparedScalarValue {
+        negative,
+        magnitude,
+    })
 }
 
 impl OwnerAcquireRecorded<'_> {
@@ -270,9 +511,58 @@ impl OwnerAcquireRecorded<'_> {
         self,
         heap: &mut [HeapCell],
     ) -> Result<OwnerAcquireReported, OwnerPhaseFailure> {
-        if !empty_slots(heap, self.slots.nullable, 3) {
+        if !empty_slots(
+            heap,
+            self.slots.nullable,
+            3 + usize::from(self.slots.status.is_some())
+                + 2 * usize::from(self.slots.offset.is_some()),
+        ) {
             return Err(OwnerPhaseFailure::HeapSlotInvariant);
         }
+        let offset_value = match (self.slots.offset, self.offset) {
+            (None, None) => None,
+            (Some(offset), pointer) => {
+                let raw = self.scalar.ok_or(OwnerPhaseFailure::Authority)?;
+                let literal = raw_scalar_literal(raw).ok_or(OwnerPhaseFailure::Authority)?;
+                let readable = literal == offset.descriptor.status;
+                let output = if readable {
+                    let pointer = pointer.ok_or(OwnerPhaseFailure::Authority)?;
+                    let (constructor, payload) = if pointer.is_null() {
+                        (self.slots.null, None)
+                    } else {
+                        let distance = input_relative_offset(
+                            offset.input_start,
+                            offset.input_length,
+                            pointer as usize,
+                        )
+                        .ok_or(OwnerPhaseFailure::Authority)?;
+                        let integer = crate::foreign::source_runtime::widen_gnu_reply(
+                            crate::foreign::source_runtime::NativeScalarReply::Scalar(
+                                NativeScalarValue::USize(distance),
+                            ),
+                            offset.prepaid,
+                        )
+                        .map_err(|_| OwnerPhaseFailure::Authority)?
+                        .ok_or(OwnerPhaseFailure::Authority)?;
+                        (self.slots.nonnull, Some(Value::Integer(integer)))
+                    };
+                    heap[offset.nullable] = HeapCell::Constructor(constructor, payload);
+                    HeapCell::Constructor(
+                        self.slots.readable,
+                        Some(Value::Location(offset.nullable)),
+                    )
+                } else {
+                    if pointer.is_some() {
+                        return Err(OwnerPhaseFailure::Authority);
+                    }
+                    // A reserved unused nullable slot remains internal scratch.
+                    HeapCell::Constructor(offset.unreadable, None)
+                };
+                heap[offset.location] = output;
+                Some(Value::Location(offset.location))
+            }
+            _ => return Err(OwnerPhaseFailure::Authority),
+        };
         let (constructor, payload) = if self.guard.is_some() {
             (
                 self.slots.nonnull,
@@ -286,10 +576,27 @@ impl OwnerAcquireRecorded<'_> {
             self.slots.readable,
             Some(Value::Location(self.slots.nullable)),
         );
-        heap[self.slots.returned] = HeapCell::Constructor(
-            self.slots.returned_constructor,
-            Some(Value::Location(self.slots.output)),
-        );
+        let payload = match (self.slots.status, self.scalar) {
+            (Some(mut status), Some(scalar)) => {
+                let integer =
+                    crate::foreign::source_runtime::widen_gnu_reply(scalar, status.prepaid)
+                        .map_err(|_| OwnerPhaseFailure::Authority)?
+                        .ok_or(OwnerPhaseFailure::Authority)?;
+                status.fields[0] = Value::Integer(integer);
+                status.fields[1] = Value::Location(self.slots.output);
+                if let Some(offset) = offset_value {
+                    status.fields[2] = offset;
+                }
+                heap[status.location] = HeapCell::Tuple(status.fields);
+                Value::Location(status.location)
+            }
+            (None, None) => Value::Location(self.slots.output),
+            _ => return Err(OwnerPhaseFailure::Authority),
+        };
+        heap[self.slots.returned] =
+            HeapCell::Constructor(self.slots.returned_constructor, Some(payload));
+        // Stable input scratch outlives owner recording and output extraction.
+        drop(self.input_storage);
         Ok(OwnerAcquireReported {
             boundary: self.slots.boundary,
             activation: self.slots.activation,
@@ -500,6 +807,20 @@ pub(super) fn prepare_conversion_refusal(
     invocation: &AdmittedSourceOwnerAcquireInvocation<'_>,
     work: &mut TypeWorkBudget,
 ) -> Result<Value, super::RuntimeFailure> {
+    prepare_conversion_refusal_cells(
+        heap,
+        invocation.hidden_error_constructor(),
+        invocation.conversion_failed_constructor(),
+        work,
+    )
+}
+
+pub(super) fn prepare_conversion_refusal_cells(
+    heap: &mut Vec<HeapCell>,
+    hidden_error: ConstructorId,
+    conversion_failed: ConstructorId,
+    work: &mut TypeWorkBudget,
+) -> Result<Value, super::RuntimeFailure> {
     super::charge_effect_work(work, 2, super::RuntimePhase::Access)?;
     heap.try_reserve(2).map_err(|_| {
         super::resource_failure(
@@ -511,13 +832,10 @@ pub(super) fn prepare_conversion_refusal(
         )
     })?;
     let error = heap.len();
-    heap.push(HeapCell::Constructor(
-        invocation.hidden_error_constructor(),
-        None,
-    ));
+    heap.push(HeapCell::Constructor(hidden_error, None));
     let report = heap.len();
     heap.push(HeapCell::Constructor(
-        invocation.conversion_failed_constructor(),
+        conversion_failed,
         Some(Value::Location(error)),
     ));
     Ok(Value::Location(report))
@@ -578,15 +896,25 @@ impl<'runtime> super::Machine<'runtime> {
             .source_bindings
             .ok_or(super::RuntimeFailure::ForeignBinding)?;
         let phase = match symbol.owner_role() {
-            Some(PreparedOwnerCall::Acquire { .. }) => SourceOwnerPhase::Acquire,
+            Some(PreparedOwnerCall::Borrow { .. }) => {
+                SourceOwnerPhase::Borrow(crate::core::source_resource::SourceResourcePhase::Handler)
+            }
+            Some(PreparedOwnerCall::Acquire { .. } | PreparedOwnerCall::OutputAcquire { .. }) => {
+                SourceOwnerPhase::Acquire
+            }
             Some(PreparedOwnerCall::Teardown { .. } | PreparedOwnerCall::StatusTeardown { .. }) => {
                 SourceOwnerPhase::Finish
             }
             None => return Err(super::RuntimeFailure::ForeignBinding),
         };
+        #[cfg(test)]
+        if matches!(phase, SourceOwnerPhase::Borrow(_)) {
+            post_record_test::block_borrow_boundary(&mut self.frames);
+        }
         let expected_phase = match phase {
-            SourceOwnerPhase::Acquire => super::ProviderPhase::Acquire,
-            SourceOwnerPhase::Finish => super::ProviderPhase::Finish,
+            SourceOwnerPhase::Acquire => Some(super::ProviderPhase::Acquire),
+            SourceOwnerPhase::Finish => Some(super::ProviderPhase::Finish),
+            SourceOwnerPhase::Borrow(_) => None,
         };
         let mut selected = None;
         for (index, frame) in self.frames.iter().enumerate().rev() {
@@ -632,16 +960,34 @@ impl<'runtime> super::Machine<'runtime> {
             if !same_instance(&actual, &effect, &mut self.instantiation_work)? {
                 continue;
             }
-            if boundary.phase != expected_phase
+            if expected_phase.is_some_and(|expected| boundary.phase != expected)
                 || boundary.consumed
+                || boundary.blocked
                 || phase == SourceOwnerPhase::Acquire && boundary.owner.is_some()
             {
                 return Err(super::RuntimeFailure::ForeignBinding);
             }
-            selected = Some((index, boundary.node, boundary.key));
+            let actual_phase = match boundary.phase {
+                super::ProviderPhase::Acquire => {
+                    crate::core::source_resource::SourceResourcePhase::Acquire
+                }
+                super::ProviderPhase::Body => {
+                    crate::core::source_resource::SourceResourcePhase::Handler
+                }
+                super::ProviderPhase::Finish => {
+                    crate::core::source_resource::SourceResourcePhase::Finish
+                }
+            };
+            selected = Some((index, boundary.node, boundary.key, actual_phase));
             break;
         }
-        let (index, node, key) = selected.ok_or(super::RuntimeFailure::ForeignBinding)?;
+        let (index, node, key, actual_phase) =
+            selected.ok_or(super::RuntimeFailure::ForeignBinding)?;
+        let phase = if matches!(phase, SourceOwnerPhase::Borrow(_)) {
+            SourceOwnerPhase::Borrow(actual_phase)
+        } else {
+            phase
+        };
         let invocation = bindings.admit_source_owner_invocation(
             &self.program,
             node,
@@ -652,13 +998,208 @@ impl<'runtime> super::Machine<'runtime> {
             &mut self.instantiation_work,
         )?;
         match invocation {
-            AdmittedSourceOwnerInvocation::Acquire(invocation) => {
-                let source = invocation.symbol().symbol();
-                let Some(PreparedOwnerCall::Acquire {
-                    initialized_bytes, ..
-                }) = invocation.symbol().owner_role()
+            AdmittedSourceOwnerInvocation::Borrow(invocation) => {
+                let Some(PreparedOwnerCall::Borrow {
+                    current_operand, ..
+                }) = symbol.owner_role()
                 else {
                     return Err(super::RuntimeFailure::ForeignBinding);
+                };
+                let source = symbol.symbol();
+                let mut operands = Vec::new();
+                super::charge_effect_work(
+                    &mut self.instantiation_work,
+                    source.operands().len(),
+                    super::RuntimePhase::Access,
+                )?;
+                operands
+                    .try_reserve_exact(source.operands().len())
+                    .map_err(|_| operand_storage(source.operands().len()))?;
+                let mut input_storage = Vec::new();
+                super::charge_effect_work(
+                    &mut self.instantiation_work,
+                    source.operands().len(),
+                    super::RuntimePhase::Access,
+                )?;
+                input_storage
+                    .try_reserve_exact(source.operands().len())
+                    .map_err(|_| operand_storage(source.operands().len()))?;
+                for (position, operand) in source.operands().iter().enumerate() {
+                    let native = match operand.source() {
+                        PreparedOperandSource::Bytes { path, extent, .. } => {
+                            let length = super::source_scalar_phases::source_integer_leaf(
+                                &self.heap,
+                                &value,
+                                extent,
+                                &mut self.instantiation_work,
+                            )?;
+                            let length = match narrow_gnu_scalar(
+                                length,
+                                PreparedScalarRepresentation::SizeT,
+                                &mut self.instantiation_work,
+                            ) {
+                                Ok(NativeScalarValue::USize(length)) => Some(length),
+                                Err(NativeScalarConversionError::OutOfRange) => None,
+                                Err(NativeScalarConversionError::WorkExhausted) => {
+                                    return Err(super::effect_work_failure(
+                                        &self.instantiation_work,
+                                        None,
+                                        super::RuntimePhase::Access,
+                                    ));
+                                }
+                                _ => return Err(super::RuntimeFailure::ForeignBinding),
+                            };
+                            let bytes = source_bytes_leaf(
+                                &self.heap,
+                                &value,
+                                path,
+                                &mut self.instantiation_work,
+                            )?;
+                            let Some(length) = length.filter(|length| *length <= bytes.len())
+                            else {
+                                self.control =
+                                    Some(super::Control::Return(prepare_conversion_refusal_cells(
+                                        &mut self.heap,
+                                        invocation.hidden_error_constructor(),
+                                        invocation.conversion_failed_constructor(),
+                                        &mut self.instantiation_work,
+                                    )?));
+                                return Ok(());
+                            };
+                            let capacity = length.max(1);
+                            super::charge_effect_work(
+                                &mut self.instantiation_work,
+                                capacity,
+                                super::RuntimePhase::Access,
+                            )?;
+                            let mut copied = Vec::new();
+                            copied
+                                .try_reserve_exact(capacity)
+                                .map_err(|_| operand_storage(capacity))?;
+                            copied.extend_from_slice(&bytes[..length]);
+                            let address = copied.as_mut_ptr().cast();
+                            input_storage.push(copied);
+                            NativeOwnerOperand::Address(address)
+                        }
+                        PreparedOperandSource::Sentinel(position) => {
+                            NativeOwnerOperand::Scalar(admit_sentinel_operand(
+                                symbol,
+                                *position,
+                                operand.representation(),
+                                &mut self.instantiation_work,
+                                super::RuntimePhase::Access,
+                            )?)
+                        }
+                        PreparedOperandSource::Current(path) if position == *current_operand => {
+                            if current_key(&self.heap, &value, path, &mut self.instantiation_work)?
+                                != key
+                            {
+                                return Err(super::RuntimeFailure::ForeignBinding);
+                            }
+                            let super::Frame::SourceResourceBoundary(boundary) =
+                                &self.frames[index]
+                            else {
+                                return Err(super::RuntimeFailure::InvalidControlState);
+                            };
+                            let owner = boundary
+                                .owner
+                                .as_ref()
+                                .ok_or(super::RuntimeFailure::ForeignBinding)?;
+                            if !Arc::ptr_eq(
+                                owner.owner(),
+                                symbol
+                                    .owner()
+                                    .ok_or(super::RuntimeFailure::ForeignBinding)?,
+                            ) || actual_phase
+                                == crate::core::source_resource::SourceResourcePhase::Handler
+                                && !owner.ordinary_live()
+                            {
+                                return Err(super::RuntimeFailure::ForeignBinding);
+                            }
+                            NativeOwnerOperand::Address(
+                                owner
+                                    .completion_address()
+                                    .ok_or(super::RuntimeFailure::ForeignBinding)?,
+                            )
+                        }
+                        PreparedOperandSource::Enclosing(path) => self.enclosing_owner_operand(
+                            index,
+                            request,
+                            &value,
+                            path,
+                            actual_phase
+                                == crate::core::source_resource::SourceResourcePhase::Finish,
+                        )?,
+                        PreparedOperandSource::Constant(position) => {
+                            NativeOwnerOperand::Scalar(admit_constant_operand(
+                                symbol,
+                                *position,
+                                operand.representation(),
+                                &mut self.instantiation_work,
+                                super::RuntimePhase::Access,
+                            )?)
+                        }
+                        PreparedOperandSource::Source(path) => {
+                            let integer = super::source_scalar_phases::source_integer_leaf(
+                                &self.heap,
+                                &value,
+                                path,
+                                &mut self.instantiation_work,
+                            )?;
+                            let PreparedRepresentation::Scalar(representation) =
+                                operand.representation()
+                            else {
+                                return Err(super::RuntimeFailure::ForeignBinding);
+                            };
+                            match narrow_gnu_scalar(
+                                integer,
+                                representation,
+                                &mut self.instantiation_work,
+                            ) {
+                                Ok(value) => NativeOwnerOperand::Scalar(value),
+                                Err(NativeScalarConversionError::OutOfRange) => {
+                                    self.control = Some(super::Control::Return(
+                                        prepare_conversion_refusal_cells(
+                                            &mut self.heap,
+                                            invocation.hidden_error_constructor(),
+                                            invocation.conversion_failed_constructor(),
+                                            &mut self.instantiation_work,
+                                        )?,
+                                    ));
+                                    return Ok(());
+                                }
+                                Err(NativeScalarConversionError::WorkExhausted) => {
+                                    return Err(super::effect_work_failure(
+                                        &self.instantiation_work,
+                                        None,
+                                        super::RuntimePhase::Access,
+                                    ));
+                                }
+                                Err(_) => return Err(super::RuntimeFailure::ForeignBinding),
+                            }
+                        }
+                        _ => return Err(super::RuntimeFailure::ForeignBinding),
+                    };
+                    operands.push(native);
+                }
+                let ready = OwnerBorrowReady::admit(
+                    invocation,
+                    operands,
+                    &mut self.heap,
+                    &mut self.instantiation_work,
+                )
+                .map_err(|error| phase_failure(error, &self.instantiation_work))?
+                .with_inputs(input_storage);
+                self.pending_source_owner_call = Some(SourceOwnerCallProgress::BorrowReady(ready));
+            }
+            AdmittedSourceOwnerInvocation::Acquire(invocation) => {
+                let source = invocation.symbol().symbol();
+                let initialized_bytes = match invocation.symbol().owner_role() {
+                    Some(PreparedOwnerCall::Acquire {
+                        initialized_bytes, ..
+                    }) => initialized_bytes.as_ref(),
+                    Some(PreparedOwnerCall::OutputAcquire { .. }) => None,
+                    _ => return Err(super::RuntimeFailure::ForeignBinding),
                 };
                 // This path is the original authored source leaf. It need not
                 // be an ABI operand, and private resource data grants no extent.
@@ -707,7 +1248,68 @@ impl<'runtime> super::Machine<'runtime> {
                 operands
                     .try_reserve_exact(source.operands().len())
                     .map_err(|_| operand_storage(source.operands().len()))?;
+                let mut input_storage = Vec::new();
+                super::charge_effect_work(
+                    &mut self.instantiation_work,
+                    source.operands().len(),
+                    super::RuntimePhase::Access,
+                )?;
+                input_storage
+                    .try_reserve_exact(source.operands().len())
+                    .map_err(|_| operand_storage(source.operands().len()))?;
                 for operand in source.operands() {
+                    if let PreparedOperandSource::Nul(path) = operand.source() {
+                        let text = source_string_leaf(
+                            &self.heap,
+                            &value,
+                            path,
+                            &mut self.instantiation_work,
+                        )?;
+                        super::charge_effect_work(
+                            &mut self.instantiation_work,
+                            text.len(),
+                            super::RuntimePhase::Access,
+                        )?;
+                        if text.as_bytes().contains(&0) {
+                            self.control =
+                                Some(super::Control::Return(prepare_conversion_refusal(
+                                    &mut self.heap,
+                                    &invocation,
+                                    &mut self.instantiation_work,
+                                )?));
+                            return Ok(());
+                        }
+                        let count = text
+                            .len()
+                            .checked_add(1)
+                            .ok_or_else(|| operand_storage(text.len()))?;
+                        super::charge_effect_work(
+                            &mut self.instantiation_work,
+                            count,
+                            super::RuntimePhase::Access,
+                        )?;
+                        let mut bytes = Vec::new();
+                        bytes
+                            .try_reserve_exact(count)
+                            .map_err(|_| operand_storage(count))?;
+                        bytes.extend_from_slice(text.as_bytes());
+                        bytes.push(0);
+                        operands.push(NativeOwnerOperand::Address(bytes.as_mut_ptr().cast()));
+                        input_storage.push(bytes);
+                        continue;
+                    }
+                    if matches!(operand.source(), PreparedOperandSource::Null) {
+                        operands.push(NativeOwnerOperand::Address(std::ptr::null_mut()));
+                        continue;
+                    }
+                    if matches!(operand.source(), PreparedOperandSource::OwnerOutput) {
+                        operands.push(NativeOwnerOperand::OwnerOutput);
+                        continue;
+                    }
+                    if matches!(operand.source(), PreparedOperandSource::OffsetOutput) {
+                        operands.push(NativeOwnerOperand::OffsetOutput);
+                        continue;
+                    }
                     if let PreparedOperandSource::Sentinel(position) = operand.source() {
                         operands.push(NativeOwnerOperand::Scalar(admit_sentinel_operand(
                             invocation.symbol(),
@@ -826,6 +1428,9 @@ impl<'runtime> super::Machine<'runtime> {
                     &mut self.instantiation_work,
                 )
                 .map_err(|error| phase_failure(error, &self.instantiation_work))?;
+                let ready = ready
+                    .with_inputs(input_storage, &mut self.instantiation_work)
+                    .map_err(|error| phase_failure(error, &self.instantiation_work))?;
                 self.pending_source_owner_call = Some(SourceOwnerCallProgress::AcquireReady(ready));
             }
             AdmittedSourceOwnerInvocation::Teardown(invocation) => {
@@ -1015,6 +1620,13 @@ impl<'runtime> super::Machine<'runtime> {
             return Ok(false);
         };
         match progress {
+            SourceOwnerCallProgress::BorrowReady(ready) => {
+                super::disposal::check()?;
+                let value = ready
+                    .invoke_and_report(&mut self.heap)
+                    .map_err(|error| phase_failure(error, &self.instantiation_work))?;
+                self.control = Some(super::Control::Return(value));
+            }
             SourceOwnerCallProgress::AcquireReturned(returned) => {
                 #[cfg(test)]
                 let returned =
@@ -1105,6 +1717,7 @@ impl<'runtime> super::Machine<'runtime> {
                 // destructor, even if later source report handling fails.
                 let _authority = consumed.owner();
                 boundary.consumed = !consumed.is_retained();
+                boundary.blocked = consumed.is_blocked();
                 boundary.owner = consumed.into_retained();
                 self.control = Some(super::Control::Return(value));
             }
@@ -1113,7 +1726,7 @@ impl<'runtime> super::Machine<'runtime> {
     }
 }
 
-fn same_instance(
+pub(super) fn same_instance(
     expected: &crate::types::EffectInstance,
     actual: &crate::types::EffectInstance,
     work: &mut TypeWorkBudget,
@@ -1138,7 +1751,7 @@ fn same_instance(
     Ok(true)
 }
 
-fn source_type_leaf<'a>(
+pub(super) fn source_type_leaf<'a>(
     mut ty: &'a crate::types::Type,
     path: &[usize],
     work: &mut TypeWorkBudget,
@@ -1339,7 +1952,7 @@ fn admit_sentinel_operand(
         })
 }
 
-fn admit_constant_operand(
+pub(super) fn admit_constant_operand(
     symbol: &crate::foreign::checked_source::CheckedForeignSymbol,
     index: usize,
     representation: crate::foreign::source_contract::PreparedRepresentation,
@@ -1363,7 +1976,87 @@ fn admit_constant_operand(
     })
 }
 
-fn current_key<'value>(
+fn source_string_leaf<'value>(
+    heap: &'value [HeapCell],
+    mut value: &'value Value,
+    path: &[usize],
+    work: &mut TypeWorkBudget,
+) -> Result<&'value str, super::RuntimeFailure> {
+    let (first, rest) = path
+        .split_first()
+        .ok_or(super::RuntimeFailure::ForeignBinding)?;
+    super::charge_effect_work(work, 1, super::RuntimePhase::Access)?;
+    if let Value::Location(location) = value {
+        let location = super::resolve_location_with_work(heap, *location, work)?;
+        let Some(HeapCell::Tuple(fields)) = heap.get(location) else {
+            return Err(super::RuntimeFailure::ForeignBinding);
+        };
+        value = fields
+            .get(*first)
+            .ok_or(super::RuntimeFailure::ForeignBinding)?;
+    } else if *first != 0 {
+        return Err(super::RuntimeFailure::ForeignBinding);
+    }
+    for component in rest {
+        super::charge_effect_work(work, 1, super::RuntimePhase::Access)?;
+        let Value::Location(location) = value else {
+            return Err(super::RuntimeFailure::ForeignBinding);
+        };
+        let location = super::resolve_location_with_work(heap, *location, work)?;
+        let Some(HeapCell::Tuple(fields)) = heap.get(location) else {
+            return Err(super::RuntimeFailure::ForeignBinding);
+        };
+        value = fields
+            .get(*component)
+            .ok_or(super::RuntimeFailure::ForeignBinding)?;
+    }
+    match value {
+        Value::String(text) => Ok(text),
+        _ => Err(super::RuntimeFailure::ForeignBinding),
+    }
+}
+
+fn source_bytes_leaf<'value>(
+    heap: &'value [HeapCell],
+    mut value: &'value Value,
+    path: &[usize],
+    work: &mut TypeWorkBudget,
+) -> Result<&'value [u8], super::RuntimeFailure> {
+    let (first, rest) = path
+        .split_first()
+        .ok_or(super::RuntimeFailure::ForeignBinding)?;
+    super::charge_effect_work(work, 1, super::RuntimePhase::Access)?;
+    if let Value::Location(location) = value {
+        let location = super::resolve_location_with_work(heap, *location, work)?;
+        let Some(HeapCell::Tuple(fields)) = heap.get(location) else {
+            return Err(super::RuntimeFailure::ForeignBinding);
+        };
+        value = fields
+            .get(*first)
+            .ok_or(super::RuntimeFailure::ForeignBinding)?;
+    } else if *first != 0 {
+        return Err(super::RuntimeFailure::ForeignBinding);
+    }
+    for component in rest {
+        super::charge_effect_work(work, 1, super::RuntimePhase::Access)?;
+        let Value::Location(location) = value else {
+            return Err(super::RuntimeFailure::ForeignBinding);
+        };
+        let location = super::resolve_location_with_work(heap, *location, work)?;
+        let Some(HeapCell::Tuple(fields)) = heap.get(location) else {
+            return Err(super::RuntimeFailure::ForeignBinding);
+        };
+        value = fields
+            .get(*component)
+            .ok_or(super::RuntimeFailure::ForeignBinding)?;
+    }
+    match value {
+        Value::String(text) => Ok(text.as_bytes()),
+        value => value.bytes().ok_or(super::RuntimeFailure::ForeignBinding),
+    }
+}
+
+pub(super) fn current_key<'value>(
     heap: &'value [HeapCell],
     mut value: &'value Value,
     path: &[usize],
@@ -1423,6 +2116,64 @@ pub(crate) mod post_record_test {
         OwnerTeardownReturned, TypeWorkBudget, Value, empty_slots,
     };
     use std::cell::Cell;
+
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    pub(crate) struct BlockedBorrowObservation {
+        pub(crate) marked: usize,
+        pub(crate) completion_address_retained: bool,
+        pub(crate) ordinary_live: bool,
+    }
+    thread_local! {
+        static BLOCK_BORROW: Cell<Option<BlockedBorrowObservation>> = const { Cell::new(None) };
+    }
+    pub(crate) fn observe_blocked_borrow<T>(
+        run: impl FnOnce() -> T,
+    ) -> (T, BlockedBorrowObservation) {
+        assert!(
+            BLOCK_BORROW
+                .replace(Some(BlockedBorrowObservation::default()))
+                .is_none()
+        );
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                BLOCK_BORROW.set(None);
+            }
+        }
+        let reset = Reset;
+        let result = run();
+        let observed = BLOCK_BORROW.get().unwrap();
+        drop(reset);
+        (result, observed)
+    }
+    pub(super) fn block_borrow_boundary(frames: &mut [super::super::Frame]) {
+        let Some(mut observed) = BLOCK_BORROW.get() else {
+            return;
+        };
+        if observed.marked != 0 {
+            return;
+        }
+        for frame in frames.iter_mut().rev() {
+            let super::super::Frame::SourceResourceBoundary(boundary) = frame else {
+                continue;
+            };
+            if boundary.phase != super::super::ProviderPhase::Finish {
+                continue;
+            }
+            let Some(owner) = &mut boundary.owner else {
+                continue;
+            };
+            // Inject only private runtime state after fresh program/binding
+            // admission. No valid source is granted a blocked-owner operation.
+            boundary.blocked = true;
+            owner.quarantine();
+            observed.marked = 1;
+            observed.completion_address_retained = owner.completion_address().is_some();
+            observed.ordinary_live = owner.ordinary_live();
+            BLOCK_BORROW.set(Some(observed));
+            break;
+        }
+    }
 
     #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
     pub(crate) struct Observation {

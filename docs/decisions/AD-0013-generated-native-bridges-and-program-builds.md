@@ -73,6 +73,61 @@ complete ordered Type/EffectRow source arguments. Bridge tables authenticate
 original library, operation and signature/assumption facts, rather than matching
 native symbol names alone. Required binding/conversion checks precede acquisition.
 
+### Native preparation and startup gas
+
+Use input-derived cumulative work allowances at the modular compiler phase
+owners and for native preparation and startup. The accepted policy is:
+
+```text
+preparation gas = 51 * (admitted source UTF8 bytes + validated main Core nodes)
+source gas      = 100 * (canonical loaded source UTF8 bytes, including builtins)
+final gas       = 161 * (the same canonical source UTF8 closure)
+Core gas        = 345 * (the same canonical source UTF8 closure)
+startup gas     = 22 * (canonical image bytes + canonical expected-fact bytes)
+```
+
+Source checking sizes the complete canonical loaded source closure before
+checking. Count each loaded module once, including builtin sources, rather than
+import edges or aliases. Pay one unit per source and one for the census in a
+finite source-count-derived bootstrap, then carry that work inside `100*S`
+through every module, source copy, closed entry and retained provenance. This is
+the total allowance; the historical ten-percent deficit does not apply.
+Final elaboration and independent compiler Core each pay their own identical
+resident-length census before work begins and carry it inside their respective
+`161*S` and `345*S` totals. Apply this at both Pure and Effect modular driver
+entries. Their existing remaining-credit loans debit the same cumulative meter.
+These totals have no historical extra ten percent. Resolution, constraints and
+other construction/rewrite budgets remain separate.
+
+Preparation reads resident admitted source lengths and main arena length before
+image construction. Pay one unit per source and one for the node count using a
+finite source-count-derived sizing allowance; carry those charges inside the
+computed total. Native-input validation and all subsequent emission work consume
+that same meter. Refuse checked-arithmetic overflow or a total below spent work.
+
+Startup derives only a private provisional meter from actual resident payload
+lengths. Complete paid canonical decoding, bounds/end-of-input checks and the
+independently emitted expected-facts comparison before semantic reconstruction.
+Keep all framing, source/original/Core/capture and final native-binding admission
+charges in the same meter. Invalid framing cannot reach semantic admission or C.
+There are no per-module resets, spent-work top-ups or static overall gas ceiling.
+
+These estimates do not prove a universal complexity bound or grant authority.
+The actual meter still refuses amplified work. Valid unused framed records or
+source whitespace can increase estimates linearly; compact DAGs cannot obtain
+exponential credit. Standalone Core validation defaults, depth, stack, fallible
+allocation and all identity/semantic checks remain unchanged. The compiler Core
+formula does not grant additional startup work or alter generic validator APIs.
+The established non-native Pure build policy is separate.
+
+The user approved preparation `24P`, then source `100S` / startup `11B`, and
+subsequently preparation `51P`, final elaboration `33S` and compiler Core `108S`,
+then startup `22B`, final elaboration `161S` and compiler Core `345S` on 2026-10-15 after the bounded calibration and larger-workload and compact-generic observations in
+[DN-0050](../design/DN-0050-native-program-gas-estimates.md). That note records
+measured scope, errors and incomplete final SQLite coverage; it is informative.
+Require focused connected normal-host and adversarial tests and independent
+review of the implementation before transferring its verification.
+
 ### Optional C/header verification
 
 Provide a separate `ash check-ffi` authoring path which emits/compiles C checks

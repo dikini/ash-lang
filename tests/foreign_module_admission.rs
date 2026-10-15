@@ -1,4 +1,5 @@
 use ash::module::{ModuleRoots, load_module_graph};
+use ash_foreign_adapter::sqlite_manifest;
 use std::{
     fs,
     path::PathBuf,

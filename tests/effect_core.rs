@@ -384,6 +384,9 @@ fn checked_source_lowers_to_explicit_effect_core() {
                 EffectOperation::NativeInterpret(_) => {
                     panic!("resume-only fixture cannot contain native interpretation")
                 }
+                EffectOperation::SourceCopyWindow(_) => {
+                    panic!("resume-only fixture cannot contain source copy window")
+                }
             }
         }
         pending.extend((0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)));

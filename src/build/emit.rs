@@ -133,6 +133,176 @@ fn emit_encoded_host(
 mod tests {
     use super::*;
 
+    // Prior materialization path is a test-only byte/cost oracle. Production
+    // always renders the same typed plans directly into the complete host.
+    fn materialized_native_host(
+        build: &super::super::image::NativeBuildImage,
+        fingerprint: &[u8; 32],
+        work: &mut TypeWorkBudget,
+    ) -> Result<NativeHostEmission, EmissionFailure> {
+        let image = build
+            .image
+            .encode_bytes(work)
+            .map_err(EmissionFailure::Image)?;
+        let expected_facts = build
+            .image
+            .encode_native_expectations(work)
+            .map_err(EmissionFailure::Image)?;
+        work.charge(build.bridges.len())
+            .map_err(|()| EmissionFailure::Resource)?;
+        let mut wrappers = Vec::new();
+        wrappers
+            .try_reserve_exact(build.bridges.len())
+            .map_err(|_| EmissionFailure::Resource)?;
+        for bridge in &build.bridges {
+            wrappers.push(
+                super::super::bridge::emit_rust_bridge(&bridge.plan, work)
+                    .map_err(EmissionFailure::Bridge)?,
+            );
+        }
+        let rust_source = render_native_host_text(build, fingerprint, work, Some(&wrappers))?;
+        Ok(NativeHostEmission {
+            rust_source,
+            payloads: NativePayloads {
+                image,
+                expected_facts,
+            },
+        })
+    }
+
+    #[test]
+    fn product_wrapper_emission_costs_keep_the_normal_cumulative_preparation_limit() {
+        use crate::{
+            driver::{RunConfiguration, compile_path},
+            module::ModuleRoots,
+        };
+        use std::{
+            fs,
+            sync::atomic::{AtomicU64, Ordering},
+        };
+        static IDS: AtomicU64 = AtomicU64::new(0);
+        struct Fixture(std::path::PathBuf);
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let fixture = Fixture(std::env::temp_dir().join(format!(
+            "ash-product-emission-{}-{}",
+            std::process::id(),
+            IDS.fetch_add(1, Ordering::Relaxed)
+        )));
+        fs::create_dir(&fixture.0).unwrap();
+        fs::write(
+            fixture.0.join("sqlite.ash"),
+            include_str!("../../libraries/sqlite.ash"),
+        )
+        .unwrap();
+        fs::write(fixture.0.join("entry.ash"), r#"import @ffi.sqlite as Sqlite
+main : Unit -> Sqlite.Scope<Sqlite.OpenError, Sqlite.CloseError, Sqlite.Scope<Sqlite.PrepareError, Sqlite.FinalizeError, Sqlite.Result<Int>>> ! {Sqlite.Initialize}
+main () = resource Sqlite.Connection<C> connection = Sqlite.InMemory {
+    resource Sqlite.Statement<S, C> statement = (connection, "SELECT 42") {
+        match Sqlite.step statement {
+            Sqlite.Row => Sqlite.column_int (statement, 0)
+            Sqlite.Done => Sqlite.Err Sqlite.MissingRow
+            Sqlite.StepError(error) => Sqlite.Err error
+        }
+    }
+}
+"#).unwrap();
+        let compiled = compile_path(RunConfiguration {
+            entry: fixture.0.join("entry.ash"),
+            roots: ModuleRoots::new([("ffi", &fixture.0)]).unwrap(),
+        })
+        .unwrap();
+        let (core, provenance) = compiled.effect_build_input().unwrap();
+        let mut construction =
+            super::super::gas::preparation(provenance, core.node_count()).unwrap();
+        let image = super::super::image::encode_effect_for_build(
+            core,
+            provenance,
+            "x86_64-unknown-linux-gnu",
+            &mut construction,
+        )
+        .unwrap();
+        let construction_used = construction.used();
+        let mut serialization = TypeWorkBudget::with_limit(construction.limit());
+        let bytes = image.image.encode_bytes(&mut serialization).unwrap();
+        let image_units = serialization.used();
+        let facts = image
+            .image
+            .encode_native_expectations(&mut serialization)
+            .unwrap();
+        let facts_units = serialization.used() - image_units;
+        let mut wrappers = TypeWorkBudget::with_limit(construction.limit());
+        let mut wrapper_bytes = 0usize;
+        for bridge in &image.bridges {
+            wrapper_bytes += super::super::bridge::emit_rust_bridge(&bridge.plan, &mut wrappers)
+                .unwrap()
+                .len();
+        }
+        // These independent component ledgers measure required work only. Each
+        // uses the adopted input-derived total; the cumulative call below
+        // retains construction and its paid resident-source census.
+        let mut emission = TypeWorkBudget::with_limit(construction.limit());
+        let emitted = native_host(&image, &[0x42; 32], &mut emission).unwrap();
+        let mut legacy = TypeWorkBudget::with_limit(construction.limit());
+        let materialized = materialized_native_host(&image, &[0x42; 32], &mut legacy).unwrap();
+        assert_eq!(
+            emitted.rust_source, materialized.rust_source,
+            "same exact typed bridge plans, coordinates and Rust bytes"
+        );
+        assert_eq!(emitted.payloads.image, materialized.payloads.image);
+        assert_eq!(
+            emitted.payloads.expected_facts,
+            materialized.payloads.expected_facts
+        );
+        assert_eq!(
+            legacy.used() - emission.used(),
+            2 * wrapper_bytes,
+            "only the removed intermediate storage/copy charge disappears"
+        );
+        let required = emission.used();
+        for prefix in [0, 7] {
+            let mut short = TypeWorkBudget::with_limit(prefix + required - 1);
+            short.charge(prefix).unwrap();
+            assert!(native_host(&image, &[0x42; 32], &mut short).is_err());
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + required);
+                exact.charge(prefix).unwrap();
+                let again = native_host(&image, &[0x42; 32], &mut exact).unwrap();
+                assert_eq!(again.rust_source, emitted.rust_source);
+                assert_eq!(exact.used(), prefix + required);
+            }
+        }
+        println!(
+            "product preparation component measurement: construction={construction_used}, image={image_units}/{}B, facts={facts_units}/{}B, bridges={}, wrapper_text={wrapper_bytes}B, wrapper_units={}, host={}B, legacy_emission={}, fused_emission_including_serialization={}, saved={}, required_component_sum={}, production_limit={}",
+            bytes.len(),
+            facts.len(),
+            image.bridges.len(),
+            wrappers.used(),
+            emitted.rust_source.len(),
+            legacy.used(),
+            emission.used(),
+            legacy.used() - emission.used(),
+            construction_used + emission.used(),
+            construction.limit()
+        );
+        assert_eq!(
+            emitted.rust_source.matches("unsafe extern \"C\"").count(),
+            image.bridges.len()
+        );
+        if construction_used + emission.used() > construction.limit() {
+            assert!(
+                native_host(&image, &[0x42; 32], &mut construction).is_err(),
+                "separate diagnostic ledgers must not shift the production limit"
+            );
+        } else {
+            native_host(&image, &[0x42; 32], &mut construction).unwrap();
+            assert_eq!(construction.used(), construction_used + emission.used());
+        }
+    }
+
     #[test]
     fn generated_main_contains_only_literal_image_inputs_and_runtime_execution() {
         let fingerprint = [0xab; 32];
@@ -255,7 +425,7 @@ fn render_coordinates(
 fn render_native_suffix(
     output: &mut impl fmt::Write,
     build: &super::image::NativeBuildImage,
-    wrappers: &[String],
+    wrappers: Option<&[String]>,
 ) -> fmt::Result {
     output.write_str("#[allow(unsafe_code)]\nmod native_bridges {\n")?;
     for (library_index, library) in build.libraries.iter().enumerate() {
@@ -264,10 +434,21 @@ fn render_native_suffix(
             let name = member.plan.rust_function_name();
             // The ONLY unsafe text is the existing typed extern wrapper module.
             // Providers merely pair their own fixed literals with that wrapper.
-            output.write_str(&wrappers[member_index])?;
+            if let Some(wrappers) = wrappers {
+                output.write_str(&wrappers[member_index])?;
+            } else {
+                super::bridge::render_bridge(output, &member.plan)?;
+            }
             let constructor = match member.plan.call() {
                 super::bridge::TargetBridgeCall::Scalar => "__private_native_bridge",
-                super::bridge::TargetBridgeCall::OwnerAcquire => {
+                super::bridge::TargetBridgeCall::OwnerBorrow => {
+                    "__private_native_owner_borrow_bridge"
+                }
+                super::bridge::TargetBridgeCall::WindowView => {
+                    "__private_native_window_view_bridge"
+                }
+                super::bridge::TargetBridgeCall::OwnerAcquire
+                | super::bridge::TargetBridgeCall::OwnerOutputAcquire => {
                     if member.plan.byte_owner() {
                         "__private_native_byte_owner_acquire_bridge"
                     } else {
@@ -340,15 +521,26 @@ pub(super) fn native_host(
         .map_err(EmissionFailure::Image)?;
     work.charge(build.bridges.len())
         .map_err(|()| EmissionFailure::Resource)?;
-    let mut wrappers = Vec::new();
-    wrappers
-        .try_reserve_exact(build.bridges.len())
-        .map_err(|_| EmissionFailure::Resource)?;
     for bridge in &build.bridges {
-        wrappers.push(
-            super::bridge::emit_rust_bridge(&bridge.plan, work).map_err(EmissionFailure::Bridge)?,
-        );
+        super::bridge::admit_render_inspection(&bridge.plan, work)
+            .map_err(EmissionFailure::Bridge)?;
     }
+    let output = render_native_host_text(build, runtime_fingerprint, work, None)?;
+    Ok(NativeHostEmission {
+        rust_source: output,
+        payloads: NativePayloads {
+            image: bytes,
+            expected_facts: facts,
+        },
+    })
+}
+
+fn render_native_host_text(
+    build: &super::image::NativeBuildImage,
+    runtime_fingerprint: &[u8; 32],
+    work: &mut TypeWorkBudget,
+    wrappers: Option<&[String]>,
+) -> Result<String, EmissionFailure> {
     // Counting pays each exact Rust text fragment before visiting/copying it.
     // Coordinate formatting is fixed-width; this writer owns no text storage.
     struct Length<'work> {
@@ -374,7 +566,7 @@ pub(super) fn native_host(
             work,
         };
         render_native_payloads(&mut counter).map_err(|_| EmissionFailure::Resource)?;
-        render_native_suffix(&mut counter, build, &wrappers)
+        render_native_suffix(&mut counter, build, wrappers)
             .map_err(|_| EmissionFailure::Resource)?;
         counter.bytes
     };
@@ -387,13 +579,7 @@ pub(super) fn native_host(
     output.push_str(NATIVE_HOST_START);
     emit_array(&mut output, runtime_fingerprint);
     render_native_payloads(&mut output).map_err(|_| EmissionFailure::Resource)?;
-    render_native_suffix(&mut output, build, &wrappers).map_err(|_| EmissionFailure::Resource)?;
+    render_native_suffix(&mut output, build, wrappers).map_err(|_| EmissionFailure::Resource)?;
     debug_assert_eq!(output.len(), length);
-    Ok(NativeHostEmission {
-        rust_source: output,
-        payloads: NativePayloads {
-            image: bytes,
-            expected_facts: facts,
-        },
-    })
+    Ok(output)
 }

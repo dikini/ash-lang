@@ -2034,28 +2034,33 @@ fn build_export_candidate(
     }
     for library in &surface.foreign_libraries {
         for member in &library.members {
-            if let crate::surface::SurfaceForeignMember::Owner(owner) = member {
+            let (name, span) = match member {
+                crate::surface::SurfaceForeignMember::Owner(value) => (&value.name, value.span),
+                crate::surface::SurfaceForeignMember::Access(value) => (&value.name, value.span),
+                _ => continue,
+            };
+            {
                 type_work.charge(registry.nominals().len()).map_err(|_| {
                     export_candidate_resource_error(
-                        owner.span,
-                        "source owner publication lookup exceeded its budget",
+                        span,
+                        "source foreign nominal publication lookup exceeded its budget",
                     )
                 })?;
                 let resolved = registry
                     .nominals()
                     .iter()
-                    .find(|nominal| nominal.origin.primary_span() == owner.span)
+                    .find(|nominal| nominal.origin.primary_span() == span)
                     .ok_or_else(|| {
                         error(
                             ResolveReason::InternalState,
-                            owner.span,
-                            "original source owner nominal is missing",
+                            span,
+                            "original source foreign nominal nominal is missing",
                         )
                     })?;
                 if library.public {
                     candidate
                         .try_insert_nominal(
-                            owner.name.text.clone(),
+                            name.text.clone(),
                             CandidateNominal {
                                 id: resolved.id,
                                 access: ExportedTypeAccess::Opaque,
@@ -2066,15 +2071,15 @@ fn build_export_candidate(
                         )
                         .map_err(|()| {
                             export_candidate_resource_error(
-                                owner.span,
-                                "source owner publication exceeded its budget",
+                                span,
+                                "source foreign nominal publication exceeded its budget",
                             )
                         })?;
                 } else {
                     candidate
                         .try_insert_withheld(
                             WithheldNamespace::Nominal,
-                            owner.name.text.clone(),
+                            name.text.clone(),
                             WithheldExport {
                                 kind: WithheldExportKind::Private,
                                 owner: None,
@@ -2084,8 +2089,8 @@ fn build_export_candidate(
                         )
                         .map_err(|()| {
                             export_candidate_resource_error(
-                                owner.span,
-                                "private source owner publication exceeded its budget",
+                                span,
+                                "private source foreign nominal publication exceeded its budget",
                             )
                         })?;
                 }
@@ -2485,6 +2490,7 @@ struct Resolver {
     builtin_cell: Option<ModuleId>,
     resource_families: HashMap<NominalTypeId, crate::resolved::ResourceDefinitionId>,
     source_resource_owned_positions: HashMap<NominalTypeId, usize>,
+    source_access_window_positions: HashMap<NominalTypeId, usize>,
     source_foreign_libraries: Vec<Arc<crate::foreign::source_contract::PreparedForeignLibrary>>,
     row_resource_families: HashSet<NominalTypeId>,
     handler_family_resources: HashSet<NominalTypeId>,
@@ -2496,6 +2502,8 @@ struct Resolver {
     next_lexical_evidence: u32,
     resolved_interfaces: ResolvedInterfaceBuffer,
     lexical_method_parameters: ImportedTypeVariableBuffer,
+    source_window_phase: Option<crate::resolved::SourceWindowPhase>,
+    source_window_declarations: Vec<crate::resolved::SourceWindowDeclaration>,
     scopes: Vec<HashMap<String, ResolvedTermBinding>>,
     globals: HashMap<String, GlobalFact>,
     type_names: HashMap<String, NominalTypeId>,
@@ -2725,7 +2733,7 @@ impl Drop for PendingImplementationBuffer {
 
 type SourceOwnerCandidate = (
     Arc<crate::foreign::source_contract::PreparedForeignLibrary>,
-    usize,
+    crate::foreign::source_contract::PreparedForeignNominalRole,
     ResolvedNominalType,
     Vec<ResolvedTypeVariable>,
 );
@@ -2929,6 +2937,7 @@ impl Resolver {
             module,
             resource_families: HashMap::new(),
             source_resource_owned_positions: HashMap::new(),
+            source_access_window_positions: HashMap::new(),
             source_foreign_libraries: Vec::new(),
             row_resource_families: HashSet::new(),
             handler_family_resources: HashSet::new(),
@@ -2941,6 +2950,8 @@ impl Resolver {
             next_lexical_evidence: 0,
             resolved_interfaces: ResolvedInterfaceBuffer(Vec::new()),
             lexical_method_parameters: ImportedTypeVariableBuffer(Vec::new()),
+            source_window_phase: None,
+            source_window_declarations: Vec::new(),
             scopes: vec![HashMap::new()],
             globals: HashMap::new(),
             type_names: HashMap::new(),
@@ -2999,6 +3010,13 @@ impl Resolver {
                         if let crate::surface::SurfaceForeignMember::Owner(owner) = member {
                             self.validate_local_type_name(
                                 &owner.name,
+                                LocalTypeDeclarationKind::Nominal,
+                                &mut type_names,
+                            )?;
+                        }
+                        if let crate::surface::SurfaceForeignMember::Access(access) = member {
+                            self.validate_local_type_name(
+                                &access.name,
                                 LocalTypeDeclarationKind::Nominal,
                                 &mut type_names,
                             )?;
@@ -7851,7 +7869,13 @@ impl Resolver {
                     )
                 })?;
             self.type_work
-                .charge(prepared.owners().len().saturating_mul(3))
+                .charge(
+                    prepared
+                        .owners()
+                        .len()
+                        .saturating_add(prepared.accesses().len())
+                        .saturating_mul(3),
+                )
                 .map_err(|()| {
                     error(
                         ResolveReason::TypeResourceExhausted,
@@ -7861,7 +7885,12 @@ impl Resolver {
                 })?;
             candidates
                 .0
-                .try_reserve(prepared.owners().len())
+                .try_reserve(
+                    prepared
+                        .owners()
+                        .len()
+                        .saturating_add(prepared.accesses().len()),
+                )
                 .map_err(|_| {
                     error(
                         ResolveReason::TypeResourceExhausted,
@@ -7869,29 +7898,69 @@ impl Resolver {
                         "source owner candidate storage could not be reserved",
                     )
                 })?;
-            for (owner_index, owner) in prepared.owners().iter().enumerate() {
-                let Some(crate::surface::SurfaceForeignMember::Owner(written)) =
-                    source.members.get(owner.member_index())
-                else {
-                    return Err(error(
-                        ResolveReason::InternalState,
-                        source.span,
-                        "source owner coordinate is invalid",
-                    ));
+            let mut owner_index = 0;
+            let mut access_index = 0;
+            for (member_index, member) in source.members.iter().enumerate() {
+                let (name, written_parameters, written_span, role) = match member {
+                    crate::surface::SurfaceForeignMember::Owner(written) => {
+                        let role =
+                            crate::foreign::source_contract::PreparedForeignNominalRole::Owner(
+                                owner_index,
+                            );
+                        let value = prepared.owners().get(owner_index).ok_or_else(|| {
+                            error(
+                                ResolveReason::InternalState,
+                                written.span,
+                                "missing owner declaration",
+                            )
+                        })?;
+                        owner_index += 1;
+                        if value.member_index() != member_index {
+                            return Err(error(
+                                ResolveReason::InternalState,
+                                written.span,
+                                "owner declaration moved",
+                            ));
+                        }
+                        (&written.name, &written.parameters, written.span, role)
+                    }
+                    crate::surface::SurfaceForeignMember::Access(written) => {
+                        let role =
+                            crate::foreign::source_contract::PreparedForeignNominalRole::Access(
+                                access_index,
+                            );
+                        let value = prepared.accesses().get(access_index).ok_or_else(|| {
+                            error(
+                                ResolveReason::InternalState,
+                                written.span,
+                                "missing access declaration",
+                            )
+                        })?;
+                        access_index += 1;
+                        if value.member_index() != member_index {
+                            return Err(error(
+                                ResolveReason::InternalState,
+                                written.span,
+                                "access declaration moved",
+                            ));
+                        }
+                        (&written.name, &written.parameters, written.span, role)
+                    }
+                    _ => continue,
                 };
-                validate_explicit_type_parameters(Some(&written.parameters))?;
+                validate_explicit_type_parameters(Some(written_parameters))?;
                 let ordinal =
                     u32::try_from(base.checked_add(candidates.0.len()).ok_or_else(|| {
                         error(
                             ResolveReason::InternalState,
-                            written.span,
+                            written_span,
                             "source owner identity space exhausted",
                         )
                     })?)
                     .map_err(|_| {
                         error(
                             ResolveReason::InternalState,
-                            written.span,
+                            written_span,
                             "source owner identity space exhausted",
                         )
                     })?;
@@ -7899,32 +7968,54 @@ impl Resolver {
                 self.type_names.try_reserve(1).map_err(|_| {
                     error(
                         ResolveReason::TypeResourceExhausted,
-                        written.span,
+                        written_span,
                         "source owner namespace storage could not be reserved",
                     )
                 })?;
                 self.nominal_parameter_counts.try_reserve(1).map_err(|_| {
                     error(
                         ResolveReason::TypeResourceExhausted,
-                        written.span,
+                        written_span,
                         "source owner parameter storage could not be reserved",
                     )
                 })?;
-                self.type_names.insert(written.name.text.clone(), id);
+                self.type_names.insert(name.text.clone(), id);
                 self.nominal_parameter_counts
-                    .insert(id, written.parameters.len());
+                    .insert(id, written_parameters.len());
+                if let crate::foreign::source_contract::PreparedForeignNominalRole::Access(index) =
+                    role
+                {
+                    self.type_work.charge(1).map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            written_span,
+                            "access window coordinate retention exceeded its budget",
+                        )
+                    })?;
+                    self.source_access_window_positions
+                        .try_reserve(1)
+                        .map_err(|_| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                written_span,
+                                "access window coordinate storage could not be reserved",
+                            )
+                        })?;
+                    self.source_access_window_positions
+                        .insert(id, prepared.accesses()[index].window_parameter());
+                }
                 let mut parameters = ImportedTypeVariableBuffer(Vec::new());
                 parameters
                     .0
-                    .try_reserve(written.parameters.len())
+                    .try_reserve(written_parameters.len())
                     .map_err(|_| {
                         error(
                             ResolveReason::TypeResourceExhausted,
-                            written.span,
+                            written_span,
                             "source owner formals could not be reserved",
                         )
                     })?;
-                for parameter in &written.parameters {
+                for parameter in written_parameters {
                     parameters.push(self.allocate_type_variable(
                         &parameter.name,
                         parameter.kind.as_ref(),
@@ -7933,15 +8024,15 @@ impl Resolver {
                 }
                 candidates.0.push((
                     Arc::clone(prepared),
-                    owner_index,
+                    role,
                     ResolvedNominalType {
                         id,
                         declaration_kind: ResolvedNominalDeclarationKind::Data,
-                        spelling: written.name.text.clone(),
+                        spelling: name.text.clone(),
                         constructors: Box::new([]),
                         representation: None,
                         representation_provenance: None,
-                        origin: Origin::Source(written.span),
+                        origin: Origin::Source(written_span),
                     },
                     parameters.into_vec(),
                 ));
@@ -8528,7 +8619,10 @@ impl Resolver {
             nominal_type_parameters,
         )?;
         let registry = registry
-            .with_source_owner_candidates(source_owner_candidates.into_vec(), &mut self.type_work)
+            .with_source_foreign_nominal_candidates(
+                source_owner_candidates.into_vec(),
+                &mut self.type_work,
+            )
             .map_err(|()| {
                 error(
                     ResolveReason::TypeResourceExhausted,
@@ -8538,7 +8632,7 @@ impl Resolver {
             })?;
         let mut constructor_payload_provenance = constructor_payload_provenance;
         self.type_work
-            .charge(registry.source_owner_candidate_count())
+            .charge(registry.source_foreign_nominal_count())
             .map_err(|()| {
                 error(
                     ResolveReason::TypeResourceExhausted,
@@ -8547,7 +8641,7 @@ impl Resolver {
                 )
             })?;
         constructor_payload_provenance
-            .try_reserve(registry.source_owner_candidate_count())
+            .try_reserve(registry.source_foreign_nominal_count())
             .map_err(|_| {
                 error(
                     ResolveReason::TypeResourceExhausted,
@@ -8556,7 +8650,7 @@ impl Resolver {
                 )
             })?;
         constructor_payload_provenance
-            .extend((0..registry.source_owner_candidate_count()).map(|_| Vec::new()));
+            .extend((0..registry.source_foreign_nominal_count()).map(|_| Vec::new()));
         let (interfaces, interface_type_parameters) = self.resolve_interface_declarations(
             &surface.interfaces,
             interface_identities,
@@ -11559,6 +11653,247 @@ impl Resolver {
         Ok(Some(arguments))
     }
 
+    // Keep window-only lookup temporaries off ordinary expression frames.
+    fn schedule_copy_window<'a>(
+        &mut self,
+        source: &'a crate::surface::SurfaceCopyWindowExpr,
+        span: Span,
+        tasks: &mut ResolveTaskBuffer<'a>,
+    ) -> Result<(), ResolveError> {
+        let SurfaceTypeKind::Application {
+            constructor,
+            arguments,
+        } = &source.family.kind
+        else {
+            return Err(error(
+                ResolveReason::TypeKind,
+                source.family.span,
+                "a copy window requires a saturated declared access family",
+            ));
+        };
+        let family = self.nominal_reference(constructor)?.id;
+        self.type_work.charge(2).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "copy window lookup exceeded its budget",
+            )
+        })?;
+        let position = self
+            .source_access_window_positions
+            .get(&family)
+            .copied()
+            .or_else(|| {
+                self.imported
+                    .source_access(family)
+                    .map(|access| access.declaration().window_parameter())
+            })
+            .ok_or_else(|| {
+                error(
+                    ResolveReason::ForeignContract,
+                    source.family.span,
+                    "the selected type is not an original declared access family",
+                )
+            })?;
+        if self.nominal_parameter_counts.get(&family).copied() != Some(arguments.len()) {
+            return Err(error(
+                ResolveReason::TypeKind,
+                source.family.span,
+                "copy window arguments must saturate the original family",
+            ));
+        }
+        tasks.0.try_reserve(2).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "copy window tasks could not be reserved",
+            )
+        })?;
+        tasks.push(ResolveTask::CopyWindowState {
+            source,
+            family,
+            position,
+            span,
+        });
+        tasks.push(ResolveTask::VisitExpr(&source.state));
+        Ok(())
+    }
+
+    // The already-boxed phase payload is unpacked only on its own path,
+    // rather than enlarging every reentrant ordinary resolution work frame.
+    #[expect(
+        clippy::boxed_local,
+        reason = "keep the already-boxed phase payload off ordinary reentrant work frames"
+    )]
+    fn finish_copy_window(
+        &mut self,
+        pending: Box<PendingCopyWindow>,
+        expressions: &mut ResolvedExpressionBuffer,
+    ) -> Result<(), ResolveError> {
+        let PendingCopyWindow {
+            family,
+            identity,
+            arguments,
+            state,
+            type_scope_checkpoint,
+            family_span,
+            span,
+        } = *pending;
+        let body = expressions.pop_owned().ok_or_else(|| {
+            error(
+                ResolveReason::InternalState,
+                span,
+                "copy window body is missing",
+            )
+        })?;
+        self.type_scopes.truncate(type_scope_checkpoint);
+        expressions.push(ResolvedExpr {
+            kind: ResolvedExprKind::CopyWindow(Box::new(crate::resolved::ResolvedCopyWindowExpr {
+                family,
+                identity,
+                arguments: arguments.into_vec().into_boxed_slice(),
+                state: Box::new(state.into_inner()),
+                body: Box::new(body.into_inner()),
+                family_span,
+            })),
+            span,
+        });
+        Ok(())
+    }
+
+    fn start_copy_window<'a>(
+        &mut self,
+        source: &'a crate::surface::SurfaceCopyWindowExpr,
+        family: NominalTypeId,
+        position: usize,
+        span: Span,
+        tasks: &mut ResolveTaskBuffer<'a>,
+        expressions: &mut ResolvedExpressionBuffer,
+    ) -> Result<(), ResolveError> {
+        let state = expressions.pop_owned().ok_or_else(|| {
+            error(
+                ResolveReason::InternalState,
+                span,
+                "copy window state is missing",
+            )
+        })?;
+        let SurfaceTypeKind::Application {
+            arguments: written, ..
+        } = &source.family.kind
+        else {
+            return Err(error(
+                ResolveReason::InternalState,
+                span,
+                "copy window family application is missing",
+            ));
+        };
+        let identity_source = written.get(position).ok_or_else(|| {
+            error(
+                ResolveReason::TypeKind,
+                source.family.span,
+                "copy window fresh argument is missing",
+            )
+        })?;
+        let SurfaceTypeKind::Named(SurfaceReference::Unqualified(identity_name)) =
+            &identity_source.kind
+        else {
+            return Err(error(
+                ResolveReason::TypeKind,
+                identity_source.span,
+                "the window argument must be a fresh unqualified Type identity",
+            ));
+        };
+        let resource = |message| error(ResolveReason::TypeResourceExhausted, span, message);
+        self.type_work
+            .charge(written.len().saturating_add(4))
+            .map_err(|_| resource("copy window arguments exceeded their budget"))?;
+        let mut inherited = ResolvedOwnerOccurrenceBuffer(Vec::new());
+        inherited
+            .0
+            .try_reserve_exact(written.len().saturating_sub(1))
+            .map_err(|_| resource("copy window arguments could not reserve storage"))?;
+        // Inherited actuals and the state resolve before W enters scope.
+        for (index, argument) in written.iter().enumerate() {
+            if index != position {
+                inherited.0.push(self.resolve_owner_argument(argument)?);
+            }
+        }
+        let identity = self.allocate_type_variable(identity_name, None, Kind::Type)?;
+        self.lexical_method_parameters
+            .0
+            .try_reserve(1)
+            .map_err(|_| resource("copy window identity storage could not be reserved"))?;
+        let retained = self.clone_type_variable_for_retention(
+            &identity,
+            span,
+            "copy window identity retention exceeded its budget",
+        )?;
+        self.lexical_method_parameters.push(retained);
+        if let Some(phase) = self.source_window_phase {
+            self.type_work
+                .charge(1)
+                .map_err(|_| resource("copy window declaration exceeded its budget"))?;
+            self.source_window_declarations
+                .try_reserve(1)
+                .map_err(|_| resource("copy window declaration storage could not be reserved"))?;
+            self.source_window_declarations
+                .push(crate::resolved::SourceWindowDeclaration {
+                    phase,
+                    family,
+                    identity: identity.id,
+                    identity_span: identity.origin.primary_span(),
+                    span,
+                });
+        }
+        let type_scope_checkpoint = self.type_scopes.len();
+        let mut scope = HashMap::new();
+        scope
+            .try_reserve(1)
+            .map_err(|_| resource("copy window type scope could not be reserved"))?;
+        scope.insert(identity.spelling.clone(), identity.id);
+        self.type_scopes
+            .try_reserve(1)
+            .map_err(|_| resource("copy window scope stack could not be reserved"))?;
+        self.type_scopes.push(scope);
+        let mut fresh = Some(self.resolve_owner_argument(identity_source)?);
+        let mut inherited = inherited.into_vec().into_iter();
+        let mut arguments = ResolvedOwnerOccurrenceBuffer(Vec::new());
+        arguments
+            .0
+            .try_reserve_exact(written.len())
+            .map_err(|_| resource("complete copy window arguments could not reserve storage"))?;
+        for index in 0..written.len() {
+            let argument = if index == position {
+                fresh.take()
+            } else {
+                inherited.next()
+            }
+            .ok_or_else(|| {
+                error(
+                    ResolveReason::InternalState,
+                    span,
+                    "copy window ordered argument is missing",
+                )
+            })?;
+            arguments.0.push(argument);
+        }
+        tasks
+            .0
+            .try_reserve(2)
+            .map_err(|_| resource("copy window body tasks could not reserve storage"))?;
+        tasks.push(ResolveTask::FinishCopyWindow(Box::new(PendingCopyWindow {
+            family,
+            identity,
+            arguments,
+            state: Box::new(state),
+            type_scope_checkpoint,
+            family_span: source.family.span,
+            span,
+        })));
+        tasks.push(ResolveTask::VisitBlock(&source.body));
+        Ok(())
+    }
+
     fn start_provider_resource<'a>(
         &mut self,
         source: &'a crate::surface::SurfaceProviderResourceExpr,
@@ -11999,6 +12334,24 @@ impl Resolver {
                         &mut tasks,
                         &mut expressions,
                     )?;
+                }
+                ResolveTask::CopyWindowState {
+                    source,
+                    family,
+                    position,
+                    span,
+                } => {
+                    self.start_copy_window(
+                        source,
+                        family,
+                        position,
+                        span,
+                        &mut tasks,
+                        &mut expressions,
+                    )?;
+                }
+                ResolveTask::FinishCopyWindow(pending) => {
+                    self.finish_copy_window(pending, &mut expressions)?;
                 }
                 ResolveTask::FinishProviderResource(pending) => {
                     self.finish_provider_resource(*pending, &mut expressions)?;
@@ -12916,6 +13269,9 @@ impl Resolver {
                 });
                 tasks.push(ResolveTask::VisitBlock(&hook.body));
             }
+            SurfaceExprKind::CopyWindow(source) => {
+                self.schedule_copy_window(source, expression.span, tasks)?;
+            }
             SurfaceExprKind::ProviderResource(source) => {
                 let family = self.nominal_reference(&source.family)?;
                 let definition =
@@ -13305,6 +13661,16 @@ impl Drop for PendingLexicalResolution<'_> {
     }
 }
 
+struct PendingCopyWindow {
+    family: NominalTypeId,
+    identity: ResolvedTypeVariable,
+    arguments: ResolvedOwnerOccurrenceBuffer,
+    state: Box<ResolvedExpressionOwner>,
+    type_scope_checkpoint: usize,
+    family_span: Span,
+    span: Span,
+}
+
 struct PendingProviderResource {
     definition: crate::resolved::ResourceDefinitionId,
     family: NominalTypeId,
@@ -13345,6 +13711,13 @@ enum ResolveTask<'a> {
         effect: ResolvedEffectInstance,
         span: Span,
     },
+    CopyWindowState {
+        source: &'a crate::surface::SurfaceCopyWindowExpr,
+        family: NominalTypeId,
+        position: usize,
+        span: Span,
+    },
+    FinishCopyWindow(Box<PendingCopyWindow>),
     ProviderResourceInitializer {
         source: &'a crate::surface::SurfaceProviderResourceExpr,
         definition: crate::resolved::ResourceDefinitionId,
@@ -13448,6 +13821,7 @@ impl ResolveTask<'_> {
             | Self::FinishCleanup { span }
             | Self::FinishHook { span, .. }
             | Self::FinishRegistration { span, .. }
+            | Self::CopyWindowState { span, .. }
             | Self::ProviderResourceInitializer { span, .. }
             | Self::ResourceInitializer { span, .. }
             | Self::FinishResource { span, .. }
@@ -13456,6 +13830,7 @@ impl ResolveTask<'_> {
             | Self::FinishFunction { span, .. }
             | Self::FinishTuple { span, .. } => *span,
             Self::FinishProviderResource(pending) => pending.span,
+            Self::FinishCopyWindow(pending) => pending.span,
             Self::FinishBinding(binding) => binding.span,
             Self::FinishLocalNewtype(declaration) => declaration.span,
             Self::VisitLexicalEvidence(source) => source.span,
@@ -14591,9 +14966,12 @@ mod tests {
         };
         let scheme = Type::Function(Box::new(Type::Unit), Box::new(Type::Nominal(owner)));
 
+        // Every exact retry uses the same immutable summary/provenance
+        // allocation; independent arenas intentionally pay structural equality.
+        let summary = summary();
         let mut measured = Resolver::new(ModuleId::new(9_090));
         measured
-            .retain_type_nominals(&scheme, &summary(), span)
+            .retain_type_nominals(&scheme, &summary, span)
             .expect("a selected value scheme should retain the opaque newtype closure");
         let exact_work = measured.type_work.used();
         let retained = measured
@@ -14615,7 +14993,7 @@ mod tests {
             TypeWorkBudget::with_limit(exact_work - 1),
         );
         let error = short
-            .retain_type_nominals(&scheme, &summary(), span)
+            .retain_type_nominals(&scheme, &summary, span)
             .expect_err("one missing closure-retention cell should fail atomically");
         assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
         assert!(short.imported.nominal(owner).is_none());
@@ -14626,7 +15004,7 @@ mod tests {
                 TypeWorkBudget::with_limit(exact_work),
             );
             exact
-                .retain_type_nominals(&scheme, &summary(), span)
+                .retain_type_nominals(&scheme, &summary, span)
                 .expect("a fresh exact retry should retain the same hidden canonical closure");
             assert_eq!(exact.type_work.used(), exact_work);
             assert!(exact.imported.nominal(owner).is_some_and(|fact| {
@@ -14637,7 +15015,6 @@ mod tests {
             }));
         }
 
-        let summary = summary();
         let retain_named = |resolver: &mut Resolver| {
             resolver.retain_imported_nominal(
                 summary.nominal("Token").expect("the named export exists"),
@@ -20652,10 +21029,21 @@ impl Resolver {
                             effect.span,
                         )?);
                     }
+                    if self.source_window_phase.is_some()
+                        || !self.source_window_declarations.is_empty()
+                    {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            source.span,
+                            "source window declaration transaction is already active",
+                        ));
+                    }
+                    self.source_window_phase = Some(crate::resolved::SourceWindowPhase::Acquire);
                     let (acquire_pattern, acquire) = self
                         .resolve_source_resource_clause(&source.acquire_pattern, &source.acquire)?;
                     let acquire_pattern = ResolvedPatternOwner::new(acquire_pattern);
                     let acquire = ResolvedExpressionOwner::new(acquire);
+                    self.source_window_phase = Some(crate::resolved::SourceWindowPhase::Finish);
                     let (finish_pattern, finish) = self
                         .resolve_source_resource_clause(&source.finish_pattern, &source.finish)?;
                     let finish_pattern = ResolvedPatternOwner::new(finish_pattern);
@@ -20673,6 +21061,7 @@ impl Resolver {
                         })?);
                     let scope = self.scopes.len();
                     self.push_binder_scope_many(&binders);
+                    self.source_window_phase = Some(crate::resolved::SourceWindowPhase::Handler);
                     let handlers = self.resolve_resource_handlers(
                         &effects.0[0],
                         &source.handlers,
@@ -20733,6 +21122,8 @@ impl Resolver {
                             provider: provider.0.take().expect("the provider header is retained"),
                             provided,
                             interpreted,
+                            windows: std::mem::take(&mut self.source_window_declarations)
+                                .into_boxed_slice(),
                             origin: Origin::Source(source.name.span),
                         }),
                         acquire_pattern: acquire_pattern.into_inner(),
@@ -20744,6 +21135,7 @@ impl Resolver {
                         span: source.span,
                     })
                 })();
+            self.source_window_phase = None;
             self.type_scopes.truncate(type_scope);
             let resource = resolved?;
             self.type_work

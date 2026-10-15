@@ -129,8 +129,8 @@ defining code rather than recompiling imported lifecycle bodies.
 
 The current executable source profile admits opaque and initialized byte owners
 with declared dependencies and Type-only state families. It retains one
-interpreted acquisition and one Current finish member of the same original
-owner, with that owner's original host destructor authenticated separately. The
+interpreted acquisition and one Current finish member, plus exact permitted
+query/usage members of the original owner, with that owner's original host destructor authenticated separately. The
 `void` or scalar-status finish and destruction contracts admit total consumed
 or retained dispositions and exact declared Current/Enclosing pointer operands.
 Scalar status alternatives retain their original checked literals, readable
@@ -151,9 +151,8 @@ including an owned slot that is not first. The resource handle's value type
 uses a saturated nominal application for a Type-only family and the resource
 application carrier for a row-bearing family; the scope retains the same
 complete tagged instance in either case. Higher-kinded resource formals,
-row-bearing owner state families, privileged lifecycle wrappers, source-projected
-scalar teardown operands, native access/copy windows and library migrations
-remain unsupported
+row-bearing owner state families, privileged lifecycle wrappers and source-projected
+scalar teardown operands remain unsupported
 by this profile. Exact native interpretation preserves ordinary outward handler
 rows and ordinary override precedence. Passive foreign-owner declarations have
 a separate admission boundary and supply no execution permission.
@@ -248,8 +247,16 @@ finish without fabricating an answer, and a running finish remains
 nonabandonable. Scope and acquired-only report projection retain their independent
 constructor roles, including terminal consumed failure on owned discard.
 
-Ordinary native boundaries remain scalar-only. A source scope provides its own
-checked acquisition and teardown phases; a non-owning resource handle does not
+Lexical copy windows retain their original access family, ordered arguments,
+fresh window identity, owner expression, body and exact native interpretations.
+Copied view/extent operations and sealed primitive occurrences retain their
+original-to-copy correspondence. Private images retain passive access/result
+facts and executable window records separately; canonical expected facts and
+fresh original/main Core admission check both. Shape-compatible metadata alone
+supplies no access permission.
+
+Ordinary native boundaries remain owner-free. A source scope provides its own
+checked acquisition, usage and teardown phases; a non-owning resource handle does not
 authorize a native owner call. Final Core validation, executable binding
 admission and runtime activation remain distinct boundaries. A transformed or
 restored source scope must reconstruct the same original templates,

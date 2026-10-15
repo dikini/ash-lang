@@ -280,8 +280,10 @@ impl From<io::Error> for BuildFailure {
 
 /// Prepares one checked program for the supported native host.
 ///
-/// Accepts the established monomorphic Pure subset and the closed owner-free
-/// scalar/void native Effect subset. Unsupported metadata remains explicit.
+/// Accepts the established monomorphic Pure subset and the admitted closed
+/// native Effect profile, including declared source owners, initialized bytes,
+/// dependent lifecycles and sealed copying windows. Unsupported metadata
+/// remains an explicit refusal.
 /// Source provenance comes from the admitted program;
 /// preparation never reopens its Ash source paths.
 ///
@@ -305,7 +307,13 @@ pub fn prepare_program(
     }
     compiler_profile()?;
     let mut configuration = configuration;
-    let mut work = TypeWorkBudget::default();
+    let mut work = if let Some((core, provenance)) = program.effect_build_input() {
+        super::gas::preparation(provenance, core.node_count())
+            .map_err(|()| BuildFailure(Failure::PreparationResource))?
+    } else {
+        // The established non-native Pure path keeps its existing policy.
+        TypeWorkBudget::default()
+    };
     // Native filesystem inputs are checked before emission/tool execution. This
     // check grants no source contract authority and performs no Ash checking.
     for (index, input) in configuration.native_inputs.iter_mut().enumerate() {

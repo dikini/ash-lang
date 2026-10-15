@@ -76,6 +76,38 @@ do not supply the original resource header or provider.
 The former `@builtin.native_buffer` path is unknown. The lowercase
 `resource native_buffer` designator is no longer a builtin resource form.
 
+### Independent byte and string modules
+
+`String` and `Bytes` are primitive value types. `String` contains validated UTF-8;
+`Bytes` contains independent immutable bytes. Neither is a foreign address,
+view or State token. They have no source constructor or byte-array literal.
+Ordinary string literals use the shared quoted-string syntax.
+
+`@builtin.bytes` and `@builtin.string` are passive canonical modules. Imports,
+aliases and re-exports preserve their original builtin function and result
+identities. Same-spelled client functions do not select builtin execution.
+Their ordinary functions have empty effect rows:
+
+| Module | Function | Result |
+| --- | --- | --- |
+| `@builtin.bytes` | `empty : Unit -> Bytes` | Empty independent bytes. |
+| `@builtin.bytes` | `length : Bytes -> Int` | Byte length. |
+| `@builtin.bytes` | `equal : (Bytes, Bytes) -> Bool` | Byte-for-byte equality. |
+| `@builtin.bytes` | `append_byte : (Bytes, Int) -> AppendResult` | `BytesAppended(Bytes)` or `InvalidByte`. |
+| `@builtin.bytes` | `at : (Bytes, Int) -> ReadResult` | `ByteAt(Int)` or `InvalidIndex`. |
+| `@builtin.string` | `to_utf8 : String -> Bytes` | Independent UTF-8 bytes. |
+| `@builtin.string` | `from_utf8 : Bytes -> DecodeResult` | `Decoded(String)` or `InvalidUtf8`. |
+| `@builtin.string` | `byte_length : String -> Int` | UTF-8 byte length. |
+| `@builtin.string` | `equal : (String, String) -> Bool` | Exact UTF-8 value equality. |
+
+The result types are ordinary transparent ADTs in their defining builtin module.
+`append_byte` accepts only integers in `[0, 255]`. `at` copies an integer in that
+range; negative, unrepresentable or out-of-range indices return `InvalidIndex`,
+and every index into empty bytes is invalid. Invalid UTF-8 returns `InvalidUtf8`
+without replacement decoding. Lookup, traversal and complete result storage
+are paid before publication; work/storage exhaustion is terminal. These APIs
+grant no native call, State, ownership or access permission.
+
 ### Compiler-owned foreign result module
 
 `@builtin.foreign` is admitted once per compilation graph and has no runtime
@@ -94,6 +126,11 @@ Complete and targeted imports, aliases and re-exports preserve those nominal
 and constructor identities. Ordinary same-spelled declarations do not supply
 the canonical native result codec. Constructing an ordinary result grants no
 native interpreter, ownership or access permission.
+
+`Extent<V>` is a separate opaque builtin type with no accessible constructor.
+Its exact descriptor-witnessed view parameter and runtime origin are checked by
+the [copy primitives](static-semantics.md#source-foreign-declarations); its
+ordinary spelling or a compatible type cannot create extent evidence.
 
 ### Source foreign-library identities
 

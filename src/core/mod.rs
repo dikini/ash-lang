@@ -12,6 +12,7 @@ pub mod primitive;
 pub(crate) mod provider;
 pub mod recursion;
 pub(crate) mod source_resource;
+pub(crate) mod source_window;
 pub mod transform;
 pub mod type_ops;
 pub mod validate;

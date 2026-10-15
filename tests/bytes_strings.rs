@@ -131,6 +131,7 @@ B.BytesAppended(bytes) => match B.append_byte (bytes, 99999999999999999999999999
 B.InvalidByte => (B.equal (original, T.to_utf8 ""), B.length bytes, B.equal (zero, T.to_utf8 "\0"))
 B.BytesAppended(unexpected) => (false, 0, false)
 }
+
 B.InvalidByte => (false, 0, false)
 }
 B.InvalidByte => (false, 0, false)
@@ -138,5 +139,20 @@ B.InvalidByte => (false, 0, false)
 }
 "#),
         "(true, 2, true)"
+    );
+}
+
+#[test]
+fn ordinary_byte_lookup_copies_unsigned_values_and_refuses_invalid_indices() {
+    assert_eq!(
+        run(r#"import @builtin.bytes as B
+import @builtin.string as T
+main : Unit -> (B.ReadResult, B.ReadResult, B.ReadResult, B.ReadResult, B.ReadResult)
+main () = match B.append_byte (T.to_utf8 "\0", 255) {
+    B.BytesAppended(bytes) => (B.at (bytes, 0), B.at (bytes, 1), B.at (bytes, 2), B.at (bytes, 999999999999999999999999999999999), B.at (B.empty (), 0))
+    B.InvalidByte => (B.InvalidIndex, B.InvalidIndex, B.InvalidIndex, B.InvalidIndex, B.InvalidIndex)
+}
+"#),
+        "(ByteAt(0), ByteAt(255), InvalidIndex, InvalidIndex, InvalidIndex)"
     );
 }

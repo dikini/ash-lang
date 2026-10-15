@@ -2,13 +2,14 @@
 use ash::{
     driver::{PipelineFailure, RunConfiguration, run_path},
     elaborate::check_module,
-    foreign::{ForeignRegistrations, provider_manifest, sqlite_manifest},
+    foreign::{ForeignRegistrations, provider_manifest},
     module::{ForeignRegistrationId, LoadGraphError, ModuleRoots, load_module_graph},
     parser::{ResourceFailure, STRUCTURAL_DEPTH_LIMIT},
     resolve::{DependencyExports, ResolveModuleError, ResolveReason, resolve_module},
     resolved::{CheckedModule, ResolvedDefinitionKind, ResolvedExprKind, ResolvedModule},
     types::{EffectRowVariable, KindedArgument},
 };
+use ash_foreign_adapter::sqlite_manifest;
 use std::{
     fs,
     path::PathBuf,

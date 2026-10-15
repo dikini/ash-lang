@@ -152,6 +152,20 @@ fn resource_occurrences<'a>(
             }
             SourceItem::Declaration(ResolvedLocalDeclaration::Newtype(_)) => {}
             SourceItem::Expression(expression) => match &expression.kind {
+                ResolvedExprKind::CopyWindow(window) => {
+                    push(
+                        &mut pending,
+                        SourceItem::Expression(&window.state),
+                        work,
+                        expression.span,
+                    )?;
+                    push(
+                        &mut pending,
+                        SourceItem::Expression(&window.body),
+                        work,
+                        expression.span,
+                    )?;
+                }
                 ResolvedExprKind::ProviderResource(resource) => {
                     work.charge(1)
                         .map_err(|()| type_resource(expression.span))?;

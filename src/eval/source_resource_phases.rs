@@ -318,6 +318,7 @@ impl Machine<'_> {
             payload: None,
             saved: None,
             consumed: false,
+            blocked: false,
             discarded: false,
         });
         self.frames.push(Frame::SourceResourceBoundary(boundary));
@@ -456,7 +457,8 @@ impl Machine<'_> {
                 let finish_body = scope.finish.body;
                 let data = boundary
                     .payload
-                    .take()
+                    .as_ref()
+                    .cloned()
                     .ok_or(RuntimeFailure::ForeignBinding)?;
                 let state_data = self
                     .foreign_tuple(&[Value::NativeStateView(key), data], RuntimePhase::Cleanup)?;
@@ -610,7 +612,7 @@ fn authenticate_typed_access(
     })
 }
 
-fn visit_typed_source_values(
+pub(super) fn visit_typed_source_values(
     heap: &[HeapCell],
     registry: &crate::resolved::ResolvedRegistry,
     operand: crate::types::IterativeTypeOwner,
@@ -1941,6 +1943,7 @@ mod source_handler_entry_tests {
                                     owner: Some(injected_guard(Arc::clone(&metadata))),
                                     dependencies: Vec::new(),
                                     consumed: false,
+                                    blocked: false,
                                     payload: Some(integer(42)),
                                     saved: None,
                                     discarded: false,
@@ -2100,6 +2103,7 @@ mod source_handler_entry_tests {
                         payload: original.payload.clone(),
                         saved: None,
                         consumed: false,
+                        blocked: false,
                         discarded: false,
                     };
                     machine

@@ -281,6 +281,10 @@ fn occurrences_in_expressions(
                 expressions.push(&resource.initializer);
                 expressions.push(&resource.body);
             }
+            ResolvedExprKind::CopyWindow(window) => {
+                expressions.push(&window.state);
+                expressions.push(&window.body);
+            }
             ResolvedExprKind::Handle(handler) => {
                 expressions.push(&handler.body);
                 expressions.extend(handler.clauses.iter().map(|clause| &clause.body));

@@ -1221,7 +1221,8 @@ fn walk_provider_source_occurrences<'a>(
                 | ResolvedExprKind::Discard(_)
                 | ResolvedExprKind::Cleanup(_)
                 | ResolvedExprKind::Resource(_)
-                | ResolvedExprKind::ProviderResource(_) => {
+                | ResolvedExprKind::ProviderResource(_)
+                | ResolvedExprKind::CopyWindow(_) => {
                     return Err(LifecycleDraftCheckError::InvalidEntry);
                 }
                 ResolvedExprKind::Block(block) => pending.push(Item::Block(block)),

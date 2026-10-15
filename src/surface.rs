@@ -411,6 +411,8 @@ pub enum SurfaceExprKind {
     Resume(Box<SurfaceExpr>),
     /// A parsed acquisition, pending resource identity and lifetime checking.
     Resource(Box<SurfaceResourceExpr>),
+    /// A lexical fresh-window scope rooted in authenticated native state.
+    CopyWindow(Box<SurfaceCopyWindowExpr>),
     /// An instance of an experimental source resource assembly.
     ProviderResource(Box<SurfaceProviderResourceExpr>),
     /// An empty-chain scope, pending hook API and effect checking.
@@ -481,6 +483,15 @@ pub struct SurfacePerformExpr {
     pub arguments: Vec<SurfaceType>,
     pub operation: SurfaceName,
     pub operand: Box<SurfaceExpr>,
+}
+
+/// One finite direct-provider window. The fresh argument position comes from
+/// the exact declared family; this syntax alone grants no native permission.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceCopyWindowExpr {
+    pub family: SurfaceType,
+    pub state: SurfaceExpr,
+    pub body: SurfaceBlock,
 }
 
 /// One lexical source handler.

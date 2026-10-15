@@ -2,9 +2,10 @@
 //! These programs exercise the selected experiment; they do not define Ash.
 use ash::{
     driver::{FileFailure, PipelineFailure, RunConfiguration, run_path_with_foreign_runtime},
-    foreign::{ForeignRegistrations, provider_manifest, runtime::ForeignRuntime, sqlite_manifest},
+    foreign::{ForeignRegistrations, provider_manifest, runtime::ForeignRuntime},
     module::{ForeignRegistrationId, ModuleRoots},
 };
+use ash_foreign_adapter::sqlite_manifest;
 use ash_foreign_adapter::{
     Event, Observations, SqliteFinishFaults, sqlite_binding_with_finish_faults,
 };

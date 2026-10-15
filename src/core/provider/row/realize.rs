@@ -178,6 +178,17 @@ impl HandlerRowRecipeDraft {
                         .map_err(|()| resource())?;
                         row = union(&row, &requested, work)?;
                     }
+                    RowEquationOperation::CopyWindow => {
+                        let EffectExprKind::Operation(EffectOperation::SourceCopyWindow(scope)) =
+                            &stored.kind
+                        else {
+                            return Err(invalid(equation.node));
+                        };
+                        for interpretation in scope.interpretations() {
+                            let actual = instance(interpretation.effect(), work)?;
+                            row = remove(&row, &actual, true, work)?;
+                        }
+                    }
                     RowEquationOperation::NativeInterpret => {
                         let EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) =
                             &stored.kind

@@ -43,6 +43,8 @@ const BYTES_SOURCE: &str = concat!(
     "pub append_byte : (Bytes, Int) -> AppendResult\nappend_byte value = append_byte value\n",
     "pub length : Bytes -> Int\nlength value = length value\n",
     "pub equal : (Bytes, Bytes) -> Bool\nequal value = equal value\n",
+    "pub type ReadResult = ByteAt(Int)\n| InvalidIndex\n",
+    "pub at : (Bytes, Int) -> ReadResult\nat value = at value\n",
 );
 const STRING_SOURCE: &str = concat!(
     "pub type DecodeResult = Decoded(String)\n| InvalidUtf8\n",
@@ -67,10 +69,17 @@ const FOREIGN_SOURCE: &str = concat!(
     "pub type Disposition<T> = Consumed(T)\n",
     "    | Retained(T)\n",
     "    | BlockedDependent\n",
+    "pub opaque type Extent<V> = HiddenExtent\n",
     "pub checked_i64 : Int -> Call<Int>\nchecked_i64 value = checked_i64 value\n",
     "pub checked_size_t : Int -> Call<Int>\nchecked_size_t value = checked_size_t value\n",
     "pub byte_read<S> : (S, Int) -> Call<Int>\nbyte_read value = byte_read value\n",
     "pub byte_write<S> : (S, Int, Int) -> Call<Unit>\nbyte_write value = byte_write value\n",
+    "pub checked_nul : String -> Call<Unit>\nchecked_nul value = checked_nul value\n",
+    "pub data_of<S, D> : S -> D\ndata_of state = data_of state\n",
+    "pub replace_data<S, D> : (S, D) -> Unit\nreplace_data value = replace_data value\n",
+    "pub copy_bytes<V> : (V, Extent<V>) -> Call<Bytes>\ncopy_bytes value = copy_bytes value\n",
+    "pub copy_nul<V> : (V, Int) -> Call<Bytes>\ncopy_nul value = copy_nul value\n",
+    "pub extent_value<V> : Extent<V> -> Int\nextent_value value = extent_value value\n",
 );
 
 /// Exact source coordinates for compiler-owned scalar preflight declarations.
@@ -89,6 +98,12 @@ pub(crate) fn foreign_scalar_preflight_ranges(
         1 => ("checked_size_t", 0, 16),
         2 => ("byte_read", 3, 21),
         3 => ("byte_write", 3, 27),
+        4 => ("checked_nul", 0, 20),
+        5 => ("data_of", 6, 6),
+        6 => ("replace_data", 6, 14),
+        7 => ("copy_bytes", 3, 29),
+        8 => ("copy_nul", 3, 23),
+        9 => ("extent_value", 3, 16),
         _ => return None,
     };
     // Only the immutable compiler-owned source is inspected here. Runtime
@@ -101,6 +116,26 @@ pub(crate) fn foreign_scalar_preflight_ranges(
     Some((
         crate::source::ByteRange::new(name_start, name_end).ok()?,
         crate::source::ByteRange::new(annotation_start, annotation_end).ok()?,
+    ))
+}
+
+/// Exact declaration and formal ranges for the compiler-owned opaque extent.
+/// These coordinates authenticate the role, never an exported display spelling.
+pub(crate) fn foreign_extent_ranges(
+    source: Span,
+) -> Option<(crate::source::ByteRange, crate::source::ByteRange)> {
+    if source.range().start() != 0
+        || usize::try_from(source.range().end()).ok()? != FOREIGN_SOURCE.len()
+    {
+        return None;
+    }
+    let declaration = "pub opaque type Extent<V> = HiddenExtent";
+    let start = u32::try_from(FOREIGN_SOURCE.find(declaration)?).ok()?;
+    let end = start.checked_add(u32::try_from(declaration.len()).ok()?)?;
+    let formal = start.checked_add(u32::try_from("pub opaque type Extent<".len()).ok()?)?;
+    Some((
+        crate::source::ByteRange::new(start, end).ok()?,
+        crate::source::ByteRange::new(formal, formal.checked_add(1)?).ok()?,
     ))
 }
 
@@ -2448,6 +2483,8 @@ pub(crate) enum ImageModuleRole {
     Ordinary,
     BuiltinForeign,
     BuiltinCell,
+    BuiltinString,
+    BuiltinBytes,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2464,12 +2501,17 @@ pub(crate) fn restore_image_module(
     work.charge(1).map_err(|()| ImageModuleFailure::Resource)?;
     match role {
         ImageModuleRole::Ordinary => Ok(ModuleId::from(source.id())),
-        ImageModuleRole::BuiltinForeign | ImageModuleRole::BuiltinCell => {
+        ImageModuleRole::BuiltinForeign
+        | ImageModuleRole::BuiltinCell
+        | ImageModuleRole::BuiltinString
+        | ImageModuleRole::BuiltinBytes => {
             let (canonical, namespace) = match role {
                 ImageModuleRole::BuiltinForeign => {
                     (FOREIGN_SOURCE, ModuleIdNamespace::BuiltinForeign)
                 }
                 ImageModuleRole::BuiltinCell => (CELL_SOURCE, ModuleIdNamespace::BuiltinCell),
+                ImageModuleRole::BuiltinString => (STRING_SOURCE, ModuleIdNamespace::BuiltinString),
+                ImageModuleRole::BuiltinBytes => (BYTES_SOURCE, ModuleIdNamespace::BuiltinBytes),
                 ImageModuleRole::Ordinary => unreachable!(),
             };
             if source.text().len() != canonical.len() {

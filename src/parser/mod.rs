@@ -132,6 +132,8 @@ pub enum NodeKind {
     ResumeExpression,
     /// One builtin cell acquisition with an identity binder and scoped body.
     ResourceExpression,
+    /// A lexical foreign-copy window and its direct body.
+    CopyWindowExpression,
     /// A module-owned experimental assembly or explicit source resource declaration.
     ResourceDefinition,
     /// Experimental assembly field or clause block.
@@ -947,6 +949,7 @@ fn retained_token(kind: &TokenKind) -> FoundToken {
         TokenKind::With => FoundToken::Spelling("with"),
         TokenKind::Resume => FoundToken::Spelling("resume"),
         TokenKind::Resource => FoundToken::Spelling("resource"),
+        TokenKind::CopyWindow => FoundToken::Spelling("copy_window"),
         TokenKind::Hook => FoundToken::Spelling("hook"),
         TokenKind::Register => FoundToken::Spelling("register"),
         TokenKind::Cleanup => FoundToken::Spelling("cleanup"),

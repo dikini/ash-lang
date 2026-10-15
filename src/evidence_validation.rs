@@ -6087,6 +6087,16 @@ fn collect_method_evidence_expression_occurrences<'a>(
     while let Some((expression, row_head)) = pending.pop() {
         charge(constraint_work, 1, expression.span)?;
         match &expression.kind {
+            ResolvedExprKind::CopyWindow(window) => {
+                reserve_method_context_expressions(
+                    &mut pending,
+                    2,
+                    constraint_work,
+                    expression.span,
+                )?;
+                pending.push((&window.body, row_head));
+                pending.push((&window.state, row_head));
+            }
             ResolvedExprKind::ProviderResource(resource) => {
                 if program
                     .registry()
@@ -6826,6 +6836,7 @@ fn authenticate_linked_constructor_payloads<'a>(
 enum LinkedBinderOwner {
     Resource(crate::interface::LexicalEvidenceId),
     ProviderDeclaration(crate::resolved::ResourceDefinitionId),
+    CopyWindow(crate::resolved::ResourceDefinitionId, crate::core::NodeId),
     LexicalMethod(crate::interface::LexicalEvidenceId, MethodId),
     Nominal(NominalTypeId),
     Effect(crate::types::EffectId),
@@ -6897,17 +6908,18 @@ fn authenticate_linked_registry_facts(
     // A constructor-free category requires the exact original owner proof;
     // candidate membership alone cannot relax ordinary nominal admission.
     type_work
-        .charge(registry.source_owner_candidate_count())
+        .charge(registry.source_foreign_nominal_count())
         .map_err(|()| type_resource(span))?;
     let mut source_owners = HashSet::new();
     source_owners
-        .try_reserve(registry.source_owner_candidate_count())
+        .try_reserve(registry.source_foreign_nominal_count())
         .map_err(|_| type_resource(span))?;
-    for (prepared, owner_index, nominal, parameters) in registry.source_owner_candidates() {
+    for (prepared, owner_index, nominal, parameters) in registry.source_foreign_nominal_candidates()
+    {
         if registry.nominal(nominal).is_none() {
             continue;
         }
-        crate::foreign::source_owner::authenticate_source_owner_candidate(
+        crate::foreign::source_access::authenticate_source_foreign_nominal_candidate(
             prepared,
             owner_index,
             nominal,
@@ -7047,6 +7059,52 @@ fn authenticate_linked_registry_facts(
                         .is_some()
                     {
                         return Err(unknown(parameter_span));
+                    }
+                }
+            }
+        }
+        // Fresh windows in original source forests are distinct lexical
+        // binders. Register only occurrences in those already independently
+        // checked forests, with their original resource and exact node identity;
+        // a registry variable or matching spelling alone is insufficient.
+        if let Some(code) = group.source_resource_code() {
+            for (index, header) in code.headers().enumerate() {
+                let template = code.resource(index).ok_or_else(|| unknown(group.span()))?;
+                let binders = template
+                    .original_window_binders(type_work)
+                    .map_err(|error| {
+                        if error.reason() == crate::core::ValidationReason::Resource {
+                            type_resource(group.span())
+                        } else {
+                            unknown(group.span())
+                        }
+                    })?;
+                for (id, defining) in binders {
+                    let span = defining.origin.primary_span();
+                    let canonical = registry
+                        .type_variable(defining.id)
+                        .ok_or_else(|| unknown(span))?;
+                    if defining.id.module() != Some(group.module())
+                        || canonical.kind != Kind::Type
+                        || !same_binders_charged(
+                            std::slice::from_ref(canonical),
+                            std::slice::from_ref(defining),
+                            budget,
+                            span,
+                        )?
+                    {
+                        return Err(unknown(span));
+                    }
+                    charge(budget, 1, span)?;
+                    owners.try_reserve(1).map_err(|_| resource(span))?;
+                    if owners
+                        .insert(
+                            defining.id,
+                            LinkedBinderOwner::CopyWindow(header.original.id, id),
+                        )
+                        .is_some()
+                    {
+                        return Err(unknown(span));
                     }
                 }
             }
@@ -7616,6 +7674,7 @@ fn validate_pending_expressions<'a, 'body>(
                 if let Some(identity) = match local {
                     LinkedLocalScope::Resource(resource) => Some(resource.identity.id),
                     LinkedLocalScope::ProviderResource(resource) => Some(resource.identity.id),
+                    LinkedLocalScope::CopyWindow(window) => Some(window.identity.id),
                     _ => None,
                 } {
                     charge(budget, 1, expression.span)?;
@@ -7661,6 +7720,41 @@ fn validate_pending_expressions<'a, 'body>(
         };
         charge(budget, 1, expression.span)?;
         match &expression.kind {
+            ResolvedExprKind::CopyWindow(window) => {
+                let canonical = program
+                    .registry()
+                    .type_variable(window.identity.id)
+                    .ok_or_else(|| invalid_root(expression.span))?;
+                charge(
+                    budget,
+                    canonical.spelling.len().saturating_add(2),
+                    expression.span,
+                )?;
+                if canonical.kind != Kind::Type
+                    || canonical.spelling != window.identity.spelling
+                    || canonical.origin.primary_span() != window.identity.origin.primary_span()
+                {
+                    return Err(invalid_root(expression.span));
+                }
+                reserve_expressions(pending, 2, budget, expression.span)?;
+                resize_lexical_heads(&mut heads, pending.len(), head, budget, expression.span)?;
+                charge(budget, 1, expression.span)?;
+                method_scopes
+                    .try_reserve(1)
+                    .map_err(|_| resource(expression.span))?;
+                let body_scope = Some(method_scopes.len());
+                method_scopes.push((LinkedLocalScope::CopyWindow(window), head.1));
+                pending.push(&window.body);
+                resize_lexical_heads(
+                    &mut heads,
+                    pending.len(),
+                    (head.0, body_scope),
+                    budget,
+                    expression.span,
+                )?;
+                pending.push(&window.state);
+                resize_lexical_heads(&mut heads, pending.len(), head, budget, expression.span)?;
+            }
             ResolvedExprKind::ProviderResource(resource_scope) => {
                 authenticate_provider_source(
                     program,
@@ -9563,6 +9657,7 @@ enum LinkedLocalScope<'a> {
     Nominal(NominalTypeId),
     Resource(&'a crate::resolved::ResolvedResourceExpr),
     ProviderResource(&'a crate::resolved::ResolvedProviderResourceExpr),
+    CopyWindow(&'a crate::resolved::ResolvedCopyWindowExpr),
 }
 
 // The same fixed-size pure shape excluded by ordinary scheme qualification.

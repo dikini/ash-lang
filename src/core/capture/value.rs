@@ -46,6 +46,13 @@ enum Expr {
         argument: usize,
         reply: usize,
     },
+    // Exact original Data call; storage is indexed by the same owner creation.
+    SourceDataCall {
+        function: usize,
+        argument: usize,
+        owner: usize,
+        replace: bool,
+    },
     Tuple(Vec<usize>),
     Constructor(ConstructorId),
     Project {
@@ -79,6 +86,9 @@ enum Expr {
     Request {
         operand: usize,
         scalar: bool,
+        // Only an independently checked original window call supplies a reply
+        // equation. Ordinary requests keep their selected handler's result.
+        reply: Option<usize>,
     },
     Resume {
         operand: usize,
@@ -180,6 +190,17 @@ impl Expr {
                 argument: argument + offset,
                 reply: reply + offset,
             },
+            Self::SourceDataCall {
+                function,
+                argument,
+                owner,
+                replace,
+            } => Self::SourceDataCall {
+                function: function + offset,
+                argument: argument + offset,
+                owner: owner + offset,
+                replace: *replace,
+            },
             Self::Cleanup { body, action } => Self::Cleanup {
                 body: body + offset,
                 action: action + offset,
@@ -230,9 +251,14 @@ impl Expr {
                 body: body + offset,
                 source: *source,
             },
-            Self::Request { operand, scalar } => Self::Request {
+            Self::Request {
+                operand,
+                scalar,
+                reply,
+            } => Self::Request {
                 operand: operand + offset,
                 scalar: *scalar,
+                reply: reply.map(|value| value + offset),
             },
             Self::Resume { operand } => Self::Resume {
                 operand: operand + offset,
@@ -275,6 +301,16 @@ struct ProviderQueryBindings {
     lexical: Vec<(usize, usize)>,
     parameters: Vec<usize>,
     capture_ports: Vec<usize>,
+    // Per-owner/creation joins include both initial and later replacement D.
+    // This is value flow, not a native guard or a cache of admission results.
+    source_payloads: Vec<SourcePayloadDefinition>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SourcePayloadDefinition {
+    owner: usize,
+    slot: usize,
+    initial: usize,
 }
 
 type EvidenceKey = (crate::interface::RequirementId, crate::interface::MethodId);
@@ -299,7 +335,7 @@ pub(super) struct Graph {
     expressions: Vec<Expr>,
     globals: Vec<(usize, usize)>,
     // Empty for ordinary analysis. The single fallible private carrier avoids
-    // enlarging every ordinary graph/result stack frame by three vectors.
+    // enlarging every ordinary graph/result stack frame with auxiliary vectors.
     provider: Vec<ProviderQueryBindings>,
     sources: Vec<Span>,
     exports: Vec<(BinderId, usize)>,
@@ -356,78 +392,297 @@ pub(super) struct CallSuccessors {
 // This result cut consumes a flow-proved original call mapped through the
 // scope's authenticated copy forest. A compatible arrow or State spelling is
 // only a cheap rejection filter; it supplies no capture or execution authority.
-#[inline(never)]
-fn source_byte_call_module<F: CoreOperationFamily>(
-    nodes: &[StoredNode<F>],
-    id: usize,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SourcePrimitiveReply {
+    Call(crate::module::ModuleId),
+    Scalar,
+    Data { owner: usize, replace: bool },
+}
+
+// One exact immutable graph owns this representation. The index retains the
+// original visitor order; it grants no authority beyond each query's existing
+// shape and canonical-function checks. Build it only after an eligible query.
+struct SourcePrimitiveReplies<'a, F: CoreOperationFamily> {
+    nodes: &'a [StoredNode<F>],
     operation: fn(&F::Kind) -> Option<&EffectOperation>,
-    budget: &mut TypeWorkBudget,
-) -> Result<Option<crate::module::ModuleId>, Failure> {
-    let Some(PureExprKind::Computation(PureComputation::Apply(application))) =
-        F::pure(&nodes.get(id).ok_or(Failure::Invalid)?.kind)
-    else {
-        return Ok(None);
-    };
-    let Some(function) = nodes
-        .get(index(application.function()))
-        .ok_or(Failure::Invalid)?
-        .ty
-        .function_view()
-    else {
-        return Ok(None);
-    };
-    let Type::Tuple(domain) = function.domain() else {
-        return Ok(None);
-    };
-    let Type::Application(result, _) = function.value() else {
-        return Ok(None);
-    };
-    let Type::Nominal(call) = &**result else {
-        return Ok(None);
-    };
-    if !matches!(domain.len(), 2 | 3)
-        || !call.module().is_builtin_foreign()
-        || call.declaration() != 1
-    {
-        return Ok(None);
+    calls: Option<HashMap<usize, Vec<(usize, crate::core::source_resource::SourceByteCall)>>>,
+}
+
+type WindowReplyLineage = (
+    usize,
+    crate::module::ModuleId,
+    bool,
+    [ConstructorId; 2],
+    [ConstructorId; 2],
+);
+
+#[derive(Clone, Copy)]
+struct WindowReplyRecord {
+    window: usize,
+    module: crate::module::ModuleId,
+    view: Option<bool>,
+    codec: Option<([ConstructorId; 2], [ConstructorId; 2])>,
+}
+
+impl WindowReplyRecord {
+    fn from_symbol(
+        window: usize,
+        symbol: &crate::foreign::checked_source::CheckedForeignSymbol,
+    ) -> Self {
+        use crate::foreign::source_contract::PreparedAccessResult;
+        Self {
+            window,
+            module: symbol.call_codec().module(),
+            view: symbol
+                .symbol()
+                .access_result()
+                .map(|result| matches!(result, PreparedAccessResult::View { .. })),
+            codec: symbol
+                .owner_codec()
+                .map(|codec| (*codec.output_constructors(), *codec.nullable_constructors())),
+        }
     }
-    charge(budget, nodes.len())?;
-    let mut admitted = None;
-    for node in nodes {
-        let Some(EffectOperation::SourceResourceScope(scope)) = operation(&node.kind) else {
-            continue;
+
+    fn select(
+        self,
+        selected: &mut Option<WindowReplyLineage>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), crate::core::ValidationError> {
+        use crate::core::{ValidationError, ValidationReason};
+        let invalid = || ValidationError::new(ValidationReason::Registry, None);
+        let Some(view) = self.view else {
+            return Ok(());
         };
-        scope
-            .visit_byte_calls(
-                |relation, _| {
-                    if relation.apply.is_some_and(|apply| index(apply) == id) {
-                        let module = relation.function.module().ok_or_else(|| {
+        let (output, nullable) = self.codec.ok_or_else(invalid)?;
+        let candidate = (self.window, self.module, view, output, nullable);
+        if selected.is_some_and(|old| old != candidate) {
+            return Err(invalid());
+        }
+        *selected = Some(candidate);
+        work.charge(1)
+            .map_err(|()| ValidationError::new(ValidationReason::Resource, None))
+    }
+}
+
+// This temporary index belongs to one immutable graph construction. It retains
+// raw original relation coordinates, never a window/call admission or marker.
+struct SourceWindowReplies<'a, F: CoreOperationFamily> {
+    nodes: &'a [StoredNode<F>],
+    operation: fn(&F::Kind) -> Option<&EffectOperation>,
+    calls: Option<HashMap<usize, Vec<WindowReplyRecord>>>,
+}
+
+impl<'a, F: CoreOperationFamily> SourceWindowReplies<'a, F> {
+    fn new(
+        nodes: &'a [StoredNode<F>],
+        operation: fn(&F::Kind) -> Option<&EffectOperation>,
+    ) -> Self {
+        Self {
+            nodes,
+            operation,
+            calls: None,
+        }
+    }
+
+    fn reply(
+        &mut self,
+        id: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Option<WindowReplyLineage>, Failure> {
+        let failure = |error: crate::core::ValidationError| {
+            if error.reason() == crate::core::ValidationReason::Resource {
+                Failure::Resource
+            } else {
+                Failure::Invalid
+            }
+        };
+        let mut selected = None;
+        if let Some(calls) = &self.calls {
+            charge(budget, 1)?;
+            if let Some(records) = calls.get(&id) {
+                for record in records {
+                    charge(budget, 1)?;
+                    record.select(&mut selected, budget).map_err(failure)?;
+                }
+            }
+            return Ok(selected);
+        }
+        charge(budget, self.nodes.len())?;
+        let mut calls = HashMap::<usize, Vec<WindowReplyRecord>>::new();
+        for stored in self.nodes {
+            let Some(EffectOperation::SourceResourceScope(scope)) = (self.operation)(&stored.kind)
+            else {
+                continue;
+            };
+            scope
+                .visit_window_calls(
+                    |request, window, symbol, work| {
+                        let record = WindowReplyRecord::from_symbol(index(window), symbol);
+                        // Preserve the first query's original selection/error order
+                        // while mapping ALL relations, including unmatched records.
+                        if index(request) == id {
+                            record.select(&mut selected, work)?;
+                        }
+                        let resource = || {
                             crate::core::ValidationError::new(
-                                crate::core::ValidationReason::Registry,
+                                crate::core::ValidationReason::Resource,
                                 None,
                             )
-                        })?;
-                        if module != call.module() {
-                            return Err(crate::core::ValidationError::new(
-                                crate::core::ValidationReason::Registry,
-                                None,
-                            ));
-                        }
-                        admitted = Some(module);
-                    }
-                    Ok(())
-                },
-                budget,
-            )
-            .map_err(|failure| {
-                if failure.reason() == crate::core::ValidationReason::Resource {
-                    Failure::Resource
-                } else {
-                    Failure::Invalid
-                }
-            })?;
+                        };
+                        work.charge(3).map_err(|()| resource())?;
+                        calls.try_reserve(1).map_err(|_| resource())?;
+                        let group = calls.entry(index(request)).or_default();
+                        group.try_reserve(1).map_err(|_| resource())?;
+                        group.push(record);
+                        Ok(())
+                    },
+                    budget,
+                )
+                .map_err(failure)?;
+        }
+        // Failed mapping or allocation publishes no partial representation.
+        charge(budget, 1)?;
+        self.calls = Some(calls);
+        Ok(selected)
     }
-    Ok(admitted)
+}
+
+impl<'a, F: CoreOperationFamily> SourcePrimitiveReplies<'a, F> {
+    fn new(
+        nodes: &'a [StoredNode<F>],
+        operation: fn(&F::Kind) -> Option<&EffectOperation>,
+    ) -> Self {
+        Self {
+            nodes,
+            operation,
+            calls: None,
+        }
+    }
+
+    fn prepare(&mut self, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        if self.calls.is_some() {
+            return Ok(());
+        }
+        charge(budget, self.nodes.len())?;
+        let mut calls =
+            HashMap::<usize, Vec<(usize, crate::core::source_resource::SourceByteCall)>>::new();
+        for (owner, node) in self.nodes.iter().enumerate() {
+            let Some(EffectOperation::SourceResourceScope(scope)) = (self.operation)(&node.kind)
+            else {
+                continue;
+            };
+            scope
+                .visit_byte_calls(
+                    |relation, work| {
+                        let resource = || {
+                            crate::core::ValidationError::new(
+                                crate::core::ValidationReason::Resource,
+                                None,
+                            )
+                        };
+                        work.charge(1).map_err(|()| resource())?;
+                        if let Some(apply) = relation.apply {
+                            // Pay the lookup and retained bucket/record before allocation.
+                            work.charge(3).map_err(|()| resource())?;
+                            calls.try_reserve(1).map_err(|_| resource())?;
+                            let group = calls.entry(index(apply)).or_default();
+                            group.try_reserve(1).map_err(|_| resource())?;
+                            group.push((owner, relation));
+                        }
+                        Ok(())
+                    },
+                    budget,
+                )
+                .map_err(|failure| {
+                    if failure.reason() == crate::core::ValidationReason::Resource {
+                        Failure::Resource
+                    } else {
+                        Failure::Invalid
+                    }
+                })?;
+        }
+        // Mapping or allocation refusal publishes no partial index. In
+        // particular, even unmatched/apply-less relations were mapped above.
+        charge(budget, 1)?;
+        self.calls = Some(calls);
+        Ok(())
+    }
+
+    fn reply(
+        &mut self,
+        id: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Option<SourcePrimitiveReply>, Failure> {
+        let nodes = self.nodes;
+        let Some(PureExprKind::Computation(PureComputation::Apply(application))) =
+            F::pure(&nodes.get(id).ok_or(Failure::Invalid)?.kind)
+        else {
+            return Ok(None);
+        };
+        let Some(function) = nodes
+            .get(index(application.function()))
+            .ok_or(Failure::Invalid)?
+            .ty
+            .function_view()
+        else {
+            return Ok(None);
+        };
+        let call = match (function.domain(), function.value()) {
+            (Type::Tuple(domain), Type::Application(result, _))
+                if matches!(domain.len(), 2 | 3) =>
+            {
+                match result.as_ref() {
+                    Type::Nominal(call)
+                        if call.module().is_builtin_foreign() && call.declaration() == 1 =>
+                    {
+                        Some(*call)
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        let state = match function.domain() {
+            Type::Tuple(fields) => fields.first(),
+            other => Some(other),
+        };
+        let stateful = state.is_some_and(|state| {
+            matches!(
+                state,
+                Type::Nominal(_) | Type::Application(_, _) | Type::Variable(_)
+            )
+        });
+        if call.is_none() && !stateful {
+            return Ok(None);
+        }
+        self.prepare(budget)?;
+        charge(budget, 1)?;
+        let mut admitted = None;
+        if let Some(group) = self.calls.as_ref().and_then(|calls| calls.get(&id)) {
+            for &(owner, relation) in group {
+                charge(budget, 1)?;
+                if relation.apply.is_some_and(|apply| index(apply) == id) {
+                    let module = relation.function.module().ok_or(Failure::Invalid)?;
+                    if module.is_builtin_foreign() {
+                        match relation.function.local() {
+                            2 | 3 | 7 | 8 if call.is_some_and(|call| call.module() == module) => {
+                                admitted = Some(SourcePrimitiveReply::Call(module))
+                            }
+                            9 => admitted = Some(SourcePrimitiveReply::Scalar),
+                            5 | 6 => {
+                                admitted = Some(SourcePrimitiveReply::Data {
+                                    owner,
+                                    replace: relation.function.local() == 6,
+                                })
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        Ok(admitted)
+    }
 }
 
 // Owned only by one exact observed control State inside one discover invocation.
@@ -485,6 +740,25 @@ impl Graph {
             storage.push(ProviderQueryBindings::default());
         }
         storage.first_mut().ok_or(Failure::Invalid)
+    }
+
+    fn source_payload(
+        &self,
+        owner: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Option<SourcePayloadDefinition>, Failure> {
+        let definitions = self
+            .provider
+            .first()
+            .map_or(&[][..], |storage| &storage.source_payloads);
+        charge(budget, definitions.len())?;
+        let mut selected = None;
+        for definition in definitions {
+            if definition.owner == owner && selected.replace(*definition).is_some() {
+                return Err(Failure::Invalid);
+            }
+        }
+        Ok(selected)
     }
 
     fn capture_ports(&self) -> &[usize] {
@@ -556,6 +830,28 @@ impl Graph {
             self.expressions.push(expression.copy(offset, budget)?);
         }
         self.sources.extend_from_slice(&imported.sources);
+        if let Some(storage) = imported.provider.first()
+            && !storage.source_payloads.is_empty()
+        {
+            charge(budget, storage.source_payloads.len())?;
+            let local = Self::provider_bindings(&mut self.provider, budget)?;
+            local
+                .source_payloads
+                .try_reserve(storage.source_payloads.len())
+                .map_err(|_| Failure::Resource)?;
+            local
+                .source_payloads
+                .extend(
+                    storage
+                        .source_payloads
+                        .iter()
+                        .map(|definition| SourcePayloadDefinition {
+                            owner: definition.owner + offset,
+                            slot: definition.slot + offset,
+                            initial: definition.initial + offset,
+                        }),
+                );
+        }
         self.globals
             .try_reserve(imported.globals.len())
             .map_err(|_| Failure::Resource)?;
@@ -859,6 +1155,9 @@ impl Graph {
                     argument,
                     reply,
                 } => children = copy_slice(&[*function, *argument, *reply], budget)?,
+                Expr::SourceDataCall {
+                    function, argument, ..
+                } => children = copy_slice(&[*function, *argument], budget)?,
                 Expr::Cleanup { body, action } => children = copy_slice(&[*body, *action], budget)?,
                 Expr::Bind {
                     binder,
@@ -921,9 +1220,15 @@ impl Graph {
                         children.push(*value);
                     }
                 }
-                Expr::Request { operand, .. } | Expr::Resume { operand } => {
-                    children = copy_slice(&[*operand], budget)?
+                Expr::Request { operand, reply, .. } => {
+                    children = copy_slice(&[*operand], budget)?;
+                    if let Some(reply) = reply {
+                        charge(budget, 1)?;
+                        children.try_reserve(1).map_err(|_| Failure::Resource)?;
+                        children.push(*reply);
+                    }
                 }
+                Expr::Resume { operand } => children = copy_slice(&[*operand], budget)?,
                 Expr::Handler { body, clauses } => {
                     children = copy_slice(&[*body], budget)?;
                     for clause in clauses {
@@ -1402,6 +1707,8 @@ impl Graph {
         methods: &super::MethodUses<'_>,
         adapters: &[super::MethodAdapter],
         headers: &mut FunctionMetadataPreparation<'_, F>,
+        source_replies: &mut SourcePrimitiveReplies<'_, F>,
+        window_replies: &mut SourceWindowReplies<'_, F>,
         budget: &mut TypeWorkBudget,
     ) -> Result<Expr, Failure> {
         let node = nodes.get(id).ok_or(Failure::Invalid)?;
@@ -1412,14 +1719,24 @@ impl Graph {
                 nodes,
                 symbols,
                 types,
+                methods,
+                adapters,
+                headers,
+                source_replies,
+                budget,
+            ),
+            pure => self.build_non_computation(
+                pure,
+                id,
+                nodes,
+                symbols,
+                types,
                 operation,
                 methods,
                 adapters,
                 headers,
+                window_replies,
                 budget,
-            ),
-            pure => self.build_non_computation(
-                pure, id, nodes, symbols, types, operation, methods, adapters, headers, budget,
             ),
         }
     }
@@ -1436,6 +1753,7 @@ impl Graph {
         methods: &super::MethodUses<'_>,
         adapters: &[super::MethodAdapter],
         headers: &mut FunctionMetadataPreparation<'_, F>,
+        window_replies: &mut SourceWindowReplies<'_, F>,
         budget: &mut TypeWorkBudget,
     ) -> Result<Expr, Failure> {
         let node = nodes.get(id).ok_or(Failure::Invalid)?;
@@ -1500,8 +1818,19 @@ impl Graph {
                 }
                 if matches!(
                     intrinsic.operation(),
+                    crate::core::packed::Intrinsic::ForeignDataOf { .. }
+                        | crate::core::packed::Intrinsic::ForeignReplaceData { .. }
+                ) {
+                    // A generic D may retain resource dependencies. Only an
+                    // exact admitted call with a scalar result gets the cut
+                    // below; other payloads keep conservative argument flow.
+                    return Ok(Expr::Unknown);
+                }
+                if matches!(
+                    intrinsic.operation(),
                     crate::core::packed::Intrinsic::ForeignCheckedI64 { .. }
                         | crate::core::packed::Intrinsic::ForeignCheckedSizeT { .. }
+                        | crate::core::packed::Intrinsic::ForeignCheckedNul { .. }
                         | crate::core::packed::Intrinsic::ForeignByteRead { .. }
                         | crate::core::packed::Intrinsic::ForeignByteWrite { .. }
                 ) {
@@ -1514,6 +1843,9 @@ impl Graph {
                 let constructors = match intrinsic.operation() {
                     crate::core::packed::Intrinsic::BytesAppendByte { appended, invalid } => {
                         Some((appended, invalid))
+                    }
+                    crate::core::packed::Intrinsic::BytesAt { found, invalid } => {
+                        Some((found, invalid))
                     }
                     crate::core::packed::Intrinsic::StringFromUtf8 { decoded, invalid } => {
                         Some((decoded, invalid))
@@ -1552,7 +1884,16 @@ impl Graph {
             }
             Some(PureExprKind::Computation(_)) => return Err(Failure::Invalid),
             _ => self.build_operation(
-                id, nodes, symbols, types, operation, methods, adapters, headers, budget,
+                id,
+                nodes,
+                symbols,
+                types,
+                operation,
+                methods,
+                adapters,
+                headers,
+                window_replies,
+                budget,
             )?,
         })
     }
@@ -1629,10 +1970,10 @@ impl Graph {
         nodes: &[StoredNode<F>],
         symbols: &mut HashMap<BinderId, usize>,
         types: &mut HashMap<crate::types::TypeVariableId, usize>,
-        operation: fn(&F::Kind) -> Option<&EffectOperation>,
         methods: &super::MethodUses<'_>,
         adapters: &[super::MethodAdapter],
         headers: &mut FunctionMetadataPreparation<'_, F>,
+        source_replies: &mut SourcePrimitiveReplies<'_, F>,
         budget: &mut TypeWorkBudget,
     ) -> Result<Expr, Failure> {
         let node = nodes.get(id).ok_or(Failure::Invalid)?;
@@ -1657,15 +1998,30 @@ impl Graph {
                 }
             }
             PureComputation::Apply(application) => {
-                if let Some(module) = source_byte_call_module(nodes, id, operation, budget)? {
-                    let body = self.foreign_call_reply(module, source, budget)?;
-                    // The original phase proof admits exactly this borrowed
-                    // call. Its evaluated inputs remain in the control graph;
-                    // neither result alternative stores their owner or metadata.
-                    Expr::BorrowedCallReply {
-                        function: index(application.function()),
-                        argument: index(application.argument()),
-                        reply: body,
+                if let Some(reply) = source_replies.reply(id, budget)? {
+                    match reply {
+                        SourcePrimitiveReply::Data { owner, replace } => Expr::SourceDataCall {
+                            function: index(application.function()),
+                            argument: index(application.argument()),
+                            owner,
+                            replace,
+                        },
+                        SourcePrimitiveReply::Scalar => {
+                            let reply = self.push(Expr::Scalar, source, budget)?;
+                            Expr::BorrowedCallReply {
+                                function: index(application.function()),
+                                argument: index(application.argument()),
+                                reply,
+                            }
+                        }
+                        SourcePrimitiveReply::Call(module) => {
+                            let body = self.foreign_call_reply(module, source, budget)?;
+                            Expr::BorrowedCallReply {
+                                function: index(application.function()),
+                                argument: index(application.argument()),
+                                reply: body,
+                            }
+                        }
                     }
                 } else {
                     Expr::Call {
@@ -1888,6 +2244,7 @@ impl Graph {
         methods: &super::MethodUses<'_>,
         adapters: &[super::MethodAdapter],
         headers: &mut FunctionMetadataPreparation<'_, F>,
+        window_replies: &mut SourceWindowReplies<'_, F>,
         budget: &mut TypeWorkBudget,
     ) -> Result<Expr, Failure> {
         let node = nodes.get(id).ok_or(Failure::Invalid)?;
@@ -2049,13 +2406,33 @@ impl Graph {
                     handler
                 }
             }
+            Some(EffectOperation::SourceCopyWindow(window)) => {
+                let identity = self.symbol(types, window.identity(), source, budget)?;
+                // This nonowning lexical marker uses the same iterative hidden
+                // value/closure escape analysis as resource identities. It adds
+                // no acquisition or completion callback.
+                Expr::Resource {
+                    success: None,
+                    failure: None,
+                    failure_payload: None,
+                    handle: identity,
+                    identity,
+                    initializer: index(window.state()),
+                    body: index(window.body()),
+                    source,
+                }
+            }
             Some(EffectOperation::SourceResourceScope(scope)) => self.build_source_resource_scope(
-                scope, source, nodes, symbols, types, methods, adapters, headers, budget,
+                scope, id, source, nodes, symbols, types, methods, adapters, headers, budget,
             )?,
-            Some(EffectOperation::Request(request)) => Expr::Request {
-                operand: index(request.operand()),
-                scalar: scalar(&node.ty),
-            },
+            Some(EffectOperation::Request(request)) => {
+                let reply = self.window_call_reply(id, window_replies, types, source, budget)?;
+                Expr::Request {
+                    operand: index(request.operand()),
+                    scalar: scalar(&node.ty),
+                    reply,
+                }
+            }
             Some(EffectOperation::Resume(resume)) => Expr::Resume {
                 operand: index(resume.value()),
             },
@@ -2093,6 +2470,17 @@ impl Graph {
         budget: &mut TypeWorkBudget,
     ) -> Result<usize, Failure> {
         let scalar = self.push(Expr::Scalar, source, budget)?;
+        self.foreign_call_payload(module, scalar, source, budget)
+    }
+
+    #[inline(never)]
+    fn foreign_call_payload(
+        &mut self,
+        module: crate::module::ModuleId,
+        scalar: usize,
+        source: Span,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
         let call = crate::types::NominalTypeId::new(module, 1);
         let returned = self.push(
             Expr::Constructor(ConstructorId::new(call, 0)),
@@ -2139,12 +2527,75 @@ impl Graph {
         )
     }
 
+    #[inline(never)]
+    fn constructor_payload(
+        &mut self,
+        constructor: ConstructorId,
+        payload: usize,
+        source: Span,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
+        let function = self.push(Expr::Constructor(constructor), source, budget)?;
+        self.push(
+            Expr::Call {
+                function,
+                arguments: copy_slice(&[payload], budget)?,
+                scalar: false,
+                type_application: false,
+            },
+            source,
+            budget,
+        )
+    }
+
+    // A view/extent reply carries the exact lexical window marker. It must not
+    // become Unknown (which loses the marker) or Scalar (which erases lifetime).
+    // The original source-flow and copied-forest relation, not result shape,
+    // authenticates which native request may produce this hidden value.
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    fn window_call_reply<F: CoreOperationFamily>(
+        &mut self,
+        id: usize,
+        replies: &mut SourceWindowReplies<'_, F>,
+        types: &mut HashMap<crate::types::TypeVariableId, usize>,
+        source: Span,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Option<usize>, Failure> {
+        let selected = replies.reply(id, budget)?;
+        let Some((window, module, view, output, nullable)) = selected else {
+            return Ok(None);
+        };
+        let Some(EffectOperation::SourceCopyWindow(window)) =
+            (replies.operation)(&replies.nodes.get(window).ok_or(Failure::Invalid)?.kind)
+        else {
+            return Err(Failure::Invalid);
+        };
+        let identity = self.symbol(types, window.identity(), source, budget)?;
+        let marker = self.push(Expr::Alias(identity), source, budget)?;
+        let payload = if view {
+            let null = self.push(Expr::Constructor(nullable[0]), source, budget)?;
+            let nonnull = self.constructor_payload(nullable[1], marker, source, budget)?;
+            let values = self.push(
+                Expr::Merge(copy_slice(&[null, nonnull], budget)?),
+                source,
+                budget,
+            )?;
+            self.constructor_payload(output[1], values, source, budget)?
+        } else {
+            marker
+        };
+        self.foreign_call_payload(module, payload, source, budget)
+            .map(Some)
+    }
+
     // Source-only conversion storage must not enlarge the ordinary capture frame.
     #[inline(never)]
     #[allow(clippy::too_many_arguments)] // Borrowed phase inputs preserve exact construction order.
     fn build_source_resource_scope<F: CoreOperationFamily>(
         &mut self,
         scope: &crate::core::source_resource::SourceResourceScopeNode,
+        owner: usize,
         source: Span,
         nodes: &[StoredNode<F>],
         symbols: &mut HashMap<BinderId, usize>,
@@ -2217,6 +2668,18 @@ impl Graph {
                 source,
                 budget,
             )?;
+            let payload = self.push(Expr::Slot, source, budget)?;
+            let storage = Self::provider_bindings(&mut self.provider, budget)?;
+            charge(budget, 1)?;
+            storage
+                .source_payloads
+                .try_reserve(1)
+                .map_err(|_| Failure::Resource)?;
+            storage.source_payloads.push(SourcePayloadDefinition {
+                owner,
+                slot: payload,
+                initial: data,
+            });
             let failure_payload = self.push(
                 Expr::Project {
                     value: acquired,
@@ -2473,6 +2936,8 @@ impl Graph {
         methods.source_layouts = source_layouts;
         methods.source_occurrences = source_occurrences;
         let mut headers = FunctionMetadataPreparation::new(nodes, operation);
+        let mut source_replies = SourcePrimitiveReplies::new(nodes, operation);
+        let mut window_replies = SourceWindowReplies::new(nodes, operation);
         let mut graph = Self {
             expressions: Vec::new(),
             globals: Vec::new(),
@@ -2537,6 +3002,8 @@ impl Graph {
                 &methods,
                 adapters,
                 &mut headers,
+                &mut source_replies,
+                &mut window_replies,
                 budget,
             )?;
             if let Some(method) = methods
@@ -4580,7 +5047,7 @@ impl<'a> Analysis<'a> {
         let (expression, _) = self.slots[port].key;
         if matches!(
             self.graph.expressions[expression],
-            Expr::BorrowedCallReply { .. }
+            Expr::BorrowedCallReply { .. } | Expr::SourceDataCall { .. }
         ) {
             charge(budget, 1)?;
             return Ok(CallSuccessors {
@@ -4631,7 +5098,7 @@ impl<'a> Analysis<'a> {
         let (expression, _) = self.slots[port].key;
         if matches!(
             self.graph.expressions[expression],
-            Expr::BorrowedCallReply { .. }
+            Expr::BorrowedCallReply { .. } | Expr::SourceDataCall { .. }
         ) {
             charge(budget, 4)?;
             // This immutable native-call result has no dynamic callable atoms.
@@ -4925,7 +5392,13 @@ impl<'a> Analysis<'a> {
         request: usize,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
-        let (expression, _) = self.slots[request].key;
+        let (expression, context) = self.slots[request].key;
+        if let Expr::Request {
+            reply: Some(reply), ..
+        } = self.graph.expressions[expression]
+        {
+            return self.link(request, reply, context, budget);
+        }
         let scalar = matches!(
             self.graph.expressions[expression],
             Expr::Request { scalar: true, .. } | Expr::Call { scalar: true, .. }
@@ -5431,6 +5904,70 @@ impl<'a> Analysis<'a> {
                 P::link(self, slot, *reply, context, budget)?;
                 SetupOutcome::FixedSetupReady
             }
+            Expr::SourceDataCall {
+                function,
+                argument,
+                owner,
+                replace,
+            } => {
+                let function = self.slot(*function, context, budget)?;
+                let argument = self.slot(*argument, context, budget)?;
+                if self.slots[function].atoms.is_empty() || self.slots[argument].atoms.is_empty() {
+                    return Ok(SetupOutcome::NeedsInputsOrDynamic);
+                }
+                let definition = self
+                    .graph
+                    .source_payload(*owner, budget)?
+                    .ok_or(Failure::Invalid)?;
+                charge(budget, self.slots[argument].atoms.len())?;
+                for position in 0..if *replace {
+                    self.slots[argument].atoms.len()
+                } else {
+                    1
+                } {
+                    let atom = self.slots[argument].atoms[position];
+                    let (state, replacement) = if *replace {
+                        let Atom::Aggregate(tuple, creation) = atom else {
+                            return Err(Failure::Invalid);
+                        };
+                        let Expr::Tuple(fields) =
+                            self.graph.expressions.get(tuple).ok_or(Failure::Invalid)?
+                        else {
+                            return Err(Failure::Invalid);
+                        };
+                        let [state, replacement] = fields.as_slice() else {
+                            return Err(Failure::Invalid);
+                        };
+                        (
+                            self.slot(*state, creation, budget)?,
+                            Some(self.slot(*replacement, creation, budget)?),
+                        )
+                    } else {
+                        (argument, None)
+                    };
+                    charge(budget, self.slots[state].atoms.len())?;
+                    for state_position in 0..self.slots[state].atoms.len() {
+                        let Atom::Resource(actual, creation) =
+                            self.slots[state].atoms[state_position]
+                        else {
+                            return Err(Failure::Invalid);
+                        };
+                        if actual != *owner {
+                            return Err(Failure::Invalid);
+                        }
+                        let payload = self.slot(definition.slot, creation, budget)?;
+                        if let Some(replacement) = replacement {
+                            self.edge(payload, replacement, budget)?;
+                            if !self.slots[replacement].atoms.is_empty() {
+                                self.atom(slot, Atom::Free, budget)?;
+                            }
+                        } else {
+                            self.edge(slot, payload, budget)?;
+                        }
+                    }
+                }
+                SetupOutcome::NeedsInputsOrDynamic
+            }
             Expr::Merge(values) => {
                 self.atom(slot, Atom::Free, budget)?;
                 for value in values {
@@ -5717,6 +6254,10 @@ impl<'a> Analysis<'a> {
                 let identity = self.slot(*identity, context, budget)?;
                 self.atom(handle, Atom::Resource(expression, context), budget)?;
                 self.atom(identity, Atom::Resource(expression, context), budget)?;
+                if let Some(definition) = self.graph.source_payload(expression, budget)? {
+                    let payload = self.slot(definition.slot, context, budget)?;
+                    self.link(payload, definition.initial, context, budget)?;
+                }
                 if success.is_some() {
                     // Allocation can fail independently of body completion.
                     // Successful values retain the ordinary constructor payload.
@@ -5727,9 +6268,11 @@ impl<'a> Analysis<'a> {
                 }
                 SetupOutcome::FixedSetupReady
             }
-            Expr::Request { operand, scalar } => {
+            Expr::Request { operand, reply, .. } => {
                 self.slot(*operand, context, budget)?;
-                let _ = scalar;
+                if let Some(reply) = reply {
+                    self.slot(*reply, context, budget)?;
+                }
                 SetupOutcome::NeedsInputsOrDynamic
             }
             Expr::Resume { operand } => {
@@ -6114,6 +6657,303 @@ mod tests {
     use super::*;
 
     #[test]
+    fn window_reply_index_keeps_query_identity_codec_and_conflict_checks() {
+        use crate::{
+            core::{EffectCoreBuilder, EffectOperationFamily},
+            module::ModuleId,
+            source::Origin,
+            types::NominalTypeId,
+        };
+        let fixture = graph(vec![Expr::Scalar]);
+        let module = ModuleId::new(44_214);
+        let nominal = NominalTypeId::new(module, 0);
+        let constructors = [
+            ConstructorId::new(nominal, 0),
+            ConstructorId::new(nominal, 1),
+        ];
+        let good = WindowReplyRecord {
+            window: 0,
+            module,
+            view: Some(true),
+            codec: Some((constructors, constructors)),
+        };
+        let mut builder = EffectCoreBuilder::with_effect_registry(std::sync::Arc::new(
+            crate::resolved::ResolvedRegistry::default(),
+        ));
+        builder
+            .unit(Type::Unit, Origin::Source(fixture.sources[0]))
+            .unwrap();
+        let mut replies =
+            SourceWindowReplies::<EffectOperationFamily>::new(&builder.nodes, |_| None);
+        // These synthetic raw records exercise query representation only.
+        // Production coordinates still come exclusively from visit_window_calls.
+        replies.calls = Some(HashMap::from([
+            (7, vec![good, good]),
+            (
+                8,
+                vec![WindowReplyRecord {
+                    codec: None,
+                    ..good
+                }],
+            ),
+            (
+                9,
+                vec![WindowReplyRecord {
+                    view: None,
+                    codec: None,
+                    ..good
+                }],
+            ),
+        ]));
+        let mut work = TypeWorkBudget::unbounded();
+        let expected = Some((0, module, true, constructors, constructors));
+        assert_eq!(replies.reply(7, &mut work).unwrap(), expected);
+        assert!(matches!(replies.reply(8, &mut work), Err(Failure::Invalid)));
+        assert_eq!(replies.reply(9, &mut work).unwrap(), None);
+        assert_eq!(replies.reply(10, &mut work).unwrap(), None);
+        for changed in [
+            WindowReplyRecord { window: 1, ..good },
+            WindowReplyRecord {
+                module: ModuleId::new(44_215),
+                ..good
+            },
+            WindowReplyRecord {
+                view: Some(false),
+                ..good
+            },
+            WindowReplyRecord {
+                codec: Some(([constructors[1], constructors[0]], constructors)),
+                ..good
+            },
+            WindowReplyRecord {
+                codec: Some((constructors, [constructors[1], constructors[0]])),
+                ..good
+            },
+        ] {
+            replies
+                .calls
+                .as_mut()
+                .unwrap()
+                .insert(11, vec![good, changed]);
+            assert!(matches!(
+                replies.reply(11, &mut work),
+                Err(Failure::Invalid)
+            ));
+            assert_eq!(replies.reply(7, &mut work).unwrap(), expected);
+        }
+        let mut actual = graph(vec![Expr::Scalar]);
+        let mut types = HashMap::new();
+        // Raw matching coordinates cannot turn an ordinary node into a window.
+        assert!(matches!(
+            actual.window_call_reply(7, &mut replies, &mut types, fixture.sources[0], &mut work),
+            Err(Failure::Invalid)
+        ));
+        assert_eq!(actual.expressions.len(), 1);
+        assert!(types.is_empty());
+        let mut fresh = SourceWindowReplies::<EffectOperationFamily>::new(&builder.nodes, |_| None);
+        assert_eq!(fresh.reply(7, &mut work).unwrap(), None);
+    }
+
+    #[test]
+    fn window_reply_index_is_lazy_paid_and_fresh_after_refusal() {
+        use crate::{
+            core::{EffectCoreBuilder, EffectOperationFamily},
+            source::Origin,
+        };
+        let fixture = graph(vec![Expr::Scalar]);
+        let mut builder = EffectCoreBuilder::with_effect_registry(std::sync::Arc::new(
+            crate::resolved::ResolvedRegistry::default(),
+        ));
+        builder
+            .unit(Type::Unit, Origin::Source(fixture.sources[0]))
+            .unwrap();
+        let run = |work: &mut TypeWorkBudget| -> Result<(), Failure> {
+            let mut replies =
+                SourceWindowReplies::<EffectOperationFamily>::new(&builder.nodes, |_| None);
+            assert!(replies.calls.is_none());
+            assert_eq!(replies.reply(0, work)?, None);
+            assert!(replies.calls.is_some());
+            assert_eq!(replies.reply(0, work)?, None);
+            Ok(())
+        };
+        let mut measured = TypeWorkBudget::unbounded();
+        run(&mut measured).unwrap();
+        for prefix in [0, 11, 150] {
+            let mut exact = TypeWorkBudget::with_limit(prefix + measured.used());
+            exact.charge(prefix).unwrap();
+            run(&mut exact).unwrap();
+            assert_eq!(exact.used(), prefix + measured.used());
+            let mut short = TypeWorkBudget::with_limit(prefix + measured.used() - 1);
+            short.charge(prefix).unwrap();
+            assert!(matches!(run(&mut short), Err(Failure::Resource)));
+            let mut retry = TypeWorkBudget::with_limit(prefix + measured.used());
+            retry.charge(prefix).unwrap();
+            run(&mut retry).unwrap();
+        }
+        let mut replies =
+            SourceWindowReplies::<EffectOperationFamily>::new(&builder.nodes, |_| None);
+        let mut failed = TypeWorkBudget::with_limit(builder.nodes.len());
+        assert!(matches!(
+            replies.reply(0, &mut failed),
+            Err(Failure::Resource)
+        ));
+        assert!(replies.calls.is_none());
+        assert_eq!(
+            replies.reply(0, &mut TypeWorkBudget::unbounded()).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn source_reply_index_preserves_exact_roles_and_ordered_precedence() {
+        use crate::{
+            core::{EffectCoreBuilder, effect::EffectOperationFamily},
+            module::ModuleId,
+            source::Origin,
+            types::NominalTypeId,
+        };
+        let fixture = graph(vec![Expr::Scalar]);
+        let origin = Origin::Source(fixture.sources[0]);
+        let foreign = ModuleId::builtin_foreign_for_test(1);
+        let donor = ModuleId::builtin_foreign_for_test(2);
+        let call = Type::Application(
+            Box::new(Type::Nominal(NominalTypeId::new(foreign, 1))),
+            Box::new(Type::Bytes),
+        );
+        let function_type = Type::Function(
+            Box::new(Type::Tuple(
+                vec![Type::Nominal(NominalTypeId::new(foreign, 10)), Type::Int].into_boxed_slice(),
+            )),
+            Box::new(call),
+        );
+        let mut builder = EffectCoreBuilder::with_effect_registry(std::sync::Arc::new(
+            crate::resolved::ResolvedRegistry::new(Vec::new(), Vec::new()),
+        ));
+        let function = builder
+            .variable(
+                BinderId::resolved(foreign, 20),
+                function_type,
+                origin.clone(),
+            )
+            .unwrap();
+        let argument = builder.unit(Type::Unit, origin.clone()).unwrap();
+        let apply = builder
+            .application(function, argument, Type::Bytes, origin)
+            .unwrap();
+        let raw = |module, local| crate::core::source_resource::SourceByteCall {
+            apply: Some(apply),
+            application: function,
+            function: BinderId::resolved(module, local),
+        };
+        let mut owner =
+            SourcePrimitiveReplies::<EffectOperationFamily>::new(&builder.nodes, |_| None);
+        // Synthetic relation records test only representation/query parity;
+        // production records still come exclusively from visit_byte_calls.
+        owner.calls = Some(HashMap::from([(
+            index(apply),
+            vec![
+                (1, raw(foreign, 8)),
+                (2, raw(donor, 8)),
+                (3, raw(ModuleId::new(1), 8)),
+            ],
+        )]));
+        let mut budget = TypeWorkBudget::unbounded();
+        assert_eq!(
+            owner.reply(index(apply), &mut budget).unwrap(),
+            Some(SourcePrimitiveReply::Call(foreign))
+        );
+        let records = owner
+            .calls
+            .as_mut()
+            .unwrap()
+            .get_mut(&index(apply))
+            .unwrap();
+        records.push((4, raw(foreign, 9)));
+        records.push((5, raw(foreign, 6)));
+        // A later ineligible same-bit donor must not erase the last eligible
+        // result, and owner disposition must retain the original node ordinal.
+        records.push((6, raw(donor, 8)));
+        assert_eq!(
+            owner.reply(index(apply), &mut budget).unwrap(),
+            Some(SourcePrimitiveReply::Data {
+                owner: 5,
+                replace: true
+            })
+        );
+        let mut fresh =
+            SourcePrimitiveReplies::<EffectOperationFamily>::new(&builder.nodes, |_| None);
+        assert_eq!(fresh.reply(index(apply), &mut budget).unwrap(), None);
+    }
+
+    #[test]
+    fn source_reply_index_is_lazy_paid_and_fresh_after_refusal() {
+        use crate::{
+            core::{EffectCoreBuilder, effect::EffectOperationFamily},
+            module::ModuleId,
+            source::Origin,
+            types::NominalTypeId,
+        };
+        let fixture = graph(vec![Expr::Scalar]);
+        let origin = Origin::Source(fixture.sources[0]);
+        let module = ModuleId::new(44_213);
+        let mut builder = EffectCoreBuilder::with_effect_registry(std::sync::Arc::new(
+            crate::resolved::ResolvedRegistry::new(Vec::new(), Vec::new()),
+        ));
+        let function = builder
+            .variable(
+                BinderId::resolved(module, 0),
+                Type::Function(
+                    Box::new(Type::Nominal(NominalTypeId::new(module, 0))),
+                    Box::new(Type::Int),
+                ),
+                origin.clone(),
+            )
+            .unwrap();
+        let argument = builder.unit(Type::Unit, origin.clone()).unwrap();
+        let apply = builder
+            .application(function, argument, Type::Int, origin)
+            .unwrap();
+        let run = |budget: &mut TypeWorkBudget| -> Result<(), Failure> {
+            let mut owner =
+                SourcePrimitiveReplies::<EffectOperationFamily>::new(&builder.nodes, |_| None);
+            assert_eq!(owner.reply(index(argument), budget)?, None);
+            assert!(owner.calls.is_none());
+            assert_eq!(owner.reply(index(apply), budget)?, None);
+            assert!(owner.calls.is_some());
+            assert_eq!(owner.reply(index(apply), budget)?, None);
+            Ok(())
+        };
+        let mut measured = TypeWorkBudget::unbounded();
+        run(&mut measured).unwrap();
+        for prefix in [0, 11, 150] {
+            let mut exact = TypeWorkBudget::with_limit(prefix + measured.used());
+            exact.charge(prefix).unwrap();
+            run(&mut exact).unwrap();
+            assert_eq!(exact.used(), prefix + measured.used());
+            let mut short = TypeWorkBudget::with_limit(prefix + measured.used() - 1);
+            short.charge(prefix).unwrap();
+            assert!(matches!(run(&mut short), Err(Failure::Resource)));
+            let mut retry = TypeWorkBudget::with_limit(prefix + measured.used());
+            retry.charge(prefix).unwrap();
+            run(&mut retry).unwrap();
+        }
+        let mut owner =
+            SourcePrimitiveReplies::<EffectOperationFamily>::new(&builder.nodes, |_| None);
+        let mut short = TypeWorkBudget::with_limit(builder.nodes.len());
+        assert!(matches!(
+            owner.reply(index(apply), &mut short),
+            Err(Failure::Resource)
+        ));
+        assert!(owner.calls.is_none());
+        assert_eq!(
+            owner
+                .reply(index(apply), &mut TypeWorkBudget::unbounded())
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
     fn clause_capture_projection_preserves_shared_cuts_and_allocation_order() {
         use super::super::{MethodAdapter, MethodTarget, MethodUse, MethodUses};
         use crate::{
@@ -6274,6 +7114,138 @@ mod tests {
         }
     }
 
+    #[test]
+    fn source_payload_store_retains_late_captures_per_creation_and_import() {
+        let mut original = graph(vec![
+            Expr::Slot,
+            Expr::Scalar,
+            Expr::Function {
+                parameters: Vec::new(),
+                body: 1,
+                captures: Vec::new(),
+            },
+            Expr::Slot,
+            Expr::Unknown,
+            Expr::SourceDataCall {
+                function: 4,
+                argument: 0,
+                owner: 10,
+                replace: false,
+            },
+            Expr::Slot,
+            Expr::Function {
+                parameters: Vec::new(),
+                body: 1,
+                captures: vec![6],
+            },
+            Expr::Tuple(vec![0, 7]),
+            Expr::SourceDataCall {
+                function: 4,
+                argument: 8,
+                owner: 10,
+                replace: true,
+            },
+        ]);
+        let source = original.sources[0];
+        for handle in [0, 6] {
+            original.expressions.push(Expr::Resource {
+                success: None,
+                failure: None,
+                failure_payload: None,
+                handle,
+                identity: handle,
+                initializer: 1,
+                body: 1,
+                source,
+            });
+            original.sources.push(source);
+        }
+        original.provider.push(ProviderQueryBindings {
+            source_payloads: vec![SourcePayloadDefinition {
+                owner: 10,
+                slot: 3,
+                initial: 2,
+            }],
+            ..ProviderQueryBindings::default()
+        });
+        let mut imported = graph(vec![Expr::Scalar, Expr::Scalar, Expr::Scalar]);
+        let offset = imported
+            .import_graph(&original, 0, 1000, &mut TypeWorkBudget::unbounded())
+            .unwrap();
+        assert_eq!(offset, 3);
+        assert!(
+            matches!(imported.expressions[5 + offset], Expr::SourceDataCall { owner, argument, .. } if owner == 10 + offset && argument == offset)
+        );
+        for (graph, offset) in [(&original, 0), (&imported, offset)] {
+            let run = |work: &mut TypeWorkBudget| -> Result<(), Failure> {
+                let mut data = Analysis::new(graph, work)?;
+                for creation in [0, 1] {
+                    let state = data.slot(offset, creation, work)?;
+                    data.atom(state, Atom::Resource(10 + offset, creation), work)?;
+                    let payload = data.slot(3 + offset, creation, work)?;
+                    data.link(payload, 2 + offset, creation, work)?;
+                }
+                let first = data.slot(5 + offset, 0, work)?;
+                let second = data.slot(5 + offset, 1, work)?;
+                data.close(work)?;
+                assert!(data.dependencies(first, work)?.is_empty());
+                assert!(data.dependencies(second, work)?.is_empty());
+                data.slot(9 + offset, 0, work)?;
+                data.close(work)?;
+                // This late value was absent from initial D. Reads must watch
+                // the replacement equation, not alias only acquisition data.
+                let capture = data.slot(6 + offset, 0, work)?;
+                data.atom(capture, Atom::Resource(11 + offset, 0), work)?;
+                data.close(work)?;
+                assert_eq!(
+                    data.dependencies(first, work)?,
+                    [Atom::Resource(11 + offset, 0)]
+                );
+                assert!(
+                    data.dependencies(second, work)?.is_empty(),
+                    "another activation has a separate store"
+                );
+                // Closing-owner dependence must survive even inside a later
+                // stored closure, so the ordinary escape fence can reject it.
+                data.atom(capture, Atom::Resource(10 + offset, 0), work)?;
+                data.close(work)?;
+                assert!(
+                    data.dependencies(first, work)?
+                        .contains(&Atom::Resource(10 + offset, 0))
+                );
+                Ok(())
+            };
+            let mut measured = TypeWorkBudget::unbounded();
+            run(&mut measured).unwrap();
+            for prefix in [0, 7] {
+                let mut short = TypeWorkBudget::with_limit(prefix + measured.used() - 1);
+                short.charge(prefix).unwrap();
+                assert!(matches!(run(&mut short), Err(Failure::Resource)));
+                for _ in 0..2 {
+                    let mut exact = TypeWorkBudget::with_limit(prefix + measured.used());
+                    exact.charge(prefix).unwrap();
+                    run(&mut exact).unwrap();
+                    assert_eq!(exact.remaining(), 0);
+                }
+            }
+            let mut work = TypeWorkBudget::unbounded();
+            let mut forged = Analysis::new(graph, &mut work).unwrap();
+            let state = forged.slot(offset, 0, &mut work).unwrap();
+            forged
+                .atom(state, Atom::Resource(11 + offset, 0), &mut work)
+                .unwrap();
+            forged.slot(5 + offset, 0, &mut work).unwrap();
+            assert!(
+                matches!(forged.close(&mut work), Err(Failure::Invalid)),
+                "same-shaped donor is not the selected original owner"
+            );
+            println!(
+                "private payload flow exact work: offset={offset}, required={}",
+                measured.used()
+            );
+        }
+    }
+
     fn native_transfer_graph() -> Graph {
         let mut fixture = graph(vec![
             Expr::Slot,
@@ -6283,6 +7255,7 @@ mod tests {
             Expr::Request {
                 operand: 3,
                 scalar: false,
+                reply: None,
             },
         ]);
         fixture.expressions.push(Expr::Resource {
@@ -10020,11 +10993,13 @@ mod tests {
             Expr::Request {
                 operand: 0,
                 scalar: false,
+                reply: None,
             },
             Expr::Slot,
             Expr::Request {
                 operand: 2,
                 scalar: false,
+                reply: None,
             },
             Expr::Scalar,
         ]);
@@ -10257,6 +11232,10 @@ mod tests {
                 &methods,
                 &[],
                 &mut FunctionMetadataPreparation::new(&nodes, |kind| match kind {
+                    EffectExprKind::Operation(operation) => Some(operation),
+                    _ => None,
+                }),
+                &mut SourceWindowReplies::new(&nodes, |kind| match kind {
                     EffectExprKind::Operation(operation) => Some(operation),
                     _ => None,
                 }),
@@ -10795,6 +11774,52 @@ mod tests {
     }
 
     #[test]
+    fn checked_window_reply_keeps_late_marker_through_import_and_exact_budget() {
+        let original = graph(vec![
+            Expr::Scalar,
+            Expr::Slot,
+            Expr::Alias(1),
+            Expr::Request {
+                operand: 0,
+                scalar: false,
+                reply: Some(2),
+            },
+        ]);
+        for offset in [0, 5] {
+            let mut copied = graph((0..offset).map(|_| Expr::Scalar).collect());
+            let mut copy_budget = TypeWorkBudget::unbounded();
+            for expression in &original.expressions {
+                copied
+                    .expressions
+                    .push(expression.copy(offset, &mut copy_budget).unwrap());
+                copied.sources.push(original.sources[0]);
+            }
+            let run = |budget: &mut TypeWorkBudget| {
+                let mut analysis = Analysis::new(&copied, budget)?;
+                let request = analysis.slot(3 + offset, 0, budget)?;
+                analysis.close(budget)?;
+                analysis.external_result(request, budget)?;
+                analysis.close(budget)?;
+                let hidden = analysis.slot(1 + offset, 0, budget)?;
+                let marker = Atom::Resource(99, offset);
+                analysis.atom(hidden, marker, budget)?;
+                analysis.close(budget)?;
+                assert!(analysis.dependencies(request, budget)?.contains(&marker));
+                Ok::<(), Failure>(())
+            };
+            let mut measured = TypeWorkBudget::unbounded();
+            run(&mut measured).unwrap();
+            assert!(matches!(
+                run(&mut TypeWorkBudget::with_limit(measured.used() - 1)),
+                Err(Failure::Resource)
+            ));
+            for _ in 0..2 {
+                run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+            }
+        }
+    }
+
+    #[test]
     fn final_payload_check_cannot_materialize_an_unfinished_or_missing_input() {
         let mut graph = graph(vec![
             Expr::Scalar,
@@ -10803,6 +11828,7 @@ mod tests {
             Expr::Request {
                 operand: 0,
                 scalar: true,
+                reply: None,
             },
         ]);
         graph.expressions.push(Expr::Resource {

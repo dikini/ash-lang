@@ -6190,13 +6190,13 @@ fn authenticate_declaration_order(
                     .registry
                     .nominals()
                     .get(index)
-                    .is_some_and(|nominal| module.registry.source_owner_nominal(nominal.id))
+                    .is_some_and(|nominal| module.registry.source_foreign_nominal(nominal.id))
                 {
                     let ordinary_count = module
                         .registry
                         .nominals()
                         .len()
-                        .saturating_sub(module.registry.source_owner_candidate_count());
+                        .saturating_sub(module.registry.source_foreign_nominal_count());
                     let ordered = index == ordinary_count.saturating_add(next_source_owner);
                     next_source_owner = next_source_owner.saturating_add(1);
                     ordered
@@ -6271,7 +6271,7 @@ fn authenticate_declaration_order(
     })?;
     if next_resource != module.resources.len()
         || next_source_resource != module.source_resources.len()
-        || next_source_owner != module.registry.source_owner_candidate_count()
+        || next_source_owner != module.registry.source_foreign_nominal_count()
         || next_type.saturating_add(next_source_owner) != module.registry.nominals().len()
         || next_interface != module.interfaces.len()
         || next_effect != module.effects.len()
@@ -7661,6 +7661,7 @@ fn authenticate_provider_instance_arguments<'a>(
 enum BodyWork<'a> {
     Expression(&'a ResolvedExpr),
     ResourceBody(&'a crate::resolved::ResolvedResourceExpr),
+    CopyWindowBody(&'a crate::resolved::ResolvedCopyWindowExpr),
     ProviderResourceBody(&'a crate::resolved::ResolvedProviderResourceExpr),
     ResourceExit(&'a crate::resolved::ResolvedTypeVariable),
     Declaration(&'a ResolvedLocalDeclaration),
@@ -7779,6 +7780,70 @@ fn check_expression_work<'a>(
                     budget,
                 )?;
             }
+            BodyWork::CopyWindowBody(window) => {
+                let parameters = std::slice::from_ref(&window.identity);
+                authenticate_owner_parameters(registry, parameters, budget)?;
+                if window.identity.kind != Kind::Type {
+                    return Err(KindFailure::internal_cause(
+                        span,
+                        KindInternalCause::ResourceIdentityKind,
+                    ));
+                }
+                budget
+                    .charge(registry.source_foreign_nominal_count())
+                    .map_err(|()| {
+                        KindFailure::resource(span, "copy window family lookup exceeded its budget")
+                    })?;
+                let access = registry
+                    .source_accesses()
+                    .find(|access| access.nominal() == window.family)
+                    .ok_or_else(|| {
+                        KindFailure::internal_cause(span, KindInternalCause::MissingNominalKind)
+                    })?;
+                let position = access.declaration().window_parameter();
+                if window.arguments.len() != access.parameters().len()
+                    || !matches!(window.arguments.get(position).map(|argument| &argument.ty), Some(KindedArgument::TypeArg(Type::Variable(id))) if *id == window.identity.id)
+                {
+                    return Err(KindFailure::internal_cause(
+                        span,
+                        KindInternalCause::ResourceIdentityKind,
+                    ));
+                }
+                // Reconstruct the exact original family/owner projection, not
+                // just an arrow kind with a compatible number of arguments.
+                let (_, state) = crate::foreign::source_access::window_state_type(
+                    access,
+                    window.arguments.iter().map(|argument| &argument.ty),
+                    window.identity.id,
+                    registry,
+                    budget,
+                )
+                .map_err(|failure| {
+                    if failure.is_resource_exhaustion() {
+                        KindFailure::resource(span, "copy window projection exceeded its budget")
+                    } else {
+                        KindFailure::internal_cause(span, KindInternalCause::ResourceIdentityKind)
+                    }
+                })?;
+                drop(state);
+                environments.extend_owner_parameters(parameters, budget)?;
+                for (argument, parameter) in window.arguments.iter().zip(access.parameters().iter())
+                {
+                    environments.expect_interface_argument(
+                        argument,
+                        &parameter.kind,
+                        argument.span,
+                        budget,
+                    )?;
+                }
+                push_body_work(
+                    &mut work,
+                    BodyWork::ResourceExit(&window.identity),
+                    span,
+                    budget,
+                )?;
+                push_body_work(&mut work, BodyWork::Expression(&window.body), span, budget)?;
+            }
             BodyWork::ResourceBody(resource) => {
                 let parameters = std::slice::from_ref(&resource.identity);
                 authenticate_owner_parameters(registry, parameters, budget)?;
@@ -7817,6 +7882,20 @@ fn check_expression_work<'a>(
                         &mut work,
                         BodyWork::Expression(&cleanup.body),
                         cleanup.body.span,
+                        budget,
+                    )?;
+                }
+                ResolvedExprKind::CopyWindow(window) => {
+                    push_body_work(
+                        &mut work,
+                        BodyWork::CopyWindowBody(window),
+                        expression.span,
+                        budget,
+                    )?;
+                    push_body_work(
+                        &mut work,
+                        BodyWork::Expression(&window.state),
+                        window.state.span,
                         budget,
                     )?;
                 }
@@ -8105,6 +8184,7 @@ fn body_work_span(item: BodyWork<'_>) -> Span {
         BodyWork::Expression(expression) => expression.span,
         BodyWork::ProviderResourceBody(resource) => resource.body.span,
         BodyWork::ResourceBody(resource) => resource.acquisition.span,
+        BodyWork::CopyWindowBody(window) => window.body.span,
         BodyWork::ResourceExit(identity) => identity.origin.primary_span(),
         BodyWork::Declaration(declaration) => local_declaration_span(declaration),
         BodyWork::LexicalNewtype(nominal) => nominal.origin.primary_span(),

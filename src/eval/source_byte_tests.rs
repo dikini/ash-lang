@@ -50,6 +50,32 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
+        Self::compile(
+            include_str!("../../tests/fixtures/source-owner/byte_owner.ash"),
+            include_str!("../../tests/fixtures/source-owner/byte_entry.ash"),
+        )
+    }
+    fn data() -> Self {
+        let owner = include_str!("../../tests/fixtures/source-owner/byte_owner.ash")
+            .replace(
+                "read : (Access, Int) -> Foreign.Call<Int>",
+                "read : Access -> Int",
+            )
+            .replace(
+                "write : (Access, Int, Int) -> Foreign.Call<Unit>",
+                "write : (Access, Int) -> Unit",
+            );
+        let start = owner.find("    handlers (state, data) {").unwrap();
+        let owner = format!(
+            "{}    handlers (state, data) {{\n        read access => resume Foreign.data_of state\n        write (access, replacement) => resume Foreign.replace_data (state, replacement)\n    }}\n}}\n",
+            &owner[..start]
+        );
+        Self::compile(
+            &owner,
+            "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Unit, Int>\nmain () = resource Owner.Probe<{}, Fresh, {}> owner = (42, 7) {\n    let _ = Owner.write (owner, 7)\n    Owner.read owner\n}\n",
+        )
+    }
+    fn compile(owner: &str, entry: &str) -> Self {
         static IDS: AtomicU64 = AtomicU64::new(0);
         let directory = std::env::temp_dir().join(format!(
             "ash-byte-entry-{}-{}",
@@ -57,16 +83,8 @@ impl Fixture {
             IDS.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&directory).unwrap();
-        fs::write(
-            directory.join("owner.ash"),
-            include_str!("../../tests/fixtures/source-owner/byte_owner.ash"),
-        )
-        .unwrap();
-        fs::write(
-            directory.join("entry.ash"),
-            include_str!("../../tests/fixtures/source-owner/byte_entry.ash"),
-        )
-        .unwrap();
+        fs::write(directory.join("owner.ash"), owner).unwrap();
+        fs::write(directory.join("entry.ash"), entry).unwrap();
         let compiled = compile_path(RunConfiguration {
             entry: directory.join("entry.ash"),
             roots: ModuleRoots::empty(),
@@ -137,15 +155,44 @@ impl Fixture {
         machine: &Machine<'_>,
         write: bool,
     ) -> (NodeId, SourceByteCallable, Instantiation) {
+        self.call_role(
+            machine,
+            if write {
+                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ByteWrite
+            } else {
+                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ByteRead
+            },
+        )
+    }
+    fn call_role(
+        &self,
+        machine: &Machine<'_>,
+        role: crate::foreign::scalar_preflight::ForeignScalarPreflightRole,
+    ) -> (NodeId, SourceByteCallable, Instantiation) {
         let scope = machine.source_resource_scope(self.scope).unwrap();
         let mut selected = None;
-        scope.visit_byte_calls(|call, _| {
-            if call.apply.is_some() && self.program().registry().scalar_preflight(call.function).unwrap().role() == if write { crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ByteWrite } else { crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ByteRead } { selected = Some(call); }
-            Ok(())
-        }, &mut TypeWorkBudget::unbounded()).unwrap();
+        scope
+            .visit_byte_calls(
+                |call, _| {
+                    if call.apply.is_some()
+                        && self
+                            .program()
+                            .registry()
+                            .scalar_preflight(call.function)
+                            .unwrap()
+                            .role()
+                            == role
+                    {
+                        selected = Some(call);
+                    }
+                    Ok(())
+                },
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap();
         let call = selected.unwrap();
         let intrinsic = self.program().nodes().iter().find_map(|node| match &node.kind {
-            EffectExprKind::Pure(PureExprKind::Value(PureValue::Intrinsic(intrinsic))) if matches!(intrinsic.operation(), crate::core::packed::Intrinsic::ForeignByteRead {function} | crate::core::packed::Intrinsic::ForeignByteWrite {function} if function == call.function) => Some(*intrinsic),
+            EffectExprKind::Pure(PureExprKind::Value(PureValue::Intrinsic(intrinsic))) if matches!(intrinsic.operation(), crate::core::packed::Intrinsic::ForeignByteRead {function} | crate::core::packed::Intrinsic::ForeignByteWrite {function} | crate::core::packed::Intrinsic::ForeignDataOf {function} | crate::core::packed::Intrinsic::ForeignReplaceData {function} if function == call.function) => Some(*intrinsic),
             _ => None,
         }).unwrap();
         let Frame::SourceResourceBoundary(boundary) = &machine.frames[0] else {
@@ -157,18 +204,17 @@ impl Fixture {
         else {
             unreachable!()
         };
-        let parameter = self
-            .program()
-            .registry()
-            .scalar_preflight(call.function)
-            .unwrap()
-            .role()
-            .byte_parameter(intrinsic.module())
-            .unwrap();
+        let mut parameters = vec![(
+            role.state_parameter(intrinsic.module()).unwrap(),
+            Kind::Type,
+        )];
+        if let Some(data) = role.data_parameter(intrinsic.module()) {
+            parameters.push((data, Kind::Type));
+        }
         let defining = Instantiation::default()
             .apply(
                 &caller,
-                &[(parameter, Kind::Type)],
+                &parameters,
                 application.arguments(),
                 application.row_arguments(),
                 &mut TypeWorkBudget::unbounded(),
@@ -475,4 +521,191 @@ fn forged_byte_specialization_and_guard_dispose_iteratively_on_small_stack() {
         .unwrap()
         .join()
         .expect("forged specialization and last guard drain without recursive destruction");
+}
+
+#[test]
+fn data_entry_exact_work_short_prefix_and_fresh_retry_preserve_payload() {
+    use crate::foreign::{
+        scalar_preflight::ForeignScalarPreflightRole as Role, source_bindings::SourceNativeBindings,
+    };
+    let fixture = Fixture::data();
+    let bindings = SourceNativeBindings::default();
+    for role in [Role::DataOf, Role::ReplaceData] {
+        let setup = || {
+            let (mut machine, key) = fixture.machine(true);
+            machine.source_bindings = Some(&bindings);
+            let operand = if role == Role::ReplaceData {
+                machine
+                    .foreign_tuple(
+                        &[Value::NativeStateView(key), integer(7)],
+                        RuntimePhase::Access,
+                    )
+                    .unwrap()
+            } else {
+                Value::NativeStateView(key)
+            };
+            // Operand construction is outside this entry-admission ledger.
+            machine.instantiation_work = TypeWorkBudget::unbounded();
+            (machine, operand)
+        };
+        let (mut measured, operand) = setup();
+        let (apply, callable, caller) = fixture.call_role(&measured, role);
+        measured
+            .return_source_data_call(apply, callable, caller, operand)
+            .unwrap();
+        let required = measured.instantiation_work.used();
+        drop(measured);
+        for prefix in [0, 9] {
+            let (mut short, operand) = setup();
+            let (apply, callable, caller) = fixture.call_role(&short, role);
+            let before = format!("{:?}", short.heap);
+            short.instantiation_work = TypeWorkBudget::with_limit(prefix + required - 1);
+            short.instantiation_work.charge(prefix).unwrap();
+            assert!(
+                short
+                    .return_source_data_call(apply, callable, caller, operand)
+                    .is_err()
+            );
+            assert_eq!(format!("{:?}", short.heap), before);
+            let Frame::SourceResourceBoundary(boundary) = &short.frames[0] else {
+                unreachable!()
+            };
+            assert!(
+                matches!(&boundary.payload, Some(Value::Integer(value)) if *value == crate::integer::Integer::from_i64(42))
+            );
+            assert!(boundary.owner.is_some());
+            assert!(short.control.is_none());
+            drop(short);
+            for _ in 0..2 {
+                let (mut exact, operand) = setup();
+                let (apply, callable, caller) = fixture.call_role(&exact, role);
+                exact.instantiation_work = TypeWorkBudget::with_limit(prefix + required);
+                exact.instantiation_work.charge(prefix).unwrap();
+                exact
+                    .return_source_data_call(apply, callable, caller, operand)
+                    .unwrap();
+                assert_eq!(exact.instantiation_work.used(), prefix + required);
+                if role == Role::ReplaceData {
+                    assert!(matches!(exact.control, Some(Control::Return(Value::Unit))));
+                    let Frame::SourceResourceBoundary(boundary) = &exact.frames[0] else {
+                        unreachable!()
+                    };
+                    assert!(
+                        matches!(&boundary.payload, Some(Value::Integer(value)) if *value == crate::integer::Integer::from_i64(7))
+                    );
+                } else {
+                    assert!(
+                        matches!(exact.control, Some(Control::Return(Value::Integer(value))) if value == crate::integer::Integer::from_i64(42))
+                    );
+                }
+            }
+        }
+        println!("Data admission exact work: role={role:?}, required={required}");
+    }
+}
+
+#[test]
+fn data_entry_rejects_forged_context_phase_and_state_payload_without_replacement() {
+    use crate::foreign::{
+        scalar_preflight::ForeignScalarPreflightRole as Role, source_bindings::SourceNativeBindings,
+    };
+    let fixture = Fixture::data();
+    let bindings = SourceNativeBindings::default();
+    for mutation in 0..8 {
+        let (mut machine, key) = fixture.machine(true);
+        machine.source_bindings = Some(&bindings);
+        let (mut apply, mut callable, caller) = fixture.call_role(&machine, Role::ReplaceData);
+        let operand = machine
+            .foreign_tuple(
+                &[
+                    Value::NativeStateView(if mutation == 0 {
+                        ActivationKey(key.0 + 1)
+                    } else {
+                        key
+                    }),
+                    if mutation == 7 {
+                        Value::NativeStateView(key)
+                    } else {
+                        integer(7)
+                    },
+                ],
+                RuntimePhase::Access,
+            )
+            .unwrap();
+        if mutation == 1 {
+            callable.application = apply;
+        }
+        if mutation == 2 || mutation == 3 {
+            let role = Role::ReplaceData;
+            let formal = if mutation == 2 {
+                role.state_parameter(callable.intrinsic.module())
+            } else {
+                role.data_parameter(callable.intrinsic.module())
+            }
+            .unwrap();
+            callable.defining = callable
+                .defining
+                .apply(
+                    &caller,
+                    &[(formal, Kind::Type)],
+                    &[Type::Bool],
+                    &[],
+                    &mut TypeWorkBudget::unbounded(),
+                )
+                .unwrap();
+        }
+        if mutation == 4 {
+            apply = callable.application;
+        }
+        if mutation == 5 || mutation == 6 {
+            let Frame::SourceResourceBoundary(boundary) = &mut machine.frames[0] else {
+                unreachable!()
+            };
+            if mutation == 5 {
+                boundary.consumed = true;
+            } else {
+                boundary.phase = ProviderPhase::Acquire;
+            }
+        }
+        let heap = format!("{:?}", machine.heap);
+        assert!(
+            machine
+                .return_source_data_call(apply, callable, caller, operand)
+                .is_err(),
+            "mutation {mutation}"
+        );
+        assert_eq!(format!("{:?}", machine.heap), heap);
+        let Frame::SourceResourceBoundary(boundary) = &machine.frames[0] else {
+            unreachable!()
+        };
+        assert!(
+            matches!(&boundary.payload, Some(Value::Integer(value)) if *value == crate::integer::Integer::from_i64(42))
+        );
+        assert!(boundary.owner.is_some());
+        assert!(machine.control.is_none());
+    }
+}
+
+#[test]
+fn data_entry_independent_core_refuses_arbitrary_state_and_callable_wrappers() {
+    let fixture = Fixture::data();
+    for source in [
+        "import @builtin.foreign as Foreign\nmain : Unit -> Int\nmain () = Foreign.data_of 7\n",
+        "import @builtin.foreign as Foreign\nmain : Unit -> Unit\nmain () = Foreign.replace_data (7, 42)\n",
+        "import @builtin.foreign as Foreign\nhelper<S, D> : S -> D\nhelper state = Foreign.data_of state\nmain : Unit -> Int\nmain () = 42\n",
+        "import @builtin.foreign as Foreign\nhelper<S, D> : (S, D) -> Unit\nhelper value = Foreign.replace_data value\nmain : Unit -> Int\nmain () = 42\n",
+    ] {
+        let entry = fixture.directory.join("refused.ash");
+        fs::write(&entry, source).unwrap();
+        let failure = compile_path(RunConfiguration {
+            entry,
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap_err();
+        assert!(
+            matches!(failure, crate::driver::FileFailure::Pipeline(ref diagnostic)
+            if matches!(diagnostic.failure(), crate::driver::PipelineFailure::Validation(_))),
+            "compatible S/D shapes and ordinary wrappers grant no descriptor authority: {failure:?}"
+        );
+    }
 }
