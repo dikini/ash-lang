@@ -17,6 +17,10 @@ mod source_byte_phases;
 #[cfg(test)]
 #[path = "source_byte_tests.rs"]
 mod source_byte_tests;
+#[path = "source_data_phases.rs"]
+mod source_data_phases;
+#[path = "source_window_phases.rs"]
+pub(super) mod source_window_phases;
 
 #[path = "source_owner_phases.rs"]
 mod source_owner_phases;
@@ -605,6 +609,11 @@ enum Frame {
         environment: Environment,
     },
     SourceResourceBoundary(Box<SourceResourceBoundary>),
+    SourceWindowInitializer {
+        node: NodeId,
+        environment: Environment,
+    },
+    SourceWindowBoundary(Box<SourceWindowBoundary>),
     ProviderStateAccess {
         node: NodeId,
         instantiation: Instantiation,
@@ -726,7 +735,21 @@ struct SourceResourceBoundary {
     payload: Option<Value>,
     saved: Option<Value>,
     consumed: bool,
+    blocked: bool,
     discarded: bool,
+}
+
+/// A nonowning lexical loan. Native addresses stay in this private frame,
+/// while Ash values carry only an unforgeable activation and slot coordinate.
+#[derive(Debug)]
+struct SourceWindowBoundary {
+    node: NodeId,
+    key: ActivationKey,
+    provider: ActivationKey,
+    owner: ActivationKey,
+    environment: Environment,
+    views: Vec<source_window_phases::WindowView>,
+    arguments: source_window_phases::WindowArguments,
 }
 
 /// Private runtime provenance for one selected sealed byte callable. Both
@@ -1362,6 +1385,15 @@ impl<'runtime> Machine<'runtime> {
             Frame::SourceResourceBoundary(boundary) => {
                 self.return_source_resource(boundary, value)?;
             }
+            Frame::SourceWindowInitializer { node, environment } => {
+                self.enter_source_window(node, environment, value)?;
+            }
+            Frame::SourceWindowBoundary(boundary) => {
+                // The original checked forest and capture evidence forbid a
+                // view/extent escape. Dropping a loan never finishes its owner.
+                drop(boundary);
+                self.control = Some(Control::Return(value));
+            }
             Frame::ProviderStateAccess {
                 node,
                 instantiation,
@@ -1420,6 +1452,11 @@ impl<'runtime> Machine<'runtime> {
                     intrinsic.operation(),
                     crate::core::packed::Intrinsic::ForeignByteRead { .. }
                         | crate::core::packed::Intrinsic::ForeignByteWrite { .. }
+                        | crate::core::packed::Intrinsic::ForeignDataOf { .. }
+                        | crate::core::packed::Intrinsic::ForeignReplaceData { .. }
+                        | crate::core::packed::Intrinsic::ForeignCopyBytes { .. }
+                        | crate::core::packed::Intrinsic::ForeignCopyNul { .. }
+                        | crate::core::packed::Intrinsic::ForeignExtentValue { .. }
                 ) {
                     return Err(RuntimeFailure::ForeignBinding);
                 }
@@ -1906,7 +1943,12 @@ impl<'runtime> Machine<'runtime> {
                 if matches!(pure_expression(&self.program, abstraction.body())?,
                     PureExprKind::Value(PureValue::Intrinsic(intrinsic))
                         if matches!(intrinsic.operation(), crate::core::packed::Intrinsic::ForeignByteRead { .. }
-                            | crate::core::packed::Intrinsic::ForeignByteWrite { .. }))
+                            | crate::core::packed::Intrinsic::ForeignByteWrite { .. }
+                            | crate::core::packed::Intrinsic::ForeignDataOf { .. }
+                            | crate::core::packed::Intrinsic::ForeignReplaceData { .. }
+                            | crate::core::packed::Intrinsic::ForeignCopyBytes { .. }
+                            | crate::core::packed::Intrinsic::ForeignCopyNul { .. }
+                            | crate::core::packed::Intrinsic::ForeignExtentValue { .. }))
                 {
                     charge_effect_work(&mut self.instantiation_work, 1, RuntimePhase::Access)?;
                     self.frames
@@ -1962,6 +2004,18 @@ impl<'runtime> Machine<'runtime> {
         if let Some(symbol) = source_symbol {
             if symbol.owner().is_some() {
                 self.trace_effect(EffectTraceEvent::Request(operation));
+                charge_effect_work(
+                    &mut self.instantiation_work,
+                    self.frames.len(),
+                    RuntimePhase::Access,
+                )?;
+                if self
+                    .frames
+                    .iter()
+                    .any(|frame| matches!(frame, Frame::SourceWindowBoundary(_)))
+                {
+                    return self.prepare_source_window_request(node, effect, value, &symbol);
+                }
                 return self.prepare_source_owner_request(node, operation, effect, value, &symbol);
             }
             let native_program = self.program.clone();
@@ -2256,6 +2310,18 @@ impl<'runtime> Machine<'runtime> {
     }
 
     fn capture_from(&mut self, selected: usize) -> Result<CapturedContinuation, RuntimeFailure> {
+        charge_effect_work(
+            &mut self.instantiation_work,
+            self.frames.len(),
+            RuntimePhase::Capture,
+        )?;
+        if self
+            .frames
+            .iter()
+            .any(|frame| matches!(frame, Frame::SourceWindowBoundary(_)))
+        {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
         let captured_len = self
             .frames
             .len()
@@ -2894,6 +2960,10 @@ fn dispatch_entry(
                         Control::Evaluate(scope.initializer(), environment.clone()),
                         Frame::ProviderInitializer { node, environment },
                     ),
+                    EffectOperation::SourceCopyWindow(window) => Transition::suspend(
+                        Control::Evaluate(window.state(), environment.clone()),
+                        Frame::SourceWindowInitializer { node, environment },
+                    ),
                     EffectOperation::SourceResourceScope(scope) => Transition::suspend(
                         Control::Evaluate(scope.initializer, environment.clone()),
                         Frame::SourceResourceInitializer { node, environment },
@@ -3290,6 +3360,8 @@ fn dispatch_return(
         | Frame::ProviderBoundary(_)
         | Frame::SourceResourceInitializer { .. }
         | Frame::SourceResourceBoundary(_)
+        | Frame::SourceWindowInitializer { .. }
+        | Frame::SourceWindowBoundary(_)
         | Frame::ProviderStateAccess { .. }
         | Frame::ResourceBoundary { .. }
         | Frame::Request { .. }
@@ -3525,10 +3597,22 @@ fn apply_intrinsic(
             Intrinsic::ForeignCheckedI64 { .. } | Intrinsic::ForeignCheckedSizeT { .. },
             Value::Integer(integer),
         ) => return apply_scalar_preflight(intrinsic, integer, heap, work, registry),
-        (Intrinsic::BytesEmpty, Value::Unit) => Value::Bytes(Arc::from([])),
-        (Intrinsic::BytesLength, Value::Bytes(bytes)) => {
-            Value::Integer(crate::integer::Integer::from_usize(bytes.len()))
+        (
+            Intrinsic::ForeignCopyBytes { .. }
+            | Intrinsic::ForeignCopyNul { .. }
+            | Intrinsic::ForeignExtentValue { .. },
+            _,
+        ) => return Err(RuntimeFailure::ForeignBinding),
+        (Intrinsic::ForeignCheckedNul { function }, Value::String(text)) => {
+            return apply_nul_preflight(intrinsic, function, &text, heap, work, registry);
         }
+        (Intrinsic::BytesAt { found, invalid }, Value::Location(location)) => {
+            return apply_byte_lookup(found, invalid, location, heap, work);
+        }
+        (Intrinsic::BytesEmpty, Value::Unit) => Value::Bytes(Arc::from([])),
+        (Intrinsic::BytesLength, bytes) if bytes.bytes().is_some() => Value::Integer(
+            crate::integer::Integer::from_usize(bytes.bytes().expect("guarded byte value").len()),
+        ),
         (Intrinsic::StringByteLength, Value::String(text)) => {
             Value::Integer(crate::integer::Integer::from_usize(text.len()))
         }
@@ -3536,9 +3620,10 @@ fn apply_intrinsic(
             charge_runtime_work(work, text.len(), RuntimePhase::Evaluation)?;
             Value::Bytes(packed_bytes(text.as_bytes(), None)?)
         }
-        (Intrinsic::StringFromUtf8 { decoded, invalid }, Value::Bytes(bytes)) => {
+        (Intrinsic::StringFromUtf8 { decoded, invalid }, bytes) if bytes.bytes().is_some() => {
+            let bytes = bytes.bytes().expect("guarded byte value");
             charge_runtime_work(work, bytes.len(), RuntimePhase::Evaluation)?;
-            let (constructor, payload) = match std::str::from_utf8(&bytes) {
+            let (constructor, payload) = match std::str::from_utf8(bytes) {
                 Ok(text) => (decoded, Some(Value::String(packed_string(text)?))),
                 Err(_) => (invalid, None),
             };
@@ -3563,9 +3648,10 @@ fn apply_intrinsic(
             match (operation, &fields[0], &fields[1]) {
                 (
                     Intrinsic::BytesAppendByte { appended, invalid },
-                    Value::Bytes(bytes),
+                    bytes,
                     Value::Integer(integer),
-                ) => {
+                ) if bytes.bytes().is_some() => {
+                    let bytes = bytes.bytes().expect("guarded byte value");
                     let byte = integer.to_i64().and_then(|value| u8::try_from(value).ok());
                     let (constructor, payload) = if let Some(byte) = byte {
                         let requested = bytes
@@ -3585,7 +3671,11 @@ fn apply_intrinsic(
                         HeapCell::Constructor(constructor, payload),
                     )?)
                 }
-                (Intrinsic::BytesEqual, Value::Bytes(left), Value::Bytes(right)) => {
+                (Intrinsic::BytesEqual, left, right)
+                    if left.bytes().is_some() && right.bytes().is_some() =>
+                {
+                    let left = left.bytes().expect("guarded byte value");
+                    let right = right.bytes().expect("guarded byte value");
                     charge_runtime_work(
                         work,
                         left.len().min(right.len()),
@@ -3611,6 +3701,122 @@ fn apply_intrinsic(
 
 // Result preparation stays outside the shared evaluator dispatch frame.
 #[inline(never)]
+fn apply_byte_lookup(
+    found: crate::types::ConstructorId,
+    invalid: crate::types::ConstructorId,
+    location: Location,
+    heap: &mut Vec<HeapCell>,
+    work: &mut TypeWorkBudget,
+) -> Result<Value, RuntimeFailure> {
+    let location = packed_tuple_location(heap, location, work)?;
+    let index = {
+        let Some(HeapCell::Tuple(fields)) = heap.get(location) else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        let [bytes, Value::Integer(index)] = fields.as_ref() else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        let bytes = bytes.bytes().ok_or(RuntimeFailure::InvalidControlState)?;
+        let magnitude = usize::try_from(index.magnitude_byte_length())
+            .map_err(|_| packed_storage_failure(usize::MAX))?;
+        let requested = magnitude
+            .checked_add(3)
+            .ok_or_else(|| packed_storage_failure(usize::MAX))?;
+        // Index inspection, length/lookup and the complete ordinary result are
+        // paid before inspecting a byte. No native permission is involved.
+        charge_runtime_work(work, requested, RuntimePhase::Evaluation)?;
+        index.to_usize().filter(|index| *index < bytes.len())
+    };
+    heap.len()
+        .checked_add(1)
+        .ok_or(RuntimeFailure::HeapCapacity)?;
+    heap.try_reserve(1).map_err(|_| {
+        resource_failure(
+            ResourceFailureCause::StorageReservationFailed,
+            RuntimePhase::Evaluation,
+            RuntimeResource::ResultHeapCells,
+            Some(1),
+            None,
+        )
+    })?;
+    let payload = if let Some(index) = index {
+        let Some(HeapCell::Tuple(fields)) = heap.get(location) else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        let byte = fields[0]
+            .bytes()
+            .and_then(|bytes| bytes.get(index))
+            .copied()
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        Some(Value::Integer(crate::integer::Integer::from_u64(
+            u64::from(byte),
+        )))
+    } else {
+        None
+    };
+    let result = heap.len();
+    heap.push(HeapCell::Constructor(
+        if payload.is_some() { found } else { invalid },
+        payload,
+    ));
+    Ok(Value::Location(result))
+}
+
+#[inline(never)]
+/// A pure scan creates only an ordinary result. No prepared-input token,
+/// pointer or native permission can be derived from this preflight.
+fn apply_nul_preflight(
+    intrinsic: crate::core::packed::IntrinsicNode,
+    function: crate::resolved::BinderId,
+    text: &str,
+    heap: &mut Vec<HeapCell>,
+    work: &mut TypeWorkBudget,
+    registry: &crate::resolved::ResolvedRegistry,
+) -> Result<Value, RuntimeFailure> {
+    use crate::foreign::scalar_preflight::ForeignScalarPreflightRole;
+    charge_runtime_work(work, 1, RuntimePhase::Evaluation)?;
+    let fact = registry
+        .scalar_preflight(function)
+        .ok_or(RuntimeFailure::InvalidControlState)?;
+    if fact.function() != function
+        || fact.module() != intrinsic.module()
+        || fact.role() != ForeignScalarPreflightRole::Nul
+    {
+        return Err(RuntimeFailure::InvalidControlState);
+    }
+    charge_runtime_work(work, text.len(), RuntimePhase::Evaluation)?;
+    let accepted = !text.as_bytes().contains(&0);
+    let cells = if accepted { 1 } else { 2 };
+    charge_runtime_work(work, cells, RuntimePhase::Evaluation)?;
+    heap.len()
+        .checked_add(cells)
+        .ok_or(RuntimeFailure::HeapCapacity)?;
+    heap.try_reserve(cells).map_err(|_| {
+        resource_failure(
+            ResourceFailureCause::StorageReservationFailed,
+            RuntimePhase::Evaluation,
+            RuntimeResource::ForeignCodecStorage,
+            Some(cells),
+            None,
+        )
+    })?;
+    let ids = fact.call_codec().ids();
+    let (constructor, payload) = if accepted {
+        (ids.returned, Value::Unit)
+    } else {
+        let location = heap.len();
+        heap.push(HeapCell::Constructor(
+            fact.conversion_error_constructor()
+                .ok_or(RuntimeFailure::InvalidControlState)?,
+            None,
+        ));
+        (ids.conversion_failed, Value::Location(location))
+    };
+    let location = heap.len();
+    heap.push(HeapCell::Constructor(constructor, Some(payload)));
+    Ok(Value::Location(location))
+}
+
 fn apply_scalar_preflight(
     intrinsic: crate::core::packed::IntrinsicNode,
     integer: crate::integer::Integer,
@@ -4128,6 +4334,202 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_byte_lookup_admits_the_whole_result_before_reading() {
+        let module = crate::module::ModuleId::from(
+            SourceFile::new("byte-lookup-mechanism", "").unwrap().id(),
+        );
+        let owner = crate::types::NominalTypeId::new(module, 1);
+        let found = crate::types::ConstructorId::new(owner, 0);
+        let invalid = crate::types::ConstructorId::new(owner, 1);
+        let inputs = [
+            crate::integer::Integer::from_i64(-1),
+            crate::integer::Integer::from_usize(0),
+            crate::integer::Integer::from_usize(1),
+            crate::integer::Integer::from_usize(2),
+            crate::integer::Integer::parse_decimal("999999999999999999999999999999999999999")
+                .unwrap(),
+        ];
+        for bytes in [&[][..], &[0, 255][..]] {
+            for index in &inputs {
+                let heap = || {
+                    vec![HeapCell::Tuple(Box::new([
+                        Value::Bytes(Arc::from(bytes)),
+                        Value::Integer(index.clone()),
+                    ]))]
+                };
+                let expected = index.to_usize().and_then(|index| bytes.get(index)).copied();
+                let mut measured = TypeWorkBudget::default();
+                apply_byte_lookup(found, invalid, 0, &mut heap(), &mut measured).unwrap();
+                let required = measured.used();
+                for prefix in [0, 17] {
+                    let mut short = TypeWorkBudget::with_limit(prefix + required - 1);
+                    short.charge(prefix).unwrap();
+                    let mut refused = heap();
+                    assert!(matches!(
+                        apply_byte_lookup(found, invalid, 0, &mut refused, &mut short),
+                        Err(RuntimeFailure::Report(_))
+                    ));
+                    assert_eq!(
+                        refused.len(),
+                        1,
+                        "terminal refusal publishes no partial ordinary result"
+                    );
+                    for _ in 0..2 {
+                        let mut exact = TypeWorkBudget::with_limit(prefix + required);
+                        exact.charge(prefix).unwrap();
+                        let mut heap = heap();
+                        let Value::Location(result) =
+                            apply_byte_lookup(found, invalid, 0, &mut heap, &mut exact).unwrap()
+                        else {
+                            panic!("ordinary result");
+                        };
+                        let HeapCell::Constructor(constructor, payload) = &heap[result] else {
+                            panic!("ordinary constructor");
+                        };
+                        assert_eq!(
+                            *constructor,
+                            if expected.is_some() { found } else { invalid }
+                        );
+                        assert_eq!(
+                            payload.as_ref().map(|value| match value {
+                                Value::Integer(value) => value.to_i64().unwrap(),
+                                _ => panic!("copied integer"),
+                            }),
+                            expected.map(i64::from)
+                        );
+                        assert_eq!(heap.len(), 2);
+                        assert_eq!(exact.used(), prefix + required);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn nul_preflight_reports_are_atomic_and_retryable() {
+        let identity = SourceFile::new("nul-preflight-runtime-identity", "")
+            .unwrap()
+            .id()
+            .value();
+        let path = std::env::temp_dir().join(format!(
+            "ash-nul-preflight-runtime-{}-{identity}.ash",
+            std::process::id()
+        ));
+        struct Fixture(std::path::PathBuf);
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let fixture = Fixture(path);
+        std::fs::write(
+            &fixture.0,
+            "import @builtin.foreign as Foreign\nmain : Unit -> Foreign.Call<Unit>\nmain () = Foreign.checked_nul \"\"\n",
+        )
+        .unwrap();
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry: fixture.0.clone(),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap();
+        let (program, _) = compiled.pure_build_input().expect("pure preflight");
+        let (intrinsic, function) = program
+            .nodes()
+            .iter()
+            .find_map(|node| match &node.kind {
+                PureExprKind::Value(PureValue::Intrinsic(intrinsic)) => {
+                    match intrinsic.operation() {
+                        crate::core::packed::Intrinsic::ForeignCheckedNul { function } => {
+                            Some((*intrinsic, function))
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .unwrap();
+        let fact = program.registry().scalar_preflight(function).unwrap();
+        let ids = fact.call_codec().ids();
+        // Both early and late NULs consume the entire admitted UTF-8 byte scan.
+        for (text, accepted) in [
+            ("", true),
+            ("é/name", true),
+            ("\0name", false),
+            ("name\0", false),
+        ] {
+            let mut measured = TypeWorkBudget::unbounded();
+            apply_nul_preflight(
+                intrinsic,
+                function,
+                text,
+                &mut Vec::new(),
+                &mut measured,
+                program.registry(),
+            )
+            .unwrap();
+            let required = measured.used();
+            assert_eq!(required, 1 + text.len() + if accepted { 1 } else { 2 });
+            for prefix in [0, 17] {
+                let mut short = TypeWorkBudget::with_limit(prefix + required - 1);
+                short.charge(prefix).unwrap();
+                let mut refused_heap = Vec::new();
+                let failure = apply_nul_preflight(
+                    intrinsic,
+                    function,
+                    text,
+                    &mut refused_heap,
+                    &mut short,
+                    program.registry(),
+                )
+                .unwrap_err();
+                assert!(matches!(failure, RuntimeFailure::Report(report)
+                    if report.primary.resource().is_some_and(|details|
+                        details.cause == ResourceFailureCause::WorkBudgetExhausted
+                            && details.phase == RuntimePhase::Evaluation
+                            && details.resource == RuntimeResource::WorkUnits)));
+                assert!(
+                    refused_heap.is_empty(),
+                    "no partial ordinary result on terminal refusal"
+                );
+                for _ in 0..2 {
+                    let mut exact = TypeWorkBudget::with_limit(prefix + required);
+                    exact.charge(prefix).unwrap();
+                    let mut heap = Vec::new();
+                    let Value::Location(location) = apply_nul_preflight(
+                        intrinsic,
+                        function,
+                        text,
+                        &mut heap,
+                        &mut exact,
+                        program.registry(),
+                    )
+                    .unwrap() else {
+                        panic!("ordinary preflight result")
+                    };
+                    if accepted {
+                        assert!(
+                            matches!(&heap[location], HeapCell::Constructor(constructor, Some(Value::Unit)) if *constructor == ids.returned)
+                        );
+                        assert_eq!(heap.len(), 1);
+                    } else {
+                        let HeapCell::Constructor(constructor, Some(Value::Location(error))) =
+                            &heap[location]
+                        else {
+                            panic!("opaque conversion refusal")
+                        };
+                        assert_eq!(*constructor, ids.conversion_failed);
+                        assert!(
+                            matches!(&heap[*error], HeapCell::Constructor(constructor, None) if Some(*constructor) == fact.conversion_error_constructor())
+                        );
+                        assert_eq!(heap.len(), 2);
+                    }
+                    assert_eq!(exact.used(), prefix + required);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn packed_literal_copy_reports_low_work_without_panicking() {
         let source = SourceFile::new("packed-limit.ash", "()").unwrap();
         let origin = Origin::Source(source.span(ByteRange::new(0, 2).unwrap()).unwrap());
@@ -4173,16 +4575,24 @@ mod tests {
         // Exact source-native registry lookup (absent for this request): 1.
         // Handler search: 1. Handler argument: 2 slots + Int.
         // Exact comparison: argument tag + Int.
-        const REQUIRED: usize = 14;
+        // Measure this exact program under the current paid capture/index
+        // implementation; a predecessor constant is not its exact cut.
+        let measured = Machine::new_effect(&program).run().unwrap();
+        assert_eq!(measured.value.to_string(), "42");
+        let required = measured.runtime_work;
+        assert!(
+            required >= 14,
+            "all original request/instantiation work remains paid"
+        );
         let mut short = Machine::new_effect(&program);
-        short.instantiation_work = TypeWorkBudget::with_limit(REQUIRED - 1);
+        short.instantiation_work = TypeWorkBudget::with_limit(required - 1);
         assert!(is_work_exhaustion(short.run().unwrap_err()));
         for _ in 0..2 {
             let mut exact = Machine::new_effect(&program);
-            exact.instantiation_work = TypeWorkBudget::with_limit(REQUIRED);
+            exact.instantiation_work = TypeWorkBudget::with_limit(required);
             let result = exact.run().unwrap();
             assert_eq!(result.value.to_string(), "42");
-            assert_eq!(result.runtime_work, REQUIRED);
+            assert_eq!(result.runtime_work, required);
         }
     }
 
@@ -6843,6 +7253,15 @@ mod tests {
             ],
         },
         TransitionOwner {
+            feature: "source copy window",
+            entry: "dispatch_entry",
+            frames: &[
+                "Frame::SourceWindowInitializer",
+                "Frame::SourceWindowBoundary",
+            ],
+            returns: &["Machine::enter_source_window", "Machine::return_from"],
+        },
+        TransitionOwner {
             feature: "handler",
             entry: "dispatch_entry",
             frames: &["Frame::HandlerBoundary"],
@@ -7014,7 +7433,7 @@ mod tests {
     #[test]
     fn every_effect_operation_has_one_explicit_transition_owner() {
         assert_eq!(TRANSITION_OWNERSHIP.len(), 14);
-        assert_eq!(EFFECT_TRANSITION_OWNERSHIP.len(), 9);
+        assert_eq!(EFFECT_TRANSITION_OWNERSHIP.len(), 10);
         assert_eq!(
             EFFECT_TRANSITION_OWNERSHIP
                 .iter()
@@ -7025,6 +7444,7 @@ mod tests {
                 "registration",
                 "resource",
                 "source resource",
+                "source copy window",
                 "handler",
                 "request",
                 "resume",
@@ -7036,7 +7456,7 @@ mod tests {
             !owner.entry.is_empty()
                 && owner.frames.len()
                     == match owner.feature {
-                        "resource" | "source resource" | "cleanup" => 2,
+                        "resource" | "source resource" | "source copy window" | "cleanup" => 2,
                         "discard" => 0,
                         _ => 1,
                     }

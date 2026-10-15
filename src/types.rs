@@ -82,6 +82,16 @@ impl TypeWorkBudget {
         self.used = next;
         Ok(())
     }
+
+    // A bounded sizing phase may admit an input-derived TOTAL. Every sizing
+    // charge remains in that total; this never resets or adds spent work.
+    pub(crate) fn finish_sizing(&mut self, total: usize) -> Result<(), ()> {
+        if self.used > total {
+            return Err(());
+        }
+        self.limit = total;
+        Ok(())
+    }
 }
 
 pub(crate) trait TypeWorkMeter {

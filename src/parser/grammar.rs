@@ -21,6 +21,7 @@ pub(super) enum ExpressionPrefixForm {
     Handler,
     Resume,
     Resource,
+    CopyWindow,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -146,6 +147,7 @@ const CURRENT_ASH_DIALECT: ParserDialect = ParserDialect {
         ExpressionPrefixForm::Handler,
         ExpressionPrefixForm::Resume,
         ExpressionPrefixForm::Resource,
+        ExpressionPrefixForm::CopyWindow,
     ],
     expression: ExpressionDialect {
         primary_forms: &[
@@ -1579,6 +1581,7 @@ pub(super) fn expression(parser: &mut Parser<'_>) {
         Some(ExpressionPrefixForm::Handler) => handler_expression(parser),
         Some(ExpressionPrefixForm::Resume) => resume_expression(parser),
         Some(ExpressionPrefixForm::Resource) => resource_expression(parser),
+        Some(ExpressionPrefixForm::CopyWindow) => copy_window_expression(parser),
         None => expression::operator_expression(parser),
     }
 }
@@ -1595,6 +1598,7 @@ fn expression_prefix_form(parser: &Parser<'_>) -> Option<ExpressionPrefixForm> {
             ExpressionPrefixForm::Handler => parser.at(&TokenKind::Handle),
             ExpressionPrefixForm::Resume => parser.at(&TokenKind::Resume),
             ExpressionPrefixForm::Resource => parser.at(&TokenKind::Resource),
+            ExpressionPrefixForm::CopyWindow => parser.at(&TokenKind::CopyWindow),
         })
 }
 
@@ -1602,6 +1606,20 @@ fn resume_expression(parser: &mut Parser<'_>) {
     parser.start(NodeKind::ResumeExpression);
     let _ = parser.bump();
     expression(parser);
+    parser.finish();
+}
+
+fn copy_window_expression(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::CopyWindowExpression);
+    let _ = parser.bump();
+    type_expression(parser);
+    if matches!(parser.current(), Some(TokenKind::Identifier(word)) if word == "from") {
+        let _ = parser.bump();
+    } else {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+    }
+    expression::primary_expression(parser);
+    block(parser);
     parser.finish();
 }
 
@@ -2903,6 +2921,7 @@ mod tests {
             ShadowPrefixForm::Existing(ExpressionPrefixForm::Handler) => "handler parser",
             ShadowPrefixForm::Existing(ExpressionPrefixForm::Resume) => "resume parser",
             ShadowPrefixForm::Existing(ExpressionPrefixForm::Resource) => "resource parser",
+            ShadowPrefixForm::Existing(ExpressionPrefixForm::CopyWindow) => "copy-window parser",
             ShadowPrefixForm::Mock(node) => mock_nested_feature::parse(node),
         }
     }

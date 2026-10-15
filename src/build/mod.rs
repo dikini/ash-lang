@@ -8,6 +8,7 @@
 mod artifacts;
 mod bridge;
 mod emit;
+mod gas;
 mod host;
 mod image;
 
@@ -168,6 +169,15 @@ enum PrivateNativeCallback {
         crate::foreign::source_runtime::NativeOwnerAcquireCallback,
         crate::foreign::source_runtime::NativeByteCallbacks,
     ),
+    OwnerBorrow(
+        fn(
+            &[crate::foreign::source_runtime::NativeOwnerOperand],
+        ) -> Result<
+            crate::foreign::source_runtime::NativeScalarReply,
+            crate::foreign::source_runtime::NativeScalarCallError,
+        >,
+    ),
+    WindowView(crate::foreign::source_runtime::NativeViewCallback),
     OwnerTeardown(crate::foreign::source_runtime::NativeOwnerTeardownCallback),
     OwnerStatusTeardown(crate::foreign::source_runtime::NativeOwnerStatusTeardownCallback),
 }
@@ -222,6 +232,39 @@ pub fn __private_native_byte_owner_acquire_bridge(
             callback,
             crate::foreign::source_runtime::NativeByteCallbacks { read, write },
         ),
+    }
+}
+
+/// Passive generated nonconsuming member; only an exact checked source phase can admit it.
+#[doc(hidden)]
+pub fn __private_native_owner_borrow_bridge(
+    coordinates: PrivateNativeCoordinates,
+    expected_facts: &'static [u8],
+    callback: fn(
+        &[crate::foreign::source_runtime::NativeOwnerOperand],
+    ) -> Result<
+        crate::foreign::source_runtime::NativeScalarReply,
+        crate::foreign::source_runtime::NativeScalarCallError,
+    >,
+) -> PrivateNativeBridge {
+    PrivateNativeBridge {
+        coordinates,
+        expected_facts,
+        callback: PrivateNativeCallback::OwnerBorrow(callback),
+    }
+}
+
+/// Passive pointer-view callback. Only an exact direct copy window can admit it.
+#[doc(hidden)]
+pub fn __private_native_window_view_bridge(
+    coordinates: PrivateNativeCoordinates,
+    expected_facts: &'static [u8],
+    callback: crate::foreign::source_runtime::NativeViewCallback,
+) -> PrivateNativeBridge {
+    PrivateNativeBridge {
+        coordinates,
+        expected_facts,
+        callback: PrivateNativeCallback::WindowView(callback),
     }
 }
 
@@ -301,7 +344,10 @@ pub fn __run_private_effect_image(
     let image_error = |error| PrivateProgramFailure(PrivateFailure::Image(error));
     let foreign_error = |error| PrivateProgramFailure(PrivateFailure::ForeignAdmission(error));
     let runtime_error = |error| PrivateProgramFailure(PrivateFailure::Evaluation(error));
-    let mut work = crate::types::TypeWorkBudget::default();
+    let mut work = gas::startup(bytes.len(), expected_facts.len())
+        .map_err(|()| image_error(image::ImageFailure::Resource))?;
+    // Framing/end-of-input and the complete canonical fact comparison precede
+    // all semantic reconstruction and consume this same input-derived meter.
     let image = image::PureImage::decode_bytes(bytes, &mut work).map_err(image_error)?;
     let facts = image
         .admit_expected_native_facts(expected_facts, &mut work)
@@ -409,6 +455,16 @@ pub fn __run_private_effect_image(
                         ),
                         &mut work,
                     ),
+                PrivateNativeCallback::WindowView(callback) => bindings.insert_owner_checked(
+                    checked_symbol,
+                    crate::foreign::source_bindings::SourceOwnerCallback::View(callback),
+                    &mut work,
+                ),
+                PrivateNativeCallback::OwnerBorrow(callback) => bindings.insert_owner_checked(
+                    checked_symbol,
+                    crate::foreign::source_bindings::SourceOwnerCallback::Borrow(callback),
+                    &mut work,
+                ),
                 PrivateNativeCallback::OwnerTeardown(callback) => bindings.insert_owner_checked(
                     checked_symbol,
                     crate::foreign::source_bindings::SourceOwnerCallback::Teardown(callback),

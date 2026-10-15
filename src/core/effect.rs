@@ -506,6 +506,7 @@ pub enum EffectOperation {
     Resource(Box<ResourceScopeNode>),
     ProviderScope(Box<super::provider::ProviderScopeNode>),
     SourceResourceScope(Box<super::source_resource::SourceResourceScopeNode>),
+    SourceCopyWindow(Box<super::source_window::SourceCopyWindowNode>),
     ProviderStateAccess(ProviderStateAccessNode),
     Request(RequestNode),
     Handler(HandlerNode),
@@ -663,6 +664,17 @@ impl CoreOperationFamily for EffectOperationFamily {
                 }
                 Some(&scope.handler.effect)
             }
+            EffectOperation::SourceCopyWindow(scope) => {
+                for argument in scope.arguments() {
+                    visit(super::dialect::OperationTypeMetadata::Argument(argument));
+                }
+                for interpretation in scope.interpretations() {
+                    for argument in interpretation.effect().arguments() {
+                        visit(super::dialect::OperationTypeMetadata::Argument(argument));
+                    }
+                }
+                None
+            }
             EffectOperation::SourceResourceScope(scope) => {
                 for argument in scope.arguments() {
                     visit(super::dialect::OperationTypeMetadata::Argument(argument));
@@ -768,6 +780,11 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(EffectOperation::ProviderStateAccess(access)) => {
                 return rewrite_kinded_arguments(&mut access.arguments, rewrite, charge);
             }
+            EffectExprKind::Operation(EffectOperation::SourceCopyWindow(_)) => {
+                // Complete Type/Row specialization is finalized atomically at
+                // the same seam as retained source-resource copies.
+                return Ok(());
+            }
             EffectExprKind::Operation(EffectOperation::SourceResourceScope(_)) => {
                 // Partial enclosing normalization must not rewrite only half of
                 // a specialization claim. The strict finalization seam resolves
@@ -851,6 +868,7 @@ impl CoreOperationFamily for EffectOperationFamily {
         match kind {
             EffectExprKind::Pure(kind) => kind.child_count(),
             EffectExprKind::Operation(EffectOperation::Cleanup(_)) => 2,
+            EffectExprKind::Operation(EffectOperation::SourceCopyWindow(_)) => 2,
             EffectExprKind::Operation(EffectOperation::Registration(_)) => 1,
             EffectExprKind::Operation(EffectOperation::Resource(_)) => 2,
             EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => scope.child_count(),
@@ -894,6 +912,7 @@ impl CoreOperationFamily for EffectOperationFamily {
             | EffectExprKind::Operation(EffectOperation::Cleanup(_))
             | EffectExprKind::Operation(EffectOperation::Registration(_))
             | EffectExprKind::Operation(EffectOperation::Resource(_))
+            | EffectExprKind::Operation(EffectOperation::SourceCopyWindow(_))
             | EffectExprKind::Operation(EffectOperation::ProviderStateAccess(_))
             | EffectExprKind::Operation(EffectOperation::Discard(_))
             | EffectExprKind::Operation(EffectOperation::Request(_) | EffectOperation::Resume(_)) => {
@@ -918,6 +937,11 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
                 scope.child_at(index)
             }
+            EffectExprKind::Operation(EffectOperation::SourceCopyWindow(scope)) => match index {
+                0 => Some(scope.state()),
+                1 => Some(scope.body()),
+                _ => None,
+            },
             EffectExprKind::Operation(EffectOperation::Resource(resource)) => match index {
                 0 => Some(resource.initializer),
                 1 => Some(resource.body),
@@ -957,6 +981,7 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(EffectOperation::Resource(resource)) => drop(resource),
             EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => drop(scope),
             EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => drop(scope),
+            EffectExprKind::Operation(EffectOperation::SourceCopyWindow(scope)) => drop(scope),
             EffectExprKind::Operation(EffectOperation::ProviderStateAccess(access)) => drop(access),
             EffectExprKind::Operation(EffectOperation::Request(mut node)) => {
                 let placeholder = EffectInstance::new(node.effect.effect(), Box::new([]));
@@ -998,6 +1023,7 @@ impl CoreBuilder<EffectOperationFamily> {
         // The ordinary provenance accessor checks both arena and index.
         self.compiler_node_kind(node)?;
         let index = node.index()?;
+        self.invalidate_settled_zonk_range(index..index + 1)?;
         crate::types::charge_effect_row_cells(&effects, &mut self.type_work)
             .map_err(|()| super::BuildError::TypeWorkExceeded)?;
         // EffectRow's disposal walks nested Type/row payloads iteratively.
@@ -1128,6 +1154,24 @@ impl CoreBuilder<EffectOperationFamily> {
             effects,
             origin,
             EffectOperation::SourceResourceScope(scope),
+        )?;
+        self.source_resource_finalization_start.get_or_insert(index);
+        Ok(node)
+    }
+
+    pub(crate) fn source_copy_window(
+        &mut self,
+        scope: Box<super::source_window::SourceCopyWindowNode>,
+        ty: Type,
+        effects: EffectRow,
+        origin: Origin,
+    ) -> Result<NodeId, super::BuildError> {
+        let index = self.nodes.len();
+        let node = self.push_operation(
+            ty,
+            effects,
+            origin,
+            EffectOperation::SourceCopyWindow(scope),
         )?;
         self.source_resource_finalization_start.get_or_insert(index);
         Ok(node)
@@ -1320,6 +1364,7 @@ impl CoreBuilder<EffectOperationFamily> {
         owner: ResumeId,
         provisional: bool,
     ) -> Result<(), super::BuildError> {
+        self.invalidate_settled_zonk_range(range.clone())?;
         enum Equation {
             Registration(NodeId),
             StateAccess(NodeId),
@@ -1328,6 +1373,7 @@ impl CoreBuilder<EffectOperationFamily> {
             Replace,
             Request(NodeId, EffectInstance),
             NativeInterpret(NodeId, Box<[NativeInterpretation]>),
+            CopyWindow(NodeId, NodeId, Box<[NativeInterpretation]>),
             Handler(EffectInstance, usize, bool),
             Resource(crate::resolved::ResourceAcquisition, NodeId, NodeId),
             ProviderGroup,
@@ -1356,6 +1402,16 @@ impl CoreBuilder<EffectOperationFamily> {
                 let equation = match &self.nodes[index].kind {
                     EffectExprKind::Operation(EffectOperation::SourceResourceScope(_)) => {
                         Equation::Keep
+                    }
+                    EffectExprKind::Operation(EffectOperation::SourceCopyWindow(scope)) => {
+                        Equation::CopyWindow(
+                            scope.state(),
+                            scope.body(),
+                            copy_native_interpretations_with_budget(
+                                scope.interpretations(),
+                                &mut self.type_work,
+                            )?,
+                        )
                     }
                     EffectExprKind::Operation(EffectOperation::ProviderStateAccess(access)) => {
                         Equation::StateAccess(access.operand())
@@ -1619,6 +1675,27 @@ impl CoreBuilder<EffectOperationFamily> {
                             .map_err(|()| super::BuildError::TypeWorkExceeded)?
                             .map_err(|_| super::BuildError::InvalidPayload)?
                     }
+                    Equation::CopyWindow(state, body, interpretations) => {
+                        let state = &self
+                            .nodes
+                            .get(state.index()?)
+                            .ok_or(super::BuildError::InvalidNodeId)?
+                            .effects;
+                        let body = &self
+                            .nodes
+                            .get(body.index()?)
+                            .ok_or(super::BuildError::InvalidNodeId)?
+                            .effects;
+                        let outward = native_interpret_outward_row(
+                            body,
+                            &interpretations,
+                            &mut self.type_work,
+                        )?;
+                        state
+                            .union_with_budget(&outward, &mut self.type_work)
+                            .map_err(|_| super::BuildError::TypeWorkExceeded)?
+                            .map_err(|_| super::BuildError::InvalidPayload)?
+                    }
                     Equation::NativeInterpret(body, interpretations) => {
                         let body = &self
                             .nodes
@@ -1721,10 +1798,14 @@ impl CoreBuilder<EffectOperationFamily> {
             .charge(suffix.len())
             .map_err(|_| super::BuildError::TypeWorkExceeded)?;
         for node in suffix {
-            if let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
-                &mut node.kind
-            {
-                scope.finalize_instantiation(rewrite, rewrite_row, &mut self.type_work)?;
+            match &mut node.kind {
+                EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
+                    scope.finalize_instantiation(rewrite, rewrite_row, &mut self.type_work)?
+                }
+                EffectExprKind::Operation(EffectOperation::SourceCopyWindow(scope)) => {
+                    scope.finalize_instantiation(rewrite, rewrite_row, &mut self.type_work)?
+                }
+                _ => {}
             }
         }
         self.source_resource_finalization_start = None;
@@ -1733,6 +1814,7 @@ impl CoreBuilder<EffectOperationFamily> {
 
     /// Completes source-only cleanup row replay after its row variables are solved.
     pub(crate) fn finish_cleanup_effect_rows(&mut self) -> Result<(), super::BuildError> {
+        self.settled_zonk_nodes.clear();
         let count = self.nodes.len();
         self.charge_effect_metadata(count)?;
         let mut previous = Vec::new();

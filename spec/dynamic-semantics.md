@@ -14,7 +14,8 @@ one suffix of that continuation into a clause-owned captured continuation. The
 suffix is moved, not copied. Its clause boundary records whether the unique
 resume capability still owns that captured control or has consumed it.
 
-Runtime values are arbitrary-precision integers, Booleans, unit, lexical
+Runtime values are arbitrary-precision integers, Booleans, unit, independent
+immutable byte sequences, validated UTF-8 strings, lexical
 functions, internal lexical polymorphic functions, payload-constructor
 functions, opaque non-owning resource handles, or heap locations. A function
 template becomes a lexical function with the recursive environment when its
@@ -580,6 +581,13 @@ Already performed native side effects remain performed. A new evaluation has
 fresh machine state and may make its own calls. Internal work/storage failures
 are not `Foreign.ConversionFailed` outcomes.
 
+An ordinary library may map an explicit bounded-copy `ConversionFailed` to a
+diagnostic-unavailable result while retaining the captured native status. In
+particular, absence of NUL within an admitted `copy_nul` bound does not require
+truncation or an empty diagnostic. This source policy cannot catch internal
+work/storage exhaustion or terminal post-call extraction failure, undo ownership
+disposition, retry the native call or retain its owner in an ordinary result.
+
 ## Common scalar preflight
 
 The pure common scalar checks invoke no native symbol. On a supported GNU64
@@ -591,6 +599,13 @@ prices the check and reserves its complete report before publishing any
 constructor cell. A terminal refusal publishes no partial result. These checks
 create no resource activation, state token, native readiness or destructor
 obligation.
+
+`Foreign.checked_nul` prepays a scan of the input's full UTF-8 byte length and
+its complete ordinary reply. No NUL byte, including for the empty string,
+produces `Returned(())`; any NUL produces `ConversionFailed` with the opaque
+error. Work or storage exhaustion is terminal and publishes no partial result.
+The pure scan performs no C call, prepares no pointer or owner, and leaves every
+later native-call conversion mandatory.
 
 A fixed non-callable sentinel is admitted from its original checked member and
 representation before native invocation. The GNU64 bridge passes all-one
@@ -617,9 +632,9 @@ entering C. A `void` result has one unconditional disposition; a scalar result
 selects consumed or retained from the original total status alternatives. Each
 foreign symbol still retains its complete ordered Type and EffectRow arguments;
 the native Type-only projection does not replace them. Source-projected scalar
-teardown operands
-and native access/copy windows remain unsupported executable shapes in this
-checkpoint.
+teardown operands remain unsupported executable shapes in this checkpoint.
+Exact borrowed scalar queries and lexical access/copy windows use the source
+provider's authenticated phase and owner.
 
 Ordinary pure module-global helpers transform only independent payloads inside
 these lifecycle computations. Same-module and imported calls use the ordinary
@@ -739,7 +754,34 @@ resource scopes complete their own finish before their enclosing scope finishes.
 Outward capture moves the source boundary and its same unique owner into the
 continuation; resume restores that activation without acquisition or byte
 reinitialization. Ordinary outward rows survive exact native interpretation.
-Finite access/copy windows remain outside this checkpoint.
+
+A lexical copy window retains the exact selected provider, owner guard, family
+and fresh window key. Its sealed native interpretation covers only the original
+family's preserving operations with complete ordered actuals. A produced view
+retains its exact originating call and scalar keys. Before an extent query
+enters C, evaluated keys must equal the producing keys; a mismatch returns
+ordinary `ConversionFailed` and invokes no extent callback. Missing, stale or
+donor view/window/owner authority remains an admission failure. No window can
+survive suspension, owner completion or escape.
+
+`copy_bytes` prepays the exact matching initialized extent and complete reply
+before reading. `copy_nul` admits both replies before scanning and pays before
+each address read, examining at most the nonnegative bound plus one terminator
+byte. It admits exact observed copy storage before publishing independent
+`Bytes`. Missing termination returns `ConversionFailed`, never truncation.
+Work/storage exhaustion is terminal and publishes no partial fallback. Null,
+unreadable and non-null empty views remain distinct. UTF-8 decoding is separate.
+Each native address read still relies on its original foreign validity contract.
+
+Output slots start at zero/null before C. Raw outcomes are recorded and any
+readable non-null owner enters its pending guard before fallible extraction,
+diagnostics or result publication. Invalid post-call `offset_into` extraction
+preserves that native outcome, disposes the unpublished partial owner and
+terminates; it cannot become ordinary pre-call `ConversionFailed` or replay C.
+A retained finish permits its listed completing diagnostics; a blocked owner
+permits no native access, including ordinary scalar Borrow. Consumed owners
+invalidate all same-owner aliases/views. A still-live enclosing owner remains
+available under its own exact permission.
 
 Before native acquisition, complete declared dependency arguments select exact
 preceding activation slots. All dependency metadata, destruction operands,
@@ -887,8 +929,8 @@ The returned value is ordinary `Foreign.Returned(Int)` or
 failure cannot replay the callback. The scope still owns exactly one release
 obligation until teardown consumes it. External initialization and writability
 remain foreign-contract assumptions; checked source, binding and image admission
-do not prove the external binary's memory validity. Copy windows, dependent
-ownership and outward source control remain outside this checkpoint.
+do not prove the external binary's memory validity. These byte primitives do
+not grant separate copy-window, dependency or outward-control permission.
 
 ## Effect handlers and completion
 

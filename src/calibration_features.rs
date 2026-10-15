@@ -417,6 +417,11 @@ fn walk<'a>(features: &mut Features, pending: &mut Vec<Visit<'a>>) {
                         pending.push(Visit::Expr(&resource.initializer, scope));
                         pending.push(Visit::Block(&resource.body, scope));
                     }
+                    SurfaceExprKind::CopyWindow(window) => {
+                        pending.push(Visit::Type(&window.family, 1));
+                        pending.push(Visit::Expr(&window.state, scope));
+                        pending.push(Visit::Block(&window.body, scope));
+                    }
                     SurfaceExprKind::ProviderResource(resource) => {
                         features.resource_sites += 1;
                         pending.extend(resource.arguments.iter().map(|ty| Visit::Type(ty, 1)));

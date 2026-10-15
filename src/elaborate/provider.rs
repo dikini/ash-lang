@@ -48,6 +48,7 @@ pub(super) struct CheckingContext {
     operations: Box<[OperationId]>,
     state_associations: Vec<HeaderStateAssociation>,
     source: Option<Arc<crate::core::source_resource::CheckedSourceResourceHeader>>,
+    pub(super) windows: Vec<super::source_window::CheckingWindow>,
 }
 
 impl CheckingContext {
@@ -83,6 +84,7 @@ impl CheckingContext {
             operations: operations.into_boxed_slice(),
             state_associations: Vec::new(),
             source: Some(header),
+            windows: Vec::new(),
         })
     }
 }
@@ -265,9 +267,15 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         })
     }
 
+    pub(super) fn source_window_context(&self) -> bool {
+        self.provider_context
+            .as_ref()
+            .is_some_and(|context| context.source.is_some())
+    }
+
     pub(super) fn contains_provider_state(&mut self, root: &Type) -> Result<bool, TypeError> {
         if self.registry.foreign_modules().next().is_none()
-            && self.registry.source_owner_candidate_count() == 0
+            && self.registry.source_foreign_nominal_count() == 0
         {
             return Ok(false);
         }
@@ -281,7 +289,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 .and_then(|count| count.checked_add(module.states.len()))
                 .ok_or_else(type_resource)?;
         }
-        let source_scan_work = self.registry.source_owner_candidate_count();
+        let source_scan_work = self.registry.source_foreign_nominal_count();
         crate::types::visit_type_structure_with_budget(root, &mut self.type_work, |node, work| {
             let crate::types::TypeStructureNode::Type(Type::Nominal(id)) = node else {
                 return Ok(false);
@@ -291,7 +299,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 return Ok(true);
             }
             work.charge(source_scan_work)?;
-            Ok(self.registry.source_owner_nominal(*id))
+            Ok(self.registry.source_foreign_nominal(*id))
         })
         .map_err(|()| type_resource())
     }
@@ -306,10 +314,122 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         if !self.contains_provider_state(argument)? {
             return Ok(());
         }
+        if let Some(window) = self
+            .provider_context
+            .as_ref()
+            .and_then(|context| context.windows.last())
+        {
+            let matches_view = |ty: &Type, work: &mut TypeWorkBudget| {
+                crate::core::source_window::matches_view_type(
+                    &window.family,
+                    &window.arguments.0,
+                    ty,
+                    work,
+                )
+            };
+            let extent_id = self
+                .provider_context
+                .as_ref()
+                .and_then(|context| context.source.as_ref())
+                .map(|header| {
+                    crate::types::NominalTypeId::new(header.acquire.call_codec().module(), 5)
+                })
+                .ok_or_else(invalid_state)?;
+            let matches_extent = |ty: &Type, work: &mut TypeWorkBudget| {
+                if let Type::Application(head, view) = ty
+                    && **head == Type::Nominal(extent_id)
+                {
+                    return matches_view(view, work);
+                }
+                Ok(false)
+            };
+            if let Some(signature) = function_type.function_view() {
+                if *signature.value() == Type::Int
+                    && matches_extent(argument, &mut self.type_work)
+                        .map_err(|()| type_resource())?
+                {
+                    return Ok(());
+                }
+                if let (Type::Tuple(fields), Type::Application(call, result)) =
+                    (argument, signature.value())
+                {
+                    let header = self
+                        .provider_context
+                        .as_ref()
+                        .and_then(|context| context.source.as_ref())
+                        .ok_or_else(invalid_state)?;
+                    if fields.len() == 2
+                        && **call == Type::Nominal(header.acquire.call_codec().ids().call)
+                        && **result == Type::Bytes
+                        && matches_view(&fields[0], &mut self.type_work)
+                            .map_err(|()| type_resource())?
+                        && (fields[1] == Type::Int
+                            || matches_extent(&fields[1], &mut self.type_work)
+                                .map_err(|()| type_resource())?)
+                    {
+                        return Ok(());
+                    }
+                }
+            }
+        }
         // This source frontier checks the candidate's complete value types.
         // Independent lifecycle flow must still authenticate the selected
         // canonical callable and its exact original TypeApplication; compatible
         // ordinary callables receive no execution authority from this check.
+        let source_data = self.provider_context.as_ref().and_then(|context| {
+            context
+                .source
+                .as_ref()
+                .map(|header| (context.phase, Arc::clone(header)))
+        });
+        if let Some((phase, header)) = source_data
+            && phase != Phase::Acquire
+            && let Some(function) = function_type.function_view()
+        {
+            let result = IterativeTypeOwner::new(self.zonk(function.value())?);
+            let state = crate::types::same_type_with_budget(
+                argument,
+                &header.original.state.ty,
+                &mut self.type_work,
+            )
+            .map_err(|()| type_resource())?;
+            let read = if state && matches!(&*result, Type::Inference(_)) {
+                // D may occur only in the result and still be unsolved here.
+                // The selected descriptor supplies its candidate relation;
+                // canonical-call identity is independently checked in flow.
+                self.refine_pattern_expected(&result, &header.original.data.ty, span)?;
+                true
+            } else {
+                state
+                    && crate::types::same_type_with_budget(
+                        &result,
+                        &header.original.data.ty,
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| type_resource())?
+            };
+            let replace = if let Type::Tuple(fields) = argument {
+                fields.len() == 2
+                    && *result == Type::Unit
+                    && crate::types::same_type_with_budget(
+                        &fields[0],
+                        &header.original.state.ty,
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| type_resource())?
+                    && crate::types::same_type_with_budget(
+                        &fields[1],
+                        &header.original.data.ty,
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| type_resource())?
+            } else {
+                false
+            };
+            if read || replace {
+                return Ok(());
+            }
+        }
         if let Some(header) = self
             .provider_context
             .as_ref()
@@ -410,24 +530,91 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             }
         })?;
         if let Some(header) = &context.source {
+            if !context.windows.is_empty() {
+                let symbol = self
+                    .registry
+                    .native_symbol(request.operation)
+                    .ok_or_else(invalid_state)?;
+                let interpretation = crate::core::NativeInterpretation::new(
+                    clone_effect_instance_with_budget(
+                        &request.effect.instance,
+                        &mut self.type_work,
+                    )?,
+                    Arc::clone(symbol),
+                );
+                for window in &context.windows {
+                    if !crate::foreign::source_access::window_interpretation_matches(
+                        &window.family,
+                        &window.arguments.0,
+                        &interpretation,
+                        &self.registry,
+                        &mut self.type_work,
+                    )
+                    .map_err(|failure| {
+                        if failure.is_resource_exhaustion() {
+                            type_resource()
+                        } else {
+                            invalid_state()
+                        }
+                    })? {
+                        return Err(contract_error(
+                            request.effect.span,
+                            "native operation does not preserve every exact open copy window",
+                        ));
+                    }
+                }
+                return Ok(());
+            }
             let symbol = self
                 .registry
                 .native_symbol(request.operation)
                 .ok_or_else(invalid_state)?;
-            let exact = match context.phase {
-                Phase::Acquire => Arc::ptr_eq(symbol, &header.acquire),
-                Phase::Finish => Arc::ptr_eq(symbol, &header.teardown),
-                Phase::Handler => false,
-            };
+            if symbol.symbol().access_result().is_some() {
+                return Err(contract_error(
+                    request.effect.span,
+                    "view and extent queries require their exact lexical copy window",
+                ));
+            }
+            let borrow = matches!(
+                symbol.owner_role(),
+                Some(crate::foreign::source_contract::PreparedOwnerCall::Borrow { .. })
+            ) && symbol
+                .owner()
+                .is_some_and(|owner| Arc::ptr_eq(owner, &header.owner));
+            let exact = borrow
+                || match context.phase {
+                    Phase::Acquire => Arc::ptr_eq(symbol, &header.acquire),
+                    Phase::Finish => Arc::ptr_eq(symbol, &header.teardown),
+                    Phase::Handler => false,
+                };
             if !exact
-                || !context.operations.contains(&request.operation)
-                || compare_effect_instances_with_budget(
-                    &context.native,
-                    &request.effect.instance,
-                    &mut self.type_work,
-                )
-                .map_err(|_| type_resource())?
-                    != std::cmp::Ordering::Equal
+                || !header
+                    .original
+                    .interpreted
+                    .iter()
+                    .any(|effect| effect.instance.effect() == request.operation.owner())
+            {
+                return Err(contract_error(
+                    request.effect.span,
+                    "source owner operation requires its exact checked lifecycle phase",
+                ));
+            }
+            self.type_work
+                .charge(header.original.interpreted.len())
+                .map_err(|_| type_resource())?;
+            let selected = header
+                .original
+                .interpreted
+                .iter()
+                .find(|effect| effect.instance.effect() == request.operation.owner())
+                .ok_or_else(invalid_state)?;
+            if compare_effect_instances_with_budget(
+                &selected.instance,
+                &request.effect.instance,
+                &mut self.type_work,
+            )
+            .map_err(|_| type_resource())?
+                != std::cmp::Ordering::Equal
             {
                 return Err(contract_error(
                     request.effect.span,
@@ -3606,6 +3793,7 @@ impl CoreElaborator<EffectOperationFamily> {
             operations: operations.into_boxed_slice(),
             state_associations: associations,
             source: None,
+            windows: Vec::new(),
         });
         let marker = self.evidence_marker()?;
         let mut context = self.base_context.clone();
@@ -3934,6 +4122,7 @@ impl CoreElaborator<EffectOperationFamily> {
             operations: operations.into_boxed_slice(),
             state_associations,
             source: None,
+            windows: Vec::new(),
         });
         let evidence_marker = imported.map(|_| self.evidence_marker()).transpose()?;
         let mut context = self.base_context.clone();
@@ -4352,7 +4541,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     | ResolvedExprKind::Discard(_)
                     | ResolvedExprKind::Cleanup(_)
                     | ResolvedExprKind::Resource(_)
-                    | ResolvedExprKind::ProviderResource(_) => {
+                    | ResolvedExprKind::ProviderResource(_)
+                    | ResolvedExprKind::CopyWindow(_) => {
                         return Err(contract_error(
                             expression.span,
                             "lifecycle templates cannot contain source handlers, continuations, cleanup or nested resources",

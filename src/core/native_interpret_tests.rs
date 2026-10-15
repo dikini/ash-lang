@@ -166,15 +166,15 @@ impl Fixture {
             Box::new(if unit { Type::Unit } else { Type::Int }),
         );
         let mut builder = EffectCoreBuilder::with_effect_registry(Arc::clone(&self.registry));
-        // The imported common module now also defines two sealed generic byte
-        // declarations. Keep their actual globals in this independently built
-        // forest so every retained original parameter row remains consumed.
+        // Keep every sealed generic builtin's actual declaration in this
+        // independently built forest. Retaining only byte_read/byte_write
+        // leaves the newer Data/copy parameter inventory unconsumed.
         let declarations = self
             .registry
             .scalar_preflights()
             .filter_map(|(_, fact)| {
                 fact.role()
-                    .byte_parameter(fact.module())
+                    .borrowed_parameter(fact.module())
                     .map(|parameter| (fact, parameter))
             })
             .collect::<Vec<_>>();
@@ -194,8 +194,37 @@ impl Fixture {
                         function: fact.function(),
                     }
                 }
+                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::DataOf => {
+                    crate::core::packed::Intrinsic::ForeignDataOf {
+                        function: fact.function(),
+                    }
+                }
+                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ReplaceData => {
+                    crate::core::packed::Intrinsic::ForeignReplaceData {
+                        function: fact.function(),
+                    }
+                }
+                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CopyBytes => {
+                    crate::core::packed::Intrinsic::ForeignCopyBytes {
+                        function: fact.function(),
+                    }
+                }
+                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CopyNul => {
+                    crate::core::packed::Intrinsic::ForeignCopyNul {
+                        function: fact.function(),
+                    }
+                }
+                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ExtentValue => {
+                    crate::core::packed::Intrinsic::ForeignExtentValue {
+                        function: fact.function(),
+                    }
+                }
                 _ => unreachable!(),
             };
+            let mut parameters = vec![(parameter, crate::types::Kind::Type)];
+            if let Some(data) = fact.role().data_parameter(fact.module()) {
+                parameters.push((data, crate::types::Kind::Type));
+            }
             let intrinsic = builder
                 .intrinsic(
                     operation,
@@ -206,7 +235,7 @@ impl Fixture {
                 .unwrap();
             let abstracted = builder
                 .type_abstraction(
-                    vec![(parameter, crate::types::Kind::Type)],
+                    parameters,
                     intrinsic,
                     fact.core_signature().clone(),
                     fact.origin().clone(),

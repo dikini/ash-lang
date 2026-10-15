@@ -19,6 +19,12 @@ pub(crate) enum ForeignScalarPreflightRole {
     SizeT,
     ByteRead,
     ByteWrite,
+    Nul,
+    DataOf,
+    ReplaceData,
+    CopyBytes,
+    CopyNul,
+    ExtentValue,
 }
 
 impl ForeignScalarPreflightRole {
@@ -28,15 +34,75 @@ impl ForeignScalarPreflightRole {
             Self::SizeT => 1,
             Self::ByteRead => 2,
             Self::ByteWrite => 3,
+            Self::Nul => 4,
+            Self::DataOf => 5,
+            Self::ReplaceData => 6,
+            Self::CopyBytes => 7,
+            Self::CopyNul => 8,
+            Self::ExtentValue => 9,
         }
     }
 
     pub(crate) const fn byte_parameter(self, module: ModuleId) -> Option<TypeVariableId> {
         match self {
-            // The four preceding canonical nominal declarations each bind T.
-            Self::ByteRead => Some(TypeVariableId::resolved(module, 4)),
-            Self::ByteWrite => Some(TypeVariableId::resolved(module, 5)),
+            // Five preceding canonical nominal declarations bind one Type formal each.
+            Self::ByteRead => Some(TypeVariableId::resolved(module, 5)),
+            Self::ByteWrite => Some(TypeVariableId::resolved(module, 6)),
             _ => None,
+        }
+    }
+
+    pub(crate) const fn state_parameter(self, module: ModuleId) -> Option<TypeVariableId> {
+        match self {
+            Self::DataOf => Some(TypeVariableId::resolved(module, 7)),
+            Self::ReplaceData => Some(TypeVariableId::resolved(module, 9)),
+            _ => self.byte_parameter(module),
+        }
+    }
+
+    pub(crate) const fn data_parameter(self, module: ModuleId) -> Option<TypeVariableId> {
+        match self {
+            Self::DataOf => Some(TypeVariableId::resolved(module, 8)),
+            Self::ReplaceData => Some(TypeVariableId::resolved(module, 10)),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn view_parameter(self, module: ModuleId) -> Option<TypeVariableId> {
+        match self {
+            Self::CopyBytes => Some(TypeVariableId::resolved(module, 11)),
+            Self::CopyNul => Some(TypeVariableId::resolved(module, 12)),
+            Self::ExtentValue => Some(TypeVariableId::resolved(module, 13)),
+            _ => None,
+        }
+    }
+    /// Shared quantifier inventory only; State and view permission stay distinct.
+    pub(crate) fn borrowed_parameter(self, module: ModuleId) -> Option<TypeVariableId> {
+        self.state_parameter(module)
+            .or_else(|| self.view_parameter(module))
+    }
+
+    pub(crate) fn matches_parameters(
+        self,
+        module: ModuleId,
+        parameters: &[(TypeVariableId, Kind)],
+    ) -> bool {
+        match (self.borrowed_parameter(module), self.data_parameter(module)) {
+            (Some(state), Some(data)) => parameters == [(state, Kind::Type), (data, Kind::Type)],
+            (Some(state), None) => parameters == [(state, Kind::Type)],
+            _ => parameters.is_empty(),
+        }
+    }
+
+    pub(crate) fn matches_parameter_ids(
+        self,
+        module: ModuleId,
+        parameters: &[TypeVariableId],
+    ) -> bool {
+        match (self.borrowed_parameter(module), self.data_parameter(module)) {
+            (Some(state), Some(data)) => parameters == [state, data],
+            (Some(state), None) => parameters == [state],
+            _ => parameters.is_empty(),
         }
     }
 }
@@ -138,17 +204,22 @@ impl CheckedForeignScalarPreflight {
         call_codec: Arc<CheckedForeignCallCodec>,
         work: &mut TypeWorkBudget,
     ) -> Result<Self, ForeignAdmissionError> {
-        let core_signature = if let Some(parameter) = role.byte_parameter(call_codec.module()) {
+        let core_signature = if let Some(parameter) = role.borrowed_parameter(call_codec.module()) {
             let body = crate::types::IterativeTypeOwner::new(
                 crate::types::clone_type_with_budget(&annotation.ty, work)
                     .map_err(|()| failure(ForeignAdmissionReason::WorkExhausted, source))?,
             );
-            charge(work, 3, source)?;
+            let data = role.data_parameter(call_codec.module());
+            let count = 1 + usize::from(data.is_some());
+            charge(work, 2 + count, source)?;
             let mut parameters = Vec::new();
             parameters
-                .try_reserve_exact(1)
+                .try_reserve_exact(count)
                 .map_err(|_| failure(ForeignAdmissionReason::WorkExhausted, source))?;
             parameters.push((parameter, Kind::Type));
+            if let Some(data) = data {
+                parameters.push((data, Kind::Type));
+            }
             Some(Type::Forall(
                 parameters.into_boxed_slice(),
                 Box::new(body.into_inner()),
@@ -195,10 +266,7 @@ impl CheckedForeignScalarPreflight {
         self.core_signature.as_ref().unwrap_or(&self.annotation.ty)
     }
     pub(crate) fn matches_parameters(&self, parameters: &[(TypeVariableId, Kind)]) -> bool {
-        match self.role.byte_parameter(self.module()) {
-            Some(parameter) => parameters == [(parameter, Kind::Type)],
-            None => parameters.is_empty(),
-        }
+        self.role.matches_parameters(self.module(), parameters)
     }
     pub(crate) fn call_codec(&self) -> &Arc<CheckedForeignCallCodec> {
         &self.call_codec
@@ -239,6 +307,12 @@ impl CheckedForeignScalarPreflight {
         {
             return Err(invalid());
         }
+        if self.role.view_parameter(module).is_some() {
+            return self.authenticate_view_annotation(work);
+        }
+        if self.role.data_parameter(module).is_some() {
+            return self.authenticate_data_annotation(work);
+        }
         if self.role.byte_parameter(module).is_some() {
             return self.authenticate_byte_annotation(work);
         }
@@ -248,8 +322,9 @@ impl CheckedForeignScalarPreflight {
         let Type::Application(call, argument) = codomain.as_ref() else {
             return Err(invalid());
         };
-        if **domain != Type::Int
-            || **argument != Type::Int
+        let nul = self.role == ForeignScalarPreflightRole::Nul;
+        if **domain != if nul { Type::String } else { Type::Int }
+            || **argument != if nul { Type::Unit } else { Type::Int }
             || !matches!(call.as_ref(), Type::Nominal(id) if *id == self.call_codec.ids().call)
         {
             return Err(invalid());
@@ -284,13 +359,182 @@ impl CheckedForeignScalarPreflight {
         let Some(ResolvedTypeProvenanceNode::Fact(argument)) = nodes.get(*argument) else {
             return Err(invalid());
         };
+        let call_offset = if nul { 10 } else { 7 };
+        let argument_length = if nul { 4 } else { 3 };
         if !effect_arguments.is_empty()
-            || !exact_span(*domain, start, start + 3)
-            || !exact_span(*argument, start + 12, start + 15)
-            || !exact_span(*call, start + 7, start + 11)
-            || !exact_span(*application, start + 7, start + 16)
+            || !exact_span(*domain, start, start + if nul { 6 } else { 3 })
+            || !exact_span(
+                *argument,
+                start + call_offset + 5,
+                start + call_offset + 5 + argument_length,
+            )
+            || !exact_span(*call, start + call_offset, start + call_offset + 4)
+            || !exact_span(
+                *application,
+                start + call_offset,
+                start + call_offset + 6 + argument_length,
+            )
             || *argument_span != *argument
             || *function != self.annotation.span
+        {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+
+    fn authenticate_view_annotation(
+        &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ForeignAdmissionError> {
+        let invalid = || failure(ForeignAdmissionReason::InvalidSignature, self.source);
+        let parameter = self
+            .role
+            .view_parameter(self.module())
+            .ok_or_else(invalid)?;
+        let extent = crate::types::NominalTypeId::new(self.module(), 5);
+        let is_extent = |ty: &Type| matches!(ty, Type::Application(head, argument) if **head == Type::Nominal(extent) && **argument == Type::Variable(parameter));
+        let Type::Function(domain, output) = self.signature() else {
+            return Err(invalid());
+        };
+        charge(work, 15, self.source)?;
+        let value = self.role == ForeignScalarPreflightRole::ExtentValue;
+        let bytes = self.role == ForeignScalarPreflightRole::CopyBytes;
+        if value {
+            if !is_extent(domain) || **output != Type::Int {
+                return Err(invalid());
+            }
+        } else {
+            let Type::Tuple(fields) = domain.as_ref() else {
+                return Err(invalid());
+            };
+            if fields.len() != 2
+                || fields[0] != Type::Variable(parameter)
+                || if bytes {
+                    !is_extent(&fields[1])
+                } else {
+                    fields[1] != Type::Int
+                }
+                || !matches!(output.as_ref(), Type::Application(call, payload) if **call == Type::Nominal(self.call_codec.ids().call) && **payload == Type::Bytes)
+            {
+                return Err(invalid());
+            }
+        }
+        let start = self.annotation.span.range().start();
+        let exact = |span: Span, offset: u32, length: u32| {
+            span.source() == self.source.source()
+                && span.range().start() == start + offset
+                && span.range().end() == start + offset + length
+        };
+        let nodes = self.annotation.provenance.nodes();
+        let fact = |id: usize, offset, length| matches!(nodes.get(id), Some(ResolvedTypeProvenanceNode::Fact(span)) if exact(*span, offset, length));
+        let application = |id: usize, offset, name_length, argument_length| {
+            matches!(nodes.get(id), Some(ResolvedTypeProvenanceNode::Application { span, function, argument, argument_span })
+                if exact(*span, offset, name_length + argument_length + 2)
+                    && fact(*function, offset, name_length)
+                    && fact(*argument, offset + name_length + 1, argument_length)
+                    && exact(*argument_span, offset + name_length + 1, argument_length))
+        };
+        let Some(ResolvedTypeProvenanceNode::Function {
+            span,
+            domain,
+            codomain,
+            effect_arguments,
+        }) = nodes.get(self.annotation.provenance.root())
+        else {
+            return Err(invalid());
+        };
+        if *span != self.annotation.span || !effect_arguments.is_empty() {
+            return Err(invalid());
+        }
+        if value {
+            if !application(*domain, 0, 6, 1) || !fact(*codomain, 13, 3) {
+                return Err(invalid());
+            }
+        } else {
+            let Some(ResolvedTypeProvenanceNode::Tuple { span, elements }) = nodes.get(*domain)
+            else {
+                return Err(invalid());
+            };
+            if !exact(*span, 0, if bytes { 14 } else { 8 })
+                || elements.len() != 2
+                || !fact(elements[0], 1, 1)
+                || if bytes {
+                    !application(elements[1], 4, 6, 1)
+                } else {
+                    !fact(elements[1], 4, 3)
+                }
+                || !application(*codomain, if bytes { 18 } else { 12 }, 4, 5)
+            {
+                return Err(invalid());
+            }
+        }
+        Ok(())
+    }
+
+    fn authenticate_data_annotation(
+        &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ForeignAdmissionError> {
+        let invalid = || failure(ForeignAdmissionReason::InvalidSignature, self.source);
+        let state = self
+            .role
+            .state_parameter(self.module())
+            .ok_or_else(invalid)?;
+        let data = self
+            .role
+            .data_parameter(self.module())
+            .ok_or_else(invalid)?;
+        let replace = self.role == ForeignScalarPreflightRole::ReplaceData;
+        let Type::Function(domain, output) = self.signature() else {
+            return Err(invalid());
+        };
+        charge(work, 8, self.source)?;
+        if replace {
+            if !matches!(domain.as_ref(), Type::Tuple(fields) if fields.as_ref() == [Type::Variable(state), Type::Variable(data)])
+                || **output != Type::Unit
+            {
+                return Err(invalid());
+            }
+        } else if **domain != Type::Variable(state) || **output != Type::Variable(data) {
+            return Err(invalid());
+        }
+        let start = self.annotation.span.range().start();
+        let exact = |span: Span, offset: u32, length: u32| {
+            span.source() == self.source.source()
+                && span.range().start() == start + offset
+                && span.range().end() == start + offset + length
+        };
+        let nodes = self.annotation.provenance.nodes();
+        let Some(ResolvedTypeProvenanceNode::Function {
+            span,
+            domain,
+            codomain,
+            effect_arguments,
+        }) = nodes.get(self.annotation.provenance.root())
+        else {
+            return Err(invalid());
+        };
+        if *span != self.annotation.span
+            || !effect_arguments.is_empty()
+            || !matches!(nodes.get(*codomain), Some(ResolvedTypeProvenanceNode::Fact(span)) if exact(*span, if replace {10} else {5}, if replace {4} else {1}))
+        {
+            return Err(invalid());
+        }
+        if replace {
+            let Some(ResolvedTypeProvenanceNode::Tuple { span, elements }) = nodes.get(*domain)
+            else {
+                return Err(invalid());
+            };
+            if !exact(*span, 0, 6) || elements.len() != 2 {
+                return Err(invalid());
+            }
+            for (index, element) in elements.iter().enumerate() {
+                if !matches!(nodes.get(*element), Some(ResolvedTypeProvenanceNode::Fact(span)) if exact(*span, if index == 0 {1} else {4}, 1))
+                {
+                    return Err(invalid());
+                }
+            }
+        } else if !matches!(nodes.get(*domain), Some(ResolvedTypeProvenanceNode::Fact(span)) if exact(*span,0,1))
         {
             return Err(invalid());
         }

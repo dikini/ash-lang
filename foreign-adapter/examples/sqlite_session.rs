@@ -3,9 +3,10 @@
 use ash::{
     compiler_work::{CompilationPhase, CompilationWork},
     driver::{RunConfiguration, run_path_with_foreign_runtime},
-    foreign::{ForeignRegistrations, provider_manifest, runtime::ForeignRuntime, sqlite_manifest},
+    foreign::{ForeignRegistrations, provider_manifest, runtime::ForeignRuntime},
     module::{ForeignRegistrationId, ModuleRoots},
 };
+use ash_foreign_adapter::sqlite_manifest;
 use ash_foreign_adapter::{Observations, sqlite_binding};
 use std::{error::Error, path::PathBuf, process::ExitCode, sync::Arc};
 

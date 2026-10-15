@@ -78,6 +78,9 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 
 ### Compiler transformations and backends
 
+- [DN-0050: Native program gas estimates](DN-0050-native-program-gas-estimates.md)
+  — calibration and prediction errors for the input-derived gas policies adopted
+  in AD-0013; predecessor diagnostics remain scoped evidence, not full-port verification.
 - [DN-0044: No Default Runtime](DN-0044-no-default-runtime.md)
   — working exploration of library-supplied services, compiler defaults,
   ordinary construction and storage lowering, constrained targets, and foreign

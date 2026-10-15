@@ -78,7 +78,16 @@ pub(super) struct ResourceHeaderRecord {
     provider_span: SpanRecord,
     provided: ResourceEffectRecord,
     interpreted: Slice,
+    windows: Slice,
     origin: u32,
+}
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ResourceWindowRecord {
+    phase: u32,
+    family: NominalId,
+    identity: TypeVariableIdentity,
+    identity_span: SpanRecord,
+    span: SpanRecord,
 }
 #[derive(Clone, Copy, Debug)]
 pub(super) struct HandlerRecord {
@@ -127,10 +136,30 @@ pub(super) struct TemplateGraphRecord {
 #[derive(Clone, Copy, Debug)]
 pub(super) struct SourceTemplateRecord {
     header: u32,
+    registry_view: u32,
     acquire: u32,
     finish: u32,
     handler: u32,
     globals: Slice,
+}
+#[derive(Clone, Copy, Debug)]
+pub(super) struct SourceRegistryViewRecord {
+    header: u32,
+    items: Slice,
+    modules: Slice,
+    abstracts: Slice,
+}
+#[derive(Clone, Copy, Debug)]
+pub(super) struct SourceRegistryAbstractRecord {
+    id: NominalId,
+    spelling: Slice,
+}
+#[derive(Clone, Copy, Debug)]
+pub(super) struct SourceRegistryItemRecord {
+    tag: u32,
+    module: u32,
+    owner: u32,
+    local: u32,
 }
 #[derive(Clone, Copy, Debug)]
 pub(super) struct NodePairRecord {
@@ -191,21 +220,21 @@ pub(super) struct SourceScopeRecord {
     pub(super) forwardings: Slice,
 }
 
-wire_struct!(ResourceIdentity, 8, module, local);
-wire_struct!(InterfaceIdentity, 8, module, local);
-wire_struct!(InterfaceOwnerRecord, 16, id, parameters);
+wire_struct!(ResourceIdentity, module, local);
+wire_struct!(InterfaceIdentity, module, local);
+wire_struct!(InterfaceOwnerRecord, id, parameters);
+wire_struct!(ResourceArgumentRecord, argument, provenance, origin, span);
+wire_struct!(ResourceEffectRecord, effect, arguments, origin, span);
 wire_struct!(
-    ResourceArgumentRecord,
-    24,
-    argument,
-    provenance,
-    origin,
+    ResourceWindowRecord,
+    phase,
+    family,
+    identity,
+    identity_span,
     span
 );
-wire_struct!(ResourceEffectRecord, 28, effect, arguments, origin, span);
 wire_struct!(
     ResourceHeaderRecord,
-    282,
     id,
     family,
     public,
@@ -229,21 +258,12 @@ wire_struct!(
     provider_span,
     provided,
     interpreted,
+    windows,
     origin
 );
-wire_struct!(
-    HandlerRecord,
-    22,
-    id,
-    body,
-    effect,
-    clauses,
-    root,
-    registration
-);
+wire_struct!(HandlerRecord, id, body, effect, clauses, root, registration);
 wire_struct!(
     HookRootRecord,
-    49,
     target,
     span,
     target_span,
@@ -253,7 +273,6 @@ wire_struct!(
 );
 wire_struct!(
     HookRegistrationRecord,
-    64,
     target,
     span,
     target_span,
@@ -264,25 +283,27 @@ wire_struct!(
     next,
     resume
 );
-wire_struct!(ClauseRecord, 28, operation, resume, arm);
-wire_struct!(TemplateGraphRecord, 16, nodes, root, catalog);
+wire_struct!(ClauseRecord, operation, resume, arm);
+wire_struct!(TemplateGraphRecord, nodes, root, catalog);
 wire_struct!(
     SourceTemplateRecord,
-    24,
     header,
+    registry_view,
     acquire,
     finish,
     handler,
     globals
 );
-wire_struct!(NodePairRecord, 8, original, copied);
-wire_struct!(BinderPairRecord, 10, original, copied);
-wire_struct!(FreshTypeRecord, 14, original, copied, kind);
-wire_struct!(PlainPairRecord, 8, original, copied);
-wire_struct!(SourceSubstitutionRecord, 9, original, value);
+wire_struct!(SourceRegistryViewRecord, header, items, modules, abstracts);
+wire_struct!(SourceRegistryItemRecord, tag, module, owner, local);
+wire_struct!(SourceRegistryAbstractRecord, id, spelling);
+wire_struct!(NodePairRecord, original, copied);
+wire_struct!(BinderPairRecord, original, copied);
+wire_struct!(FreshTypeRecord, original, copied, kind);
+wire_struct!(PlainPairRecord, original, copied);
+wire_struct!(SourceSubstitutionRecord, original, value);
 wire_struct!(
     SourceCopyRecord,
-    56,
     nodes,
     binders,
     variables,
@@ -293,7 +314,6 @@ wire_struct!(
 );
 wire_struct!(
     SourceScopeRecord,
-    89,
     template,
     arguments,
     identity,
@@ -342,10 +362,9 @@ pub(super) struct InheritedParameterRecord {
     slot: u32,
     binder: TypeVariableIdentity,
 }
-wire_struct!(MethodCatalogRecord, 16, methods, evidence);
+wire_struct!(MethodCatalogRecord, methods, evidence);
 wire_struct!(
     MethodRecord,
-    48,
     interface,
     local,
     interface_parameters,
@@ -354,9 +373,9 @@ wire_struct!(
     value_type,
     spelling
 );
-wire_struct!(InheritedParameterRecord, 18, owner, slot, binder);
+wire_struct!(InheritedParameterRecord, owner, slot, binder);
 impl Wire for OwnerIdentity {
-    const MINIMUM: usize = 9;
+    const MINIMUM: usize = 1 + super::EffectIdentity::MINIMUM;
     fn write(&self, writer: &mut WireWriter<'_>) -> Result<(), ImageFailure> {
         match self {
             Self::Effect(id) => {
@@ -399,6 +418,146 @@ impl InterfaceOwnerRecord {
 }
 
 impl Encoder<'_> {
+    pub(super) fn encode_source_registry_view(
+        &mut self,
+        original: &CheckedSourceResourceTemplate,
+        canonical: &ResolvedRegistry,
+    ) -> Result<u32, ImageFailure> {
+        use crate::resolved::ImageRegistryItem as Item;
+        let key = original as *const CheckedSourceResourceTemplate;
+        charge(self.work, 1)?;
+        if let Some(slot) = self.source_views.get(&key) {
+            return Ok(*slot);
+        }
+        let failure = |error| match error {
+            crate::resolved::ResolvedBuildFailure::TypeResource => ImageFailure::Resource,
+            _ => ImageFailure::Unsupported(Unsupported::RegistryMetadata),
+        };
+        let defining = original.original_registry();
+        let items = defining.image_registry_items(self.work).map_err(failure)?;
+        let mut names = defining
+            .image_registry_abstract_names(self.work)
+            .map_err(failure)?;
+        // Match the deterministic identity order used by the selector records.
+        for position in 0..names.len() {
+            let mut selected = position;
+            for candidate in position + 1..names.len() {
+                charge(self.work, 1)?;
+                if names[candidate].0 < names[selected].0 {
+                    selected = candidate;
+                }
+            }
+            charge(self.work, 1)?;
+            names.swap(position, selected);
+        }
+        if !defining
+            .matches_image_registry_projection(canonical, self.work)
+            .map_err(failure)?
+        {
+            return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
+        }
+        let header = self.encode_source_header(&original.header().original)?;
+        let start = self.image.source_registry_abstracts.len();
+        for (id, name) in names {
+            let id = self.nominal(id)?;
+            let spelling = append(&mut self.image.bytes, name.as_bytes(), self.work)?;
+            push(
+                &mut self.image.source_registry_abstracts,
+                SourceRegistryAbstractRecord { id, spelling },
+                self.work,
+            )?;
+        }
+        let abstracts = Slice::of(&self.image.source_registry_abstracts, start)?;
+        let start = self.image.source_registry_items.len();
+        for item in items {
+            let (tag, module, owner, local) = match item {
+                Item::Nominal(id) | Item::Abstract(id) | Item::Foreign(id) => {
+                    let tag = match item {
+                        Item::Nominal(_) => 0,
+                        Item::Abstract(_) => 5,
+                        _ => 8,
+                    };
+                    let id = self.nominal(id)?;
+                    (tag, id.module, 0, id.local)
+                }
+                Item::Constructor(id) => {
+                    let id = self.constructor(id)?;
+                    (1, id.owner.module, id.owner.local, id.local)
+                }
+                Item::Effect(id) => {
+                    let id = self.effect_identity(id)?;
+                    (2, id.module, 0, id.local)
+                }
+                Item::Variable(id) => match self.type_variable(id)? {
+                    TypeVariableIdentity::Resolved { module, local } => (3, module, 0, local),
+                    _ => return Err(ImageFailure::InvalidRecord),
+                },
+                Item::Global(id) | Item::Preflight(id) => {
+                    let tag = if matches!(item, Item::Global(_)) {
+                        4
+                    } else {
+                        10
+                    };
+                    match self.binder_id(id)? {
+                        BinderIdentity::Resolved { module, local } => (tag, module, 0, local),
+                        _ => return Err(ImageFailure::InvalidRecord),
+                    }
+                }
+                Item::Interface(id) => {
+                    let id = self.interface_identity(id)?;
+                    (6, id.module, 0, id.local)
+                }
+                Item::Resource(id) => {
+                    let id = self.resource_identity(id)?;
+                    (7, id.module, 0, id.local)
+                }
+                Item::Native(id) => {
+                    let id = self.operation_identity(id)?;
+                    (9, id.owner.module, id.owner.local, id.local)
+                }
+            };
+            push(
+                &mut self.image.source_registry_items,
+                SourceRegistryItemRecord {
+                    tag,
+                    module,
+                    owner,
+                    local,
+                },
+                self.work,
+            )?;
+        }
+        let items = Slice::of(&self.image.source_registry_items, start)?;
+        let start = self.image.source_registry_modules.len();
+        for (module, source) in original.module_sources() {
+            charge(self.work, 1)?;
+            let module = *self
+                .modules
+                .get(module)
+                .ok_or(ImageFailure::InvalidRecord)?;
+            if self.sources.get(source) != Some(&module) {
+                return Err(ImageFailure::InvalidRecord);
+            }
+            push(&mut self.image.source_registry_modules, module, self.work)?;
+        }
+        let modules = Slice::of(&self.image.source_registry_modules, start)?;
+        charge(self.work, 1)?;
+        self.source_views
+            .try_reserve(1)
+            .map_err(|_| ImageFailure::Resource)?;
+        let slot = push(
+            &mut self.image.source_registry_views,
+            SourceRegistryViewRecord {
+                header,
+                items,
+                modules,
+                abstracts,
+            },
+            self.work,
+        )?;
+        self.source_views.insert(key, slot);
+        Ok(slot)
+    }
     pub(super) fn resource_identity(
         &mut self,
         id: ResourceDefinitionId,
@@ -557,6 +716,22 @@ impl Encoder<'_> {
             push(&mut self.image.resource_effects, effect, self.work)?;
         }
         let interpreted = Slice::of(&self.image.resource_effects, start)?;
+        let start = self.image.resource_windows.len();
+        for declaration in &header.windows {
+            let record = ResourceWindowRecord {
+                phase: match declaration.phase {
+                    crate::resolved::SourceWindowPhase::Acquire => 0,
+                    crate::resolved::SourceWindowPhase::Finish => 1,
+                    crate::resolved::SourceWindowPhase::Handler => 2,
+                },
+                family: self.nominal(declaration.family)?,
+                identity: self.type_variable(declaration.identity)?,
+                identity_span: self.span(declaration.identity_span)?,
+                span: self.span(declaration.span)?,
+            };
+            push(&mut self.image.resource_windows, record, self.work)?;
+        }
+        let windows = Slice::of(&self.image.resource_windows, start)?;
         let record = ResourceHeaderRecord {
             id,
             family,
@@ -585,6 +760,7 @@ impl Encoder<'_> {
             provider_span: self.span(header.provider.span)?,
             provided: self.resource_effect(&header.provided)?,
             interpreted,
+            windows,
             origin: self.encode_origin(&header.origin)?,
         };
         let slot = push(&mut self.image.resource_headers, record, self.work)?;
@@ -723,7 +899,7 @@ impl Encoder<'_> {
             }
             let root = self.node(original.image_root())?;
             let nodes = append(&mut self.image.template_nodes, &self.image.nodes, self.work)?;
-            let catalog = self.encode_method_catalog(original.method_evidence())?;
+            let catalog = self.encode_source_method_catalog(original.method_evidence())?;
             let graph = push(
                 &mut self.image.source_graphs,
                 TemplateGraphRecord {
@@ -753,6 +929,11 @@ impl Encoder<'_> {
             .try_reserve(1)
             .map_err(|_| ImageFailure::Resource)?;
         let header = self.encode_source_header(&original.header().original)?;
+        charge(self.work, 1)?;
+        let registry_view = *self
+            .source_views
+            .get(&key)
+            .ok_or(ImageFailure::InvalidRecord)?;
         let (acquire, acquire_mapping) = self.encode_template_graph(original.original_acquire())?;
         let (finish, finish_mapping) = self.encode_template_graph(original.original_finish())?;
         let (handler, handler_mapping) = self.encode_template_graph(original.original_handler())?;
@@ -797,6 +978,7 @@ impl Encoder<'_> {
             &mut self.image.source_templates,
             SourceTemplateRecord {
                 header,
+                registry_view,
                 acquire,
                 finish,
                 handler,
@@ -985,6 +1167,140 @@ impl Encoder<'_> {
 }
 
 impl Decoder<'_> {
+    /// The complete defining view is canonical fact metadata. Only views of
+    /// instantiated original templates contribute to this subset inventory;
+    /// an orphan view cannot account for otherwise unexplained main variables.
+    pub(super) fn source_registry_view_variables(
+        &mut self,
+    ) -> Result<Vec<TypeVariableId>, ImageFailure> {
+        let mut variables = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for scope in &self.image.source_scopes {
+            charge(self.work, 1)?;
+            seen.try_reserve(1).map_err(|_| ImageFailure::Resource)?;
+            if !seen.insert(scope.template) {
+                continue;
+            }
+            let template = get(&self.image.source_templates, scope.template)?;
+            let view = get(&self.image.source_registry_views, template.registry_view)?;
+            if view.header != template.header {
+                return Err(ImageFailure::InvalidRecord);
+            }
+            for item in view.items.get(&self.image.source_registry_items)? {
+                charge(self.work, 1)?;
+                if item.tag == 3 {
+                    if item.owner != 0 {
+                        return Err(ImageFailure::InvalidRecord);
+                    }
+                    let id = self.type_variable(TypeVariableIdentity::Resolved {
+                        module: item.module,
+                        local: item.local,
+                    })?;
+                    push(&mut variables, id, self.work)?;
+                }
+            }
+        }
+        Ok(variables)
+    }
+
+    fn source_registry_view(
+        &mut self,
+        canonical: &ResolvedRegistry,
+        record: SourceRegistryViewRecord,
+    ) -> Result<Arc<ResolvedRegistry>, ImageFailure> {
+        use crate::resolved::ImageRegistryItem as Item;
+        let mut items = Vec::new();
+        for item in record.items.get(&self.image.source_registry_items)? {
+            charge(self.work, 1)?;
+            if item.owner != 0 && item.tag != 1 && item.tag != 9 {
+                return Err(ImageFailure::InvalidRecord);
+            }
+            let nominal = NominalId {
+                module: item.module,
+                local: item.local,
+            };
+            let value = match item.tag {
+                0 => Item::Nominal(self.nominal(nominal)?),
+                1 => Item::Constructor(self.constructor(super::ConstructorIdentity {
+                    owner: NominalId {
+                        module: item.module,
+                        local: item.owner,
+                    },
+                    local: item.local,
+                })?),
+                2 => Item::Effect(self.effect_identity(EffectIdentity {
+                    module: item.module,
+                    local: item.local,
+                })?),
+                3 => Item::Variable(self.type_variable(TypeVariableIdentity::Resolved {
+                    module: item.module,
+                    local: item.local,
+                })?),
+                4 => Item::Global(self.binder_id(BinderIdentity::Resolved {
+                    module: item.module,
+                    local: item.local,
+                })?),
+                5 => Item::Abstract(self.nominal(nominal)?),
+                6 => Item::Interface(self.interface_identity(InterfaceIdentity {
+                    module: item.module,
+                    local: item.local,
+                })?),
+                7 => Item::Resource(self.resource_identity(ResourceIdentity {
+                    module: item.module,
+                    local: item.local,
+                })?),
+                8 => Item::Foreign(self.nominal(nominal)?),
+                9 => Item::Native(self.operation_identity(OperationIdentity {
+                    owner: EffectIdentity {
+                        module: item.module,
+                        local: item.owner,
+                    },
+                    local: item.local,
+                })?),
+                10 => Item::Preflight(self.binder_id(BinderIdentity::Resolved {
+                    module: item.module,
+                    local: item.local,
+                })?),
+                _ => return Err(ImageFailure::InvalidRecord),
+            };
+            push(&mut items, value, self.work)?;
+        }
+        // Restored ModuleIds are fresh coordinates. Sort the decoded identities
+        // in that universe rather than assuming serialized ordering is shared.
+        crate::resolved::sort_image_registry_items(&mut items, self.work)
+            .map_err(|()| ImageFailure::Resource)?;
+        let mut owned_names = Vec::new();
+        for exposure in record
+            .abstracts
+            .get(&self.image.source_registry_abstracts)?
+        {
+            let id = self.nominal(exposure.id)?;
+            // Original view names cannot redirect into an executable suffix.
+            let prefixes = self
+                .image
+                .native_fact_prefixes
+                .ok_or(ImageFailure::InvalidRecord)?;
+            exposure.spelling.get(super::native_fact_table(
+                &self.image.bytes,
+                prefixes.bytes,
+                false,
+            )?)?;
+            let name = self.text(exposure.spelling)?;
+            push(&mut owned_names, (id, name), self.work)?;
+        }
+        let mut names = Vec::new();
+        for (id, name) in &owned_names {
+            push(&mut names, (*id, name.as_str()), self.work)?;
+        }
+        let registry = canonical
+            .select_image_registry(&items, &names, self.work)
+            .map_err(|error| match error {
+                crate::resolved::ResolvedBuildFailure::TypeResource => ImageFailure::Resource,
+                _ => ImageFailure::InvalidRecord,
+            })?;
+        charge(self.work, 1)?;
+        Ok(Arc::new(registry))
+    }
     pub(super) fn resource_identity(
         &mut self,
         id: ResourceIdentity,
@@ -1100,10 +1416,38 @@ impl Decoder<'_> {
             .with_image_interface_owner_definitions(interfaces, self.work)
             .map_err(|_| ImageFailure::RegistryAdmission)?;
         let mut facts = Vec::new();
+        charge(self.work, self.image.resource_windows.len())?;
+        let mut windows_seen = Vec::new();
+        windows_seen
+            .try_reserve_exact(self.image.resource_windows.len())
+            .map_err(|_| ImageFailure::Resource)?;
+        windows_seen.resize(self.image.resource_windows.len(), false);
         for record in &self.image.resource_headers {
+            for (offset, _) in record
+                .windows
+                .get(&self.image.resource_windows)?
+                .iter()
+                .enumerate()
+            {
+                charge(self.work, 1)?;
+                let slot = usize::try_from(record.windows.start)
+                    .map_err(|_| ImageFailure::InvalidRecord)?
+                    .checked_add(offset)
+                    .ok_or(ImageFailure::InvalidRecord)?;
+                let seen = windows_seen
+                    .get_mut(slot)
+                    .ok_or(ImageFailure::InvalidRecord)?;
+                if std::mem::replace(seen, true) {
+                    return Err(ImageFailure::InvalidRecord);
+                }
+            }
             let fact = self.source_header(*record, arena)?;
             charge(self.work, 1)?;
             push(&mut facts, Arc::new(fact), self.work)?;
+        }
+        charge(self.work, windows_seen.len())?;
+        if windows_seen.iter().any(|seen| !seen) {
+            return Err(ImageFailure::InvalidRecord);
         }
         registry
             .with_image_source_resource_facts(facts, self.work)
@@ -1169,6 +1513,23 @@ impl Decoder<'_> {
         }
         let owned_position =
             usize::try_from(record.owned_position).map_err(|_| ImageFailure::InvalidRecord)?;
+        let mut windows = Vec::new();
+        for declaration in record.windows.get(&self.image.resource_windows)? {
+            let phase = match declaration.phase {
+                0 => crate::resolved::SourceWindowPhase::Acquire,
+                1 => crate::resolved::SourceWindowPhase::Finish,
+                2 => crate::resolved::SourceWindowPhase::Handler,
+                _ => return Err(ImageFailure::InvalidRecord),
+            };
+            let value = crate::resolved::SourceWindowDeclaration {
+                phase,
+                family: self.nominal(declaration.family)?,
+                identity: self.type_variable(declaration.identity)?,
+                identity_span: self.span(declaration.identity_span)?,
+                span: self.span(declaration.span)?,
+            };
+            push(&mut windows, value, self.work)?;
+        }
         Ok(SourceResourceTypeFact {
             id,
             family,
@@ -1203,6 +1564,7 @@ impl Decoder<'_> {
             },
             provided: provided.take(),
             interpreted: interpreted.take(),
+            windows: windows.into_boxed_slice(),
             origin: origin.take(),
         })
     }
@@ -1330,7 +1692,7 @@ impl Decoder<'_> {
     ) -> Result<(UnvalidatedEffectProgram, Vec<NodeId>), ImageFailure> {
         let graph = *get(&self.image.source_graphs, slot)?;
         let records = graph.nodes.get(&self.image.template_nodes)?;
-        let catalog = self.method_catalog(graph.catalog)?;
+        let catalog = self.source_method_catalog(graph.catalog)?;
         let mut builder = crate::core::EffectCoreBuilder::with_registry_and_method_evidence(
             Arc::clone(registry),
             catalog,
@@ -1350,6 +1712,7 @@ impl Decoder<'_> {
                 .row()?;
             let node = self.effect_node(
                 &mut builder,
+                registry,
                 &nodes,
                 symbols,
                 &[],
@@ -1370,9 +1733,13 @@ impl Decoder<'_> {
         binders: &[crate::resolved::BinderId],
     ) -> Result<Vec<RestoredSourceTemplate>, ImageFailure> {
         let mut templates = Vec::new();
-        let mut structure_session =
-            crate::core::validate::SourceResourceStructureSession::default();
         for record in &self.image.source_templates {
+            let view = *get(&self.image.source_registry_views, record.registry_view)?;
+            if view.header != record.header {
+                return Err(ImageFailure::InvalidRecord);
+            }
+            let original_registry = self.source_registry_view(registry, view)?;
+            let registry = &original_registry;
             let header_record = *get(&self.image.resource_headers, record.header)?;
             let id = self.resource_identity(header_record.id)?;
             let original = registry
@@ -1402,11 +1769,29 @@ impl Decoder<'_> {
             }
             let mut sources = Vec::new();
             let mut module_sources = Vec::new();
-            for (module, source) in self.modules.iter().zip(self.sources.iter()) {
+            let mut seen = std::collections::HashSet::new();
+            let modules = view.modules.get(&self.image.source_registry_modules)?;
+            charge(self.work, modules.len())?;
+            seen.try_reserve(modules.len())
+                .map_err(|_| ImageFailure::Resource)?;
+            if modules.is_empty() {
+                return Err(ImageFailure::InvalidRecord);
+            }
+            for slot in modules {
+                let module = get(&self.modules, *slot)?;
+                let source = get(&self.sources, *slot)?;
+                if !seen.insert(*slot) {
+                    return Err(ImageFailure::InvalidRecord);
+                }
                 push(&mut sources, source, self.work)?;
                 push(&mut module_sources, (*module, source.id()), self.work)?;
             }
             let declared_globals = globals.len();
+            // The three forests share this exact defining view. A different
+            // original template owns another registry allocation/context and
+            // must not inherit the previous template's registry receipt.
+            let mut structure_session =
+                crate::core::validate::SourceResourceStructureSession::default();
             let template = CheckedSourceResourceTemplate::admit_with_globals(
                 Arc::new(header),
                 acquire,
@@ -1702,7 +2087,43 @@ fn same_instance(
     Ok(true)
 }
 
+fn declaration_only_catalog(catalog: &crate::core::dialect::MethodEvidenceCatalog) -> bool {
+    catalog.lexical_owners().is_empty()
+        && catalog.implementation_owners().is_empty()
+        && catalog.domains().is_empty()
+        && catalog.occurrences().is_empty()
+        && catalog.final_occurrence_owners().is_empty()
+        && catalog.adapters().is_empty()
+        && catalog.concrete_sources().is_empty()
+        && catalog.expectations().is_empty()
+}
+
 impl Encoder<'_> {
+    fn encode_source_method_catalog(
+        &mut self,
+        catalog: &Arc<crate::core::dialect::MethodEvidenceCatalog>,
+    ) -> Result<u32, ImageFailure> {
+        charge(self.work, 1)?;
+        if !declaration_only_catalog(catalog) {
+            return self.encode_method_catalog(catalog);
+        }
+        let key = Arc::as_ptr(catalog);
+        if let Some((_, slot)) = self.source_declaration_catalogs.get(&key) {
+            return Ok(*slot);
+        }
+        let slot = self.encode_method_catalog(catalog)?;
+        charge(self.work, 1)?;
+        self.source_declaration_catalogs
+            .try_reserve(1)
+            .map_err(|_| ImageFailure::Resource)?;
+        // Retain the exact Arc so its address cannot be recycled. The main
+        // catalog never enters this original-forest interner: its distinct
+        // role in canonical cell declaration augmentation remains unchanged.
+        self.source_declaration_catalogs
+            .insert(key, (Arc::clone(catalog), slot));
+        Ok(slot)
+    }
+
     pub(super) fn encode_method_catalog(
         &mut self,
         catalog: &Arc<crate::core::dialect::MethodEvidenceCatalog>,
@@ -1781,6 +2202,32 @@ impl Encoder<'_> {
     }
 }
 impl Decoder<'_> {
+    fn source_method_catalog(
+        &mut self,
+        slot: u32,
+    ) -> Result<Arc<crate::core::dialect::MethodEvidenceCatalog>, ImageFailure> {
+        charge(self.work, 1)?;
+        if self.image.main_method_catalog == Some(slot) {
+            return self.method_catalog(slot);
+        }
+        if let Some(catalog) = self.source_declaration_catalogs.get(&slot) {
+            return Ok(Arc::clone(catalog));
+        }
+        let catalog = self.method_catalog(slot)?;
+        // Decode and check the complete evidence record before deciding that
+        // it is declaration-only. Every forest still reconstructs its graph
+        // and runs independent structure/lineage/Core authentication.
+        if declaration_only_catalog(&catalog) {
+            charge(self.work, 1)?;
+            self.source_declaration_catalogs
+                .try_reserve(1)
+                .map_err(|_| ImageFailure::Resource)?;
+            self.source_declaration_catalogs
+                .insert(slot, Arc::clone(&catalog));
+        }
+        Ok(catalog)
+    }
+
     pub(super) fn method_catalog(
         &mut self,
         slot: u32,
@@ -1792,44 +2239,11 @@ impl Decoder<'_> {
         let original_methods = catalog
             .methods
             .get(self.fact_table(&self.image.source_methods, |p| p.source_methods)?)?;
-        let mut enclosing_cell_methods = Vec::new();
-        charge(self.work, self.modules.len())?;
-        if self.modules.iter().any(|module| module.is_builtin_cell())
-            && self.image.main_method_catalog != Some(slot)
-        {
-            let main = get(
-                self.fact_table(&self.image.method_catalogs, |p| p.method_catalogs)?,
-                self.image
-                    .main_method_catalog
-                    .ok_or(ImageFailure::InvalidRecord)?,
-            )?;
-            // An original library forest can predate its caller's cell import,
-            // while reconstruction deliberately shares the whole registry.
-            // Retain only missing declarations from that SAME program's cell
-            // catalog, not lexical owners, occurrences or permissions. Normal
-            // Core admission still checks every canonical cell signature.
-            for method in main
-                .methods
-                .get(self.fact_table(&self.image.source_methods, |p| p.source_methods)?)?
-            {
-                charge(self.work, 1)?;
-                if !get(&self.modules, method.interface.module)?.is_builtin_cell() {
-                    continue;
-                }
-                let mut present = false;
-                for original in original_methods {
-                    charge(self.work, 1)?;
-                    present |= original.interface.module == method.interface.module
-                        && original.interface.local == method.interface.local
-                        && original.local == method.local;
-                }
-                if !present {
-                    push(&mut enclosing_cell_methods, *method, self.work)?;
-                }
-            }
-        }
         let mut methods = Vec::new();
-        for record in original_methods.iter().chain(enclosing_cell_methods.iter()) {
+        // Each catalog belongs to its exact original registry view. Caller
+        // declarations remain in main's catalog, never ambient additions to
+        // a defining library's catalog.
+        for record in original_methods {
             let id = crate::interface::MethodId::new(
                 self.interface_identity(record.interface)?,
                 record.local,
@@ -1915,6 +2329,537 @@ mod tests {
     impl Drop for Fixture {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    #[test]
+    fn active_original_view_accounts_for_uninstantiated_window_metadata() {
+        let root = std::env::temp_dir().join(format!(
+            "ash-original-unused-windows-{}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        let fixture = Fixture(root);
+        fs::write(
+            fixture.0.join("sqlite.ash"),
+            include_str!("../../libraries/sqlite.ash"),
+        )
+        .unwrap();
+        fs::write(fixture.0.join("entry.ash"), "import @ffi.sqlite as Sqlite\nmain : Unit -> Sqlite.Scope<Sqlite.OpenError, Sqlite.CloseError, Bool> ! {Sqlite.Initialize}\nmain () = resource Sqlite.Connection<C> connection = (Sqlite.File \":memory:\") {\n    true\n}\n").unwrap();
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry: fixture.0.join("entry.ash"),
+            roots: crate::module::ModuleRoots::new([("ffi", &fixture.0)]).unwrap(),
+        })
+        .unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let scope = program
+            .nodes()
+            .iter()
+            .find_map(|node| match &node.kind {
+                crate::core::EffectExprKind::Operation(
+                    crate::core::EffectOperation::SourceResourceScope(scope),
+                ) => Some(scope),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            scope
+                .original()
+                .original_window_binders(&mut TypeWorkBudget::default())
+                .unwrap()
+                .len(),
+            1
+        );
+        let original_variables = scope
+            .original()
+            .original_registry()
+            .type_variables()
+            .map(|variable| variable.id)
+            .collect::<Vec<_>>();
+        let identities = [scope.identity()];
+        let inventory = |work: &mut TypeWorkBudget| {
+            program.registry().native_image_subset_with_source_scopes(
+                &identities,
+                &original_variables,
+                work,
+            )
+        };
+        assert!(
+            !program
+                .registry()
+                .native_image_subset_with_source_scopes(
+                    &identities,
+                    &[],
+                    &mut TypeWorkBudget::default()
+                )
+                .unwrap()
+        );
+        let mut measured = TypeWorkBudget::default();
+        assert!(inventory(&mut measured).unwrap());
+        let cost = measured.used();
+        for prefix in [0, 19] {
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                assert!(inventory(&mut exact).unwrap());
+                assert_eq!(exact.used(), prefix + cost);
+            }
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            assert!(inventory(&mut short).unwrap_err().is_resource_exhaustion());
+        }
+        let registry = program.registry();
+        let mut work = TypeWorkBudget::default();
+        let items = registry.image_registry_items(&mut work).unwrap();
+        let names = registry.image_registry_abstract_names(&mut work).unwrap();
+        let orphan = crate::resolved::ResolvedTypeVariable {
+            id: crate::types::TypeVariableId::resolved(
+                scope.identity().module().unwrap(),
+                u32::MAX,
+            ),
+            spelling: "orphan".to_owned(),
+            kind: crate::types::Kind::Type,
+            origin: scope
+                .original()
+                .original_registry()
+                .type_variables()
+                .next()
+                .unwrap()
+                .origin
+                .clone(),
+        };
+        let surplus = registry
+            .select_image_registry(&items, &names, &mut work)
+            .unwrap()
+            .with_additional_type_variables(vec![orphan]);
+        assert!(
+            !surplus
+                .native_image_subset_with_source_scopes(&identities, &original_variables, &mut work)
+                .unwrap()
+        );
+        let mut preparation =
+            super::super::super::gas::preparation(provenance, program.node_count()).unwrap();
+        let image = super::super::encode_effect_for_build(
+            program,
+            provenance,
+            super::super::super::NATIVE_TARGET,
+            &mut preparation,
+        )
+        .unwrap()
+        .image;
+        let bytes = image.encode_bytes(&mut preparation).unwrap();
+        let expected = image.encode_native_expectations(&mut preparation).unwrap();
+        let mut startup = super::super::super::gas::startup(bytes.len(), expected.len()).unwrap();
+        let decoded = PureImage::decode_bytes(&bytes, &mut startup).unwrap();
+        decoded
+            .compare_native_expectations(&expected, &mut startup)
+            .unwrap();
+        decoded.restore_effect(&mut startup).unwrap();
+        let connection = image
+            .resource_headers
+            .iter()
+            .position(|header| header.spelling.get(&image.bytes).unwrap() == b"Connection")
+            .unwrap();
+        let statement = image
+            .resource_headers
+            .iter()
+            .position(|header| header.spelling.get(&image.bytes).unwrap() == b"Statement")
+            .unwrap();
+        let declaration = image.resource_headers[connection].windows.start as usize;
+        let sibling = image.resource_headers[statement].windows.start as usize;
+        assert_ne!(declaration, sibling);
+        for mutation in 0..10 {
+            let mut forged =
+                PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+            match mutation {
+                0 => forged.resource_headers[connection].windows.len = 0,
+                1 => forged.resource_windows[declaration].phase = 0,
+                2 => {
+                    forged.resource_windows[declaration].family =
+                        forged.resource_windows[sibling].family
+                }
+                3 => {
+                    forged.resource_windows[declaration].identity =
+                        forged.parameters[forged.resource_headers[connection].answer as usize].id
+                }
+                4 => forged.resource_windows[sibling] = forged.resource_windows[declaration],
+                5 => {
+                    forged.resource_windows[declaration].identity_span =
+                        forged.resource_windows[declaration].span
+                }
+                6 => {
+                    forged.resource_windows[declaration].span =
+                        forged.resource_windows[declaration].identity_span
+                }
+                7 => {
+                    let original = forged.resource_headers[connection].windows;
+                    forged.resource_headers[connection].windows =
+                        forged.resource_headers[statement].windows;
+                    forged.resource_headers[statement].windows = original;
+                }
+                8 => forged
+                    .resource_windows
+                    .push(forged.resource_windows[declaration]),
+                9 => {
+                    // An identical parameter in the executable suffix is still
+                    // outside the authenticated declaration prefix.
+                    let identity = forged.resource_windows[declaration].identity;
+                    let slot = forged
+                        .source_parameters
+                        .iter()
+                        .position(|slot| forged.parameters[*slot as usize].id == identity)
+                        .unwrap();
+                    let parameter = forged.parameters[forged.source_parameters[slot] as usize];
+                    forged.source_parameters[slot] =
+                        u32::try_from(forged.parameters.len()).unwrap();
+                    forged.parameters.push(parameter);
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                forged
+                    .compare_native_expectations(&expected, &mut TypeWorkBudget::default())
+                    .is_err(),
+                "canonical category mutation {mutation}"
+            );
+            let mut work = super::super::super::gas::startup(bytes.len(), expected.len()).unwrap();
+            let failure = forged
+                .restore_effect(&mut work)
+                .err()
+                .expect("category forgery must refuse");
+            assert!(
+                !matches!(failure, ImageFailure::Resource),
+                "semantic mutation {mutation} must not rely on gas exhaustion"
+            );
+        }
+    }
+
+    #[test]
+    fn original_registry_view_roundtrips_without_client_lexical_parameters() {
+        let root =
+            std::env::temp_dir().join(format!("ash-original-registry-view-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        let fixture = Fixture(root);
+        fs::write(
+            fixture.0.join("owner.ash"),
+            include_str!("../../tests/fixtures/source-owner/owner.ash"),
+        )
+        .unwrap();
+        fs::write(fixture.0.join("entry.ash"), "import owner as Owner\nid<T> : T -> T\nid value = value\nmain : Unit -> Owner.Scope<Unit, Unit, Int>\nmain () = resource Owner.Probe<{}, R, {}> owner = 42 {\n    id (Owner.read owner)\n}\n").unwrap();
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry: fixture.0.join("entry.ash"),
+            roots: crate::module::ModuleRoots::empty(),
+        })
+        .unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let original = program
+            .nodes()
+            .iter()
+            .find_map(|node| match &node.kind {
+                crate::core::EffectExprKind::Operation(
+                    crate::core::EffectOperation::SourceResourceScope(scope),
+                ) => Some(scope.original()),
+                _ => None,
+            })
+            .unwrap();
+        let defining = original.original_registry();
+        let mut work = TypeWorkBudget::default();
+        let items = defining.image_registry_items(&mut work).unwrap();
+        let names = defining.image_registry_abstract_names(&mut work).unwrap();
+        let selected = program
+            .registry()
+            .select_image_registry(&items, &names, &mut work)
+            .unwrap();
+        assert!(defining.same_image_registry(&selected, &mut work).unwrap());
+        assert!(
+            defining
+                .matches_image_registry_projection(program.registry(), &mut work)
+                .unwrap()
+        );
+        assert!(program.registry().type_variable_count() > selected.type_variable_count());
+        let mut reversed = items.clone();
+        reversed.reverse();
+        let mut reverse_work = TypeWorkBudget::default();
+        crate::resolved::sort_image_registry_items(&mut reversed, &mut reverse_work).unwrap();
+        let mut ordered = items.clone();
+        let mut ordered_work = TypeWorkBudget::default();
+        crate::resolved::sort_image_registry_items(&mut ordered, &mut ordered_work).unwrap();
+        assert_eq!(reversed, items);
+        assert_eq!(ordered, items);
+        assert_eq!(reverse_work.used(), ordered_work.used());
+        let mut altered_names = names.clone();
+        altered_names[0].1 = "different opaque exposure";
+        let renamed = program
+            .registry()
+            .select_image_registry(&items, &altered_names, &mut TypeWorkBudget::default())
+            .unwrap();
+        assert!(
+            !defining
+                .same_image_registry(&renamed, &mut TypeWorkBudget::default())
+                .unwrap()
+        );
+        let mut visible_items = items.clone();
+        let abstract_id = visible_items
+            .iter()
+            .find_map(|item| match item {
+                crate::resolved::ImageRegistryItem::Abstract(id)
+                    if program.registry().nominal(*id).is_some() =>
+                {
+                    Some(*id)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let slot = visible_items
+            .iter()
+            .position(|item| *item == crate::resolved::ImageRegistryItem::Abstract(abstract_id))
+            .unwrap();
+        visible_items[slot] = crate::resolved::ImageRegistryItem::Nominal(abstract_id);
+        crate::resolved::sort_image_registry_items(
+            &mut visible_items,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        let visible_names = names
+            .iter()
+            .copied()
+            .filter(|(id, _)| *id != abstract_id)
+            .collect::<Vec<_>>();
+        match program.registry().select_image_registry(
+            &visible_items,
+            &visible_names,
+            &mut TypeWorkBudget::default(),
+        ) {
+            Ok(visible) => assert!(
+                !defining
+                    .same_image_registry(&visible, &mut TypeWorkBudget::default())
+                    .unwrap()
+            ),
+            Err(crate::resolved::ResolvedBuildFailure::InvalidState) => {}
+            Err(error) => panic!("visibility refusal must not be resource exhaustion: {error:?}"),
+        }
+        let select = |work: &mut TypeWorkBudget| {
+            let selected = program
+                .registry()
+                .select_image_registry(&items, &names, work)?;
+            assert!(defining.same_image_registry(&selected, work)?);
+            Ok::<_, crate::resolved::ResolvedBuildFailure>(selected)
+        };
+        let mut measured = TypeWorkBudget::default();
+        drop(select(&mut measured).unwrap());
+        let cost = measured.used();
+        for prefix in [0, 17] {
+            let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+            exact.charge(prefix).unwrap();
+            drop(select(&mut exact).unwrap());
+            assert_eq!(exact.used(), prefix + cost);
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            assert!(select(&mut short).unwrap_err().is_resource_exhaustion());
+            assert!(short.used() > prefix && short.used() <= short.limit());
+            drop(select(&mut TypeWorkBudget::default()).unwrap());
+        }
+        let image = super::super::encode_effect_for_build(
+            program,
+            provenance,
+            "x86_64-unknown-linux-gnu",
+            &mut TypeWorkBudget::default(),
+        )
+        .map_err(|failure| format!("{failure:?}"))
+        .unwrap()
+        .image;
+        let expected = image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        image
+            .compare_native_expectations(&expected, &mut TypeWorkBudget::default())
+            .unwrap();
+        let restored = image
+            .restore_effect(&mut TypeWorkBudget::default())
+            .unwrap();
+        let rebuilt = restored
+            .program
+            .nodes()
+            .iter()
+            .find_map(|node| match &node.kind {
+                crate::core::EffectExprKind::Operation(
+                    crate::core::EffectOperation::SourceResourceScope(scope),
+                ) => Some(scope.original()),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            restored.program.registry().type_variable_count()
+                > rebuilt.original_registry().type_variable_count()
+        );
+        assert_eq!(
+            original.module_sources().len(),
+            rebuilt.module_sources().len()
+        );
+        let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
+        for mutation in 0..4 {
+            let mut forged =
+                PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+            match mutation {
+                0 => forged.source_registry_views[0].header = u32::MAX,
+                1 => {
+                    let view = forged.source_registry_views[0];
+                    let mut records = view
+                        .items
+                        .get(&forged.source_registry_items)
+                        .unwrap()
+                        .to_vec();
+                    records.push(records[0]);
+                    forged.source_registry_views[0].items = super::super::append(
+                        &mut forged.source_registry_items,
+                        &records,
+                        &mut TypeWorkBudget::default(),
+                    )
+                    .unwrap();
+                }
+                2 => {
+                    let super::super::TypeVariableIdentity::Resolved { module, local } =
+                        forged.source_scopes[0].identity
+                    else {
+                        panic!("client generative identity")
+                    };
+                    let view = forged.source_registry_views[0];
+                    let mut records = view
+                        .items
+                        .get(&forged.source_registry_items)
+                        .unwrap()
+                        .to_vec();
+                    assert!(
+                        !records.iter().any(|item| item.tag == 3
+                            && item.module == module
+                            && item.local == local)
+                    );
+                    records.push(super::SourceRegistryItemRecord {
+                        tag: 3,
+                        module,
+                        owner: 0,
+                        local,
+                    });
+                    forged.source_registry_views[0].items = super::super::append(
+                        &mut forged.source_registry_items,
+                        &records,
+                        &mut TypeWorkBudget::default(),
+                    )
+                    .unwrap();
+                }
+                _ => {
+                    let exposure = &mut forged.source_registry_abstracts[0];
+                    let value = exposure.spelling.get(&forged.bytes).unwrap().to_vec();
+                    exposure.spelling = super::super::append(
+                        &mut forged.bytes,
+                        &value,
+                        &mut TypeWorkBudget::default(),
+                    )
+                    .unwrap();
+                }
+            }
+            assert!(matches!(
+                forged.compare_native_expectations(&expected, &mut TypeWorkBudget::default()),
+                Err(ImageFailure::InvalidRecord)
+            ));
+            // Even a self-consistent untrusted pair cannot turn these malformed
+            // associations, duplicate/client records or suffix facts into a view.
+            assert!(matches!(
+                forged.restore_effect(&mut TypeWorkBudget::default()),
+                Err(ImageFailure::InvalidRecord
+                    | ImageFailure::RegistryAdmission
+                    | ImageFailure::Validation(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn source_resource_declaration_catalogs_share_one_exact_wire_record() {
+        let root =
+            std::env::temp_dir().join(format!("ash-source-catalog-wire-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        let fixture = Fixture(root);
+        fs::write(
+            fixture.0.join("native_buffer.ash"),
+            include_str!("../../libraries/native_buffer.ash"),
+        )
+        .unwrap();
+        fs::write(fixture.0.join("entry.ash"), "import native_buffer as Buffer\nmain : Unit -> Buffer.Outcome<Buffer.Outcome<Int>>\nmain () = resource Buffer.Buffer<R> buffer = 2 {\n    Buffer.read (buffer, 0)\n}\n").unwrap();
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry: fixture.0.join("entry.ash"),
+            roots: crate::module::ModuleRoots::empty(),
+        })
+        .unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let image = super::super::encode_effect_for_build(
+            program,
+            provenance,
+            super::super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap()
+        .image;
+        assert_eq!(
+            image.source_graphs.len(),
+            3,
+            "all three original forests remain present"
+        );
+        let slot = image.source_graphs[0].catalog;
+        assert!(
+            image
+                .source_graphs
+                .iter()
+                .all(|graph| graph.catalog == slot),
+            "the same immutable declaration catalog is not copied for each forest"
+        );
+        assert_ne!(
+            image.main_method_catalog,
+            Some(slot),
+            "main catalog augmentation has a distinct role"
+        );
+        let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
+        let expected = image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        drop(image);
+        drop(compiled);
+        drop(fixture);
+        let restore = |work: &mut TypeWorkBudget| {
+            let decoded = PureImage::decode_bytes(&bytes, work)?;
+            let _facts = decoded.admit_expected_native_facts(&expected, work)?;
+            decoded.restore_effect(work)
+        };
+        let mut measured = TypeWorkBudget::default();
+        restore(&mut measured).unwrap();
+        let required = measured.used();
+        for prefix in [0, 23] {
+            let mut short = TypeWorkBudget::with_limit(prefix + required - 1);
+            short.charge(prefix).unwrap();
+            assert!(restore(&mut short).is_err());
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + required);
+                exact.charge(prefix).unwrap();
+                restore(&mut exact).unwrap();
+                assert_eq!(exact.used(), prefix + required);
+            }
+        }
+        for mutate in [
+            (|image: &mut PureImage| image.source_graphs[1].catalog = u32::MAX)
+                as fn(&mut PureImage),
+            |image: &mut PureImage| {
+                let catalog = image.source_graphs[0].catalog as usize;
+                let method = image.method_catalogs[catalog].methods.start as usize;
+                image.source_methods[method].value_type = u32::MAX;
+            },
+        ] {
+            let mut image =
+                PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+            mutate(&mut image);
+            assert!(
+                image
+                    .restore_effect(&mut TypeWorkBudget::default())
+                    .is_err(),
+                "shared representation cannot authenticate a forged catalog/coordinate"
+            );
         }
     }
     #[test]

@@ -270,6 +270,10 @@ fn method_occurrences(definition: &CheckedDefinition, method: MethodId) -> Vec<&
                 expressions.push(&resource.initializer);
                 expressions.push(&resource.body);
             }
+            ResolvedExprKind::CopyWindow(window) => {
+                expressions.push(&window.state);
+                expressions.push(&window.body);
+            }
         }
     }
     slots.reverse();

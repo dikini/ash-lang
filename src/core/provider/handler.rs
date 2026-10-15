@@ -543,6 +543,10 @@ fn source_imports<'a>(
                     pending.push(Task::Expression(&resource.initializer));
                     pending.push(Task::Expression(&resource.body));
                 }
+                ResolvedExprKind::CopyWindow(window) => {
+                    pending.push(Task::Expression(&window.state));
+                    pending.push(Task::Expression(&window.body));
+                }
                 ResolvedExprKind::ProviderResource(resource) => {
                     pending.push(Task::Expression(&resource.initializer));
                     pending.push(Task::Expression(&resource.body));

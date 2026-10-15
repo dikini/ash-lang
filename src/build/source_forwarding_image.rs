@@ -29,8 +29,8 @@ struct MethodIdentity {
     interface: InterfaceIdentity,
     local: u32,
 }
-wire_struct!(LexicalIdentity, 8, module, local);
-wire_struct!(MethodIdentity, 12, interface, local);
+wire_struct!(LexicalIdentity, module, local);
+wire_struct!(MethodIdentity, interface, local);
 
 // Implementation-owned evidence remains outside this bounded carrier. Both
 // source global and resource-family identities are retained without name lookup.
@@ -44,8 +44,8 @@ struct RequirementRecord {
     owner: MethodOwnerRecord,
     local: u32,
 }
-wire_struct!(MethodOwnerRecord, 2, global, resource);
-wire_struct!(RequirementRecord, 6, owner, local);
+wire_struct!(MethodOwnerRecord, global, resource);
+wire_struct!(RequirementRecord, owner, local);
 
 fn put<T: Wire>(
     data: &mut Vec<u8>,

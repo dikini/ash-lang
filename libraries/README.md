@@ -40,8 +40,7 @@ refuses missing native bindings before evaluating the program.
 The [connected arena evidence](../tests/fixtures/source-arena/README.md) observes
 real allocations and exact releases separately from injected failure. Typed
 allocation, references, layout evidence, borrowing and storage families remain
-outside this library checkpoint. SQLite remains a separate milestone task.
-
+outside this library checkpoint. The SQLite library below has its own lifecycle and copy profile.
 
 ## Native buffer
 
@@ -110,3 +109,108 @@ non-resource lexical dictionaries. Their legal source/Core capture checks remain
 covered; that unsupported-build diagnostic is not native buffer parity. This
 port adds neither privileged State/native wrappers, source-given forwarding,
 copy windows, SQLite, header checking nor general macro evaluation.
+
+## Copying SQLite
+
+[sqlite.ash](sqlite.ash) is the ordinary passive source library for Linux x86-64
+GNU. It declares the SQLite symbols, owner dependencies, constants and non-callable
+TRANSIENT sentinel. Ash code supplies path/SQL validation, statement protocol,
+copying and completion policy. Generated typed bridges call SQLite directly;
+there is no product SQLite registration or adapter dependency.
+
+A minimal imported client is:
+
+```ash
+import @ffi.sqlite as Sqlite
+main : Unit -> Sqlite.Scope<Sqlite.OpenError, Sqlite.CloseError, Sqlite.Scope<Sqlite.PrepareError, Sqlite.FinalizeError, Sqlite.Result<Int>>> ! {Sqlite.Initialize}
+main () = resource Sqlite.Connection<C> db = Sqlite.InMemory {
+    resource Sqlite.Statement<S, C> stmt = (db, "SELECT 42") {
+        match Sqlite.step stmt {
+            Sqlite.Row => Sqlite.column_int (stmt, 0)
+            Sqlite.Done => Sqlite.Err Sqlite.MissingRow
+            Sqlite.StepError(error) => Sqlite.Err error
+        }
+    }
+}
+```
+
+It prints `Completed(Completed(Ok(42), Closed), Closed)`. Body results stay nested;
+refused acquisition skips the body. Statement finalization precedes connection
+close. Capture/resume preserves the same owners; owned discard runs needed source
+cleanup before releasing each owner once and skips the abandoned body.
+
+SQLite needs an explicit native input. The CLI has no native-link option; use the
+Rust build API and the matching installed SQLite library:
+
+```rust
+use ash::build::{BuildConfiguration, NativeLinkInput, build_path};
+use ash::driver::RunConfiguration;
+use ash::module::ModuleRoots;
+use std::path::Path;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let source = RunConfiguration {
+        entry: "entry.ash".into(),
+        roots: ModuleRoots::new([("ffi", Path::new("libraries"))])?,
+    };
+    let mut build = BuildConfiguration::new("./program".into());
+    build.native_inputs.push(NativeLinkInput::SharedLibrary(
+        "/usr/lib/x86_64-linux-gnu/libsqlite3.so.0".into(),
+    ));
+    let program = build_path(source, build)?;
+    println!("{}", program.executable().display());
+    Ok(())
+}
+```
+
+Run the resulting executable separately. The native binary and system loader must
+match the declared profile and authored foreign assumptions; linking is not a
+header/ABI proof. The optional `ash check-ffi` authoring tool is not implemented.
+The [generated-host tests](../tests/sqlite_library.rs) use this API with the real
+shared SQLite library and separate static observation wrappers. They remove Ash
+sources before building and image/facts files before execution.
+
+The public operations cover integer/text/blob binding, step, reset, clear and
+independent column copies. NULL and empty values remain distinct. Copied text uses
+strict UTF-8 and may contain NUL; bound text rejects interior NUL. Input-width,
+column/storage-kind and phase refusals occur before the relevant C operation.
+FLOAT columns refuse rather than add an Ash Float type. SQL permits one statement
+followed only by the retained ASCII whitespace policy. Database-name interior NUL
+refuses before SQLite initialization. Initialization otherwise occurs once per
+connection acquisition; the library does not shut down the process-wide SQLite
+runtime.
+
+`Sqlite.diagnostic db` copies the current native message and status. Ordinary
+bounded-copy refusal produces `DiagnosticUnavailable(code)` without inventing an
+empty message or changing the code; actual work/storage exhaustion is terminal.
+Native step/binding status and statement completion are separate results. A
+consumed finalize error does not retain or retry that statement. Retained or
+blocked completion revokes source access under the common quarantine policy;
+there is no `close_v2` substitution.
+
+### SQLite migration
+
+| Former experiment spelling or path | Source-library replacement |
+| --- | --- |
+| `import sqlite as Sqlite` with a Rust registration | `import @ffi.sqlite as Sqlite`, root `ffi=libraries`, explicit native build input |
+| `Provider.Scope<I, E, T>` | `Sqlite.Scope<I, E, T>` with the same nested report structure |
+| `resource Sqlite.Statement<S> stmt = (db, Sqlite.SqlText sql)` | `resource Sqlite.Statement<S, C> stmt = (db, sql)`, using the enclosing connection identity `C` |
+| `StatementOps<S, C>` / `StatementProvider<S, C>` | `StatementOps<Sqlite.Statement<S, C>>` / `StatementProvider<Sqlite.Statement<S, C>>` |
+| Compiler `foreign::sqlite_manifest` / `sqlite_binding` / copying C shim | Passive source declarations and generated typed native bridges |
+
+Connection operations/provider use `ConnectionOps<C>` / `ConnectionProvider<C>`.
+Ordinary diagnostic callbacks therefore carry the owner identity rather than
+native State as an effect argument. The State-returning `borrow` operation is for
+exact original lifecycle phases; it grants no ordinary callable or native-wrapper
+permission. State-returning callables and native calls outside their checked phase
+still refuse.
+
+The [ported clients](../tests/fixtures/sqlite-product/) retain copying, imported
+row helpers, statement reuse, repeated/simultaneous identities, file persistence,
+control resume/discard and error/refusal cases. The old DN-0036 Rust/C adapter and
+programs remain explicit experiment comparators in `foreign-adapter` and
+`tests/fixtures/provider-experiments`; the compiler no longer exports their
+SQLite manifest. Generic foreign/arena experiment mechanisms remain separate.
+Generated-native local newtype/dictionary limitations and signed-64 literal image
+limits remain; ordinary Int arithmetic can still produce wider mathematical
+values and checked foreign narrowing still refuses them.

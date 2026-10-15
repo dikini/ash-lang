@@ -192,6 +192,15 @@ calls in the body return views indexed by that `W`; no view exists before its
 producing call. The fresh binder is a lexical identity, like a resource identity,
 not a globally selectable type argument. Every returning path closes the window.
 
+The lexical window installs sealed native interpretation for only the original
+family's declared, access-compatible operations at that exact fresh `W`. Each
+call still requires the authenticated owner, key, guard, complete ordered Type
+and Row actuals, and a permitted direct provider phase. This interpretation
+grants no arbitrary native-call, source-handler or privileged-helper permission;
+readiness, lifetime, invalidation and window closure checks still apply. The
+resource's outer `interpret` list remains exact and nonquantified. This scoped
+interpretation records the accepted human clarification of 2026-10-14.
+
 | Member role | Required checked contents |
 | --- | --- |
 | Profile | Exact profile identity; no implicit host fallback. |
@@ -295,6 +304,27 @@ grant no access or ownership authority, and do not replace the exact conversion
 required by a subsequent native call. Library code combines their results when
 its configuration needs the intersection of those ranges.
 
+The human-approved ordinary preflight `Foreign.checked_nul : String ->
+Foreign.Call<Unit>` validates that the complete UTF-8 input contains no NUL byte.
+It accepts the empty string and returns `Returned(())`; an embedded NUL returns
+`ConversionFailed` with the canonical opaque error. It invokes no C function,
+creates no scratch pointer or native readiness, and grants no access or ownership
+authority. Work and complete reply storage are admitted before publication;
+work/storage exhaustion remains terminal. SQLite performs this check before
+`sqlite3_initialize` so invalid names preserve pre-initialization refusal. The
+later native call still performs its own exact input conversion.
+
+The human-approved ordinary byte inspection used by source SQL-tail policy is
+`@builtin.bytes at : (Bytes, Int) -> ReadResult`, with
+`ReadResult = ByteAt(Int) | InvalidIndex`. A successful result independently
+copies one integer in `[0, 255]`. Negative or unrepresentable indices, indices
+at or beyond the byte length, and every index into empty bytes return
+`InvalidIndex`. Lookup and complete result storage are paid; work or storage
+exhaustion is terminal. This operation inspects ordinary independent `Bytes`;
+it grants no native State, view, ownership, access or call authority and does not
+use `Foreign.Call`. SQLite may combine it with `String` UTF-8 conversion to
+check its existing ASCII-whitespace tail policy after checked offset extraction.
+
 Primitives have explicit failure results and work/storage charges. Before a
 native call, prepare operand conversions, scratch, output storage and guard
 slots fallibly. Native side effects occur once and cannot in general be rolled
@@ -359,8 +389,10 @@ checks that a readable non-null address denotes a byte offset in that prepared
 input, including its end position but excluding unrelated storage. It returns
 an independent `Int` before destroying scratch; no source pointer arithmetic is
 available. This permits `sqlite3_prepare_v2` tail checks against the original
-copied SQL and rejection of trailing statements. Invalid offsets are conversion
-failures and trigger disposal of a partial statement guard.
+copied SQL and rejection of trailing statements. Invalid post-call offsets are
+terminal output-extraction failures: preserve the witnessed native outcome,
+dispose any unpublished partial statement guard and terminate evaluation. They
+do not produce an ordinary `Foreign.ConversionFailed` reply.
 
 A returned borrowed address is accessible only inside a fresh lexical copy
 window `W`, tied to its authenticated guard lineage and declared access family. Its
@@ -502,10 +534,10 @@ exact owner/family arguments:
 | --- | --- |
 | `checked_i64` | `Int -> Foreign.Call<Int>`; GNU64 signed 64-bit range check, ordinary independent result. |
 | `checked_size_t` | `Int -> Foreign.Call<Int>`; GNU64 nonnegative 64-bit range check, ordinary independent result. |
-| `copy_bytes` | `(View<W,...>, Extent<W,...>) -> Result<Bytes, ConversionError>`; evidence must originate from that view; direct provider window only. |
-| `copy_nul` | `(View<W,...>, Int) -> Result<Bytes, ConversionError>`; NUL family and checked scan bound; direct provider window only. |
+| `copy_bytes` | `copy_bytes<V> : (V, Foreign.Extent<V>) -> Foreign.Call<Bytes>`; compiler-sealed `V` is the exact live declared view; matching extent evidence and a direct provider window are required. |
+| `copy_nul` | `copy_nul<V> : (V, Int) -> Foreign.Call<Bytes>`; the same sealed live-view admission, NUL family and checked scan bound; direct provider window only. |
 | `decode_utf8` | `Bytes -> Result<String, ConversionError>`; ordinary independent values, no native permission. |
-| `extent_value` | `Extent<W,...> -> Int`; exposes a copied length, not authority to read another view. |
+| `extent_value` | `extent_value<V> : Foreign.Extent<V> -> Int`; exposes a copied length, not authority to read a view. |
 | `byte_read<S>` | `(S, Int) -> Foreign.Call<Int>`; compiler-sealed `S` must be the exact descriptor-witnessed initialized live State, with checked index. |
 | `byte_write<S>` | `(S, Int, Int) -> Foreign.Call<Unit>`; the same sealed State admission, additionally checked byte range and pre-mutation result admission. |
 | `data_of` / `replace_data` | Exact descriptor-supplied `State`/`D` relation; controlled state access/update, never an owning value. |
@@ -520,6 +552,28 @@ call occurrence, owner and family, selected evidence and copied specialization,
 including the complete ordered Type/EffectRow actuals of both the caller and
 defining declaration independently of the primitive's `S` argument. A merely
 compatible State or an arbitrary `S` is insufficient.
+
+The human-approved copy API clarification of 2026-10-14 adopts the three
+signatures above. `V` is compiler-sealed to the exact descriptor-witnessed live
+view, including its family, window, owners, scalar keys and complete ordered
+Type/EffectRow context. A compatible type grants no access. `Foreign.Extent<V>`
+is opaque and unconstructible by ordinary source code; its evidence belongs to
+one exact view. `extent_value` returns only its copied integer length and grants
+no reading permission. Both copy primitives return the existing canonical
+`Foreign.Call` with independent `Bytes` on `Returned` and an opaque error on
+`ConversionFailed`; work or storage exhaustion is terminal. This clarification
+preserves the direct provider window requirement, nullable-versus-empty
+behavior, readability, invalidation and original identity checks. UTF-8 decoding
+remains a separate operation; this choice adds no text codec.
+
+The human-approved diagnostic fallback clarification of 2026-10-15 permits the
+SQLite library to map an ordinary bounded `copy_nul` conversion refusal,
+including absence of NUL within the bound, to diagnostic-unavailable while
+preserving the original native status. It does not truncate the message or
+substitute an empty diagnostic. Actual work/storage exhaustion remains terminal;
+this is not an exception to terminal post-call extraction failures, nor authority
+to undo disposition, repeat a call or let owner state escape. This intentionally
+changes the old Rust library's terminal bound-failure policy.
 
 `codec scope` requires the exact P-1 `Scope`/`Completion` roles below. The
 `acquired_only` codec requires a nominal result with defining-order roles

@@ -1,13 +1,13 @@
 # Static Semantics
 
-Ash has `Int`, `Bool`, `Unit`, rigid type variables, structural tuples,
+Ash has `Int`, `Bool`, `Unit`, `String`, `Bytes`, rigid type variables, structural tuples,
 parameterized nominal algebraic data types, unary functions, and effect rows. A
 tuple contains at least two element types. A function has a value domain and a
 computation codomain `A ! epsilon`, where `A` is a value type and `epsilon` is
 an effect row. Source kinds contain `Type`, `EffectRow`, and right-associative
 function kinds, subject to the binder restrictions below.
 
-Type equality is one shared rule. `Int`, `Bool`, and `Unit` equal themselves;
+Type equality is one shared rule. `Int`, `Bool`, `Unit`, `String` and `Bytes` equal themselves;
 tuples, term functions and their computation codomains, and unary type
 applications compare structurally; type
 variables compare by binder identity; nominal constructors compare by stable
@@ -121,7 +121,7 @@ positional kind.
 ```sequent
 family kind-synthesis:
   K-Primitive :=
-    primitive in {Int, Bool, Unit}
+    primitive in {Int, Bool, Unit, String, Bytes}
     ===>
     DELTA; OMEGA; XI |- primitive => Type
 
@@ -435,6 +435,11 @@ family primitive-typing:
   T-Unit :=
     ===>
     GAMMA |- () ⇒ Unit
+
+  T-String :=
+    s is a decoded string literal
+    ===>
+    GAMMA |- s ⇒ String
 
   T-Variable :=
     x : scheme in GAMMA
@@ -1010,8 +1015,9 @@ only the non-callable fixed operand role selected by
 another representation or equal-bit member is not interchangeable. Sentinel
 members publish no ordinary term, `Int`, pointer, function or callable symbol.
 They cannot supply a source-projected argument, an owner address, a scalar
-predicate or a native result. `from null` does not provide this role and remains
-outside the admitted profile. A sentinel grants no access or window permission.
+predicate or a native result. `from null` does not provide this role. It supplies
+only an explicitly admitted nullable address ABI input, with no State, view,
+scalar or function-address authority. A sentinel grants no access or window permission.
 
 An owner declaration introduces an opaque nominal state family without source
 constructors. Its explicit owned position selects a `Type` formal. Canonical
@@ -1091,6 +1097,12 @@ authority.
 These checks grant no native-call, access or ownership permission and do not
 replace a later native call's exact operand conversion.
 
+`Foreign.checked_nul : String -> Foreign.Call<Unit>` is an ordinary pure
+preflight with the same original builtin identity and codec requirements. It
+accepts an empty or nonempty string with no NUL byte and otherwise returns an
+opaque conversion error. It supplies no native input, access, State, ownership
+or call authority and does not replace native-call input preparation.
+
 The canonical byte functions have empty ordinary effect rows and signatures
 `Foreign.byte_read<S> : (S, Int) -> Foreign.Call<Int>` and
 `Foreign.byte_write<S> : (S, Int, Int) -> Foreign.Call<Unit>`. Their generic state
@@ -1101,9 +1113,46 @@ including forwarding through an ordinary generic helper, grants no permission.
 The result codec is the existing canonical `Foreign.Call` allocation, with an
 opaque conversion error; this choice applies only to these byte primitives.
 
-Constants, qualified ABI references, output slots, general foreign access and
-copy windows remain outside this implementation checkpoint. Owner declarations and
-their parsed contracts alone grant no executable permission.
+An input `nul` role requires ordinary `String`; a `bytes(length_position)` role
+requires independent `Bytes` or UTF-8 bytes of `String`, with a checked integer length. `call_borrow` and
+`copy` both forbid retaining the prepared Ash input address after return. They
+are foreign assumptions about the callee, not permission to retain an Ash view.
+An `out` operand declares private initialized storage and has no source operand.
+The canonical result product contains the non-void result first, followed by
+output slots in ABI order; zero fields use `Unit`, and one field is unwrapped.
+Scalar results are bare `Int`; pointer and slot results retain their checked
+`Output`/`Nullable` roles. One call may create at most one owner or finish one
+owner, never both. An `offset_into` output becomes an independent integer offset
+into its exact input, not an address.
+
+An access family is constructor-free and retains its original owner, fresh
+window position, extent convention and preserving member identities.
+`copy_window Family<W, ...> from state { body }` introduces fresh `W` only in
+the body and requires an authenticated live, pending or completing owner in a
+permitted direct provider phase. Its sealed interpretation admits only that
+original family's access-compatible members at the exact ordered Type/Row
+actuals. The outer resource interpretation remains exact and nonquantified.
+The current executable view-family application profile is Type-only; retained
+Row tags are not silently projected away or admitted by matching shape.
+
+Each view records its producing operation, exact owner/window and scalar keys.
+An extent query requires that view and those same keys; known unequal keys
+reject statically, and unknown keys require the runtime equality check before
+native entry. Nullable, unreadable and non-null empty outputs remain distinct.
+Windows cannot suspend, complete their owner, escape in values/evidence/rows,
+or pass State/view permission through an ordinary callable.
+
+`Foreign.copy_bytes<V> : (V, Foreign.Extent<V>) -> Foreign.Call<Bytes>` and
+`Foreign.copy_nul<V> : (V, Int) -> Foreign.Call<Bytes>` require the exact sealed
+live view in a direct provider window. `Foreign.Extent<V>` is opaque,
+unconstructible and tied to that exact view. `extent_value<V> :
+Foreign.Extent<V> -> Int` exposes only an independent copied length. Compatible
+types, donor extents or ordinary generic instantiation supply no authority.
+`Foreign.data_of<S, D> : S -> D` and `Foreign.replace_data<S, D> : (S, D) -> Unit`
+use only the exact descriptor-supplied State/private-data relation in an admitted
+phase. They grant no State transport or native-call permission to helpers.
+Owner/access declarations and their parsed contracts alone grant no executable
+permission.
 
 ## Source resource declarations
 
@@ -1125,8 +1174,8 @@ specialization. A permitted local enclosing State in acquisition or finish does
 not authorize storing it in `D`. Ordinary declared-dependency access handles are
 distinct and remain subject to exact identity, liveness and revocation checks.
 Every native interpretation must match the original state owner and its complete
-symbol arguments. This profile's admitted list
-contains one acquisition and one Current finish member. The owner's original
+symbol arguments. The admitted list contains one acquisition, one Current
+finish member and the exact permitted scalar query/usage members. The owner's original
 declared host destructor is authenticated separately, even when source finish
 selects a retaining member. A same-spelled symbol, swapped
 argument, ordinary state ADT or ordinary effect cannot replace those facts.
@@ -1165,8 +1214,8 @@ into its constructor payloads and compares those exact types. A one-parameter
 `Outcome<T> = Success(T) | Failure(Error)` can therefore use a concrete acquisition
 error; a generic error parameter follows the same check. Constructor names and
 parameter positions do not select this codec. A consumed completion failure is
-terminal rather than a successful report. This checkpoint's native teardown
-always consumes; retained native outcomes remain unsupported.
+terminal rather than a successful report. Retention cannot be reported as a
+successful `acquired_only` completion.
 
 Acquire checks from the declared input to acquisition type. Finish checks from
 `(State, D)` to completion type. Their patterns and the handlers' `(State, D)`
@@ -1236,9 +1285,8 @@ native State or its view; a compatible function type grants no descriptor or
 native-effect permission. Original and copied calls remain independently checked
 against the same defining global.
 
-Privileged lifecycle wrappers, source `given` forwarding, source-projected scalar
-teardown operands, native access/copy windows and library migrations remain
-unsupported. These
+Privileged lifecycle wrappers, source `given` forwarding and source-projected scalar
+teardown operands remain unsupported. These
 are checkpoint restrictions, not additional language rules for all resources;
 the broader obligations remain in
 [CP-0022](../docs/proposals/CP-0022-ash-authored-foreign-interfaces.md).

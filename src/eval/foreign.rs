@@ -153,6 +153,21 @@ pub(super) fn encode_input(
                     work,
                     phase,
                 )?,
+                Value::BytePrefix(value) => {
+                    let bytes = value.as_bytes();
+                    charge_effect_work(work, bytes.len(), phase)?;
+                    let mut copied = Vec::new();
+                    copied.try_reserve_exact(bytes.len()).map_err(|_| {
+                        foreign_failure(ForeignExecutionError::STORAGE_REFUSED, phase)
+                    })?;
+                    copied.extend_from_slice(bytes);
+                    push_node(
+                        &mut nodes,
+                        ForeignDataNode::Bytes(Arc::from(copied)),
+                        work,
+                        phase,
+                    )?
+                }
                 Value::String(value) => push_node(
                     &mut nodes,
                     ForeignDataNode::String(Arc::clone(value)),

@@ -41,6 +41,8 @@ const OWNER_OPERAND: &str = "ash::foreign::source_runtime::NativeOwnerOperand";
 pub(crate) enum TargetOperand {
     Scalar(TargetScalar),
     Address,
+    OwnerOutput,
+    OffsetOutput,
     FunctionAddressSentinel,
 }
 
@@ -49,6 +51,7 @@ impl TargetOperand {
         match self {
             Self::Scalar(scalar) => scalar.rust_type(),
             Self::Address | Self::FunctionAddressSentinel => "*mut core::ffi::c_void",
+            Self::OwnerOutput | Self::OffsetOutput => "*mut *mut core::ffi::c_void",
         }
     }
 }
@@ -110,6 +113,7 @@ pub(crate) enum TargetResult {
     Void,
     Scalar(TargetScalar),
     OwnerAddress,
+    ViewAddress,
 }
 
 /// Distinct generated callback roles; pointers never enter scalar transport.
@@ -117,7 +121,10 @@ pub(crate) enum TargetResult {
 pub(crate) enum TargetBridgeCall {
     Scalar,
     OwnerAcquire,
+    OwnerOutputAcquire,
     OwnerTeardown,
+    OwnerBorrow,
+    WindowView,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -219,6 +226,15 @@ impl TargetResolvedForeignBridge {
         self.symbol.owner().is_some_and(|owner| {
             owner.owner().representation() == PreparedAddressRepresentation::Bytes
         })
+    }
+    fn output_offset(&self) -> Option<&crate::foreign::source_contract::PreparedOffsetOutput> {
+        match self.symbol.owner_role() {
+            Some(PreparedOwnerCall::OutputAcquire {
+                offset: Some(offset),
+                ..
+            }) => Some(offset),
+            _ => None,
+        }
     }
     #[cfg(test)]
     pub(crate) fn symbol(&self) -> &Arc<CheckedForeignSymbol> {
@@ -366,6 +382,70 @@ fn plan_target_bridge(
                 .owner()
                 .ok_or_else(|| fail(ForeignBridgeReason::InvalidAuthority, span))?;
             match role {
+                PreparedOwnerCall::Borrow {
+                    current_operand, ..
+                } => {
+                    if !source
+                        .operands()
+                        .get(*current_operand)
+                        .is_some_and(|operand| {
+                            matches!(operand.source(), PreparedOperandSource::Current(_))
+                                && operand.representation()
+                                    == PreparedRepresentation::Address(
+                                        owner.owner().representation(),
+                                    )
+                        })
+                    {
+                        return Err(fail(ForeignBridgeReason::InvalidAuthority, span));
+                    }
+                    match (source.access_result(), source.result()) {
+                        (
+                            Some(crate::foreign::source_contract::PreparedAccessResult::View {
+                                ..
+                            }),
+                            PreparedAbiResult::Address(PreparedAddressRepresentation::Bytes),
+                        ) => TargetBridgeCall::WindowView,
+                        (
+                            None
+                            | Some(crate::foreign::source_contract::PreparedAccessResult::Extent {
+                                ..
+                            }),
+                            PreparedAbiResult::Scalar(_),
+                        ) => TargetBridgeCall::OwnerBorrow,
+                        _ => return Err(fail(ForeignBridgeReason::InvalidAuthority, span)),
+                    }
+                }
+                PreparedOwnerCall::OutputAcquire {
+                    output_operand,
+                    offset,
+                    ..
+                } => {
+                    if owner.owner().representation() != PreparedAddressRepresentation::Opaque
+                        || !matches!(source.result(), PreparedAbiResult::Scalar(_))
+                        || !source
+                            .operands()
+                            .get(*output_operand)
+                            .is_some_and(|operand| {
+                                matches!(operand.source(), PreparedOperandSource::OwnerOutput)
+                            })
+                    {
+                        return Err(fail(ForeignBridgeReason::UnsupportedRepresentation, span));
+                    }
+                    if let Some(offset) = offset
+                        && (!source
+                            .operands()
+                            .get(offset.operand)
+                            .is_some_and(|operand| {
+                                matches!(operand.source(), PreparedOperandSource::OffsetOutput)
+                            })
+                            || !source.operands().get(offset.input_operand).is_some_and(
+                                |operand| matches!(operand.source(), PreparedOperandSource::Nul(_)),
+                            ))
+                    {
+                        return Err(fail(ForeignBridgeReason::InvalidAuthority, span));
+                    }
+                    TargetBridgeCall::OwnerOutputAcquire
+                }
                 PreparedOwnerCall::Acquire {
                     initialized_bytes, ..
                 } => {
@@ -415,6 +495,27 @@ fn plan_target_bridge(
         .map_err(|_| fail(ForeignBridgeReason::Resource, span))?;
     for operand in source.operands() {
         let target = match (operand.source(), operand.representation()) {
+            (
+                PreparedOperandSource::Bytes { .. },
+                PreparedRepresentation::Address(PreparedAddressRepresentation::Bytes),
+            ) if call == TargetBridgeCall::OwnerBorrow => TargetOperand::Address,
+            (
+                PreparedOperandSource::OwnerOutput,
+                PreparedRepresentation::Address(PreparedAddressRepresentation::Opaque),
+            ) if call == TargetBridgeCall::OwnerOutputAcquire => TargetOperand::OwnerOutput,
+            (
+                PreparedOperandSource::OffsetOutput,
+                PreparedRepresentation::Address(PreparedAddressRepresentation::Bytes),
+            ) if call == TargetBridgeCall::OwnerOutputAcquire => TargetOperand::OffsetOutput,
+            (
+                PreparedOperandSource::Nul(_),
+                PreparedRepresentation::Address(PreparedAddressRepresentation::Bytes),
+            )
+            | (PreparedOperandSource::Null, PreparedRepresentation::Address(_))
+                if call == TargetBridgeCall::OwnerOutputAcquire =>
+            {
+                TargetOperand::Address
+            }
             (
                 PreparedOperandSource::Sentinel(index),
                 PreparedRepresentation::FunctionAddressSentinel,
@@ -469,7 +570,12 @@ fn plan_target_bridge(
                 TargetOperand::Address
             }
             (PreparedOperandSource::Current(_), PreparedRepresentation::Address(_))
-                if call == TargetBridgeCall::OwnerTeardown =>
+                if matches!(
+                    call,
+                    TargetBridgeCall::OwnerTeardown
+                        | TargetBridgeCall::OwnerBorrow
+                        | TargetBridgeCall::WindowView
+                ) =>
             {
                 TargetOperand::Address
             }
@@ -484,6 +590,11 @@ fn plan_target_bridge(
         }
         PreparedAbiResult::Address(_) if call == TargetBridgeCall::OwnerAcquire => {
             TargetResult::OwnerAddress
+        }
+        PreparedAbiResult::Address(PreparedAddressRepresentation::Bytes)
+            if call == TargetBridgeCall::WindowView =>
+        {
+            TargetResult::ViewAddress
         }
         PreparedAbiResult::Address(_) => {
             return Err(fail(ForeignBridgeReason::UnsupportedRepresentation, span));
@@ -593,7 +704,10 @@ fn operation_name(
     Ok(output)
 }
 
-fn render_bridge(output: &mut impl Write, plan: &TargetResolvedForeignBridge) -> fmt::Result {
+pub(super) fn render_bridge(
+    output: &mut impl Write,
+    plan: &TargetResolvedForeignBridge,
+) -> fmt::Result {
     if plan.call == TargetBridgeCall::OwnerAcquire && plan.byte_owner() {
         let name = &plan.rust_function_name;
         write!(
@@ -617,16 +731,28 @@ fn render_bridge(output: &mut impl Write, plan: &TargetResolvedForeignBridge) ->
     output.write_str(")")?;
     match plan.result {
         TargetResult::Scalar(scalar) => write!(output, " -> {}", scalar.rust_type())?,
-        TargetResult::OwnerAddress => output.write_str(" -> *mut core::ffi::c_void")?,
+        TargetResult::OwnerAddress | TargetResult::ViewAddress => {
+            output.write_str(" -> *mut core::ffi::c_void")?
+        }
         TargetResult::Void => {}
     }
     match plan.call {
+        TargetBridgeCall::WindowView => write!(
+            output,
+            ";\n}}\npub fn {}(arguments: &[{OWNER_OPERAND}]) -> Result<ash::foreign::source_runtime::NativeViewReturned, {ERROR}> {{\n    let [",
+            plan.rust_function_name
+        )?,
+        TargetBridgeCall::OwnerBorrow => write!(
+            output,
+            ";\n}}\npub fn {}(arguments: &[{OWNER_OPERAND}]) -> Result<{REPLY}, {ERROR}> {{\n    let [",
+            plan.rust_function_name
+        )?,
         TargetBridgeCall::Scalar => write!(
             output,
             ";\n}}\npub fn {}(arguments: &[{VALUE}]) -> Result<{REPLY}, {ERROR}> {{\n    let [",
             plan.rust_function_name
         )?,
-        TargetBridgeCall::OwnerAcquire => write!(
+        TargetBridgeCall::OwnerAcquire | TargetBridgeCall::OwnerOutputAcquire => write!(
             output,
             ";\n}}\npub fn {}(arguments: &[{OWNER_OPERAND}], readiness: {OWNER_READY}) -> Result<{OWNER_RETURNED}, {ERROR}> {{\n    let [",
             plan.rust_function_name
@@ -664,6 +790,8 @@ fn render_bridge(output: &mut impl Write, plan: &TargetResolvedForeignBridge) ->
                 scalar.value_variant()
             )?,
             TargetOperand::Address => write!(output, "{OWNER_OPERAND}::Address(arg{index})")?,
+            TargetOperand::OwnerOutput => write!(output, "{OWNER_OPERAND}::OwnerOutput")?,
+            TargetOperand::OffsetOutput => write!(output, "{OWNER_OPERAND}::OffsetOutput")?,
         }
     }
     output.write_str("] = arguments else {\n")?;
@@ -672,16 +800,31 @@ fn render_bridge(output: &mut impl Write, plan: &TargetResolvedForeignBridge) ->
     } else {
         writeln!(output, "        return Err({ERROR}::ArgumentContract);")?;
     }
+    output.write_str("    };\n")?;
+    if plan.call == TargetBridgeCall::OwnerOutputAcquire {
+        output.write_str(
+            "    let mut owner_output: *mut core::ffi::c_void = core::ptr::null_mut();\n",
+        )?;
+        if plan.output_offset().is_some() {
+            output.write_str(
+                "    let mut offset_output: *mut core::ffi::c_void = core::ptr::null_mut();\n",
+            )?;
+        }
+    }
     write!(
         output,
-        "    }};\n    // SAFETY: Exact preflight supplies these ABI values and live guarded addresses.\n    // Linking assumes the authored synchronous native contract.\n    let value = unsafe {{ {}__ffi(",
+        "    // SAFETY: Exact preflight supplies these ABI values and live guarded addresses.\n    // Linking assumes the authored synchronous native contract.\n    let value = unsafe {{ {}__ffi(",
         plan.rust_function_name
     )?;
     for index in 0..plan.operands.len() {
         if index > 0 {
             output.write_str(", ")?;
         }
-        if plan.operands[index] == TargetOperand::FunctionAddressSentinel {
+        if plan.operands[index] == TargetOperand::OwnerOutput {
+            output.write_str("&mut owner_output")?;
+        } else if plan.operands[index] == TargetOperand::OffsetOutput {
+            output.write_str("&mut offset_output")?;
+        } else if plan.operands[index] == TargetOperand::FunctionAddressSentinel {
             // GNU64 represents this non-callable sentinel in the pointer ABI.
             // Never materialize an invalid Rust function pointer or invoke it.
             output.write_str("usize::MAX as *mut core::ffi::c_void")?;
@@ -691,6 +834,13 @@ fn render_bridge(output: &mut impl Write, plan: &TargetResolvedForeignBridge) ->
     }
     output.write_str(") };\n")?;
     match plan.result {
+        TargetResult::Scalar(scalar) if plan.call == TargetBridgeCall::OwnerOutputAcquire => {
+            writeln!(output, "    let returned = readiness.returned_output(owner_output, {VALUE}::{}(value));", scalar.value_variant())?;
+            if let Some(offset) = plan.output_offset() {
+                writeln!(output, "    let offset = if value == {}{}{} {{ Some(offset_output) }} else {{ None }};", if offset.status.negative { "-" } else { "" }, offset.status.magnitude, scalar.rust_type())?;
+                output.write_str("    Ok(returned.with_output_offset(offset))\n}\n")
+            } else { output.write_str("    Ok(returned)\n}\n") }
+        }
         TargetResult::Void if plan.call == TargetBridgeCall::OwnerTeardown =>
             output.write_str("    let () = value;\n}\n"),
         TargetResult::Void => write!(output, "    let () = value;\n    Ok({REPLY}::Void)\n}}\n"),
@@ -700,15 +850,34 @@ fn render_bridge(output: &mut impl Write, plan: &TargetResolvedForeignBridge) ->
             "    Ok({REPLY}::Scalar({VALUE}::{}(value)))\n}}\n",
             scalar.value_variant()
         ),
+        TargetResult::ViewAddress => write!(output,
+            "    Ok(ash::foreign::source_runtime::NativeViewReturned::new(value, {}__read))\n}}\nfn {}__read(address: *mut core::ffi::c_void, index: usize) -> u8 {{\n    // SAFETY: the exact live window admits the native initialized extent before reading.\n    unsafe {{ *address.cast::<u8>().add(index) }}\n}}\n", plan.rust_function_name, plan.rust_function_name),
         TargetResult::OwnerAddress => output.write_str(
             "    // Arm pre-admitted destruction before any Ash reporting step.\n    Ok(readiness.returned(value))\n}\n",
         ),
     }
 }
 
-/// Emits a fixed C ABI signature and one native call after exact count/tag checks.
-/// The output must live in a generated bridge crate/module admitting this narrow
-/// unsafe boundary; the initial Pure host still forbids unsafe code.
+/// Pays inspection of a fixed typed plan before either host rendering pass.
+pub(super) fn admit_render_inspection(
+    plan: &TargetResolvedForeignBridge,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ForeignBridgeFailure> {
+    // Pay before the counting pass inspects native bytes and formats indices.
+    let inspection = plan
+        .symbol
+        .symbol()
+        .native_name()
+        .len()
+        .checked_mul(2)
+        .and_then(|count| plan.operands.len().checked_mul(64)?.checked_add(count))
+        .and_then(|count| count.checked_add(plan.rust_function_name.len().checked_mul(8)?))
+        .ok_or_else(|| fail(ForeignBridgeReason::Resource, plan.span))?;
+    charge(work, inspection, plan.span)
+}
+
+#[cfg(test)]
+/// Materializes the prior standalone wrapper as a byte/cost oracle for tests.
 pub(crate) fn emit_rust_bridge(
     plan: &TargetResolvedForeignBridge,
     work: &mut TypeWorkBudget,
@@ -720,17 +889,7 @@ pub(crate) fn emit_rust_bridge(
             Ok(())
         }
     }
-    // Pay before the counting pass inspects native bytes and formats indices.
-    let inspection = plan
-        .symbol
-        .symbol()
-        .native_name()
-        .len()
-        .checked_mul(2)
-        .and_then(|count| plan.operands.len().checked_mul(64)?.checked_add(count))
-        .and_then(|count| count.checked_add(plan.rust_function_name.len().checked_mul(8)?))
-        .ok_or_else(|| fail(ForeignBridgeReason::Resource, plan.span))?;
-    charge(work, inspection, plan.span)?;
+    admit_render_inspection(plan, work)?;
     let mut length = Length(0);
     render_bridge(&mut length, plan).map_err(|_| fail(ForeignBridgeReason::Resource, plan.span))?;
     charge(

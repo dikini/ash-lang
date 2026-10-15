@@ -189,6 +189,21 @@ impl super::Machine<'_> {
         caller: super::Instantiation,
         value: Value,
     ) -> Result<(), RuntimeFailure> {
+        if matches!(
+            callable.intrinsic.operation(),
+            crate::core::packed::Intrinsic::ForeignCopyBytes { .. }
+                | crate::core::packed::Intrinsic::ForeignCopyNul { .. }
+                | crate::core::packed::Intrinsic::ForeignExtentValue { .. }
+        ) {
+            return self.return_source_view_call(apply, callable, caller, value);
+        }
+        if matches!(
+            callable.intrinsic.operation(),
+            crate::core::packed::Intrinsic::ForeignDataOf { .. }
+                | crate::core::packed::Intrinsic::ForeignReplaceData { .. }
+        ) {
+            return self.return_source_data_call(apply, callable, caller, value);
+        }
         use crate::{
             core::{EffectExprKind, EffectOperation, PureComputation, PureExprKind},
             foreign::scalar_preflight::ForeignScalarPreflightRole,

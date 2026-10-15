@@ -4,6 +4,10 @@
 //! not an Ash lifetime extension. The evaluator must enforce Ash scope ownership.
 //! There is no shutdown call: initialization belongs to the host process.
 
+use ash as contract;
+mod sqlite_manifest;
+pub use sqlite_manifest::sqlite_manifest;
+
 pub mod arena;
 /// Identity-bound executable Ash bindings for the SQLite copying experiment.
 pub mod ash_bindings;

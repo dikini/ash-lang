@@ -173,7 +173,7 @@ impl Resolver {
             )
         })?;
         let codec = Arc::new(codec);
-        if declarations.definitions.len() != 4 {
+        if declarations.definitions.len() != 10 {
             return Err(error(
                 ResolveReason::InternalState,
                 span,
@@ -185,6 +185,12 @@ impl Resolver {
             ForeignScalarPreflightRole::SizeT,
             ForeignScalarPreflightRole::ByteRead,
             ForeignScalarPreflightRole::ByteWrite,
+            ForeignScalarPreflightRole::Nul,
+            ForeignScalarPreflightRole::DataOf,
+            ForeignScalarPreflightRole::ReplaceData,
+            ForeignScalarPreflightRole::CopyBytes,
+            ForeignScalarPreflightRole::CopyNul,
+            ForeignScalarPreflightRole::ExtentValue,
         ]) {
             let ResolvedDefinitionKind::Equational(global) = &definition.kind else {
                 return Err(error(
@@ -194,7 +200,7 @@ impl Resolver {
                 ));
             };
             if global.interface.name.id != BinderId::resolved(self.module, role.local())
-                || match role.byte_parameter(self.module) {
+                || match role.borrowed_parameter(self.module) {
                     None => !global.interface.type_parameters.is_empty(),
                     Some(expected) => {
                         let parameters = &global.interface.type_parameters;
@@ -207,10 +213,11 @@ impl Resolver {
                                         "sealed byte declaration range is invalid",
                                     )
                                 })?;
-                        parameters.len() != 1
+                        parameters.len() != 1 + usize::from(role.data_parameter(self.module).is_some())
                             || parameters[0].id != expected
                             || parameters[0].kind != crate::types::Kind::Type
                             || !matches!(&parameters[0].origin, crate::source::Origin::Source(parameter) if parameter.source() == span.source() && parameter.range().start() == name.end()+1 && parameter.range().end() == name.end()+2)
+                            || role.data_parameter(self.module).is_some_and(|expected| parameters.get(1).is_none_or(|parameter| parameter.id != expected || parameter.kind != crate::types::Kind::Type || !matches!(&parameter.origin, crate::source::Origin::Source(origin) if origin.source() == span.source() && origin.range().start() == name.end()+4 && origin.range().end() == name.end()+5)))
                     }
                 }
                 || !global.interface.requirements.is_empty()
@@ -552,6 +559,66 @@ impl Resolver {
                 ));
             }
         }
+        let mut accesses = Vec::new();
+        for (ordinal, library) in prepared.iter().enumerate() {
+            self.type_work
+                .charge(library.prepared.accesses().len())
+                .map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        surface.span,
+                        "source access binding exceeded work",
+                    )
+                })?;
+            accesses
+                .try_reserve(library.prepared.accesses().len())
+                .map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        surface.span,
+                        "source access binding storage refused",
+                    )
+                })?;
+            let ordinal = u32::try_from(ordinal).map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    surface.span,
+                    "source library identity exceeded bound",
+                )
+            })?;
+            for index in 0..library.prepared.accesses().len() {
+                self.type_work
+                    .charge(registry.source_foreign_nominal_count())
+                    .map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            surface.span,
+                            "source access lookup exceeded work",
+                        )
+                    })?;
+                let (nominal, parameters) = registry
+                    .source_access_candidate(&library.prepared, index)
+                    .ok_or_else(|| {
+                        error(
+                            ResolveReason::ForeignContract,
+                            surface.span,
+                            "source access has no original nominal",
+                        )
+                    })?;
+                accesses.push(Arc::new(
+                    crate::foreign::source_access::bind_foreign_access(
+                        NativeLibraryId::new(self.module, ordinal),
+                        Arc::clone(&library.prepared),
+                        index,
+                        nominal,
+                        parameters,
+                        &registry,
+                        &mut self.type_work,
+                    )
+                    .map_err(source_admission_failure)?,
+                ));
+            }
+        }
         let context = ForeignBindingContext::new(
             &registry,
             common_module,
@@ -629,6 +696,9 @@ impl Resolver {
                 "source foreign publication requires its unique defining registry",
             )
         })?;
+        registry
+            .retain_source_accesses(&accesses, &mut self.type_work)
+            .map_err(|failure| source_build_failure(failure, surface.span))?;
         for (effect_index, symbol) in symbols {
             declarations.effects[effect_index].native_contract = Some(Arc::clone(&symbol));
             registry
@@ -1019,6 +1089,7 @@ pub(super) fn retain_module_declaration_order(
                 .effects
                 .len()
                 .checked_add(library.prepared.owners().len())
+                .and_then(|n| n.checked_add(library.prepared.accesses().len()))
                 .and_then(|n| n.checked_add(library.prepared.constants().len()))
                 .ok_or_else(|| {
                     error(
@@ -1046,7 +1117,7 @@ pub(super) fn retain_module_declaration_order(
             let mut owners = 0;
             for member in &written.members {
                 match member {
-                    SurfaceForeignMember::Owner(_) => {
+                    SurfaceForeignMember::Owner(_) | SurfaceForeignMember::Access(_) => {
                         result.push(crate::resolved::ResolvedDeclarationIndex::Type(next_owner));
                         next_owner = next_owner.checked_add(1).ok_or_else(|| {
                             error(
@@ -1076,7 +1147,14 @@ pub(super) fn retain_module_declaration_order(
                     _ => {}
                 }
             }
-            if effect != library.effects.end || owners != library.prepared.owners().len() {
+            if effect != library.effects.end
+                || owners
+                    != library
+                        .prepared
+                        .owners()
+                        .len()
+                        .saturating_add(library.prepared.accesses().len())
+            {
                 return Err(error(
                     ResolveReason::InternalState,
                     written.span,

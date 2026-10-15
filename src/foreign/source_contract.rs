@@ -25,6 +25,16 @@ use crate::{
     types::{Kind, TypeWorkBudget},
 };
 
+#[path = "source_access_contract.rs"]
+pub(crate) mod access_contract;
+#[path = "source_access_image.rs"]
+mod access_image;
+#[path = "source_output_contract.rs"]
+mod output_contract;
+pub use access_contract::{
+    PreparedAccessApplication, PreparedAccessResult, PreparedForeignAccess, PreparedForeignExtent,
+};
+
 const PROFILE: &str = "x86_64-unknown-linux-gnu";
 
 /// The cause of source foreign ABI preparation refusal.
@@ -333,6 +343,18 @@ pub struct PreparedForeignParameter {
     origin: Origin,
 }
 impl PreparedForeignParameter {
+    /// Untrusted normalized image data, authenticated with its whole library
+    /// and original nominal/symbol binding before any checked use.
+    pub(crate) fn from_private_image(parts: PrivatePreparedParameterParts) -> Self {
+        Self {
+            name: parts.name,
+            kind: match parts.kind {
+                PrivatePreparedParameterKind::Type => Kind::Type,
+                PrivatePreparedParameterKind::EffectRow => Kind::EffectRow,
+            },
+            origin: Origin::Source(parts.span),
+        }
+    }
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
@@ -355,6 +377,22 @@ pub enum PreparedOperandSource {
     Sentinel(usize),
     Current(Vec<usize>),
     Enclosing(Vec<usize>),
+    /// Stable copied String input, borrowed only until this native call returns.
+    Nul(Vec<usize>),
+    /// Independent temporary input with an explicit source byte extent. Both
+    /// disciplines forbid retaining its address after the call; `copy` also
+    /// records the authored independent-native-copy promise.
+    Bytes {
+        path: Vec<usize>,
+        extent: Vec<usize>,
+        copy: bool,
+    },
+    /// An explicitly authored optional null address, not an owner or sentinel.
+    Null,
+    /// A zero-initialized private owner-output slot at this ABI position.
+    OwnerOutput,
+    /// A separate initialized pointer slot read only by its exact offset rule.
+    OffsetOutput,
 }
 
 /// One ABI input in exact native order.
@@ -479,9 +517,31 @@ pub struct PreparedOwnerStatusOutcome {
     pub(crate) outcome_span: Span,
 }
 
+/// An initialized pointer output extracted relative to one exact prepared NUL
+/// input. The first scalar-equality outcome reads it; otherwise leaves it unread.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedOffsetOutput {
+    pub(crate) operand: usize,
+    pub(crate) input_operand: usize,
+    pub(crate) output_span: Span,
+    pub(crate) status: PreparedScalarValue,
+    pub(crate) condition_span: Span,
+    pub(crate) readable_span: Span,
+    pub(crate) otherwise_span: Span,
+    pub(crate) otherwise_readable_spans: [Span; 3],
+}
+
 /// Complete facts for the admitted owner-producing or finishing call shape.
 #[derive(Debug)]
 pub enum PreparedOwnerCall {
+    /// A guarded nonconsuming scalar call. No source owner is created or finished.
+    Borrow {
+        application: PreparedOwnerApplication,
+        current_operand: usize,
+        output_span: Span,
+        outcome_span: Span,
+        readable_span: Span,
+    },
     Acquire {
         application: PreparedOwnerApplication,
         first_nonnull: bool,
@@ -489,6 +549,17 @@ pub enum PreparedOwnerCall {
         outcome_spans: [Span; 2],
         readable_spans: [Span; 2],
         initialized_bytes: Option<PreparedInitializedBytes>,
+    },
+    /// A readable scalar result followed by one readable nullable opaque owner
+    /// output. The private slot is initialized to null before native entry.
+    OutputAcquire {
+        application: PreparedOwnerApplication,
+        output_operand: usize,
+        output_span: Span,
+        scalar_output_span: Span,
+        outcome_span: Span,
+        readable_spans: [Span; 2],
+        offset: Option<PreparedOffsetOutput>,
     },
     Teardown {
         application: PreparedOwnerApplication,
@@ -511,17 +582,22 @@ impl PreparedOwnerCall {
     pub(crate) fn application(&self) -> &PreparedOwnerApplication {
         match self {
             Self::Acquire { application, .. }
+            | Self::Borrow { application, .. }
+            | Self::OutputAcquire { application, .. }
             | Self::Teardown { application, .. }
             | Self::StatusTeardown { application, .. } => application,
         }
     }
     pub(crate) fn current_operand(&self) -> Option<usize> {
         match self {
-            Self::Acquire { .. } => None,
+            Self::Acquire { .. } | Self::OutputAcquire { .. } => None,
             Self::Teardown {
                 current_operand, ..
             }
             | Self::StatusTeardown {
+                current_operand, ..
+            }
+            | Self::Borrow {
                 current_operand, ..
             } => Some(*current_operand),
         }
@@ -602,6 +678,10 @@ impl PreparedForeignOwner {
 
 /// Mutually exclusive normalized scalar or owner call contracts.
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "keep normalized owner plans inline without an additional infallible allocation"
+)]
 pub enum PreparedForeignCall {
     Scalar {
         outcomes: Vec<PreparedForeignOutcome>,
@@ -629,6 +709,7 @@ pub struct PreparedForeignSymbol {
     operands: Vec<PreparedForeignOperand>,
     result: PreparedAbiResult,
     call: PreparedForeignCall,
+    access_result: Option<PreparedAccessResult>,
     origin: Origin,
 }
 impl PreparedForeignSymbol {
@@ -673,12 +754,40 @@ impl PreparedForeignSymbol {
         &self.call
     }
     #[must_use]
+    pub const fn access_result(&self) -> Option<&PreparedAccessResult> {
+        self.access_result.as_ref()
+    }
+    #[must_use]
     pub fn outcomes(&self) -> &[PreparedForeignOutcome] {
         self.call.outcomes()
     }
     #[must_use]
     pub const fn origin(&self) -> &Origin {
         &self.origin
+    }
+}
+
+/// Constructor-free source declarations remain distinct passive categories.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PreparedForeignNominalRole {
+    Owner(usize),
+    Access(usize),
+}
+impl PreparedForeignNominalRole {
+    pub(crate) fn declaration(
+        self,
+        library: &PreparedForeignLibrary,
+    ) -> Option<(&str, &[PreparedForeignParameter], &Origin)> {
+        match self {
+            Self::Owner(index) => library
+                .owners()
+                .get(index)
+                .map(|value| (value.name(), value.parameters(), value.origin())),
+            Self::Access(index) => library
+                .accesses()
+                .get(index)
+                .map(|value| (value.name(), value.parameters(), value.origin())),
+        }
     }
 }
 
@@ -692,6 +801,7 @@ pub struct PreparedForeignLibrary {
     constants: Vec<PreparedForeignConstant>,
     sentinels: Vec<PreparedForeignSentinel>,
     owners: Vec<PreparedForeignOwner>,
+    accesses: Vec<PreparedForeignAccess>,
     symbols: Vec<PreparedForeignSymbol>,
     origin: Origin,
 }
@@ -729,6 +839,18 @@ impl PreparedForeignLibrary {
         &self.owners
     }
     #[must_use]
+    pub fn accesses(&self) -> &[PreparedForeignAccess] {
+        &self.accesses
+    }
+    pub(crate) fn access_result_owner(
+        &self,
+        application: &PreparedAccessApplication,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(usize, Vec<PreparedOwnerArgument>), ForeignContractError> {
+        access_contract::access_owner(self, application, work)
+    }
+
+    #[must_use]
     pub fn symbols(&self) -> &[PreparedForeignSymbol] {
         &self.symbols
     }
@@ -762,6 +884,7 @@ pub(crate) fn prepare_foreign_library_with_budget(
     let mut sentinel_count = 0;
     let mut symbol_count = 0;
     let mut owner_count = 0;
+    let mut access_count = 0;
     let mut names: Vec<&str> = Vec::new();
     reserve(&mut names, source.members.len(), source.span)?;
     for member in &source.members {
@@ -795,7 +918,10 @@ pub(crate) fn prepare_foreign_library_with_budget(
                 owner_count += 1;
                 &value.name
             }
-            SurfaceForeignMember::Access(value) => &value.name,
+            SurfaceForeignMember::Access(value) => {
+                access_count += 1;
+                &value.name
+            }
             SurfaceForeignMember::Symbol(value) => {
                 symbol_count += 1;
                 &value.name
@@ -819,6 +945,7 @@ pub(crate) fn prepare_foreign_library_with_budget(
         constants: Vec::new(),
         sentinels: Vec::new(),
         owners: Vec::new(),
+        accesses: Vec::new(),
         symbols: Vec::new(),
         origin: Origin::Source(source.span),
     };
@@ -831,6 +958,7 @@ pub(crate) fn prepare_foreign_library_with_budget(
     reserve(&mut prepared.sentinels, sentinel_count, source.span)?;
     reserve(&mut prepared.symbols, symbol_count, source.span)?;
     reserve(&mut prepared.owners, owner_count, source.span)?;
+    reserve(&mut prepared.accesses, access_count, source.span)?;
     for (member_index, member) in source.members.iter().enumerate() {
         charge(work, 1, source.span)?;
         match member {
@@ -880,12 +1008,7 @@ pub(crate) fn prepare_foreign_library_with_budget(
             }
             SurfaceForeignMember::Sentinel(_) => {}
             SurfaceForeignMember::Owner(_) => {}
-            SurfaceForeignMember::Access(value) => {
-                return Err(failure(
-                    ForeignContractReason::UnimplementedContract,
-                    value.span,
-                ));
-            }
+            SurfaceForeignMember::Access(_) => {}
             _ => {}
         }
     }
@@ -941,12 +1064,20 @@ pub(crate) fn prepare_foreign_library_with_budget(
     }
     for (member_index, member) in source.members.iter().enumerate() {
         charge(work, 1, source.span)?;
+        if let SurfaceForeignMember::Access(value) = member {
+            let access = access_contract::prepare(&prepared, source, member_index, value, work)?;
+            prepared.accesses.push(access);
+        }
+    }
+    for (member_index, member) in source.members.iter().enumerate() {
+        charge(work, 1, source.span)?;
         if let SurfaceForeignMember::Symbol(value) = member {
             let symbol = prepare_symbol(&prepared, member_index, value, work)?;
             prepared.symbols.push(symbol);
         }
     }
     validate_owner_teardowns(&prepared, work)?;
+    access_contract::validate_preserving_symbols(&prepared, work)?;
     Ok(prepared)
 }
 
@@ -1195,6 +1326,7 @@ fn prepare_symbol(
         call: PreparedForeignCall::Scalar {
             outcomes: Vec::new(),
         },
+        access_result: None,
         origin: Origin::Source(source.span),
     };
     charge(work, source.parameters.len(), source.span)?;
@@ -1245,9 +1377,23 @@ fn prepare_symbol(
     }
     if !library.owners.is_empty() {
         charge(work, source.contracts.len(), source.span)?;
-        let current = source.contracts.iter().any(|contract| matches!(contract,
-            SurfaceForeignContract::Operand { source: SurfaceForeignOperandSource::Source { role, .. }, .. }
-            if matches!(role.kind, SurfaceForeignOperandRoleKind::Current)));
+        let owner_contract = source.contracts.iter().find_map(|contract| match contract {
+            SurfaceForeignContract::Operand {
+                source: SurfaceForeignOperandSource::Source { role, .. },
+                ..
+            } if matches!(role.kind, SurfaceForeignOperandRoleKind::Current) => Some(false),
+            SurfaceForeignContract::Output { position, role, .. }
+                if matches!(role.kind, SurfaceForeignOutputRoleKind::Owner(_))
+                    && matches!(position, SurfaceForeignNativePosition::Argument(_)) =>
+            {
+                Some(true)
+            }
+            _ => None,
+        });
+        if owner_contract == Some(true) {
+            return output_contract::prepare(library, source, symbol, &function.domain, work);
+        }
+        let current = owner_contract.is_some();
         if current || matches!(symbol.result, PreparedAbiResult::Address(_)) {
             return prepare_owner_symbol_body(library, source, symbol, &function.domain, work);
         }
@@ -1616,6 +1762,15 @@ fn owner_application(
     ty: &SurfaceType,
     work: &mut TypeWorkBudget,
 ) -> Result<PreparedOwnerApplication, ForeignContractError> {
+    owner_application_from_parameters(library, &symbol.parameters, ty, work)
+}
+
+fn owner_application_from_parameters(
+    library: &PreparedForeignLibrary,
+    parameters: &[PreparedForeignParameter],
+    ty: &SurfaceType,
+    work: &mut TypeWorkBudget,
+) -> Result<PreparedOwnerApplication, ForeignContractError> {
     let SurfaceTypeKind::Application {
         constructor,
         arguments,
@@ -1637,13 +1792,28 @@ fn owner_application(
     }
     let owner = owner.ok_or_else(|| failure(ForeignContractReason::UnknownMember, ty.span))?;
     let family = &library.owners[owner];
-    charge(work, arguments.len(), ty.span)?;
-    if arguments.len() != family.parameters.len() {
-        return Err(failure(ForeignContractReason::InvalidParameters, ty.span));
+    let projection = project_arguments(parameters, arguments, &family.parameters, ty.span, work)?;
+    Ok(PreparedOwnerApplication {
+        owner,
+        arguments: projection,
+        span: ty.span,
+    })
+}
+
+fn project_arguments(
+    parameters: &[PreparedForeignParameter],
+    arguments: &[SurfaceType],
+    expected: &[PreparedForeignParameter],
+    span: Span,
+    work: &mut TypeWorkBudget,
+) -> Result<Vec<PreparedOwnerArgument>, ForeignContractError> {
+    charge(work, arguments.len(), span)?;
+    if arguments.len() != expected.len() {
+        return Err(failure(ForeignContractReason::InvalidParameters, span));
     }
     let mut projection = Vec::new();
-    reserve(&mut projection, arguments.len(), ty.span)?;
-    for (argument, expected) in arguments.iter().zip(&family.parameters) {
+    reserve(&mut projection, arguments.len(), span)?;
+    for (argument, expected) in arguments.iter().zip(expected) {
         let name = match (&argument.kind, &expected.kind) {
             (SurfaceTypeKind::Named(reference), Kind::Type) if reference.qualifier().is_none() => {
                 reference.member()
@@ -1661,7 +1831,7 @@ fn owner_application(
             }
         };
         let mut parameter = None;
-        for (index, candidate) in symbol.parameters.iter().enumerate() {
+        for (index, candidate) in parameters.iter().enumerate() {
             if names_equal(&candidate.name, &name.text, argument.span, work)?
                 && candidate.kind == expected.kind
             {
@@ -1681,11 +1851,7 @@ fn owner_application(
             }
         });
     }
-    Ok(PreparedOwnerApplication {
-        owner,
-        arguments: projection,
-        span: ty.span,
-    })
+    Ok(projection)
 }
 
 fn owner_source_path<'a>(
@@ -1762,6 +1928,7 @@ fn prepare_owner_symbol_body(
             } => {
                 if output.is_some()
                     || scalar_output.is_some()
+                    || symbol.access_result.is_some()
                     || native_position(position, work)? != PreparedNativePosition::Result
                 {
                     return Err(failure(ForeignContractReason::OutputCoverage, *span));
@@ -1771,6 +1938,12 @@ fn prepare_owner_symbol_body(
                         output = Some(owner_application(library, &symbol, ty, work)?);
                     }
                     SurfaceForeignOutputRoleKind::Scalar => scalar_output = Some(*span),
+                    SurfaceForeignOutputRoleKind::View { .. }
+                    | SurfaceForeignOutputRoleKind::ExtentOf { .. } => {
+                        symbol.access_result = Some(access_contract::prepare_result(
+                            library, &symbol, &role.kind, domain, *span, work,
+                        )?);
+                    }
                     _ => {
                         return Err(failure(
                             ForeignContractReason::UnimplementedContract,
@@ -1833,6 +2006,36 @@ fn prepare_owner_symbol_body(
                     (
                         PreparedRepresentation::Scalar(representation),
                         PreparedOperandSource::Constant(index),
+                    )
+                }
+                (
+                    PreparedAbiResult::Address(representation),
+                    SurfaceForeignOperandSource::Source { position, role },
+                ) if matches!(role.kind, SurfaceForeignOperandRoleKind::Bytes { .. }) => {
+                    let SurfaceForeignOperandRoleKind::Bytes { extent, discipline } = &role.kind
+                    else {
+                        unreachable!()
+                    };
+                    let (path, ty) = owner_source_path(position, domain, work)?;
+                    if representation != PreparedAddressRepresentation::Bytes
+                        || !matches!(ty.kind, SurfaceTypeKind::Bytes | SurfaceTypeKind::String)
+                        || scalar_output.is_none()
+                        || output.is_some()
+                        || block.is_some()
+                        || symbol.access_result.is_some()
+                    {
+                        return Err(failure(ForeignContractReason::OperandRole, role.span));
+                    }
+                    (
+                        PreparedRepresentation::Address(representation),
+                        PreparedOperandSource::Bytes {
+                            path,
+                            extent: source_path(extent, domain, work)?,
+                            copy: matches!(
+                                discipline,
+                                crate::surface::SurfaceForeignInputDiscipline::Copy(_)
+                            ),
+                        },
                     )
                 }
                 (
@@ -1976,9 +2179,72 @@ fn prepare_owner_symbol_body(
     } else {
         let (current_operand, application) =
             current.ok_or_else(|| failure(ForeignContractReason::OperandCoverage, source.span))?;
+        if let Some(access) = &symbol.access_result {
+            let (expected_owner, expected_arguments) =
+                access_contract::access_owner(library, access.application(), work)?;
+            charge(work, expected_arguments.len(), source.span)?;
+            if application.owner() != expected_owner
+                || application.arguments() != expected_arguments
+                || block.is_some()
+                || scalar_output.is_some()
+                || cases.len() != 1
+                || !matches!(cases[0].0, SurfaceForeignOutcomeTest::Otherwise(_))
+                || !matches!(
+                    (access, symbol.result),
+                    (
+                        PreparedAccessResult::View { .. },
+                        PreparedAbiResult::Address(PreparedAddressRepresentation::Bytes)
+                    ) | (
+                        PreparedAccessResult::Extent { .. },
+                        PreparedAbiResult::Scalar(_)
+                    )
+                )
+            {
+                return Err(failure(ForeignContractReason::OutputRole, source.span));
+            }
+            charge(work, cases[0].1.len(), cases[0].2)?;
+            let [fact] = cases[0].1 else {
+                return Err(failure(ForeignContractReason::Readability, cases[0].2));
+            };
+            if !matches!(&fact.kind, SurfaceForeignOutcomeFactKind::Readable(position) if native_position(position, work)? == PreparedNativePosition::Result)
+            {
+                return Err(failure(ForeignContractReason::Readability, fact.span));
+            }
+            symbol.call = PreparedForeignCall::Owner(PreparedOwnerCall::Borrow {
+                application,
+                current_operand,
+                output_span: access.span(),
+                outcome_span: cases[0].2,
+                readable_span: fact.span,
+            });
+            return Ok(symbol);
+        }
         if let PreparedAbiResult::Scalar(representation) = symbol.result {
             let output_span = scalar_output
                 .ok_or_else(|| failure(ForeignContractReason::OutputCoverage, source.span))?;
+            if block.is_none() {
+                if cases.len() != 1
+                    || !matches!(cases[0].0, SurfaceForeignOutcomeTest::Otherwise(_))
+                {
+                    return Err(failure(ForeignContractReason::OutcomeCoverage, source.span));
+                }
+                charge(work, cases[0].1.len(), cases[0].2)?;
+                let [fact] = cases[0].1 else {
+                    return Err(failure(ForeignContractReason::Readability, cases[0].2));
+                };
+                if !matches!(&fact.kind, SurfaceForeignOutcomeFactKind::Readable(position) if native_position(position, work)? == PreparedNativePosition::Result)
+                {
+                    return Err(failure(ForeignContractReason::Readability, fact.span));
+                }
+                symbol.call = PreparedForeignCall::Owner(PreparedOwnerCall::Borrow {
+                    application,
+                    current_operand,
+                    output_span,
+                    outcome_span: cases[0].2,
+                    readable_span: fact.span,
+                });
+                return Ok(symbol);
+            }
             let block_span = block
                 .ok_or_else(|| failure(ForeignContractReason::OutcomeCoverage, source.span))?;
             let PreparedOperandSource::Current(current_path) =
@@ -2378,6 +2644,7 @@ pub(crate) struct PrivatePreparedLibraryParts {
     pub(crate) constants: Vec<PrivatePreparedConstantParts>,
     pub(crate) sentinels: Vec<PrivatePreparedSentinelParts>,
     pub(crate) owners: Vec<PrivatePreparedOwnerParts>,
+    pub(crate) accesses: Vec<PreparedForeignAccess>,
     pub(crate) symbols: Vec<PrivatePreparedSymbolParts>,
     pub(crate) span: Span,
 }
@@ -2441,6 +2708,10 @@ pub(crate) struct PrivatePreparedOutcomeParts {
     pub(crate) span: Span,
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "keep normalized owner plans inline without an additional infallible allocation"
+)]
 pub(crate) enum PrivatePreparedCall {
     Scalar {
         outcomes: Vec<PrivatePreparedOutcomeParts>,
@@ -2465,6 +2736,7 @@ pub(crate) struct PrivatePreparedSymbolParts {
     pub(crate) operands: Vec<PrivatePreparedOperandParts>,
     pub(crate) result: PreparedAbiResult,
     pub(crate) call: PrivatePreparedCall,
+    pub(crate) access_result: Option<PreparedAccessResult>,
     pub(crate) span: Span,
 }
 
@@ -2555,6 +2827,152 @@ fn private_owner_call(
     work: &mut TypeWorkBudget,
 ) -> Result<(), ForeignContractError> {
     match call {
+        PreparedOwnerCall::Borrow {
+            application,
+            current_operand,
+            output_span,
+            outcome_span,
+            readable_span,
+        } => {
+            let owner = private_owner_application(parts, symbol, application, work)?;
+            charge(work, symbol.operands.len().saturating_add(6), symbol.span)?;
+            if !(matches!(symbol.result, PreparedAbiResult::Scalar(_))
+                || matches!(
+                    symbol.access_result,
+                    Some(PreparedAccessResult::View { .. })
+                ) && symbol.result
+                    == PreparedAbiResult::Address(PreparedAddressRepresentation::Bytes))
+                || !symbol
+                    .operands
+                    .get(*current_operand)
+                    .is_some_and(|operand| {
+                        matches!(operand.source, PreparedOperandSource::Current(_))
+                            && operand.representation
+                                == PreparedRepresentation::Address(owner.representation)
+                    })
+                || symbol
+                    .operands
+                    .iter()
+                    .filter(|operand| matches!(operand.source, PreparedOperandSource::Current(_)))
+                    .count()
+                    != 1
+                || symbol.operands.iter().any(|operand| {
+                    matches!(
+                        operand.source,
+                        PreparedOperandSource::OwnerOutput | PreparedOperandSource::OffsetOutput
+                    )
+                })
+                || !private_span_within(symbol.span, *output_span)
+                || !private_span_within(symbol.span, *outcome_span)
+                || !private_span_within(*outcome_span, *readable_span)
+            {
+                return Err(failure(ForeignContractReason::OutputRole, symbol.span));
+            }
+        }
+        PreparedOwnerCall::OutputAcquire {
+            application,
+            output_operand,
+            output_span,
+            scalar_output_span,
+            outcome_span,
+            readable_spans,
+            offset,
+        } => {
+            let owner = private_owner_application(parts, symbol, application, work)?;
+            charge(work, symbol.operands.len().saturating_add(9), symbol.span)?;
+            let slot = symbol
+                .operands
+                .get(*output_operand)
+                .ok_or_else(|| failure(ForeignContractReason::OutputCoverage, *output_span))?;
+            if owner.representation != PreparedAddressRepresentation::Opaque
+                || !matches!(symbol.result, PreparedAbiResult::Scalar(_))
+                || slot.representation != PreparedRepresentation::Address(owner.representation)
+                || !matches!(slot.source, PreparedOperandSource::OwnerOutput)
+                || symbol
+                    .operands
+                    .iter()
+                    .filter(|operand| matches!(operand.source, PreparedOperandSource::OwnerOutput))
+                    .count()
+                    != 1
+                || symbol
+                    .operands
+                    .iter()
+                    .any(|operand| matches!(operand.source, PreparedOperandSource::Current(_)))
+                || !private_span_within(symbol.span, *output_span)
+                || !private_span_within(*output_span, application.span)
+                || !private_span_within(symbol.span, *scalar_output_span)
+                || output_span == scalar_output_span
+                || !private_span_within(symbol.span, *outcome_span)
+                || readable_spans[0] == readable_spans[1]
+            {
+                return Err(failure(ForeignContractReason::OutputRole, symbol.span));
+            }
+            for span in readable_spans {
+                if !private_span_within(*outcome_span, *span) {
+                    return Err(failure(ForeignContractReason::Readability, *span));
+                }
+            }
+            match offset {
+                None if symbol.operands.iter().all(|operand| {
+                    !matches!(operand.source, PreparedOperandSource::OffsetOutput)
+                }) => {}
+                Some(offset) => {
+                    charge(
+                        work,
+                        symbol.operands.len().saturating_add(13),
+                        offset.output_span,
+                    )?;
+                    let valid_input =
+                        symbol
+                            .operands
+                            .get(offset.input_operand)
+                            .is_some_and(|operand| {
+                                matches!(operand.source, PreparedOperandSource::Nul(_))
+                            });
+                    let valid_output = symbol.operands.get(offset.operand).is_some_and(|operand| {
+                        matches!(operand.source, PreparedOperandSource::OffsetOutput)
+                            && operand.representation
+                                == PreparedRepresentation::Address(
+                                    PreparedAddressRepresentation::Bytes,
+                                )
+                    });
+                    let PreparedAbiResult::Scalar(representation) = symbol.result else {
+                        return Err(failure(ForeignContractReason::OutputRole, symbol.span));
+                    };
+                    private_scalar_value(offset.status, representation, offset.condition_span)?;
+                    if !valid_input
+                        || !valid_output
+                        || offset.operand == *output_operand
+                        || symbol
+                            .operands
+                            .iter()
+                            .filter(|operand| {
+                                matches!(operand.source, PreparedOperandSource::OffsetOutput)
+                            })
+                            .count()
+                            != 1
+                        || !private_span_within(symbol.span, offset.output_span)
+                        || offset.output_span == *output_span
+                        || offset.output_span == *scalar_output_span
+                        || !private_span_within(*outcome_span, offset.condition_span)
+                        || !private_span_within(*outcome_span, offset.readable_span)
+                        || readable_spans.contains(&offset.readable_span)
+                        || !private_span_within(symbol.span, offset.otherwise_span)
+                        || offset.otherwise_span == *outcome_span
+                    {
+                        return Err(failure(ForeignContractReason::OutputRole, symbol.span));
+                    }
+                    for (index, span) in offset.otherwise_readable_spans.iter().enumerate() {
+                        if !private_span_within(offset.otherwise_span, *span)
+                            || offset.otherwise_readable_spans[..index].contains(span)
+                        {
+                            return Err(failure(ForeignContractReason::Readability, *span));
+                        }
+                    }
+                }
+                _ => return Err(failure(ForeignContractReason::OutputRole, symbol.span)),
+            }
+        }
         PreparedOwnerCall::Acquire {
             application,
             first_nonnull,
@@ -2757,6 +3175,58 @@ fn same_owner_call(
     charge(work, 1, span)?;
     match (left, right) {
         (
+            Some(PreparedOwnerCall::Borrow {
+                application: la,
+                current_operand: lc,
+                output_span: lo,
+                outcome_span: ls,
+                readable_span: lr,
+            }),
+            Some(PreparedOwnerCall::Borrow {
+                application: ra,
+                current_operand: rc,
+                output_span: ro,
+                outcome_span: rs,
+                readable_span: rr,
+            }),
+        ) => {
+            charge(work, 5, span)?;
+            Ok(lc == rc
+                && lo == ro
+                && ls == rs
+                && lr == rr
+                && same_owner_application(la, ra, work)?)
+        }
+        (
+            Some(PreparedOwnerCall::OutputAcquire {
+                application: la,
+                output_operand: lp,
+                output_span: lo,
+                scalar_output_span: ls,
+                outcome_span: lc,
+                readable_spans: lr,
+                offset: l_offset,
+            }),
+            Some(PreparedOwnerCall::OutputAcquire {
+                application: ra,
+                output_operand: rp,
+                output_span: ro,
+                scalar_output_span: rs,
+                outcome_span: rc,
+                readable_spans: rr,
+                offset: r_offset,
+            }),
+        ) => {
+            charge(work, 20, span)?;
+            Ok(lp == rp
+                && lo == ro
+                && ls == rs
+                && lc == rc
+                && lr == rr
+                && l_offset == r_offset
+                && same_owner_application(la, ra, work)?)
+        }
+        (
             Some(PreparedOwnerCall::Acquire {
                 application: la,
                 first_nonnull: ln,
@@ -2928,6 +3398,7 @@ pub(crate) fn restore_prepared_library(
         .and_then(|count| count.checked_add(parts.sentinels.len()))
         .and_then(|count| count.checked_add(parts.symbols.len()))
         .and_then(|count| count.checked_add(parts.owners.len()))
+        .and_then(|count| count.checked_add(parts.accesses.len()))
         .ok_or_else(|| failure(ForeignContractReason::WorkExhausted, span))?;
     charge(
         work,
@@ -2966,6 +3437,13 @@ pub(crate) fn restore_prepared_library(
                 .iter()
                 .map(|value| (value.name.as_str(), value.member_index, value.span)),
         )
+        .chain(parts.accesses.iter().map(|value| {
+            (
+                value.name(),
+                value.member_index(),
+                value.origin().primary_span(),
+            )
+        }))
     {
         charge(work, 1, member_span)?;
         if name.is_empty() || !private_span_within(span, member_span) || member_index > count {
@@ -3022,6 +3500,14 @@ pub(crate) fn restore_prepared_library(
             .map(|value| (value.member_index, value.span)),
         work,
     )?;
+    private_member_order(
+        parts
+            .accesses
+            .iter()
+            .map(|value| (value.member_index(), value.origin().primary_span())),
+        work,
+    )?;
+    access_image::validate_accesses(&parts, work)?;
     for representation in &parts.representations {
         charge(work, 1, representation.span)?;
         private_representation(representation.representation, representation.span)?;
@@ -3180,7 +3666,7 @@ pub(crate) fn restore_prepared_library(
                 symbol.span,
             ));
         }
-        for operand in &symbol.operands {
+        for (operand_index, operand) in symbol.operands.iter().enumerate() {
             charge(
                 work,
                 parts
@@ -3200,6 +3686,63 @@ pub(crate) fn restore_prepared_library(
                 return Err(failure(ForeignContractReason::OperandRole, operand.span));
             }
             match &operand.source {
+                PreparedOperandSource::Bytes { path, extent, .. } => {
+                    charge(
+                        work,
+                        path.len().saturating_add(extent.len()).saturating_add(1),
+                        operand.span,
+                    )?;
+                    if path.is_empty()
+                        || extent.is_empty()
+                        || operand.representation
+                            != PreparedRepresentation::Address(PreparedAddressRepresentation::Bytes)
+                        || !matches!(
+                            symbol.call,
+                            PrivatePreparedCall::Owner(PreparedOwnerCall::Borrow { .. })
+                        )
+                    {
+                        return Err(failure(ForeignContractReason::OperandRole, operand.span));
+                    }
+                }
+                PreparedOperandSource::Nul(path) => {
+                    charge(work, path.len().saturating_add(1), operand.span)?;
+                    if path.is_empty()
+                        || operand.representation
+                            != PreparedRepresentation::Address(PreparedAddressRepresentation::Bytes)
+                        || !matches!(
+                            symbol.call,
+                            PrivatePreparedCall::Owner(PreparedOwnerCall::OutputAcquire { .. })
+                        )
+                    {
+                        return Err(failure(ForeignContractReason::OperandRole, operand.span));
+                    }
+                }
+                PreparedOperandSource::Null => {
+                    if !matches!(operand.representation, PreparedRepresentation::Address(_))
+                        || !matches!(
+                            symbol.call,
+                            PrivatePreparedCall::Owner(PreparedOwnerCall::OutputAcquire { .. })
+                        )
+                    {
+                        return Err(failure(ForeignContractReason::OperandRole, operand.span));
+                    }
+                }
+                PreparedOperandSource::OwnerOutput => {
+                    if operand.representation
+                        != PreparedRepresentation::Address(PreparedAddressRepresentation::Opaque)
+                        || !matches!(symbol.call, PrivatePreparedCall::Owner(PreparedOwnerCall::OutputAcquire { output_operand, .. }) if output_operand == operand_index)
+                    {
+                        return Err(failure(ForeignContractReason::OutputRole, operand.span));
+                    }
+                }
+                PreparedOperandSource::OffsetOutput => {
+                    if operand.representation
+                        != PreparedRepresentation::Address(PreparedAddressRepresentation::Bytes)
+                        || !matches!(&symbol.call, PrivatePreparedCall::Owner(PreparedOwnerCall::OutputAcquire { offset: Some(offset), .. }) if offset.operand == operand_index)
+                    {
+                        return Err(failure(ForeignContractReason::OperandRole, operand.span));
+                    }
+                }
                 PreparedOperandSource::Constant(index) => {
                     let constant = parts.constants.get(*index).ok_or_else(|| {
                         failure(ForeignContractReason::UnknownMember, operand.span)
@@ -3240,6 +3783,7 @@ pub(crate) fn restore_prepared_library(
                             symbol.call,
                             PrivatePreparedCall::Owner(
                                 PreparedOwnerCall::Teardown { .. }
+                                    | PreparedOwnerCall::Borrow { .. }
                                     | PreparedOwnerCall::StatusTeardown { .. }
                             )
                         )
@@ -3285,6 +3829,7 @@ pub(crate) fn restore_prepared_library(
                 return Err(failure(ForeignContractReason::UnknownMember, symbol.span));
             }
         }
+        access_image::validate_result(&parts, symbol, work)?;
         if let PrivatePreparedCall::Owner(owner_call) = &symbol.call {
             private_owner_call(&parts, symbol, owner_call, work)?;
             continue;
@@ -3384,6 +3929,7 @@ pub(crate) fn restore_prepared_library(
         constants: Vec::new(),
         sentinels: Vec::new(),
         owners: Vec::new(),
+        accesses: parts.accesses,
         symbols: Vec::new(),
         origin: Origin::Source(span),
     };
@@ -3504,6 +4050,7 @@ pub(crate) fn restore_prepared_library(
             operands,
             result: value.result,
             call,
+            access_result: value.access_result,
             origin: Origin::Source(value.span),
         });
     }
@@ -3528,6 +4075,9 @@ pub(crate) fn same_prepared_library_parts(
 ) -> Result<bool, ForeignContractError> {
     let span = candidate.span;
     charge(work, 5, span)?;
+    if !access_image::same_accesses(&original.accesses, &candidate.accesses, span, work)? {
+        return Ok(false);
+    }
     if !original.owners.is_empty() || !candidate.owners.is_empty() {
         charge(work, 1, span)?;
         if original.owners.len() != candidate.owners.len() {
@@ -3628,6 +4178,14 @@ pub(crate) fn same_prepared_library_parts(
         {
             return Ok(false);
         }
+        if !access_image::same_result(
+            left.access_result(),
+            right.access_result.as_ref(),
+            right.span,
+            work,
+        )? {
+            return Ok(false);
+        }
         if !same_owner_call(
             left.owner_call(),
             match &right.call {
@@ -3666,11 +4224,31 @@ pub(crate) fn same_prepared_library_parts(
             }
             let operand_span = right.span;
             let matches = match (&left.source, &right.source) {
+                (
+                    PreparedOperandSource::Bytes {
+                        path: lp,
+                        extent: le,
+                        copy: lc,
+                    },
+                    PreparedOperandSource::Bytes {
+                        path: rp,
+                        extent: re,
+                        copy: rc,
+                    },
+                ) => {
+                    if lc != rc || lp.len() != rp.len() || le.len() != re.len() {
+                        false
+                    } else {
+                        charge(work, lp.len().saturating_add(le.len()), operand_span)?;
+                        lp == rp && le == re
+                    }
+                }
                 (PreparedOperandSource::Sentinel(left), PreparedOperandSource::Sentinel(right))
                 | (PreparedOperandSource::Constant(left), PreparedOperandSource::Constant(right)) => {
                     left == right
                 }
                 (PreparedOperandSource::Source(left), PreparedOperandSource::Source(right))
+                | (PreparedOperandSource::Nul(left), PreparedOperandSource::Nul(right))
                 | (PreparedOperandSource::Current(left), PreparedOperandSource::Current(right))
                 | (
                     PreparedOperandSource::Enclosing(left),
@@ -3682,6 +4260,11 @@ pub(crate) fn same_prepared_library_parts(
                         charge(work, left.len(), operand_span)?;
                         left == right
                     }
+                }
+                (PreparedOperandSource::Null, PreparedOperandSource::Null)
+                | (PreparedOperandSource::OwnerOutput, PreparedOperandSource::OwnerOutput)
+                | (PreparedOperandSource::OffsetOutput, PreparedOperandSource::OffsetOutput) => {
+                    true
                 }
                 _ => false,
             };
@@ -3738,13 +4321,79 @@ mod owner_normalization_tests {
 }
 "#;
 
-    fn source(text: &str) -> (ModuleId, crate::surface::SurfaceModule) {
+    pub(super) fn source(text: &str) -> (ModuleId, crate::surface::SurfaceModule) {
         let source = crate::source::SourceFile::new("owner-normalization.ash", text).unwrap();
         let tree = crate::parser::parse(crate::lexer::lex(&source).unwrap());
         (
             ModuleId::from(source.id()),
             crate::parser::project_module(&source, &tree).unwrap(),
         )
+    }
+
+    #[test]
+    fn temporary_bytes_preserve_source_extent_discipline_and_exact_preparation_budget() {
+        let symbol = r#"    symbol Hash<R> : (State<R>, Bytes, Int) -> Foreign.Call<Int> {
+        name "hash_bytes"
+        abi (pointer(Address), pointer(Address), Size) -> Size
+        operand 0 from 0 current
+        operand 1 from 1 bytes(2) copy
+        operand 2 from 2 scalar
+        output result as scalar
+        outcome otherwise { readable result }
+    }
+"#;
+        let text = OWNED_BYTES.replace("    symbol Free", &format!("{symbol}    symbol Free"));
+        let (module, surface) = source(&text);
+        let original = &surface.foreign_libraries[0];
+        let mut measured = TypeWorkBudget::default();
+        let prepared =
+            prepare_foreign_library_with_budget(module, original, &mut measured).unwrap();
+        assert!(matches!(&prepared.symbols()[1].operands()[1].source,
+            PreparedOperandSource::Bytes { path, extent, copy: true } if path == &[1] && extent == &[2]));
+        let required = measured.used();
+        for prefix in [0, 11] {
+            let mut short = TypeWorkBudget::with_limit(prefix + required - 1);
+            short.charge(prefix).unwrap();
+            assert!(
+                prepare_foreign_library_with_budget(module, original, &mut short)
+                    .unwrap_err()
+                    .is_resource_exhaustion()
+            );
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + required);
+                exact.charge(prefix).unwrap();
+                prepare_foreign_library_with_budget(module, original, &mut exact).unwrap();
+                assert_eq!(exact.used(), prefix + required);
+            }
+        }
+        let mut changed = parts(&prepared);
+        let PreparedOperandSource::Bytes { copy, .. } = &mut changed.symbols[1].operands[1].source
+        else {
+            panic!("bytes role");
+        };
+        *copy = false;
+        assert!(
+            !same_prepared_library_parts(&prepared, &changed, &mut TypeWorkBudget::default())
+                .unwrap()
+        );
+        restore_prepared_library(changed, &mut TypeWorkBudget::default()).unwrap();
+        for text in [
+            text.replace("bytes(2)", "bytes(1)"),
+            text.replace("Bytes, Int)", "Bytes, Bool)"),
+            text.replace("bytes(2) copy", "nul copy"),
+        ] {
+            let (module, surface) = source(&text);
+            assert!(prepare_foreign_library(module, &surface.foreign_libraries[0]).is_err());
+        }
+        let string = text
+            .replace("Bytes, Int)", "String, Int)")
+            .replace("bytes(2) copy", "bytes(2) call_borrow");
+        let (module, surface) = source(&string);
+        let prepared = prepare_foreign_library(module, &surface.foreign_libraries[0]).unwrap();
+        assert!(matches!(
+            prepared.symbols()[1].operands()[1].source(),
+            PreparedOperandSource::Bytes { copy: false, .. }
+        ));
     }
 
     // Construction data is deliberately rebuilt from immutable prepared facts.
@@ -3772,6 +4421,36 @@ mod owner_normalization_tests {
     }
     fn call(value: &PreparedOwnerCall) -> PreparedOwnerCall {
         match value {
+            PreparedOwnerCall::Borrow {
+                application: value,
+                current_operand,
+                output_span,
+                outcome_span,
+                readable_span,
+            } => PreparedOwnerCall::Borrow {
+                application: application(value),
+                current_operand: *current_operand,
+                output_span: *output_span,
+                outcome_span: *outcome_span,
+                readable_span: *readable_span,
+            },
+            PreparedOwnerCall::OutputAcquire {
+                application: value,
+                output_operand,
+                output_span,
+                scalar_output_span,
+                outcome_span,
+                readable_spans,
+                offset,
+            } => PreparedOwnerCall::OutputAcquire {
+                application: application(value),
+                output_operand: *output_operand,
+                output_span: *output_span,
+                scalar_output_span: *scalar_output_span,
+                outcome_span: *outcome_span,
+                readable_spans: *readable_spans,
+                offset: *offset,
+            },
             PreparedOwnerCall::Acquire {
                 application: value,
                 first_nonnull,
@@ -3832,8 +4511,32 @@ mod owner_normalization_tests {
             },
         }
     }
-    fn parts(value: &PreparedForeignLibrary) -> PrivatePreparedLibraryParts {
+    pub(super) fn parts(value: &PreparedForeignLibrary) -> PrivatePreparedLibraryParts {
         PrivatePreparedLibraryParts {
+            accesses: value
+                .accesses
+                .iter()
+                .map(|access| PreparedForeignAccess {
+                    member_index: access.member_index(),
+                    name: access.name().to_owned(),
+                    parameters: access
+                        .parameters()
+                        .iter()
+                        .map(|parameter| PreparedForeignParameter {
+                            name: parameter.name().to_owned(),
+                            kind: parameter.kind().clone(),
+                            origin: parameter.origin().clone(),
+                        })
+                        .collect(),
+                    window_parameter: access.window_parameter(),
+                    window_span: access.window_span(),
+                    owner: application(access.owner()),
+                    extent: access.extent(),
+                    extent_span: access.extent_span(),
+                    preserving_members: access.preserving_members().to_vec(),
+                    origin: access.origin().clone(),
+                })
+                .collect(),
             module: value.module,
             name: value.name.clone(),
             public: value.public,
@@ -3890,6 +4593,31 @@ mod owner_normalization_tests {
                 .symbols
                 .iter()
                 .map(|value| PrivatePreparedSymbolParts {
+                    access_result: value.access_result().map(|result| {
+                        let original = result.application();
+                        let application = PreparedAccessApplication {
+                            family: original.family(),
+                            arguments: original.arguments().to_vec(),
+                            span: original.span(),
+                        };
+                        match result {
+                            PreparedAccessResult::View { keys, span, .. } => {
+                                PreparedAccessResult::View {
+                                    application,
+                                    keys: keys.clone(),
+                                    span: *span,
+                                }
+                            }
+                            PreparedAccessResult::Extent {
+                                view, keys, span, ..
+                            } => PreparedAccessResult::Extent {
+                                application,
+                                view: view.clone(),
+                                keys: keys.clone(),
+                                span: *span,
+                            },
+                        }
+                    }),
                     member_index: value.member_index,
                     name: value.name.clone(),
                     native_name: value.native_name.clone(),
@@ -3906,6 +4634,23 @@ mod owner_normalization_tests {
                             source: match &value.source {
                                 PreparedOperandSource::Source(value) => {
                                     PreparedOperandSource::Source(value.clone())
+                                }
+                                PreparedOperandSource::Bytes { path, extent, copy } => {
+                                    PreparedOperandSource::Bytes {
+                                        path: path.clone(),
+                                        extent: extent.clone(),
+                                        copy: *copy,
+                                    }
+                                }
+                                PreparedOperandSource::Nul(value) => {
+                                    PreparedOperandSource::Nul(value.clone())
+                                }
+                                PreparedOperandSource::Null => PreparedOperandSource::Null,
+                                PreparedOperandSource::OwnerOutput => {
+                                    PreparedOperandSource::OwnerOutput
+                                }
+                                PreparedOperandSource::OffsetOutput => {
+                                    PreparedOperandSource::OffsetOutput
                                 }
                                 PreparedOperandSource::Current(value) => {
                                     PreparedOperandSource::Current(value.clone())

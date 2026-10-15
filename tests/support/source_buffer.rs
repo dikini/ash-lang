@@ -96,6 +96,10 @@ pub fn run_modules(entry: &str, modules: &[(&str, &str)]) -> Result<Observed, Fi
             .join("ffi-native-hosts"),
     );
     let prepared = prepare_program(&compiled, configuration).unwrap();
+    println!(
+        "normal formula native preparation work: {}",
+        prepared.preparation_work()
+    );
     for (name, _) in modules {
         fs::remove_file(fixture.0.join(name)).unwrap();
     }
@@ -108,6 +112,23 @@ pub fn run_modules(entry: &str, modules: &[(&str, &str)]) -> Result<Observed, Fi
         panic!("migrated buffer host: {error:?}\n{log}")
     });
     let generated = built.generated_source().parent().unwrap();
+    if let Some(directory) = std::env::var_os("ASH_SQLITE_DIAGNOSTIC_DIR").map(PathBuf::from) {
+        fs::create_dir_all(&directory).unwrap();
+        for (input, name) in [
+            (executable.as_path(), "program"),
+            (built.generated_source(), "main.rs"),
+            (
+                generated.join("program-image.bin").as_path(),
+                "program-image.bin",
+            ),
+            (
+                generated.join("expected-facts.bin").as_path(),
+                "expected-facts.bin",
+            ),
+        ] {
+            fs::copy(input, directory.join(name)).unwrap();
+        }
+    }
     fs::remove_file(generated.join("program-image.bin")).unwrap();
     fs::remove_file(generated.join("expected-facts.bin")).unwrap();
     let mut child = Command::new(executable)

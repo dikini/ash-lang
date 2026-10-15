@@ -13,8 +13,8 @@ a program from standard input.
 ## Building an executable
 
 The program-build path supports the retained Pure subset, scalar/void foreign
-calls and dependency-free opaque or initialized byte resource scopes on Linux
-x86-64 GNU. It
+calls, declared dependent opaque owners, initialized byte resource scopes and
+scoped read-only copying windows on Linux x86-64 GNU. It
 compiles the source graph once
 and generates a Rust host containing private Core construction data, the
 existing evaluator and any required typed native bridges:
@@ -139,12 +139,13 @@ The Pure carrier retains its restrictions on polymorphic or lexical type
 operations. It admits the common side-effect-free `Foreign.checked_i64` and
 `Foreign.checked_size_t` checks, both returning `Foreign.Call<Int>` with the
 unchanged integer or a conversion failure. The Effect carrier also admits
-generic helper abstraction/application, native requests and dependency-free
-opaque or initialized byte source resource scopes with the admitted lifecycle
-codec. Ordinary
-handler precedence, local resumption and nested normal completion use the
-existing evaluator. Outward resource capture, discard, retained quarantine and
-byte-access windows remain outside this build profile.
+generic helper abstraction/application, native requests, declared dependent
+opaque or initialized byte source resource scopes, and the admitted read-only
+copy-window profile. Ordinary handler precedence, local resumption, resource
+capture/resume, owned discard, retained quarantine and nested reports use the
+existing evaluator and authenticated original lifecycle forests. Window views
+and extents retain exact live owner/family/window identities; an ordinary helper
+or matching function type grants no native-call permission.
 
 Both carriers refuse unsupported method evidence, newtype conversion, other
 intrinsics and integer literal payloads outside signed 64-bit range. Evaluated
@@ -153,8 +154,10 @@ semantics. These are build-path limitations, not changes to ordinary non-foreign
 execution. The source [arena library](../../libraries/README.md) provides the
 minimal allocation/usage/release lifecycle. The ordinary source buffer library
 supplies checked zeroed bytes and scoped access through the same generated path.
-SQLite, temporary copy windows and the separate optional `ash check-ffi`
-authoring tool remain work in the `ffi-ash` milestone.
+The source [copying SQLite library](../../libraries/README.md#copying-sqlite)
+uses explicit native inputs, source protocol and guarded temporary copy windows.
+The separate optional `ash check-ffi` authoring tool remains unimplemented. These
+milestone additions have not yet integrated into Main.
 
 ## Diagnostic formats and locales
 

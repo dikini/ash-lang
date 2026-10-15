@@ -288,6 +288,38 @@ impl TransformFamily for EffectOperationFamily {
                     origin,
                 )
             }
+            EffectOperation::SourceCopyWindow(scope) => {
+                let identity = copy_variable_id(builder, scope.identity(), context)?;
+                let mut arguments = IterativeArgumentBuffer(Vec::new());
+                builder.charge_effect_metadata(
+                    scope.arguments().len() + scope.interpretations().len(),
+                )?;
+                arguments
+                    .try_reserve(scope.arguments().len())
+                    .map_err(|_| BuildError::TypeWorkExceeded)?;
+                for argument in scope.arguments() {
+                    arguments.push(copy_argument(builder, argument, context)?);
+                }
+                let mut interpretations = Vec::new();
+                interpretations
+                    .try_reserve_exact(scope.interpretations().len())
+                    .map_err(|_| BuildError::TypeWorkExceeded)?;
+                for original in scope.interpretations() {
+                    interpretations.push(super::NativeInterpretation::new(
+                        copy_effect_instance(builder, original.effect(), context)?,
+                        std::sync::Arc::clone(original.symbol()),
+                    ));
+                }
+                let window = super::source_window::SourceCopyWindowNode::new(
+                    std::sync::Arc::clone(scope.family()),
+                    arguments.into_vec().into_boxed_slice(),
+                    identity,
+                    interpretations.into_boxed_slice(),
+                    remap(remapped, scope.state())?,
+                    remap(remapped, scope.body())?,
+                );
+                builder.source_copy_window(Box::new(window), ty.into_inner(), effects, origin)
+            }
             EffectOperation::SourceResourceScope(scope) => {
                 if context.is_some() {
                     return Err(TransformError::InvalidValidatedInput);

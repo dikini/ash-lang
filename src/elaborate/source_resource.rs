@@ -394,6 +394,18 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             }
             effects = self.union_effects(&effects, &outward, progress.span)?;
         }
+        // Selected source-handler native calls belong to this same sealed
+        // scope; preserve all other outward instances, including ordinary overrides.
+        for interpretation in &header.interpreted {
+            let original =
+                clone_effect_instance_with_budget(&interpretation.instance, &mut self.type_work)
+                    .map_err(|_| type_resource())?;
+            let interpreted = progress
+                .replacements
+                .substitute_row(&EffectRow::singleton(original), &mut self.type_work)?;
+            let effect = interpreted.known().first().ok_or_else(invalid_state)?;
+            effects = self.remove_cleanup_effect(&effects, effect, progress.span, true)?;
+        }
         self.check_provider_instance_escape(
             progress.resource,
             &report,
@@ -549,8 +561,7 @@ fn lower_source_copies(
             _ => invalid_state(),
         }
     }
-    transform::begin_provider_draft_work(builder, work.remaining());
-    let result = (|| {
+    builder.with_caller_type_work(work, |builder| {
         let replacements = HashMap::new();
         let acquire = copy_prepared_provider_forest(
             builder,
@@ -569,8 +580,7 @@ fn lower_source_copies(
         )
         .map_err(failure)?;
         let original_handler = template.original_handler_node();
-        work.charge(original_handler.clauses().len().saturating_mul(2))
-            .map_err(|_| type_resource())?;
+        builder.charge_rebuild_work(original_handler.clauses().len().saturating_mul(2))?;
         let mut roots = Vec::new();
         roots
             .try_reserve_exact(original_handler.clauses().len())
@@ -636,14 +646,15 @@ fn lower_source_copies(
             ));
         }
         let mut effect_arguments = SourceArguments(Vec::new());
-        work.charge(original_handler.effect().arguments().len())
-            .map_err(|_| type_resource())?;
+        builder.charge_rebuild_work(original_handler.effect().arguments().len())?;
         effect_arguments
             .0
             .try_reserve_exact(original_handler.effect().arguments().len())
             .map_err(|_| type_resource())?;
         for argument in original_handler.effect().arguments() {
-            effect_arguments.0.push(context.argument(argument, work)?);
+            effect_arguments
+                .0
+                .push(builder.with_rebuild_type_work(|work| context.argument(argument, work))?);
         }
         let effect = EffectInstance::new_kinded(
             original_handler.effect().effect(),
@@ -672,9 +683,7 @@ fn lower_source_copies(
             handler: handler_node,
             forests: [acquire, finish, handler],
         })
-    })();
-    transform::discharge_provider_draft_work(builder, work)?;
-    result
+    })
 }
 
 fn validation(error: crate::core::ValidationError) -> TypeError {
@@ -847,6 +856,12 @@ impl<'a> SourceBinderInventory<'a, '_> {
                         for arm in &expression.arms {
                             self.push([Node::Pattern(&arm.pattern), Node::Expression(&arm.body)])?;
                         }
+                    }
+                    ResolvedExprKind::CopyWindow(window) => {
+                        self.push([
+                            Node::Expression(&window.state),
+                            Node::Expression(&window.body),
+                        ])?;
                     }
                     ResolvedExprKind::ProviderResource(resource) => {
                         for method in &resource.forwarding {

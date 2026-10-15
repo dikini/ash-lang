@@ -1046,6 +1046,20 @@ fn visit_source_items<'a>(
                     return Ok(true);
                 }
                 match &expression.kind {
+                    ResolvedExprKind::CopyWindow(window) => {
+                        push_source(
+                            &mut pending,
+                            BodySourceItem::Expression(&window.body),
+                            work,
+                            expression.span,
+                        )?;
+                        push_source(
+                            &mut pending,
+                            BodySourceItem::Expression(&window.state),
+                            work,
+                            expression.span,
+                        )?;
+                    }
                     ResolvedExprKind::ProviderResource(resource) => {
                         push_source(
                             &mut pending,

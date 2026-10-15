@@ -141,9 +141,11 @@ fn runtime_value_class(value: &Value) -> &'static str {
     match value {
         Value::ResourceHandle(_) => "resource-handle",
         Value::NativeStateView(_) => "native-state-view",
+        Value::NativeWindowView(_) => "native-window-view",
+        Value::NativeWindowExtent(_) => "native-window-extent",
         Value::LayoutWitness(_) => "layout-witness",
         Value::Reference { .. } => "reference",
-        Value::Bytes(_) => "bytes",
+        Value::Bytes(_) | Value::BytePrefix(_) => "bytes",
         Value::String(_) => "string",
         Value::Intrinsic(_) => "intrinsic",
         Value::ByteCallable(_) => "byte-callable",
