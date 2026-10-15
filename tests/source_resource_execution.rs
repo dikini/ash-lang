@@ -68,6 +68,122 @@ fn owner_with_scalar_teardown_result() -> String {
 }
 
 #[test]
+fn pr27_implicit_finish_tracks_replaced_private_payload_captures() {
+    let owner = include_str!("fixtures/source-owner/replaced_payload_owner.ash");
+    let entry = r#"import owner as Owner
+initial : Unit -> Int
+initial () = 7
+main : Unit -> Owner.Scope<Unit, Unit -> Int, Unit>
+main () = resource Owner.Probe<{}, Fresh, {}> owner = initial {
+    let replacement : Unit -> Int = fn(ignored) {
+        let retained = owner
+        42
+    }
+    Owner.store (owner, replacement)
+}
+"#;
+    let independent = entry.replace("let retained = owner", "let retained = 1");
+    let handled = entry.replace(
+        "let retained = owner\n        42",
+        "handle (Owner.read owner) with Owner.ProbeOps<Owner.Probe<{}, Fresh, {}>> {\n            read ignored => resume 42\n            store ignored => resume ()\n        }",
+    );
+    let explicit = owner
+        .replace(
+            "finish (state, data) => match perform Free",
+            "finish (state, data) => {\n        let latest : Unit -> Int = Foreign.data_of state\n        match perform Free",
+        )
+        .replace("ConsumedFailure data", "ConsumedFailure latest")
+        .replace("Retained(state, data)", "Retained(state, latest)")
+        .replace("    handlers (state, data)", "    }\n    handlers (state, data)");
+    let discarded = format!("{owner}\nindependent : Unit -> Int\nindependent ignored = 42\n")
+        .replace("ConsumedFailure data", "Consumed")
+        .replace("Retained(state, data)", "Retained(state, independent)");
+    let mut unexpected = Vec::new();
+    for (name, library, source, accepted) in [
+        ("independent replacement", owner, independent.as_str(), true),
+        ("explicit latest read", explicit.as_str(), entry, false),
+        ("implicit finish data", owner, entry, false),
+        ("locally handled request", owner, handled.as_str(), false),
+        (
+            "payload retained identity",
+            discarded.as_str(),
+            entry,
+            false,
+        ),
+    ] {
+        let fixture = Fixture::new(source);
+        fs::write(fixture.0.join("owner.ash"), library).unwrap();
+        match compile_path(fixture.configuration()) {
+            Ok(_) => {
+                println!("{name}: accepted through independent Core");
+                if !accepted {
+                    unexpected.push(name);
+                }
+            }
+            Err(failure) => {
+                println!("{name}: {}", failure.reason_code());
+                assert!(
+                    !accepted,
+                    "independent callback must remain legal: {failure:?}"
+                );
+                assert_eq!(failure.reason_code(), "type.resource-escape");
+            }
+        }
+    }
+    assert!(
+        unexpected.is_empty(),
+        "closing-owner capture admitted: {unexpected:?}"
+    );
+}
+
+#[test]
+fn pr27_latest_finish_payload_preserves_immutable_handler_aliases() {
+    let owner = include_str!("fixtures/source-owner/replaced_payload_owner.ash")
+        .replace("read : Access -> Int", "read : Access -> (Unit -> Int)")
+        .replace("read access => resume 7", "read access => resume data");
+    // The handler returns its independent callback value. Calling that value
+    // belongs to the ordinary body, outside the bounded lifecycle call carrier.
+    generated_owner_program_with_native(
+        &owner,
+        "import owner as Owner\ninitial : Unit -> Int\ninitial () = 7\nmain : Unit -> (Int, Int)\nmain () = {\n    let report = resource Owner.Probe<{}, Fresh, {}> owner = initial {\n        let replacement : Unit -> Int = fn(ignored) {\n            42\n        }\n        let stored = Owner.store (owner, replacement)\n        let original = Owner.read owner\n        original ()\n    }\n    match report {\n        Owner.Completed(observed, Owner.ConsumedError(action)) => (observed, action ())\n        _ => (0, 0)\n    }\n}\n",
+        None,
+        "(7, 42)",
+        "acquire:8\nrelease:8\n",
+        include_str!("fixtures/source-owner/native_owner.c"),
+    );
+}
+
+#[test]
+fn pr27_acquired_handler_borrow_uses_the_exact_retained_enclosing_owner() {
+    let query = r#"    symbol ChildQuery<P, R> : (ChildState<P, R>, ParentState<P>) -> Foreign.Call<Int> {
+        name "ash_child_query"
+        abi (pointer(Address), pointer(ParentBytes)) -> Status
+        operand 0 from 0 current
+        operand 1 from 1 enclosing
+        output result as scalar
+        outcome otherwise { readable result }
+    }
+"#;
+    let owner = include_str!("fixtures/source-owner/dependent_owner.ash")
+        .replace("    repr Size = size_t", "    repr Size = size_t\n    repr Status = signed(32)")
+        .replace("    symbol ChildHold<P, R>", &format!("{query}    symbol ChildHold<P, R>"))
+        .replace("interpret ChildAllocate<P, R>, ChildHold<P, R>", "interpret ChildAllocate<P, R>, ChildHold<P, R>, ChildQuery<P, R>")
+        .replace("child_read access => resume label", "child_read access => {\n            let dependency = perform ParentOps<Parent<P>, ParentState<P>>.borrow parent\n            match perform ChildQuery<P, R>.call (state, dependency) {\n                Foreign.Returned(value) => resume value\n                Foreign.ConversionFailed(_) => resume 0\n            }\n        }");
+    let native = format!(
+        "{}\nint ash_child_query(struct ash_child *child, struct ash_parent *parent) {{\n    assert(child != NULL && child->parent == parent && parent->children != 0);\n    record(\"child-query\", child->identity);\n    return 42;\n}}\n",
+        include_str!("fixtures/source-owner/native_dependent_owner.c")
+    );
+    generated_owner_program_with_native(
+        &owner,
+        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Unit, Owner.Scope<Unit, Unit, Int>>\nmain () = resource Owner.Parent<ParentFresh> parent = 64 {\n    resource Owner.Child<ParentFresh, ChildFresh> child = (parent, 4) {\n        Owner.child_read child\n    }\n}\n",
+        None,
+        "Completed(Completed(42, RetainedError(())), RetainedError(()))",
+        "parent-acquire:64\nchild-acquire:4\nchild-query:4\nchild-retain:4\nchild-release:4\nparent-final-byte:99\nparent-release:64\n",
+        &native,
+    );
+}
+
+#[test]
 fn generated_status_owner_records_consumption_before_reporting_scalar_result() {
     let owner = owner_with_scalar_teardown_result();
     let native = include_str!("fixtures/source-owner/native_owner.c")

@@ -21,6 +21,15 @@ release; every non-null allocation is released once.
 Resource and native applications retain row/type/row arguments, with the owned
 identity in the middle position. The state family itself has Type-only arguments.
 
+`replaced_payload_owner.ash` supplies the private-data regression for PR #27.
+Independent callbacks remain legal. Replacing data with a closure retaining the
+current owner must reject, including when finish discards the data. A native
+control distinguishes acquisition-time handler aliases from the latest payload
+passed to finish by returning the old callback to the resource body and calling
+the new callback from the completion report. The dependent-owner scalar query
+separately checks guard-held parent lineage after acquisition, with exact native
+query and cleanup traces.
+
 `acquired_only_owner.ash` and `acquired_only_entry.ash` use the same native fixture
 with a one-parameter `Outcome<T>` report. The public pipeline also checks renamed
 constructor roles, a generic error parameter, malformed report fields and forged

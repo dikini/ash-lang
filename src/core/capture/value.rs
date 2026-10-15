@@ -2694,6 +2694,13 @@ impl Graph {
                 source,
                 budget,
             )?;
+            // Handler aliases keep their acquisition value. Runtime finish
+            // instead receives the latest private payload, including stores.
+            let finish_data = self.push(
+                Expr::Tuple(copy_slice(&[handle, payload], budget)?),
+                source,
+                budget,
+            )?;
             let completed = self.push(
                 Expr::Cleanup {
                     body: handler,
@@ -2707,7 +2714,7 @@ impl Graph {
             let completed = self.push(
                 Expr::Bind {
                     binder: finish_parameter,
-                    initializer: state_data,
+                    initializer: finish_data,
                     body: completed,
                 },
                 source,
@@ -5466,6 +5473,42 @@ impl<'a> Analysis<'a> {
         Ok(())
     }
 
+    fn source_payload_retains_owner(
+        &mut self,
+        owner: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<bool, Failure> {
+        let Some(definition) = self.graph.source_payload(owner, budget)? else {
+            return Ok(false);
+        };
+        // Read only the converged store; validation must not materialize a
+        // missing value port after control/call successor discovery.
+        let payload = *self
+            .indices
+            .get(&(definition.slot, context))
+            .ok_or(Failure::Invalid)?;
+        let dependencies = self.dependencies(payload, budget)?;
+        charge(budget, dependencies.len())?;
+        Ok(dependencies.contains(&Atom::Resource(owner, context)))
+    }
+
+    fn check_source_payload_owner(
+        &mut self,
+        owner: usize,
+        context: usize,
+        acquisition: Span,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        if self.source_payload_retains_owner(owner, context, budget)? {
+            return Err(Failure::Escape {
+                source: self.graph.sources[owner],
+                acquisition,
+            });
+        }
+        Ok(())
+    }
+
     pub(super) fn check_resources(&mut self, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
         if !self.pending.is_empty() || self.current.is_some() {
             return Err(Failure::Invalid);
@@ -5485,7 +5528,7 @@ impl<'a> Analysis<'a> {
                     acquisition: source,
                 });
             }
-            return Ok(());
+            return self.check_source_payload_owner(expression, context, source, budget);
         }
         for slot in 0..self.slots.len() {
             charge(budget, 1)?;
@@ -5501,6 +5544,7 @@ impl<'a> Analysis<'a> {
                         acquisition: source,
                     });
                 }
+                self.check_source_payload_owner(expression, context, source, budget)?;
             }
         }
         Ok(())
@@ -5530,10 +5574,15 @@ impl<'a> Analysis<'a> {
             let (expression, context) = self.slots[slot].key;
             if let Expr::Resource { body, .. } = self.graph.expressions[expression]
                 && let Some(&body) = self.indices.get(&(body, context))
-                && self
-                    .dependencies(body, budget)?
-                    .contains(&Atom::Resource(expression, context))
             {
+                let body_retains_owner = self
+                    .dependencies(body, budget)?
+                    .contains(&Atom::Resource(expression, context));
+                if !body_retains_owner
+                    && !self.source_payload_retains_owner(expression, context, budget)?
+                {
+                    continue;
+                }
                 charge(budget, 1)?;
                 candidates.try_reserve(1).map_err(|_| Failure::Resource)?;
                 candidates.push((expression, context));
@@ -7184,6 +7233,7 @@ mod tests {
                     data.atom(state, Atom::Resource(10 + offset, creation), work)?;
                     let payload = data.slot(3 + offset, creation, work)?;
                     data.link(payload, 2 + offset, creation, work)?;
+                    data.slot(10 + offset, creation, work)?;
                 }
                 let first = data.slot(5 + offset, 0, work)?;
                 let second = data.slot(5 + offset, 1, work)?;
@@ -7205,6 +7255,8 @@ mod tests {
                     data.dependencies(second, work)?.is_empty(),
                     "another activation has a separate store"
                 );
+                data.check_source_payload_owner(10 + offset, 0, graph.sources[10 + offset], work)?;
+                assert!(data.resource_candidates(work)?.is_empty());
                 // Closing-owner dependence must survive even inside a later
                 // stored closure, so the ordinary escape fence can reject it.
                 data.atom(capture, Atom::Resource(10 + offset, 0), work)?;
@@ -7213,7 +7265,22 @@ mod tests {
                     data.dependencies(first, work)?
                         .contains(&Atom::Resource(10 + offset, 0))
                 );
-                Ok(())
+                data.check_source_payload_owner(10 + offset, 1, graph.sources[10 + offset], work)?;
+                assert_eq!(
+                    data.resource_candidates(work)?,
+                    [(10 + offset, 0)],
+                    "a store-only own capture must enter focused resource checking"
+                );
+                match data.check_source_payload_owner(
+                    10 + offset,
+                    0,
+                    graph.sources[10 + offset],
+                    work,
+                ) {
+                    Err(Failure::Escape { .. }) => Ok(()),
+                    Err(failure) => Err(failure),
+                    Ok(()) => panic!("private data must not retain its current owner"),
+                }
             };
             let mut measured = TypeWorkBudget::unbounded();
             run(&mut measured).unwrap();

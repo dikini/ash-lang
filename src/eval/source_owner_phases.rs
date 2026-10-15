@@ -1590,18 +1590,31 @@ impl<'runtime> super::Machine<'runtime> {
             completion,
             &mut self.instantiation_work,
         )?;
-        let permitted = if finishing {
-            completion.is_some_and(|guard| guard.retains(&dependency))
-        } else {
-            super::charge_effect_work(
-                &mut self.instantiation_work,
-                boundary.dependencies.len(),
-                super::RuntimePhase::Access,
-            )?;
-            boundary
-                .dependencies
-                .iter()
-                .any(|admitted| admitted.same_slot(&dependency))
+        let permitted = match boundary.owner.as_ref() {
+            Some(guard) => {
+                // Acquisition moved these receipts into the guard. Membership
+                // does not grant ordinary access to a quarantined dependency:
+                // borrowed_owner above receives completion permission only
+                // during Finish.
+                super::charge_effect_work(
+                    &mut self.instantiation_work,
+                    guard.retained_dependency_count(),
+                    super::RuntimePhase::Access,
+                )?;
+                guard.retains(&dependency)
+            }
+            None if !finishing => {
+                super::charge_effect_work(
+                    &mut self.instantiation_work,
+                    boundary.dependencies.len(),
+                    super::RuntimePhase::Access,
+                )?;
+                boundary
+                    .dependencies
+                    .iter()
+                    .any(|admitted| admitted.same_slot(&dependency))
+            }
+            None => false,
         };
         if !permitted {
             return Err(super::RuntimeFailure::ForeignBinding);

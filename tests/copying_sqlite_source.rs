@@ -546,9 +546,9 @@ fn sqlite_input_extent_refusal_precedes_binding_and_preserves_owner_release() {
         .replace("name \"sqlite3_initialize\"", "name \"probe_initialize\"")
         .replace("name \"sqlite3_open_v2\"", "name \"probe_open\"")
         .replace("name \"sqlite3_close\"", "name \"probe_close\"")
-        .replace("name \"sqlite3_prepare_v2\"", "name \"probe_prepare\"")
-        .replace("name \"sqlite3_finalize\"", "name \"probe_finalize\"")
-        .replace("name \"sqlite3_bind_blob\"", "name \"probe_bind_blob\"");
+        .replace("name \"sqlite3_prepare_v2\"", "name \"probe_statement_prepare\"")
+        .replace("name \"sqlite3_finalize\"", "name \"probe_statement_finalize\"")
+        .replace("name \"sqlite3_bind_blob\"", "name \"probe_refused_bind_blob\"");
     let start = STATEMENT_RESOURCE.find("select_value access => ").unwrap();
     let end = start
         + STATEMENT_RESOURCE[start..]
@@ -581,7 +581,7 @@ fn sqlite_input_extent_refusal_precedes_binding_and_preserves_owner_release() {
     // calls. Entering the selected bind callback aborts, making zero entry
     // independent of bytes under test or a release identity carried by them.
     let source = fixture.0.join("counted.c");
-    fs::write(&source, format!("{COUNTED_CONNECTION}\n{COUNTED_STATEMENT}\nint probe_bind_blob(void *statement, int index, const void *bytes, int length, void (*destroy)(void *)) {{ abort(); }}\n")).unwrap();
+    fs::write(&source, format!("{COUNTED_CONNECTION}\n{COUNTED_STATEMENT}\nint probe_refused_bind_blob(void *statement, int index, const void *bytes, int length, void (*destroy)(void *)) {{ abort(); }}\n")).unwrap();
     let object = fixture.0.join("counted.o");
     assert!(
         Command::new("cc")
@@ -1137,9 +1137,9 @@ fn nested_statement_probe(dynamic_index: bool, protocol: bool) {
         .replace("\"sqlite3_initialize\"", "\"probe_initialize\"")
         .replace("\"sqlite3_open_v2\"", "\"probe_open\"")
         .replace("\"sqlite3_close\"", "\"probe_close\"")
-        .replace("\"sqlite3_prepare_v2\"", "\"probe_prepare\"")
-        .replace("\"sqlite3_finalize\"", "\"probe_finalize\"")
-        .replace("\"sqlite3_step\"", "\"probe_step\"")
+        .replace("\"sqlite3_prepare_v2\"", "\"probe_statement_prepare\"")
+        .replace("\"sqlite3_finalize\"", "\"probe_statement_finalize\"")
+        .replace("\"sqlite3_step\"", "\"probe_statement_step\"")
         .replace("\"sqlite3_column_int64\"", "\"probe_column\"")
         // Retain the complete used two-owner probe, without the prototype's
         // unused Boolean provider operations.
@@ -1550,33 +1550,34 @@ const COUNTED_CONNECTION: &str = include_str!("support/sqlite_connection_trace.c
 // The second execution deliberately violates only the tail-address contract
 // AFTER a real successful SQLite prepare. This is extraction-failure injection,
 // not a claim that SQLite itself returned an invalid address.
+// Distinct wrapper names keep this oracle separate from the shared trace.
 const COUNTED_STATEMENT: &str = r#"
 #include <stdint.h>
 #include <string.h>
 extern int sqlite3_prepare_v2(void *, const char *, int, void **, const char **);
 extern int sqlite3_finalize(void *);
 extern int sqlite3_step(void *);
-extern long long sqlite3_column_int64(void *, int);
-int probe_prepare(void *connection, const char *sql, int length, void **statement, const char **tail) {
+extern int64_t sqlite3_column_int64(void *, int);
+int probe_statement_prepare(void *connection, const char *sql, int length, void **statement, const char **tail) {
     if (*statement || *tail || length != (int)strlen(sql) + 1) abort();
     int status = sqlite3_prepare_v2(connection, sql, length, statement, tail);
     trace("prepare", status, *statement != NULL);
     if (getenv("ASH_SQLITE_INVALID_TAIL")) *tail = (const char *)(uintptr_t)1;
     return status;
 }
-int probe_finalize(void *statement) {
+int probe_statement_finalize(void *statement) {
     int status = sqlite3_finalize(statement);
     trace("finalize", status, -1);
     return status;
 }
-int probe_step(void *statement) {
+int probe_statement_step(void *statement) {
     int status = sqlite3_step(statement);
     trace("step", status, -1);
     return status;
 }
-long long probe_column(void *statement, int column) {
+int64_t probe_column(void *statement, int column) {
     if (column) abort();
-    long long value = sqlite3_column_int64(statement, column);
+    int64_t value = sqlite3_column_int64(statement, column);
     trace("column", (int)value, -1);
     return value;
 }
