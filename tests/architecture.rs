@@ -498,6 +498,89 @@ const TASK_4_PHASE_CONSTRAINT: &str = "kind inference is intentionally absent on
 
 #[rustfmt::skip]
 const KIND_SITES: &[KindSite] = &[
+    // Passive access and copy-window fields retain their physical owners.
+    // Borrowed views, shared facts and owned buffers keep separate profiles.
+    kind_site!("src/build/image.rs::DecodedType.value", FieldBuildTypeOwned),
+    kind_site!("src/build/image.rs::Decoder.decoded_types", FieldBuildTypeOwned),
+    kind_site!("src/build/image.rs::Decoder.source_declaration_catalogs", FieldBuildProgramShared),
+    kind_site!("src/build/image.rs::Encoder.source_accesses", FieldBuildNativeFactsBorrow),
+    kind_site!("src/build/image.rs::Encoder.source_declaration_catalogs", FieldBuildProgramShared, Mixed),
+    kind_site!("src/build/image.rs::Encoder.source_views", FieldSourceBuildTemplateShared, Borrowed),
+    kind_site!("src/core/capture/value.rs::SourcePrimitiveReplies.nodes", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeCoreTree),
+    kind_site!("src/core/capture/value.rs::SourceWindowReplies.nodes", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeCoreTree),
+    kind_site!("src/core/effect.rs::$impl_CoreBuilder::$fn_replay_effect_rows_in_range::Equation.CopyWindow.2", FieldNativeReplayMixed),
+    kind_site!("src/core/effect.rs::EffectOperation.SourceCopyWindow.0", FieldSourceTemplateShared),
+    kind_site!("src/core/provider/projection.rs::BorrowedNodeProjection.metadata", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeCoreTree),
+    kind_site!("src/core/provider/projection.rs::MetadataView.Argument.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeCoreTree),
+    kind_site!("src/core/provider/projection.rs::MetadataView.Kind.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeCoreTree),
+    kind_site!("src/core/provider/projection.rs::MetadataView.Row.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeCoreTree),
+    kind_site!("src/core/provider/projection.rs::MetadataView.Type.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeCoreTree),
+    kind_site!("src/core/provider/specialization.rs::SourceResourceOriginalForest.inventory", FieldProviderCoreOwned),
+    kind_site!("src/core/provider/specialization.rs::SourceResourceOriginalForest.projections", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeCoreTree),
+    kind_site!("src/core/provider/specialization.rs::SourceScopeFreshening.fresh", FieldProviderKindBorrow),
+    kind_site!("src/core/source_window.rs::SourceCopyWindowNode.descriptor", FieldSourceTemplateShared),
+    kind_site!("src/core/source_window.rs::WindowDescriptor.arguments", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/source_window.rs::WindowDescriptor.family", FieldNativeCoreFactsShared),
+    kind_site!("src/core/source_window.rs::WindowDescriptor.interpretations", FieldNativeCoreMixed),
+    kind_site!("src/elaborate.rs::ElaborationTask.CopyWindowBody.0", FieldSourceElaborationMixed),
+    kind_site!("src/elaborate.rs::ElaborationTask.FinishCopyWindow.0", FieldSourceElaborationMixed),
+    kind_site!("src/elaborate/provider.rs::CheckingContext.windows", FieldSourceElaborationMixed),
+    kind_site!("src/elaborate/source_window.rs::CheckingWindow.arguments", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate/source_window.rs::CheckingWindow.family", FieldSourceElaborationTemplateShared),
+    kind_site!("src/elaborate/source_window.rs::WindowArguments.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate/source_window.rs::WindowProgress.arguments", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate/source_window.rs::WindowProgress.family", FieldSourceElaborationTemplateShared),
+    kind_site!("src/elaborate/source_window.rs::WindowProgress.source", FieldBorrowedResolvedCarrierRetentionPreservedCarrierElaborationInferenceTypeResolvedTree),
+    kind_site!("src/elaborate/source_window.rs::WindowProgress.state", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/eval/machine.rs::Frame.SourceWindowBoundary.0", FieldNativeCallMixed),
+    kind_site!("src/eval/machine.rs::Frame.SourceWindowInitializer.environment", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::SourceWindowBoundary.arguments", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationTransientWork),
+    kind_site!("src/eval/machine.rs::SourceWindowBoundary.environment", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::SourceWindowBoundary.views", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/source_owner_phases.rs::AcquireReportSlots.status", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/source_owner_phases.rs::AcquireStatusStorage.fields", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/source_owner_phases.rs::OwnerAcquireReady.slots", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/source_owner_phases.rs::OwnerAcquireRecorded.slots", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/source_owner_phases.rs::OwnerAcquireReturned.slots", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/source_owner_phases.rs::OwnerBorrowReady.invocation", FieldNativeCallMixed),
+    kind_site!("src/eval/source_owner_phases.rs::SourceOwnerCallProgress.BorrowReady.0", FieldNativeCallMixed),
+    kind_site!("src/eval/source_window_phases.rs::WindowArguments.0", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationTransientWork),
+    kind_site!("src/eval/source_window_phases.rs::WindowView.operands", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/source_window_phases.rs::WindowView.symbol", FieldSourceRuntimeOwnerShared),
+    kind_site!("src/evidence_validation.rs::LinkedLocalScope.CopyWindow.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeResolvedTree),
+    kind_site!("src/foreign/checked_source.rs::PrivateExecutableForeignLibraryParts.abi", FieldBuildPreparedShared, Owned),
+    kind_site!("src/foreign/source_access.rs::CheckedForeignAccess.parameters", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree, Shared),
+    kind_site!("src/foreign/source_access.rs::CheckedForeignAccess.prepared", FieldForeignPreparedKinds, Shared),
+    kind_site!("src/foreign/source_access.rs::CheckedForeignNominal.Access.0", FieldForeignFactsShared),
+    kind_site!("src/foreign/source_access.rs::CheckedForeignNominal.Owner.0", FieldForeignFactsShared),
+    kind_site!("src/foreign/source_access_contract.rs::PreparedForeignAccess.parameters", FieldForeignPreparedKinds),
+    kind_site!("src/foreign/source_bindings.rs::AdmittedSourceOwnerBorrowInvocation.binding", FieldNativeBindingBorrow),
+    kind_site!("src/foreign/source_bindings.rs::AdmittedSourceOwnerBorrowInvocation.receipt", FieldNativeCallMixed),
+    kind_site!("src/foreign/source_bindings.rs::AdmittedSourceOwnerInvocation.Borrow.0", FieldNativeCallMixed),
+    kind_site!("src/foreign/source_bindings.rs::AdmittedSourceWindowInvocation.binding", FieldNativeBindingBorrow),
+    kind_site!("src/foreign/source_bindings.rs::AdmittedSourceWindowInvocation.receipt", FieldNativeCallMixed),
+    kind_site!("src/foreign/source_contract.rs::PreparedForeignAccess.$alias", FieldForeignPreparedKinds),
+    kind_site!("src/foreign/source_contract.rs::PreparedForeignLibrary.accesses", FieldForeignPreparedKinds),
+    kind_site!("src/foreign/source_contract.rs::PrivatePreparedLibraryParts.accesses", FieldBuildPreparedShared, Owned),
+    kind_site!("src/kind.rs::BodyWork.CopyWindowBody.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeResolvedTree),
+    kind_site!("src/parser/project.rs::ExpressionTask.FinishCopyWindow.family", FieldSurfaceProjectionOnlyDeferredProjectionProjectionProjectionSurfaceTree),
+    kind_site!("src/resolve.rs::PendingCopyWindow.arguments", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
+    kind_site!("src/resolve.rs::PendingCopyWindow.identity", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
+    kind_site!("src/resolve.rs::PendingCopyWindow.state", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
+    kind_site!("src/resolve.rs::ResolveTask.CopyWindowState.source", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
+    kind_site!("src/resolve.rs::ResolveTask.FinishCopyWindow.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork, Mixed),
+    kind_site!("src/resolved.rs::ResolvedCopyWindowExpr.arguments", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
+    kind_site!("src/resolved.rs::ResolvedCopyWindowExpr.body", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
+    kind_site!("src/resolved.rs::ResolvedCopyWindowExpr.identity", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
+    kind_site!("src/resolved.rs::ResolvedCopyWindowExpr.state", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
+    kind_site!("src/resolved.rs::ResolvedExprKind.CopyWindow.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
+    kind_site!("src/resolved.rs::SourceForeignNominalCandidate.access", FieldForeignFactsShared),
+    kind_site!("src/resolved/image_registry.rs::InterfaceRows.0", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree),
+    kind_site!("src/surface.rs::SurfaceCopyWindowExpr.body", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
+    kind_site!("src/surface.rs::SurfaceCopyWindowExpr.family", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
+    kind_site!("src/surface.rs::SurfaceCopyWindowExpr.state", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
+    kind_site!("src/surface.rs::SurfaceExprKind.CopyWindow.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
+
     // Original provider catalogue construction borrows the resolved module,
     // checked interface facts and canonical registry without retaining copies.
     kind_site!("src/evidence_validation.rs::MethodEvidenceInputs.SourceInterfaces.module", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeResolvedTree),
@@ -651,9 +734,9 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/foreign/source_runtime.rs::NativeOwnerGuard.$alias", FieldSourceRuntimeOwnerShared),
     kind_site!("src/foreign/source_runtime.rs::NativeByteAccess.$alias", FieldSourceRuntimeOwnerShared, Borrowed),
     kind_site!("src/foreign/source_runtime.rs::NativeOwnerGuardReady.$alias", FieldSourceRuntimeOwnerShared),
-    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_source_resource_definitions::$block_160_0_3::$block_160_0_3_6::Effects.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
-    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_source_resource_definitions::$block_160_0_3::$block_160_0_3_6::Handlers.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
-    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_source_resource_definitions::$block_160_0_3::$block_160_0_3_6::Provider.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
+    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_source_resource_definitions::$block_161_0_3::$block_161_0_3_6::Effects.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
+    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_source_resource_definitions::$block_161_0_3::$block_161_0_3_6::Handlers.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
+    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_source_resource_definitions::$block_161_0_3::$block_161_0_3_6::Provider.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolve.rs::ResolvedDeclarations.source_resources", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolve.rs::ResolvedSourceResourceBuffer.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolve.rs::Resolver.source_foreign_libraries", FieldForeignPreparedKinds, Shared),
@@ -661,7 +744,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolve.rs::SourceOwnerCandidateBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork, Mixed),
     kind_site!("src/resolved.rs::$impl_ResolvedRegistry::$fn_with_image_interface_owner_definitions::Pending.0", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree),
     kind_site!("src/resolved.rs::$impl_ResolvedRegistry::$fn_with_image_source_parameters::Parameter.0", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree),
-    kind_site!("src/resolved.rs::$impl_ResolvedRegistry::$fn_with_source_owner_candidates::Pending.0", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree, Mixed),
+    kind_site!("src/resolved.rs::$impl_ResolvedRegistry::$fn_with_source_foreign_nominal_candidates::Pending.0", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree, Mixed),
     kind_site!("src/resolved.rs::CheckedModule.source_resources", FieldSourceTemplateShared),
     kind_site!("src/resolved.rs::CheckedModuleParts.source_resources", FieldSourceTemplateShared),
     kind_site!("src/resolved.rs::ExportSummary.source_resource_facts", FieldResourceFactsShared),
@@ -671,14 +754,14 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::ResolvedModule.source_resources", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolved.rs::ResolvedModuleGroup.source_resources", FieldSourceTemplateShared),
     kind_site!("src/resolved.rs::ResolvedModuleParts.source_resources", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
-    kind_site!("src/resolved.rs::ResolvedRegistry.source_owner_candidates", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree, Shared),
+    kind_site!("src/resolved.rs::ResolvedRegistry.source_foreign_nominals", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree, Shared),
     kind_site!("src/resolved.rs::ResolvedRegistry.source_resource_facts", FieldResourceFactsShared),
     kind_site!("src/resolved.rs::ResolvedSourceResourceDefinition.acquire", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolved.rs::ResolvedSourceResourceDefinition.finish", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolved.rs::ResolvedSourceResourceDefinition.handlers", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolved.rs::ResolvedSourceResourceDefinition.header", FieldResourceFactsShared),
-    kind_site!("src/resolved.rs::SourceOwnerCandidate.parameters", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree, Shared),
-    kind_site!("src/resolved.rs::SourceOwnerCandidate.prepared", FieldForeignPreparedKinds, Shared),
+    kind_site!("src/resolved.rs::SourceForeignNominalCandidate.parameters", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree, Shared),
+    kind_site!("src/resolved.rs::SourceForeignNominalCandidate.prepared", FieldForeignPreparedKinds, Shared),
     kind_site!("src/resolved.rs::SourceResourceTypeFact.acquisition", FieldResolvedValueTypeValueResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::SourceResourceTypeFact.answer", FieldResolvedDeclaredKindDeclaredResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::SourceResourceTypeFact.completion", FieldResolvedValueTypeValueResolutionResolutionTypeResolvedTree),
@@ -4620,6 +4703,109 @@ fn carrier_scanner_shared_wrapper_routes_preserve_lexical_type_shadowing_and_cyc
 }
 
 #[test]
+fn carrier_scanner_restricted_visibility_preserves_module_attributes() {
+    for visibility in [
+        "pub(super)",
+        "pub(crate)",
+        "pub(self)",
+        "pub(in crate)",
+        "pub(in crate::parent)",
+    ] {
+        let parent = format!(
+            r#"#[path = "storage.rs"] {visibility} mod selected;
+            #[cfg(test)] #[path = "helper.rs"] {visibility} mod hidden;
+            #[path = "helper.rs"] #[cfg(test)] {visibility} mod hidden_alias;
+            struct Holder(selected::Retained);"#
+        );
+        let fields = fields_from_sources(&[
+            ("src/lib.rs", "mod types; mod parent;"),
+            ("src/types.rs", "pub struct Type;"),
+            ("src/parent.rs", &parent),
+            ("src/storage.rs", "pub struct Retained(crate::types::Type);"),
+            ("src/helper.rs", "struct Hidden(crate::types::Type);"),
+        ]);
+        assert!(
+            fields.iter().any(|field| field.source == "src/storage.rs"),
+            "restricted-visible path module omitted for {visibility}"
+        );
+        assert!(
+            !fields.iter().any(|field| field.source == "src/helper.rs"),
+            "direct cfg(test) module became production for {visibility}"
+        );
+        assert_eq!(
+            transitive_type_retention(&fields).get(&CarrierId {
+                source: "src/parent.rs".to_owned(),
+                name: "Holder".to_owned(),
+            }),
+            Some(&RetentionMode::Owned),
+            "path module owner identity changed for {visibility}"
+        );
+    }
+
+    let missing = [
+        ("src/lib.rs", "mod parent;"),
+        (
+            "src/parent.rs",
+            r#"#[path = "absent.rs"] pub(super) mod missing;"#,
+        ),
+    ];
+    assert!(
+        std::panic::catch_unwind(|| fields_from_sources(&missing)).is_err(),
+        "a missing restricted-visible path module must still fail closed"
+    );
+}
+
+#[test]
+fn carrier_scanner_tuple_visibility_preserves_exact_type_references() {
+    for visibility in [
+        "pub(super)",
+        "pub(crate)",
+        "pub(self)",
+        "pub(in crate)",
+        "pub(in crate::parent)",
+    ] {
+        let source = format!(
+            "struct Payload({visibility} Box<[crate::types::Type]>, \
+             {visibility} *const crate::types::Type, \
+             {visibility} std::sync::Arc<crate::types::Type>, \
+             {visibility} (std::sync::Arc<crate::types::Type>, *const crate::types::Type));"
+        );
+        let fields = parse_top_level_fields("src/parent.rs", &source);
+        assert_eq!(fields.len(), 4);
+        for (field, (references, retention)) in fields.iter().zip([
+            (&["Box", "crate::types::Type"][..], RetentionSet::owned()),
+            (
+                &["crate::types::Type"][..],
+                RetentionSet(RetentionSet::BORROWED),
+            ),
+            (
+                &["std::sync::Arc", "crate::types::Type"][..],
+                RetentionSet(RetentionSet::SHARED),
+            ),
+            (
+                &["std::sync::Arc", "crate::types::Type"][..],
+                RetentionSet(RetentionSet::SHARED | RetentionSet::BORROWED),
+            ),
+        ]) {
+            assert_eq!(
+                field.references,
+                references
+                    .iter()
+                    .map(|reference| (*reference).to_owned())
+                    .collect(),
+                "visibility became type evidence for {visibility} field {}",
+                field.field,
+            );
+            assert_eq!(
+                field.reference_retentions["crate::types::Type"], retention,
+                "visibility changed retention for {visibility} field {}",
+                field.field,
+            );
+        }
+    }
+}
+
+#[test]
 fn carrier_scanner_follows_path_modules_reexports_and_inherited_imports() {
     let sources = [
         (
@@ -7521,7 +7707,21 @@ fn direct_attributes<'tokens, 'source>(
     declaration: usize,
 ) -> Vec<&'tokens [&'source str]> {
     let mut cursor = declaration;
-    if cursor > 0 && tokens[cursor - 1] == "pub" {
+    if cursor > 0 && tokens[cursor - 1] == ")" {
+        let mut open = cursor - 1;
+        let mut depth = 1;
+        while depth != 0 {
+            open = open.checked_sub(1).expect("unbalanced visibility modifier");
+            match tokens[open] {
+                ")" => depth += 1,
+                "(" => depth -= 1,
+                _ => {}
+            }
+        }
+        if open > 0 && tokens[open - 1] == "pub" {
+            cursor = open - 1;
+        }
+    } else if cursor > 0 && tokens[cursor - 1] == "pub" {
         cursor -= 1;
     }
     let mut attributes = Vec::new();
@@ -7682,7 +7882,7 @@ fn type_reference_retentions(
     ) {
         if tokens.first() == Some(&"pub") {
             tokens = &tokens[1..];
-            if tokens.first() == Some(&"(") && tokens.get(1) == Some(&"crate") {
+            if tokens.first() == Some(&"(") {
                 let close = matching_token(tokens, 0, "(", ")");
                 tokens = &tokens[close + 1..];
             }

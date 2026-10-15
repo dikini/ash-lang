@@ -1,7 +1,21 @@
 //! Exact passive selections from one independently restored registry. These
 //! records describe visibility; they do not carry registry checking authority.
 
-use super::*;
+use super::{
+    Arc, BinderId, CanonicalNominalKind, ConstructorId, EffectId, HashMap, InterfaceId, Kind,
+    NominalTypeId, NonMaterializedNominalKind, NonMaterializedNominalKindFact, OperationId,
+    OwnerId, ResolvedBuildFailure, ResolvedConstructor, ResolvedConstructorBuffer,
+    ResolvedEffectBuffer, ResolvedGlobalParameterVecBuffer, ResolvedNominalBuffer,
+    ResolvedNominalDeclarationKind, ResolvedNominalParameterVecBuffer, ResolvedNominalType,
+    ResolvedRegistry, ResolvedTypeVariable, ResolvedTypeVariableBuffer,
+    SourceForeignNominalCandidate, TypeVariableId, TypeWorkBudget, clone_arrows_with_budget,
+    clone_constructor_ids_for_combined_registry, clone_effect_origin_with_budget,
+    clone_kind_with_budget, clone_resolved_effect_with_budget,
+    clone_resolved_type_variable_with_budget, clone_resolved_type_variables_with_budget,
+    clone_type_with_budget, discard_resolved_type_variable, same_checker_type_variable_with_budget,
+    same_kind_with_charge, same_origin_with_budget, same_resolved_type_provenance_with_budget,
+    try_clone_string,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub(crate) enum ImageRegistryItem {
@@ -75,6 +89,11 @@ pub(crate) fn sort_image_registry_items(
 }
 
 struct InterfaceRows(Vec<(InterfaceId, Vec<ResolvedTypeVariable>)>);
+impl InterfaceRows {
+    fn into_vec(mut self) -> Vec<(InterfaceId, Vec<ResolvedTypeVariable>)> {
+        std::mem::take(&mut self.0)
+    }
+}
 impl Drop for InterfaceRows {
     fn drop(&mut self) {
         for (_, row) in self.0.drain(..) {
@@ -337,7 +356,7 @@ impl ResolvedRegistry {
                 .with_effects_with_budget(effects.into_vec(), work)?
                 .with_image_global_parameters(std::mem::take(&mut globals.0), work)?
                 .with_image_source_parameters(variables.into_vec(), work)?
-                .with_image_interface_owner_definitions(std::mem::take(&mut interfaces.0), work)?
+                .with_image_interface_owner_definitions(interfaces.into_vec(), work)?
                 .with_image_source_resource_facts(resources, work)?;
         // The selected abstract category can differ from visible constructors;
         // never infer one category from a module's presence in the main view.

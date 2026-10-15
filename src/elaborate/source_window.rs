@@ -1,5 +1,11 @@
 //! Direct source-phase candidates; independent Core reconstructs their authority.
-use super::*;
+use super::{
+    Arc, CheckKind, CoreElaborator, CoreLoweringFamily, EffectOperation, ElaborationTask,
+    ElaborationTaskBuffer, IterativeTypeOwner, Origin, ProvenancedType, Span, Type, TypeError,
+    TypeReason, TypeVariableId, TypedNode, TypedNodeBuffer, TypedNodeOwner,
+    clone_effect_instance_with_budget, clone_effect_row_with_budget, inference_failure,
+    invalid_state, type_resource,
+};
 use crate::foreign::source_access::CheckedForeignAccess;
 
 #[derive(Debug)]
