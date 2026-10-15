@@ -89,7 +89,8 @@ fn common_module_is_admitted_once_with_ordered_ordinary_codec_identities() {
             "Call",
             "Output",
             "Nullable",
-            "Disposition"
+            "Disposition",
+            "Extent"
         ]
     );
     assert_eq!(
@@ -97,7 +98,7 @@ fn common_module_is_admitted_once_with_ordered_ordinary_codec_identities() {
         SurfaceTypeVisibility::PublicOpaque
     );
     assert!(declarations[0].parameters.is_empty());
-    for declaration in &declarations[1..] {
+    for declaration in &declarations[1..5] {
         assert_eq!(
             declaration.declaration_kind,
             SurfaceNominalDeclarationKind::Data
@@ -108,7 +109,7 @@ fn common_module_is_admitted_once_with_ordered_ordinary_codec_identities() {
         );
         assert_eq!(declaration.parameters.len(), 1);
     }
-    for (declaration, expected) in declarations[1..].iter().zip([
+    for (declaration, expected) in declarations[1..5].iter().zip([
         &["Returned", "ConversionFailed"][..],
         &["Unreadable", "Readable"][..],
         &["Null", "NonNull"][..],
@@ -130,7 +131,23 @@ fn common_module_is_admitted_once_with_ordered_ordinary_codec_identities() {
             );
         }
     }
+    let extent = &declarations[5];
+    assert_eq!(extent.declaration_kind, SurfaceNominalDeclarationKind::Data);
+    assert_eq!(extent.visibility, SurfaceTypeVisibility::PublicOpaque);
+    assert_eq!(extent.parameters.len(), 1);
+    assert_eq!(extent.parameters[0].name.text, "V");
+    assert!(extent.parameters[0].kind.is_none());
+    assert_eq!(extent.constructors.len(), 1);
+    assert_eq!(extent.constructors[0].name.text, "HiddenExtent");
+    assert!(extent.constructors[0].fields.is_empty());
     let resolved = resolve_module(common, &[]).unwrap();
+    let extent = NominalTypeId::new(common.id(), 5);
+    assert_eq!(resolved.registry().nominals().len(), 6);
+    assert_eq!(resolved.registry().nominals()[5].id, extent);
+    assert_eq!(
+        resolved.registry().nominals()[5].constructors.as_ref(),
+        [ConstructorId::new(extent, 0)]
+    );
     let call = NominalTypeId::new(common.id(), 1);
     assert_eq!(
         resolved.registry().nominals()[0].id,
@@ -194,6 +211,30 @@ fn conversion_error_type_is_nameable_but_its_constructors_are_withheld() {
         "import @builtin.foreign as Foreign\n",
         "main : Unit -> Foreign.ConversionError\n",
         "main () = Foreign.HiddenConversionError\n",
+    ));
+    let failure = run_path(inaccessible.configuration()).unwrap_err();
+    assert!(
+        matches!(failure.pipeline_failure(), Some(PipelineFailure::Resolution(error))
+        if error.reason == ResolveReason::OpaqueConstructor)
+    );
+}
+
+#[test]
+fn extent_type_is_nameable_but_its_constructor_is_withheld() {
+    let named = Fixture::new(concat!(
+        "import @builtin.foreign as Foreign\n",
+        "ignore : Foreign.Extent<Int> -> Int\n",
+        "ignore extent = 0\n",
+        "main : Unit -> Int\nmain () = 42\n",
+    ));
+    assert_eq!(
+        run_path(named.configuration()).unwrap().value_display(),
+        "42"
+    );
+    let inaccessible = Fixture::new(concat!(
+        "import @builtin.foreign as Foreign\n",
+        "main : Unit -> Foreign.Extent<Int>\n",
+        "main () = Foreign.HiddenExtent\n",
     ));
     let failure = run_path(inaccessible.configuration()).unwrap_err();
     assert!(
