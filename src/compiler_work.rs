@@ -5,7 +5,7 @@
 
 use crate::{module::ModuleGraph, source::SourceFile, types::TypeWorkBudget};
 
-const SOURCE_PER_BYTE: usize = 100;
+const SOURCE_PER_BYTE: usize = 200;
 
 fn source_total(bytes: usize) -> Result<usize, ()> {
     bytes.checked_mul(SOURCE_PER_BYTE).ok_or(())
@@ -235,8 +235,8 @@ mod tests {
     #[test]
     fn source_gas_is_paid_carried_checked_and_has_no_extra_ten_percent() {
         let source = SourceFile::new("source.ash", "main : Unit -> Int\nmain () = 42\n").unwrap();
-        let total = source.text().len() * 100;
-        assert!(source_total(usize::MAX / 100 + 1).is_err());
+        let total = source.text().len() * 200;
+        assert!(source_total(usize::MAX / 200 + 1).is_err());
         let mut empty = TypeWorkBudget::with_limit(1);
         assert_eq!(
             size_sources(

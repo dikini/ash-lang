@@ -1,7 +1,7 @@
 # DN-0050: Native program gas estimates
 
 - ID: `DN-0050`
-- Status: calibration record; `100S` source, `161S` final elaboration, `345S` Core, `51P` preparation and `22B` startup accepted
+- Status: calibration record; `200S` source, `161S` final elaboration, `345S` Core, `51P` preparation and `22B` startup accepted
 - Related: [TASK-0040](../tasks/TASK-0040-ash-copying-sqlite-library.md),
   [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md),
   [CP-0022](../proposals/CP-0022-ash-authored-foreign-interfaces.md)
@@ -24,7 +24,7 @@ mechanism, normal-host and quality checks. The human then approved startup
 The current formulas are:
 
 ```text
-source checking = 100 * canonical loaded source UTF8 bytes, including builtins
+source checking = 200 * canonical loaded source UTF8 bytes, including builtins
 preparation     = 51 * (admitted source UTF8 bytes + validated main Core nodes)
 final elaboration = 161 * canonical loaded source UTF8 bytes, including builtins
 independent Core  = 345 * canonical loaded source UTF8 bytes, including builtins
@@ -50,6 +50,55 @@ builtin sources. The minimum 25%-reserve source coefficient from that row is
 86; the human selected the conservative rounded coefficient 100. The earlier startup coefficient 11 was
 `ceil(1.25 * max(work / bytes))` over those complete observations. The actual
 meter still refuses work amplification. These revisions grant no authority.
+
+## Recursive-hook Source observation and accepted revision
+
+The unchanged [recursive-hook regression](../../tests/hooks_runtime.rs)
+`repeated_source_site_activations_overlap_without_merging` uses 283 UTF8 bytes,
+one loaded module and no imports or builtin sources. It requires five overlapping
+registrations and result `13`. The integrated checkpoint at `7997564` refused
+Source checking at 28,230 of 28,300 units. Capture-control normalization requested
+95 units after changing the continuation state. The active cumulative meter is
+moved into the elaborator and restored before error propagation; its outer
+placeholder is not additional allowance. The trace showed no missing census,
+reset, top-up or double debit.
+
+Run 726 used the saved checkpoint binary and exact witness with one finite
+diagnostic Source allowance of 113,200. Its existing calibration hook received
+normal allowance 28,300; no global override changed resolution or other owners.
+The complete Source total was 42,836, including the paid census of two units
+once. The module prefix was 42,835; the closed-entry and retained-provenance
+prefixes both ended at 42,836. These are cumulative, not additive. Resolution
+remained separate at 253 of 327,680. The observer stopped before module linking,
+Final/Core checking or evaluation. This is not a normal result-`13` pass.
+
+| Source fitting row | Canonical S | Complete reported work | Work / S | Accepted `200S` forecast |
+| --- | ---: | ---: | ---: | ---: |
+| Persistence / 517 | 42,851 | 2,946,584 | 68.763483 | 8,570,200 |
+| Repeated / 539 | 37,603 | 1,045,628 | 27.807037 | 7,520,600 |
+| Simultaneous / 541 | 37,605 | 1,243,262 | 33.061082 | 7,521,000 |
+| Later copying | 41,830 | 2,176,588 | 52.034138 | 8,366,000 |
+| Later persistence | 43,209 | 2,950,458 | 68.283413 | 8,641,800 |
+| Recursive hook / 726 | 283 | 42,836 | 151.363958 | 56,600 |
+
+The earlier rows retain their distinct historical source/accounting pins and
+complete reported totals; they are not current remeasurements of paid census.
+All rows contribute to fitting. There is no untouched holdout, same-version
+full-port accuracy claim or universal complexity bound. Applying the existing
+25% engineering-reserve rule to the maximum gives `ceil(1.25 * 151.363958) = 190`.
+The project lead selected conservative rounded `200S` under the user's delegated
+autonomous judgment, after independent measurement/accounting review. It gives
+56,600 units for this hook, 32.13% above the measured total. The reserve is an
+engineering choice, not a confidence bound.
+
+Only the Source coefficient changes. Canonical sizing, cumulative paid carry,
+terminal refusal, overflow and all other phase, depth, stack and authority checks
+remain. Whitespace or admitted unused source can still buy linear allowance;
+compact structural amplification still meets the actual meter. No intercept,
+floor, extra ten-percent margin or static overall cap is added. Final/Core,
+preparation, startup and runtime metrics do not participate in this Source fit.
+Normal hook execution, focused policy verification and independent implementation
+review remain separate from this diagnostic and the required fresh checkpoint.
 
 ## Complete persistence startup and accepted revision
 

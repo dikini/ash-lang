@@ -82,6 +82,27 @@ Actual copy work/storage refusal remains terminal in the mechanism tests.
 These are focused results. Bounded policy/fallback independent review passed;
 whole-port review, retaining verification and #6 acceptance remain separate.
 
+### Integrated checkpoint and Source policy
+
+The preserving [PR #28 repair](https://github.com/dikini/ash-lang/pull/28) passed
+independent current-head and retained review. Issue #6 C4 was restored and the
+issue closed at 6/6; milestone acceptance returned to 26/36. The reopening record
+below describes the earlier correction and is historical.
+
+The subsequent integrated checkpoint at `7997564` failed Source checking for an
+unchanged 283-byte recursive-hook regression before evaluation. Its 26-case
+`copying_sqlite_source` target passed, but the separate 34-case `sqlite_library`
+target and later targets/rustdoc were not reached. A single finite Source-only
+diagnostic measured 42,836 units including census, and stopped before linking,
+Final/Core checking or evaluation. Independent review cleared that measurement
+and accounting. Under the user's delegated autonomous judgment, the project lead
+adopted Source `200S`; the 25% reserve minimum is 190. [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md)
+governs this coefficient-only revision and [DN-0050](../design/DN-0050-native-program-gas-estimates.md)
+records its fit and limitations. The hook bytes, activation depth and result-`13`
+oracle remain unchanged. Focused normal execution, implementation review,
+retention and a fresh integrated checkpoint are separate obligations; the
+earlier failed checkpoints do not become passes.
+
 ## Verification
 
 Run existing copying/persistence programs through generated hosts. Observe

@@ -80,7 +80,7 @@ owners and for native preparation and startup. The accepted policy is:
 
 ```text
 preparation gas = 51 * (admitted source UTF8 bytes + validated main Core nodes)
-source gas      = 100 * (canonical loaded source UTF8 bytes, including builtins)
+source gas      = 200 * (canonical loaded source UTF8 bytes, including builtins)
 final gas       = 161 * (the same canonical source UTF8 closure)
 Core gas        = 345 * (the same canonical source UTF8 closure)
 startup gas     = 22 * (canonical image bytes + canonical expected-fact bytes)
@@ -89,7 +89,7 @@ startup gas     = 22 * (canonical image bytes + canonical expected-fact bytes)
 Source checking sizes the complete canonical loaded source closure before
 checking. Count each loaded module once, including builtin sources, rather than
 import edges or aliases. Pay one unit per source and one for the census in a
-finite source-count-derived bootstrap, then carry that work inside `100*S`
+finite source-count-derived bootstrap, then carry that work inside `200*S`
 through every module, source copy, closed entry and retained provenance. This is
 the total allowance; the historical ten-percent deficit does not apply.
 Final elaboration and independent compiler Core each pay their own identical
@@ -127,6 +127,17 @@ then startup `22B`, final elaboration `161S` and compiler Core `345S` on 2026-10
 measured scope, errors and incomplete final SQLite coverage; it is informative.
 Require focused connected normal-host and adversarial tests and independent
 review of the implementation before transferring its verification.
+
+On 2026-10-16, the project lead adopted source `200S` under the user's explicit
+delegation to choose recommended autonomous fixes. The unchanged 283-byte
+recursive-hook regression required 42,836 units through complete Source
+checking, including its paid census. The 25% reserve rule gives coefficient 190;
+200 is the conservative rounded choice. Independent review cleared the finite
+Source-only measurement and accounting before adoption. This changes only the
+Source coefficient; the other phase policies and checks above remain unchanged.
+[DN-0050](../design/DN-0050-native-program-gas-estimates.md) records the measured
+scope and historical comparisons. Normal execution, implementation review and
+the integrated checkpoint remain separate verification obligations.
 
 ### Optional C/header verification
 
