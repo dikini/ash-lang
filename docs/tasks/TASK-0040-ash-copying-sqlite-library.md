@@ -298,3 +298,45 @@ changes the old Rust bound-failure policy; actual work/storage exhaustion stays
 terminal. [CP-0022](../proposals/CP-0022-ash-authored-foreign-interfaces.md) records
 that delta. Return any further semantic gap to the governing proposal rather
 than resolving it locally; keep excluded features outside this task.
+
+## Post-merge PR #27 review correction
+
+The [post-merge review](https://github.com/dikini/ash-lang/pull/27#pullrequestreview-5533587489)
+found two defects in retaining merge `3ab09d6`:
+
+- [P1](https://github.com/dikini/ash-lang/pull/27#discussion_r4283337255):
+  implicit finish capture followed acquisition data instead of replacement
+  payloads. A closure could retain the closing owner through completion, or
+  remain in private data when finish discarded that data. Independent callbacks
+  remain legal; an explicit `data_of` read already rejected the unsafe capture.
+- [P2](https://github.com/dikini/ash-lang/pull/27#discussion_r4283337268):
+  an acquired handler's Current/Enclosing scalar Borrow checked the emptied
+  pre-acquisition receipt vector. The public generated host refused before the
+  valid query callback, while releasing the child and parent.
+
+Author runs 690 and 688 reproduced these defects before production repairs.
+The corrective implementation gives finish its current payload while preserving
+immutable acquisition-time handler aliases, and includes private payloads in
+focused ownership checks. Acquired borrows select exact guard-retained lineage;
+pre-acquisition receipts and ordinary versus finishing liveness checks remain
+separate. The existing semantic rules and approved budgets do not change.
+
+Run 694 passes both reported regressions, including the real native query and
+exact child/parent cleanup. Run 693 checks late payload captures, imported graphs,
+distinct creations, paid exact/short/prefix admission and fresh retries. The
+independent-callback native control returns `(7, 42)`: the handler returns its
+acquisition-time callback to the ordinary body, while finish returns the latest
+replacement callback. Calling a local private-data callback inside the handler
+is outside the bounded lifecycle carrier; that earlier fixture failed Source
+owner-flow checking before Core or native execution. Correcting the fixture adds
+no lifecycle-call permission. Runs 697 and 698 pass the native control and all 68
+affected owner tests. Broader SQLite checks also exposed an existing test-C
+composition error: specialized statement and bind-refusal wrappers collided with
+the shared trace, and their column-scalar declarations used different C types.
+Those local fixtures now use distinct wrapper names and the shared `int64_t`
+type, preserving the native forwarding, invalid-tail injection, zero-bind-entry
+oracle and release assertions. Focused author verification does not replace
+independent repair review, retained verification or original acceptance. Original
+issue #6 C4 is reopened; the other five checks remain, and acceptance is 25/36.
+Restoration requires the preserving repair delivery and independent retained
+verification. The named checkpoint and Main advancement remain held.
