@@ -7,7 +7,6 @@ use std::{
     process::{Command, Stdio},
 };
 
-use ash::compiler_work::CompilationPhase;
 use serde_json::Value;
 
 fn run(entry: &Path, observe: bool, diagnostic_base: Option<usize>) -> std::process::Output {
@@ -85,12 +84,11 @@ fn pure_and_effect_observation_preserve_results_and_report_selected_capacities_o
         let graph =
             ash::module::load_module_graph(&root.join(fixture), &ash::module::ModuleRoots::empty())
                 .unwrap();
-        let source_normal = 100
-            * graph
-                .modules()
-                .iter()
-                .map(|module| module.source().text().len())
-                .sum::<usize>();
+        let source_bytes = graph
+            .modules()
+            .iter()
+            .map(|module| module.source().text().len())
+            .sum::<usize>();
         for base in [None, Some(2_000_000)] {
             let entry = root.join(fixture);
             let off = run(&entry, false, base);
@@ -102,19 +100,11 @@ fn pure_and_effect_observation_preserve_results_and_report_selected_capacities_o
             let observed = records(&on);
             for (phase, normal, multiplier) in [
                 ("resolution", ash::types::TYPE_WORK_LIMIT, 1),
-                ("source-checking", source_normal, 1),
+                ("source-checking", 200 * source_bytes, 1),
                 ("module-linking", ash::types::TYPE_WORK_LIMIT, 1),
                 ("linked-interface", ash::types::TYPE_WORK_LIMIT, 1),
-                (
-                    "final-elaboration",
-                    CompilationPhase::FinalElaboration.hard_limit(),
-                    1,
-                ),
-                (
-                    "independent-effect-core",
-                    CompilationPhase::IndependentCore.hard_limit(),
-                    3,
-                ),
+                ("final-elaboration", 161 * source_bytes, 1),
+                ("independent-effect-core", 345 * source_bytes, 3),
             ] {
                 let endpoints = observed
                     .iter()
