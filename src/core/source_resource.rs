@@ -5721,6 +5721,90 @@ mod tests {
     }
 
     #[test]
+    fn source_control_copy_window_recipe_keeps_state_and_exact_direct_claim() {
+        let fixture = Fixture::new();
+        let library = include_str!("../../libraries/sqlite.ash");
+        let direct_clause =
+            "error_code access => resume (column_int_result (perform ErrorCode<C>.call state))";
+        let direct_prefix = "let code = column_int_result (perform ErrorCode<C>.call state)";
+        let window_prefix = "copy_window DiagnosticView<W, C> from state {";
+        for exact in [direct_clause, direct_prefix, window_prefix] {
+            assert_eq!(library.matches(exact).count(), 1);
+        }
+        // Make the state prefix the only ErrorCode request in this handler.
+        // The actual body still requests the separate window-local ErrorMessage.
+        let library = library
+            .replace(direct_clause, "error_code access => resume (Ok 14)")
+            .replace(direct_prefix, "let code = Ok 14")
+            .replace(window_prefix, "copy_window DiagnosticView<W, C> from ({\n                        let _ = perform ErrorCode<C>.call state\n                        state\n                    }) {");
+        fs::write(fixture.0.join("owner.ash"), library).unwrap();
+        fs::write(fixture.0.join("entry.ash"), "import owner as Sqlite\nmain : Unit -> Sqlite.Scope<Sqlite.OpenError, Sqlite.CloseError, Bool> ! {Sqlite.Initialize}\nmain () = resource Sqlite.Connection<C> connection = Sqlite.InMemory {\n    true\n}\n").unwrap();
+        let compiled = fixture.compile();
+        let (checked, _) = compiled.effect_build_input().unwrap();
+        let original = checked
+            .nodes()
+            .iter()
+            .find_map(|node| match &node.kind {
+                EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
+                    Some(scope.original())
+                }
+                _ => None,
+            })
+            .unwrap();
+        let program = original.original_handler();
+        let window = program
+            .nodes
+            .iter()
+            .find_map(|stored| match &stored.kind {
+                EffectExprKind::Operation(EffectOperation::SourceCopyWindow(window)) => {
+                    Some(window)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let state = &program.nodes[window.state().index().unwrap()].effects;
+        let body = &program.nodes[window.body().index().unwrap()].effects;
+        let inputs = original.original_handler_inputs().unwrap();
+        assert_eq!(state.known().len(), 1);
+        assert!(state.tail().is_none());
+        assert_eq!(body.known().len(), 1);
+        assert!(body.tail().is_none());
+        assert_ne!(state.known()[0].effect(), body.known()[0].effect());
+        let mut work = TypeWorkBudget::default();
+        assert!(
+            crate::types::same_effect_rows_with_budget(state, &inputs.direct, &mut work).unwrap()
+        );
+        let graph = original
+            .reconstructed_handler_graph_for_test(&mut work)
+            .unwrap();
+        let view = graph.handler_graph();
+        let recipe =
+            super::super::provider::HandlerRowRecipeDraft::reconstruct(&view, &mut work).unwrap();
+        let (direct, pending) = recipe
+            .realize_direct(
+                &std::collections::HashMap::new(),
+                &std::collections::HashMap::new(),
+                &std::collections::HashMap::new(),
+                &mut work,
+            )
+            .unwrap();
+        assert_eq!(pending.len(), inputs.pending.equations.len());
+        assert!(crate::types::same_effect_rows_with_budget(&direct, state, &mut work).unwrap());
+        let leaked = state.union_with_budget(body, &mut work).unwrap().unwrap();
+        for wrong in [crate::types::EffectRow::empty(), leaked] {
+            let mut changed = view;
+            changed.draft.direct_demands = &wrong;
+            let error = super::super::provider::HandlerRowRecipeDraft::reconstruct(
+                &changed,
+                &mut TypeWorkBudget::default(),
+            )
+            .unwrap_err();
+            assert_eq!(error.reason(), ValidationReason::ResourceEscape);
+            assert_eq!(error.node(), Some(program.root));
+        }
+    }
+
+    #[test]
     fn source_control_handler_call_proof_preserves_prior_value_flow() {
         let fixture = Fixture::new();
         fs::write(

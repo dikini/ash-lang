@@ -84,6 +84,12 @@ copies. The current open-Delta and equal-substitution witnesses execute through
 generated hosts; they do not replace the full criterion's existing ownership,
 quarantine and failure evidence.
 
+Copy-window row proofs reconstruct state evaluation separately from the body.
+Only the body's exact native instances are interpreted, and any remaining body
+demand refuses admission. The complete state row remains outward demand, including
+an overlapping native instance and its row tail. These row facts do not replace
+the original family, phase, access and capture checks.
+
 Defining declaration slots require source-derived coordinates, not density of a
 claim-sorted table. A bounded syntax-only walk of resident original provenance
 reconstructs nominal category allocation and the separate written effect/native
