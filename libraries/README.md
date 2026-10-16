@@ -165,7 +165,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 Run the resulting executable separately. The native binary and system loader must
 match the declared profile and authored foreign assumptions; linking is not a
-header/ABI proof. The optional `ash check-ffi` authoring tool is not implemented.
+header/ABI proof. The optional [`ash check-ffi`](../docs/tools/ash.md#optional-c-header-checking)
+authoring tool separately checks supplied headers against the authored facts;
+its C assertions produce no runtime object or executable authority.
 The [generated-host tests](../tests/sqlite_library.rs) use this API with the real
 shared SQLite library and separate static observation wrappers. They remove Ash
 sources before building and image/facts files before execution.

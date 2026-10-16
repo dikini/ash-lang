@@ -1327,6 +1327,41 @@ pub fn compile_build_diagnostic<'a>(
 
 /// Presents the executable's failed standard-output write.
 #[must_use]
+pub fn compile_check_ffi_diagnostic<'a>(
+    failure: &'a crate::check_ffi::CheckFailure,
+    detail: &'a str,
+) -> CompileDiagnostic<'a> {
+    let primary = failure.declaration().map(|(source, span)| Label {
+        source,
+        span,
+        message: Message::check_ffi_failure(detail),
+        relationship: "foreign_declaration",
+        facts: Vec::new(),
+    });
+    let mut facts = vec![Fact {
+        name: "detail",
+        kind: "header-check-detail",
+        value: FactValue::Text(detail),
+    }];
+    if let Some(log) = failure.compiler_log() {
+        facts.push(Fact {
+            name: "compiler_log",
+            kind: "path",
+            value: FactValue::Path(log),
+        });
+    }
+    CompileDiagnostic {
+        reason: failure.reason().into(),
+        responsibility: "header-verification",
+        message: Message::check_ffi_failure(detail),
+        primary,
+        related: Vec::new(),
+        facts,
+    }
+}
+
+/// Presents the executable's failed standard-output write.
+#[must_use]
 pub fn compile_output_write_diagnostic() -> CompileDiagnostic<'static> {
     CompileDiagnostic {
         reason: "internal.output-write".into(),

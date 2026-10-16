@@ -1124,8 +1124,9 @@ runtime-label-requested = Заявени допълнителни единици
 runtime-label-available = Налични допълнителни единици
 runtime-label-teardown = Първа грешка при освобождаване
 runtime-label-cleanup = Състояние на почистването
-invocation-usage = Очаква се: ash [--message-format human|short|json] [--locale NAME] [--root name=path]... <entry-file>, или ash build --output FILE [--target TARGET] [--cargo-target-dir PATH] [--root name=path]... <entry-file>. Опциите трябва да са преди входния файл и могат да бъдат зададени само по веднъж, с изключение на корените.
+invocation-usage = Очаква се: ash [--message-format human|short|json] [--locale NAME] [--root name=path]... <entry-file>, или ash build --output FILE [--target TARGET] [--cargo-target-dir PATH] [--root name=path]... <entry-file>, или ash check-ffi --header FILE... --mapping FILE --compiler FILE --output DIR [--target TARGET] [--root name=path]... <entry-file>. Опциите трябва да са преди входния файл и могат да бъдат зададени само по веднъж, с изключение на корените и заглавните файлове за check-ffi.
 build-failure = Ash не можа да изгради нативната програма: { $detail }.
+check-ffi-failure = Ash не можа да провери C хедърите: { $detail }.
 output-write = Ash не можа да запише резултата от програмата на стандартния изход.
 source-ids-unlocated = Ash не може да задели нова идентичност на източник.
 source-unrepresentable-span-unlocated = Ash срещна непредставима дължина на източник или отместване на токен при създаване на диапазон.
