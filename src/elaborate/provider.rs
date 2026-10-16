@@ -1314,6 +1314,50 @@ pub(super) struct PreparedLocalProviderCode {
     code: Option<Arc<ProviderGroupPreparation>>,
     originals: Vec<Arc<ProviderOriginalPreparation>>,
 }
+
+/// Borrows one defining transaction during Source-original admission only.
+/// Every consumer authenticates the exact code, completed facts and still
+/// private publication together; this context cannot publish or enter an image.
+pub(crate) struct SourceOriginalProviderContext<'a> {
+    code: &'a Arc<CheckedProviderGroup>,
+    imported: &'a crate::resolved::ImportedFacts,
+    defining: &'a Arc<crate::resolved::ProviderDefiningFacts>,
+    publication: &'a PendingEvidencePublication,
+}
+
+impl SourceOriginalProviderContext<'_> {
+    pub(crate) fn module(&self) -> crate::module::ModuleId {
+        self.code.module()
+    }
+    pub(crate) fn code(&self) -> &Arc<CheckedProviderGroup> {
+        self.code
+    }
+    pub(crate) fn authenticate(
+        &self,
+        certificate: &Arc<CheckedProviderContracts>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), crate::resolved::ResolvedBuildFailure> {
+        self.code
+            .local_template_view(
+                certificate,
+                crate::resolved::ProviderExternalFacts {
+                    imported: self.imported,
+                    defining: Some(self.defining),
+                },
+                self.publication,
+                work,
+            )
+            .map_err(|failure| match failure {
+                TypeError::Internal(super::ElaborationFailure::TypeResourceExhausted) => {
+                    crate::resolved::ResolvedBuildFailure::TypeResource
+                }
+                TypeError::Internal(super::ElaborationFailure::ConstraintResourceExhausted) => {
+                    crate::resolved::ResolvedBuildFailure::ConstraintResource
+                }
+                _ => crate::resolved::ResolvedBuildFailure::InvalidState,
+            })
+    }
+}
 impl std::fmt::Debug for PreparedLocalProviderCode {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -1362,6 +1406,19 @@ impl PreparedLocalProviderCode {
             .as_ref()
             .map(|code| &code.code)
             .ok_or_else(invalid_state)
+    }
+    pub(super) fn source_original_context<'a>(
+        &'a self,
+        imported: &'a crate::resolved::ImportedFacts,
+        defining: &'a Arc<crate::resolved::ProviderDefiningFacts>,
+        publication: &'a PendingEvidencePublication,
+    ) -> Result<SourceOriginalProviderContext<'a>, TypeError> {
+        Ok(SourceOriginalProviderContext {
+            code: self.code()?,
+            imported,
+            defining,
+            publication,
+        })
     }
     pub(super) fn contains(&self, definition: crate::resolved::ResourceDefinitionId) -> bool {
         self.code.as_ref().is_some_and(|code| {

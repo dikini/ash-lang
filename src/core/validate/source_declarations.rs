@@ -1469,10 +1469,21 @@ main () = 42
             "needed config = neededIdentity config",
             "needed config = {\n    let scoped = resource Probe<{}, Prerequisite, {}> owner = 42 { 0 }\n    config\n}",
         );
-        for (text, waits_for_source, independent_core) in [
-            (&dependent, false, true),
-            (&ordinary_only, false, false),
-            (&unavailable, true, false),
+        let selected = dependent.replace(
+            "needed config = neededIdentity config",
+            "needed config = keepConfig (neededIdentity config)",
+        ) + "\ninterface KeepConfig<A> {\nkeepConfig : A -> A\n}\nimpl KeepConfig<Legacy.OpenConfig> {\nkeepConfig config = config\n}\n";
+        let late_failure = selected.replace(
+            "owner = 42 {\n            42",
+            "owner = 42 {\n            true",
+        );
+        assert_ne!(late_failure, selected);
+        for (text, waits_for_source, independent_core, selected_slot, late_refusal) in [
+            (&dependent, false, true, false, false),
+            (&ordinary_only, false, false, false, false),
+            (&unavailable, true, false, false, false),
+            (&selected, false, true, true, false),
+            (&late_failure, false, false, true, true),
         ] {
             std::fs::write(&path.0, text).unwrap();
             let graph = load_module_graph(&path.0, &roots).unwrap();
@@ -1494,7 +1505,9 @@ main () = 42
                     })
                     .collect::<Vec<_>>();
                 let resolved = resolve_module(loaded, &dependencies).unwrap();
-                if loaded.id() == graph.entry() && (waits_for_source || independent_core) {
+                if loaded.id() == graph.entry()
+                    && (waits_for_source || independent_core || selected_slot)
+                {
                     let prerequisites =
                         crate::elaborate::source_original_prerequisites_for_test(&resolved)
                             .unwrap();
@@ -1507,7 +1520,7 @@ main () = 42
                         // deliberately makes no whole-module rejection claim.
                         continue;
                     }
-                    assert_eq!(prerequisites.len(), 2);
+                    assert_eq!(prerequisites.len(), if selected_slot { 3 } else { 2 });
                     for (index, definition) in resolved.definitions().iter().enumerate() {
                         let name = match &definition.kind {
                             crate::resolved::ResolvedDefinitionKind::Equational(global)
@@ -1525,7 +1538,57 @@ main () = 42
                         }
                     }
                 }
-                checked.push(crate::elaborate::check_module(resolved).unwrap());
+                let pending = if selected_slot && loaded.id() == graph.entry() {
+                    let definition = resolved
+                        .definitions()
+                        .iter()
+                        .find(|definition| {
+                            matches!(&definition.kind,
+                            crate::resolved::ResolvedDefinitionKind::Equational(global)
+                                if global.interface.name.spelling == "needed")
+                        })
+                        .unwrap();
+                    let crate::resolved::ResolvedDefinitionKind::Equational(global) =
+                        &definition.kind
+                    else {
+                        unreachable!()
+                    };
+                    let crate::resolved::ResolvedExprKind::Apply(application) =
+                        &global.equations[0].body.kind
+                    else {
+                        panic!("selected helper application")
+                    };
+                    let crate::resolved::ResolvedExprKind::Occurrence(occurrence) =
+                        &application.function.kind
+                    else {
+                        panic!("selected helper method")
+                    };
+                    let [slot] = occurrence.evidence.as_ref() else {
+                        panic!("one real selected evidence slot")
+                    };
+                    let handle = slot.handle();
+                    assert!(handle.selection().is_none());
+                    Some(handle)
+                } else {
+                    None
+                };
+                let result = crate::elaborate::check_module(resolved);
+                if late_refusal && loaded.id() == graph.entry() {
+                    assert!(matches!(
+                        result,
+                        Err(crate::elaborate::TypeError::Source(_))
+                            | Err(crate::elaborate::TypeError::Mismatch(_))
+                    ));
+                    assert!(
+                        pending.unwrap().selection().is_none(),
+                        "a later body failure cannot publish the earlier selected helper"
+                    );
+                } else {
+                    checked.push(result.unwrap());
+                    if let Some(handle) = pending {
+                        assert!(handle.selection().is_some());
+                    }
+                }
             }
             if independent_core {
                 crate::driver::compile_path(crate::driver::RunConfiguration {
@@ -1535,6 +1598,82 @@ main () = 42
                 .expect("same-module Source scope and checked pure prerequisite reach independent whole Core admission");
             }
         }
+
+        // Select one renamed public resource from a group that also contains a
+        // private resource. The original checker retains the complete group,
+        // not just the selected public spelling or its one family.
+        let provider_name = format!(
+            "ash_source_provider_{}_{}",
+            std::process::id(),
+            IDS.fetch_add(1, Ordering::Relaxed)
+        );
+        let provider_path = File(path.0.with_file_name(format!("{provider_name}.ash")));
+        let ordinary_start = source.find("        interface OrdinaryProvider").unwrap();
+        let main_start = source.find("        main :").unwrap();
+        let private = source[ordinary_start..main_start].replace("Ordinary", "PrivateOrdinary");
+        let donor = source.replacen(
+            "        resource Ordinary<R>",
+            "        pub resource Ordinary<R>",
+            1,
+        ) + &private;
+        std::fs::write(&provider_path.0, donor).unwrap();
+        let imported_entry = format!(
+            "import {provider_name} (Ordinary as Renamed)\n{}\nmain : Unit -> Scope<Unit, Unit, Int>\nmain () = resource Probe<{{}}, Fresh, {{}}> owner = 42 {{\n42\n}}\n",
+            include_str!("../../../tests/fixtures/source-owner/owner.ash")
+        );
+        std::fs::write(&path.0, imported_entry).unwrap();
+        let graph = load_module_graph(&path.0, &roots).unwrap();
+        let mut checked: Vec<CheckedModule> = Vec::new();
+        for loaded in graph.modules() {
+            let dependencies = loaded
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    DependencyExports::new(
+                        edge,
+                        checked
+                            .iter()
+                            .find(|module| module.module() == edge.target())
+                            .unwrap()
+                            .exports(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let resolved = resolve_module(loaded, &dependencies).unwrap();
+            if loaded.id() == graph.entry() {
+                let (alias, fact) = resolved
+                    .imported_facts()
+                    .resource_facts()
+                    .find(|(name, _)| *name == "Renamed")
+                    .unwrap();
+                assert_eq!(alias, "Renamed");
+                let certificate = resolved
+                    .imported_facts()
+                    .provider_contract(fact.id.module())
+                    .unwrap();
+                assert_eq!(certificate.resource_count(), 2);
+                let view = resolved
+                    .registry()
+                    .source_original_checker_view(
+                        resolved.imported_facts(),
+                        &mut TypeWorkBudget::default(),
+                    )
+                    .unwrap();
+                view.authenticate_provider_contracts(&mut TypeWorkBudget::default())
+                    .unwrap();
+                for (_, _, original) in certificate.resource_contracts() {
+                    assert!(view.resource_signature_family(original.id).is_some());
+                    assert!(view.type_variable(original.answer.id).is_some());
+                }
+            }
+            checked.push(crate::elaborate::check_module(resolved).unwrap());
+        }
+        crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry: path.0.clone(),
+            roots,
+        })
+        .expect("renamed imported complete ordinary group and local Source scope reach final Core");
     }
 
     #[test]

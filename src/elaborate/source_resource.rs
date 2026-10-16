@@ -1222,6 +1222,7 @@ fn source_module_binders(
 
 /// Transfers the caller's cumulative meter into one ordinary effect checker.
 /// Both successful and refused compilation return the consumed meter.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn compile(
     module: &ResolvedModule,
     registry: &Arc<ResolvedRegistry>,
@@ -1230,6 +1231,7 @@ pub(super) fn compile(
     work: &mut TypeWorkBudget,
     coverage: &mut UsefulnessBudget,
     constraints: &mut InterfaceConstraintBudget,
+    original_provider: Option<&provider::SourceOriginalProviderContext<'_>>,
 ) -> Result<Option<Arc<CheckedSourceResourceTemplates>>, TypeError> {
     if module.source_resources().is_empty() {
         return Ok(None);
@@ -1359,7 +1361,7 @@ pub(super) fn compile(
                     &sources,
                     &module_sources,
                     &mut compiler.type_work,
-                    &mut crate::core::validate::SourceResourceStructureSession::default(),
+                    &mut crate::core::validate::SourceResourceStructureSession::with_original_provider(original_provider),
                 )
                 .map_err(|error| template_validation(error, definition.span))?,
             ));

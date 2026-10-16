@@ -1011,7 +1011,7 @@ impl CheckedSourceResourceTemplate {
         sources: &[&crate::source::SourceFile],
         module_sources: &[(crate::module::ModuleId, crate::source::SourceId)],
         work: &mut TypeWorkBudget,
-        session: &mut super::validate::SourceResourceStructureSession,
+        session: &mut super::validate::SourceResourceStructureSession<'_>,
     ) -> Result<Self, ValidationError> {
         check_original_window_declarations(
             &header.original.windows,
@@ -7775,7 +7775,7 @@ main () = resource Owner.Probe<{}, Outer, {}> outer = 64 {
             })
             .unwrap();
         let mut session = super::super::validate::SourceResourceStructureSession::default();
-        let check = |session: &mut super::super::validate::SourceResourceStructureSession,
+        let check = |session: &mut super::super::validate::SourceResourceStructureSession<'_>,
                      globals: &Arc<super::SourceResourceGlobals>,
                      work: &mut TypeWorkBudget| {
             session.check_with_globals(

@@ -3717,6 +3717,7 @@ fn check_source_resource_structure_with_globals(
         module_sources,
         globals,
         None,
+        None,
         work,
     )
 }
@@ -3730,6 +3731,7 @@ fn check_source_resource_structure_with_handler_graph(
     module_sources: &[(ModuleId, SourceId)],
     globals: Option<&super::source_resource::SourceResourceGlobals>,
     handler_graph: Option<&super::source_resource::SourceHandlerGraph<'_>>,
+    original_provider: Option<&crate::elaborate::provider::SourceOriginalProviderContext<'_>>,
     work: &mut TypeWorkBudget,
 ) -> Result<(), ValidationError> {
     if handler_graph.is_some_and(|graph| !answer || !graph.authenticates(program, original)) {
@@ -3737,6 +3739,7 @@ fn check_source_resource_structure_with_handler_graph(
     }
     let mut validator = Validator::new_modules(program, sources, module_sources)?;
     validator.source_handler_graph = handler_graph;
+    validator.source_original_provider = original_provider;
     validator.provider_external_types = globals.map(|globals| &**globals);
     if !program
         .registry
@@ -3763,8 +3766,10 @@ fn check_source_resource_structure_with_handler_graph(
 /// same immutable registry. This private receipt retains the complete registry
 /// proof and exact source objects; it never admits a forest or executable node.
 #[derive(Default)]
-pub(crate) struct SourceResourceStructureSession {
+pub(crate) struct SourceResourceStructureSession<'context> {
     admitted: Option<OriginalTemplateRegistryAdmission>,
+    original_provider:
+        Option<&'context crate::elaborate::provider::SourceOriginalProviderContext<'context>>,
 }
 
 struct OriginalTemplateRegistryAdmission {
@@ -3776,7 +3781,17 @@ struct OriginalTemplateRegistryAdmission {
     abstract_nominals: HashSet<crate::types::NominalTypeId>,
 }
 
-impl SourceResourceStructureSession {
+impl<'context> SourceResourceStructureSession<'context> {
+    pub(crate) fn with_original_provider(
+        original_provider: Option<
+            &'context crate::elaborate::provider::SourceOriginalProviderContext<'context>,
+        >,
+    ) -> Self {
+        Self {
+            admitted: None,
+            original_provider,
+        }
+    }
     #[cfg(test)]
     pub(crate) fn check(
         &mut self,
@@ -3836,7 +3851,9 @@ impl SourceResourceStructureSession {
     ) -> Result<(), ValidationError> {
         // Conditional source originals retain the same complete ordinary check.
         // Their separately reconstructed graph authorizes only exact row positions.
-        if handler_graph.is_some() {
+        // Pending transactions always receive a fresh complete admission; a
+        // completed cache entry cannot retarget another facts/publication loan.
+        if handler_graph.is_some() || self.original_provider.is_some() {
             return check_source_resource_structure_with_handler_graph(
                 program,
                 original,
@@ -3845,6 +3862,7 @@ impl SourceResourceStructureSession {
                 module_sources,
                 Some(globals),
                 handler_graph,
+                self.original_provider,
                 work,
             );
         }
@@ -4262,6 +4280,8 @@ struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily
     module_sources: Option<HashMap<ModuleId, SourceId>>,
     contextual_registry: Option<&'program crate::resolved::ResolvedRegistry>,
     contextual_native_authentication: Option<&'program crate::foreign::NativeAuthenticationSession>,
+    source_original_provider:
+        Option<&'program crate::elaborate::provider::SourceOriginalProviderContext<'program>>,
     binders: HashMap<BinderId, &'program TypedBinder>,
     provider_external_types: Option<&'program HashMap<BinderId, crate::types::IterativeTypeOwner>>,
     provider_method_evidence:
@@ -4657,6 +4677,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             module_sources: None,
             contextual_registry: None,
             contextual_native_authentication: None,
+            source_original_provider: None,
             binders: HashMap::new(),
             provider_external_types: None,
             provider_method_evidence: None,
@@ -8904,7 +8925,17 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             .expect("module registry validation requires an explicit relation");
         let mut contract_work =
             TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
-        let contract_result = registry.authenticate_provider_contracts(&mut contract_work);
+        let contract_result = if let Some(original) = self.source_original_provider {
+            if !matches!(self.source_resource_context,
+                SourceResourceValidationContext::OriginalTemplate { resource, .. }
+                    if resource.module() == original.module())
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+            registry.authenticate_source_original_provider_contracts(original, &mut contract_work)
+        } else {
+            registry.authenticate_provider_contracts(&mut contract_work)
+        };
         let authenticated_abstract_inventory = contract_result.is_ok();
         self.charge_type_work(contract_work.used())?;
         // Contextual provider checking has its separately admitted defining

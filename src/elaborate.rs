@@ -4243,9 +4243,15 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         interface_facts: &[crate::resolved::SharedCheckedInterfaceFact],
         checked_implementations: &[CheckedImplementation],
         constraints: &mut InterfaceConstraintBudget,
-    ) -> Result<Vec<ModuleBodyChecking>, TypeError> {
+    ) -> Result<
+        (
+            Vec<ModuleBodyChecking>,
+            Option<Arc<crate::resolved::ProviderDefiningFacts>>,
+        ),
+        TypeError,
+    > {
         if !F::EFFECTS || module.source_resources().is_empty() || module.resources().is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), None));
         }
         std::mem::swap(&mut self.constraint_work, constraints);
         let result = (|| {
@@ -4302,6 +4308,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     .iter()
                     .all(|dependency| closed.contains(dependency));
             }
+            let mut source_defining = None;
             if available {
                 self.type_work.charge(1).map_err(|()| type_resource())?;
                 let defining = Arc::new(self.completed_module_provider_facts_for(
@@ -4329,6 +4336,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     checking.publication.as_ref().ok_or_else(invalid_state)?,
                     &mut self.type_work,
                 )?);
+                source_defining = Some(defining);
             }
             // One owned state, held off the module driver's stack. The later
             // phase consumes it; no second body/scheme/publication preparation.
@@ -4336,7 +4344,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             let mut started = Vec::new();
             started.try_reserve_exact(1).map_err(|_| type_resource())?;
             started.push(checking);
-            Ok(started)
+            Ok((started, source_defining))
         })();
         std::mem::swap(&mut self.constraint_work, constraints);
         result
@@ -22356,31 +22364,52 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
             &mut elaborator.type_work,
             constraint_work,
         )?);
-        let mut started_bodies = elaborator.prepare_available_provider_group_before_source(
-            &resolved,
-            &mut schemes,
-            &checked_interfaces,
-            &interface_facts,
-            &checked_implementations,
-            constraint_work,
-        )?;
-        let source_registry = if let Some(local) = &elaborator.pending_local_provider {
-            let code = local.code()?;
+        let (mut started_bodies, source_defining) = elaborator
+            .prepare_available_provider_group_before_source(
+                &resolved,
+                &mut schemes,
+                &checked_interfaces,
+                &interface_facts,
+                &checked_implementations,
+                constraint_work,
+            )?;
+        let source_provider = if let Some(local) = &elaborator.pending_local_provider {
+            Some(
+                local.source_original_context(
+                    resolved.imported_facts(),
+                    source_defining.as_ref().ok_or_else(invalid_state)?,
+                    started_bodies
+                        .first()
+                        .and_then(|checking| checking.publication.as_ref())
+                        .ok_or_else(invalid_state)?,
+                )?,
+            )
+        } else {
+            None
+        };
+        let source_registry = if resolved.source_resources().is_empty() {
+            Arc::clone(&elaborator.registry)
+        } else {
             let registry = resolved
                 .registry()
-                .checker_view(resolved.imported_facts(), &mut elaborator.type_work)
+                .source_original_checker_view(resolved.imported_facts(), &mut elaborator.type_work)
                 .map_err(resolved_build_error)?;
+            let registry = if let Some(local) = &source_provider {
+                registry
+                    .with_source_prepared_provider_group(
+                        &resolved,
+                        local,
+                        &mut elaborator.type_work,
+                    )
+                    .map_err(resolved_build_error)?
+            } else {
+                registry
+            };
             elaborator
                 .type_work
                 .charge(1)
                 .map_err(|_| type_resource())?;
-            Arc::new(
-                registry
-                    .with_source_prepared_provider_group(&resolved, code, &mut elaborator.type_work)
-                    .map_err(resolved_build_error)?,
-            )
-        } else {
-            Arc::clone(&elaborator.registry)
+            Arc::new(registry)
         };
         let source_resources = source_resource::compile(
             &resolved,
@@ -22390,6 +22419,7 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
             &mut elaborator.type_work,
             &mut elaborator.coverage_work,
             constraint_work,
+            source_provider.as_ref(),
         )?;
         if let Some(code) = &source_resources {
             elaborator.provider_codes.retain_source(
