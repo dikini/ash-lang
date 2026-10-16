@@ -475,9 +475,11 @@ impl ResourceBinderCoordinates {
                 }
             }
         }
-        if found.len() != binding_spans.len() {
-            return Err(registry_error());
-        }
+        // An importing original can retain a resource declaration without the
+        // dependency's unrelated bodies or their fresh binders. Authenticate
+        // every retained matching record; the source file is not a census of
+        // the projected registry. Ordinary scope/type checks still require the
+        // canonical record for every identity actually used by the forest.
         Ok(())
     }
 }
@@ -1546,6 +1548,18 @@ main () = 42
                 );
             }
         }
+        let mut projected = view.clone();
+        assert!(projected.corrupt_global_parameter_rows_for_core_test(
+            crate::resolved::CoreGlobalParameterRowMutationForTest::RemoveCanonicalParameter(
+                identity,
+            ),
+        ));
+        assert!(
+            check(&projected, &mut TypeWorkBudget::default())
+                .unwrap()
+                .is_empty(),
+            "source-only coordinates do not require an unrelated projected binder"
+        );
         let donor = SourceFile::new("unrelated-binder.ash", "Fresh").unwrap();
         for mutation in 0..7 {
             let mut changed = crate::resolved::clone_resolved_type_variable_with_budget(
@@ -1592,13 +1606,19 @@ main () = 42
                 _ => unreachable!(),
             }
             let forged = view.clone().with_additional_type_variables([changed]);
-            assert_eq!(
-                check(&forged, &mut TypeWorkBudget::default())
-                    .unwrap_err()
-                    .reason(),
-                ValidationReason::Registry,
-                "generative provenance mutation {mutation}"
-            );
+            let result = check(&forged, &mut TypeWorkBudget::default());
+            if matches!(mutation, 1 | 2 | 6) {
+                assert!(
+                    result.unwrap().is_empty(),
+                    "a retained record outside the exact binding coordinate gets no ordering authority: mutation {mutation}"
+                );
+            } else {
+                assert_eq!(
+                    result.unwrap_err().reason(),
+                    ValidationReason::Registry,
+                    "generative provenance mutation {mutation}"
+                );
+            }
         }
     }
 
@@ -2023,6 +2043,20 @@ main () = 42
                         &mut TypeWorkBudget::default(),
                     )
                     .unwrap();
+                let donor_source = graph
+                    .modules()
+                    .iter()
+                    .find(|module| module.id() == fact.id.module())
+                    .unwrap()
+                    .source();
+                assert!(donor_source.text().contains("Fresh"));
+                assert!(
+                    !view.type_variables().any(|parameter| {
+                        parameter.id.module() == Some(fact.id.module())
+                            && parameter.spelling == "Fresh"
+                    }),
+                    "the importing original retains the whole ordinary group but projects out its dependency's unrelated main binder"
+                );
                 view.authenticate_provider_contracts(&mut TypeWorkBudget::default())
                     .unwrap();
                 for (_, _, original) in certificate.resource_contracts() {
@@ -2032,11 +2066,46 @@ main () = 42
             }
             checked.push(crate::elaborate::check_module(resolved).unwrap());
         }
-        crate::driver::compile_path(crate::driver::RunConfiguration {
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
             entry: path.0.clone(),
             roots,
         })
         .expect("renamed imported complete ordinary group and local Source scope reach final Core");
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let mut forged = crate::core::transform::identity_effect_traversal(program).unwrap();
+        let identity = forged
+            .nodes
+            .iter()
+            .find_map(|node| match &node.kind {
+                crate::core::EffectExprKind::Operation(
+                    crate::core::EffectOperation::SourceResourceScope(scope),
+                ) => Some(scope.identity()),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            Arc::make_mut(&mut forged.registry).corrupt_global_parameter_rows_for_core_test(
+                crate::resolved::CoreGlobalParameterRowMutationForTest::RemoveCanonicalParameter(
+                    identity,
+                ),
+            )
+        );
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let modules = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let error = super::super::validate_effect_modules_with_work(
+            forged,
+            &sources,
+            &modules,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap_err();
+        assert_eq!(error.reason(), ValidationReason::Registry);
     }
 
     #[test]
