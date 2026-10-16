@@ -3,7 +3,7 @@
 //! This syntax-only check grants no semantic or executable authority. In
 //! particular, a retained nominal/effect ID cannot choose its defining slot.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::{ValidationError, ValidationReason};
 use crate::{
@@ -17,7 +17,10 @@ use crate::{
     resolved::{ResolvedNominalDeclarationKind, ResolvedRegistry},
     source::{Origin, SourceFile, SourceId, Span},
     syntax_resource::SyntaxBudget,
-    types::{ConstructorId, EffectId, NominalTypeId, ResourceDefinitionId, TypeWorkBudget},
+    types::{
+        ConstructorId, EffectId, Kind, NominalTypeId, ResourceDefinitionId, TypeVariableId,
+        TypeWorkBudget,
+    },
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -81,6 +84,7 @@ struct DeclarationCoordinates {
     constructor_origins: HashMap<Span, usize>,
     effects: Vec<EffectCoordinate>,
     effect_origins: HashMap<Span, usize>,
+    resource_binders: ResourceBinderCoordinates,
 }
 
 fn registry() -> ValidationError {
@@ -271,6 +275,213 @@ fn original_span(mut origin: &Origin, work: &mut TypeWorkBudget) -> Result<Span,
     }
 }
 
+// These coordinates classify only the written generative binding site. They
+// grant no executable scope, native, capture or ownership authority. Canonical
+// source-origin binder records remain exact; this is no generated-Core renaming
+// permission and prescribes no new global allocator replay.
+#[derive(Clone, Copy)]
+struct ResourceBinderCoordinate {
+    scope: Span,
+    family: Option<Span>,
+    argument: Span,
+    position: usize,
+    arguments: usize,
+}
+
+#[derive(Default)]
+struct ResourceBinderCoordinates {
+    bindings: Vec<ResourceBinderCoordinate>,
+}
+
+impl ResourceBinderCoordinates {
+    fn from_tree(
+        root: &ConcreteNode,
+        tokens: &[Token],
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, ValidationError> {
+        let mut result = Self::default();
+        let mut pending = Vec::new();
+        push(&mut pending, root, work)?;
+        while let Some(node) = pending.pop() {
+            charge(work, node.children.len())?;
+            for child in &node.children {
+                if let ConcreteElement::Node(child) = child {
+                    push(&mut pending, child, work)?;
+                }
+            }
+            if node.kind == NodeKind::ResourceExpression {
+                charge(work, node.children.len())?;
+                let mut identity = None;
+                for child in &node.children {
+                    if let ConcreteElement::Token(index) = child {
+                        let token = tokens.get(*index).ok_or_else(registry)?;
+                        if matches!(token.kind, TokenKind::UpperIdentifier(_))
+                            && identity.replace(token.span).is_some()
+                        {
+                            return Err(registry());
+                        }
+                    }
+                }
+                push(
+                    &mut result.bindings,
+                    ResourceBinderCoordinate {
+                        scope: span(node, tokens, work)?,
+                        family: None,
+                        argument: identity.ok_or_else(registry)?,
+                        position: 0,
+                        arguments: 1,
+                    },
+                    work,
+                )?;
+            } else if node.kind == NodeKind::ProviderResourceExpression {
+                charge(work, node.children.len())?;
+                let instance = node
+                    .children
+                    .iter()
+                    .find_map(|child| match child {
+                        ConcreteElement::Node(child) if child.kind == NodeKind::EffectInstance => {
+                            Some(child)
+                        }
+                        _ => None,
+                    })
+                    .ok_or_else(registry)?;
+                charge(work, instance.children.len())?;
+                if instance.children.iter().any(|child| matches!(child, ConcreteElement::Node(child) if child.kind == NodeKind::QualifiedName)) {
+                    // Qualified imported names retain the existing original
+                    // graph/lexical-owner proof; a short spelling cannot choose
+                    // another module's resource-owned slot.
+                    continue;
+                }
+                let family = name(instance, tokens, work)?;
+                let mut arguments = Vec::new();
+                charge(work, instance.children.len())?;
+                for child in &instance.children {
+                    if let ConcreteElement::Node(child) = child
+                        && matches!(child.kind, NodeKind::Type | NodeKind::EffectRow)
+                    {
+                        push(&mut arguments, span(child, tokens, work)?, work)?;
+                    }
+                }
+                for (position, argument) in arguments.iter().copied().enumerate() {
+                    push(
+                        &mut result.bindings,
+                        ResourceBinderCoordinate {
+                            scope: span(node, tokens, work)?,
+                            family: Some(family),
+                            argument,
+                            position,
+                            arguments: arguments.len(),
+                        },
+                        work,
+                    )?;
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    fn authenticate(
+        &self,
+        registry: &ResolvedRegistry,
+        module: ModuleId,
+        source: &SourceFile,
+        work: &mut TypeWorkBudget,
+        admitted: &mut HashSet<TypeVariableId>,
+    ) -> Result<(), ValidationError> {
+        let mut binding_spans = HashMap::new();
+        for binder in &self.bindings {
+            charge(work, 1)?;
+            let selected = if let Some(family) = binder.family {
+                let family_name = text(source, family)?;
+                let mut selected = None;
+                for fact in registry.source_resource_facts() {
+                    charge(work, 1 + fact.spelling.len())?;
+                    if fact.id.module() == module
+                        && fact.spelling == family_name
+                        && selected
+                            .replace((fact.owned_position, fact.parameters.len()))
+                            .is_some()
+                    {
+                        return Err(registry_error());
+                    }
+                }
+                charge(work, registry.provider_contract_count())?;
+                for (_, certificate) in registry.provider_contracts() {
+                    charge(work, certificate.resource_count())?;
+                    for (spelling, _, fact) in certificate.resource_contracts() {
+                        charge(work, spelling.len())?;
+                        if fact.id.module() == module
+                            && spelling == family_name
+                            && selected.replace((0, fact.parameters.len())).is_some()
+                        {
+                            return Err(registry_error());
+                        }
+                    }
+                }
+                selected
+            } else {
+                Some((0, 1))
+            };
+            let Some((owned, count)) = selected else {
+                continue;
+            };
+            if owned != binder.position {
+                continue;
+            }
+            if count != binder.arguments
+                || binder.argument.source() != source.id()
+                || binder.scope.source() != source.id()
+                || binder.argument.range().start() < binder.scope.range().start()
+                || binder.argument.range().end() > binder.scope.range().end()
+                || !super::valid_upper_spelling(text(source, binder.argument)?)
+            {
+                return Err(registry_error());
+            }
+            charge(work, 1)?;
+            binding_spans.try_reserve(1).map_err(|_| resource())?;
+            if binding_spans
+                .insert(binder.argument, binder.scope)
+                .is_some()
+            {
+                return Err(registry_error());
+            }
+        }
+        if binding_spans.is_empty() {
+            return Ok(());
+        }
+        let mut found = HashSet::new();
+        charge(work, registry.type_variable_count())?;
+        for parameter in registry.type_variables() {
+            if parameter.id.module() != Some(module) {
+                continue;
+            }
+            let origin = parameter.origin.primary_span();
+            charge(work, 1)?;
+            if binding_spans.contains_key(&origin) {
+                if !matches!(&parameter.origin, Origin::Source(span) if *span == origin)
+                    || parameter.kind != Kind::Type
+                    || !same_name(source, origin, &parameter.spelling, work)?
+                    || registry
+                        .type_variable(parameter.id)
+                        .is_none_or(|canonical| !std::ptr::eq(canonical, parameter))
+                {
+                    return Err(registry_error());
+                }
+                charge(work, 2)?;
+                admitted.try_reserve(1).map_err(|_| resource())?;
+                found.try_reserve(1).map_err(|_| resource())?;
+                if !admitted.insert(parameter.id) || !found.insert(origin) {
+                    return Err(registry_error());
+                }
+            }
+        }
+        if found.len() != binding_spans.len() {
+            return Err(registry_error());
+        }
+        Ok(())
+    }
+}
+
 impl DeclarationCoordinates {
     fn from_source(
         source: &SourceFile,
@@ -280,6 +491,7 @@ impl DeclarationCoordinates {
         let root = tree.root().ok_or_else(registry)?;
         let tokens = tree.tokens();
         let mut result = Self::default();
+        result.resource_binders = ResourceBinderCoordinates::from_tree(root, tokens, work)?;
         let mut ordinary_resources = Vec::new();
         let mut source_resources = Vec::new();
         let mut foreign_nominals = Vec::new();
@@ -521,14 +733,22 @@ pub(super) fn authenticate(
     sources: &HashMap<SourceId, &SourceFile>,
     modules: &HashMap<ModuleId, SourceId>,
     work: &mut TypeWorkBudget,
-) -> Result<(), ValidationError> {
+) -> Result<HashSet<TypeVariableId>, ValidationError> {
+    let mut generatives = HashSet::new();
     for (module, source) in modules {
         charge(work, 1)?;
         let source = *sources.get(source).ok_or_else(registry_error)?;
         let coordinates = DeclarationCoordinates::from_source(source, work)?;
         authenticate_module(registry, *module, source, &coordinates, work)?;
+        coordinates.resource_binders.authenticate(
+            registry,
+            *module,
+            source,
+            work,
+            &mut generatives,
+        )?;
     }
-    Ok(())
+    Ok(generatives)
 }
 
 fn registry_error() -> ValidationError {
@@ -1263,6 +1483,125 @@ main () = 42
         ));
     }
 
+    // This checks the body-free provenance mechanism against genuine resolver
+    // records. The surrounding test separately requires whole checked Source
+    // admission, pending publication and independent Core; this helper grants
+    // no native or executable authority.
+    fn source_control_generative_provenance_inputs(
+        resolved: &crate::resolved::ResolvedModule,
+        source: &SourceFile,
+    ) {
+        let module = resolved.module();
+        let mut view = resolved
+            .registry()
+            .source_original_checker_view(resolved.imported_facts(), &mut TypeWorkBudget::default())
+            .unwrap();
+        let headers = resolved
+            .source_resources()
+            .iter()
+            .filter(|resource| view.source_resource_fact(resource.header.id).is_none())
+            .map(|resource| Arc::clone(&resource.header))
+            .collect::<Vec<_>>();
+        view = view
+            .with_image_source_resource_facts(headers, &mut TypeWorkBudget::default())
+            .unwrap();
+        let check = |registry: &ResolvedRegistry, work: &mut TypeWorkBudget| {
+            let coordinates = DeclarationCoordinates::from_source(source, work)?;
+            let mut admitted = HashSet::new();
+            coordinates.resource_binders.authenticate(
+                registry,
+                module,
+                source,
+                work,
+                &mut admitted,
+            )?;
+            Ok::<_, ValidationError>(admitted)
+        };
+        let mut measured = TypeWorkBudget::default();
+        let admitted = check(&view, &mut measured).unwrap();
+        assert_eq!(admitted.len(), 1);
+        let identity = *admitted.iter().next().unwrap();
+        let original = view.type_variable(identity).unwrap();
+        assert_eq!(original.spelling, "Fresh");
+        assert_eq!(
+            text(source, original.origin.primary_span()).unwrap(),
+            "Fresh"
+        );
+        let cost = measured.used();
+        for prefix in [0, 13] {
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                assert_eq!(check(&view, &mut exact).unwrap(), admitted);
+                assert_eq!(exact.used(), prefix + cost);
+                let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+                short.charge(prefix).unwrap();
+                assert_eq!(
+                    check(&view, &mut short).unwrap_err().reason(),
+                    ValidationReason::Resource
+                );
+                assert_eq!(
+                    check(&view, &mut TypeWorkBudget::default()).unwrap(),
+                    admitted
+                );
+            }
+        }
+        let donor = SourceFile::new("unrelated-binder.ash", "Fresh").unwrap();
+        for mutation in 0..7 {
+            let mut changed = crate::resolved::clone_resolved_type_variable_with_budget(
+                original,
+                &mut TypeWorkBudget::default(),
+            )
+            .unwrap();
+            match mutation {
+                0 => changed.kind = Kind::EffectRow,
+                1 => {
+                    changed.origin = resolved.source_resources()[0].header.parameters[0]
+                        .origin
+                        .clone()
+                }
+                2 => {
+                    changed.origin = Origin::Source(
+                        donor
+                            .span(crate::source::ByteRange::new(0, 5).unwrap())
+                            .unwrap(),
+                    )
+                }
+                3 => changed.id = resolved.source_resources()[0].header.parameters[0].id,
+                4 => changed.spelling = "Different".to_owned(),
+                5 => {
+                    changed.origin = Origin::Generated {
+                        cause: Box::new(changed.origin),
+                        reason: crate::source::GeneratedReason::TypeChecking,
+                    }
+                }
+                6 => {
+                    let span = changed.origin.primary_span();
+                    changed.origin = Origin::Source(
+                        source
+                            .span(
+                                crate::source::ByteRange::new(
+                                    span.range().start() + 1,
+                                    span.range().end(),
+                                )
+                                .unwrap(),
+                            )
+                            .unwrap(),
+                    );
+                }
+                _ => unreachable!(),
+            }
+            let forged = view.clone().with_additional_type_variables([changed]);
+            assert_eq!(
+                check(&forged, &mut TypeWorkBudget::default())
+                    .unwrap_err()
+                    .reason(),
+                ValidationReason::Registry,
+                "generative provenance mutation {mutation}"
+            );
+        }
+    }
+
     #[test]
     fn source_control_original_registry_retains_distinct_resource_categories() {
         use crate::{
@@ -1556,6 +1895,9 @@ main () = 42
                         }
                     }
                 }
+                if selected_slot && !late_refusal && loaded.id() == graph.entry() {
+                    source_control_generative_provenance_inputs(&resolved, loaded.source());
+                }
                 let pending = if selected_slot && loaded.id() == graph.entry() {
                     let definition = resolved
                         .definitions()
@@ -1628,7 +1970,10 @@ main () = 42
         let provider_path = File(path.0.with_file_name(format!("{provider_name}.ash")));
         let ordinary_start = source.find("        interface OrdinaryProvider").unwrap();
         let main_start = source.find("        main :").unwrap();
-        let private = source[ordinary_start..main_start].replace("Ordinary", "PrivateOrdinary");
+        let private = source[ordinary_start..main_start]
+            .replace("Ordinary", "PrivateOrdinary")
+            .replace("diagnostic :", "privateDiagnostic :")
+            .replace("diagnostic access =>", "privateDiagnostic access =>");
         let donor = source.replacen(
             "        resource Ordinary<R>",
             "        pub resource Ordinary<R>",

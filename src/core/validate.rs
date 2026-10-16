@@ -8532,6 +8532,13 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     }
 
     fn validate_registry(&self) -> Result<RegistryParameterOwners, ValidationError> {
+        self.validate_registry_with_generatives(None)
+    }
+
+    fn validate_registry_with_generatives(
+        &self,
+        generatives: Option<&HashSet<crate::types::TypeVariableId>>,
+    ) -> Result<RegistryParameterOwners, ValidationError> {
         self.validate_scalar_preflight_registry()?;
         if let Some(canonical) = self.contextual_registry {
             let mut work = TypeWorkBudget::with_limit(
@@ -8559,7 +8566,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             }
         }
         if self.module_sources.is_some() {
-            return self.validate_module_registry();
+            return self.validate_module_registry(generatives);
         }
         if self.program.registry.has_provider_contracts() {
             return Err(ValidationError::new(ValidationReason::Registry, None));
@@ -8917,7 +8924,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         ))
     }
 
-    fn validate_module_registry(&self) -> Result<RegistryParameterOwners, ValidationError> {
+    fn validate_module_registry(
+        &self,
+        generatives: Option<&HashSet<crate::types::TypeVariableId>>,
+    ) -> Result<RegistryParameterOwners, ValidationError> {
         let registry = &self.program.registry;
         let relation = self
             .module_sources
@@ -9213,7 +9223,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             let contextual = self.is_lexical_source_parameter(parameter.id)?
                 || self.is_provider_declaration_parameter(parameter.id)?
                 || source_owner_parameters.contains(&parameter.id)
-                || source_window_parameters.contains(&parameter.id);
+                || source_window_parameters.contains(&parameter.id)
+                || generatives.is_some_and(|original| original.contains(&parameter.id));
             if self.contextual_registry.is_none() && parameter.id.local() != *expected
                 || parameter_span.source() != source
                 || !origin_depth_within_limit(&parameter.origin)
@@ -9427,6 +9438,56 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         }
         self.validate_lexical_registry(&mut parameter_owners, None)?;
         self.validate_global_parameter_rows(&parameter_owners)?;
+        if let Some(generatives) = generatives {
+            self.charge_type_work(generatives.len())?;
+            if generatives
+                .iter()
+                .any(|id| parameter_owners.contains_key(id))
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+            for (_, parameters) in registry.image_interface_owner_definitions() {
+                self.charge_type_work(parameters.len())?;
+                if parameters
+                    .iter()
+                    .any(|parameter| generatives.contains(&parameter.id))
+                {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+            }
+            for row in registry.global_parameter_rows() {
+                self.charge_type_work(
+                    row.parameters()
+                        .len()
+                        .checked_add(1)
+                        .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?,
+                )?;
+                if row.parameters().iter().any(|id| generatives.contains(id)) {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+            }
+            for method in self.program.method_evidence.methods() {
+                self.charge_type_work(
+                    method
+                        .parameters
+                        .len()
+                        .checked_add(method.interface_parameters.len())
+                        .and_then(|count| count.checked_add(1))
+                        .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?,
+                )?;
+                if method
+                    .parameters
+                    .iter()
+                    .any(|(id, _)| generatives.contains(id))
+                    || method
+                        .interface_parameters
+                        .iter()
+                        .any(|id| generatives.contains(id))
+                {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+            }
+        }
         Ok(parameter_owners)
     }
 
@@ -15676,7 +15737,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         ),
         ValidationError,
     > {
-        if matches!(
+        let generatives = if matches!(
             self.source_resource_context,
             SourceResourceValidationContext::OriginalTemplate { .. }
         ) {
@@ -15692,9 +15753,11 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 &mut work,
             );
             self.charge_type_work(work.used())?;
-            result?;
-        }
-        let mut owners = self.validate_registry()?;
+            Some(result?)
+        } else {
+            None
+        };
+        let mut owners = self.validate_registry_with_generatives(generatives.as_ref())?;
         self.validate_effect_registry(self.module_sources.as_ref(), &mut owners)?;
         let empty_type_binders = CoreTypeBinders::new();
         for nominal in self
