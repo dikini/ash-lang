@@ -81,6 +81,9 @@ and exclusions remain at their linked owners.
 - [DN-0024: Executable Learning and Evidence Stream](DN-0024-executable-learning-and-evidence-stream.md)
   — a version-pinned external learning corpus, forward migration, and
   cooperative design-evidence flow.
+- [DN-0052: Diag Ash Case Studies and Teaching](DN-0052-diag-ash-case-studies-and-teaching.md)
+  — candidate application studies, diagnostic repairs, teaching method and
+  verification guidance for ash-doc's pinned Diag Ash edition.
 - [DN-0025: Library and Package Milestones](DN-0025-library-and-package-milestones.md)
   — the completed `modular-ash` closure boundary, four completed bounded
   `lib-ash` increments retained by the import, kind, method-parameter, and
