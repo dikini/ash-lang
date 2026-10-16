@@ -1123,7 +1123,7 @@ impl DirectDemandProof {
             let clause = Self::copy(&proof.nodes[equation.0], work)?;
             direct = proof.union(direct, &clause, work)?;
         }
-        let claimed = proof.row(&entry.draft.direct_demands, &identities, program.root, work)?;
+        let claimed = proof.row(entry.draft.direct_demands, &identities, program.root, work)?;
         charge(
             work,
             direct

@@ -602,7 +602,7 @@ impl HandlerRowRecipeDraft {
         }
         for output in &mut recipe.outputs {
             let roots: &[super::super::effect::EffectClause] = match output.owner {
-                HandlerOutputOwner::ProviderEntry { .. } => &entry.draft.clauses,
+                HandlerOutputOwner::ProviderEntry { .. } => entry.draft.clauses,
                 HandlerOutputOwner::Nested { node: id, .. } => {
                     let handler = match &node(program, id)?.kind {
                         EffectExprKind::Operation(EffectOperation::Handler(handler)) => handler,
@@ -695,7 +695,7 @@ impl HandlerRowRecipeDraft {
         let Some(proof) = self.direct.as_ref() else {
             return Ok(false);
         };
-        let stored = node(&entry.draft.program, id)?;
+        let stored = node(entry.draft.program, id)?;
         if std::ptr::eq(row, &stored.effects) {
             return Ok(proof.node_projection(equation));
         }
@@ -1075,7 +1075,7 @@ impl HandlerRowRecipeDraft {
             .try_reserve(pending.equations.len())
             .map_err(|_| resource())?;
         for equation in &self.nodes {
-            let stored = super::node(&entry.draft.program, equation.node)?;
+            let stored = super::node(entry.draft.program, equation.node)?;
             charge(work, 1)?;
             if let Some(tail) = stored.effects.tail()
                 && let EffectRowVariable::Inference(identity) = tail.variable()
@@ -1109,7 +1109,7 @@ impl HandlerRowRecipeDraft {
         // absence of an invocation does not erase the retained equation.
         for equation in &self.nodes {
             charge(work, 1)?;
-            let stored = super::node(&entry.draft.program, equation.node)?;
+            let stored = super::node(entry.draft.program, equation.node)?;
             if let Some(tail) = stored
                 .ty
                 .function_view()

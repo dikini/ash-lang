@@ -1201,7 +1201,6 @@ impl CheckedSourceResourceTemplate {
         {
             return Err(invalid());
         }
-        let placeholder_binder = answer.parameter().id();
         let handler_body = answer.body();
         let acquire_calls = check_flow(
             &acquire,
@@ -1223,8 +1222,7 @@ impl CheckedSourceResourceTemplate {
             &handler,
             &header,
             &handler_entry.0,
-            handler_body,
-            placeholder_binder,
+            answer,
             &globals,
             handler_graph.as_ref(),
             work,
@@ -3322,12 +3320,13 @@ fn check_handler(
     program: &UnvalidatedEffectProgram,
     header: &CheckedSourceResourceHeader,
     state: &TypedBinder,
-    body: NodeId,
-    answer: crate::resolved::BinderId,
+    callback: &super::function::FunctionNode,
     globals: &SourceResourceGlobals,
     graph: Option<&SourceHandlerGraph<'_>>,
     work: &mut TypeWorkBudget,
 ) -> Result<SourcePhaseCalls, ValidationError> {
+    let body = callback.body();
+    let answer = callback.parameter().id();
     let mut facts = facts(work)?;
     facts.globals = Some(globals);
     facts.handler_graph = graph.map(|graph| graph.handler_graph());
@@ -4799,7 +4798,7 @@ impl SourceResourceScopeNode {
             let substitution = super::provider::ProviderTemplateSubstitution {
                 types: &copy.types,
                 rows: &copy.rows,
-                pending: &pending,
+                pending,
             };
             if phase == 2
                 && let Some(realized) = &realized
@@ -4966,7 +4965,7 @@ impl SourceResourceScopeNode {
                             argument,
                             &copy.types,
                             &copy.rows,
-                            &pending,
+                            pending,
                             &renaming,
                             |cells| work.charge(cells).map_err(|_| resource()),
                             resource,

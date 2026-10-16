@@ -1401,7 +1401,7 @@ main () = 42
             checked.push(compiled);
         }
         assert!(tested_categories);
-        let registry = ResolvedRegistry::combine_checked(
+        let mut registry = ResolvedRegistry::combine_checked(
             &checked,
             &mut TypeWorkBudget::default(),
             &mut crate::interface::InterfaceConstraintBudget::default(),
@@ -1437,8 +1437,26 @@ main () = 42
             current.origin.primary_span().range().start()
                 < ordinary.origin.primary_span().range().start()
         );
+        let source_id = current.id;
         registry
             .authenticate_provider_contracts(&mut TypeWorkBudget::default())
+            .unwrap();
+        registry
+            .authenticate_owner_definitions(&mut TypeWorkBudget::default())
+            .unwrap();
+        let original = registry
+            .source_control_take_original_resource_fact(source_id)
+            .unwrap();
+        assert_eq!(
+            registry.authenticate_owner_definitions(&mut TypeWorkBudget::default()),
+            Err(crate::resolved::ResolvedBuildFailure::InvalidState),
+            "a same-module ordinary certificate cannot replace the missing Source owner declaration"
+        );
+        registry = registry
+            .with_image_source_resource_facts(vec![original], &mut TypeWorkBudget::default())
+            .unwrap();
+        registry
+            .authenticate_owner_definitions(&mut TypeWorkBudget::default())
             .unwrap();
         original_registry_phase_modules(&sources, &modules, registry).unwrap();
 
@@ -1467,7 +1485,7 @@ main () = 42
         // offered as a capture fact merely because its signature is available.
         let unavailable = dependent.replace(
             "needed config = neededIdentity config",
-            "needed config = {\n    let scoped = resource Probe<{}, Prerequisite, {}> owner = 42 { 0 }\n    config\n}",
+            "needed config = {\n    let scoped = resource Probe<{}, Prerequisite, {}> owner = 42 {\n        0\n    }\n    config\n}",
         );
         let selected = dependent.replace(
             "needed config = neededIdentity config",

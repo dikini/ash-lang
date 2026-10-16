@@ -20237,18 +20237,45 @@ impl ResolvedRegistry {
                     )?;
                 }
                 OwnerId::Resource(id) => {
-                    if let Some(contracts) = self.provider_contracts.get(&id.module()) {
-                        let resource = contracts
+                    budget
+                        .charge(2)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    let source = self.source_resource_fact(id);
+                    let contracts = self.provider_contracts.get(&id.module());
+                    let ordinary = if let Some(contracts) = contracts {
+                        budget
+                            .charge(contracts.resource_count())
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                        contracts
                             .resource_contracts()
                             .find(|(_, _, fact)| fact.id == id)
-                            .ok_or(ResolvedBuildFailure::InvalidState)?
-                            .2;
-                        self.authenticate_owner_signature(
-                            definition.owner,
-                            Some(resource.family),
-                            &resource.parameters,
-                            budget,
-                        )?;
+                            .map(|(_, _, fact)| fact)
+                    } else {
+                        None
+                    };
+                    match (source, ordinary) {
+                        (Some(resource), None) if resource.id == id => {
+                            self.authenticate_owner_signature(
+                                definition.owner,
+                                Some(resource.family),
+                                &resource.parameters,
+                                budget,
+                            )?;
+                        }
+                        (None, Some(resource)) => {
+                            self.authenticate_owner_signature(
+                                definition.owner,
+                                Some(resource.family),
+                                &resource.parameters,
+                                budget,
+                            )?;
+                        }
+                        // Before ordinary contracts are prepared, their exact
+                        // retained definitions/signatures remain the authority.
+                        (None, None) if contracts.is_none() => {}
+                        // One full identity cannot name both declaration kinds,
+                        // or omit its member from an already present contract.
+                        _ => return Err(ResolvedBuildFailure::InvalidState),
                     }
                 }
                 OwnerId::Interface(_) => {}
@@ -20264,6 +20291,14 @@ impl ResolvedRegistry {
             return Err(ResolvedBuildFailure::InvalidState);
         }
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn source_control_take_original_resource_fact(
+        &mut self,
+        id: ResourceDefinitionId,
+    ) -> Option<Arc<SourceResourceTypeFact>> {
+        self.source_resource_facts.remove(&id)
     }
 
     fn retain_owner_signature(
