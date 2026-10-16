@@ -1484,13 +1484,15 @@ enum FlowFact<'a> {
     ScalarPreflight,
     PayloadCallable,
     // This invocation fact comes only from an exact original operation input.
-    // It is deliberately neither independent data nor a native operand.
+    // Ordinary transport retains its separate prior value fact; invocation
+    // itself supplies neither independence nor a native operand.
     HandlerInputCallable {
         original: &'a SourceResourceTypeFact,
         operation: OperationId,
         pattern: &'a CorePattern,
         binder: &'a TypedBinder,
         value_type: &'a Type,
+        value: Option<usize>,
     },
     ByteCallable(crate::resolved::BinderId, Option<NodeId>),
     ViewCallable(crate::resolved::BinderId, Option<NodeId>),
@@ -1545,6 +1547,9 @@ impl<'a> FlowFacts<'a> {
                 }
                 FlowFact::Constructor(_, Some(payload)) => push(&mut pending, *payload, work)?,
                 FlowFact::Constructor(_, None) => {}
+                FlowFact::HandlerInputCallable {
+                    value: Some(value), ..
+                } => push(&mut pending, *value, work)?,
                 _ => return Ok(false),
             }
         }
@@ -1585,6 +1590,9 @@ impl<'a> FlowFacts<'a> {
                     pending.extend_from_slice(fields);
                 }
                 FlowFact::Constructor(_, Some(payload)) => push(&mut pending, *payload, work)?,
+                FlowFact::HandlerInputCallable {
+                    value: Some(value), ..
+                } => push(&mut pending, *value, work)?,
                 _ => return Ok(false),
             }
         }
@@ -2218,6 +2226,7 @@ fn eval_flow<'a>(
                         pattern,
                         binder,
                         value_type,
+                        ..
                     } = facts.fact(function)?
                     {
                         let (original, operation, pattern, binder, value_type) =
@@ -2257,6 +2266,7 @@ fn eval_flow<'a>(
                                     pattern,
                                     binder,
                                     value_type: signature.value(),
+                                    value: None,
                                 },
                                 work,
                             )?
@@ -3452,6 +3462,7 @@ fn check_handler(
             for binder in clause.pattern().binder_iter() {
                 charge(work, 1)?;
                 if binder.ty().function_view().is_some() {
+                    let prior = *clause_path.locals.get(&binder.id()).ok_or_else(invalid)?;
                     let value = facts.add(
                         FlowFact::HandlerInputCallable {
                             original: &header.original,
@@ -3459,6 +3470,7 @@ fn check_handler(
                             pattern: clause.pattern(),
                             binder,
                             value_type: binder.ty(),
+                            value: Some(prior),
                         },
                         work,
                     )?;
@@ -5704,6 +5716,66 @@ mod tests {
                     .unwrap_err()
                     .reason(),
                 ValidationReason::Registry
+            );
+        }
+    }
+
+    #[test]
+    fn source_control_handler_call_proof_preserves_prior_value_flow() {
+        let fixture = Fixture::new();
+        fs::write(
+            fixture.0.join("owner.ash"),
+            include_str!("../../tests/fixtures/source-owner/replaced_payload_owner.ash"),
+        )
+        .unwrap();
+        fs::write(fixture.0.join("entry.ash"), "import owner as Owner\ninitial : Unit -> Int\ninitial () = 7\nmain : Unit -> Owner.Scope<Unit, Unit -> Int, Unit>\nmain () = resource Owner.Probe<{}, Fresh, {}> owner = initial {\n    let replacement : Unit -> Int = fn(ignored) {\n        let retained = 1\n        42\n    }\n    Owner.store (owner, replacement)\n}\n").unwrap();
+        let compiled = fixture.compile();
+        let (program, _) = compiled.effect_build_input().unwrap();
+        let original = program
+            .nodes()
+            .iter()
+            .find_map(|node| match &node.kind {
+                EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
+                    Some(scope.original())
+                }
+                _ => None,
+            })
+            .unwrap();
+        let (clause, binder) = original
+            .original_handler_node()
+            .clauses()
+            .iter()
+            .find_map(|clause| {
+                clause
+                    .pattern()
+                    .binder_iter()
+                    .find(|binder| binder.ty().function_view().is_some())
+                    .map(|binder| (clause, binder))
+            })
+            .unwrap();
+        let mut work = TypeWorkBudget::default();
+        let mut facts = super::facts(&mut work).unwrap();
+        let current = facts.add(super::FlowFact::Current, &mut work).unwrap();
+        for (prior, expected) in [(None, false), (Some(current), false), (Some(0), true)] {
+            let value = facts
+                .add(
+                    super::FlowFact::HandlerInputCallable {
+                        original: &original.header().original,
+                        operation: clause.operation(),
+                        pattern: clause.pattern(),
+                        binder,
+                        value_type: binder.ty(),
+                        value: prior,
+                    },
+                    &mut work,
+                )
+                .unwrap();
+            assert_eq!(facts.independent(value, &mut work).unwrap(), expected);
+            assert_eq!(
+                facts
+                    .borrowed(value, false, original.header(), &mut work)
+                    .unwrap(),
+                expected,
             );
         }
     }
