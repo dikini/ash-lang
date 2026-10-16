@@ -579,6 +579,92 @@ pub(crate) struct ResolvedProviderHandlerRows {
     captures: crate::core::capture::ActualCaptureInputs,
 }
 impl ResolvedProviderHandlerRows {
+    pub(crate) fn source_rows(&self) -> [&crate::types::EffectRow; 4] {
+        [&self.direct, &self.epsilon, &self.output, &self.residual]
+    }
+    pub(crate) fn capture_inputs(&self) -> &crate::core::capture::ActualCaptureInputs {
+        &self.captures
+    }
+    pub(crate) fn handler_outputs(
+        &self,
+    ) -> &std::collections::HashMap<crate::core::HandlerId, crate::types::EffectRow> {
+        &self.handler_outputs
+    }
+
+    pub(in crate::core) fn rewrite_source_claim(
+        &self,
+        rewrite: &mut dyn FnMut(
+            &crate::types::EffectRow,
+        )
+            -> Result<crate::types::EffectRow, crate::core::BuildError>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, crate::core::BuildError> {
+        fn rows<K: Copy + Eq + std::hash::Hash>(
+            source: &std::collections::HashMap<K, crate::types::EffectRow>,
+            rewrite: &mut dyn FnMut(
+                &crate::types::EffectRow,
+            )
+                -> Result<crate::types::EffectRow, crate::core::BuildError>,
+            work: &mut TypeWorkBudget,
+        ) -> Result<std::collections::HashMap<K, crate::types::EffectRow>, crate::core::BuildError>
+        {
+            work.charge(source.len())
+                .map_err(|_| crate::core::BuildError::TypeWorkExceeded)?;
+            let mut result = std::collections::HashMap::new();
+            result
+                .try_reserve(source.len())
+                .map_err(|_| crate::core::BuildError::TypeWorkExceeded)?;
+            for (id, row) in source {
+                result.insert(*id, rewrite(row)?);
+            }
+            Ok(result)
+        }
+        Ok(Self {
+            original_arena: self.original_arena,
+            direct: rewrite(&self.direct)?,
+            epsilon: rewrite(&self.epsilon)?,
+            output: rewrite(&self.output)?,
+            residual: rewrite(&self.residual)?,
+            pending: rows(&self.pending, rewrite, work)?,
+            node_rows: rows(&self.node_rows, rewrite, work)?,
+            handler_outputs: rows(&self.handler_outputs, rewrite, work)?,
+            captures: self.captures.rewrite_rows(rewrite, work)?,
+        })
+    }
+
+    /// Plain source specialization data. Final source-scope admission derives
+    /// every row and actual request witness again; this is no execution proof.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::core) fn from_source_solution(
+        original_arena: crate::core::dialect::ArenaId,
+        rows: [crate::types::EffectRow; 3],
+        pending: std::collections::HashMap<
+            crate::types::InferenceVariableId,
+            crate::types::EffectRow,
+        >,
+        node_rows: std::collections::HashMap<NodeId, crate::types::EffectRow>,
+        handler_outputs: std::collections::HashMap<crate::core::HandlerId, crate::types::EffectRow>,
+        captures: crate::core::capture::ActualCaptureInputs,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, ValidationError> {
+        let [direct, epsilon, output] = rows;
+        // The private continuation retains the complete client residual,
+        // including effects that also occur in the independent direct demand.
+        let residual = crate::types::clone_effect_row_with_budget(&epsilon, work)
+            .map_err(|_| super::resource())?;
+        Ok(Self {
+            original_arena,
+            direct,
+            epsilon,
+            output,
+            residual,
+            pending,
+            node_rows,
+            handler_outputs,
+            captures,
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn assert_distinct_actual_captures_for_test(&self, effect: crate::types::EffectId) {
         assert!(
@@ -717,7 +803,7 @@ impl DeferredProviderHandlerRows {
         )
     }
 
-    fn from_domain(
+    pub(in crate::core) fn from_domain(
         original_arena: crate::core::dialect::ArenaId,
         original_pending: &[crate::types::InferenceVariableId],
         original_nodes: &[NodeId],

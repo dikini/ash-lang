@@ -1,0 +1,1473 @@
+//! Original declaration coordinates reconstructed from resident source text.
+//!
+//! This syntax-only check grants no semantic or executable authority. In
+//! particular, a retained nominal/effect ID cannot choose its defining slot.
+
+use std::collections::HashMap;
+
+use super::{ValidationError, ValidationReason};
+use crate::{
+    foreign::source_contract::PreparedForeignNominalRole,
+    lexer::{Token, TokenKind, lex_with_budget},
+    module::ModuleId,
+    parser::{
+        ConcreteElement, ConcreteNode, ConcreteTree, NodeKind, STRUCTURAL_DEPTH_LIMIT,
+        parse_with_budget, source_structural_weight,
+    },
+    resolved::{ResolvedNominalDeclarationKind, ResolvedRegistry},
+    source::{Origin, SourceFile, SourceId, Span},
+    syntax_resource::SyntaxBudget,
+    types::{ConstructorId, EffectId, NominalTypeId, ResourceDefinitionId, TypeWorkBudget},
+};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct LibraryCoordinate {
+    span: Span,
+    name: Span,
+    ordinal: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NominalRole {
+    Data {
+        newtype: bool,
+        constructors: usize,
+    },
+    Resource {
+        source: bool,
+        ordinal: u32,
+    },
+    Foreign {
+        library: LibraryCoordinate,
+        member: usize,
+        role: PreparedForeignNominalRole,
+    },
+}
+
+#[derive(Clone, Copy, Debug)]
+struct NominalCoordinate {
+    origin: Span,
+    name: Span,
+    role: NominalRole,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ConstructorCoordinate {
+    owner: u32,
+    ordinal: u32,
+    origin: Span,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SymbolCoordinate {
+    library: LibraryCoordinate,
+    member: usize,
+    symbol: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct EffectCoordinate {
+    origin: Span,
+    span: Span,
+    name: Span,
+    foreign: Option<SymbolCoordinate>,
+}
+
+#[derive(Default)]
+struct DeclarationCoordinates {
+    nominals: Vec<NominalCoordinate>,
+    nominal_origins: HashMap<Span, usize>,
+    constructors: Vec<ConstructorCoordinate>,
+    constructor_origins: HashMap<Span, usize>,
+    effects: Vec<EffectCoordinate>,
+    effect_origins: HashMap<Span, usize>,
+}
+
+fn registry() -> ValidationError {
+    ValidationError::new(ValidationReason::Registry, None)
+}
+
+fn resource() -> ValidationError {
+    ValidationError::new(ValidationReason::Resource, None)
+}
+
+fn charge(work: &mut TypeWorkBudget, amount: usize) -> Result<(), ValidationError> {
+    work.charge(amount).map_err(|()| resource())
+}
+
+fn push<T>(rows: &mut Vec<T>, value: T, work: &mut TypeWorkBudget) -> Result<(), ValidationError> {
+    charge(work, 1)?;
+    rows.try_reserve(1).map_err(|_| resource())?;
+    rows.push(value);
+    Ok(())
+}
+
+fn ordinal(value: usize) -> Result<u32, ValidationError> {
+    u32::try_from(value).map_err(|_| registry())
+}
+
+fn syntax(source: &SourceFile, work: &mut TypeWorkBudget) -> Result<ConcreteTree, ValidationError> {
+    // The byte scan and the retained syntax share the caller's cumulative
+    // allowance. Return spent syntax before examining any result or tree.
+    charge(work, source.text().len())?;
+    let mut loan = SyntaxBudget::loan(work.remaining());
+    let parsed =
+        lex_with_budget(source, &mut loan).map(|lexed| parse_with_budget(lexed, &mut loan));
+    charge(work, loan.consumed())?;
+    let tree = parsed.map_err(|_| registry())?;
+    if tree.resource_failure().is_some() {
+        return Err(resource());
+    }
+    if tree.malformed.is_some()
+        || !tree.lexical_diagnostics().is_empty()
+        || !tree.parse_diagnostics().is_empty()
+    {
+        return Err(registry());
+    }
+    validate_tree(source, &tree, work)?;
+    Ok(tree)
+}
+
+fn validate_tree(
+    source: &SourceFile,
+    tree: &ConcreteTree,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ValidationError> {
+    let root = tree.root().ok_or_else(registry)?;
+    if root.kind != NodeKind::Module {
+        return Err(registry());
+    }
+    let mut pending = Vec::new();
+    push(&mut pending, (root, 0usize), work)?;
+    let mut next_token = 0;
+    while let Some((node, depth)) = pending.pop() {
+        // structural_weight inspects only direct children. Charge those visits
+        // as well as the following complete traversal before either begins.
+        charge(
+            work,
+            node.children.len().checked_mul(2).ok_or_else(resource)?,
+        )?;
+        let depth = depth
+            .checked_add(source_structural_weight(node))
+            .ok_or_else(resource)?;
+        if depth > STRUCTURAL_DEPTH_LIMIT {
+            return Err(resource());
+        }
+        // Parser construction authenticates token coverage/order. This paid
+        // walk independently preserves the projection's weighted depth check.
+        for child in node.children.iter().rev() {
+            match child {
+                ConcreteElement::Node(child) => push(&mut pending, (child, depth), work)?,
+                ConcreteElement::Missing { .. } | ConcreteElement::Error(_) => {
+                    return Err(registry());
+                }
+                ConcreteElement::Token(_) => {}
+            }
+        }
+    }
+    // Parser construction checks token coverage/order. This fresh canonical
+    // tree cannot be supplied by a caller; still validate every source range.
+    for token in tree.tokens() {
+        charge(work, 1)?;
+        if token.span.source() != source.id()
+            || source.span(token.span.range()).is_err()
+            || token.span.range().start() < next_token
+        {
+            return Err(registry());
+        }
+        next_token = token.span.range().end();
+    }
+    if !matches!(tree.tokens().last(), Some(Token { kind: TokenKind::EndOfFile, span })
+        if span.range().start() as usize == source.text().len()
+            && span.range().end() as usize == source.text().len())
+    {
+        return Err(registry());
+    }
+    Ok(())
+}
+
+fn edge(
+    mut node: &ConcreteNode,
+    tokens: &[Token],
+    back: bool,
+    work: &mut TypeWorkBudget,
+) -> Result<Span, ValidationError> {
+    loop {
+        charge(work, 1)?;
+        let child = if back {
+            node.children.last()
+        } else {
+            node.children.first()
+        }
+        .ok_or_else(registry)?;
+        match child {
+            ConcreteElement::Node(child) => node = child,
+            ConcreteElement::Token(index) => {
+                return tokens
+                    .get(*index)
+                    .map(|token| token.span)
+                    .ok_or_else(registry);
+            }
+            ConcreteElement::Missing { .. } | ConcreteElement::Error(_) => return Err(registry()),
+        }
+    }
+}
+
+fn span(
+    node: &ConcreteNode,
+    tokens: &[Token],
+    work: &mut TypeWorkBudget,
+) -> Result<Span, ValidationError> {
+    edge(node, tokens, false, work)?
+        .cover(edge(node, tokens, true, work)?)
+        .ok_or_else(registry)
+}
+
+fn name(
+    node: &ConcreteNode,
+    tokens: &[Token],
+    work: &mut TypeWorkBudget,
+) -> Result<Span, ValidationError> {
+    for child in &node.children {
+        charge(work, 1)?;
+        if let ConcreteElement::Token(index) = child {
+            let token = tokens.get(*index).ok_or_else(registry)?;
+            if matches!(token.kind, TokenKind::UpperIdentifier(_)) {
+                return Ok(token.span);
+            }
+        }
+    }
+    Err(registry())
+}
+
+fn text(source: &SourceFile, span: Span) -> Result<&str, ValidationError> {
+    if span.source() != source.id() {
+        return Err(registry());
+    }
+    source
+        .text()
+        .get(span.range().start() as usize..span.range().end() as usize)
+        .ok_or_else(registry)
+}
+
+fn same_name(
+    source: &SourceFile,
+    coordinate: Span,
+    spelling: &str,
+    work: &mut TypeWorkBudget,
+) -> Result<bool, ValidationError> {
+    charge(work, spelling.len())?;
+    Ok(text(source, coordinate)? == spelling)
+}
+
+fn original_span(mut origin: &Origin, work: &mut TypeWorkBudget) -> Result<Span, ValidationError> {
+    loop {
+        charge(work, 1)?;
+        match origin {
+            Origin::Source(span) => return Ok(*span),
+            Origin::Generated { cause, .. } => origin = cause,
+            Origin::Related { primary, .. } => origin = primary,
+        }
+    }
+}
+
+impl DeclarationCoordinates {
+    fn from_source(
+        source: &SourceFile,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, ValidationError> {
+        let tree = syntax(source, work)?;
+        let root = tree.root().ok_or_else(registry)?;
+        let tokens = tree.tokens();
+        let mut result = Self::default();
+        let mut ordinary_resources = Vec::new();
+        let mut source_resources = Vec::new();
+        let mut foreign_nominals = Vec::new();
+        let mut next_library = 0usize;
+        for element in &root.children {
+            charge(work, 1)?;
+            let ConcreteElement::Node(node) = element else {
+                continue;
+            };
+            match node.kind {
+                NodeKind::TypeDeclaration | NodeKind::NewtypeDeclaration => {
+                    let owner = ordinal(result.nominals.len())?;
+                    let mut constructors = 0usize;
+                    for child in &node.children {
+                        charge(work, 1)?;
+                        if let ConcreteElement::Node(child) = child
+                            && child.kind == NodeKind::ConstructorDeclaration
+                        {
+                            let coordinate = ConstructorCoordinate {
+                                owner,
+                                ordinal: ordinal(constructors)?,
+                                origin: span(child, tokens, work)?,
+                            };
+                            push(&mut result.constructors, coordinate, work)?;
+                            constructors = constructors.checked_add(1).ok_or_else(resource)?;
+                        }
+                    }
+                    let coordinate = NominalCoordinate {
+                        origin: span(node, tokens, work)?,
+                        name: name(node, tokens, work)?,
+                        role: NominalRole::Data {
+                            newtype: node.kind == NodeKind::NewtypeDeclaration,
+                            constructors,
+                        },
+                    };
+                    push(&mut result.nominals, coordinate, work)?;
+                }
+                NodeKind::ResourceDefinition => {
+                    let mut is_source = false;
+                    for child in &node.children {
+                        charge(work, 1)?;
+                        is_source |= matches!(child, ConcreteElement::Node(child) if child.kind == NodeKind::SourceResourceField);
+                    }
+                    let name = name(node, tokens, work)?;
+                    let coordinate = NominalCoordinate {
+                        origin: name,
+                        name,
+                        role: NominalRole::Resource {
+                            source: is_source,
+                            ordinal: 0,
+                        },
+                    };
+                    push(
+                        if is_source {
+                            &mut source_resources
+                        } else {
+                            &mut ordinary_resources
+                        },
+                        coordinate,
+                        work,
+                    )?;
+                }
+                NodeKind::EffectDeclaration => {
+                    let name = name(node, tokens, work)?;
+                    let coordinate = EffectCoordinate {
+                        origin: name,
+                        span: span(node, tokens, work)?,
+                        name,
+                        foreign: None,
+                    };
+                    push(&mut result.effects, coordinate, work)?;
+                }
+                NodeKind::ForeignLibrary => {
+                    result.library(
+                        node,
+                        tokens,
+                        ordinal(next_library)?,
+                        &mut foreign_nominals,
+                        work,
+                    )?;
+                    next_library = next_library.checked_add(1).ok_or_else(resource)?;
+                }
+                _ => {}
+            }
+        }
+        for (index, mut coordinate) in ordinary_resources
+            .into_iter()
+            .chain(source_resources)
+            .enumerate()
+        {
+            charge(work, 1)?;
+            let NominalRole::Resource { source, .. } = coordinate.role else {
+                return Err(registry());
+            };
+            coordinate.role = NominalRole::Resource {
+                source,
+                ordinal: ordinal(index)?,
+            };
+            push(&mut result.nominals, coordinate, work)?;
+        }
+        for coordinate in foreign_nominals {
+            push(&mut result.nominals, coordinate, work)?;
+        }
+        for (index, coordinate) in result.nominals.iter().enumerate() {
+            charge(work, 1)?;
+            result
+                .nominal_origins
+                .try_reserve(1)
+                .map_err(|_| resource())?;
+            if result
+                .nominal_origins
+                .insert(coordinate.origin, index)
+                .is_some()
+            {
+                return Err(registry());
+            }
+        }
+        for (index, coordinate) in result.effects.iter().enumerate() {
+            charge(work, 1)?;
+            result
+                .effect_origins
+                .try_reserve(1)
+                .map_err(|_| resource())?;
+            if result
+                .effect_origins
+                .insert(coordinate.origin, index)
+                .is_some()
+            {
+                return Err(registry());
+            }
+        }
+        for (index, coordinate) in result.constructors.iter().enumerate() {
+            charge(work, 1)?;
+            result
+                .constructor_origins
+                .try_reserve(1)
+                .map_err(|_| resource())?;
+            if result
+                .constructor_origins
+                .insert(coordinate.origin, index)
+                .is_some()
+            {
+                return Err(registry());
+            }
+        }
+        Ok(result)
+    }
+
+    fn library(
+        &mut self,
+        node: &ConcreteNode,
+        tokens: &[Token],
+        ordinal: u32,
+        nominals: &mut Vec<NominalCoordinate>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
+        let library = LibraryCoordinate {
+            span: span(node, tokens, work)?,
+            name: name(node, tokens, work)?,
+            ordinal,
+        };
+        let (mut member, mut owner, mut access, mut symbol) = (0usize, 0usize, 0usize, 0usize);
+        for element in &node.children {
+            charge(work, 1)?;
+            let ConcreteElement::Node(child) = element else {
+                continue;
+            };
+            if child.kind != NodeKind::ForeignMember {
+                return Err(registry());
+            }
+            charge(work, 1)?;
+            let Some(ConcreteElement::Token(first)) = child.children.first() else {
+                return Err(registry());
+            };
+            let Some(Token {
+                kind: TokenKind::Identifier(word),
+                ..
+            }) = tokens.get(*first)
+            else {
+                return Err(registry());
+            };
+            match word.as_str() {
+                "owner" | "access" => {
+                    let role = if word == "owner" {
+                        let role = PreparedForeignNominalRole::Owner(owner);
+                        owner = owner.checked_add(1).ok_or_else(resource)?;
+                        role
+                    } else {
+                        let role = PreparedForeignNominalRole::Access(access);
+                        access = access.checked_add(1).ok_or_else(resource)?;
+                        role
+                    };
+                    let coordinate = NominalCoordinate {
+                        origin: span(child, tokens, work)?,
+                        name: name(child, tokens, work)?,
+                        role: NominalRole::Foreign {
+                            library,
+                            member,
+                            role,
+                        },
+                    };
+                    push(nominals, coordinate, work)?;
+                }
+                "symbol" => {
+                    let origin = span(child, tokens, work)?;
+                    let coordinate = EffectCoordinate {
+                        origin,
+                        span: origin,
+                        name: name(child, tokens, work)?,
+                        foreign: Some(SymbolCoordinate {
+                            library,
+                            member,
+                            symbol,
+                        }),
+                    };
+                    push(&mut self.effects, coordinate, work)?;
+                    symbol = symbol.checked_add(1).ok_or_else(resource)?;
+                }
+                _ => {}
+            }
+            member = member.checked_add(1).ok_or_else(resource)?;
+        }
+        Ok(())
+    }
+
+    fn nominal(
+        &self,
+        origin: Span,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(u32, &NominalCoordinate), ValidationError> {
+        charge(work, 1)?;
+        let index = *self.nominal_origins.get(&origin).ok_or_else(registry)?;
+        Ok((ordinal(index)?, &self.nominals[index]))
+    }
+}
+
+pub(super) fn authenticate(
+    registry: &ResolvedRegistry,
+    sources: &HashMap<SourceId, &SourceFile>,
+    modules: &HashMap<ModuleId, SourceId>,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ValidationError> {
+    for (module, source) in modules {
+        charge(work, 1)?;
+        let source = *sources.get(source).ok_or_else(registry_error)?;
+        let coordinates = DeclarationCoordinates::from_source(source, work)?;
+        authenticate_module(registry, *module, source, &coordinates, work)?;
+    }
+    Ok(())
+}
+
+fn registry_error() -> ValidationError {
+    registry()
+}
+
+fn authenticate_module(
+    registry: &ResolvedRegistry,
+    module: ModuleId,
+    source: &SourceFile,
+    coordinates: &DeclarationCoordinates,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ValidationError> {
+    for nominal in registry.nominals() {
+        charge(work, 1)?;
+        if nominal.id.module() != module {
+            continue;
+        }
+        let origin = original_span(&nominal.origin, work)?;
+        let (expected, coordinate) = coordinates.nominal(origin, work)?;
+        if nominal.id != NominalTypeId::new(module, expected) {
+            return Err(registry_error());
+        }
+        match coordinate.role {
+            NominalRole::Data {
+                newtype,
+                constructors,
+            } => {
+                if newtype != (nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype)
+                    || constructors != nominal.constructors.len()
+                {
+                    return Err(registry_error());
+                }
+                // Imported aliases are display routes, not defining names.
+            }
+            NominalRole::Foreign { .. } if nominal.constructors.is_empty() => {}
+            _ => return Err(registry_error()),
+        }
+    }
+    for (prepared, role, id, _) in registry.source_foreign_nominal_candidates() {
+        charge(work, 1)?;
+        if id.module() != module {
+            continue;
+        }
+        let (name, _, origin) = role.declaration(prepared).ok_or_else(registry_error)?;
+        let origin = original_span(origin, work)?;
+        let (expected, coordinate) = coordinates.nominal(origin, work)?;
+        let member = match role {
+            PreparedForeignNominalRole::Owner(index) => prepared
+                .owners()
+                .get(index)
+                .map(|value| value.member_index()),
+            PreparedForeignNominalRole::Access(index) => prepared
+                .accesses()
+                .get(index)
+                .map(|value| value.member_index()),
+        }
+        .ok_or_else(registry_error)?;
+        let NominalRole::Foreign {
+            library,
+            member: written_member,
+            role: written_role,
+        } = coordinate.role
+        else {
+            return Err(registry_error());
+        };
+        if id != NominalTypeId::new(module, expected)
+            || prepared.module() != module
+            || library.span != original_span(prepared.origin(), work)?
+            || written_member != member
+            || written_role != role
+            || !same_name(source, library.name, prepared.name(), work)?
+            || !same_name(source, coordinate.name, name, work)?
+        {
+            return Err(registry_error());
+        }
+    }
+    for (id, _, origin) in registry.abstract_nominal_kind_entries() {
+        charge(work, 1)?;
+        if id.module() != module {
+            continue;
+        }
+        let (expected, _) = coordinates.nominal(origin, work)?;
+        if id != NominalTypeId::new(module, expected) {
+            return Err(registry_error());
+        }
+    }
+    for constructor in registry.constructors() {
+        charge(work, 1)?;
+        if constructor.owner.module() != module {
+            continue;
+        }
+        // Derive the owner from its independently authenticated original span.
+        let owner = registry
+            .nominal(constructor.owner)
+            .ok_or_else(registry_error)?;
+        let owner_origin = original_span(&owner.origin, work)?;
+        let (expected, coordinate) = coordinates.nominal(owner_origin, work)?;
+        let constructor_origin = original_span(&constructor.origin, work)?;
+        if !matches!(coordinate.role, NominalRole::Data { .. }) {
+            return Err(registry_error());
+        }
+        charge(work, 1)?;
+        let original = &coordinates.constructors[*coordinates
+            .constructor_origins
+            .get(&constructor_origin)
+            .ok_or_else(registry_error)?];
+        if original.owner != expected
+            || constructor.owner != NominalTypeId::new(module, expected)
+            || constructor.id != ConstructorId::new(constructor.owner, original.ordinal)
+        {
+            return Err(registry_error());
+        }
+    }
+    for effect in registry.effects() {
+        charge(work, 1)?;
+        if effect.id.module() != module {
+            continue;
+        }
+        charge(work, 1)?;
+        let origin = original_span(&effect.origin, work)?;
+        let expected = *coordinates
+            .effect_origins
+            .get(&origin)
+            .ok_or_else(registry_error)?;
+        let coordinate = &coordinates.effects[expected];
+        if effect.id != EffectId::new(module, ordinal(expected)?)
+            || effect.span != coordinate.span
+            || effect.native_contract.is_some() != coordinate.foreign.is_some()
+            || !same_name(source, coordinate.name, &effect.spelling, work)?
+        {
+            return Err(registry_error());
+        }
+        if let Some(written) = coordinate.foreign {
+            let symbol = effect.native_contract.as_ref().ok_or_else(registry_error)?;
+            let prepared = symbol.prepared();
+            charge(work, 1)?;
+            let declaration = prepared
+                .symbols()
+                .get(written.symbol)
+                .ok_or_else(registry_error)?;
+            if prepared.module() != module
+                || symbol.symbol_index() != written.symbol
+                || symbol.library()
+                    != crate::foreign::checked_source::NativeLibraryId::new(
+                        module,
+                        written.library.ordinal,
+                    )
+                || original_span(prepared.origin(), work)? != written.library.span
+                || declaration.member_index() != written.member
+                || original_span(declaration.origin(), work)? != coordinate.origin
+                || !same_name(source, written.library.name, prepared.name(), work)?
+                || !same_name(source, coordinate.name, declaration.name(), work)?
+            {
+                return Err(registry_error());
+            }
+        }
+    }
+    for fact in registry.source_resource_facts() {
+        charge(work, 1)?;
+        if fact.id.module() != module {
+            continue;
+        }
+        let origin = original_span(&fact.origin, work)?;
+        let (expected, coordinate) = coordinates.nominal(origin, work)?;
+        let NominalRole::Resource {
+            source: true,
+            ordinal,
+        } = coordinate.role
+        else {
+            return Err(registry_error());
+        };
+        if fact.family != NominalTypeId::new(module, expected)
+            || fact.id != ResourceDefinitionId::new(module, ordinal)
+            || !same_name(source, coordinate.name, &fact.spelling, work)?
+        {
+            return Err(registry_error());
+        }
+    }
+    for (_, certificate) in registry.provider_contracts() {
+        charge(work, 1)?;
+        for (_, _, fact) in certificate.resource_contracts() {
+            charge(work, 1)?;
+            if fact.id.module() != module {
+                continue;
+            }
+            let origin = original_span(&fact.origin, work)?;
+            let (expected, coordinate) = coordinates.nominal(origin, work)?;
+            let NominalRole::Resource {
+                source: false,
+                ordinal,
+            } = coordinate.role
+            else {
+                return Err(registry_error());
+            };
+            if fact.family != NominalTypeId::new(module, expected)
+                || fact.id != ResourceDefinitionId::new(module, ordinal)
+            {
+                return Err(registry_error());
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        core::EffectCoreBuilder,
+        resolved::{
+            ResolvedEffectDeclaration, ResolvedEffectOperation, ResolvedNominalType, ResolvedType,
+            ResolvedTypeProvenance, ResolvedTypeProvenanceNode, ResolvedTypeVariable,
+        },
+        surface::{SurfaceModule, SurfaceTypeKind},
+        types::{Kind, OperationId, Type, TypeVariableId},
+    };
+    use std::sync::Arc;
+
+    fn surface(source: &SourceFile) -> SurfaceModule {
+        let tree = crate::parser::parse(crate::lexer::lex(source).unwrap());
+        crate::parser::project_module(source, &tree).unwrap()
+    }
+
+    fn original_registry_phase(
+        source: &SourceFile,
+        registry: ResolvedRegistry,
+    ) -> Result<(), ValidationError> {
+        original_registry_phase_modules(
+            &[source],
+            &[(ModuleId::from(source.id()), source.id())],
+            registry,
+        )
+    }
+
+    fn original_registry_phase_modules(
+        sources: &[&SourceFile],
+        modules: &[(ModuleId, SourceId)],
+        registry: ResolvedRegistry,
+    ) -> Result<(), ValidationError> {
+        let source = sources[0];
+        let module = modules[0].0;
+        let mut builder = EffectCoreBuilder::with_effect_registry(Arc::new(registry));
+        let root = builder
+            .unit(
+                Type::Unit,
+                Origin::Source(
+                    source
+                        .span(crate::source::ByteRange::new(0, 1).unwrap())
+                        .unwrap(),
+                ),
+            )
+            .unwrap();
+        let program = builder.finish(root).unwrap();
+        let mut validator =
+            super::super::Validator::new_modules(&program, sources, modules).unwrap();
+        validator.source_resource_context =
+            super::super::SourceResourceValidationContext::OriginalTemplate {
+                resource: ResourceDefinitionId::new(module, 0),
+                answer: false,
+            };
+        // Exercise the production original registry-admission phase, including
+        // the independent source proof before any registry ordering. This does
+        // not stand in for a complete resource forest or native execution.
+        validator.authenticate_effect_registry_phase().map(|_| ())
+    }
+
+    fn owner_access_source() -> SourceFile {
+        let base = include_str!("../../../tests/fixtures/source-owner/owner.ash")
+            .split("pub type Acquire")
+            .next()
+            .unwrap();
+        SourceFile::new(
+            "owner-access.ash",
+            base.replace(
+                "    symbol Allocate",
+                r#"    access View<W, R> {
+        window W
+        owner State<R>
+        extent nul
+        preserves Read
+    }
+    symbol Read<R> : State<R> -> Foreign.Call<Int> {
+        name "ash_owner_read"
+        abi (pointer(Address)) -> Size
+        operand 0 from 0 current
+        output result as scalar
+        outcome otherwise { readable result }
+    }
+    symbol Allocate"#,
+            ),
+        )
+        .unwrap()
+    }
+
+    fn owner_access_registry(source: &SourceFile, permutation: [u32; 2]) -> ResolvedRegistry {
+        owner_access_registry_order(source, permutation, false)
+    }
+
+    fn owner_access_registry_order(
+        source: &SourceFile,
+        permutation: [u32; 2],
+        reverse: bool,
+    ) -> ResolvedRegistry {
+        let module = ModuleId::from(source.id());
+        let surface = surface(source);
+        let prepared = Arc::new(
+            crate::foreign::source_contract::prepare_foreign_library(
+                module,
+                &surface.foreign_libraries[0],
+            )
+            .unwrap(),
+        );
+        let mut next_parameter = 0u32;
+        let mut candidates = Vec::new();
+        for (role, id) in [
+            PreparedForeignNominalRole::Owner(0),
+            PreparedForeignNominalRole::Access(0),
+        ]
+        .into_iter()
+        .zip(permutation)
+        {
+            let (name, original, origin) = role.declaration(&prepared).unwrap();
+            let parameters = original
+                .iter()
+                .map(|parameter| {
+                    let id = TypeVariableId::resolved(module, next_parameter);
+                    next_parameter += 1;
+                    assert_eq!(parameter.kind(), &Kind::Type);
+                    ResolvedTypeVariable {
+                        id,
+                        spelling: parameter.name().to_owned(),
+                        kind: Kind::Type,
+                        origin: parameter.origin().clone(),
+                    }
+                })
+                .collect();
+            let nominal = ResolvedNominalType {
+                id: NominalTypeId::new(module, id),
+                declaration_kind: ResolvedNominalDeclarationKind::Data,
+                spelling: name.to_owned(),
+                constructors: Box::new([]),
+                representation: None,
+                representation_provenance: None,
+                origin: origin.clone(),
+            };
+            candidates.push((Arc::clone(&prepared), role, nominal, parameters));
+        }
+        // The production constructor installs all nominal lookup positions,
+        // parameter/kind rows and original role candidates from the same IDs.
+        // The negative is a coherent permutation, not a stale lookup table.
+        if reverse {
+            candidates.reverse();
+        }
+        ResolvedRegistry::default()
+            .with_source_foreign_nominal_candidates(candidates, &mut TypeWorkBudget::default())
+            .unwrap()
+    }
+
+    #[test]
+    fn original_admission_rejects_coherent_owner_access_id_permutation() {
+        let source = owner_access_source();
+        for (permutation, expected) in [([0, 1], None), ([1, 0], Some(ValidationReason::Registry))]
+        {
+            let registry = owner_access_registry(&source, permutation);
+            // Passive role/category authentication alone does not recover
+            // the defining allocation ordinal. Both fixtures satisfy it.
+            registry
+                .authenticate_provider_contracts(&mut TypeWorkBudget::default())
+                .unwrap();
+            for (_, _, id, parameters) in registry.source_foreign_nominal_candidates() {
+                assert_eq!(registry.nominal_parameters(id).unwrap(), parameters);
+                assert!(registry.nominal(id).is_some());
+            }
+            assert_eq!(
+                original_registry_phase(&source, registry)
+                    .err()
+                    .map(|error| error.reason()),
+                expected
+            );
+        }
+        original_registry_phase(&source, owner_access_registry_order(&source, [0, 1], true))
+            .unwrap();
+    }
+
+    #[test]
+    fn original_coordinate_authentication_preserves_work_and_rejects_missing_or_donor_sources() {
+        let source = owner_access_source();
+        let registry = owner_access_registry(&source, [0, 1]);
+        let module = ModuleId::from(source.id());
+        let sources = HashMap::from([(source.id(), &source)]);
+        let modules = HashMap::from([(module, source.id())]);
+        let mut measured = TypeWorkBudget::default();
+        authenticate(&registry, &sources, &modules, &mut measured).unwrap();
+        let total = measured.used();
+        for prefix in [0usize, 41] {
+            let mut short = TypeWorkBudget::with_limit(prefix + total - 1);
+            short.charge(prefix).unwrap();
+            assert_eq!(
+                authenticate(&registry, &sources, &modules, &mut short)
+                    .unwrap_err()
+                    .reason(),
+                ValidationReason::Resource
+            );
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + total);
+                exact.charge(prefix).unwrap();
+                authenticate(&registry, &sources, &modules, &mut exact).unwrap();
+                assert_eq!(exact.used(), prefix + total);
+            }
+        }
+        assert_eq!(
+            authenticate(
+                &registry,
+                &HashMap::new(),
+                &modules,
+                &mut TypeWorkBudget::default()
+            )
+            .unwrap_err()
+            .reason(),
+            ValidationReason::Registry
+        );
+        let donor = SourceFile::new("same-shape-donor.ash", source.text()).unwrap();
+        assert_eq!(
+            authenticate(
+                &registry,
+                &HashMap::from([(donor.id(), &donor)]),
+                &HashMap::from([(module, donor.id())]),
+                &mut TypeWorkBudget::default()
+            )
+            .unwrap_err()
+            .reason(),
+            ValidationReason::Registry
+        );
+    }
+
+    fn effect_registry(source: &SourceFile, permutation: [u32; 2]) -> ResolvedRegistry {
+        let module = ModuleId::from(source.id());
+        let declarations = surface(source);
+        let effects = declarations
+            .effects
+            .iter()
+            .zip(permutation)
+            .map(|(effect, ordinal)| {
+                let id = EffectId::new(module, ordinal);
+                let operation = &effect.operations[0];
+                let SurfaceTypeKind::Function(function) = &operation.annotation.kind else {
+                    panic!("function fixture")
+                };
+                let annotation = operation.annotation.span;
+                let provenance = ResolvedTypeProvenance::new(
+                    vec![
+                        ResolvedTypeProvenanceNode::Fact(function.domain.span),
+                        ResolvedTypeProvenanceNode::Fact(function.codomain.span),
+                        ResolvedTypeProvenanceNode::Function {
+                            span: annotation,
+                            domain: 0,
+                            codomain: 1,
+                            effect_arguments: Box::new([]),
+                        },
+                    ],
+                    2,
+                );
+                ResolvedEffectDeclaration {
+                    native_contract: None,
+                    id,
+                    public: effect.public,
+                    spelling: effect.name.text.clone(),
+                    parameters: Box::new([]),
+                    operations: Box::new([ResolvedEffectOperation {
+                        id: OperationId::new(id, 0),
+                        spelling: operation.name.text.clone(),
+                        annotation: ResolvedType {
+                            ty: Type::Function(Box::new(Type::Unit), Box::new(Type::Unit)),
+                            provenance,
+                            origin: Origin::Source(annotation),
+                            span: annotation,
+                        },
+                        origin: Origin::Source(operation.span),
+                        span: operation.span,
+                    }]),
+                    origin: Origin::Source(effect.name.span),
+                    span: effect.span,
+                }
+            })
+            .collect();
+        // Rebuild positions, owner definitions/signatures and operation IDs
+        // together, so incoming table consistency cannot authenticate a slot.
+        ResolvedRegistry::default().with_effects(effects)
+    }
+
+    #[test]
+    fn original_admission_rejects_coherent_effect_id_and_operation_permutation() {
+        let source = SourceFile::new(
+            "effects.ash",
+            "effect Earlier {\nfirst : Unit -> Unit\n}\neffect Later {\nsecond : Unit -> Unit\n}\n",
+        )
+        .unwrap();
+        for (permutation, expected) in [([0, 1], None), ([1, 0], Some(ValidationReason::Registry))]
+        {
+            let registry = effect_registry(&source, permutation);
+            registry
+                .authenticate_owner_definitions(&mut TypeWorkBudget::default())
+                .unwrap();
+            for effect in registry.effects() {
+                assert_eq!(registry.effect(effect.id), Some(effect));
+                assert_eq!(effect.operations[0].id.owner(), effect.id);
+            }
+            assert_eq!(
+                original_registry_phase(&source, registry)
+                    .err()
+                    .map(|error| error.reason()),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn original_admission_rejects_consistently_rebound_foreign_symbol_id_permutation() {
+        use crate::{
+            foreign::checked_source::{ForeignBindingContext, bind_foreign_symbol},
+            module::{ModuleRoots, load_module_graph},
+            resolve::{DependencyExports, resolve_module},
+            resolved::{CheckedModule, clone_resolved_effect_with_budget},
+        };
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static IDS: AtomicU64 = AtomicU64::new(0);
+        struct Directory(std::path::PathBuf);
+        impl Drop for Directory {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let directory = Directory(std::env::temp_dir().join(format!(
+            "ash-original-symbol-coordinates-{}-{}",
+            std::process::id(),
+            IDS.fetch_add(1, Ordering::Relaxed)
+        )));
+        std::fs::create_dir(&directory.0).unwrap();
+        let entry = directory.0.join("entry.ash");
+        std::fs::write(
+            &entry,
+            r#"import @builtin.foreign as Foreign
+effect Before {
+    before : Unit -> Unit
+}
+foreign library Native {
+    profile "x86_64-unknown-linux-gnu"
+    symbol First : Unit -> Foreign.Call<Unit> {
+        name "ash_first"
+        abi () -> void
+        outcome otherwise {}
+    }
+    symbol Second : Unit -> Foreign.Call<Unit> {
+        name "ash_second"
+        abi () -> void
+        outcome otherwise {}
+    }
+}
+effect After {
+    after : Unit -> Unit
+}
+main : Unit -> Int
+main () = 42
+"#,
+        )
+        .unwrap();
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+        let mut checked: Vec<CheckedModule> = Vec::new();
+        for loaded in graph.modules() {
+            let dependencies = loaded
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    let dependency = checked
+                        .iter()
+                        .find(|checked| checked.module() == edge.target())
+                        .unwrap();
+                    DependencyExports::new(edge, dependency.exports()).unwrap()
+                })
+                .collect::<Vec<_>>();
+            let resolved = resolve_module(loaded, &dependencies).unwrap();
+            checked.push(crate::elaborate::check_module(resolved).unwrap());
+        }
+        let original = ResolvedRegistry::combine_checked(
+            &checked,
+            &mut TypeWorkBudget::default(),
+            &mut crate::interface::InterfaceConstraintBudget::default(),
+        )
+        .unwrap();
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|loaded| loaded.source())
+            .collect::<Vec<_>>();
+        let modules = graph
+            .modules()
+            .iter()
+            .map(|loaded| (loaded.id(), loaded.source().id()))
+            .collect::<Vec<_>>();
+        std::fs::remove_file(entry).unwrap();
+        original_registry_phase_modules(&sources, &modules, original.clone()).unwrap();
+
+        let remap = |id: EffectId| {
+            if id.module() == graph.entry() {
+                match id.declaration() {
+                    1 => EffectId::new(id.module(), 2),
+                    2 => EffectId::new(id.module(), 1),
+                    _ => id,
+                }
+            } else {
+                id
+            }
+        };
+        let mut setup = TypeWorkBudget::unbounded();
+        let effects = original
+            .effects()
+            .iter()
+            .map(|effect| {
+                let mut effect = clone_resolved_effect_with_budget(effect, &mut setup).unwrap();
+                effect.id = remap(effect.id);
+                for operation in &mut effect.operations {
+                    operation.id = OperationId::new(effect.id, operation.id.operation());
+                }
+                effect.native_contract = None;
+                effect
+            })
+            .collect();
+        let mut forged = original
+            .clone()
+            .rebuild_effect_identity_tables_for_core_test(effects);
+        let mut rebound = Vec::new();
+        let codec = original
+            .effects()
+            .iter()
+            .find_map(|effect| effect.native_contract.as_ref())
+            .unwrap()
+            .call_codec();
+        let context = ForeignBindingContext::new(
+            &forged,
+            codec.module(),
+            codec.source(),
+            codec.ids(),
+            &mut setup,
+        )
+        .unwrap();
+        for effect in original.effects() {
+            let Some(symbol) = effect.native_contract.as_ref() else {
+                continue;
+            };
+            rebound.push(Arc::new(
+                bind_foreign_symbol(
+                    symbol.library(),
+                    Arc::clone(symbol.prepared()),
+                    symbol.symbol_index(),
+                    forged.effect(remap(effect.id)).unwrap(),
+                    &context,
+                    &mut setup,
+                )
+                .unwrap(),
+            ));
+        }
+        for symbol in rebound {
+            forged.retain_native_symbol(symbol, &mut setup).unwrap();
+        }
+        forged.authenticate_owner_definitions(&mut setup).unwrap();
+        for effect in forged.effects() {
+            assert_eq!(forged.effect(effect.id), Some(effect));
+            for operation in &effect.operations {
+                assert_eq!(operation.id.owner(), effect.id);
+            }
+            if let Some(symbol) = effect.native_contract.as_ref() {
+                assert!(Arc::ptr_eq(
+                    forged.native_symbol(symbol.operation()).unwrap(),
+                    symbol
+                ));
+                assert_eq!(symbol.effect(), effect.id);
+            }
+        }
+        assert_eq!(
+            original_registry_phase_modules(&sources, &modules, forged)
+                .err()
+                .unwrap()
+                .reason(),
+            ValidationReason::Registry
+        );
+    }
+
+    #[test]
+    fn defining_categories_allocate_after_data_despite_an_early_foreign_library() {
+        let source = SourceFile::new(
+            "owner.ash",
+            include_str!("../../../tests/fixtures/source-owner/owner.ash"),
+        )
+        .unwrap();
+        let mut work = TypeWorkBudget::default();
+        let coordinates = DeclarationCoordinates::from_source(&source, &mut work).unwrap();
+        let names = coordinates
+            .nominals
+            .iter()
+            .map(|entry| text(&source, entry.name).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            ["Acquire", "Finish", "Completion", "Scope", "Probe", "State"]
+        );
+        let state = coordinates.nominals.last().unwrap();
+        assert!(state.origin.range().start() < coordinates.nominals[0].origin.range().start());
+        assert!(matches!(
+            state.role,
+            NominalRole::Foreign {
+                role: PreparedForeignNominalRole::Owner(0),
+                member: 3,
+                ..
+            }
+        ));
+        assert_eq!(coordinates.nominal(state.origin, &mut work).unwrap().0, 5);
+        assert_eq!(
+            coordinates
+                .effects
+                .iter()
+                .map(|entry| text(&source, entry.name).unwrap())
+                .collect::<Vec<_>>(),
+            ["Allocate", "Free", "ProbeOps"]
+        );
+        assert!(matches!(
+            coordinates.nominals[4].role,
+            NominalRole::Resource {
+                source: true,
+                ordinal: 0
+            }
+        ));
+    }
+
+    #[test]
+    fn source_control_original_registry_retains_distinct_resource_categories() {
+        use crate::{
+            foreign::{ForeignRegistrations, provider_manifest, sqlite_manifest},
+            module::{ForeignRegistrationId, ModuleRoots, load_module_graph},
+            resolve::{DependencyExports, resolve_module},
+            resolved::CheckedModule,
+        };
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static IDS: AtomicU64 = AtomicU64::new(0);
+        struct File(std::path::PathBuf);
+        impl Drop for File {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let path = File(std::env::temp_dir().join(format!(
+            "ash-resource-coordinates-{}-{}.ash",
+            std::process::id(),
+            IDS.fetch_add(1, Ordering::Relaxed)
+        )));
+        // Reuse the genuine current source-owner definition. The ordinary
+        // experimental declaration needs its own normally checked provider
+        // certificate; legacy registrations here establish registry categories,
+        // not generated-host or current source-resource execution evidence.
+        let source = format!(
+            "import @foreign.sqlite as Legacy\n{}\n{}",
+            include_str!("../../../tests/fixtures/source-owner/owner.ash"),
+            r#"
+        interface OrdinaryProvider<R> {
+            diagnostic : Ordinary<R> -> Legacy.Error ! {OrdinaryOps<R>}
+        }
+        effect OrdinaryOps<R> {
+            diagnostic : Ordinary<R> -> Legacy.Error
+        }
+        resource Ordinary<R> {
+            input Legacy.OpenConfig
+            state Legacy.ConnectionState<R>
+            result Scope<Legacy.OpenError, Legacy.CloseError, Answer> for <Answer>
+            provider OrdinaryProvider<R>
+            effect OrdinaryOps<R>
+            interpret Legacy.Connection<R>
+            acquire config => perform Legacy.Connection<R>.open config
+            finish state => perform Legacy.Connection<R>.close state
+            handlers state {
+                diagnostic access => resume (perform Legacy.Connection<R>.diagnostic state)
+            }
+        }
+        main : Unit -> Int
+        main () = 42
+        "#
+        );
+        std::fs::write(&path.0, source).unwrap();
+        let roots = ModuleRoots::empty().with_foreign_registrations(
+            ForeignRegistrations::new([
+                sqlite_manifest(ForeignRegistrationId::new(991)).unwrap(),
+                provider_manifest(ForeignRegistrationId::new(992)).unwrap(),
+            ])
+            .unwrap(),
+        );
+        let graph = load_module_graph(&path.0, &roots).unwrap();
+        let mut checked: Vec<CheckedModule> = Vec::new();
+        let mut tested_categories = false;
+        for loaded in graph.modules() {
+            let dependencies = loaded
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    DependencyExports::new(
+                        edge,
+                        checked
+                            .iter()
+                            .find(|module| module.module() == edge.target())
+                            .unwrap()
+                            .exports(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let resolved = resolve_module(loaded, &dependencies).unwrap();
+            if loaded.id() == graph.entry() {
+                let ordinary = &resolved.resources()[0];
+                let current = &resolved.source_resources()[0];
+                assert!(current.span.range().start() < ordinary.span.range().start());
+                let coordinates = DeclarationCoordinates::from_source(
+                    loaded.source(),
+                    &mut TypeWorkBudget::default(),
+                )
+                .unwrap();
+                let module = loaded.id();
+                assert_eq!(ordinary.id, ResourceDefinitionId::new(module, 0));
+                assert_eq!(current.id, ResourceDefinitionId::new(module, 1));
+                assert_eq!(ordinary.family, NominalTypeId::new(module, 4));
+                assert_eq!(current.family, NominalTypeId::new(module, 5));
+                for (origin, family, is_source, slot) in [
+                    (ordinary.origin.primary_span(), ordinary.family, false, 0),
+                    (current.origin.primary_span(), current.family, true, 1),
+                ] {
+                    let (expected, coordinate) = coordinates
+                        .nominal(origin, &mut TypeWorkBudget::default())
+                        .unwrap();
+                    assert_eq!(family, NominalTypeId::new(module, expected));
+                    assert!(
+                        matches!(coordinate.role, NominalRole::Resource { source, ordinal } if source == is_source && ordinal == slot)
+                    );
+                }
+                tested_categories = true;
+            }
+            checked.push(crate::elaborate::check_module(resolved).unwrap());
+        }
+        assert!(tested_categories);
+        let registry = ResolvedRegistry::combine_checked(
+            &checked,
+            &mut TypeWorkBudget::default(),
+            &mut crate::interface::InterfaceConstraintBudget::default(),
+        )
+        .unwrap();
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|loaded| loaded.source())
+            .collect::<Vec<_>>();
+        let modules = graph
+            .modules()
+            .iter()
+            .map(|loaded| (loaded.id(), loaded.source().id()))
+            .collect::<Vec<_>>();
+        let current = registry
+            .source_resource_facts()
+            .find(|fact| fact.id.module() == graph.entry())
+            .unwrap();
+        assert_eq!(current.id, ResourceDefinitionId::new(graph.entry(), 1));
+        assert_eq!(current.family, NominalTypeId::new(graph.entry(), 5));
+        let ordinary = registry
+            .provider_contracts()
+            .find(|(module, _)| **module == graph.entry())
+            .unwrap()
+            .1
+            .resource_contracts()
+            .find(|(_, _, fact)| fact.id == ResourceDefinitionId::new(graph.entry(), 0))
+            .unwrap()
+            .2;
+        assert_eq!(ordinary.family, NominalTypeId::new(graph.entry(), 4));
+        assert!(
+            current.origin.primary_span().range().start()
+                < ordinary.origin.primary_span().range().start()
+        );
+        registry
+            .authenticate_provider_contracts(&mut TypeWorkBudget::default())
+            .unwrap();
+        original_registry_phase_modules(&sources, &modules, registry).unwrap();
+    }
+
+    #[test]
+    fn declaration_coordinate_work_is_exact_cumulative_and_retryable() {
+        let source = SourceFile::new("coordinates.ash", "type First = One\n| Two(Int)\neffect Before {\ncall : Unit -> Unit\n}\nnewtype Last = Last(Int)\n").unwrap();
+        let mut measured = TypeWorkBudget::default();
+        let coordinates = DeclarationCoordinates::from_source(&source, &mut measured).unwrap();
+        assert_eq!(coordinates.nominals.len(), 2);
+        assert_eq!(coordinates.constructors.len(), 3);
+        assert_eq!(coordinates.constructors[2].owner, 1);
+        let total = measured.used();
+        for prefix in [0usize, 37] {
+            let mut short = TypeWorkBudget::with_limit(prefix + total - 1);
+            short.charge(prefix).unwrap();
+            assert_eq!(
+                DeclarationCoordinates::from_source(&source, &mut short)
+                    .err()
+                    .unwrap()
+                    .reason(),
+                ValidationReason::Resource
+            );
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + total);
+                exact.charge(prefix).unwrap();
+                let retry = DeclarationCoordinates::from_source(&source, &mut exact).unwrap();
+                assert_eq!(retry.nominals.len(), 2);
+                assert_eq!(exact.used(), prefix + total);
+            }
+        }
+    }
+
+    #[test]
+    fn syntax_loan_returns_lexer_parser_and_recovery_consumption_on_refusal() {
+        let source = SourceFile::new("short.ash", "type Value = Make\n").unwrap();
+        for extra in [1usize, 10] {
+            let mut work = TypeWorkBudget::with_limit(source.text().len() + extra);
+            assert_eq!(
+                DeclarationCoordinates::from_source(&source, &mut work)
+                    .err()
+                    .unwrap()
+                    .reason(),
+                ValidationReason::Resource
+            );
+            assert_eq!(work.used(), source.text().len() + extra);
+        }
+        let malformed = SourceFile::new("malformed.ash", "type Value =\n").unwrap();
+        let mut work = TypeWorkBudget::default();
+        assert_eq!(
+            DeclarationCoordinates::from_source(&malformed, &mut work)
+                .err()
+                .unwrap()
+                .reason(),
+            ValidationReason::Registry
+        );
+        assert!(work.used() > malformed.text().len());
+    }
+}

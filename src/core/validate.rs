@@ -1,5 +1,7 @@
 //! Independent validation for unchecked pure Core arenas.
 
+mod source_declarations;
+
 use std::{
     cell::Cell,
     collections::{HashMap, HashSet},
@@ -2978,6 +2980,89 @@ impl fmt::Display for ValidationError {
 
 impl Error for ValidationError {}
 
+#[cfg(test)]
+pub(in crate::core) fn assert_source_wrapper_coordinate_for_test(
+    template: &super::source_resource::CheckedSourceResourceTemplate,
+    sources: &[&crate::source::SourceFile],
+    modules: &[(crate::module::ModuleId, crate::source::SourceId)],
+) {
+    let graph = template
+        .reconstructed_handler_graph_for_test(&mut TypeWorkBudget::default())
+        .unwrap();
+    let program = template.original_handler();
+    let original_modules = template.module_sources();
+    let original_sources = original_modules
+        .iter()
+        .map(|pair| {
+            assert!(modules.contains(pair));
+            *sources.iter().find(|source| source.id() == pair.1).unwrap()
+        })
+        .collect::<Vec<_>>();
+    let mut validator =
+        Validator::new_modules(program, &original_sources, original_modules).unwrap();
+    validator.source_handler_graph = Some(&graph);
+    let wrapper = graph.wrapper();
+    let super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Handler(handler)) =
+        &program.nodes[wrapper.value() as usize].kind
+    else {
+        unreachable!()
+    };
+    let resume = program
+        .nodes
+        .iter()
+        .enumerate()
+        .find_map(|(index, node)| match &node.kind {
+            super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Resume(
+                resume,
+            )) if resume.handler() == handler.id() => {
+                Some(NodeId::new(program.arena, index as u32))
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_ne!(wrapper, resume);
+    let contract = EffectClauseContract::Ordinary {
+        handler: wrapper,
+        clause: 0,
+    };
+    assert!(matches!(
+        validator
+            .borrowed_clause_contract(contract, resume)
+            .unwrap()
+            .output,
+        ClauseOutput::ProvisionalOperand
+    ));
+    let nested = program
+        .nodes
+        .iter()
+        .enumerate()
+        .find_map(|(index, node)| {
+            let id = NodeId::new(program.arena, index as u32);
+            (id != wrapper
+                && matches!(
+                    &node.kind,
+                    super::effect::EffectExprKind::Operation(
+                        super::effect::EffectOperation::Handler(_)
+                    )
+                ))
+            .then_some(id)
+        })
+        .unwrap();
+    let contract = EffectClauseContract::Ordinary {
+        handler: nested,
+        clause: 0,
+    };
+    // Even a wrapper-shaped diagnostic coordinate cannot grant its exception
+    // to an independently owned nested handler's continuation.
+    assert!(matches!(
+        validator
+            .borrowed_clause_contract(contract, wrapper)
+            .unwrap()
+            .output,
+        ClauseOutput::Ordinary(_)
+    ));
+}
+
 fn valid_upper_spelling(spelling: &str) -> bool {
     let mut bytes = spelling.bytes();
     bytes.next().is_some_and(|byte| byte.is_ascii_uppercase())
@@ -3623,7 +3708,34 @@ fn check_source_resource_structure_with_globals(
     globals: Option<&super::source_resource::SourceResourceGlobals>,
     work: &mut TypeWorkBudget,
 ) -> Result<(), ValidationError> {
+    check_source_resource_structure_with_handler_graph(
+        program,
+        original,
+        answer,
+        sources,
+        module_sources,
+        globals,
+        None,
+        work,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_source_resource_structure_with_handler_graph(
+    program: &UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
+    original: &std::sync::Arc<crate::resolved::SourceResourceTypeFact>,
+    answer: bool,
+    sources: &[&SourceFile],
+    module_sources: &[(ModuleId, SourceId)],
+    globals: Option<&super::source_resource::SourceResourceGlobals>,
+    handler_graph: Option<&super::source_resource::SourceHandlerGraph<'_>>,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ValidationError> {
+    if handler_graph.is_some_and(|graph| !answer || !graph.authenticates(program, original)) {
+        return Err(ValidationError::new(ValidationReason::Registry, None));
+    }
     let mut validator = Validator::new_modules(program, sources, module_sources)?;
+    validator.source_handler_graph = handler_graph;
     validator.provider_external_types = globals.map(|globals| &**globals);
     if !program
         .registry
@@ -3685,6 +3797,7 @@ impl SourceResourceStructureSession {
         )
     }
 
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn check_with_globals(
         &mut self,
@@ -3696,6 +3809,44 @@ impl SourceResourceStructureSession {
         globals: &std::sync::Arc<super::source_resource::SourceResourceGlobals>,
         work: &mut TypeWorkBudget,
     ) -> Result<(), ValidationError> {
+        self.check_with_handler_graph(
+            program,
+            original,
+            answer,
+            sources,
+            module_sources,
+            globals,
+            None,
+            work,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::core) fn check_with_handler_graph(
+        &mut self,
+        program: &UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
+        original: &std::sync::Arc<crate::resolved::SourceResourceTypeFact>,
+        answer: bool,
+        sources: &[&SourceFile],
+        module_sources: &[(ModuleId, SourceId)],
+        globals: &std::sync::Arc<super::source_resource::SourceResourceGlobals>,
+        handler_graph: Option<&super::source_resource::SourceHandlerGraph<'_>>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
+        // Conditional source originals retain the same complete ordinary check.
+        // Their separately reconstructed graph authorizes only exact row positions.
+        if handler_graph.is_some() {
+            return check_source_resource_structure_with_handler_graph(
+                program,
+                original,
+                answer,
+                sources,
+                module_sources,
+                Some(globals),
+                handler_graph,
+                work,
+            );
+        }
         // Registry parameter ordering can depend on lexical method owners and
         // their graph-local provider instances. Those contexts keep their full
         // fresh registry check; the receipt carries no lexical exemption.
@@ -4117,6 +4268,7 @@ struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily
     provider_state_accesses:
         Option<&'program super::provider::AuthenticatedProviderStateAccesses<'program>>,
     provider_handler_entry: Option<&'program super::provider::HandlerFragmentEntry<'program>>,
+    source_handler_graph: Option<&'program super::source_resource::SourceHandlerGraph<'program>>,
     provider_fragment_locals: Option<&'program [crate::types::NominalTypeId]>,
     source_resource_context: SourceResourceValidationContext,
     authenticated_abstract_nominals: std::cell::RefCell<HashSet<crate::types::NominalTypeId>>,
@@ -4509,6 +4661,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             provider_method_evidence: None,
             provider_state_accesses: None,
             provider_handler_entry: None,
+            source_handler_graph: None,
             provider_fragment_locals: None,
             source_resource_context: SourceResourceValidationContext::FinalProgram,
             authenticated_abstract_nominals: std::cell::RefCell::new(HashSet::new()),
@@ -8862,16 +9015,25 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let mut next_nominal = HashMap::<ModuleId, u32>::new();
         let mut previous_nominal_end = HashMap::new();
 
-        // Canonical closure retention order need not be source declaration
-        // order. Independently check ranges in source order without relaxing
-        // ordinary registry ordering or the canonical metadata comparison.
+        // A retained source-template closure follows dependency retention
+        // order. Reconstruct its defining declaration order; source foreign
+        // owner slots can follow data slots despite an earlier source span.
+        // Every exact ID and non-owner source range remains checked below.
+        let source_original = matches!(
+            self.source_resource_context,
+            SourceResourceValidationContext::OriginalTemplate { .. }
+        );
         let nominals = registry_source_order(
             registry.nominals(),
-            self.contextual_registry.is_some(),
+            self.contextual_registry.is_some() || source_original,
             |nominal| {
                 Ok((
                     nominal.id.module(),
-                    self.registry_source_start(&nominal.origin)?,
+                    if source_original {
+                        nominal.id.declaration()
+                    } else {
+                        self.registry_source_start(&nominal.origin)?
+                    },
                 ))
             },
             |amount| self.charge_type_work(amount),
@@ -9089,7 +9251,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let mut previous_constructor_start = HashMap::new();
         let constructors = registry_source_order(
             registry.constructors(),
-            self.contextual_registry.is_some(),
+            self.contextual_registry.is_some() || source_original,
             |constructor| {
                 Ok((
                     constructor.owner.module(),
@@ -9413,7 +9575,16 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         next_declaration
             .try_reserve(self.program.registry.effects().len())
             .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
-        for effect in self.program.registry.effects() {
+        let effects = registry_source_order(
+            self.program.registry.effects(),
+            matches!(
+                self.source_resource_context,
+                SourceResourceValidationContext::OriginalTemplate { .. }
+            ),
+            |effect| Ok((effect.id.module(), effect.id.declaration())),
+            |amount| self.charge_type_work(amount),
+        )?;
+        for effect in effects {
             self.charge_type_work(
                 effect
                     .parameters
@@ -12135,7 +12306,18 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     }
 
     fn conditional_node_row(&self, id: NodeId) -> Result<bool, ValidationError> {
-        let Some(entry) = self.provider_handler_entry else {
+        if self
+            .source_handler_graph
+            .is_some_and(|graph| graph.wrapper() == id)
+        {
+            return Ok(true);
+        }
+        use super::provider::HandlerGraph;
+        let entry = self
+            .provider_handler_entry
+            .map(|entry| entry.handler_graph())
+            .or_else(|| self.source_handler_graph.map(|graph| graph.handler_graph()));
+        let Some(entry) = entry.as_ref() else {
             return Ok(false);
         };
         let Some(recipe) = entry.row_recipe else {
@@ -12153,7 +12335,12 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         row: &EffectRow,
         id: NodeId,
     ) -> Result<bool, ValidationError> {
-        let Some(entry) = self.provider_handler_entry else {
+        use super::provider::HandlerGraph;
+        let entry = self
+            .provider_handler_entry
+            .map(|entry| entry.handler_graph())
+            .or_else(|| self.source_handler_graph.map(|graph| graph.handler_graph()));
+        let Some(entry) = entry.as_ref() else {
             return Ok(false);
         };
         let Some(recipe) = entry.row_recipe else {
@@ -12167,7 +12354,12 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     }
 
     fn conditional_function_relation(&self, id: NodeId) -> Result<bool, ValidationError> {
-        let Some(entry) = self.provider_handler_entry else {
+        use super::provider::HandlerGraph;
+        let entry = self
+            .provider_handler_entry
+            .map(|entry| entry.handler_graph())
+            .or_else(|| self.source_handler_graph.map(|graph| graph.handler_graph()));
+        let Some(entry) = entry.as_ref() else {
             return Ok(false);
         };
         let Some(recipe) = entry.row_recipe else {
@@ -15455,6 +15647,24 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         ),
         ValidationError,
     > {
+        if matches!(
+            self.source_resource_context,
+            SourceResourceValidationContext::OriginalTemplate { .. }
+        ) {
+            let mut work = TypeWorkBudget::with_limit(
+                self.type_work_limit.saturating_sub(self.type_work.get()),
+            );
+            let result = source_declarations::authenticate(
+                &self.program.registry,
+                &self.sources,
+                self.module_sources
+                    .as_ref()
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?,
+                &mut work,
+            );
+            self.charge_type_work(work.used())?;
+            result?;
+        }
         let mut owners = self.validate_registry()?;
         self.validate_effect_registry(self.module_sources.as_ref(), &mut owners)?;
         let empty_type_binders = CoreTypeBinders::new();
@@ -15548,6 +15758,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             || self
                 .provider_handler_entry
                 .is_some_and(|entry| entry.row_recipe.is_some())
+            || self.source_handler_graph.is_some()
         {
             return Ok(());
         }
@@ -16385,13 +16596,13 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     handler_ids,
                     clause_contracts,
                 )?;
-                let mut row = self.native_interpret_row(
+                let mut row = self.source_native_phase_row(
                     scope.handler_output.effects(),
                     scope.native_interpretations(),
                     id,
                 )?;
                 for root in [scope.acquire.body, scope.finish.body] {
-                    let phase = self.native_interpret_row(
+                    let phase = self.source_native_phase_row(
                         &self.node(root)?.effects,
                         scope.native_interpretations(),
                         id,
@@ -16862,6 +17073,32 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             }
         }
         Ok(false)
+    }
+
+    fn source_native_phase_row(
+        &self,
+        row: &EffectRow,
+        interpretations: &[super::effect::NativeInterpretation],
+        id: NodeId,
+    ) -> Result<EffectRow, ValidationError> {
+        let mut work =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let result = (|| {
+            let mut outward = crate::types::clone_effect_row_with_budget(row, &mut work)
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+            work.charge(interpretations.len())
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+            for interpretation in interpretations {
+                outward = super::provider::interpret_native_phase_row(
+                    &outward,
+                    interpretation.effect(),
+                    &mut work,
+                )?;
+            }
+            Ok(outward)
+        })();
+        self.charge_type_work(work.used())?;
+        result
     }
 
     fn native_interpret_row(
@@ -17714,8 +17951,11 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         id: NodeId,
     ) -> Result<BorrowedClauseContract<'_>, ValidationError> {
         match contract {
-            EffectClauseContract::Ordinary { handler, clause } => {
-                let node = self.node(handler)?;
+            EffectClauseContract::Ordinary {
+                handler: owner,
+                clause,
+            } => {
+                let node = self.node(owner)?;
                 let super::effect::EffectExprKind::Operation(
                     super::effect::EffectOperation::Handler(handler),
                 ) = &node.kind
@@ -17732,7 +17972,14 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     effect: handler.effect(),
                     clause,
                     answer: std::borrow::Cow::Borrowed(&node.ty),
-                    output: ClauseOutput::Ordinary(&node.effects),
+                    output: if self
+                        .source_handler_graph
+                        .is_some_and(|graph| graph.wrapper() == owner)
+                    {
+                        ClauseOutput::ProvisionalOperand
+                    } else {
+                        ClauseOutput::Ordinary(&node.effects)
+                    },
                 })
             }
             EffectClauseContract::Scoped {

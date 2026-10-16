@@ -7,7 +7,7 @@ use super::{CaptureInputId, HandlerRowRecipeDraft, PendingRowEquation, RowEquati
 use crate::{
     core::{
         EffectExprKind, EffectOperation, NodeId, PureExprKind, PureValue, ValidationError,
-        provider::{HandlerFragmentEntry, charge, invalid, node, resource},
+        provider::{charge, invalid, node, resource},
     },
     types::{
         EffectInstance, EffectRow, EffectRowError, EffectRowVariable, InferenceVariableId,
@@ -524,10 +524,11 @@ impl DirectDemandProof {
     fn authenticate_annotations(
         &mut self,
         recipe: &HandlerRowRecipeDraft,
-        entry: &HandlerFragmentEntry<'_>,
+        entry: &impl crate::core::provider::HandlerGraph,
         identities: &HashMap<InferenceVariableId, usize>,
         work: &mut TypeWorkBudget,
     ) -> Result<(), ValidationError> {
+        let entry = &entry.handler_graph();
         let program = &entry.draft.program;
         charge(
             work,
@@ -686,10 +687,11 @@ impl DirectDemandProof {
     fn authenticate_recomputations(
         &mut self,
         recipe: &HandlerRowRecipeDraft,
-        entry: &HandlerFragmentEntry<'_>,
+        entry: &impl crate::core::provider::HandlerGraph,
         identities: &HashMap<InferenceVariableId, usize>,
         work: &mut TypeWorkBudget,
     ) -> Result<(), ValidationError> {
+        let entry = &entry.handler_graph();
         use std::collections::HashSet;
         let program = &entry.draft.program;
         let mut replayed = HashSet::new();
@@ -781,9 +783,10 @@ impl DirectDemandProof {
     fn authenticate_source_equalities(
         &self,
         recipe: &HandlerRowRecipeDraft,
-        entry: &HandlerFragmentEntry<'_>,
+        entry: &impl crate::core::provider::HandlerGraph,
         work: &mut TypeWorkBudget,
     ) -> Result<(), ValidationError> {
+        let entry = &entry.handler_graph();
         let program = &entry.draft.program;
         // Scalar source equalities are diagnostic replay claims. Their actual
         // typing endpoints are reconstructed from immutable function bodies and
@@ -843,9 +846,10 @@ impl DirectDemandProof {
 
     pub(super) fn reconstruct(
         recipe: &HandlerRowRecipeDraft,
-        entry: &HandlerFragmentEntry<'_>,
+        entry: &impl crate::core::provider::HandlerGraph,
         work: &mut TypeWorkBudget,
     ) -> Result<Self, ValidationError> {
+        let entry = &entry.handler_graph();
         let program = &entry.draft.program;
         let records = &entry.draft.pending_rows.equations;
         let mut proof = Self {
@@ -1112,7 +1116,7 @@ impl DirectDemandProof {
             }
         }
         let mut direct = DemandExpression::default();
-        for clause in &entry.draft.clauses {
+        for clause in entry.draft.clauses {
             let equation = recipe.node_equations
                 [clause.body().index().map_err(|_| invalid(clause.body()))?]
             .ok_or_else(|| invalid(clause.body()))?;

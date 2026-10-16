@@ -96,6 +96,17 @@ fn invalid() -> ValidationError {
 }
 
 impl NodeProjection {
+    pub(in crate::core) fn replace_effects(
+        &mut self,
+        row: EffectRow,
+    ) -> Result<(), ValidationError> {
+        let Some(Metadata::Row(effects)) = self.metadata.get_mut(1) else {
+            return Err(invalid());
+        };
+        *effects = row;
+        Ok(())
+    }
+
     pub(in crate::core) fn node(&self) -> NodeId {
         self.node
     }

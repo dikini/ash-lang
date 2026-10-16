@@ -154,7 +154,15 @@ pub(in crate::core) struct RowEquationId(usize);
 pub(in crate::core) struct HandlerOutputId(usize);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub(in crate::core) struct CaptureInputId(usize);
+pub(crate) struct CaptureInputId(usize);
+impl CaptureInputId {
+    pub(crate) const fn from_image_claim(value: usize) -> Self {
+        Self(value)
+    }
+    pub(crate) const fn value(self) -> usize {
+        self.0
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::core) enum HandlerOutputOwner {
@@ -312,24 +320,48 @@ impl HandlerRowRecipeDraft {
         }
     }
     pub(in crate::core) fn reconstruct(
-        entry: &super::HandlerFragmentEntry<'_>,
+        entry: &impl super::HandlerGraph,
         work: &mut TypeWorkBudget,
     ) -> Result<Self, super::ValidationError> {
+        let entry = &entry.handler_graph();
         use super::{PureComputation, PureExprKind, charge, invalid, node, resource};
         use std::collections::{HashMap, HashSet};
         let program = &entry.draft.program;
-        let order = super::super::transform::provider_fragment_order(
-            program,
-            entry.roots(),
-            &HashSet::new(),
-            work,
-        )
-        .map_err(|failure| match failure {
+        let failure = |failure| match failure {
             super::super::transform::TransformError::Build(BuildError::TypeWorkExceeded) => {
                 resource()
             }
             _ => invalid(program.root),
-        })?;
+        };
+        let order = if let Some(root) = entry.wrapper_root {
+            if root != program.root {
+                return Err(invalid(program.root));
+            }
+            // Projecting clause equations never makes the retained wrappers or
+            // unrelated nodes disappear from complete original validation.
+            super::super::transform::provider_fragment_order(
+                program,
+                &[root],
+                &HashSet::new(),
+                work,
+            )
+            .map_err(failure)?;
+            super::super::transform::provider_entry_forest_order(
+                program,
+                entry.roots(),
+                &HashSet::new(),
+                work,
+            )
+            .map_err(failure)?
+        } else {
+            super::super::transform::provider_fragment_order(
+                program,
+                entry.roots(),
+                &HashSet::new(),
+                work,
+            )
+            .map_err(failure)?
+        };
         charge(
             work,
             program.nodes.len().checked_mul(3).ok_or_else(resource)?,
@@ -380,7 +412,7 @@ impl HandlerRowRecipeDraft {
         clauses
             .try_reserve(entry.draft.clauses.len())
             .map_err(|_| resource())?;
-        for clause in &entry.draft.clauses {
+        for clause in entry.draft.clauses {
             if clauses
                 .insert(
                     (entry.draft.handler, clause.resume()),
@@ -607,11 +639,8 @@ impl HandlerRowRecipeDraft {
         Ok(recipe)
     }
 
-    fn equation_for(
-        &self,
-        entry: &super::HandlerFragmentEntry<'_>,
-        id: NodeId,
-    ) -> Option<RowEquationId> {
+    fn equation_for(&self, entry: &impl super::HandlerGraph, id: NodeId) -> Option<RowEquationId> {
+        let entry = &entry.handler_graph();
         if self.template != entry.draft.template || id.arena() != entry.draft.program.arena {
             return None;
         }
@@ -620,10 +649,11 @@ impl HandlerRowRecipeDraft {
 
     pub(in crate::core) fn deferred_node(
         &self,
-        entry: &super::HandlerFragmentEntry<'_>,
+        entry: &impl super::HandlerGraph,
         id: NodeId,
         work: &mut TypeWorkBudget,
     ) -> Result<bool, super::ValidationError> {
+        let entry = &entry.handler_graph();
         super::charge(work, 1)?;
         Ok(self
             .equation_for(entry, id)
@@ -633,10 +663,11 @@ impl HandlerRowRecipeDraft {
 
     pub(in crate::core) fn deferred_function(
         &self,
-        entry: &super::HandlerFragmentEntry<'_>,
+        entry: &impl super::HandlerGraph,
         id: NodeId,
         work: &mut TypeWorkBudget,
     ) -> Result<bool, super::ValidationError> {
+        let entry = &entry.handler_graph();
         super::charge(work, 1)?;
         Ok(self
             .equation_for(entry, id)
@@ -646,11 +677,12 @@ impl HandlerRowRecipeDraft {
 
     pub(in crate::core) fn permits_row_position(
         &self,
-        entry: &super::HandlerFragmentEntry<'_>,
+        entry: &impl super::HandlerGraph,
         id: NodeId,
         row: &EffectRow,
         work: &mut TypeWorkBudget,
     ) -> Result<bool, super::ValidationError> {
+        let entry = &entry.handler_graph();
         use super::{PureComputation, PureExprKind, charge, node};
         charge(work, 1)?;
         let Some(equation) = self.equation_for(entry, id) else {
@@ -704,10 +736,11 @@ impl HandlerRowRecipeDraft {
 
     pub(in crate::core) fn discard_port(
         &self,
-        entry: &super::HandlerFragmentEntry<'_>,
+        entry: &impl super::HandlerGraph,
         id: NodeId,
         work: &mut TypeWorkBudget,
     ) -> Result<bool, super::ValidationError> {
+        let entry = &entry.handler_graph();
         super::charge(work, 1)?;
         let Some(equation) = self.equation_for(entry, id) else {
             return Ok(false);
@@ -724,9 +757,10 @@ impl HandlerRowRecipeDraft {
 
     fn reconstruct_callable_bodies(
         &mut self,
-        entry: &super::HandlerFragmentEntry<'_>,
+        entry: &impl super::HandlerGraph,
         work: &mut TypeWorkBudget,
     ) -> Result<(), super::ValidationError> {
+        let entry = &entry.handler_graph();
         use super::{PureComputation, PureExprKind, charge, invalid, node, resource};
         use std::collections::HashMap;
         let program = &entry.draft.program;
@@ -862,9 +896,10 @@ impl HandlerRowRecipeDraft {
 
     fn reconstruct_pending_positions(
         &mut self,
-        entry: &super::HandlerFragmentEntry<'_>,
+        entry: &impl super::HandlerGraph,
         work: &mut TypeWorkBudget,
     ) -> Result<(), super::ValidationError> {
+        let entry = &entry.handler_graph();
         use super::{charge, invalid, resource};
         use crate::types::EffectRowVariable;
         use std::collections::{HashMap, HashSet};

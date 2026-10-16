@@ -25,7 +25,7 @@ use crate::{
 };
 use std::primitive::usize;
 use std::{ops::Deref, sync::Arc};
-mod copy;
+pub(super) mod copy;
 pub(crate) mod final_preparation;
 pub(super) use copy::{
     PreparedPhaseCopy, PreparedScopeCopyPlan, lower_family_scope_copies, lower_final_scope_copies,

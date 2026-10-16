@@ -82,17 +82,20 @@ pub(in crate::core) use external::{
 };
 pub(crate) use handler::HandlerFragmentDraft;
 pub(in crate::core) use handler::RetainedHandlerStateAssociation;
-pub(in crate::core) use handler::{HandlerAssociations, HandlerFragmentEntry};
+pub(in crate::core) use handler::{
+    HandlerAssociations, HandlerFragmentEntry, HandlerGraph, HandlerGraphDraft, HandlerGraphView,
+};
 #[cfg(test)]
 pub(crate) use handler::{HandlerMutation, mutate_handler_for_test};
+pub(crate) use row::CaptureInputId;
 pub(in crate::core) use row::effect_operation as row_effect_operation;
 #[cfg(test)]
 pub(in crate::core) use row::owned_contract_links_for_test;
-pub(in crate::core) use row::{CaptureInputId, HandlerRowContract, HandlerRowRecipeDraft};
 pub(crate) use row::{
     HandlerPendingRows, PendingRowEquality, PendingRowEquation, PendingRowRecomputation,
     PendingRowRecord,
 };
+pub(in crate::core) use row::{HandlerRowContract, HandlerRowRecipeDraft};
 #[cfg(test)]
 pub(crate) use row::{
     add_unused_pending_equality_for_test, drop_native_from_pending_demands_for_test,

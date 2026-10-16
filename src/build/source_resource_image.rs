@@ -141,6 +141,7 @@ pub(super) struct SourceTemplateRecord {
     finish: u32,
     handler: u32,
     globals: Slice,
+    handler_inputs: Option<Slice>,
 }
 #[derive(Clone, Copy, Debug)]
 pub(super) struct SourceRegistryViewRecord {
@@ -179,8 +180,8 @@ pub(super) struct FreshTypeRecord {
 }
 #[derive(Clone, Copy, Debug)]
 pub(super) struct PlainPairRecord {
-    original: u32,
-    copied: u32,
+    pub(super) original: u32,
+    pub(super) copied: u32,
 }
 #[derive(Clone, Copy, Debug)]
 pub(super) struct SourceSubstitutionRecord {
@@ -196,6 +197,8 @@ pub(super) struct SourceCopyRecord {
     resumes: Slice,
     types: Slice,
     rows: Slice,
+    pending: Slice,
+    node_rows: Slice,
 }
 #[derive(Clone, Copy, Debug)]
 pub(super) struct SourceScopeRecord {
@@ -216,6 +219,7 @@ pub(super) struct SourceScopeRecord {
     acquire_copy: u32,
     finish_copy: u32,
     handler_copy: u32,
+    handler_rows: Option<Slice>,
     pub(super) interpretations: Slice,
     pub(super) forwardings: Slice,
 }
@@ -292,7 +296,8 @@ wire_struct!(
     acquire,
     finish,
     handler,
-    globals
+    globals,
+    handler_inputs
 );
 wire_struct!(SourceRegistryViewRecord, header, items, modules, abstracts);
 wire_struct!(SourceRegistryItemRecord, tag, module, owner, local);
@@ -310,7 +315,9 @@ wire_struct!(
     handlers,
     resumes,
     types,
-    rows
+    rows,
+    pending,
+    node_rows
 );
 wire_struct!(
     SourceScopeRecord,
@@ -331,6 +338,7 @@ wire_struct!(
     acquire_copy,
     finish_copy,
     handler_copy,
+    handler_rows,
     interpretations,
     forwardings
 );
@@ -936,7 +944,28 @@ impl Encoder<'_> {
             .ok_or(ImageFailure::InvalidRecord)?;
         let (acquire, acquire_mapping) = self.encode_template_graph(original.original_acquire())?;
         let (finish, finish_mapping) = self.encode_template_graph(original.original_finish())?;
-        let (handler, handler_mapping) = self.encode_template_graph(original.original_handler())?;
+        let saved_pending = std::mem::take(&mut self.source_pending_rows);
+        let conditional = (|| {
+            if let Some(inputs) = original.original_handler_inputs() {
+                for id in inputs.pending.identities() {
+                    charge(self.work, 1)?;
+                    self.source_pending_rows
+                        .try_reserve(1)
+                        .map_err(|_| ImageFailure::Resource)?;
+                    if !self.source_pending_rows.insert(id) {
+                        return Err(ImageFailure::InvalidRecord);
+                    }
+                }
+            }
+            let (handler, mapping) = self.encode_template_graph(original.original_handler())?;
+            let inputs = original
+                .original_handler_inputs()
+                .map(|inputs| self.encode_source_row_inputs(inputs, &mapping))
+                .transpose()?;
+            Ok::<_, ImageFailure>((handler, mapping, inputs))
+        })();
+        self.source_pending_rows = saved_pending;
+        let (handler, handler_mapping, handler_inputs) = conditional?;
         let mut ordered: Vec<(
             &crate::resolved::BinderId,
             &crate::types::IterativeTypeOwner,
@@ -983,6 +1012,7 @@ impl Encoder<'_> {
                 finish,
                 handler,
                 globals,
+                handler_inputs,
             },
             self.work,
         )?;
@@ -1052,6 +1082,10 @@ impl Encoder<'_> {
                 acquire_copy: copies[0],
                 finish_copy: copies[1],
                 handler_copy: copies[2],
+                handler_rows: scope
+                    .handler_row_claim()
+                    .map(|rows| self.encode_source_row_claim(rows, &retained.mappings[2]))
+                    .transpose()?,
                 interpretations,
                 forwardings,
             };
@@ -1065,10 +1099,7 @@ impl Encoder<'_> {
         claim: SourceResourceCopyClaim<'_>,
         original: &[Option<u32>],
     ) -> Result<u32, ImageFailure> {
-        if !claim.freshening.nominals.is_empty()
-            || !claim.freshening.lexicals.is_empty()
-            || !claim.substitution.pending.is_empty()
-        {
+        if !claim.freshening.nominals.is_empty() || !claim.freshening.lexicals.is_empty() {
             return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
         }
         let start = self.image.source_node_pairs.len();
@@ -1150,6 +1181,15 @@ impl Encoder<'_> {
             push(&mut self.image.source_substitutions, record, self.work)?;
         }
         let rows = Slice::of(&self.image.source_substitutions, start)?;
+        let pending =
+            self.encode_source_row_pairs(claim.substitution.pending, |id| Ok(id.value()))?;
+        let node_rows = self.encode_source_row_pairs(claim.node_rows, |id| {
+            original
+                .get(id.value() as usize)
+                .copied()
+                .flatten()
+                .ok_or(ImageFailure::InvalidRecord)
+        })?;
         push(
             &mut self.image.source_copies,
             SourceCopyRecord {
@@ -1160,6 +1200,8 @@ impl Encoder<'_> {
                 resumes,
                 types,
                 rows,
+                pending,
+                node_rows,
             },
             self.work,
         )
@@ -1689,7 +1731,15 @@ impl Decoder<'_> {
         symbols: &[Arc<crate::foreign::checked_source::CheckedForeignSymbol>],
         binders: &[crate::resolved::BinderId],
         slot: u32,
-    ) -> Result<(UnvalidatedEffectProgram, Vec<NodeId>), ImageFailure> {
+        inputs: Option<super::source_resource_rows_image::SourceInputsRecord>,
+    ) -> Result<
+        (
+            UnvalidatedEffectProgram,
+            Vec<NodeId>,
+            Option<crate::core::source_resource::SourceHandlerRowInputs>,
+        ),
+        ImageFailure,
+    > {
         let graph = *get(&self.image.source_graphs, slot)?;
         let records = graph.nodes.get(&self.image.template_nodes)?;
         let catalog = self.source_method_catalog(graph.catalog)?;
@@ -1703,6 +1753,14 @@ impl Decoder<'_> {
             self.work,
         )?;
         builder.reserve_provider_draft_binders(binders, self.work)?;
+        if let Some(inputs) = &inputs {
+            builder.with_caller_type_work(self.work, |builder| {
+                for identity in inputs.identities() {
+                    builder.defer_cleanup_row(identity)?;
+                }
+                Ok::<_, crate::core::BuildError>(())
+            })?;
+        }
         let mut nodes = Vec::new();
         for record in records {
             let ty = self.ty(record.ty)?;
@@ -1723,8 +1781,27 @@ impl Decoder<'_> {
             )?;
             push(&mut nodes, node, self.work)?;
         }
-        let program = builder.finish_provider_draft(*get(&nodes, graph.root)?, self.work)?;
-        Ok((program, nodes))
+        let (program, inputs) = if let Some(inputs) = inputs {
+            let inputs = self.source_row_inputs(inputs, &nodes)?;
+            let (program, pending) = builder.finish_provider_conditional_draft(
+                *get(&nodes, graph.root)?,
+                inputs.pending,
+                self.work,
+            )?;
+            (
+                program,
+                Some(crate::core::source_resource::SourceHandlerRowInputs {
+                    direct: inputs.direct,
+                    pending,
+                }),
+            )
+        } else {
+            (
+                builder.finish_provider_draft(*get(&nodes, graph.root)?, self.work)?,
+                None,
+            )
+        };
+        Ok((program, nodes, inputs))
     }
     pub(super) fn source_templates(
         &mut self,
@@ -1747,12 +1824,19 @@ impl Decoder<'_> {
                 .ok_or(ImageFailure::InvalidRecord)?;
             let header = CheckedSourceResourceHeader::admit(original, registry, self.work)
                 .map_err(ImageFailure::Validation)?;
-            let (acquire, acquire_nodes) =
-                self.source_graph(registry, symbols, binders, record.acquire)?;
-            let (finish, finish_nodes) =
-                self.source_graph(registry, symbols, binders, record.finish)?;
-            let (handler, handler_nodes) =
-                self.source_graph(registry, symbols, binders, record.handler)?;
+            let (acquire, acquire_nodes, _) =
+                self.source_graph(registry, symbols, binders, record.acquire, None)?;
+            let (finish, finish_nodes, _) =
+                self.source_graph(registry, symbols, binders, record.finish, None)?;
+            let inputs = record
+                .handler_inputs
+                .map(|blob| self.source_row_inputs_record(blob))
+                .transpose()?;
+            let saved_pending =
+                self.install_source_pending(inputs.iter().flat_map(|record| record.identities()))?;
+            let handler = self.source_graph(registry, symbols, binders, record.handler, inputs);
+            self.source_pending_rows = saved_pending;
+            let (handler, handler_nodes, handler_inputs) = handler?;
             let mut globals = crate::core::source_resource::SourceResourceGlobals::new();
             for slot in record.globals.get(&self.image.node_children)? {
                 let binding = *get(&self.image.binders, *slot)?;
@@ -1797,6 +1881,7 @@ impl Decoder<'_> {
                 acquire,
                 finish,
                 handler,
+                handler_inputs,
                 Arc::new(globals),
                 &sources,
                 &module_sources,
@@ -1890,6 +1975,10 @@ impl Decoder<'_> {
                 return Err(ImageFailure::InvalidRecord);
             }
         }
+        copy.pending = self.source_row_pairs(record.pending, |id| {
+            Ok(crate::types::InferenceVariableId::new(id))
+        })?;
+        copy.node_rows = self.source_row_pairs(record.node_rows, |id| Ok(*get(original, id)?))?;
         Ok(copy)
     }
     pub(super) fn source_scope(
@@ -1935,7 +2024,7 @@ impl Decoder<'_> {
             arguments.push(argument.into_inner());
         }
         let (lexical, forwardings) = self.source_forwardings(record.forwardings)?;
-        let scope = SourceResourceScopeNode::new(
+        let mut scope = SourceResourceScopeNode::new(
             Arc::clone(&template.template),
             arguments.into_boxed_slice(),
             identity,
@@ -1957,6 +2046,10 @@ impl Decoder<'_> {
             self.work,
         )
         .map_err(ImageFailure::Validation)?;
+        if let Some(blob) = record.handler_rows {
+            let rows = self.source_row_claim(blob, &template.template, &template.nodes[2])?;
+            scope.retain_handler_rows(Arc::new(rows), self.work)?;
+        }
         let expected = record.interpretations.get(&self.image.interpretations)?;
         if expected.len() != scope.native_interpretations().len() {
             return Err(ImageFailure::InvalidRecord);
@@ -2039,6 +2132,7 @@ struct RestoredSourceCopy {
     types: HashMap<TypeVariableId, Type>,
     rows: HashMap<TypeVariableId, EffectRow>,
     pending: HashMap<crate::types::InferenceVariableId, EffectRow>,
+    node_rows: HashMap<NodeId, EffectRow>,
 }
 impl RestoredSourceCopy {
     fn claim(&self) -> SourceResourceCopyClaim<'_> {
@@ -2057,6 +2151,7 @@ impl RestoredSourceCopy {
                 rows: &self.rows,
                 pending: &self.pending,
             },
+            node_rows: &self.node_rows,
         }
     }
 }
@@ -4000,6 +4095,203 @@ Buffer.Success (Buffer.Success 7)
         }
         drop(restore(&mut TypeWorkBudget::default()).expect("fresh retry remains independent"));
     }
+    fn conditional_control_image() -> PureImage {
+        static IDS: AtomicU64 = AtomicU64::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "ash-conditional-image-{}-{}",
+            std::process::id(),
+            IDS.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&root).unwrap();
+        let fixture = Fixture(root);
+        for (path, text) in [
+            (
+                "owner.ash",
+                include_str!("../../tests/fixtures/source-owner/owner.ash"),
+            ),
+            (
+                "helpers.ash",
+                include_str!("../../tests/fixtures/source-owner/control_capture.ash"),
+            ),
+            (
+                "entry.ash",
+                include_str!("../../tests/fixtures/source-owner/control_capture_entry.ash"),
+            ),
+        ] {
+            fs::write(fixture.0.join(path), text).unwrap();
+        }
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry: fixture.0.join("entry.ash"),
+            roots: crate::module::ModuleRoots::empty(),
+        })
+        .unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let image = super::super::encode_effect_for_build(
+            program,
+            provenance,
+            super::super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap()
+        .image;
+        drop(compiled);
+        drop(fixture);
+        image
+    }
+
+    #[test]
+    fn source_control_image_retains_original_pending_owner_and_each_actual_request() {
+        let image = conditional_control_image();
+        let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
+        let expected = image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        let restore = |work: &mut TypeWorkBudget| {
+            let image = PureImage::decode_bytes(&bytes, work)?;
+            image.admit_expected_native_facts(&expected, work)?;
+            image.restore_effect(work)
+        };
+        let mut normal = super::super::super::gas::startup(bytes.len(), expected.len()).unwrap();
+        let restored = restore(&mut normal).unwrap();
+        let scope = restored
+            .program
+            .nodes()
+            .iter()
+            .find_map(|node| match &node.kind {
+                crate::core::EffectExprKind::Operation(
+                    crate::core::EffectOperation::SourceResourceScope(scope),
+                ) if scope.handler_row_claim().is_some() => Some(scope),
+                _ => None,
+            })
+            .unwrap();
+        let claim = scope.handler_row_claim().unwrap();
+        claim.assert_distinct_actual_captures_for_test(claim.source_rows()[0].known()[0].effect());
+        drop(restored);
+        let cost = normal.used();
+        assert!(cost < normal.limit());
+        for prefix in [0, 23] {
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            assert!(matches!(restore(&mut short), Err(ImageFailure::Resource)));
+            assert!(short.used() > prefix);
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                drop(restore(&mut exact).unwrap());
+                assert_eq!(exact.used(), prefix + cost);
+            }
+        }
+        drop(
+            restore(&mut super::super::super::gas::startup(bytes.len(), expected.len()).unwrap())
+                .unwrap(),
+        );
+        for mutation in 0..9 {
+            let mut work = super::super::super::gas::startup(bytes.len(), expected.len()).unwrap();
+            let mut forged = PureImage::decode_bytes(&bytes, &mut work).unwrap();
+            let scope_index = forged
+                .source_scopes
+                .iter()
+                .position(|scope| scope.handler_rows.is_some())
+                .unwrap();
+            let scope = forged.source_scopes[scope_index];
+            let template_index = scope.template as usize;
+            match mutation {
+                0 => forged.source_scopes[scope_index].handler_rows = None,
+                1 => forged.source_templates[template_index].handler_inputs = None,
+                2 => {
+                    let record = forged
+                        .types
+                        .iter_mut()
+                        .find(|record| {
+                            matches!(record.tag, super::super::TypeTag::SourcePendingRow { .. })
+                        })
+                        .unwrap();
+                    let super::super::TypeTag::SourcePendingRow { identity, .. } = &mut record.tag
+                    else {
+                        unreachable!()
+                    };
+                    *identity = u32::MAX;
+                }
+                3 => {
+                    let handler = forged.source_graphs
+                        [forged.source_templates[template_index].handler as usize];
+                    let unit = handler
+                        .nodes
+                        .get(&forged.template_nodes)
+                        .unwrap()
+                        .iter()
+                        .position(|node| matches!(node.tag, super::super::NodeTag::Unit))
+                        .unwrap() as u32;
+                    let blob = forged.source_templates[template_index]
+                        .handler_inputs
+                        .unwrap();
+                    forged.source_templates[template_index].handler_inputs = Some(
+                        super::super::source_resource_rows_image::replace_discard_node_for_test(
+                            &mut forged,
+                            blob,
+                            unit,
+                        ),
+                    );
+                }
+                4 => {
+                    let copy = scope.handler_copy as usize;
+                    forged.source_copies[copy].node_rows.len = 0;
+                }
+                5 => {
+                    let pending = forged.source_copies[scope.handler_copy as usize].pending;
+                    assert!(pending.len > 0);
+                    let acquire = &mut forged.source_copies[scope.acquire_copy as usize];
+                    assert_eq!(acquire.pending.len, 0);
+                    acquire.pending = pending;
+                }
+                6..=8 => {
+                    let blob = scope.handler_rows.unwrap();
+                    forged.source_scopes[scope_index].handler_rows = Some(
+                        super::super::source_resource_rows_image::mutate_claim_for_test(
+                            &mut forged,
+                            blob,
+                            (mutation - 6) as u8,
+                        ),
+                    );
+                }
+                _ => unreachable!(),
+            }
+            forged
+                .compare_native_expectations(&expected, &mut work)
+                .unwrap();
+            let error = match forged.restore_effect(&mut work) {
+                Err(error) => error,
+                Ok(_) => panic!("conditional image mutation {mutation} was accepted"),
+            };
+            match mutation {
+                1 | 2 => assert!(
+                    matches!(error, ImageFailure::InvalidRecord),
+                    "mutation {mutation}: {error:?}"
+                ),
+                3 => assert!(
+                    matches!(
+                        error,
+                        ImageFailure::CoreAdmission(crate::core::BuildError::InvalidPayload)
+                    ),
+                    "mutation {mutation}: {error:?}"
+                ),
+                _ => {
+                    let ImageFailure::Validation(error) = error else {
+                        panic!("mutation {mutation}: {error:?}")
+                    };
+                    assert_eq!(
+                        error.reason(),
+                        crate::core::ValidationReason::Registry,
+                        "mutation {mutation}: {error:?}"
+                    );
+                }
+            }
+        }
+        println!(
+            "conditional source image work={cost}; exact/prefix/one-short/fresh, two distinct requests and nine original/phase/domain/capture claim refusals"
+        );
+    }
+
     fn scope_image() -> PureImage {
         static IDS: AtomicU64 = AtomicU64::new(0);
         let root = std::env::temp_dir().join(format!(

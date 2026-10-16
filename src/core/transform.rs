@@ -727,7 +727,7 @@ fn rebuild_source_resource_scope(
         .try_reserve_exact(scope.forwardings.len())
         .map_err(|_| BuildError::TypeWorkExceeded)?;
     forwardings.extend_from_slice(&scope.forwardings);
-    let scope = super::source_resource::SourceResourceScopeNode::new(
+    let mut copied_scope = super::source_resource::SourceResourceScopeNode::new(
         Arc::clone(scope.original()),
         arguments,
         scope.identity(),
@@ -751,8 +751,9 @@ fn rebuild_source_resource_scope(
             TransformError::InvalidValidatedInput
         }
     })?;
+    copied_scope.retain_handler_rows_from(scope, &mut builder.type_work)?;
     builder
-        .source_resource_scope(Box::new(scope), ty.into_inner(), effects, origin)
+        .source_resource_scope(Box::new(copied_scope), ty.into_inner(), effects, origin)
         .map_err(TransformError::from)
 }
 

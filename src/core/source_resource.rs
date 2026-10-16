@@ -3,6 +3,11 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+mod handler_rows;
+pub(in crate::core) use handler_rows::SourceHandlerGraph;
+pub(crate) use handler_rows::SourceHandlerRowInputs;
+use handler_rows::SourceHandlerRows;
+
 use crate::{
     foreign::{
         checked_source::CheckedForeignSymbol, source_contract::PreparedOwnerCall,
@@ -826,6 +831,7 @@ pub(crate) struct CheckedSourceResourceTemplate {
     acquire: UnvalidatedEffectProgram,
     finish: UnvalidatedEffectProgram,
     handler: UnvalidatedEffectProgram,
+    handler_rows: Option<SourceHandlerRows>,
     acquire_entry: (TypedBinder, NodeId),
     finish_entry: (TypedBinder, NodeId),
     handler_entry: (TypedBinder, NodeId),
@@ -1000,6 +1006,7 @@ impl CheckedSourceResourceTemplate {
         acquire: UnvalidatedEffectProgram,
         finish: UnvalidatedEffectProgram,
         handler: UnvalidatedEffectProgram,
+        handler_inputs: Option<SourceHandlerRowInputs>,
         globals: Arc<SourceResourceGlobals>,
         sources: &[&crate::source::SourceFile],
         module_sources: &[(crate::module::ModuleId, crate::source::SourceId)],
@@ -1044,19 +1051,64 @@ impl CheckedSourceResourceTemplate {
             }
         }
         let globals = Arc::new(SourceResourceGlobals { types: used });
+        let mut handler_graph = handler_inputs
+            .as_ref()
+            .map(|inputs| SourceHandlerGraph::reconstruct(&handler, &header, inputs, work))
+            .transpose()?;
+        let recipe = handler_graph
+            .as_ref()
+            .map(|graph| super::provider::HandlerRowRecipeDraft::reconstruct(graph, work))
+            .transpose()?;
+        if let Some(graph) = &mut handler_graph {
+            graph.recipe = recipe.as_ref();
+        }
+        let capture = handler_graph
+            .as_ref()
+            .map(|graph| {
+                charge(work, handler.nodes.len())?;
+                let mut correspondence = Vec::new();
+                correspondence
+                    .try_reserve_exact(handler.nodes.len())
+                    .map_err(|_| resource())?;
+                for ordinal in 0..handler.nodes.len() {
+                    correspondence.push(Some(NodeId::new(
+                        handler.arena,
+                        u32::try_from(ordinal).map_err(|_| resource())?,
+                    )));
+                }
+                super::capture::reconstruct_conditional_handler_capture(
+                    graph,
+                    &handler.nodes,
+                    handler.arena,
+                    &correspondence,
+                    &[],
+                    &[],
+                    &[],
+                    &[],
+                    &[],
+                    None,
+                    work,
+                )
+                .map_err(|failure| match failure {
+                    super::capture::Failure::Resource => resource(),
+                    _ => invalid(),
+                })
+            })
+            .transpose()?;
         // Ordinary graph, kind, scope, effect, registry and provenance checking
         // precedes the resource-specific phase and owner-lineage proof.
         for (program, answer) in [(&acquire, false), (&finish, false), (&handler, true)] {
             if !Arc::ptr_eq(&program.registry, &acquire.registry) {
                 return Err(invalid());
             }
-            session.check_with_globals(
+            session.check_with_handler_graph(
                 program,
                 &header.original,
                 answer,
                 sources,
                 module_sources,
                 &globals,
+                if answer { handler_graph.as_ref() } else { None },
                 work,
             )?;
         }
@@ -1172,6 +1224,7 @@ impl CheckedSourceResourceTemplate {
             handler_body,
             placeholder_binder,
             &globals,
+            handler_graph.as_ref(),
             work,
         )?;
         charge(work, module_sources.len())?;
@@ -1180,6 +1233,16 @@ impl CheckedSourceResourceTemplate {
             .try_reserve_exact(module_sources.len())
             .map_err(|_| resource())?;
         retained_sources.extend_from_slice(module_sources);
+        drop(handler_graph);
+        let handler_rows = match (handler_inputs, recipe, capture) {
+            (Some(inputs), Some(recipe), Some(capture)) => Some(SourceHandlerRows {
+                inputs,
+                recipe,
+                capture,
+            }),
+            (None, None, None) => None,
+            _ => return Err(invalid()),
+        };
         Ok(Self {
             header,
             module_sources: retained_sources.into_boxed_slice(),
@@ -1187,6 +1250,7 @@ impl CheckedSourceResourceTemplate {
             acquire,
             finish,
             handler,
+            handler_rows,
             acquire_entry,
             finish_entry,
             handler_entry: (handler_entry.0, handler_body),
@@ -1258,6 +1322,10 @@ impl CheckedSourceResourceTemplate {
         &self,
         work: &mut TypeWorkBudget,
     ) -> Result<crate::types::EffectRow, ValidationError> {
+        if let Some(rows) = &self.handler_rows {
+            return crate::types::clone_effect_row_with_budget(&rows.inputs.direct, work)
+                .map_err(|_| resource());
+        }
         crate::types::rebuild_effect_row_with_budget(
             node(&self.handler, self.handler_entry.1)?
                 .effects
@@ -1392,12 +1460,22 @@ enum FlowFact<'a> {
     Callable(ConstructorId),
     ScalarPreflight,
     PayloadCallable,
+    // This invocation fact comes only from an exact original operation input.
+    // It is deliberately neither independent data nor a native operand.
+    HandlerInputCallable {
+        original: &'a SourceResourceTypeFact,
+        operation: OperationId,
+        pattern: &'a CorePattern,
+        binder: &'a TypedBinder,
+        value_type: &'a Type,
+    },
     ByteCallable(crate::resolved::BinderId, Option<NodeId>),
     ViewCallable(crate::resolved::BinderId, Option<NodeId>),
 }
 #[derive(Default)]
 struct FlowFacts<'a> {
     globals: Option<&'a SourceResourceGlobals>,
+    handler_graph: Option<super::provider::HandlerGraphView<'a>>,
     values: Vec<FlowFact<'a>>,
     byte_calls: Vec<SourceByteCall>,
     window_calls: Vec<SourceWindowCall>,
@@ -1603,6 +1681,7 @@ struct FlowPath {
     attempted_teardown: bool,
     blocked: bool,
     windows: Vec<(NodeId, usize)>,
+    ordinary_owners: Vec<(super::HandlerId, crate::resolved::ResumeId)>,
 }
 impl FlowPath {
     fn new(work: &mut TypeWorkBudget) -> Result<Self, ValidationError> {
@@ -1614,6 +1693,7 @@ impl FlowPath {
             attempted_teardown: false,
             blocked: false,
             windows: Vec::new(),
+            ordinary_owners: Vec::new(),
         })
     }
     fn bind(
@@ -1640,6 +1720,12 @@ impl FlowPath {
             .try_reserve_exact(self.windows.len())
             .map_err(|_| resource())?;
         windows.extend_from_slice(&self.windows);
+        let mut ordinary_owners = Vec::new();
+        charge(work, self.ordinary_owners.len())?;
+        ordinary_owners
+            .try_reserve_exact(self.ordinary_owners.len())
+            .map_err(|_| resource())?;
+        ordinary_owners.extend_from_slice(&self.ordinary_owners);
         Ok(Self {
             locals,
             acquired: self.acquired,
@@ -1647,6 +1733,7 @@ impl FlowPath {
             attempted_teardown: self.attempted_teardown,
             blocked: self.blocked,
             windows,
+            ordinary_owners,
         })
     }
 }
@@ -2069,6 +2156,7 @@ fn eval_flow<'a>(
                     FlowFact::Callable(constructor) => Some(*constructor),
                     FlowFact::ScalarPreflight
                     | FlowFact::PayloadCallable
+                    | FlowFact::HandlerInputCallable { .. }
                     | FlowFact::ByteCallable(_, Some(_))
                     | FlowFact::ViewCallable(_, Some(_)) => None,
                     _ => return Err(invalid()),
@@ -2101,6 +2189,61 @@ fn eval_flow<'a>(
                             work,
                         )?;
                         0
+                    } else if let FlowFact::HandlerInputCallable {
+                        original,
+                        operation,
+                        pattern,
+                        binder,
+                        value_type,
+                    } = facts.fact(function)?
+                    {
+                        let (original, operation, pattern, binder, value_type) =
+                            (*original, *operation, *pattern, *binder, *value_type);
+                        let graph = facts.handler_graph.as_ref().ok_or_else(invalid)?;
+                        charge(work, graph.draft.clauses.len())?;
+                        let clause = graph
+                            .draft
+                            .clauses
+                            .iter()
+                            .find(|clause| {
+                                clause.operation() == operation
+                                    && std::ptr::eq(clause.pattern(), pattern)
+                            })
+                            .ok_or_else(invalid)?;
+                        charge(work, clause.pattern().binder_iter().count())?;
+                        if phase != SourceResourcePhase::Handler
+                            || !std::ptr::eq(original, &*header.original)
+                            || !clause
+                                .pattern()
+                                .binder_iter()
+                                .any(|candidate| std::ptr::eq(candidate, binder))
+                            || !same(&node(program, application.function())?.ty, value_type, work)?
+                            || !facts.independent(argument, work)?
+                        {
+                            return Err(invalid());
+                        }
+                        let signature = value_type.function_view().ok_or_else(invalid)?;
+                        if !same(signature.value(), &stored.ty, work)? {
+                            return Err(invalid());
+                        }
+                        if signature.value().function_view().is_some() {
+                            facts.add(
+                                FlowFact::HandlerInputCallable {
+                                    original,
+                                    operation,
+                                    pattern,
+                                    binder,
+                                    value_type: signature.value(),
+                                },
+                                work,
+                            )?
+                        } else {
+                            let value = facts.input(&stored.ty, &program.registry, work)?;
+                            if !facts.independent(value, work)? {
+                                return Err(invalid());
+                            }
+                            value
+                        }
                     } else if matches!(facts.fact(function)?, FlowFact::PayloadCallable) {
                         let callable = node(program, application.function())?;
                         let signature = callable.ty.function_view().ok_or_else(invalid)?;
@@ -2706,6 +2849,79 @@ fn eval_flow<'a>(
             }
             Ok(results)
         }
+        EffectExprKind::Operation(EffectOperation::Handler(handler))
+            if phase == SourceResourcePhase::Handler && facts.handler_graph.is_some() =>
+        {
+            if handler.has_hook_contracts() {
+                return Err(invalid());
+            }
+            let mut results = eval_flow(
+                program,
+                header,
+                handler.body(),
+                phase,
+                path.copy(work)?,
+                facts,
+                depth + 1,
+                work,
+            )?;
+            for clause in handler.clauses() {
+                let mut branch = path.copy(work)?;
+                push(
+                    &mut branch.ordinary_owners,
+                    (handler.id(), clause.resume()),
+                    work,
+                )?;
+                bind_pattern(
+                    clause.pattern(),
+                    0,
+                    &mut branch,
+                    facts,
+                    &program.registry,
+                    depth + 1,
+                    work,
+                )?;
+                let completed = eval_flow(
+                    program,
+                    header,
+                    clause.body(),
+                    phase,
+                    branch,
+                    facts,
+                    depth + 1,
+                    work,
+                )?;
+                for (value, mut branch) in completed {
+                    if !facts.independent(value, work)? {
+                        return Err(invalid());
+                    }
+                    if branch.ordinary_owners.pop() != Some((handler.id(), clause.resume())) {
+                        return Err(invalid());
+                    }
+                    push(&mut results, (value, branch), work)?;
+                }
+            }
+            Ok(results)
+        }
+        EffectExprKind::Operation(EffectOperation::Discard(discard))
+            if phase == SourceResourcePhase::Handler =>
+        {
+            let graph = facts.handler_graph.as_ref().ok_or_else(invalid)?;
+            let recipe = graph.row_recipe.ok_or_else(invalid)?;
+            charge(work, path.ordinary_owners.len())?;
+            if !path
+                .ordinary_owners
+                .contains(&(discard.handler(), discard.owner()))
+                || !recipe.discard_port(graph, id, work)?
+                || !same(&stored.ty, &Type::Unit, work)?
+            {
+                return Err(invalid());
+            }
+            // This is the checked Discard expression's Unit result, not a
+            // resumed client return or a native-consumption witness. Its actual
+            // capture and cleanup remain in the conditional control graph.
+            one((0, path), work)
+        }
         EffectExprKind::Operation(EffectOperation::Resume(resume))
             if phase == SourceResourcePhase::Handler =>
         {
@@ -3107,10 +3323,13 @@ fn check_handler(
     body: NodeId,
     answer: crate::resolved::BinderId,
     globals: &SourceResourceGlobals,
+    graph: Option<&SourceHandlerGraph<'_>>,
     work: &mut TypeWorkBudget,
 ) -> Result<SourcePhaseCalls, ValidationError> {
     let mut facts = facts(work)?;
     facts.globals = Some(globals);
+    use super::provider::HandlerGraph;
+    facts.handler_graph = graph.map(|graph| graph.handler_graph());
     let mut path = FlowPath::new(work)?;
     path.bind(
         state.id(),
@@ -3201,6 +3420,29 @@ fn check_handler(
             0,
             work,
         )?;
+        push(
+            &mut clause_path.ordinary_owners,
+            (handler.id(), clause.resume()),
+            work,
+        )?;
+        if facts.handler_graph.is_some() {
+            for binder in clause.pattern().binder_iter() {
+                charge(work, 1)?;
+                if binder.ty().function_view().is_some() {
+                    let value = facts.add(
+                        FlowFact::HandlerInputCallable {
+                            original: &header.original,
+                            operation: clause.operation(),
+                            pattern: clause.pattern(),
+                            binder,
+                            value_type: binder.ty(),
+                        },
+                        work,
+                    )?;
+                    clause_path.bind(binder.id(), value, work)?;
+                }
+            }
+        }
         for (value, _) in eval_flow(
             program,
             header,
@@ -3228,6 +3470,7 @@ pub(crate) struct SourceResourceCopyClaim<'a> {
     pub(crate) nodes: &'a [(NodeId, NodeId)],
     pub(crate) freshening: super::provider::ProviderFreshening<'a>,
     pub(crate) substitution: super::provider::ProviderTemplateSubstitution<'a>,
+    pub(crate) node_rows: &'a HashMap<NodeId, crate::types::EffectRow>,
 }
 #[derive(Debug)]
 struct SourceResourceCopy {
@@ -3244,6 +3487,8 @@ struct SourceResourceCopy {
     resumes: Box<[(crate::resolved::ResumeId, crate::resolved::ResumeId)]>,
     types: HashMap<crate::types::TypeVariableId, Type>,
     rows: HashMap<crate::types::TypeVariableId, crate::types::EffectRow>,
+    pending: HashMap<crate::types::InferenceVariableId, crate::types::EffectRow>,
+    node_rows: HashMap<NodeId, crate::types::EffectRow>,
 }
 impl Drop for SourceResourceCopy {
     fn drop(&mut self) {
@@ -3259,10 +3504,7 @@ impl SourceResourceCopy {
         work: &mut TypeWorkBudget,
     ) -> Result<Self, ValidationError> {
         claim.freshening.authenticate(work)?;
-        if !claim.freshening.nominals.is_empty()
-            || !claim.freshening.lexicals.is_empty()
-            || !claim.substitution.pending.is_empty()
-        {
+        if !claim.freshening.nominals.is_empty() || !claim.freshening.lexicals.is_empty() {
             return Err(invalid());
         }
         fn pairs<T: Copy>(
@@ -3311,6 +3553,24 @@ impl SourceResourceCopy {
                 crate::types::clone_effect_row_with_budget(row, work).map_err(|_| resource())?,
             );
         }
+        fn row_map<K: Copy + Eq + std::hash::Hash>(
+            input: &HashMap<K, crate::types::EffectRow>,
+            work: &mut TypeWorkBudget,
+        ) -> Result<HashMap<K, crate::types::EffectRow>, ValidationError> {
+            charge(work, input.len())?;
+            let mut output = HashMap::new();
+            output.try_reserve(input.len()).map_err(|_| resource())?;
+            for (id, row) in input {
+                output.insert(
+                    *id,
+                    crate::types::clone_effect_row_with_budget(row, work)
+                        .map_err(|_| resource())?,
+                );
+            }
+            Ok(output)
+        }
+        let pending = row_map(claim.substitution.pending, work)?;
+        let node_rows = row_map(claim.node_rows, work)?;
         Ok(Self {
             nodes: pairs(claim.nodes, work)?,
             binders: pairs(claim.freshening.binders, work)?,
@@ -3319,6 +3579,8 @@ impl SourceResourceCopy {
             resumes: pairs(claim.freshening.resumes, work)?,
             types: types.into_map(),
             rows,
+            pending,
+            node_rows,
         })
     }
     fn fresh(&self) -> super::provider::ProviderFreshening<'_> {
@@ -3346,6 +3608,7 @@ struct SourceResourceScopeDescriptor {
     identity: crate::types::TypeVariableId,
     interpretations: Box<[super::NativeInterpretation]>,
     copies: [SourceResourceCopy; 3],
+    handler_rows: Option<Arc<super::provider::ResolvedProviderHandlerRows>>,
 }
 impl Drop for SourceResourceScopeDescriptor {
     fn drop(&mut self) {
@@ -3424,6 +3687,36 @@ impl SourceResourceScopeNode {
             SourceResourceCopy::retain(finish_copy, work)?,
             SourceResourceCopy::retain(handler_copy, work)?,
         ];
+        if copies[..2]
+            .iter()
+            .any(|copy| !copy.pending.is_empty() || !copy.node_rows.is_empty())
+        {
+            return Err(invalid());
+        }
+        if let Some(original) = &template.handler_rows {
+            let (nodes, _) = original.recipe.deferred_copy_domain(work)?;
+            charge(
+                work,
+                nodes
+                    .len()
+                    .checked_add(original.inputs.pending.equations.len())
+                    .ok_or_else(resource)?,
+            )?;
+            if copies[2].node_rows.len() != nodes.len()
+                || nodes.iter().any(|id| !copies[2].node_rows.contains_key(id))
+                || copies[2].pending.len() != original.inputs.pending.equations.len()
+                || original
+                    .inputs
+                    .pending
+                    .identities()
+                    .any(|id| !copies[2].pending.contains_key(&id))
+            {
+                return Err(invalid());
+            }
+        } else if !copies[2].pending.is_empty() || !copies[2].node_rows.is_empty() {
+            return Err(invalid());
+        }
+
         let mut interpretations = Vec::new();
         charge(work, template.header.original.interpreted.len())?;
         interpretations
@@ -3474,6 +3767,7 @@ impl SourceResourceScopeNode {
                 identity,
                 interpretations: interpretations.into_boxed_slice(),
                 copies,
+                handler_rows: None,
             }),
             initializer,
             acquire,
@@ -3533,6 +3827,7 @@ impl SourceResourceScopeNode {
                 identity: self.identity(),
                 interpretations,
                 copies,
+                handler_rows: self.descriptor.handler_rows.as_ref().map(Arc::clone),
             });
         }
         let descriptor =
@@ -3543,6 +3838,8 @@ impl SourceResourceScopeNode {
                 copy.types
                     .len()
                     .checked_add(copy.rows.len())
+                    .and_then(|count| count.checked_add(copy.pending.len()))
+                    .and_then(|count| count.checked_add(copy.node_rows.len()))
                     .ok_or_else(exhausted)?,
             )
             .map_err(|_| exhausted())?;
@@ -3550,9 +3847,17 @@ impl SourceResourceScopeNode {
                 let replacement = rewrite(actual)?;
                 crate::types::replace_type_iteratively(actual, replacement);
             }
-            for actual in copy.rows.values_mut() {
+            for actual in copy
+                .rows
+                .values_mut()
+                .chain(copy.pending.values_mut())
+                .chain(copy.node_rows.values_mut())
+            {
                 *actual = rewrite_row(actual)?;
             }
+        }
+        if let Some(rows) = &descriptor.handler_rows {
+            descriptor.handler_rows = Some(Arc::new(rows.rewrite_source_claim(rewrite_row, work)?));
         }
         work.charge(descriptor.interpretations.len())
             .map_err(|_| exhausted())?;
@@ -3584,6 +3889,47 @@ impl SourceResourceScopeNode {
         Ok(())
     }
 
+    pub(crate) fn retain_handler_rows(
+        &mut self,
+        rows: Arc<super::provider::ResolvedProviderHandlerRows>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), super::BuildError> {
+        work.charge(1)
+            .map_err(|_| super::BuildError::TypeWorkExceeded)?;
+        if !self.original().has_conditional_handler_rows() || self.descriptor.handler_rows.is_some()
+        {
+            return Err(super::BuildError::InvalidPayload);
+        }
+        Arc::get_mut(&mut self.descriptor)
+            .ok_or(super::BuildError::InvalidPayload)?
+            .handler_rows = Some(rows);
+        Ok(())
+    }
+
+    pub(in crate::core) fn retain_handler_rows_from(
+        &mut self,
+        original: &Self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), super::BuildError> {
+        work.charge(1)
+            .map_err(|_| super::BuildError::TypeWorkExceeded)?;
+        if !Arc::ptr_eq(self.original(), original.original())
+            || self.descriptor.handler_rows.is_some()
+        {
+            return Err(super::BuildError::InvalidPayload);
+        }
+        Arc::get_mut(&mut self.descriptor)
+            .ok_or(super::BuildError::InvalidPayload)?
+            .handler_rows = original.descriptor.handler_rows.as_ref().map(Arc::clone);
+        Ok(())
+    }
+
+    pub(crate) fn handler_row_claim(
+        &self,
+    ) -> Option<&super::provider::ResolvedProviderHandlerRows> {
+        self.descriptor.handler_rows.as_deref()
+    }
+
     pub(crate) fn original(&self) -> &Arc<CheckedSourceResourceTemplate> {
         &self.descriptor.template
     }
@@ -3600,10 +3946,6 @@ impl SourceResourceScopeNode {
         &self.descriptor.interpretations
     }
     pub(crate) fn copy_claims(&self) -> [SourceResourceCopyClaim<'_>; 3] {
-        static PENDING: std::sync::OnceLock<
-            HashMap<crate::types::InferenceVariableId, crate::types::EffectRow>,
-        > = std::sync::OnceLock::new();
-        let pending = PENDING.get_or_init(HashMap::new);
         std::array::from_fn(|index| {
             let copy = &self.descriptor.copies[index];
             SourceResourceCopyClaim {
@@ -3612,8 +3954,9 @@ impl SourceResourceScopeNode {
                 substitution: super::provider::ProviderTemplateSubstitution {
                     types: &copy.types,
                     rows: &copy.rows,
-                    pending,
+                    pending: &copy.pending,
                 },
+                node_rows: &copy.node_rows,
             }
         })
     }
@@ -4063,6 +4406,9 @@ impl SourceResourceScopeNode {
         work: &mut TypeWorkBudget,
     ) -> Result<(), ValidationError> {
         let template = self.original();
+        if template.has_conditional_handler_rows() && self.descriptor.handler_rows.is_none() {
+            return Err(invalid());
+        }
         let header =
             CheckedSourceResourceHeader::admit(&template.header.original, &program.registry, work)?;
         charge(work, template.header.dependencies.len().saturating_add(3))?;
@@ -4100,6 +4446,75 @@ impl SourceResourceScopeNode {
         {
             return Err(invalid());
         }
+        let realized = if template.has_conditional_handler_rows() {
+            let mut types = TypesGuard(HashMap::new());
+            let mut rows = HashMap::new();
+            charge(work, formals.len())?;
+            types.0.try_reserve(formals.len()).map_err(|_| resource())?;
+            rows.try_reserve(formals.len()).map_err(|_| resource())?;
+            for (formal, argument) in formals.iter().zip(self.arguments()) {
+                match (&formal.kind, argument) {
+                    (Kind::Type, KindedArgument::TypeArg(ty)) => types.insert(
+                        formal.id,
+                        crate::types::clone_type_with_budget(ty, work).map_err(|_| resource())?,
+                    ),
+                    (Kind::EffectRow, KindedArgument::RowArg(row)) => {
+                        rows.insert(
+                            formal.id,
+                            crate::types::clone_effect_row_with_budget(row, work)
+                                .map_err(|_| resource())?,
+                        );
+                    }
+                    _ => return Err(invalid()),
+                }
+            }
+            let root_bindings =
+                crate::core::capture::source_root_bindings(program, work).map_err(|failure| {
+                    match failure {
+                        crate::core::capture::Failure::Resource => resource(),
+                        _ => invalid(),
+                    }
+                })?;
+            let captures = crate::core::capture::reconstruct_source_captures(
+                &program.nodes,
+                program.arena,
+                id,
+                &root_bindings,
+                &[],
+                &[],
+                &[],
+                super::provider::row_effect_operation,
+                work,
+            )
+            .map_err(|failure| match failure {
+                crate::core::capture::Failure::Resource => resource(),
+                _ => invalid(),
+            })?;
+            let actual = template.realize_handler_rows(
+                &types.0,
+                &rows,
+                &node(program, self.handler.body())?.ty,
+                &node(program, self.handler.body())?.effects,
+                self.handler.effect(),
+                Some(captures),
+                work,
+            )?;
+            if !self
+                .descriptor
+                .handler_rows
+                .as_ref()
+                .ok_or_else(invalid)?
+                .same_actual_captures(&actual, work)?
+            {
+                return Err(invalid());
+            }
+            Some(actual)
+        } else {
+            if self.descriptor.handler_rows.is_some() {
+                return Err(invalid());
+            }
+            None
+        };
         let forests = [
             source_inventory(template, 0, &self.descriptor.copies[0], work)?,
             source_inventory(template, 1, &self.descriptor.copies[1], work)?,
@@ -4241,29 +4656,32 @@ impl SourceResourceScopeNode {
                 return Err(invalid());
             }
             if phase == 2 {
-                let mut expected =
-                    crate::types::clone_effect_row_with_budget(self.handler_output.effects(), work)
-                        .map_err(|_| resource())?;
-                let original_direct = template.handler_direct_row(work)?;
-                let direct = crate::types::substitute_row_for_template_with(
-                    &original_direct,
-                    &copy.types,
-                    &copy.rows,
-                    &HashMap::new(),
-                    &crate::types::TemplateIdentityRenaming {
-                        variables: &HashMap::new(),
-                        nominals: &HashMap::new(),
-                    },
-                    |cells| work.charge(cells).map_err(|_| resource()),
-                    resource,
-                )?
-                .map_err(|_| invalid())?;
-                for effect in direct.known() {
-                    expected = expected
-                        .remove_exact_with_budget(effect, work)
+                let expected = if let Some(rows) = &realized {
+                    if !crate::types::same_effect_rows_with_budget(
+                        self.handler_output.effects(),
+                        rows.output(),
+                        work,
+                    )
+                    .map_err(|_| resource())?
+                    {
+                        return Err(invalid());
+                    }
+                    crate::types::clone_effect_row_with_budget(rows.residual(), work)
                         .map_err(|_| resource())?
-                        .map_err(|_| invalid())?;
-                }
+                } else {
+                    let body = &node(program, self.handler.body())?.effects;
+                    match body
+                        .remove_exact_with_budget(self.handler.effect(), work)
+                        .map_err(|_| resource())?
+                    {
+                        Ok(row) => row,
+                        Err(crate::types::EffectRowError::Missing) => {
+                            crate::types::clone_effect_row_with_budget(body, work)
+                                .map_err(|_| resource())?
+                        }
+                        Err(_) => return Err(invalid()),
+                    }
+                };
                 if !crate::types::same_effect_rows_with_budget(
                     copy.rows
                         .get(&template.handler_continuation())
@@ -4372,7 +4790,7 @@ impl SourceResourceScopeNode {
                 variables.insert(*source, *target);
             }
             let nominals = HashMap::new();
-            let pending = HashMap::new();
+            let pending = &copy.pending;
             let renaming = crate::types::TemplateIdentityRenaming {
                 variables: &variables,
                 nominals: &nominals,
@@ -4382,6 +4800,67 @@ impl SourceResourceScopeNode {
                 rows: &copy.rows,
                 pending: &pending,
             };
+            if phase == 2
+                && let Some(realized) = &realized
+            {
+                charge(
+                    work,
+                    realized
+                        .pending()
+                        .len()
+                        .checked_add(realized.node_rows().len())
+                        .ok_or_else(resource)?,
+                )?;
+                if copy.pending.len() != realized.pending().len()
+                    || copy.node_rows.len() != realized.node_rows().len()
+                {
+                    return Err(invalid());
+                }
+                for (source, actual) in realized.pending() {
+                    let expected = crate::types::substitute_row_for_template_with(
+                        actual,
+                        &HashMap::new(),
+                        &HashMap::new(),
+                        &HashMap::new(),
+                        &renaming,
+                        |cells| work.charge(cells).map_err(|_| resource()),
+                        resource,
+                    )?
+                    .map_err(|_| invalid())?;
+                    if !crate::types::same_effect_rows_with_budget(
+                        copy.pending.get(source).ok_or_else(invalid)?,
+                        &expected,
+                        work,
+                    )
+                    .map_err(|_| resource())?
+                    {
+                        return Err(invalid());
+                    }
+                }
+                for (source, actual) in realized.node_rows() {
+                    let expected = crate::types::substitute_row_for_template_with(
+                        actual,
+                        &HashMap::new(),
+                        &HashMap::new(),
+                        &HashMap::new(),
+                        &renaming,
+                        |cells| work.charge(cells).map_err(|_| resource()),
+                        resource,
+                    )?
+                    .map_err(|_| invalid())?;
+                    if !crate::types::same_effect_rows_with_budget(
+                        copy.node_rows.get(source).ok_or_else(invalid)?,
+                        &expected,
+                        work,
+                    )
+                    .map_err(|_| resource())?
+                    {
+                        return Err(invalid());
+                    }
+                }
+            } else if !copy.pending.is_empty() || !copy.node_rows.is_empty() {
+                return Err(invalid());
+            }
             let fresh = copy.fresh();
             fresh.authenticate(work)?;
             let fresh_lookup = super::provider::specialization::SourceScopeFreshening::new(
@@ -4389,7 +4868,7 @@ impl SourceResourceScopeNode {
             )?;
             for (source, target) in &copy.nodes {
                 let expected = originals.get(source).ok_or_else(invalid)?;
-                let expected = super::provider::specialization::specialize_source_projection(
+                let mut expected = super::provider::specialization::specialize_source_projection(
                     expected,
                     &mappings,
                     &fresh_lookup,
@@ -4397,6 +4876,12 @@ impl SourceResourceScopeNode {
                     &renaming,
                     work,
                 )?;
+                if let Some(row) = copy.node_rows.get(source) {
+                    expected.replace_effects(
+                        crate::types::clone_effect_row_with_budget(row, work)
+                            .map_err(|_| resource())?,
+                    )?;
+                }
                 let actual = super::provider::projection::project_borrowed(
                     *target,
                     node(program, *target)?,
@@ -5002,11 +5487,10 @@ fn source_inventory<'a>(
             push(&mut roots, clause.body(), work)?;
         }
     }
-    let pending = HashMap::new();
     let sigma = super::provider::ProviderTemplateSubstitution {
         types: &copy.types,
         rows: &copy.rows,
-        pending: &pending,
+        pending: &copy.pending,
     };
     let handler_patterns = [template.handler_pattern()];
     super::provider::specialization::source_resource_original_forest(
@@ -5203,16 +5687,22 @@ mod tests {
         // header and template remain intact, so each altered claim must fail.
         for mutation in 0..3 {
             let mut forged = fresh();
-            let scope = forged
+            let scope_index = forged
                 .nodes
-                .iter_mut()
-                .find_map(|node| match &mut node.kind {
-                    EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
-                        Some(scope)
-                    }
-                    _ => None,
+                .iter()
+                .position(|node| {
+                    matches!(
+                        &node.kind,
+                        EffectExprKind::Operation(EffectOperation::SourceResourceScope(_))
+                    )
                 })
                 .unwrap();
+            let scope_id = NodeId::new(forged.arena, scope_index as u32);
+            let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+                &mut forged.nodes[scope_index].kind
+            else {
+                unreachable!()
+            };
             let continuation = scope.original().handler_continuation();
             assert_eq!(scope.handler_output.effects().known().len(), 1);
             assert!(scope.handler_output.effects().tail().is_none());
@@ -5229,15 +5719,173 @@ mod tests {
                     .swap(0, 1),
             }
             let error = validate(forged, &mut TypeWorkBudget::default()).unwrap_err();
-            assert_eq!(
-                error.reason(),
-                ValidationReason::Registry,
-                "mutation {mutation}: {error:?}"
-            );
+            if mutation == 1 {
+                // The intact client residual now exposes output erasure at the
+                // ordinary handler check before original-copy correspondence.
+                assert_eq!(error.reason(), ValidationReason::EffectRow);
+                assert_eq!(error.cause_name(), Some("handler-body-effects"));
+                assert_eq!(error.node(), Some(scope_id));
+            } else {
+                assert_eq!(
+                    error.reason(),
+                    ValidationReason::Registry,
+                    "mutation {mutation}: {error:?}"
+                );
+            }
         }
         println!(
             "source control independent Core work={cost}; exact/one-short/prefix/two fresh retries and three original-claim refusals"
         );
+    }
+
+    #[test]
+    fn source_control_complete_client_residual_is_distinct_from_direct_demand() {
+        use crate::types::{EffectRow, clone_effect_row_with_budget, same_effect_rows_with_budget};
+        for overlap in [false, true] {
+            let fixture = Fixture::new();
+            let helper = include_str!("../../tests/fixtures/source-owner/control_capture.ash");
+            let helper = if overlap {
+                helper.replace("    let first = probe (connection, with_owner)", "    let overlap = perform H.op ()\n    let first = probe (connection, with_owner)")
+            } else {
+                helper.to_owned()
+            };
+            fs::write(fixture.0.join("helpers.ash"), helper).unwrap();
+            fs::write(
+                fixture.0.join("entry.ash"),
+                include_str!("../../tests/fixtures/source-owner/control_capture_entry.ash"),
+            )
+            .unwrap();
+            let compiled = fixture.compile();
+            let (checked, provenance) = compiled.effect_build_input().unwrap();
+            let sources = provenance
+                .iter()
+                .map(|(_, source)| source.as_ref())
+                .collect::<Vec<_>>();
+            let modules = provenance
+                .iter()
+                .map(|(module, source)| (*module, source.id()))
+                .collect::<Vec<_>>();
+            let fresh = || super::super::transform::identity_effect_traversal(checked).unwrap();
+            let validate = |program| {
+                super::super::validate::validate_effect_modules_family(program, &sources, &modules)
+            };
+            let normal = fresh();
+            let index = normal.nodes.iter().position(|stored| matches!(&stored.kind,
+                EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) if scope.handler_row_claim().is_some()
+            )).unwrap();
+            let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+                &normal.nodes[index].kind
+            else {
+                unreachable!()
+            };
+            let claims = scope.handler_row_claim().unwrap();
+            let [direct, epsilon, output, residual] = claims.source_rows();
+            assert_eq!(direct.known().len(), 1);
+            assert!(direct.tail().is_none());
+            assert_eq!(epsilon.is_empty(), !overlap);
+            let mut work = TypeWorkBudget::default();
+            assert!(same_effect_rows_with_budget(epsilon, residual, &mut work).unwrap());
+            assert!(same_effect_rows_with_budget(direct, output, &mut work).unwrap());
+            if overlap {
+                assert!(
+                    same_effect_rows_with_budget(direct, epsilon, &mut work).unwrap(),
+                    "overlapping client H remains in epsilon"
+                );
+            } else {
+                claims.assert_distinct_actual_captures_for_test(direct.known()[0].effect());
+            }
+            super::super::validate::assert_source_wrapper_coordinate_for_test(
+                scope.original(),
+                &sources,
+                &modules,
+            );
+            let continuation = scope.original().handler_continuation();
+            assert!(
+                same_effect_rows_with_budget(
+                    &scope.descriptor.copies[2].rows[&continuation],
+                    epsilon,
+                    &mut work
+                )
+                .unwrap()
+            );
+            let wrong_row = if overlap {
+                EffectRow::empty()
+            } else {
+                clone_effect_row_with_budget(direct, &mut work).unwrap()
+            };
+            let donor = normal
+                .nodes
+                .iter()
+                .find_map(|stored| match &stored.kind {
+                    EffectExprKind::Operation(EffectOperation::SourceResourceScope(other))
+                        if !Arc::ptr_eq(scope.original(), other.original()) =>
+                    {
+                        other
+                            .header()
+                            .original
+                            .parameters
+                            .iter()
+                            .find(|parameter| parameter.kind == crate::types::Kind::EffectRow)
+                            .map(|parameter| parameter.id)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            validate(normal).unwrap();
+            for mutation in 0..3 {
+                let mut forged = fresh();
+                let id = NodeId::new(forged.arena, index as u32);
+                let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+                    &mut forged.nodes[index].kind
+                else {
+                    unreachable!()
+                };
+                let descriptor = Arc::get_mut(&mut scope.descriptor).unwrap();
+                match mutation {
+                    0 => {
+                        *descriptor.copies[2].rows.get_mut(&continuation).unwrap() =
+                            clone_effect_row_with_budget(&wrong_row, &mut TypeWorkBudget::default())
+                                .unwrap()
+                    }
+                    1 => {
+                        let row = descriptor.copies[2].rows.remove(&continuation).unwrap();
+                        assert!(descriptor.copies[2].rows.insert(donor, row).is_none());
+                    }
+                    _ => {
+                        let row = clone_effect_row_with_budget(
+                            &descriptor.copies[2].rows[&continuation],
+                            &mut TypeWorkBudget::default(),
+                        )
+                        .unwrap();
+                        assert!(
+                            descriptor.copies[0]
+                                .rows
+                                .insert(continuation, row)
+                                .is_none()
+                        );
+                    }
+                }
+                let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+                    &forged.nodes[index].kind
+                else {
+                    unreachable!()
+                };
+                let direct_error = scope
+                    .authenticate(id, &forged, &mut TypeWorkBudget::default())
+                    .unwrap_err();
+                assert_eq!(
+                    direct_error.reason(),
+                    ValidationReason::Registry,
+                    "overlap={overlap} mutation={mutation}: {direct_error:?}"
+                );
+                let whole_error = validate(forged).unwrap_err();
+                assert_eq!(
+                    whole_error.reason(),
+                    ValidationReason::Registry,
+                    "overlap={overlap} mutation={mutation}: {whole_error:?}"
+                );
+            }
+        }
     }
 
     #[test]

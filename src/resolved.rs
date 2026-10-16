@@ -22235,6 +22235,10 @@ impl ResolvedRegistry {
             if retained.constructor_count != 0 {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
+            // Opaque imports have no materialized nominal parameter row. The
+            // exact original owner/access formals still belong to the checker
+            // universe consumed by independent category authentication.
+            registry.retain_shared_canonical_parameters(owner.parameters(), budget)?;
             budget
                 .charge(registry.source_foreign_nominals.len())
                 .map_err(|_| ResolvedBuildFailure::TypeResource)?;
@@ -22293,6 +22297,7 @@ impl ResolvedRegistry {
                     .iter()
                     .any(|candidate| candidate.nominal == owner.nominal())
                 {
+                    registry.retain_shared_canonical_parameters(owner.parameters(), budget)?;
                     registry
                         .source_foreign_nominals
                         .push(SourceForeignNominalCandidate {
@@ -23049,6 +23054,25 @@ impl ResolvedRegistry {
             effects.into_boxed_slice(),
         ));
         self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn rebuild_effect_identity_tables_for_core_test(
+        mut self,
+        effects: Vec<ResolvedEffectDeclaration>,
+    ) -> Self {
+        // This fixture starts with only effect owners. Reconstruct every
+        // corresponding table rather than testing a stale-position mismatch.
+        assert!(
+            self.owner_definitions
+                .iter()
+                .all(|value| matches!(value.owner, OwnerId::Effect(_)))
+        );
+        self.owner_definitions.clear();
+        self.owner_definition_positions.clear();
+        self.owner_signatures = OwnerSignatures::default();
+        self.native_symbols.clear();
+        self.with_effects(effects)
     }
 
     /// Looks up one canonical effect declaration by stable identity.

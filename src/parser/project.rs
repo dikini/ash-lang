@@ -180,7 +180,7 @@ fn source_structural_depth_exceeds_budget(root: &ConcreteNode) -> bool {
     false
 }
 
-fn structural_weight(node: &ConcreteNode) -> usize {
+pub(crate) fn structural_weight(node: &ConcreteNode) -> usize {
     match node.kind {
         NodeKind::Block
         | NodeKind::RegistrationExpression

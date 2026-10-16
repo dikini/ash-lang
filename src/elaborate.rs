@@ -2950,6 +2950,7 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     provider_instances: crate::resolved::PendingProviderInstancePublication,
     provider_family_demands: Vec<provider_instance::ProviderFamilyDemandScope>,
     deferred_provider_instances: Vec<provider_instance::DeferredSourceProviderInstance>,
+    deferred_source_resources: Vec<source_resource::DeferredSourceResourceInstance>,
     provider_defining_facts: Option<Arc<crate::resolved::ProviderDefiningFacts>>,
     provider_context: Option<provider::CheckingContext>,
     provider_occurrence_template: Option<crate::resolved::ProviderTemplateId>,
@@ -3294,6 +3295,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             provider_instances: crate::resolved::PendingProviderInstancePublication::default(),
             provider_family_demands: Vec::new(),
             deferred_provider_instances: Vec::new(),
+            deferred_source_resources: Vec::new(),
             provider_defining_facts: None,
             provider_context: None,
             provider_occurrence_template: None,
@@ -3436,6 +3438,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             provider_instances: crate::resolved::PendingProviderInstancePublication::default(),
             provider_family_demands: Vec::new(),
             deferred_provider_instances: Vec::new(),
+            deferred_source_resources: Vec::new(),
             provider_defining_facts: None,
             provider_context: None,
             provider_occurrence_template: None,
@@ -3566,6 +3569,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             provider_instances: crate::resolved::PendingProviderInstancePublication::default(),
             provider_family_demands: Vec::new(),
             deferred_provider_instances: Vec::new(),
+            deferred_source_resources: Vec::new(),
             provider_defining_facts: None,
             provider_context: None,
             provider_occurrence_template: None,
@@ -4005,6 +4009,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             provider_instances: crate::resolved::PendingProviderInstancePublication::default(),
             provider_family_demands: Vec::new(),
             deferred_provider_instances: Vec::new(),
+            deferred_source_resources: Vec::new(),
             provider_defining_facts: None,
             provider_context: None,
             provider_occurrence_template: None,
@@ -6205,7 +6210,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         owner: NodeId,
     ) -> Result<(), TypeError> {
         self.close_evidence_obligations(marker)?;
-        self.complete_deferred_provider_instances(marker, owner)
+        self.complete_deferred_provider_instances(marker, owner)?;
+        self.complete_deferred_source_resources(Some(marker), owner)
     }
 
     fn apply_improvement_tasks(
@@ -10744,7 +10750,17 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         &mut self,
         program: &ValidatedInterfaceProgram,
     ) -> Result<TypedNode, TypeError> {
-        if !F::EFFECTS || self.final_provider_preparation.is_none() {
+        if !F::EFFECTS {
+            return self.elaborate_module_program_with_provider_roots(program);
+        }
+        self.type_work
+            .charge(program.groups().len())
+            .map_err(|_| type_resource())?;
+        let source_resources = program
+            .groups()
+            .iter()
+            .any(|group| group.source_resource_code().is_some());
+        if self.final_provider_preparation.is_none() && !source_resources {
             return self.elaborate_module_program_with_provider_roots(program);
         }
         let previous = self.provider_completed_roots.replace(Vec::new());
@@ -10841,6 +10857,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             discard_typed_node(result);
             return Err(error);
         }
+        self.complete_deferred_source_resources(None, result.node)?;
         self.solve_cleanup_rows(&[], &[], &[], &[])?;
         Ok(result)
     }
@@ -11855,6 +11872,15 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         } else {
             Ok(())
         };
+        let source_close = if evidence_marker.is_none() {
+            if let Ok((_, function)) = &definition_result {
+                self.complete_deferred_source_resources(None, function.node)
+            } else {
+                Ok(())
+            }
+        } else {
+            Ok(())
+        };
         let leave_result = if evidence_marker.is_some() {
             self.leave_evidence_scope()
         } else {
@@ -11873,6 +11899,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }
         let (name, mut function) = definition_result?;
         close_result?;
+        source_close?;
         leave_result?;
         lowered_clear_result?;
         if let Some(binders) = lowered_evidence {
@@ -15090,6 +15117,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         // this initializer before conditional source metadata is saved.
         if let Some(marker) = evidence_marker {
             self.complete_deferred_provider_instances(marker, initializer.node)?;
+            self.complete_deferred_source_resources(Some(marker), initializer.node)?;
         }
         Ok(())
     }
