@@ -1804,7 +1804,10 @@ impl SpecializationProof {
             if let Some(ty) = &occurrence.original.value {
                 uses.ty(ty)?;
             }
-            uses.evidence_slot(&occurrence.original.allocation)?;
+            occurrence
+                .original
+                .allocation
+                .visit_semantic_type_variables(uses)?;
             uses.application(&occurrence.original.application)?;
             uses.selection(&occurrence.original.selection)?;
         }

@@ -553,8 +553,10 @@ impl DeclarationCoordinates {
         let tree = syntax(source, work)?;
         let root = tree.root().ok_or_else(registry)?;
         let tokens = tree.tokens();
-        let mut result = Self::default();
-        result.resource_binders = ResourceBinderCoordinates::from_tree(root, tokens, work)?;
+        let mut result = Self {
+            resource_binders: ResourceBinderCoordinates::from_tree(root, tokens, work)?,
+            ..Self::default()
+        };
         let mut ordinary_resources = Vec::new();
         let mut source_resources = Vec::new();
         let mut foreign_nominals = Vec::new();

@@ -450,13 +450,6 @@ impl<'work> UnusedVariables<'work> {
         }
         Ok(())
     }
-
-    pub(crate) fn evidence_slot(
-        &mut self,
-        slot: &crate::interface::EvidenceSlot,
-    ) -> Result<(), ()> {
-        slot.visit_semantic_type_variables(self)
-    }
 }
 
 #[cfg(test)]

@@ -4,6 +4,22 @@ use super::*;
 use crate::core::validate::semantic_type_variables::UnusedVariables;
 
 impl ResolvedRegistry {
+    /// Source generative binders cannot also define private interface formals.
+    /// Keep those owner records behind the registry's borrowed check.
+    pub(crate) fn source_parameters_disjoint_from_private_formals(
+        &self,
+        parameters: &HashSet<TypeVariableId>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ()> {
+        for (_, formals) in self.image_interface_owner_definitions() {
+            work.charge(formals.len())?;
+            if formals.iter().any(|formal| parameters.contains(&formal.id)) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     pub(crate) fn visit_semantic_type_variables(
         &self,
         uses: &mut UnusedVariables<'_>,
@@ -127,24 +143,6 @@ impl UnusedVariables<'_> {
         Ok(())
     }
 
-    pub(crate) fn implementation_fact(
-        &mut self,
-        fact: &CheckedImplementationFact,
-    ) -> Result<(), ()> {
-        self.application(fact.application())?;
-        self.charge(fact.head_parameters.len() + fact.prerequisites.len() + fact.methods.len())?;
-        for parameter in &fact.head_parameters {
-            self.id(parameter.id)?;
-        }
-        for requirement in &fact.prerequisites {
-            self.application(&requirement.application)?;
-        }
-        for method in &fact.methods {
-            self.scheme(&method.scheme)?;
-            method.capture.visit_semantic_type_variables(self)?;
-        }
-        Ok(())
-    }
     pub(crate) fn resolved_application(
         &mut self,
         application: &ResolvedInterfaceApplication,
@@ -211,6 +209,27 @@ impl UnusedVariables<'_> {
     }
 }
 
+impl CheckedImplementationFact {
+    pub(crate) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        uses.application(self.application())?;
+        uses.charge(self.head_parameters.len() + self.prerequisites.len() + self.methods.len())?;
+        for parameter in &self.head_parameters {
+            uses.id(parameter.id)?;
+        }
+        for requirement in &self.prerequisites {
+            uses.application(&requirement.application)?;
+        }
+        for method in &self.methods {
+            uses.scheme(&method.scheme)?;
+            method.capture.visit_semantic_type_variables(uses)?;
+        }
+        Ok(())
+    }
+}
+
 impl ProviderExternalFacts<'_> {
     pub(crate) fn visit_semantic_type_variables(
         &self,
@@ -233,7 +252,7 @@ impl ProviderExternalFacts<'_> {
             uses.interface_fact(&interface.fact)?;
         }
         for implementation in &self.imported.implementations {
-            uses.implementation_fact(&implementation.fact)?;
+            implementation.fact.visit_semantic_type_variables(uses)?;
         }
         if let Some(defining) = self.defining {
             uses.charge(
@@ -247,7 +266,7 @@ impl ProviderExternalFacts<'_> {
                 uses.interface_fact(interface)?;
             }
             for implementation in &defining.implementations {
-                uses.implementation_fact(implementation)?;
+                implementation.visit_semantic_type_variables(uses)?;
             }
         }
         Ok(())

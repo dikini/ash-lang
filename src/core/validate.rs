@@ -9482,14 +9482,14 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
-            for (_, parameters) in registry.image_interface_owner_definitions() {
-                self.charge_type_work(parameters.len())?;
-                if parameters
-                    .iter()
-                    .any(|parameter| generatives.contains(&parameter.id))
-                {
-                    return Err(ValidationError::new(ValidationReason::Registry, None));
-                }
+            let mut owner_work = TypeWorkBudget::with_limit(
+                self.type_work_limit.saturating_sub(self.type_work.get()),
+            );
+            let disjoint = registry
+                .source_parameters_disjoint_from_private_formals(generatives, &mut owner_work);
+            self.charge_type_work(owner_work.used())?;
+            if !disjoint.map_err(|()| ValidationError::new(ValidationReason::Resource, None))? {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
             }
             for row in registry.global_parameter_rows() {
                 self.charge_type_work(

@@ -4601,13 +4601,13 @@ impl RetainedHandlerExternals {
             uses.ty(ty)?;
         }
         for implementation in &self.implementations {
-            uses.implementation_fact(&implementation.fact)?;
+            implementation.fact.visit_semantic_type_variables(uses)?;
         }
         for implementation in &self.defining_implementations {
-            uses.implementation_fact(implementation)?;
+            implementation.visit_semantic_type_variables(uses)?;
         }
         for method in &self.methods {
-            uses.evidence_slot(&method.slot)?;
+            method.slot.visit_semantic_type_variables(uses)?;
         }
         for occurrence in &self.occurrences {
             uses.ty(&occurrence.callable_type)?;
@@ -4622,7 +4622,7 @@ impl RetainedHandlerExternals {
                 uses.selection(selection)?;
             }
             for slot in &occurrence.slots {
-                uses.evidence_slot(slot)?;
+                slot.visit_semantic_type_variables(uses)?;
             }
             for argument in &occurrence.arguments.0 {
                 uses.ty(argument)?;
