@@ -4826,6 +4826,16 @@ impl ImportedFacts {
         }
     }
 
+    pub(crate) fn source_owner(
+        &self,
+        id: NominalTypeId,
+    ) -> Option<&Arc<crate::foreign::source_owner::CheckedForeignOwner>> {
+        match self.source_owners.get(&id)? {
+            crate::foreign::source_access::CheckedForeignNominal::Owner(owner) => Some(owner),
+            crate::foreign::source_access::CheckedForeignNominal::Access(_) => None,
+        }
+    }
+
     /// Looks up one imported nominal fact by semantic identity.
     #[must_use]
     pub fn nominal(&self, id: NominalTypeId) -> Option<&ImportedNominalFact> {
@@ -8314,7 +8324,9 @@ fn visit_summary_variables<'a>(
             SummaryRoot::Type(Type::Inference(_) | Type::Forall(_, _)) => {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
-            SummaryRoot::Type(Type::ResourceApply(_, arguments)) => {
+            SummaryRoot::Type(
+                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments),
+            ) => {
                 charge(arguments.len())?;
                 pending
                     .try_reserve(arguments.len())
@@ -9076,6 +9088,23 @@ fn same_resolved_type_provenance_with_charge(
                     || left_resource != right_resource
                     || left_arguments != right_arguments
                 {
+                    return Ok(false);
+                }
+            }
+            (
+                ResolvedTypeProvenanceNode::ForeignOwner {
+                    span: a,
+                    nominal: x,
+                    arguments: aa,
+                },
+                ResolvedTypeProvenanceNode::ForeignOwner {
+                    span: b,
+                    nominal: y,
+                    arguments: bb,
+                },
+            ) => {
+                charge(aa.len())?;
+                if a != b || x != y || aa != bb {
                     return Ok(false);
                 }
             }
@@ -17916,6 +17945,12 @@ fn visit_type_identity_references(
             Task::Type(Type::Nominal(identity)) => {
                 visit(TypeIdentityReference::Nominal(*identity), budget)?
             }
+            Task::Type(Type::ForeignOwnerApply(identity, arguments)) => {
+                visit(TypeIdentityReference::Nominal(*identity), budget)?;
+                for argument in arguments {
+                    schedule(&mut work, Task::Argument(argument), budget)?;
+                }
+            }
             Task::Type(Type::ResourceApply(_, arguments)) => {
                 for argument in arguments {
                     schedule(&mut work, Task::Argument(argument), budget)?;
@@ -24516,6 +24551,21 @@ impl ResolvedRegistry {
             {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
+            let row_owner = match candidate.role {
+                crate::foreign::source_contract::PreparedForeignNominalRole::Owner(index) => {
+                    crate::foreign::source_owner::authenticate_source_owner_candidate(
+                        &candidate.prepared,
+                        index,
+                        candidate.nominal,
+                        &candidate.parameters,
+                        self,
+                        work,
+                    )
+                    .map_err(scalar_preflight_failure)?;
+                    true
+                }
+                crate::foreign::source_contract::PreparedForeignNominalRole::Access(_) => false,
+            };
             // Imported display spellings may be aliases or private labels.
             // The original candidate authenticates identity, provenance and kind.
             let expected = NonMaterializedNominalKind::Ordinary(
@@ -24556,8 +24606,12 @@ impl ResolvedRegistry {
                 .map_err(|()| ResolvedBuildFailure::TypeResource)?;
                 if !identities.insert(parameter.id)
                     || parameter.id.module() != Some(candidate.nominal.module())
-                    || parameter.kind != Kind::Type
-                    || source.kind() != &Kind::Type
+                    || if row_owner {
+                        !matches!(parameter.kind, Kind::Type | Kind::EffectRow)
+                            || &parameter.kind != source.kind()
+                    } else {
+                        parameter.kind != Kind::Type || source.kind() != &Kind::Type
+                    }
                     || parameter.spelling != source.name()
                     || source_span.source() != parameter_span.source()
                     || source_span.range().start() > parameter_span.range().start()
@@ -24967,6 +25021,21 @@ impl ResolvedRegistry {
                         }
                     }
                 }
+                Task::Type(Type::ForeignOwnerApply(owner, arguments)) => {
+                    if let Some(nominal) = self.nominal(*owner) {
+                        output.push_str(&nominal.spelling);
+                    } else {
+                        output.push_str("<foreign-owner>");
+                    }
+                    output.push('<');
+                    work.push(Task::Text(">"));
+                    for (index, argument) in arguments.iter().enumerate().rev() {
+                        work.push(Task::Argument(argument));
+                        if index > 0 {
+                            work.push(Task::Text(", "));
+                        }
+                    }
+                }
                 Task::Text(text) => output.push_str(text),
                 Task::EffectRow(row) => {
                     output.push('{');
@@ -25286,7 +25355,7 @@ pub(crate) fn same_resolved_type_variables_with_budget(
 }
 
 /// Authenticates one checker-view mirror without recursive Origin comparison.
-fn same_checker_type_variable_with_budget(
+pub(crate) fn same_checker_type_variable_with_budget(
     left: &ResolvedTypeVariable,
     right: &ResolvedTypeVariable,
     budget: &mut TypeWorkBudget,
@@ -25642,6 +25711,12 @@ pub enum ResolvedTypeProvenanceNode {
         resource: ResourceDefinitionId,
         arguments: Box<[usize]>,
     },
+    /// A saturated foreign Owner State and its complete defining-order actuals.
+    ForeignOwner {
+        span: Span,
+        nominal: NominalTypeId,
+        arguments: Box<[usize]>,
+    },
     /// A tagged complete row argument and canonical member argument roots.
     Row {
         span: Span,
@@ -25687,6 +25762,7 @@ impl ResolvedTypeProvenance {
             | ResolvedTypeProvenanceNode::Function { span, .. }
             | ResolvedTypeProvenanceNode::Application { span, .. }
             | ResolvedTypeProvenanceNode::Resource { span, .. }
+            | ResolvedTypeProvenanceNode::ForeignOwner { span, .. }
             | ResolvedTypeProvenanceNode::Row { span, .. } => *span,
         })
     }

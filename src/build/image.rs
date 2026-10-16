@@ -175,6 +175,7 @@ struct CellAcquisitionRecord {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 enum TypeTag {
     Resource(ResourceIdentity),
+    ForeignOwner(NominalId),
     Variable(TypeVariableIdentity),
     Application,
     Forall {
@@ -1964,6 +1965,10 @@ impl Wire for TypeTag {
     const MINIMUM: usize = 1;
     fn write(&self, writer: &mut WireWriter<'_>) -> Result<(), ImageFailure> {
         match self {
+            Self::ForeignOwner(id) => {
+                18u8.write(writer)?;
+                id.write(writer)
+            }
             Self::Resource(id) => {
                 16u8.write(writer)?;
                 id.write(writer)
@@ -2013,6 +2018,7 @@ impl Wire for TypeTag {
                 known: Wire::read(reader)?,
                 identity: Wire::read(reader)?,
             },
+            18 => Self::ForeignOwner(Wire::read(reader)?),
             16 => Self::Resource(Wire::read(reader)?),
             0 => Self::Int,
             1 => Self::Bool,
@@ -6361,6 +6367,11 @@ enum ProvenanceRecord {
         span: SpanRecord,
         arguments: Slice,
     },
+    ForeignOwner {
+        span: SpanRecord,
+        nominal: NominalId,
+        arguments: Slice,
+    },
     Resource {
         span: SpanRecord,
         resource: ResourceIdentity,
@@ -7270,6 +7281,16 @@ impl Wire for ProvenanceRecord {
     const MINIMUM: usize = 1 + SpanRecord::MINIMUM;
     fn write(&self, writer: &mut WireWriter<'_>) -> Result<(), ImageFailure> {
         match self {
+            Self::ForeignOwner {
+                span,
+                nominal,
+                arguments,
+            } => {
+                6u8.write(writer)?;
+                span.write(writer)?;
+                nominal.write(writer)?;
+                arguments.write(writer)
+            }
             Self::Resource {
                 span,
                 resource,
@@ -7322,6 +7343,11 @@ impl Wire for ProvenanceRecord {
     }
     fn read(reader: &mut WireReader<'_>) -> Result<Self, ImageFailure> {
         match u8::read(reader)? {
+            6 => Ok(Self::ForeignOwner {
+                span: Wire::read(reader)?,
+                nominal: Wire::read(reader)?,
+                arguments: Wire::read(reader)?,
+            }),
             5 => Ok(Self::Resource {
                 span: Wire::read(reader)?,
                 resource: Wire::read(reader)?,
@@ -7604,6 +7630,9 @@ impl Encoder<'_> {
                                 TypeTag::Resource(self.resource_identity(*id)?),
                                 arguments.len(),
                             ),
+                            Type::ForeignOwnerApply(id, arguments) => {
+                                (TypeTag::ForeignOwner(self.nominal(*id)?), arguments.len())
+                            }
                             Type::Inference(_) => {
                                 return Err(ImageFailure::Unsupported(Unsupported::Type));
                             }
@@ -7709,7 +7738,8 @@ impl Encoder<'_> {
                                     self.work,
                                 )?;
                             }
-                            Type::ResourceApply(_, arguments) => {
+                            Type::ResourceApply(_, arguments)
+                            | Type::ForeignOwnerApply(_, arguments) => {
                                 for argument in arguments.iter().rev() {
                                     push(
                                         &mut tasks,
@@ -8059,7 +8089,9 @@ impl Decoder<'_> {
                             count == 1
                         }
                         TypeTag::Tuple => count >= 2,
-                        TypeTag::Instance(_) | TypeTag::Resource(_) => true,
+                        TypeTag::Instance(_) | TypeTag::Resource(_) | TypeTag::ForeignOwner(_) => {
+                            true
+                        }
                         TypeTag::SourcePendingRow { known, identity } => {
                             self.source_pending_rows
                                 .contains(&crate::types::InferenceVariableId::new(identity))
@@ -8214,6 +8246,30 @@ impl Decoder<'_> {
                                         owned.push(child.into_inner());
                                     }
                                     Type::ResourceApply(id, owned.into_boxed_slice())
+                                }
+                                TypeTag::ForeignOwner(id) => {
+                                    let id = self.nominal(id)?;
+                                    let start = results
+                                        .len()
+                                        .checked_sub(count)
+                                        .ok_or(ImageFailure::InvalidRecord)?;
+                                    let mut guarded = Vec::new();
+                                    charge(self.work, count)?;
+                                    guarded
+                                        .try_reserve_exact(count)
+                                        .map_err(|_| ImageFailure::Resource)?;
+                                    for child in results.drain(start..) {
+                                        guarded.push(child.argument()?);
+                                    }
+                                    let mut owned = Vec::new();
+                                    charge(self.work, count)?;
+                                    owned
+                                        .try_reserve_exact(count)
+                                        .map_err(|_| ImageFailure::Resource)?;
+                                    for child in guarded {
+                                        owned.push(child.into_inner());
+                                    }
+                                    Type::ForeignOwnerApply(id, owned.into_boxed_slice())
                                 }
                                 TypeTag::Int => Type::Int,
                                 TypeTag::Bool => Type::Bool,
@@ -8438,9 +8494,7 @@ impl Encoder<'_> {
         for argument in application.arguments() {
             let (row, parameter) = match argument {
                 PreparedOwnerArgument::Type(parameter) => (false, *parameter),
-                PreparedOwnerArgument::EffectRow(_) => {
-                    return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
-                }
+                PreparedOwnerArgument::EffectRow(parameter) => (true, *parameter),
             };
             push(
                 &mut self.image.prepared_owner_arguments,
@@ -9301,6 +9355,27 @@ impl Encoder<'_> {
                         arguments: Slice::of(&self.image.provenance_children, start)?,
                     }
                 }
+                P::ForeignOwner {
+                    span,
+                    nominal,
+                    arguments,
+                } => {
+                    let span = self.span(*span)?;
+                    let nominal = self.nominal(*nominal)?;
+                    let start = self.image.provenance_children.len();
+                    for child in arguments {
+                        push(
+                            &mut self.image.provenance_children,
+                            root(*child)?,
+                            self.work,
+                        )?;
+                    }
+                    ProvenanceRecord::ForeignOwner {
+                        span,
+                        nominal,
+                        arguments: Slice::of(&self.image.provenance_children, start)?,
+                    }
+                }
             };
             push(&mut self.image.provenance, record, self.work)?;
         }
@@ -9822,6 +9897,15 @@ impl Decoder<'_> {
                     resource: self.resource_identity(resource)?,
                     arguments: roots(arguments, self.work)?,
                 },
+                ProvenanceRecord::ForeignOwner {
+                    span,
+                    nominal,
+                    arguments,
+                } => P::ForeignOwner {
+                    span: self.span(span)?,
+                    nominal: self.nominal(nominal)?,
+                    arguments: roots(arguments, self.work)?,
+                },
                 ProvenanceRecord::Fact(span) => P::Fact(self.span(span)?),
                 ProvenanceRecord::Tuple { span, elements } => P::Tuple {
                     span: self.span(span)?,
@@ -9916,16 +10000,14 @@ impl Decoder<'_> {
         use crate::foreign::source_contract::{PreparedOwnerApplication, PreparedOwnerArgument};
         let mut arguments = Vec::new();
         for record in record.arguments.get(&self.image.prepared_owner_arguments)? {
-            if record.row {
-                return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
-            }
             let parameter =
                 usize::try_from(record.parameter).map_err(|_| ImageFailure::InvalidRecord)?;
-            push(
-                &mut arguments,
-                PreparedOwnerArgument::Type(parameter),
-                self.work,
-            )?;
+            let argument = if record.row {
+                PreparedOwnerArgument::EffectRow(parameter)
+            } else {
+                PreparedOwnerArgument::Type(parameter)
+            };
+            push(&mut arguments, argument, self.work)?;
         }
         Ok(PreparedOwnerApplication {
             owner: usize::try_from(record.owner).map_err(|_| ImageFailure::InvalidRecord)?,

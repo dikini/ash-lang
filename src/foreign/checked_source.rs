@@ -961,6 +961,7 @@ pub(super) fn check_domain(
             Type::Application(_, _)
             | Type::Inference(_)
             | Type::ResourceApply(_, _)
+            | Type::ForeignOwnerApply(_, _)
             | Type::Forall(_, _)
             | Type::Function(_, _)
             | Type::EffectfulFunction(_, _) => {

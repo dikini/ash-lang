@@ -173,8 +173,7 @@ pub(crate) struct CheckedSourceResourceHeader {
     pub(crate) codec: SourceResourceCodec,
 }
 
-/// Borrows a saturated ordinary nominal application without copying its types.
-/// Row-bearing owner state families are refused by this bounded source profile.
+/// Borrows an ordinary result-codec application without copying its types.
 fn application<'a>(
     ty: &'a Type,
     work: &mut TypeWorkBudget,
@@ -397,6 +396,37 @@ fn dependency_state_identity(
         };
         return Ok(Some(*identity));
     }
+    if let Type::ForeignOwnerApply(nominal, _) = ty {
+        let span = match registry.nominal_kind(*nominal).ok_or_else(invalid)? {
+            crate::resolved::CanonicalNominalKind::Parameters { origin, .. }
+            | crate::resolved::CanonicalNominalKind::Frozen { origin, .. }
+            | crate::resolved::CanonicalNominalKind::RowBearingResource { origin, .. } => origin,
+        };
+        let map = |error: crate::foreign::checked_source::ForeignAdmissionError| {
+            if error.is_resource_exhaustion() {
+                resource()
+            } else {
+                invalid()
+            }
+        };
+        let parameters =
+            crate::foreign::source_owner::row_owner_parameters(*nominal, registry, span, work)
+                .map_err(map)?;
+        let arguments =
+            crate::foreign::source_owner::state_arguments(ty, *nominal, parameters, span, work)
+                .map_err(map)?;
+        charge(work, registry.source_owner_candidate_count())?;
+        let (prepared, index, _, _) = registry
+            .source_owner_candidates()
+            .find(|(_, _, id, _)| id == nominal)
+            .ok_or_else(invalid)?;
+        let Some(crate::foreign::source_owner::StateArgument::Type(Type::Variable(identity))) =
+            arguments.get(prepared.owners()[index].owned_parameter())
+        else {
+            return Err(invalid());
+        };
+        return Ok(Some(*identity));
+    }
     let mut head = ty;
     let mut arguments = Vec::new();
     while let Type::Application(function, argument) = head {
@@ -470,7 +500,10 @@ fn admit_private_data(
     while let Some(ty) = pending.pop() {
         let mut nominals = Vec::new();
         let forbidden = crate::types::visit_type_structure_with_budget(ty, work, |node, work| {
-            if let crate::types::TypeStructureNode::Type(Type::Nominal(nominal)) = node {
+            if let crate::types::TypeStructureNode::Type(
+                Type::Nominal(nominal) | Type::ForeignOwnerApply(nominal, _),
+            ) = node
+            {
                 work.charge(candidates)?;
                 if registry.source_foreign_nominal(*nominal) {
                     return Ok(true);
@@ -545,7 +578,36 @@ impl CheckedSourceResourceHeader {
         {
             return Err(invalid());
         }
-        let (state, state_arguments) = application(&header.state.ty, work)?;
+        let state = header.state.ty.outer_nominal().ok_or_else(invalid)?;
+        charge(work, registry.source_owner_candidate_count())?;
+        let (prepared, index, _, parameters) = registry
+            .source_owner_candidates()
+            .find(|(_, _, id, _)| *id == state)
+            .ok_or_else(invalid)?;
+        crate::foreign::source_owner::authenticate_source_owner_candidate(
+            prepared, index, state, parameters, registry, work,
+        )
+        .map_err(|error| {
+            if error.is_resource_exhaustion() {
+                resource()
+            } else {
+                invalid()
+            }
+        })?;
+        let state_arguments = crate::foreign::source_owner::state_arguments(
+            &header.state.ty,
+            state,
+            parameters,
+            header.state.span,
+            work,
+        )
+        .map_err(|error| {
+            if error.is_resource_exhaustion() {
+                resource()
+            } else {
+                invalid()
+            }
+        })?;
         let (acquisition, acquisition_arguments) = application(&header.acquisition.ty, work)?;
         let (finish, finish_arguments) = application(&header.completion.ty, work)?;
         let (scope, scope_arguments) = application(&header.result.ty, work)?;
@@ -594,7 +656,7 @@ impl CheckedSourceResourceHeader {
                 || owner.parameter_ids().len() != state_arguments.len()
                 || state_arguments
                     .get(owner.owned_parameter())
-                    .is_none_or(|ty| !variable(ty, header.parameters[header.owned_position].id))
+                    .is_none_or(|argument| !matches!(argument, crate::foreign::source_owner::StateArgument::Type(ty) if variable(ty, header.parameters[header.owned_position].id)))
             {
                 return Err(invalid());
             }
@@ -615,17 +677,33 @@ impl CheckedSourceResourceHeader {
                 return Err(invalid());
             }
             for (mapping, state_argument) in arguments.iter().zip(&state_arguments) {
-                let crate::foreign::source_contract::PreparedOwnerArgument::Type(position) =
-                    mapping
-                else {
-                    return Err(invalid());
+                use crate::foreign::{
+                    source_contract::PreparedOwnerArgument, source_owner::StateArgument,
                 };
-                let Some(KindedArgument::TypeArg(actual)) =
-                    effect.instance.arguments().get(*position)
-                else {
-                    return Err(invalid());
+                let position = match mapping {
+                    PreparedOwnerArgument::Type(position)
+                    | PreparedOwnerArgument::EffectRow(position) => *position,
                 };
-                if !same(actual, state_argument, work)? {
+                let actual = effect
+                    .instance
+                    .arguments()
+                    .get(position)
+                    .ok_or_else(invalid)?;
+                let valid = match (mapping, state_argument, actual) {
+                    (
+                        PreparedOwnerArgument::Type(_),
+                        StateArgument::Type(expected),
+                        KindedArgument::TypeArg(actual),
+                    ) => same(actual, expected, work)?,
+                    (
+                        PreparedOwnerArgument::EffectRow(_),
+                        StateArgument::EffectRow(expected),
+                        KindedArgument::RowArg(actual),
+                    ) => crate::types::same_effect_rows_with_budget(actual, expected, work)
+                        .map_err(|_| resource())?,
+                    _ => false,
+                };
+                if !valid {
                     return Err(invalid());
                 }
             }
@@ -691,7 +769,9 @@ impl CheckedSourceResourceHeader {
             .try_reserve_exact(owner.owner().retained_parameters().len())
             .map_err(|_| resource())?;
         for position in owner.owner().retained_parameters() {
-            let Some(Type::Variable(identity)) = state_arguments.get(*position).copied() else {
+            let Some(crate::foreign::source_owner::StateArgument::Type(Type::Variable(identity))) =
+                state_arguments.get(*position)
+            else {
                 return Err(invalid());
             };
             charge(work, header.parameters.len())?;
@@ -712,7 +792,9 @@ impl CheckedSourceResourceHeader {
                 crate::types::visit_type_structure_with_budget(ty, work, |node, work| match node {
                     crate::types::TypeStructureNode::Type(Type::Variable(id)) => Ok(*id == owned),
                     crate::types::TypeStructureNode::Type(
-                        ty @ (Type::Application(_, _) | Type::ResourceApply(_, _)),
+                        ty @ (Type::Application(_, _)
+                        | Type::ResourceApply(_, _)
+                        | Type::ForeignOwnerApply(_, _)),
                     ) => {
                         let identity = match dependency_state_identity(ty, registry, work) {
                             Ok(identity) => identity,

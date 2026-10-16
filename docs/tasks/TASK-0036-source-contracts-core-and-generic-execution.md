@@ -71,6 +71,18 @@ checks do not complete the shared-runtime regression checkpoint.
 
 ## Discoveries
 
+The inherited-owner Row implementation needs a nominal Owner application with
+complete tagged actuals. Its exact prepared Owner declaration selects that form
+from the defining kind vector; ordinary applications and source-resource
+identities retain their separate representations. The direct nominal head must
+remain visible to native-state, private-data and imported-metadata checks even
+though it is no longer a nominal child. Opaque imports retain full canonical
+formal records and original kinds without materializing a private declaration.
+State lifecycle mappings and pre-call destructor specialization must preserve
+Rows as well as Types before the native ABI projects Type arguments. This is
+active CP-0022 implementation work; reached native/image behavior, refusal/work
+controls and retained verification remain required before claiming delivery.
+
 Source handler originals retain conditional row equations and exact callback-input
 coordinates until actual request captures are available. Their private
 continuation specializes to the complete client residual row; direct handler

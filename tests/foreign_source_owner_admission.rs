@@ -120,12 +120,32 @@ fn passive_owner_preparation_does_not_allow_ordinary_acquisition_calls() {
 }
 
 #[test]
-fn row_bearing_owner_families_remain_an_explicit_canonical_admission_refusal() {
+fn row_bearing_owner_families_keep_inherited_rows_with_type_owned_identity() {
     let source = SOURCE
         .replace("owner State<T, R>", "owner State<T : EffectRow, R>")
         .replace("State<T, R>", "State<{| T}, R>")
         .replace(" R, T, After", " R, T : EffectRow, After")
         .replace("symbol Free<T,", "symbol Free<T : EffectRow,");
     let fixture = Fixture::new(&source);
-    assert!(compile_path(fixture.configuration()).is_err());
+    let compiled = compile_path(fixture.configuration())
+        .expect("an inherited EffectRow does not replace the Type-owned identity");
+    let result = execute(&compiled).expect("passive owner admission creates no activation");
+    assert_eq!(result.value_display(), "42");
+}
+
+#[test]
+fn row_bearing_owner_import_keeps_full_phantom_rows_under_alias() {
+    let owner = include_str!("fixtures/source-owner/owner.ash")
+        .replace(
+            "owner State<R>",
+            "owner State<Before : EffectRow, R, After : EffectRow>",
+        )
+        .replace("State<R>", "State<{| Before}, R, {| After}>");
+    let fixture = Fixture::new(
+        "import owner as Renamed\neffect BeforeNoise {\n    before : Unit -> Unit\n}\neffect AfterNoise {\n    after : Unit -> Unit\n}\nmain : Unit -> Renamed.Scope<Unit, Unit, Int>\nmain () = resource Renamed.Probe<{BeforeNoise}, Fresh, {AfterNoise}> owner = 42 {\n    Renamed.read owner\n}\n",
+    );
+    fs::write(fixture.0.join("owner.ash"), owner).unwrap();
+    compile_path(fixture.configuration()).expect(
+        "imported opaque State retains both ordered phantom Rows and the Type-owned slot through independent Core",
+    );
 }

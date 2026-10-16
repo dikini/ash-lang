@@ -10,7 +10,8 @@ fn charge_provenance(
     for node in provenance.nodes.iter() {
         match node {
             ResolvedTypeProvenanceNode::Tuple { elements, .. } => work.charge(elements.len())?,
-            ResolvedTypeProvenanceNode::Resource { arguments, .. } => {
+            ResolvedTypeProvenanceNode::Resource { arguments, .. }
+            | ResolvedTypeProvenanceNode::ForeignOwner { arguments, .. } => {
                 work.charge(arguments.len())?
             }
             ResolvedTypeProvenanceNode::Row { argument_roots, .. } => {

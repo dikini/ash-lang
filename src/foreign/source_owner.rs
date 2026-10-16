@@ -21,7 +21,9 @@ use crate::{
         clone_resolved_type_variables_with_budget, same_origin_with_budget,
     },
     source::Span,
-    types::{ConstructorId, Kind, NominalTypeId, Type, TypeVariableId, TypeWorkBudget},
+    types::{
+        ConstructorId, Kind, KindedArgument, NominalTypeId, Type, TypeVariableId, TypeWorkBudget,
+    },
 };
 
 /// Immutable owner identity and original authored assumptions, without runtime permission.
@@ -75,8 +77,8 @@ impl CheckedForeignOwner {
 
 /// Checks the original owner declaration against its constructor-free canonical nominal.
 ///
-/// This checkpoint admits Type-only owner families. Row-bearing owner preparation
-/// remains passive; a row must not be erased to make an ordinary Type application.
+/// Owner families retain their complete Type/EffectRow formals. Only the
+/// explicitly owned position introduces a Type-kind identity.
 pub(crate) fn bind_foreign_owner(
     library: NativeLibraryId,
     prepared: Arc<PreparedForeignLibrary>,
@@ -132,6 +134,30 @@ pub(crate) fn authenticate_source_owner_candidate(
     Ok(())
 }
 
+/// Reconstructs the exact original row-bearing State declaration. The tag is
+/// canonical only for an Owner whose full defining vector contains a Row.
+pub(crate) fn row_owner_parameters<'a>(
+    nominal: NominalTypeId,
+    registry: &'a ResolvedRegistry,
+    span: Span,
+    work: &mut TypeWorkBudget,
+) -> Result<&'a [ResolvedTypeVariable], ForeignAdmissionError> {
+    charge(work, registry.source_owner_candidate_count(), span)?;
+    let (prepared, index, _, parameters) = registry
+        .source_owner_candidates()
+        .find(|(_, _, candidate, _)| *candidate == nominal)
+        .ok_or_else(|| failure(ForeignAdmissionReason::InvalidSignature, span))?;
+    authenticate_source_owner_candidate(prepared, index, nominal, parameters, registry, work)?;
+    charge(work, parameters.len(), span)?;
+    if !parameters
+        .iter()
+        .any(|parameter| parameter.kind == Kind::EffectRow)
+    {
+        return Err(failure(ForeignAdmissionReason::InvalidParameters, span));
+    }
+    Ok(parameters)
+}
+
 fn owner_parameter_ids(
     library_module: ModuleId,
     prepared: &PreparedForeignLibrary,
@@ -155,30 +181,51 @@ fn owner_parameter_ids(
     {
         return Err(failure(ForeignAdmissionReason::InvalidParameters, span));
     }
-    let original = registry
-        .nominal(nominal)
-        .ok_or_else(|| failure(ForeignAdmissionReason::InvalidSignature, span))?;
-    charge(work, original.constructors.len().saturating_add(3), span)?;
-    if original.declaration_kind != ResolvedNominalDeclarationKind::Data
-        || !original.constructors.is_empty()
-        || original.representation.is_some()
-        || original.representation_provenance.is_some()
-        || !same_origin_with_budget(&original.origin, owner.origin(), work)
-            .map_err(|()| failure(ForeignAdmissionReason::WorkExhausted, span))?
-        || !names_match(&original.spelling, owner.name(), work, span)?
-    {
-        return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
-    }
-    let Some(CanonicalNominalKind::Parameters {
-        parameters: canonical,
-        ..
-    }) = registry.nominal_kind(nominal)
-    else {
-        return Err(failure(ForeignAdmissionReason::InvalidParameters, span));
+    let canonical = match registry.nominal_kind(nominal) {
+        Some(CanonicalNominalKind::Parameters {
+            parameters: canonical,
+            origin,
+        }) if origin == span => {
+            let original = registry
+                .nominal(nominal)
+                .ok_or_else(|| failure(ForeignAdmissionReason::InvalidSignature, span))?;
+            charge(work, original.constructors.len().saturating_add(3), span)?;
+            if original.declaration_kind != ResolvedNominalDeclarationKind::Data
+                || !original.constructors.is_empty()
+                || original.representation.is_some()
+                || original.representation_provenance.is_some()
+                || !same_origin_with_budget(&original.origin, owner.origin(), work)
+                    .map_err(|_| failure(ForeignAdmissionReason::WorkExhausted, span))?
+                || !names_match(&original.spelling, owner.name(), work, span)?
+                || canonical.len() != parameters.len()
+            {
+                return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
+            }
+            Some(canonical)
+        }
+        Some(CanonicalNominalKind::Frozen { kind, origin })
+            if origin == span && registry.nominal(nominal).is_none() =>
+        {
+            // The original prepared Owner and full retained defining records
+            // authenticate import opacity; a frozen arrow shape alone does not.
+            charge(work, parameters.len().saturating_add(2), span)?;
+            let mut remaining = kind;
+            for parameter in parameters {
+                let Kind::Arrow(argument, result) = remaining else {
+                    return Err(failure(ForeignAdmissionReason::InvalidParameters, span));
+                };
+                if argument.as_ref() != &parameter.kind {
+                    return Err(failure(ForeignAdmissionReason::InvalidParameters, span));
+                }
+                remaining = result;
+            }
+            if remaining != &Kind::Type {
+                return Err(failure(ForeignAdmissionReason::InvalidParameters, span));
+            }
+            None
+        }
+        _ => return Err(failure(ForeignAdmissionReason::InvalidParameters, span)),
     };
-    if canonical.len() != parameters.len() {
-        return Err(failure(ForeignAdmissionReason::InvalidParameters, span));
-    }
     charge(
         work,
         parameters
@@ -193,14 +240,18 @@ fn owner_parameter_ids(
     let mut seen = HashSet::new();
     seen.try_reserve(parameters.len())
         .map_err(|_| failure(ForeignAdmissionReason::StorageRefused, span))?;
-    for ((parameter, canonical), source) in parameters.iter().zip(canonical).zip(owner.parameters())
-    {
+    for (position, (parameter, source)) in parameters.iter().zip(owner.parameters()).enumerate() {
+        let canonical = canonical
+            .and_then(|canonical| canonical.get(position))
+            .or_else(|| registry.type_variable(parameter.id))
+            .ok_or_else(|| failure(ForeignAdmissionReason::InvalidParameters, span))?;
         charge(work, 3, span)?;
         let parameter_span = primary_span(source.origin(), work, span)?;
-        if source.kind() != &Kind::Type
-            || parameter.kind != Kind::Type
+        if !matches!(source.kind(), Kind::Type | Kind::EffectRow)
+            || &parameter.kind != source.kind()
             || parameter.id != canonical.id
-            || canonical.kind != Kind::Type
+            || canonical.kind != parameter.kind
+            || (position == owner.owned_parameter() && parameter.kind != Kind::Type)
             || parameter.id.module() != Some(nominal.module())
             || !seen.insert(parameter.id)
             || !names_match(&parameter.spelling, source.name(), work, parameter_span)?
@@ -323,6 +374,64 @@ pub(super) fn unary_payload<'a>(
     }
 }
 
+/// Borrowed actuals preserve their Type/Row tag without creating authority.
+pub(crate) enum StateArgument<'a> {
+    Type(&'a Type),
+    EffectRow(&'a crate::types::EffectRow),
+}
+
+/// Reads one complete canonical State vector after its caller has authenticated
+/// the original Owner. Type-only owners keep the ordinary application encoding.
+pub(crate) fn state_arguments<'a>(
+    state: &'a Type,
+    nominal: NominalTypeId,
+    parameters: &[ResolvedTypeVariable],
+    span: Span,
+    work: &mut TypeWorkBudget,
+) -> Result<Vec<StateArgument<'a>>, ForeignAdmissionError> {
+    charge(work, parameters.len().saturating_add(1), span)?;
+    let has_row = parameters
+        .iter()
+        .any(|parameter| parameter.kind == Kind::EffectRow);
+    let mut arguments = Vec::new();
+    if let Type::ForeignOwnerApply(head, actuals) = state {
+        if *head != nominal || !has_row || actuals.len() != parameters.len() {
+            return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
+        }
+        charge(work, actuals.len(), span)?;
+        arguments
+            .try_reserve_exact(actuals.len())
+            .map_err(|_| failure(ForeignAdmissionReason::StorageRefused, span))?;
+        for (argument, parameter) in actuals.iter().zip(parameters) {
+            arguments.push(match (argument, &parameter.kind) {
+                (KindedArgument::TypeArg(ty), Kind::Type) => StateArgument::Type(ty),
+                (KindedArgument::RowArg(row), Kind::EffectRow) => StateArgument::EffectRow(row),
+                _ => return Err(failure(ForeignAdmissionReason::InvalidParameters, span)),
+            });
+        }
+    } else {
+        if has_row {
+            return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
+        }
+        let mut head = state;
+        while let Type::Application(function, argument) = head {
+            charge(work, 1, span)?;
+            arguments
+                .try_reserve(1)
+                .map_err(|_| failure(ForeignAdmissionReason::StorageRefused, span))?;
+            arguments.push(StateArgument::Type(argument));
+            head = function;
+        }
+        if !matches!(head, Type::Nominal(id) if *id == nominal)
+            || arguments.len() != parameters.len()
+        {
+            return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
+        }
+        arguments.reverse();
+    }
+    Ok(arguments)
+}
+
 fn check_state_application(
     state: &Type,
     owner: &CheckedForeignOwner,
@@ -337,25 +446,39 @@ fn check_state_application(
     {
         return Err(failure(ForeignAdmissionReason::InvalidParameters, span));
     }
-    let mut remaining = state;
-    for argument in application.arguments().iter().rev() {
-        let PreparedOwnerArgument::Type(position) = argument else {
-            return Err(failure(ForeignAdmissionReason::InvalidParameters, span));
+    let actuals = state_arguments(state, owner.nominal(), owner.parameters(), span, work)?;
+    for (argument, actual) in application.arguments().iter().zip(actuals) {
+        let position = match argument {
+            PreparedOwnerArgument::Type(position) | PreparedOwnerArgument::EffectRow(position) => {
+                *position
+            }
         };
         let parameter = effect
             .parameters
-            .get(*position)
+            .get(position)
             .ok_or_else(|| failure(ForeignAdmissionReason::InvalidParameters, span))?;
-        let Type::Application(head, actual) = remaining else {
-            return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
+        let valid = match (argument, actual, &parameter.kind) {
+            (
+                PreparedOwnerArgument::Type(_),
+                StateArgument::Type(Type::Variable(id)),
+                Kind::Type,
+            ) => *id == parameter.id,
+            (
+                PreparedOwnerArgument::EffectRow(_),
+                StateArgument::EffectRow(row),
+                Kind::EffectRow,
+            ) => {
+                row.known().is_empty()
+                    && row.tail().is_some_and(|tail| {
+                        tail.variable() == crate::types::EffectRowVariable::rigid(parameter.id)
+                            && tail.lacks().is_empty()
+                    })
+            }
+            _ => false,
         };
-        if parameter.kind != Kind::Type || actual.as_ref() != &Type::Variable(parameter.id) {
+        if !valid {
             return Err(failure(ForeignAdmissionReason::InvalidParameters, span));
         }
-        remaining = head;
-    }
-    if remaining != &Type::Nominal(owner.nominal()) {
-        return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
     }
     Ok(())
 }
@@ -397,31 +520,20 @@ pub(crate) fn enclosing_identity(
     span: Span,
     work: &mut TypeWorkBudget,
 ) -> Result<TypeVariableId, ForeignAdmissionError> {
-    let mut arguments = Vec::new();
-    let mut head = state;
-    while let Type::Application(function, argument) = head {
-        charge(work, 1, span)?;
-        arguments
-            .try_reserve(1)
-            .map_err(|_| failure(ForeignAdmissionReason::StorageRefused, span))?;
-        arguments.push(argument.as_ref());
-        head = function;
-    }
-    arguments.reverse();
-    let Type::Nominal(nominal) = head else {
-        return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
-    };
+    let nominal = state
+        .outer_nominal()
+        .ok_or_else(|| failure(ForeignAdmissionReason::InvalidSignature, span))?;
     charge(work, registry.source_owner_candidate_count(), span)?;
     let (prepared, index, _, parameters) = registry
         .source_owner_candidates()
-        .find(|(_, _, candidate, _)| candidate == nominal)
+        .find(|(_, _, candidate, _)| *candidate == nominal)
         .ok_or_else(|| failure(ForeignAdmissionReason::InvalidSignature, span))?;
-    authenticate_source_owner_candidate(prepared, index, *nominal, parameters, registry, work)?;
+    authenticate_source_owner_candidate(prepared, index, nominal, parameters, registry, work)?;
     let enclosing = &prepared.owners()[index];
-    if arguments.len() != parameters.len() {
-        return Err(failure(ForeignAdmissionReason::InvalidParameters, span));
-    }
-    let Some(Type::Variable(identity)) = arguments.get(enclosing.owned_parameter()).copied() else {
+    let arguments = state_arguments(state, nominal, parameters, span, work)?;
+    let Some(StateArgument::Type(Type::Variable(identity))) =
+        arguments.get(enclosing.owned_parameter())
+    else {
         return Err(failure(ForeignAdmissionReason::InvalidParameters, span));
     };
     charge(work, owner.owner().retained_parameters().len(), span)?;
@@ -479,7 +591,7 @@ fn owner_domain(
                 .try_reserve(fields.len())
                 .map_err(|_| failure(ForeignAdmissionReason::StorageRefused, span))?;
             pending.extend(fields.iter());
-        } else if matches!(ty, Type::Application(_, _)) {
+        } else if matches!(ty, Type::Application(_, _) | Type::ForeignOwnerApply(_, _)) {
             enclosing_identity(ty, owner, application, effect, registry, span, work)?;
         } else {
             check_domain(ty, parameters, registry, work, span)?;
@@ -532,8 +644,8 @@ pub(super) fn validate_owner_symbol(
     {
         let parameter_span = primary_span(original.origin(), work, span)?;
         if parameter.id != *id
-            || parameter.kind != Kind::Type
-            || original.kind() != &Kind::Type
+            || !matches!(original.kind(), Kind::Type | Kind::EffectRow)
+            || &parameter.kind != original.kind()
             || !names_match(&parameter.spelling, original.name(), work, parameter_span)?
             || !origin_within(parameter_span, &parameter.origin, work)?
         {
@@ -551,7 +663,7 @@ pub(super) fn validate_owner_symbol(
             if current
                 .iter()
                 .zip(parameters)
-                .any(|(left, right)| left.id != right.id || left.kind != Kind::Type)
+                .any(|(left, right)| left.id != right.id || left.kind != right.kind)
             {
                 return Err(failure(ForeignAdmissionReason::InvalidParameters, span));
             }
@@ -571,11 +683,11 @@ pub(super) fn validate_owner_symbol(
             // the canonical owner fact supplies the defining formal records.
             charge(work, parameters.len().saturating_add(1), span)?;
             let mut remaining = kind;
-            for _ in parameters {
+            for parameter in parameters {
                 let Kind::Arrow(argument, result) = remaining else {
                     return Err(failure(ForeignAdmissionReason::InvalidParameters, span));
                 };
-                if argument.as_ref() != &Kind::Type {
+                if argument.as_ref() != &parameter.kind {
                     return Err(failure(ForeignAdmissionReason::InvalidParameters, span));
                 }
                 remaining = result;
@@ -867,8 +979,9 @@ pub(super) fn validate_owner_symbol(
                     charge(work, 1, span)?;
                     head = function;
                 }
-                let Type::Nominal(nominal) = head else {
-                    return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
+                let nominal = match head {
+                    Type::Nominal(nominal) | Type::ForeignOwnerApply(nominal, _) => nominal,
+                    _ => return Err(failure(ForeignAdmissionReason::InvalidSignature, span)),
                 };
                 charge(work, registry.source_owner_candidate_count(), span)?;
                 let (prepared, index, _, _) = registry
