@@ -1047,7 +1047,11 @@ mod tests {
 "#;
 
     fn fixture() -> (Arc<PreparedForeignLibrary>, NominalTypeId, ResolvedRegistry) {
-        let source = SourceFile::new("source-owner.ash", SOURCE).unwrap();
+        fixture_from(SOURCE)
+    }
+
+    fn fixture_from(text: &str) -> (Arc<PreparedForeignLibrary>, NominalTypeId, ResolvedRegistry) {
+        let source = SourceFile::new("source-owner.ash", text).unwrap();
         let module = project_module(&source, &parse(lex(&source).unwrap())).unwrap();
         let id = ModuleId::from(source.id());
         let prepared = Arc::new(
@@ -1069,7 +1073,7 @@ mod tests {
             .map(|(index, parameter)| ResolvedTypeVariable {
                 id: TypeVariableId::resolved(id, index as u32),
                 spelling: parameter.name.text.clone(),
-                kind: Kind::Type,
+                kind: prepared.owners()[0].parameters()[index].kind().clone(),
                 origin: Origin::Source(parameter.name.span),
             })
             .collect::<Vec<_>>();
@@ -1087,6 +1091,184 @@ mod tests {
         )
         .with_type_parameters(vec![(nominal, parameters)]);
         (prepared, nominal, registry)
+    }
+
+    #[test]
+    fn inherited_row_owner_kind_authority_preserves_exact_formals_tags_and_work() {
+        use crate::{
+            kind::{KindEnvironments, KindFailure},
+            types::{EffectRow, IterativeTypeOwner, KindedArgument, Type},
+        };
+
+        let text = SOURCE
+            .replace("owner State<T, R>", "owner State<T : EffectRow, R>")
+            .replace("State<T, R>", "State<{| T}, R>")
+            .replace("R, T>", "R, T : EffectRow>")
+            .replace("symbol Free<T,", "symbol Free<T : EffectRow,");
+        let (prepared, nominal, registry) = fixture_from(&text);
+        let parameters = registry.nominal_parameters(nominal).unwrap();
+        let bound = bind_foreign_owner(
+            NativeLibraryId::new(prepared.module(), 0),
+            Arc::clone(&prepared),
+            0,
+            nominal,
+            parameters,
+            &registry,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        assert_eq!(bound.owned_parameter(), 1);
+        assert_eq!(parameters[0].kind, Kind::EffectRow);
+        assert_eq!(parameters[1].kind, Kind::Type);
+        let span = prepared.origin().primary_span();
+        let state = IterativeTypeOwner::new(Type::ForeignOwnerApply(
+            nominal,
+            vec![
+                KindedArgument::RowArg(EffectRow::empty()),
+                KindedArgument::TypeArg(Type::Int),
+            ]
+            .into_boxed_slice(),
+        ));
+        let check = |mirror: &[ResolvedTypeVariable], work: &mut TypeWorkBudget| {
+            let mut kinds = KindEnvironments::new();
+            kinds.insert_source_owner_nominal(&bound, mirror, span, work)?;
+            kinds.expect_body_free_value_type_with_ledger(&state, span, work)
+        };
+        let mut measured = TypeWorkBudget::default();
+        check(parameters, &mut measured).unwrap();
+        let cost = measured.used();
+        for prefix in [0, 13] {
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            assert!(
+                check(parameters, &mut short)
+                    .unwrap_err()
+                    .is_resource_exhaustion()
+            );
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                check(parameters, &mut exact).unwrap();
+                assert_eq!(exact.used(), prefix + cost);
+            }
+            check(parameters, &mut TypeWorkBudget::default()).unwrap();
+        }
+        for change in 0..4 {
+            let mut mirror = parameters.to_vec();
+            match change {
+                0 => mirror[0].id = parameters[1].id,
+                1 => mirror[0].origin = parameters[1].origin.clone(),
+                2 => mirror[0].kind = Kind::Type,
+                _ => mirror.swap(0, 1),
+            }
+            assert!(matches!(
+                check(&mirror, &mut TypeWorkBudget::default()),
+                Err(KindFailure::Internal(_))
+            ));
+        }
+        let (_, donor_nominal, donor) = fixture_from(&text);
+        assert_ne!(nominal, donor_nominal);
+        assert!(matches!(
+            check(
+                donor.nominal_parameters(donor_nominal).unwrap(),
+                &mut TypeWorkBudget::default()
+            ),
+            Err(KindFailure::Internal(_))
+        ));
+
+        let mut ordinary = KindEnvironments::new();
+        ordinary
+            .insert_nominal(nominal, parameters, span, &mut TypeWorkBudget::default())
+            .unwrap();
+        assert!(matches!(
+            ordinary.expect_body_free_value_type_with_ledger(
+                &state,
+                span,
+                &mut TypeWorkBudget::default()
+            ),
+            Err(KindFailure::Internal(_))
+        ));
+        for (head, arguments) in [
+            (
+                donor_nominal,
+                vec![
+                    KindedArgument::RowArg(EffectRow::empty()),
+                    KindedArgument::TypeArg(Type::Int),
+                ],
+            ),
+            (
+                nominal,
+                vec![
+                    KindedArgument::TypeArg(Type::Unit),
+                    KindedArgument::TypeArg(Type::Int),
+                ],
+            ),
+            (
+                nominal,
+                vec![
+                    KindedArgument::RowArg(EffectRow::empty()),
+                    KindedArgument::RowArg(EffectRow::empty()),
+                ],
+            ),
+            (nominal, vec![KindedArgument::RowArg(EffectRow::empty())]),
+        ] {
+            let forged = IterativeTypeOwner::new(Type::ForeignOwnerApply(
+                head,
+                arguments.into_boxed_slice(),
+            ));
+            let mut kinds = KindEnvironments::new();
+            kinds
+                .insert_source_owner_nominal(
+                    &bound,
+                    parameters,
+                    span,
+                    &mut TypeWorkBudget::default(),
+                )
+                .unwrap();
+            assert!(
+                kinds
+                    .expect_body_free_value_type_with_ledger(
+                        &forged,
+                        span,
+                        &mut TypeWorkBudget::default()
+                    )
+                    .is_err()
+            );
+        }
+        let ordinary_state = IterativeTypeOwner::new(Type::Application(
+            Box::new(Type::Nominal(nominal)),
+            Box::new(Type::Int),
+        ));
+        assert!(
+            super::state_arguments(
+                &ordinary_state,
+                nominal,
+                parameters,
+                span,
+                &mut TypeWorkBudget::default()
+            )
+            .is_err()
+        );
+
+        let (plain, plain_nominal, plain_registry) = fixture();
+        let tagged_plain = IterativeTypeOwner::new(Type::ForeignOwnerApply(
+            plain_nominal,
+            vec![
+                KindedArgument::TypeArg(Type::Unit),
+                KindedArgument::TypeArg(Type::Int),
+            ]
+            .into_boxed_slice(),
+        ));
+        assert!(
+            super::state_arguments(
+                &tagged_plain,
+                plain_nominal,
+                plain_registry.nominal_parameters(plain_nominal).unwrap(),
+                plain.origin().primary_span(),
+                &mut TypeWorkBudget::default()
+            )
+            .is_err()
+        );
     }
 
     #[test]

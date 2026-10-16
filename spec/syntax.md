@@ -432,8 +432,10 @@ publish a partial method binder list.
 Every declaration-level type binder uses `type_parameter`. Its optional kind
 annotation contains `Type`, `EffectRow`, a function kind, or a parenthesized
 kind. Static semantics admits `EffectRow` in complete global, eligible
-generalized-local, native symbol and resource binders and forbids it beneath a
-kind arrow. Owner state families currently admit only `Type` parameters. The spellings
+generalized-local, native symbol, resource and foreign Owner binders. It forbids
+`EffectRow` within a written function-kind annotation. An Owner's explicitly
+owned formal has kind `Type`.
+The spellings
 `Type` and `EffectRow` are contextual: they denote kinds only inside a kind
 annotation and remain ordinary `upper_identifier` spellings elsewhere. For
 example, this complete entry module declares and uses a nominal type named

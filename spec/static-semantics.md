@@ -173,12 +173,21 @@ family kind-synthesis:
 
 An unsaturated nominal constructor synthesizes its derived function kind. A
 partial application synthesizes its residual kind. Either form is valid when
-the owning rule accepts that kind. Resolution represents every admitted named
+the owning rule accepts that kind. Resolution represents an ordinary named
 application as repeated unary `Apply(function_type, argument_type)` nodes,
 folded from left to right. Equality, substitution, unification, occurs checks,
 implementation matching, summary authentication, and validation use this
 structural and injective form. Both the function and argument are immediate
 strict subterms of an application.
+
+Source resource applications and row-bearing foreign Owner State applications
+retain separate complete ordered Type/Row vectors. Their exact original
+declarations determine the argument kinds, arity and identity. A State application
+uses its foreign nominal identity, distinct from the resource access-family
+identity; every inherited Row remains a Row even when it is empty or phantom.
+The saturated State has kind `Type`. A Type-only Owner retains ordinary nominal
+application form. These forms add no Row argument to an ordinary nominal,
+interface or effect declaration.
 
 Constructor payloads, global and method value types, pattern and term-binder
 types, source expression types, entry results, and ordinary Core value
@@ -196,13 +205,13 @@ codomain, term-binder type, or any other source monotype. A method scheme
 remains separate in `MU`; the elaboration specification defines its sole
 authenticated compiler-generated Core evidence position.
 
-`EffectRow` is valid only as the complete kind of a global parameter or an
-eligible generalized-local parameter. It cannot be the domain or codomain of a
-kind arrow. Nominal, interface, implementation, effect, and method parameter
-lists admit only their existing ordinary kinds. A row tail must resolve to a
-global or eligible generalized-local parameter of kind `EffectRow`; a row
-variable cannot occur in an ordinary value position, nominal or interface
-argument, effect argument, or pattern.
+`EffectRow` is valid as a complete global or eligible generalized-local kind,
+and in the complete native-symbol, source-resource and foreign Owner vectors
+defined below. It cannot occur within a written function-kind annotation. Ordinary
+nominal, interface, implementation, effect and method parameter lists admit
+only their existing ordinary kinds. A row tail must resolve to an in-scope
+`EffectRow` binder. A row variable cannot occur in an ordinary value position,
+ordinary nominal, interface or effect argument, or pattern.
 
 Every omitted declaration kind annotation and every binder introduced by an
 omitted implementation binder list is fixed to `Type`. An omitted global list
@@ -1022,7 +1031,9 @@ scalar or function-address authority. A sentinel grants no access or window perm
 An owner declaration introduces an opaque nominal state family without source
 constructors. Its explicit owned position selects a `Type` formal. Canonical
 admission retains every original parameter identity, kind and defining origin;
-the current owner checkpoint rejects `EffectRow` and function-kind formals.
+the complete ordered vector admits `Type` and `EffectRow` formals and rejects
+function-kind formals. Imported aliases preserve that original vector. An equal
+kind vector or same-shaped nominal does not establish the Owner role.
 An owner address uses an `opaque` or `bytes` representation and one authenticated
 teardown symbol from the same defining library. Declared dependencies retain
 their original owner roles and exact preceding state applications; a same-shaped
@@ -1161,8 +1172,9 @@ ordered Type/Row formals, input, native state, private data, acquisition,
 completion and body-result report types. Its provider application, provided
 effect, complete native interpretation list, codec and all lifecycle and handler
 patterns retain defining identities and provenance. The family is a declaration;
-it creates no activation. A foreign state family remains an ordinary opaque
-nominal application and is distinct from a resource instance's access family.
+it creates no activation. A foreign state family retains its opaque nominal
+identity and complete ordered Type/Row application, distinct from a resource
+instance's access family.
 
 The `owned` formal has kind `Type` and coincides with the foreign state family's
 declared owned argument. Input and private data cannot contain the current owned
@@ -1242,7 +1254,8 @@ body. The report type, outward effects, evidence and stored dependencies cannot
 expose the fresh identity; an escape reports `type.resource-escape`.
 
 This implementation checkpoint executes opaque and initialized byte owners,
-including declared retained dependencies, with Type-only state-family arguments
+including declared retained dependencies, with complete ordered Type/Row state
+arguments
 and either report codec. Its `void` or scalar-status finish and
 host-destruction contracts admit total consumed or retained dispositions. A
 Current call can also be blocked before native entry while a retained dependent

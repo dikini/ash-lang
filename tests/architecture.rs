@@ -762,6 +762,8 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/foreign/source_bindings.rs::SourceOwnerScopeRequest._scope", FieldSourceRuntimeTemplateShared),
     kind_site!("src/foreign/source_owner.rs::CheckedForeignOwner.parameters", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree, Shared),
     kind_site!("src/foreign/source_owner.rs::CheckedForeignOwner.prepared", FieldForeignPreparedKinds, Shared),
+    kind_site!("src/foreign/source_owner.rs::StateArgument.Type.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/foreign/source_owner.rs::StateArgument.EffectRow.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/foreign/source_owner_runtime.rs::NativeOwnerCallRecorded.guard", FieldSourceRuntimeOwnerShared),
     kind_site!("src/foreign/source_owner_runtime.rs::NativeOwnerCallReturned.guard", FieldSourceRuntimeOwnerShared),
     kind_site!("src/foreign/source_owner_runtime.rs::NativeOwnerGuard.owner", FieldSourceRuntimeOwnerShared),
@@ -836,6 +838,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/source_resource.rs::FlowFacts.globals", FieldSourceGlobalBorrow),
     kind_site!("src/eval/machine.rs::SourceResourceBoundary.dependencies", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
     kind_site!("src/eval/source_owner_phases.rs::OwnerTypeReplacements.0", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationTransientWork),
+    kind_site!("src/eval/source_owner_phases.rs::OwnerTypeReplacements.1", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationTransientWork),
     kind_site!("src/foreign/source_bindings.rs::AdmittedSourceOwnerAcquireInvocation.destructor", FieldNativeBindingBorrow),
     kind_site!("src/foreign/source_bindings.rs::SourceNativeBindings.owner_storage", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
     kind_site!("src/foreign/source_owner_runtime.rs::NativeOwnerDependency.storage", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
@@ -1421,6 +1424,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/types.rs::SubstitutionRoot.Row.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::SubstitutionRoot.Type.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::Type.ResourceApply.1", FieldCanonicalApplicationStructureStructuralSubtreeTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::Type.ForeignOwnerApply.1", FieldCanonicalApplicationStructureStructuralSubtreeTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::TypeHashTask.Argument.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::TypeHashTask.Arguments.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::TypeStructureNode.Tail.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
@@ -2146,6 +2150,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/kind.rs::InterfaceKindFact.parameters", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
     kind_site!("src/kind.rs::ResourceKindFact.parameters", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
     kind_site!("src/kind.rs::KindEnvironments.row_resource_owners", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
+    kind_site!("src/kind.rs::KindEnvironments.row_foreign_owners", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
     kind_site!("src/kind.rs::KindEnvironments.delta", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
     kind_site!("src/kind.rs::KindEnvironments.effects", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
     kind_site!("src/kind.rs::KindEnvironments.iota", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
@@ -3521,6 +3526,7 @@ fn kind_inventory_is_closed() {
             | Type::Inference(_)
             | Type::Application(_, _)
             | Type::ResourceApply(_, _)
+            | Type::ForeignOwnerApply(_, _)
             | Type::Forall(_, _)
             | Type::Function(_, _)
             | Type::EffectfulFunction(_, _) => {}

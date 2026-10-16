@@ -6586,6 +6586,164 @@ mod tests {
     }
 
     #[test]
+    fn inherited_row_owner_copies_preserve_phantom_order_identity_and_state_barriers() {
+        let fixture = Fixture::new();
+        let owner = include_str!("../../tests/fixtures/source-owner/owner.ash")
+            .replace(
+                "owner State<R>",
+                "owner State<Before : EffectRow, R, After : EffectRow>",
+            )
+            .replace("State<R>", "State<{| Before}, R, {| After}>");
+        fs::write(fixture.0.join("owner.ash"), owner).unwrap();
+        fs::write(fixture.0.join("entry.ash"), "import owner as Owner\neffect First {\n    first : Unit -> Unit\n}\neffect Last {\n    last : Unit -> Unit\n}\nmain : Unit -> (Owner.Scope<Unit, Unit, Int>, Owner.Scope<Unit, Unit, Int>)\nmain () = (resource Owner.Probe<{First}, Fresh, {Last}> owner = 42 {\n    Owner.read owner\n}, resource Owner.Probe<{Last}, Donor, {First}> owner = 7 {\n    Owner.read owner\n})\n").unwrap();
+        let compiled = fixture.compile();
+        let (checked, provenance) = compiled.effect_build_input().unwrap();
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let modules = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let fresh = || super::super::transform::identity_effect_traversal(checked).unwrap();
+        let validate = |program, work: &mut TypeWorkBudget| {
+            super::super::validate::validate_effect_modules_with_work(
+                program, &sources, &modules, work,
+            )
+        };
+        let original = fresh();
+        let indices = source_forwarding_scope_indices(&original);
+        assert_eq!(indices.len(), 2);
+        let EffectExprKind::Operation(EffectOperation::SourceResourceScope(first)) =
+            &original.nodes[indices[0]].kind
+        else {
+            unreachable!()
+        };
+        let EffectExprKind::Operation(EffectOperation::SourceResourceScope(donor)) =
+            &original.nodes[indices[1]].kind
+        else {
+            unreachable!()
+        };
+        assert_ne!(first.identity(), donor.identity());
+        let donor_identity = donor.identity();
+        let Type::Tuple(state_data) = first.finish.parameter.ty() else {
+            panic!("complete finish domain")
+        };
+        assert!(
+            matches!(&state_data[0], Type::ForeignOwnerApply(_, arguments) if arguments.len() == 3 && matches!(&arguments[0], KindedArgument::RowArg(row) if !row.known().is_empty()) && matches!(&arguments[2], KindedArgument::RowArg(row) if !row.known().is_empty()))
+        );
+        let state = crate::types::IterativeTypeOwner::new(
+            crate::types::clone_type_with_budget(&state_data[0], &mut TypeWorkBudget::default())
+                .unwrap(),
+        );
+        assert_eq!(
+            super::admit_private_data(&state, checked.registry(), &mut TypeWorkBudget::default())
+                .unwrap_err()
+                .reason(),
+            ValidationReason::Registry
+        );
+        let nested_state = crate::types::IterativeTypeOwner::new(Type::Tuple(
+            vec![
+                Type::Int,
+                crate::types::clone_type_with_budget(&state, &mut TypeWorkBudget::default())
+                    .unwrap(),
+            ]
+            .into_boxed_slice(),
+        ));
+        assert_eq!(
+            super::admit_private_data(
+                &nested_state,
+                checked.registry(),
+                &mut TypeWorkBudget::default()
+            )
+            .unwrap_err()
+            .reason(),
+            ValidationReason::Registry
+        );
+
+        let mut measured = TypeWorkBudget::default();
+        validate(fresh(), &mut measured).unwrap();
+        let cost = measured.used();
+        for prefix in [0, 7] {
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            assert_eq!(
+                validate(fresh(), &mut short).unwrap_err().reason(),
+                ValidationReason::Resource
+            );
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                validate(fresh(), &mut exact).unwrap();
+                assert_eq!(exact.used(), prefix + cost);
+            }
+            validate(fresh(), &mut TypeWorkBudget::default()).unwrap();
+        }
+        for change in 0..6 {
+            let mut changed = fresh();
+            let index = indices[0];
+            let node = NodeId::new(changed.arena, u32::try_from(index).unwrap());
+            let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+                &mut changed.nodes[index].kind
+            else {
+                unreachable!()
+            };
+            let before = scope.header().original.parameters[0].id;
+            let after = scope.header().original.parameters[2].id;
+            let descriptor = Arc::get_mut(&mut scope.descriptor).unwrap();
+            assert!(
+                matches!(&descriptor.arguments[0], KindedArgument::RowArg(row) if !row.known().is_empty())
+            );
+            assert!(
+                matches!(&descriptor.arguments[2], KindedArgument::RowArg(row) if !row.known().is_empty())
+            );
+            match change {
+                0 => descriptor.arguments.swap(0, 2),
+                1 => {
+                    let old = std::mem::replace(
+                        &mut descriptor.arguments[1],
+                        KindedArgument::RowArg(crate::types::EffectRow::empty()),
+                    );
+                    crate::types::discard_kinded_argument_iteratively(old);
+                }
+                2..=4 => {
+                    let copy = &mut descriptor.copies[change - 2];
+                    let replacement = crate::types::clone_effect_row_with_budget(
+                        copy.rows.get(&after).unwrap(),
+                        &mut TypeWorkBudget::default(),
+                    )
+                    .unwrap();
+                    let actual = copy.rows.get_mut(&before).unwrap();
+                    assert!(*actual != replacement);
+                    *actual = replacement;
+                }
+                _ => {
+                    let old = std::mem::replace(
+                        &mut descriptor.arguments[1],
+                        KindedArgument::TypeArg(Type::Variable(donor_identity)),
+                    );
+                    crate::types::discard_kinded_argument_iteratively(old);
+                }
+            }
+            let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+                &changed.nodes[index].kind
+            else {
+                unreachable!()
+            };
+            assert_eq!(
+                scope
+                    .authenticate(node, &changed, &mut TypeWorkBudget::default())
+                    .unwrap_err()
+                    .reason(),
+                ValidationReason::Registry,
+                "full owner Row/copy claim {change}"
+            );
+            assert!(validate(changed, &mut TypeWorkBudget::default()).is_err());
+        }
+    }
+
+    #[test]
     fn status_owner_scope_copies_preserve_phantom_rows_and_reject_changed_original_claims() {
         let fixture = Fixture::new();
         fs::write(

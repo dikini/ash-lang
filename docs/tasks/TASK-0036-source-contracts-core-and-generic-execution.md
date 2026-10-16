@@ -71,17 +71,22 @@ checks do not complete the shared-runtime regression checkpoint.
 
 ## Discoveries
 
-The inherited-owner Row implementation needs a nominal Owner application with
+The inherited-owner Row implementation retains a nominal Owner application with
 complete tagged actuals. Its exact prepared Owner declaration selects that form
 from the defining kind vector; ordinary applications and source-resource
 identities retain their separate representations. The direct nominal head must
 remain visible to native-state, private-data and imported-metadata checks even
 though it is no longer a nominal child. Opaque imports retain full canonical
 formal records and original kinds without materializing a private declaration.
-State lifecycle mappings and pre-call destructor specialization must preserve
-Rows as well as Types before the native ABI projects Type arguments. This is
-active CP-0022 implementation work; reached native/image behavior, refusal/work
-controls and retained verification remain required before claiming delivery.
+State lifecycle mappings and pre-call destructor specialization preserve Rows
+as well as Types before the native ABI projects Type arguments. Focused current
+evidence compiles passive and imported aliases through independent Core and
+executes copied/image-restored owners through generated native hosts with empty,
+distinct and reversed phantom Rows, preserving each acquire/release trace.
+Exact original/fact and semantic-copy refusals, cumulative work boundaries,
+current affected callers, review and retained verification remain separate
+delivery obligations. This is active implementation of accepted CP-0022;
+scalar teardown input mapping A remains a separate increment.
 
 Source handler originals retain conditional row equations and exact callback-input
 coordinates until actual request captures are available. Their private

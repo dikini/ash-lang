@@ -132,7 +132,8 @@ Dependency summaries retain body-free headers; linking retains the checked
 defining code rather than recompiling imported lifecycle bodies.
 
 The current executable source profile admits opaque and initialized byte owners
-with declared dependencies and Type-only state families. It retains one
+with declared dependencies and complete ordered Type/Row state families. It
+retains one
 interpreted acquisition and one Current finish member, plus exact permitted
 query/usage members of the original owner, with that owner's original host destructor authenticated separately. The
 `void` or scalar-status finish and destruction contracts admit total consumed
@@ -155,11 +156,20 @@ including an owned slot that is not first. The resource handle's value type
 uses a saturated nominal application for a Type-only family and the resource
 application carrier for a row-bearing family; the scope retains the same
 complete tagged instance in either case. Higher-kinded resource formals,
-row-bearing owner state families, privileged lifecycle wrappers and source-projected
-scalar teardown operands remain unsupported
+privileged lifecycle wrappers and source-projected scalar teardown operands
+remain unsupported
 by this profile. Exact native interpretation preserves ordinary outward handler
 rows and ordinary override precedence. Passive foreign-owner declarations have
 a separate admission boundary and supply no execution permission.
+
+A row-bearing foreign Owner State uses a separate nominal application carrier
+with its complete ordered tagged Type/Row arguments. Its exact prepared Owner
+declaration selects that form from the original kind vector; an ordinary nominal,
+access family or resource identity cannot select it. Type-only Owners retain
+ordinary nominal applications. Summary admission, original and copied forests,
+and private images preserve the full vector and original nominal identity.
+Native ABI projection selects only Type arguments at their original full-vector
+indices; it supplies no replacement State identity or Row permission.
 
 Lifecycle forests may call ordinary pure module-global helpers on independent
 payloads. Same-module and imported helper schemes retain complete ordered Type/Row

@@ -475,8 +475,9 @@ an omitted annotation fixes it at `Type`.
 
 Native symbol and source resource parameters retain their complete written
 Type/Row vector, including parameters with no ABI operand. An owner state
-family retains its own ordered nominal parameters; the current canonical owner
-checkpoint admits only `Type` formals. These distinct inventories are not
+family retains its own ordered `Type`/`EffectRow` parameters and their original
+binding coordinates. Its explicit owned selector names a `Type` formal; inherited
+Rows remain Rows. These distinct inventories are not
 collapsed into a Type-only vector for source effect identity.
 
 For an interface declaration, binder encounter order starts with the interface

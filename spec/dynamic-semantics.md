@@ -622,7 +622,8 @@ owner-disposition rules are unchanged.
 The admitted product source resource scope combines an Ash initializer, acquire
 and finish functions, private data `D`, and an associated ordinary effect handler.
 This checkpoint supports opaque and initialized byte foreign owners with declared
-dependencies and Type-kind owner formals. Acquisition admits scalar and exact
+dependencies and complete ordered Type/Row owner formals, with a Type-kind owned
+identity. Acquisition admits scalar and exact
 declared enclosing-State operands with one pointer result. Finish and host
 destruction contracts use the exact Current State and declared Enclosing pointer
 operands, with checked original scalar constants at declared scalar ABI positions
@@ -664,13 +665,17 @@ The resource's private payload cannot replace or enlarge this recorded extent.
 
 The initializer evaluates once in the preceding environment. Before native
 acquisition, the machine authenticates the original destructor and its total
-outcome contract, reserves
+outcome contract, specializes its complete source domain using the full Type/Row
+owner and symbol mappings, and reserves
 scope and guard storage, checks each scalar conversion, and reserves the native
 report slots and recording/report work. A representable operand supplies its
 stable ABI scalar; a conversion refusal produces canonical
 `Foreign.ConversionFailed(error)` without invoking the native function. Missing
 bindings, malformed authority, unsupported representations and internal work or
 storage refusal cannot invoke acquisition.
+Full domain specialization precedes operand selection even for an address-only
+or fixed-operand destructor. Enclosing dependency selection compares complete
+State applications, including inherited phantom Rows.
 
 For acquisition, `d` retains the exact symbol, complete instance and sealed
 destructor. `p` retains the admitted inline guard and prepaid report storage.
