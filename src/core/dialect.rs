@@ -2660,7 +2660,12 @@ impl CoreBuilder<PureOperationFamily> {
         method_evidence: Arc<MethodEvidenceCatalog>,
         type_work: TypeWorkBudget,
     ) -> Result<Self, BuildError> {
-        Self::with_catalogs_and_type_work(registry, method_evidence, type_work)
+        Self::with_catalogs_and_type_work(
+            registry,
+            method_evidence,
+            type_work,
+            TypeWorkBudget::default(),
+        )
     }
 }
 
@@ -2685,6 +2690,7 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         method_evidence_anchors: Vec<MethodEvidenceAnchor>,
         consumed_method_evidence: Vec<bool>,
         type_work: TypeWorkBudget,
+        rewrite_type_work: TypeWorkBudget,
     ) -> Self {
         Self {
             registry,
@@ -2702,7 +2708,7 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             inference_binders: HashSet::new(),
             binder_phase_started: false,
             type_work,
-            rewrite_type_work: TypeWorkBudget::default(),
+            rewrite_type_work,
             requires_type_rewrite: false,
             settled_zonk_nodes: Vec::new(),
             source_resource_finalization_start: None,
@@ -2718,18 +2724,33 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             Vec::new(),
             Vec::new(),
             TypeWorkBudget::default(),
+            TypeWorkBudget::default(),
         )
     }
 
     /// Starts an empty arena carrying an immutable resolved data registry.
     pub(crate) fn with_registry_for_family(registry: Arc<ResolvedRegistry>) -> Self {
+        Self::with_registry_and_rewrite_work(registry, TypeWorkBudget::default())
+    }
+
+    /// Starts an empty compiler arena with its separate cumulative rewrite meter.
+    pub(crate) fn with_registry_and_rewrite_work(
+        registry: Arc<ResolvedRegistry>,
+        rewrite_type_work: TypeWorkBudget,
+    ) -> Self {
         Self::from_catalogs(
             registry,
             Arc::clone(empty_method_evidence()),
             Vec::new(),
             Vec::new(),
             TypeWorkBudget::default(),
+            rewrite_type_work,
         )
+    }
+
+    /// Fresh compiler arenas inherit capacity, never another arena's spending.
+    pub(crate) const fn rewrite_work_limit(&self) -> usize {
+        self.rewrite_type_work.limit()
     }
 
     /// Runs one payload-construction operation on the caller's actual ledger.
@@ -2777,13 +2798,31 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         registry: Arc<ResolvedRegistry>,
         method_evidence: Arc<MethodEvidenceCatalog>,
     ) -> Result<Self, BuildError> {
-        Self::with_catalogs_and_type_work(registry, method_evidence, TypeWorkBudget::default())
+        Self::with_registry_method_evidence_and_rewrite_work(
+            registry,
+            method_evidence,
+            TypeWorkBudget::default(),
+        )
+    }
+
+    pub(crate) fn with_registry_method_evidence_and_rewrite_work(
+        registry: Arc<ResolvedRegistry>,
+        method_evidence: Arc<MethodEvidenceCatalog>,
+        rewrite_type_work: TypeWorkBudget,
+    ) -> Result<Self, BuildError> {
+        Self::with_catalogs_and_type_work(
+            registry,
+            method_evidence,
+            TypeWorkBudget::default(),
+            rewrite_type_work,
+        )
     }
 
     fn with_catalogs_and_type_work(
         registry: Arc<ResolvedRegistry>,
         method_evidence: Arc<MethodEvidenceCatalog>,
         mut type_work: TypeWorkBudget,
+        rewrite_type_work: TypeWorkBudget,
     ) -> Result<Self, BuildError> {
         let expectation_count = method_evidence.expectations().len();
         type_work
@@ -2828,6 +2867,7 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             method_evidence_anchors,
             consumed_method_evidence,
             type_work,
+            rewrite_type_work,
         );
         builder.method_evidence_anchor_keys = method_evidence_anchor_keys;
         builder.method_evidence_expectation_positions = method_evidence_expectation_positions;
@@ -5710,6 +5750,67 @@ mod tests {
 
     fn resolved_id(local: u32) -> BinderId {
         BinderId::resolved(ModuleId::new(0), local)
+    }
+
+    #[test]
+    fn rewrite_gas_is_cumulative_exact_and_separate_from_construction() {
+        fn builder(work: TypeWorkBudget) -> CoreBuilder {
+            let source = SourceFile::new("rewrite-meter.ash", "()").unwrap();
+            let variable = TypeVariableId::resolved(ModuleId::new(0), 0);
+            let ty = Type::Forall(
+                vec![(variable, crate::types::Kind::Type)].into_boxed_slice(),
+                Box::new(Type::Variable(variable)),
+            );
+            let mut builder =
+                CoreBuilder::with_registry_and_rewrite_work(Arc::clone(empty_registry()), work);
+            builder.unit(ty, generated_origin(&source, 0)).unwrap();
+            builder
+        }
+        fn rewrite(builder: &mut CoreBuilder) -> Result<(), BuildError> {
+            builder.rewrite_types(|ty| Ok(ty.clone()))
+        }
+        let mut measured = builder(TypeWorkBudget::with_limit(1_000));
+        let primary = measured.type_work.clone();
+        rewrite(&mut measured).unwrap();
+        let first = measured.rewrite_type_work.used();
+        assert!(first > 0);
+        rewrite(&mut measured).unwrap();
+        let cost = measured.rewrite_type_work.used();
+        assert_eq!(cost, 2 * first);
+        assert_eq!(measured.type_work, primary);
+        assert_eq!(
+            CoreBuilder::new().rewrite_work_limit(),
+            TypeWorkBudget::default().limit()
+        );
+        for prefix in [0, 13] {
+            for _ in 0..2 {
+                let mut work = TypeWorkBudget::with_limit(prefix + cost);
+                work.charge(prefix).unwrap();
+                let mut exact = builder(work);
+                let primary = exact.type_work.clone();
+                rewrite(&mut exact).unwrap();
+                rewrite(&mut exact).unwrap();
+                assert_eq!(exact.rewrite_type_work.used(), prefix + cost);
+                assert_eq!(rewrite(&mut exact), Err(BuildError::TypeWorkExceeded));
+                assert_eq!(exact.rewrite_type_work.used(), prefix + cost);
+                assert_eq!(exact.type_work, primary);
+                let fresh = CoreBuilder::<PureOperationFamily>::with_registry_and_rewrite_work(
+                    Arc::clone(empty_registry()),
+                    TypeWorkBudget::with_limit(exact.rewrite_work_limit()),
+                );
+                assert_eq!(fresh.rewrite_type_work.used(), 0);
+                assert_eq!(fresh.rewrite_work_limit(), prefix + cost);
+                assert_eq!(exact.rewrite_type_work.used(), prefix + cost);
+                let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+                short.charge(prefix).unwrap();
+                let mut short = builder(short);
+                let primary = short.type_work.clone();
+                rewrite(&mut short).unwrap();
+                assert_eq!(rewrite(&mut short), Err(BuildError::TypeWorkExceeded));
+                assert!(short.rewrite_type_work.used() <= short.rewrite_work_limit());
+                assert_eq!(short.type_work, primary);
+            }
+        }
     }
 
     #[test]

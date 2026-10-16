@@ -5,7 +5,12 @@
 
 use crate::{module::ModuleGraph, source::SourceFile, types::TypeWorkBudget};
 
-const SOURCE_PER_BYTE: usize = 300;
+const SOURCE_PER_BYTE: usize = 800;
+
+/// Separate per-arena capacity from the already-paid canonical source size.
+pub(crate) fn rewrite_total(bytes: usize) -> Result<usize, ()> {
+    bytes.checked_mul(16).ok_or(())
+}
 
 fn source_total(bytes: usize) -> Result<usize, ()> {
     bytes.checked_mul(SOURCE_PER_BYTE).ok_or(())
@@ -14,7 +19,7 @@ fn source_total(bytes: usize) -> Result<usize, ()> {
 fn phase_total(phase: CompilationPhase, bytes: usize) -> Result<usize, ()> {
     match phase {
         CompilationPhase::SourceChecking => source_total(bytes),
-        CompilationPhase::FinalElaboration => bytes.checked_mul(161).ok_or(()),
+        CompilationPhase::FinalElaboration => bytes.checked_mul(800).ok_or(()),
         CompilationPhase::IndependentCore => bytes.checked_mul(345).ok_or(()),
     }
 }
@@ -23,40 +28,40 @@ fn size_sources<'a>(
     sources: impl Iterator<Item = &'a SourceFile>,
     phase: CompilationPhase,
     work: &mut TypeWorkBudget,
-) -> Result<usize, ()> {
+) -> Result<(usize, usize), ()> {
     work.charge(1)?;
     let mut bytes = 0usize;
     for source in sources {
         work.charge(1)?;
         bytes = bytes.checked_add(source.text().len()).ok_or(())?;
     }
-    phase_total(phase, bytes)
+    Ok((phase_total(phase, bytes)?, bytes))
 }
 
-pub(crate) fn source_work(graph: &ModuleGraph) -> Result<TypeWorkBudget, ()> {
+pub(crate) fn source_work(graph: &ModuleGraph) -> Result<(TypeWorkBudget, usize), ()> {
     // The loader has already admitted one source per canonical module. Aliases
     // and repeated import edges do not add modules or size credit here.
     let bootstrap = graph.modules().len().checked_add(1).ok_or(())?;
     let mut work = TypeWorkBudget::with_limit(bootstrap);
-    let total = size_sources(
+    let (total, bytes) = size_sources(
         graph.modules().iter().map(|module| module.source()),
         CompilationPhase::SourceChecking,
         &mut work,
     )?;
     work.finish_sizing(total)?;
-    Ok(work)
+    Ok((work, bytes))
 }
 
 pub(crate) fn resident_phase_work(
     phase: CompilationPhase,
     sources: &[&SourceFile],
-) -> Result<TypeWorkBudget, ()> {
+) -> Result<(TypeWorkBudget, usize), ()> {
     // The public driver supplies the canonical loaded closure, including
     // builtins, once. Each phase pays its own resident-length census.
     let mut work = TypeWorkBudget::with_limit(sources.len().checked_add(1).ok_or(())?);
-    let total = size_sources(sources.iter().copied(), phase, &mut work)?;
+    let (total, bytes) = size_sources(sources.iter().copied(), phase, &mut work)?;
     work.finish_sizing(total)?;
-    Ok(work)
+    Ok((work, bytes))
 }
 
 /// An independently accounted compilation phase.
@@ -196,14 +201,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rewrite_gas_uses_the_paid_size_and_checked_scalar_total() {
+        let source = SourceFile::new("rewrite-gas.ash", "main () = ()\n").unwrap();
+        let (source_work, bytes) =
+            resident_phase_work(CompilationPhase::SourceChecking, &[&source]).unwrap();
+        assert_eq!(bytes, source.text().len());
+        assert_eq!((source_work.used(), source_work.limit()), (2, 800 * bytes));
+        assert_eq!(rewrite_total(bytes), Ok(16 * bytes));
+        assert_eq!(rewrite_total(0), Ok(0));
+        assert!(rewrite_total(usize::MAX / 16 + 1).is_err());
+        let mut rewrite = TypeWorkBudget::with_limit(rewrite_total(bytes).unwrap());
+        rewrite.charge(rewrite.remaining()).unwrap();
+        assert!(rewrite.charge(1).is_err());
+        assert_eq!(source_work.used(), 2);
+    }
+
+    #[test]
     fn resident_phase_gas_pays_census_and_preserves_exact_total() {
         let source = SourceFile::new("phase.ash", "main : Unit -> Int\nmain () = 42\n").unwrap();
         for (phase, coefficient) in [
-            (CompilationPhase::FinalElaboration, 161),
+            (CompilationPhase::FinalElaboration, 800),
             (CompilationPhase::IndependentCore, 345),
         ] {
             let total = coefficient * source.text().len();
-            let fresh = resident_phase_work(phase, &[&source]).unwrap();
+            let (fresh, bytes) = resident_phase_work(phase, &[&source]).unwrap();
+            assert_eq!(bytes, source.text().len());
             assert_eq!((fresh.used(), fresh.limit()), (2, total));
             assert!(resident_phase_work(phase, &[]).is_err());
             assert!(phase_total(phase, usize::MAX / coefficient + 1).is_err());
@@ -217,7 +239,7 @@ mod tests {
                     exact.charge(prefix).unwrap();
                     assert_eq!(
                         size_sources(std::iter::once(&source), phase, &mut exact),
-                        Ok(total)
+                        Ok((total, source.text().len()))
                     );
                     exact.finish_sizing(total).unwrap();
                     assert_eq!((exact.used(), exact.limit()), (prefix + 2, total));
@@ -235,8 +257,8 @@ mod tests {
     #[test]
     fn source_gas_is_paid_carried_checked_and_has_no_extra_ten_percent() {
         let source = SourceFile::new("source.ash", "main : Unit -> Int\nmain () = 42\n").unwrap();
-        let total = source.text().len() * 300;
-        assert!(source_total(usize::MAX / 300 + 1).is_err());
+        let total = source.text().len() * 800;
+        assert!(source_total(usize::MAX / 800 + 1).is_err());
         let mut empty = TypeWorkBudget::with_limit(1);
         assert_eq!(
             size_sources(
@@ -244,7 +266,7 @@ mod tests {
                 CompilationPhase::SourceChecking,
                 &mut empty
             ),
-            Ok(0)
+            Ok((0, 0))
         );
         assert!(empty.finish_sizing(0).is_err());
         for prefix in [0, 11] {
@@ -267,7 +289,7 @@ mod tests {
                         CompilationPhase::SourceChecking,
                         &mut exact
                     ),
-                    Ok(total)
+                    Ok((total, source.text().len()))
                 );
                 exact.finish_sizing(total).unwrap();
                 assert_eq!((exact.used(), exact.limit()), (prefix + 2, total));

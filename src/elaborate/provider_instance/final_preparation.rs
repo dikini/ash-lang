@@ -494,11 +494,14 @@ pub(crate) fn prepare_final_provider_program(
     if inventory.is_empty() {
         return Ok(None);
     }
+    // Linked-interface preparation retains its construction-owned defaults;
+    // the modular Source/Final owners separately select source-sized rewrite gas.
     let mut compiler = EffectElaborator::for_module_program_inputs(
         program.registry(),
         program.groups(),
         program.result(),
         basecatalog,
+        TypeWorkBudget::default(),
         TypeWorkBudget::default(),
     )
     .map_err(TypeError::Internal)?;

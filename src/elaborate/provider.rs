@@ -2878,6 +2878,7 @@ pub(super) fn check_module_provider_group(
     type_work: &mut TypeWorkBudget,
     coverage_work: &mut super::UsefulnessBudget,
     constraint_work: &mut super::InterfaceConstraintBudget,
+    rewrite_work_limit: usize,
 ) -> Result<Option<std::sync::Arc<CheckedProviderGroup>>, TypeError> {
     if module.resources().is_empty() {
         return Ok(None);
@@ -2888,6 +2889,7 @@ pub(super) fn check_module_provider_group(
         type_work,
         coverage_work,
         constraint_work,
+        rewrite_work_limit,
     )?;
     let mut components = Vec::new();
     type_work
@@ -2906,6 +2908,7 @@ pub(super) fn check_module_provider_group(
             type_work,
             coverage_work,
             constraint_work,
+            rewrite_work_limit,
         )?);
     }
     finish_module_provider_originals(module, &components, type_work).map(Some)
@@ -2924,6 +2927,7 @@ pub(super) fn prepare_module_provider_originals(
     type_work: &mut TypeWorkBudget,
     coverage_work: &mut super::UsefulnessBudget,
     constraint_work: &mut super::InterfaceConstraintBudget,
+    rewrite_work_limit: usize,
 ) -> Result<ModuleProviderOriginals, TypeError> {
     // Every declaration in this group borrows the same immutable module. Share
     // its authenticated source inventory and template registry; each compiler
@@ -2952,6 +2956,7 @@ pub(super) fn prepare_module_provider_originals(
             type_work,
             coverage_work,
             constraint_work,
+            rewrite_work_limit,
             |compiler| compiler.check_provider_header(module, definition),
         )?);
     }
@@ -2979,6 +2984,7 @@ pub(super) fn check_module_provider_original(
     type_work: &mut TypeWorkBudget,
     coverage_work: &mut super::UsefulnessBudget,
     constraint_work: &mut super::InterfaceConstraintBudget,
+    rewrite_work_limit: usize,
 ) -> Result<Arc<PreparedProviderOriginal>, TypeError> {
     let definition = module.resources().get(index).ok_or_else(invalid_state)?;
     let header = preparation.headers.get(index).ok_or_else(invalid_state)?;
@@ -2989,6 +2995,7 @@ pub(super) fn check_module_provider_original(
         type_work,
         coverage_work,
         constraint_work,
+        rewrite_work_limit,
         |compiler| {
             compiler
                 .type_work
@@ -3028,6 +3035,7 @@ pub(super) fn check_module_provider_original(
         type_work,
         coverage_work,
         constraint_work,
+        rewrite_work_limit,
         |compiler| {
             compiler
                 .type_work
@@ -3067,6 +3075,7 @@ pub(super) fn check_module_provider_original(
         type_work,
         coverage_work,
         constraint_work,
+        rewrite_work_limit,
         |compiler| compiler.compile_provider_handler(definition, header, module.imported_facts()),
     )?;
     type_work
@@ -3113,6 +3122,7 @@ pub(super) fn check_module_provider_original(
             type_work,
             coverage_work,
             constraint_work,
+            rewrite_work_limit,
             |compiler| {
                 let (application, methods) =
                     compiler.check_provider_family_header(module, definition, family)?;
@@ -3390,6 +3400,10 @@ fn module_provider_failure(failure: LifecycleDraftCheckError) -> TypeError {
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the two work owners stay separate from defining facts and publication"
+)]
 fn with_module_provider_compiler<T>(
     module: &crate::resolved::ResolvedModule,
     registry: &Arc<crate::resolved::ResolvedRegistry>,
@@ -3397,6 +3411,7 @@ fn with_module_provider_compiler<T>(
     type_work: &mut TypeWorkBudget,
     coverage_work: &mut super::UsefulnessBudget,
     constraint_work: &mut super::InterfaceConstraintBudget,
+    rewrite_work_limit: usize,
     check: impl FnOnce(&mut CoreElaborator<EffectOperationFamily>) -> Result<T, TypeError>,
 ) -> Result<T, TypeError> {
     let compiler_result =
@@ -3405,6 +3420,7 @@ fn with_module_provider_compiler<T>(
             Arc::clone(registry),
             type_work,
             coverage_work.clone(),
+            Some(TypeWorkBudget::with_limit(rewrite_work_limit)),
         );
 
     let mut compiler = compiler_result?;
@@ -4465,8 +4481,9 @@ impl CoreElaborator<EffectOperationFamily> {
                 &substitutions,
             )?
         } else {
-            let placeholder = CoreBuilder::<EffectOperationFamily>::with_registry_for_family(
+            let placeholder = CoreBuilder::<EffectOperationFamily>::with_registry_and_rewrite_work(
                 Arc::clone(&self.registry),
+                TypeWorkBudget::with_limit(self.builder.rewrite_work_limit()),
             );
             (
                 std::mem::replace(&mut self.builder, placeholder).finish(root)?,

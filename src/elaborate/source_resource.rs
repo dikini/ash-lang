@@ -1232,6 +1232,7 @@ pub(super) fn compile(
     coverage: &mut UsefulnessBudget,
     constraints: &mut InterfaceConstraintBudget,
     original_provider: Option<&provider::SourceOriginalProviderContext<'_>>,
+    rewrite_work_limit: usize,
 ) -> Result<Option<Arc<CheckedSourceResourceTemplates>>, TypeError> {
     if module.source_resources().is_empty() {
         return Ok(None);
@@ -1260,6 +1261,7 @@ pub(super) fn compile(
         Arc::clone(registry),
         work,
         coverage.clone(),
+        TypeWorkBudget::with_limit(rewrite_work_limit),
     )?;
     let result = (|| {
         // These original declaration headers were checked by the caller.
@@ -1382,8 +1384,10 @@ impl CoreElaborator<EffectOperationFamily> {
         registry: Arc<ResolvedRegistry>,
         work: &mut TypeWorkBudget,
         coverage: UsefulnessBudget,
+        rewrite_work: TypeWorkBudget,
     ) -> Result<Self, TypeError> {
-        let builder = CoreBuilder::with_registry_for_family(Arc::clone(&registry));
+        let builder =
+            CoreBuilder::with_registry_and_rewrite_work(Arc::clone(&registry), rewrite_work);
         Self::for_module_with_prepared_builder(module, registry, work, coverage, builder)
     }
 
@@ -1452,9 +1456,10 @@ impl CoreElaborator<EffectOperationFamily> {
         {
             return Err(invalid_state());
         }
-        self.builder = CoreBuilder::with_registry_and_method_evidence(
+        self.builder = CoreBuilder::with_registry_method_evidence_and_rewrite_work(
             Arc::clone(&self.registry),
             Arc::clone(catalog),
+            TypeWorkBudget::with_limit(self.builder.rewrite_work_limit()),
         )?;
         self.builder
             .reserve_provider_draft_binders(binders, &mut self.type_work)?;
@@ -1590,7 +1595,10 @@ impl CoreElaborator<EffectOperationFamily> {
             self.builder
                 .type_abstraction(parameters, function, scheme, header.origin.clone())?;
         crate::core::transform::discharge_provider_draft_work(&self.builder, &mut self.type_work)?;
-        let replacement = CoreBuilder::with_registry_for_family(Arc::clone(&self.registry));
+        let replacement = CoreBuilder::with_registry_and_rewrite_work(
+            Arc::clone(&self.registry),
+            TypeWorkBudget::with_limit(self.builder.rewrite_work_limit()),
+        );
         std::mem::replace(&mut self.builder, replacement)
             .finish(root)
             .map_err(Into::into)
@@ -1913,7 +1921,10 @@ impl CoreElaborator<EffectOperationFamily> {
                     &self.builder,
                     &mut self.type_work,
                 )?;
-                let replacement = CoreBuilder::with_registry_for_family(Arc::clone(&self.registry));
+                let replacement = CoreBuilder::with_registry_and_rewrite_work(
+                    Arc::clone(&self.registry),
+                    TypeWorkBudget::with_limit(self.builder.rewrite_work_limit()),
+                );
                 let (program, pending) = std::mem::replace(&mut self.builder, replacement)
                     .finish_provider_conditional_draft(root, pending, &mut self.type_work)?;
                 Ok((

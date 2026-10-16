@@ -1,7 +1,7 @@
 # DN-0050: Native program gas estimates
 
 - ID: `DN-0050`
-- Status: calibration record; `300S` source, `161S` final elaboration, `345S` Core, `51P` preparation and `22B` startup accepted
+- Status: calibration record; `800S` source, `800S` final elaboration, `16S` compiler-arena rewrite, `345S` Core, `51P` preparation and `22B` startup accepted
 - Related: [TASK-0040](../tasks/TASK-0040-ash-copying-sqlite-library.md),
   [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md),
   [CP-0022](../proposals/CP-0022-ash-authored-foreign-interfaces.md)
@@ -24,15 +24,19 @@ mechanism, normal-host and quality checks. The human then approved startup
 The current formulas are:
 
 ```text
-source checking = 300 * canonical loaded source UTF8 bytes, including builtins
+source checking = 800 * canonical loaded source UTF8 bytes, including builtins
 preparation     = 51 * (admitted source UTF8 bytes + validated main Core nodes)
-final elaboration = 161 * canonical loaded source UTF8 bytes, including builtins
+final elaboration = 800 * canonical loaded source UTF8 bytes, including builtins
+compiler rewrite  = 16 * the same source closure, per compiler arena lifetime
 independent Core  = 345 * canonical loaded source UTF8 bytes, including builtins
 startup         = 22 * (canonical image bytes + canonical expected-fact bytes)
 ```
 
-Each total includes paid sizing and all subsequent work in its phase. Source gas
-has no additional historical ten-percent margin. Resolution and other construction/constraint, allocation, depth, stack and
+Each Source/Final/Core total includes paid sizing and subsequent work in its
+phase. The same paid canonical byte count separately funds each compiler rewrite
+arena once; repeated rewrites retain cumulative spending. These totals have no
+additional historical ten-percent margin. Generic, standalone and private-image
+rewrite defaults remain unchanged. Resolution and other construction/constraint, allocation, depth, stack and
 authority checks retain their existing policies. There is no static overall gas ceiling.
 
 | Earlier observation | Input size | Complete measured work | Historical forecast |
@@ -136,12 +140,55 @@ The existing 25% engineering-reserve rule gives
 the project lead selected the conservative rounded `300S` under the user's
 delegated autonomous judgment; this was not a direct human choice of 300.
 It gives this constraint case 11,709,900 units, 37.59% above measured demand.
-Only the Source coefficient changes. Paid canonical sizing and cumulative
+That revision changed only the Source coefficient. Paid canonical sizing and cumulative
 carry, overflow and terminal refusal remain exact; no floor, intercept, reset,
 extra ten-percent margin or changes to other phase/depth/stack checks are added.
 The other three exhausted demands were not completed by this measurement.
 Normal affected callers, implementation review, retention and the fresh
 checkpoint remain separate evidence obligations.
+
+## Current Source, Final and separate rewrite revision
+
+The current full SQLite library run at Source `300S` / Final `161S` passed 30
+cases and exhausted four required cases. Separate finite Source/Final
+measurements completed the constraint and native-index cases, then stopped at
+persistence's Source refusal. A single first-refusal observation identified the
+separate builder rewrite meter denying one unit at its implementation default
+of 327,680; the outer Source meter still had credit. No duplicated debit or
+missing Source funding was established.
+
+The remaining two cases completed with finite diagnostic Source `1200S`, Final
+`644S` and separate rewrite capacity 1,310,720 per arena. Each invocation used
+the original source texts and display paths, paid each phase's own canonical
+census once and stopped after complete Final, before independent Core,
+preparation or native execution. All temporary changes were restored.
+
+| Complete diagnostic case | Canonical S | Source | Final | Largest rewrite arena |
+| --- | ---: | ---: | ---: | ---: |
+| Constraint / 902 | 39,033 | 8,510,632 | 6,794,355 | At most 327,680; not measured |
+| Native index / 902 | 39,068 | 8,483,884 | 6,761,494 | At most 327,680; not measured |
+| Persistence / 904 | 44,512 | 28,158,349 | 26,809,274 | 510,782 |
+| Prepare refusals / 904 | 38,797 | 12,941,261 | 11,100,299 | 129,551 |
+
+The exact normal-895 table has 37 complete Source and 35 complete Final
+observations. Adding these four completed diagnostic observations gives 41 and
+39 separate fitting rows. Run 904 also records 25 distinct arena lifetimes and
+95 monotone checkpoints; checkpoints are not additional work, and owner
+capacities are not summed. Failed or absent phase totals do not enter the fit.
+The older measurements above remain at their own versions and accounting pins.
+These are fitting observations, not independent cases or holdout evidence.
+
+Persistence determines all three maxima: `632.601299*S` Source,
+`602.293179*S` Final and `11.475153*S` rewrite. Applying the same 25% fitting
+reserve gives integer minima 791, 753 and 15. After independent accounting and
+scope review, the project lead selected conservative rounded coefficients
+`800S`, `800S` and `16S` under the user's delegated judgment. This was not a
+direct human selection of those numbers. The rewrite rule uses the same trusted
+canonical S returned by the paid census and initializes a separate meter once
+for each empty compiler arena; generic, standalone and private-image defaults
+remain unchanged. [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md)
+governs this accepted policy. Normal affected callers, implementation review,
+retained verification and the full checkpoint remain separate obligations.
 
 ## Complete persistence startup and accepted revision
 

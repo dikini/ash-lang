@@ -1958,7 +1958,7 @@ main () = 42
             load_module_graph(&directory.0.join("entry.ash"), &ModuleRoots::empty()).unwrap();
         let mut checked: Vec<CheckedModule> = Vec::new();
         let mut provider_codes = crate::elaborate::ProviderCodeAvailability::default();
-        let mut checking_work = crate::compiler_work::source_work(&graph).unwrap();
+        let (mut checking_work, _) = crate::compiler_work::source_work(&graph).unwrap();
         let mut coverage_work = crate::pattern::UsefulnessBudget::default();
         let mut constraint_work = crate::interface::InterfaceConstraintBudget::default();
         for loaded in graph.modules() {

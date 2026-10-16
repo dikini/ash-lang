@@ -777,8 +777,9 @@ impl CoreElaborator<EffectOperationFamily> {
                 };
             }
         }
-        let placeholder = CoreBuilder::<EffectOperationFamily>::with_registry_for_family(
+        let placeholder = CoreBuilder::<EffectOperationFamily>::with_registry_and_rewrite_work(
             Arc::clone(&self.registry),
+            TypeWorkBudget::with_limit(self.builder.rewrite_work_limit()),
         );
         let (source, pending_rows) = std::mem::replace(&mut self.builder, placeholder)
             .finish_provider_conditional_draft(root, pending_rows, &mut self.type_work)?;
@@ -820,13 +821,14 @@ impl CoreElaborator<EffectOperationFamily> {
             _ => invalid_state(),
         }
             })?;
-        self.builder = crate::core::transform::prepare_provider_fragment_builder_with_catalog(
+        self.builder = crate::core::transform::prepare_provider_fragment_builder_with_rewrite_work(
             &source,
             &full_order,
             Arc::new(catalog),
             states,
             patterns,
             &mut self.type_work,
+            TypeWorkBudget::with_limit(self.builder.rewrite_work_limit()),
         )
         .map_err(provider_transform_failure)?;
         let order = crate::core::transform::provider_fragment_order(
@@ -1050,8 +1052,9 @@ impl CoreElaborator<EffectOperationFamily> {
             )?;
             mapped_patterns.push(result?);
         }
-        let placeholder = CoreBuilder::<EffectOperationFamily>::with_registry_for_family(
+        let placeholder = CoreBuilder::<EffectOperationFamily>::with_registry_and_rewrite_work(
             Arc::clone(&self.registry),
+            TypeWorkBudget::with_limit(self.builder.rewrite_work_limit()),
         );
         let pending_rows =
             pending_rows.relocate(root, &remapped, mapped_roots[0], &mut self.type_work)?;

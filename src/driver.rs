@@ -7,8 +7,8 @@ use crate::{
     diagnostic::{Diagnostic, SourceLabel, compare_source_spans},
     elaborate::{
         EffectElaborator, Elaborator, ProviderCodeAvailability, TypeError,
-        check_module_with_budget_and_provider_codes, checked_program_contains_effect_syntax,
-        link_modules_with_budget,
+        check_module_with_budget_and_provider_codes_and_rewrite_work,
+        checked_program_contains_effect_syntax, link_modules_with_budget,
     },
     eval::{Evaluation, ObservedHeap, RuntimeFailure, Value, evaluate, evaluate_effect},
     evidence_validation::{
@@ -1242,14 +1242,15 @@ where
     let mut checked_by_module: HashMap<ModuleId, usize> =
         HashMap::with_capacity(graph.modules().len());
     let mut resolution_type_work = TypeWorkBudget::default();
-    let mut checking_type_work = crate::compiler_work::source_work(graph).map_err(|()| {
-        FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
-            crate::elaborate::ElaborationFailure::TypeResourceExhausted,
-        )))
-    })?;
+    let (mut checking_type_work, source_bytes) =
+        crate::compiler_work::source_work(graph).map_err(|()| {
+            FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+                crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+            )))
+        })?;
     let source_normal_limit = checking_type_work.limit();
     // Preserve the existing explicit diagnostic feature, with the paid census
-    // already in the same ledger. Ordinary builds retain exactly 300*S.
+    // already in the same ledger. Ordinary builds retain exactly 800*S.
     checking_type_work
         .finish_sizing(crate::calibration::limit(
             source_normal_limit,
@@ -1260,6 +1261,11 @@ where
                 crate::elaborate::ElaborationFailure::TypeResourceExhausted,
             )))
         })?;
+    let rewrite_limit = modular_rewrite_limit(source_bytes).map_err(|()| {
+        FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+            crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+        )))
+    })?;
     let mut provider_codes = ProviderCodeAvailability::default();
     let mut coverage_work = UsefulnessBudget::default();
     for module in graph.modules() {
@@ -1315,12 +1321,13 @@ where
         );
         drop(dependencies);
         let source_phase = crate::calibration::Phase::start("source-checking");
-        let checked_module = check_module_with_budget_and_provider_codes(
+        let checked_module = check_module_with_budget_and_provider_codes_and_rewrite_work(
             resolved,
             &provider_codes,
             &mut checking_type_work,
             &mut coverage_work,
             constraint_work,
+            Some(TypeWorkBudget::with_limit(rewrite_limit)),
         )
         .map_err(|failure| {
             FileFailure::from(PipelineFailure::Typing(failure)).with_phase_work(
@@ -1571,7 +1578,7 @@ where
             true,
         );
         let elaboration_phase = crate::calibration::Phase::start("final-elaboration");
-        let (final_budget, final_normal_limit) = modular_phase_work(
+        let (final_budget, final_normal_limit, source_bytes) = modular_phase_work(
             crate::compiler_work::CompilationPhase::FinalElaboration,
             &sources,
         )
@@ -1581,16 +1588,25 @@ where
             )))
         })?;
         let final_limit = final_budget.limit();
-        let mut elaborator =
-            Elaborator::for_module_program_with_budget(&validated_interfaces, final_budget)
-                .map_err(|(failure, used)| {
-                    FileFailure::from(PipelineFailure::Typing(TypeError::Internal(failure)))
-                        .with_phase_work(
-                            crate::compiler_work::CompilationPhase::FinalElaboration
-                                .assess_with_allowance(used, final_limit)
-                                .incomplete(),
-                        )
-                })?;
+        let rewrite_budget =
+            TypeWorkBudget::with_limit(modular_rewrite_limit(source_bytes).map_err(|()| {
+                FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+                    crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+                )))
+            })?);
+        let mut elaborator = Elaborator::for_module_program_with_budgets(
+            &validated_interfaces,
+            final_budget,
+            rewrite_budget,
+        )
+        .map_err(|(failure, used)| {
+            FileFailure::from(PipelineFailure::Typing(TypeError::Internal(failure)))
+                .with_phase_work(
+                    crate::compiler_work::CompilationPhase::FinalElaboration
+                        .assess_with_allowance(used, final_limit)
+                        .incomplete(),
+                )
+        })?;
         let typed = if select_effect_core {
             elaborator.synthesize_module_program_after_effect_scan(&validated_interfaces)
         } else {
@@ -1672,7 +1688,7 @@ fn retain_source_provenance(
 fn modular_phase_work(
     phase: crate::compiler_work::CompilationPhase,
     sources: &[&SourceFile],
-) -> Result<(TypeWorkBudget, usize), ()> {
+) -> Result<(TypeWorkBudget, usize, usize), ()> {
     use crate::{calibration::DiagnosticOwner, compiler_work::CompilationPhase};
     let owner = match phase {
         CompilationPhase::SourceChecking | CompilationPhase::FinalElaboration => {
@@ -1680,10 +1696,17 @@ fn modular_phase_work(
         }
         CompilationPhase::IndependentCore => DiagnosticOwner::Core,
     };
-    let mut work = crate::compiler_work::resident_phase_work(phase, sources)?;
+    let (mut work, source_bytes) = crate::compiler_work::resident_phase_work(phase, sources)?;
     let normal = work.limit();
     work.finish_sizing(crate::calibration::limit(normal, owner))?;
-    Ok((work, normal))
+    Ok((work, normal, source_bytes))
+}
+
+fn modular_rewrite_limit(source_bytes: usize) -> Result<usize, ()> {
+    Ok(crate::calibration::limit(
+        crate::compiler_work::rewrite_total(source_bytes)?,
+        crate::calibration::DiagnosticOwner::Structural,
+    ))
 }
 
 type ModularCoreResult = Result<
@@ -1698,7 +1721,7 @@ fn validate_modular_core(
 ) -> ModularCoreResult {
     let phase = crate::compiler_work::CompilationPhase::IndependentCore;
     let validation_phase = crate::calibration::Phase::start("independent-effect-core");
-    let (mut work, normal_limit) = match modular_phase_work(phase, sources) {
+    let (mut work, normal_limit, _) = match modular_phase_work(phase, sources) {
         Ok(work) => work,
         Err(()) => {
             return Err((ValidationError::resource_exhausted(program), None));
@@ -1744,7 +1767,7 @@ fn finish_effect_compilation(
     native_entry_span: Option<Span>,
 ) -> Result<CompiledProgram, FileFailure> {
     let elaboration_phase = crate::calibration::Phase::start("final-elaboration");
-    let (final_budget, final_normal_limit) = modular_phase_work(
+    let (final_budget, final_normal_limit, source_bytes) = modular_phase_work(
         crate::compiler_work::CompilationPhase::FinalElaboration,
         sources,
     )
@@ -1754,16 +1777,24 @@ fn finish_effect_compilation(
         )))
     })?;
     let final_limit = final_budget.limit();
-    let mut elaborator =
-        EffectElaborator::for_module_program_with_budget(validated_interfaces, final_budget)
-            .map_err(|(failure, used)| {
-                FileFailure::from(PipelineFailure::Typing(TypeError::Internal(failure)))
-                    .with_phase_work(
-                        crate::compiler_work::CompilationPhase::FinalElaboration
-                            .assess_with_allowance(used, final_limit)
-                            .incomplete(),
-                    )
-            })?;
+    let rewrite_budget =
+        TypeWorkBudget::with_limit(modular_rewrite_limit(source_bytes).map_err(|()| {
+            FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+                crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+            )))
+        })?);
+    let mut elaborator = EffectElaborator::for_module_program_with_budgets(
+        validated_interfaces,
+        final_budget,
+        rewrite_budget,
+    )
+    .map_err(|(failure, used)| {
+        FileFailure::from(PipelineFailure::Typing(TypeError::Internal(failure))).with_phase_work(
+            crate::compiler_work::CompilationPhase::FinalElaboration
+                .assess_with_allowance(used, final_limit)
+                .incomplete(),
+        )
+    })?;
     let typed = elaborator
         .synthesize_effect_module_program(validated_interfaces)
         .map_err(|failure| {
@@ -1815,7 +1846,7 @@ fn finish_effect_compilation(
     );
     elaboration_phase.finish(Some(final_work), final_normal_limit, final_limit);
     let validation_phase = crate::calibration::Phase::start("independent-effect-core");
-    let (mut core_work, core_normal_limit) = match modular_phase_work(
+    let (mut core_work, core_normal_limit, _) = match modular_phase_work(
         crate::compiler_work::CompilationPhase::IndependentCore,
         sources,
     ) {
@@ -2245,10 +2276,11 @@ mod tests {
             .iter()
             .map(|module| module.source().text().len())
             .sum();
-        let work = crate::compiler_work::source_work(&graph).unwrap();
+        let (work, counted_bytes) = crate::compiler_work::source_work(&graph).unwrap();
+        assert_eq!(counted_bytes, bytes);
         assert_eq!(
             (work.used(), work.limit()),
-            (graph.modules().len() + 1, 300 * bytes)
+            (graph.modules().len() + 1, 800 * bytes)
         );
         let sources = graph
             .modules()
@@ -2258,11 +2290,13 @@ mod tests {
         for (phase, coefficient) in [
             (
                 crate::compiler_work::CompilationPhase::FinalElaboration,
-                161,
+                800,
             ),
             (crate::compiler_work::CompilationPhase::IndependentCore, 345),
         ] {
-            let work = crate::compiler_work::resident_phase_work(phase, &sources).unwrap();
+            let (work, counted_bytes) =
+                crate::compiler_work::resident_phase_work(phase, &sources).unwrap();
+            assert_eq!(counted_bytes, bytes);
             assert_eq!(
                 (work.used(), work.limit()),
                 (sources.len() + 1, coefficient * bytes)
@@ -2545,11 +2579,12 @@ mod tests {
         let modules = [(ModuleId::new(0), source.id())];
         for prefix in [0, 11] {
             for _ in 0..2 {
-                let mut work = crate::compiler_work::resident_phase_work(
+                let (mut work, counted_bytes) = crate::compiler_work::resident_phase_work(
                     crate::compiler_work::CompilationPhase::IndependentCore,
                     &[&source],
                 )
                 .unwrap();
+                assert_eq!(counted_bytes, source.text().len());
                 assert_eq!((work.used(), work.limit()), (2, 690));
                 work.charge(prefix).unwrap();
                 let origin = Origin::Source(source.span(ByteRange::new(0, 2).unwrap()).unwrap());

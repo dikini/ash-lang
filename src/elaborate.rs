@@ -3361,7 +3361,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         mut type_work: TypeWorkBudget,
         coverage_work: UsefulnessBudget,
     ) -> Result<Self, TypeError> {
-        Self::for_module_with_registry_and_work(module, registry, &mut type_work, coverage_work)
+        Self::for_module_with_registry_and_work(
+            module,
+            registry,
+            &mut type_work,
+            coverage_work,
+            None,
+        )
     }
 
     fn for_module_with_registry_and_work(
@@ -3369,8 +3375,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         registry: Arc<ResolvedRegistry>,
         type_work: &mut TypeWorkBudget,
         coverage_work: UsefulnessBudget,
+        rewrite_work: Option<TypeWorkBudget>,
     ) -> Result<Self, TypeError> {
-        let mut builder = CoreBuilder::<F>::with_registry_for_family(Arc::clone(&registry));
+        let mut builder = CoreBuilder::<F>::with_registry_and_rewrite_work(
+            Arc::clone(&registry),
+            rewrite_work.unwrap_or_default(),
+        );
         let binders = resolved_module_binders(module, |units| builder.charge_rebuild_work(units))
             .map_err(TypeError::from)?;
         builder
@@ -3485,6 +3495,14 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         program: &ValidatedInterfaceProgram,
         type_work: TypeWorkBudget,
     ) -> Result<Self, (ElaborationFailure, usize)> {
+        Self::for_module_program_with_budgets(program, type_work, TypeWorkBudget::default())
+    }
+
+    pub(crate) fn for_module_program_with_budgets(
+        program: &ValidatedInterfaceProgram,
+        type_work: TypeWorkBudget,
+        rewrite_work: TypeWorkBudget,
+    ) -> Result<Self, (ElaborationFailure, usize)> {
         let prefix = type_work.used();
         let mut elaborator = Self::for_module_program_inputs(
             program.registry(),
@@ -3492,6 +3510,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             program.result(),
             Arc::clone(program.method_evidence()),
             type_work,
+            rewrite_work,
         )
         .map_err(|failure| (failure, prefix))?;
         if let Some(preparation) = program.provider_preparation() {
@@ -3519,10 +3538,14 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         result: &ResolvedExpr,
         catalog: Arc<crate::core::dialect::MethodEvidenceCatalog>,
         type_work: TypeWorkBudget,
+        rewrite_work: TypeWorkBudget,
     ) -> Result<Self, ElaborationFailure> {
         let registry = Arc::clone(registry);
-        let mut builder =
-            CoreBuilder::<F>::with_registry_and_method_evidence(Arc::clone(&registry), catalog)?;
+        let mut builder = CoreBuilder::<F>::with_registry_method_evidence_and_rewrite_work(
+            Arc::clone(&registry),
+            catalog,
+            rewrite_work,
+        )?;
         let mut binders = Vec::new();
         let mut expressions = vec![result];
         for group in groups {
@@ -4325,6 +4348,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     &mut self.type_work,
                     &mut self.coverage_work,
                     &mut self.constraint_work,
+                    self.builder.rewrite_work_limit(),
                 )?
                 .ok_or_else(invalid_state)?;
                 self.pending_local_provider = Some(provider::PreparedLocalProviderCode::prepare(
@@ -4547,6 +4571,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 &mut self.type_work,
                 &mut self.coverage_work,
                 &mut self.constraint_work,
+                self.builder.rewrite_work_limit(),
             )?
             .ok_or_else(invalid_state)?;
             let local = provider::PreparedLocalProviderCode::prepare(
@@ -4578,6 +4603,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             &mut self.type_work,
             &mut self.coverage_work,
             &mut self.constraint_work,
+            self.builder.rewrite_work_limit(),
         )?;
         let mut instance_requirements = Vec::new();
         self.type_work
@@ -4639,6 +4665,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     &mut self.type_work,
                     &mut self.coverage_work,
                     &mut self.constraint_work,
+                    self.builder.rewrite_work_limit(),
                 )?;
                 original.authenticate_pending(
                     crate::resolved::ProviderExternalFacts {
@@ -22175,6 +22202,25 @@ pub(crate) fn check_module_with_budget_and_provider_codes(
     coverage_work: &mut UsefulnessBudget,
     constraint_work: &mut InterfaceConstraintBudget,
 ) -> Result<CheckedModule, TypeError> {
+    check_module_with_budget_and_provider_codes_and_rewrite_work(
+        resolved,
+        provider_codes,
+        type_work,
+        coverage_work,
+        constraint_work,
+        None,
+    )
+}
+
+/// The modular driver supplies one separately funded rewrite meter per arena.
+pub(crate) fn check_module_with_budget_and_provider_codes_and_rewrite_work(
+    resolved: ResolvedModule,
+    provider_codes: &ProviderCodeAvailability,
+    type_work: &mut TypeWorkBudget,
+    coverage_work: &mut UsefulnessBudget,
+    constraint_work: &mut InterfaceConstraintBudget,
+    rewrite_work: Option<TypeWorkBudget>,
+) -> Result<CheckedModule, TypeError> {
     let mut effects = !resolved.resources().is_empty()
         || !resolved.source_resources().is_empty()
         || !resolved.effects().is_empty()
@@ -22203,6 +22249,7 @@ pub(crate) fn check_module_with_budget_and_provider_codes(
             type_work,
             coverage_work,
             constraint_work,
+            rewrite_work,
             #[cfg(test)]
             None,
         )
@@ -22213,6 +22260,7 @@ pub(crate) fn check_module_with_budget_and_provider_codes(
             type_work,
             coverage_work,
             constraint_work,
+            rewrite_work,
             #[cfg(test)]
             None,
         )
@@ -22236,6 +22284,7 @@ pub(crate) fn check_effect_module_with_source_capture_for_test(
         type_work,
         coverage_work,
         constraint_work,
+        None,
         Some(observer),
     )
 }
@@ -22253,12 +22302,17 @@ pub(crate) fn source_original_prerequisites_for_test(
     schedule.available_original_prerequisites(module, &mut elaborator.type_work)
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "source and rewrite work retain separate owners alongside the test observer"
+)]
 fn check_module_with_budget_family<F: CoreLoweringFamily>(
     mut resolved: ResolvedModule,
     provider_codes: &ProviderCodeAvailability,
     type_work: &mut TypeWorkBudget,
     coverage_work: &mut UsefulnessBudget,
     constraint_work: &mut InterfaceConstraintBudget,
+    rewrite_work: Option<TypeWorkBudget>,
     #[cfg(test)] source_capture_observer: Option<fn(&crate::core::EffectCoreBuilder)>,
 ) -> Result<CheckedModule, TypeError> {
     resolved
@@ -22285,6 +22339,7 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
         registry,
         type_work,
         coverage_work.clone(),
+        rewrite_work,
     )?;
     let result: Result<_, TypeError> = (|| {
         elaborator.provider_codes = provider_codes.clone_with_budget(&mut elaborator.type_work)?;
@@ -22420,6 +22475,7 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
             &mut elaborator.coverage_work,
             constraint_work,
             source_provider.as_ref(),
+            elaborator.builder.rewrite_work_limit(),
         )?;
         if let Some(code) = &source_resources {
             elaborator.provider_codes.retain_source(
@@ -22478,6 +22534,7 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
                 &mut elaborator.type_work,
                 &mut elaborator.coverage_work,
                 constraint_work,
+                elaborator.builder.rewrite_work_limit(),
             )?
         } else if resolved.resources().is_empty() {
             None

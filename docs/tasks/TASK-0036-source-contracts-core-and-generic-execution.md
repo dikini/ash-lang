@@ -685,6 +685,28 @@ records the fit and limitations. No predicate, witness, cumulative carry,
 other allowance, depth or stack policy changes. The diagnostic does not close
 normal caller, retained verification or checkpoint obligations.
 
+The subsequent full SQLite run passed 30 cases and exhausted four required
+cases at Source `300S` / Final `161S`. Finite phase measurements completed all
+four unchanged source closures. Persistence used 28,158,349 Source units and
+26,809,274 Final units for 44,512 canonical bytes. Its separate builder rewrite
+meter first refused at the fixed implementation default, then completed at
+510,782 units under the explicitly bounded diagnostic. No Source-credit loan,
+reset or duplicate-debit repair was justified.
+
+After independent measurement/accounting review, the project lead adopted
+Source `800S`, Final `800S` and separate compiler-arena rewrite `16S` under the
+user's delegated judgment. The existing paid canonical census returns S
+alongside its budget; checked multiplication funds each empty compiler arena
+once, and every later rewrite retains that arena's cumulative spending. Fresh
+arenas inherit capacity only. Generic, standalone and private-image defaults,
+other limits, witnesses and semantic checks remain unchanged.
+[AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md)
+holds the policy and [DN-0050](../design/DN-0050-native-program-gas-estimates.md)
+records phase-separated fitting evidence and its limitations. These diagnostics
+stopped before independent Core and native execution. Normal four-case and
+whole-caller verification, current quality, actual-head review and retained
+acceptance remain pending on [PR #34](https://github.com/dikini/ash-lang/pull/34).
+
 ## Deviations
 
 None authorized. Return concrete semantic gaps to CP-0022 instead of resolving

@@ -1692,10 +1692,32 @@ pub(crate) fn prepare_provider_fragment_builder_with_catalog(
     patterns: &[&CorePattern],
     budget: &mut crate::types::TypeWorkBudget,
 ) -> Result<CoreBuilder<EffectOperationFamily>, TransformError> {
-    let mut builder = CoreBuilder::<EffectOperationFamily>::with_registry_and_method_evidence(
-        Arc::clone(&program.registry),
+    prepare_provider_fragment_builder_with_rewrite_work(
+        program,
+        order,
         catalog,
-    )?;
+        state,
+        patterns,
+        budget,
+        crate::types::TypeWorkBudget::default(),
+    )
+}
+
+pub(crate) fn prepare_provider_fragment_builder_with_rewrite_work(
+    program: &super::UnvalidatedEffectProgram,
+    order: &[NodeId],
+    catalog: Arc<super::dialect::MethodEvidenceCatalog>,
+    state: &[&super::TypedBinder],
+    patterns: &[&CorePattern],
+    budget: &mut crate::types::TypeWorkBudget,
+    rewrite_work: crate::types::TypeWorkBudget,
+) -> Result<CoreBuilder<EffectOperationFamily>, TransformError> {
+    let mut builder =
+        CoreBuilder::<EffectOperationFamily>::with_registry_method_evidence_and_rewrite_work(
+            Arc::clone(&program.registry),
+            catalog,
+            rewrite_work,
+        )?;
     // Catalog admission is part of this new rebuild, before its per-node ledger resets.
     budget
         .charge(builder.type_work.used())
@@ -3959,6 +3981,41 @@ mod provider_draft_tests {
         source::{ByteRange, Origin, SourceFile},
         types::{Type, TypeWorkBudget},
     };
+
+    #[test]
+    fn rewrite_gas_survives_the_compiler_fragment_constructor() {
+        let program = draft();
+        let mut work = TypeWorkBudget::with_limit(1_000);
+        work.charge(13).unwrap();
+        let order =
+            provider_draft_order(&program, &std::collections::HashSet::new(), &mut work).unwrap();
+        let prefix = work.used();
+        let compiler = prepare_provider_fragment_builder_with_rewrite_work(
+            &program,
+            &order,
+            Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
+            &[],
+            &[],
+            &mut work,
+            TypeWorkBudget::with_limit(211),
+        )
+        .unwrap();
+        assert_eq!(compiler.rewrite_work_limit(), 211);
+        assert!(work.used() > prefix);
+        let generic = prepare_provider_fragment_builder_with_catalog(
+            &program,
+            &order,
+            Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
+            &[],
+            &[],
+            &mut work,
+        )
+        .unwrap();
+        assert_eq!(
+            generic.rewrite_work_limit(),
+            TypeWorkBudget::default().limit()
+        );
+    }
     fn draft() -> super::super::UnvalidatedEffectProgram {
         let source = SourceFile::new("provider-draft.ash", "x").unwrap();
         let origin = Origin::Source(source.span(ByteRange::new(0, 1).unwrap()).unwrap());
