@@ -22584,36 +22584,50 @@ impl ResolvedRegistry {
                     .charge(certificate.resource_count())
                     .map_err(|()| ResolvedBuildFailure::TypeResource)?;
                 for (spelling, _, fact) in certificate.resource_contracts() {
-                    let (interface, parameters) =
-                        certificate.provider_interface_formals(fact.id, budget)?;
-                    registry.retain_owner_signature(
-                        OwnerId::Interface(interface),
-                        None,
-                        parameters,
-                        budget,
-                    )?;
-                    for parameter in parameters {
-                        budget
-                            .charge(1)
-                            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-                        if let Some(actual) = registry.type_variables.get(&parameter.id) {
-                            if !same_checker_type_variable_with_budget(actual, parameter, budget)
-                                .map_err(|()| ResolvedBuildFailure::TypeResource)?
-                            {
-                                return Err(ResolvedBuildFailure::InvalidState);
+                    for (owner, parameters) in
+                        certificate.provider_declaration_formals(fact.id, budget)?
+                    {
+                        match owner {
+                            OwnerId::Interface(_) => {
+                                registry.retain_owner_signature(owner, None, parameters, budget)?;
                             }
-                        } else {
-                            registry
-                                .type_variables
-                                .try_reserve(1)
-                                .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-                            let retained =
-                                clone_resolved_type_variable_with_budget(parameter, budget)
+                            OwnerId::Effect(effect) => {
+                                budget
+                                    .charge(1)
                                     .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-                            let displaced = registry
-                                .type_variables
-                                .insert(parameter.id, retained.into());
-                            debug_assert!(displaced.is_none());
+                                if registry.effect(effect).is_some() {
+                                    registry.authenticate_owner_signature(
+                                        owner, None, parameters, budget,
+                                    )?;
+                                }
+                            }
+                            OwnerId::Resource(_) => return Err(ResolvedBuildFailure::InvalidState),
+                        }
+                        for parameter in parameters {
+                            budget
+                                .charge(1)
+                                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                            if let Some(actual) = registry.type_variables.get(&parameter.id) {
+                                if !same_checker_type_variable_with_budget(
+                                    actual, parameter, budget,
+                                )
+                                .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                                {
+                                    return Err(ResolvedBuildFailure::InvalidState);
+                                }
+                            } else {
+                                registry
+                                    .type_variables
+                                    .try_reserve(1)
+                                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                                let retained =
+                                    clone_resolved_type_variable_with_budget(parameter, budget)
+                                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                                let displaced = registry
+                                    .type_variables
+                                    .insert(parameter.id, retained.into());
+                                debug_assert!(displaced.is_none());
+                            }
                         }
                     }
                     if fact.id.module() != *module

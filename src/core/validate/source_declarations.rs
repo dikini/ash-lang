@@ -2160,118 +2160,152 @@ main () = 42
                     "the importing original retains the whole ordinary group but projects out its dependency's unrelated main binder"
                 );
                 let unrelated = SourceFile::new("unrelated-provider-formal.ash", "R").unwrap();
+                let mut private_effect_rows = 0;
                 for (_, _, original) in certificate.resource_contracts() {
                     let mut measured = TypeWorkBudget::default();
-                    let (interface, parameters) = certificate
-                        .provider_interface_formals(original.id, &mut measured)
+                    let rows = certificate
+                        .provider_declaration_formals(original.id, &mut measured)
                         .unwrap();
-                    assert_eq!(parameters.len(), 1);
-                    assert_eq!(
-                        text(donor_source, parameters[0].origin.primary_span()).unwrap(),
-                        "R"
-                    );
-                    assert!(
-                        crate::resolved::same_resolved_type_variables_with_budget(
-                            view.defining_owner_parameters(crate::resolved::OwnerId::Interface(
-                                interface
-                            ),)
-                                .unwrap(),
-                            parameters,
-                            &mut TypeWorkBudget::default(),
-                        )
-                        .unwrap()
-                    );
-                    let parameter = &parameters[0];
-                    assert_eq!(view.type_variable(parameter.id), Some(parameter));
-                    let matching = crate::resolved::clone_resolved_type_variable_with_budget(
-                        parameter,
-                        &mut TypeWorkBudget::default(),
-                    )
-                    .unwrap();
-                    let matching_view = resolved
-                        .registry()
-                        .as_ref()
-                        .clone()
-                        .with_additional_type_variables([matching])
-                        .source_original_checker_view(
-                            resolved.imported_facts(),
-                            &mut TypeWorkBudget::default(),
-                        )
-                        .unwrap();
-                    assert_eq!(matching_view.type_variable(parameter.id), Some(parameter));
-                    assert!(
-                        !resolved
-                            .imported_facts()
-                            .interface_imports()
-                            .any(|imported| imported.fact.id == interface),
-                        "private provider formals do not expose an interface import"
-                    );
-                    let cost = measured.used();
-                    let mut exact = TypeWorkBudget::with_limit(13 + cost);
-                    exact.charge(13).unwrap();
-                    certificate
-                        .provider_interface_formals(original.id, &mut exact)
-                        .unwrap();
-                    assert_eq!(exact.used(), 13 + cost);
-                    let mut short = TypeWorkBudget::with_limit(13 + cost - 1);
-                    short.charge(13).unwrap();
-                    assert_eq!(
-                        certificate
-                            .provider_interface_formals(original.id, &mut short)
-                            .unwrap_err(),
-                        crate::resolved::ResolvedBuildFailure::TypeResource
-                    );
-                    for mutation in 0..5 {
-                        let mut changed =
-                            crate::resolved::clone_resolved_type_variable_with_budget(
-                                parameter,
-                                &mut TypeWorkBudget::default(),
-                            )
-                            .unwrap();
-                        match mutation {
-                            0 => {
-                                let (_, _, other) = certificate
-                                    .resource_contracts()
-                                    .find(|(_, _, other)| other.id != original.id)
-                                    .unwrap();
-                                let (_, other_parameters) = certificate
-                                    .provider_interface_formals(
-                                        other.id,
-                                        &mut TypeWorkBudget::default(),
-                                    )
-                                    .unwrap();
-                                changed.id = other_parameters[0].id;
-                            }
-                            1 => changed.origin = original.origin.clone(),
-                            2 => changed.kind = Kind::EffectRow,
-                            3 => {
-                                changed.origin = Origin::Source(
-                                    unrelated
-                                        .span(crate::source::ByteRange::new(0, 1).unwrap())
-                                        .unwrap(),
-                                );
-                            }
-                            4 => changed.spelling = "Different".to_owned(),
-                            _ => unreachable!(),
-                        }
-                        let result = resolved
-                            .registry()
-                            .as_ref()
-                            .clone()
-                            .with_additional_type_variables([changed])
-                            .source_original_checker_view(
-                                resolved.imported_facts(),
-                                &mut TypeWorkBudget::default(),
-                            );
-                        assert!(
-                            matches!(
-                                result,
-                                Err(crate::resolved::ResolvedBuildFailure::InvalidState)
-                            ),
-                            "private provider formal mirror mutation {mutation}"
+                    for (owner, parameters) in rows {
+                        assert_eq!(parameters.len(), 1);
+                        assert_eq!(
+                            text(donor_source, parameters[0].origin.primary_span()).unwrap(),
+                            "R"
                         );
+                        if matches!(owner, crate::resolved::OwnerId::Effect(effect) if view.effect(effect).is_none())
+                        {
+                            assert!(view.defining_owner_parameters(owner).is_none());
+                            private_effect_rows += 1;
+                        } else {
+                            assert!(
+                                crate::resolved::same_resolved_type_variables_with_budget(
+                                    view.defining_owner_parameters(owner).unwrap(),
+                                    parameters,
+                                    &mut TypeWorkBudget::default(),
+                                )
+                                .unwrap()
+                            )
+                        }
+                        let parameter = &parameters[0];
+                        assert_eq!(view.type_variable(parameter.id), Some(parameter));
+                        let already_supplied = resolved.imported_facts().effects().any(|effect| {
+                            effect
+                                .parameters
+                                .iter()
+                                .any(|other| other.id == parameter.id)
+                        });
+                        if !already_supplied {
+                            let matching =
+                                crate::resolved::clone_resolved_type_variable_with_budget(
+                                    parameter,
+                                    &mut TypeWorkBudget::default(),
+                                )
+                                .unwrap();
+                            let matching_view = resolved
+                                .registry()
+                                .as_ref()
+                                .clone()
+                                .with_additional_type_variables([matching])
+                                .source_original_checker_view(
+                                    resolved.imported_facts(),
+                                    &mut TypeWorkBudget::default(),
+                                )
+                                .unwrap();
+                            assert_eq!(matching_view.type_variable(parameter.id), Some(parameter));
+                        }
+                        if let crate::resolved::OwnerId::Interface(interface) = owner {
+                            assert!(
+                                !resolved
+                                    .imported_facts()
+                                    .interface_imports()
+                                    .any(|imported| imported.fact.id == interface),
+                                "private provider formals do not expose an interface import"
+                            );
+                        } else {
+                            assert_eq!(
+                                owner,
+                                crate::resolved::OwnerId::Effect(
+                                    original.provided.instance.effect()
+                                ),
+                            );
+                        }
+                        let cost = measured.used();
+                        let mut exact = TypeWorkBudget::with_limit(13 + cost);
+                        exact.charge(13).unwrap();
+                        certificate
+                            .provider_declaration_formals(original.id, &mut exact)
+                            .unwrap();
+                        assert_eq!(exact.used(), 13 + cost);
+                        let mut short = TypeWorkBudget::with_limit(13 + cost - 1);
+                        short.charge(13).unwrap();
+                        assert_eq!(
+                            certificate
+                                .provider_declaration_formals(original.id, &mut short)
+                                .unwrap_err(),
+                            crate::resolved::ResolvedBuildFailure::TypeResource
+                        );
+                        if already_supplied {
+                            continue;
+                        }
+                        for mutation in 0..5 {
+                            let mut changed =
+                                crate::resolved::clone_resolved_type_variable_with_budget(
+                                    parameter,
+                                    &mut TypeWorkBudget::default(),
+                                )
+                                .unwrap();
+                            match mutation {
+                                0 => {
+                                    let (_, _, other) = certificate
+                                        .resource_contracts()
+                                        .find(|(_, _, other)| other.id != original.id)
+                                        .unwrap();
+                                    let (_, other_parameters) = certificate
+                                        .provider_declaration_formals(
+                                            other.id,
+                                            &mut TypeWorkBudget::default(),
+                                        )
+                                        .unwrap()
+                                        .into_iter()
+                                        .find(|(other_owner, _)| {
+                                            std::mem::discriminant(other_owner)
+                                                == std::mem::discriminant(&owner)
+                                        })
+                                        .unwrap();
+                                    changed.id = other_parameters[0].id;
+                                }
+                                1 => changed.origin = original.origin.clone(),
+                                2 => changed.kind = Kind::EffectRow,
+                                3 => {
+                                    changed.origin = Origin::Source(
+                                        unrelated
+                                            .span(crate::source::ByteRange::new(0, 1).unwrap())
+                                            .unwrap(),
+                                    );
+                                }
+                                4 => changed.spelling = "Different".to_owned(),
+                                _ => unreachable!(),
+                            }
+                            let result = resolved
+                                .registry()
+                                .as_ref()
+                                .clone()
+                                .with_additional_type_variables([changed])
+                                .source_original_checker_view(
+                                    resolved.imported_facts(),
+                                    &mut TypeWorkBudget::default(),
+                                );
+                            assert!(
+                                matches!(
+                                    result,
+                                    Err(crate::resolved::ResolvedBuildFailure::InvalidState)
+                                ),
+                                "private provider formal mirror mutation {mutation}"
+                            );
+                        }
                     }
                 }
+                assert_eq!(private_effect_rows, 1);
                 view.authenticate_provider_contracts(&mut TypeWorkBudget::default())
                     .unwrap();
                 for (_, _, original) in certificate.resource_contracts() {

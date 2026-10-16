@@ -1834,17 +1834,17 @@ impl CheckedProviderContracts {
     pub(crate) fn resource_count(&self) -> usize {
         self.declarations.len()
     }
-    /// Borrows the defining provider-interface row from the same canonical
-    /// registry that authenticates this declaration's checked application.
-    pub(crate) fn provider_interface_formals(
+    /// Borrows the defining provider-interface and provided-effect rows from
+    /// the same canonical registry that authenticates this declaration.
+    pub(crate) fn provider_declaration_formals(
         &self,
         definition: crate::resolved::ResourceDefinitionId,
         work: &mut TypeWorkBudget,
     ) -> Result<
-        (
-            crate::interface::InterfaceId,
+        [(
+            crate::resolved::OwnerId,
             &[crate::resolved::ResolvedTypeVariable],
-        ),
+        ); 2],
         crate::resolved::ResolvedBuildFailure,
     > {
         use crate::resolved::ResolvedBuildFailure as Failure;
@@ -1860,14 +1860,27 @@ impl CheckedProviderContracts {
             .iter()
             .find(|declaration| declaration.fact.id == definition)
             .ok_or(Failure::InvalidState)?;
-        let interface = declaration.provider_application.interface();
-        let owner = crate::resolved::OwnerId::Interface(interface);
         let canonical = &declaration.acquire.canonical;
-        let parameters = canonical
-            .defining_owner_parameters(owner)
-            .ok_or(Failure::InvalidState)?;
-        canonical.authenticate_owner_signature(owner, None, parameters, work)?;
-        Ok((interface, parameters))
+        let mut rows: [(
+            crate::resolved::OwnerId,
+            &[crate::resolved::ResolvedTypeVariable],
+        ); 2] = [
+            (
+                crate::resolved::OwnerId::Interface(declaration.provider_application.interface()),
+                &[],
+            ),
+            (
+                crate::resolved::OwnerId::Effect(declaration.fact.provided.instance.effect()),
+                &[],
+            ),
+        ];
+        for (owner, parameters) in &mut rows {
+            *parameters = canonical
+                .defining_owner_parameters(*owner)
+                .ok_or(Failure::InvalidState)?;
+            canonical.authenticate_owner_signature(*owner, None, parameters, work)?;
+        }
+        Ok(rows)
     }
     pub(crate) fn defining_sources(
         &self,
