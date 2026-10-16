@@ -74,11 +74,8 @@ impl HandlerGraphView<'_> {
     }
 }
 
-pub(in crate::core) trait HandlerGraph {
-    fn handler_graph(&self) -> HandlerGraphView<'_>;
-}
-impl HandlerGraph for HandlerGraphView<'_> {
-    fn handler_graph(&self) -> HandlerGraphView<'_> {
+impl HandlerGraphView<'_> {
+    pub(in crate::core) fn handler_graph(&self) -> HandlerGraphView<'_> {
         *self
     }
 }
@@ -100,8 +97,8 @@ pub(in crate::core) struct HandlerFragmentEntry<'a> {
         HashMap<crate::source::Span, &'a crate::resolved::ResolvedOccurrence>,
 }
 
-impl HandlerGraph for HandlerFragmentEntry<'_> {
-    fn handler_graph(&self) -> HandlerGraphView<'_> {
+impl HandlerFragmentEntry<'_> {
+    pub(in crate::core) fn handler_graph(&self) -> HandlerGraphView<'_> {
         HandlerGraphView {
             draft: HandlerGraphDraft {
                 program: &self.draft.program,

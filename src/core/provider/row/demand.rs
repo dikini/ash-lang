@@ -524,7 +524,7 @@ impl DirectDemandProof {
     fn authenticate_annotations(
         &mut self,
         recipe: &HandlerRowRecipeDraft,
-        entry: &impl crate::core::provider::HandlerGraph,
+        entry: &crate::core::provider::HandlerGraphView<'_>,
         identities: &HashMap<InferenceVariableId, usize>,
         work: &mut TypeWorkBudget,
     ) -> Result<(), ValidationError> {
@@ -687,7 +687,7 @@ impl DirectDemandProof {
     fn authenticate_recomputations(
         &mut self,
         recipe: &HandlerRowRecipeDraft,
-        entry: &impl crate::core::provider::HandlerGraph,
+        entry: &crate::core::provider::HandlerGraphView<'_>,
         identities: &HashMap<InferenceVariableId, usize>,
         work: &mut TypeWorkBudget,
     ) -> Result<(), ValidationError> {
@@ -783,7 +783,7 @@ impl DirectDemandProof {
     fn authenticate_source_equalities(
         &self,
         recipe: &HandlerRowRecipeDraft,
-        entry: &impl crate::core::provider::HandlerGraph,
+        entry: &crate::core::provider::HandlerGraphView<'_>,
         work: &mut TypeWorkBudget,
     ) -> Result<(), ValidationError> {
         let entry = &entry.handler_graph();
@@ -846,7 +846,7 @@ impl DirectDemandProof {
 
     pub(super) fn reconstruct(
         recipe: &HandlerRowRecipeDraft,
-        entry: &impl crate::core::provider::HandlerGraph,
+        entry: &crate::core::provider::HandlerGraphView<'_>,
         work: &mut TypeWorkBudget,
     ) -> Result<Self, ValidationError> {
         let entry = &entry.handler_graph();

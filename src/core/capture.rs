@@ -3765,7 +3765,7 @@ impl Drop for ConditionalTypeReplacements {
     reason = "the sealed defining entry and authenticated projection supply actual graph, import, method and source occurrence facts"
 )]
 pub(in crate::core) fn reconstruct_conditional_handler_capture(
-    entry: &impl super::provider::HandlerGraph,
+    entry: &super::provider::HandlerGraphView<'_>,
     nodes: &[StoredNode<super::effect::EffectOperationFamily>],
     projected_arena: super::dialect::ArenaId,
     correspondence: &[Option<NodeId>],
@@ -8971,7 +8971,7 @@ pub(crate) fn conditional_capture_inventory_for_test(
         .map(|ordinal| Some(NodeId::new(draft.program.arena, ordinal as u32)))
         .collect::<Vec<_>>();
     let graph = reconstruct_conditional_handler_capture(
-        &entry,
+        &entry.handler_graph(),
         &draft.program.nodes,
         draft.program.arena,
         &correspondence,

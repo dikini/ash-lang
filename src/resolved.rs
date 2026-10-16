@@ -23695,6 +23695,52 @@ impl ResolvedRegistry {
             })
     }
 
+    /// The ordinary group has actually been checked in this same defining
+    /// transaction. Its immutable certificate supplies the closed Source
+    /// registry category; it grants no provider instance or publication slot.
+    pub(crate) fn with_source_prepared_provider_group(
+        mut self,
+        module: &ResolvedModule,
+        code: &Arc<crate::elaborate::provider::CheckedProviderGroup>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, ResolvedBuildFailure> {
+        if code.module() != module.module()
+            || self.provider_contracts.contains_key(&module.module())
+        {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        code.authenticate_code(code.contracts(), work)?;
+        work.charge(
+            code.contracts()
+                .defining_sources()
+                .len()
+                .checked_mul(
+                    module
+                        .defining_sources()
+                        .len()
+                        .checked_add(1)
+                        .ok_or(ResolvedBuildFailure::TypeResource)?,
+                )
+                .ok_or(ResolvedBuildFailure::TypeResource)?,
+        )
+        .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for (owner, source) in code.contracts().defining_sources() {
+            if !module
+                .defining_sources()
+                .iter()
+                .any(|(actual, retained)| actual == owner && Arc::ptr_eq(retained, source))
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+        }
+        work.charge(1)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        self.provider_contracts
+            .insert(module.module(), Arc::clone(code.contracts()));
+        self.authenticate_provider_contracts(work)?;
+        Ok(self)
+    }
+
     pub(crate) fn provider_contracts(
         &self,
     ) -> impl Iterator<

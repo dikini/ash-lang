@@ -1311,11 +1311,13 @@ main () = 42
                 diagnostic access => resume (perform Legacy.Connection<R>.diagnostic state)
             }
         }
-        main : Unit -> Int
-        main () = 42
+        main : Unit -> Scope<Unit, Unit, Int>
+        main () = resource Probe<{}, Fresh, {}> owner = 42 {
+            42
+        }
         "#
         );
-        std::fs::write(&path.0, source).unwrap();
+        std::fs::write(&path.0, &source).unwrap();
         let roots = ModuleRoots::empty().with_foreign_registrations(
             ForeignRegistrations::new([
                 sqlite_manifest(ForeignRegistrationId::new(991)).unwrap(),
@@ -1371,7 +1373,32 @@ main () = 42
                 }
                 tested_categories = true;
             }
-            checked.push(crate::elaborate::check_module(resolved).unwrap());
+            let compiled = crate::elaborate::check_module(resolved).unwrap();
+            if loaded.id() == graph.entry() {
+                let original = compiled
+                    .source_resource_code()
+                    .unwrap()
+                    .resource(0)
+                    .unwrap();
+                let group = compiled.provider_code().unwrap();
+                for forest in [
+                    original.original_acquire(),
+                    original.original_finish(),
+                    original.original_handler(),
+                ] {
+                    let certificate = forest
+                        .registry
+                        .provider_contracts()
+                        .find(|(module, _)| **module == loaded.id())
+                        .unwrap()
+                        .1;
+                    assert!(
+                        Arc::ptr_eq(certificate, group.contracts()),
+                        "Source originals and final module must consume the same once-checked ordinary group"
+                    );
+                }
+            }
+            checked.push(compiled);
         }
         assert!(tested_categories);
         let registry = ResolvedRegistry::combine_checked(
@@ -1414,6 +1441,100 @@ main () = 42
             .authenticate_provider_contracts(&mut TypeWorkBudget::default())
             .unwrap();
         original_registry_phase_modules(&sources, &modules, registry).unwrap();
+
+        // A pure local prerequisite is checked in the same body transaction,
+        // then its actual closed facts authenticate the ordinary group. Both
+        // this helper and the Source scope must survive final Core admission.
+        let dependent = source.replace(
+            "acquire config => perform Legacy.Connection<R>.open config",
+            "acquire config => perform Legacy.Connection<R>.open (needed config)",
+        ) + "\nneeded : Legacy.OpenConfig -> Legacy.OpenConfig\nneeded config = neededIdentity config\nneededIdentity : Legacy.OpenConfig -> Legacy.OpenConfig\nneededIdentity config = config\n";
+        let source_start = dependent.find("pub resource Probe").unwrap();
+        let ordinary_start = dependent
+            .find("        interface OrdinaryProvider")
+            .unwrap();
+        let ordinary_only = format!(
+            "{}{}",
+            &dependent[..source_start],
+            &dependent[ordinary_start..]
+        )
+        .replace(
+            "main : Unit -> Scope<Unit, Unit, Int>\n        main () = resource Probe<{}, Fresh, {}> owner = 42 {\n            42\n        }",
+            "main : Unit -> Int\n        main () = 42",
+        );
+        // This prerequisite actually needs the Source original that is still
+        // awaiting the ordinary certificate. It cannot be marked checked or
+        // offered as a capture fact merely because its signature is available.
+        let unavailable = dependent.replace(
+            "needed config = neededIdentity config",
+            "needed config = {\n    let scoped = resource Probe<{}, Prerequisite, {}> owner = 42 { 0 }\n    config\n}",
+        );
+        for (text, waits_for_source, independent_core) in [
+            (&dependent, false, true),
+            (&ordinary_only, false, false),
+            (&unavailable, true, false),
+        ] {
+            std::fs::write(&path.0, text).unwrap();
+            let graph = load_module_graph(&path.0, &roots).unwrap();
+            let mut checked: Vec<CheckedModule> = Vec::new();
+            for loaded in graph.modules() {
+                let dependencies = loaded
+                    .dependencies()
+                    .iter()
+                    .map(|edge| {
+                        DependencyExports::new(
+                            edge,
+                            checked
+                                .iter()
+                                .find(|module| module.module() == edge.target())
+                                .unwrap()
+                                .exports(),
+                        )
+                        .unwrap()
+                    })
+                    .collect::<Vec<_>>();
+                let resolved = resolve_module(loaded, &dependencies).unwrap();
+                if loaded.id() == graph.entry() && (waits_for_source || independent_core) {
+                    let prerequisites =
+                        crate::elaborate::source_original_prerequisites_for_test(&resolved)
+                            .unwrap();
+                    if waits_for_source {
+                        assert!(
+                            prerequisites.is_empty(),
+                            "the unchecked Source-code dependency is withheld from early preparation"
+                        );
+                        // This asserts the internal staging boundary only. It
+                        // deliberately makes no whole-module rejection claim.
+                        continue;
+                    }
+                    assert_eq!(prerequisites.len(), 2);
+                    for (index, definition) in resolved.definitions().iter().enumerate() {
+                        let name = match &definition.kind {
+                            crate::resolved::ResolvedDefinitionKind::Equational(global)
+                            | crate::resolved::ResolvedDefinitionKind::ForeignConstant(global) => {
+                                global.interface.name.spelling.as_str()
+                            }
+                            crate::resolved::ResolvedDefinitionKind::InlineOperational(global) => {
+                                global.header.name.spelling.as_str()
+                            }
+                        };
+                        if matches!(name, "needed" | "neededIdentity") {
+                            assert!(prerequisites.contains(
+                                &crate::resolved::ResolvedDeclarationIndex::Global(index)
+                            ));
+                        }
+                    }
+                }
+                checked.push(crate::elaborate::check_module(resolved).unwrap());
+            }
+            if independent_core {
+                crate::driver::compile_path(crate::driver::RunConfiguration {
+                    entry: path.0.clone(),
+                    roots: roots.clone(),
+                })
+                .expect("same-module Source scope and checked pure prerequisite reach independent whole Core admission");
+            }
+        }
     }
 
     #[test]

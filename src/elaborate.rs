@@ -4232,6 +4232,120 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }
     }
 
+    /// A mixed defining module needs genuine ordinary contracts before its
+    /// Source originals consume a closed registry. Use the normal transaction
+    /// and actual checked dependency closure; no source-name readiness shortcut.
+    fn prepare_available_provider_group_before_source(
+        &mut self,
+        module: &ResolvedModule,
+        schemes: &mut [CheckedGlobalScheme],
+        checked_interfaces: &[CheckedInterface],
+        interface_facts: &[crate::resolved::SharedCheckedInterfaceFact],
+        checked_implementations: &[CheckedImplementation],
+        constraints: &mut InterfaceConstraintBudget,
+    ) -> Result<Vec<ModuleBodyChecking>, TypeError> {
+        if !F::EFFECTS || module.source_resources().is_empty() || module.resources().is_empty() {
+            return Ok(Vec::new());
+        }
+        std::mem::swap(&mut self.constraint_work, constraints);
+        let result = (|| {
+            let mut checking = self.begin_module_body_checking(module, schemes)?;
+            self.enable_module_body_reordering(module, schemes, &mut checking)?;
+            let prerequisites = checking
+                .schedule
+                .as_ref()
+                .ok_or_else(invalid_state)?
+                .available_original_prerequisites(module, &mut self.type_work)?;
+            self.type_work
+                .charge(
+                    module
+                        .declaration_order()
+                        .len()
+                        .checked_mul(
+                            prerequisites
+                                .len()
+                                .checked_add(1)
+                                .ok_or_else(type_resource)?,
+                        )
+                        .ok_or_else(type_resource)?,
+                )
+                .map_err(|()| type_resource())?;
+            for declaration in module.declaration_order() {
+                if prerequisites.contains(declaration) {
+                    self.step_module_body_checking(
+                        module,
+                        checked_interfaces,
+                        checked_implementations,
+                        *declaration,
+                        &mut checking,
+                    )?;
+                }
+            }
+            self.stage_completed_module_body_evidence(&mut checking)?;
+            let closed = self.closed_completed_module_declarations(module, &checking)?;
+            let mut available = true;
+            for definition in module.resources() {
+                let dependencies = checking
+                    .schedule
+                    .as_ref()
+                    .ok_or_else(invalid_state)?
+                    .original_source_dependencies(definition, &mut self.type_work)?;
+                self.type_work
+                    .charge(
+                        dependencies
+                            .len()
+                            .checked_mul(closed.len().checked_add(1).ok_or_else(type_resource)?)
+                            .ok_or_else(type_resource)?,
+                    )
+                    .map_err(|_| type_resource())?;
+                available &= dependencies
+                    .iter()
+                    .all(|dependency| closed.contains(dependency));
+            }
+            if available {
+                self.type_work.charge(1).map_err(|()| type_resource())?;
+                let defining = Arc::new(self.completed_module_provider_facts_for(
+                    module,
+                    schemes,
+                    interface_facts,
+                    &mut checking,
+                    &closed,
+                )?);
+                let code = provider::check_module_provider_group(
+                    module,
+                    Some(&defining),
+                    checking.publication.as_mut().ok_or_else(invalid_state)?,
+                    &mut self.type_work,
+                    &mut self.coverage_work,
+                    &mut self.constraint_work,
+                )?
+                .ok_or_else(invalid_state)?;
+                self.pending_local_provider = Some(provider::PreparedLocalProviderCode::prepare(
+                    &code,
+                    crate::resolved::ProviderExternalFacts {
+                        imported: module.imported_facts(),
+                        defining: Some(&defining),
+                    },
+                    checking.publication.as_ref().ok_or_else(invalid_state)?,
+                    &mut self.type_work,
+                )?);
+            }
+            // One owned state, held off the module driver's stack. The later
+            // phase consumes it; no second body/scheme/publication preparation.
+            self.type_work.charge(1).map_err(|_| type_resource())?;
+            let mut started = Vec::new();
+            started.try_reserve_exact(1).map_err(|_| type_resource())?;
+            started.push(checking);
+            Ok(started)
+        })();
+        std::mem::swap(&mut self.constraint_work, constraints);
+        result
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the same started body/evidence transaction accompanies the existing module checking inputs"
+    )]
     fn check_module_bodies(
         &mut self,
         module: &ResolvedModule,
@@ -4239,6 +4353,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         checked_interfaces: &[CheckedInterface],
         interface_facts: &[crate::resolved::SharedCheckedInterfaceFact],
         checked_implementations: &[CheckedImplementation],
+        started: &mut Vec<ModuleBodyChecking>,
         constraint_work: &mut InterfaceConstraintBudget,
     ) -> Result<(Box<[CheckedImplementationFact]>, PendingEvidencePublication), TypeError> {
         if self.purpose != ElaborationPurpose::ModuleCheck {
@@ -4251,6 +4366,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             checked_interfaces,
             interface_facts,
             checked_implementations,
+            started,
         );
         std::mem::swap(&mut self.constraint_work, constraint_work);
         result
@@ -4263,11 +4379,18 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         checked_interfaces: &[CheckedInterface],
         interface_facts: &[crate::resolved::SharedCheckedInterfaceFact],
         checked_implementations: &[CheckedImplementation],
+        started: &mut Vec<ModuleBodyChecking>,
     ) -> Result<(Box<[CheckedImplementationFact]>, PendingEvidencePublication), TypeError> {
-        let mut checking = self.begin_module_body_checking(module, checked_schemes)?;
+        if started.len() > 1 {
+            return Err(invalid_state());
+        }
+        let mut checking = match started.pop() {
+            Some(checking) => checking,
+            None => self.begin_module_body_checking(module, checked_schemes)?,
+        };
         let mut local_instances = Vec::new();
         let mut needs_local_preparation = false;
-        if F::EFFECTS && !module.resources().is_empty() {
+        if F::EFFECTS && !module.resources().is_empty() && self.pending_local_provider.is_none() {
             self.type_work
                 .charge(module.declaration_order().len())
                 .map_err(|()| type_resource())?;
@@ -4296,6 +4419,15 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             )?;
         } else {
             for declaration in module.declaration_order() {
+                if matches!(
+                    declaration,
+                    ResolvedDeclarationIndex::Global(_)
+                        | ResolvedDeclarationIndex::Implementation(_)
+                ) && let Some(schedule) = &checking.schedule
+                    && schedule.is_completed(*declaration)?
+                {
+                    continue;
+                }
                 self.step_module_body_checking(
                     module,
                     checked_interfaces,
@@ -4332,9 +4464,23 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         {
             return Err(invalid_state());
         }
-        self.enable_module_body_reordering(module, schemes, checking)?;
+        if checking.schedule.is_none() {
+            self.enable_module_body_reordering(module, schemes, checking)?;
+        }
         for (declaration, local) in module.declaration_order().iter().zip(local_instances) {
             if !local {
+                if matches!(
+                    declaration,
+                    ResolvedDeclarationIndex::Global(_)
+                        | ResolvedDeclarationIndex::Implementation(_)
+                ) && checking
+                    .schedule
+                    .as_ref()
+                    .ok_or_else(invalid_state)?
+                    .is_completed(*declaration)?
+                {
+                    continue;
+                }
                 self.step_module_body_checking(
                     module,
                     checked_interfaces,
@@ -22086,6 +22232,19 @@ pub(crate) fn check_effect_module_with_source_capture_for_test(
     )
 }
 
+/// Exposes only the internal scheduling selector. It neither checks a body nor
+/// establishes that an unavailable prerequisite makes the whole module invalid.
+#[cfg(test)]
+pub(crate) fn source_original_prerequisites_for_test(
+    module: &ResolvedModule,
+) -> Result<Vec<ResolvedDeclarationIndex>, TypeError> {
+    let mut elaborator = EffectElaborator::for_module(module)?;
+    let schemes = elaborator.checked_module_schemes(module.definitions())?;
+    let schedule =
+        module_bodies::ModuleBodySchedule::new(module, &schemes, &mut elaborator.type_work)?;
+    schedule.available_original_prerequisites(module, &mut elaborator.type_work)
+}
+
 fn check_module_with_budget_family<F: CoreLoweringFamily>(
     mut resolved: ResolvedModule,
     provider_codes: &ProviderCodeAvailability,
@@ -22197,9 +22356,35 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
             &mut elaborator.type_work,
             constraint_work,
         )?);
+        let mut started_bodies = elaborator.prepare_available_provider_group_before_source(
+            &resolved,
+            &mut schemes,
+            &checked_interfaces,
+            &interface_facts,
+            &checked_implementations,
+            constraint_work,
+        )?;
+        let source_registry = if let Some(local) = &elaborator.pending_local_provider {
+            let code = local.code()?;
+            let registry = resolved
+                .registry()
+                .checker_view(resolved.imported_facts(), &mut elaborator.type_work)
+                .map_err(resolved_build_error)?;
+            elaborator
+                .type_work
+                .charge(1)
+                .map_err(|_| type_resource())?;
+            Arc::new(
+                registry
+                    .with_source_prepared_provider_group(&resolved, code, &mut elaborator.type_work)
+                    .map_err(resolved_build_error)?,
+            )
+        } else {
+            Arc::clone(&elaborator.registry)
+        };
         let source_resources = source_resource::compile(
             &resolved,
-            &elaborator.registry,
+            &source_registry,
             &interface_facts,
             &schemes,
             &mut elaborator.type_work,
@@ -22219,6 +22404,7 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
             &checked_interfaces,
             &interface_facts,
             &checked_implementations,
+            &mut started_bodies,
             constraint_work,
         )?;
         let selector = elaborator.selection.as_ref().ok_or_else(invalid_state)?;
@@ -39868,6 +40054,7 @@ mod tests {
                 &[],
                 &[],
                 &[],
+                &mut Vec::new(),
                 &mut InterfaceConstraintBudget::default(),
             )
             .expect("recursive globals should elaborate");

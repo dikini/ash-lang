@@ -71,6 +71,28 @@ checks do not complete the shared-runtime regression checkpoint.
 
 ## Discoveries
 
+Source handler originals retain conditional row equations and exact callback-input
+coordinates until actual request captures are available. Their private
+continuation specializes to the complete client residual row; direct handler
+requests contribute separately to the outward row. Empty residuals and overlap
+with direct effects need distinct controls, since subtracting direct requests
+from the total can erase real client demand. Independent final Core derives both
+rows and each request capture from checked lexical/global roots before comparing
+copying claims. Private images scope unresolved original rows to their exact
+pending owner before interning or memoization, then re-admit originals and final
+copies. The current open-Delta and equal-substitution witnesses execute through
+generated hosts; they do not replace the full criterion's existing ownership,
+quarantine and failure evidence.
+
+Defining declaration slots require source-derived coordinates, not density of a
+claim-sorted table. A bounded syntax-only walk of resident original provenance
+reconstructs nominal category allocation and the separate written effect/native
+symbol order. The lexer and parser share a capped loan from the consuming
+validation ledger; every return debits spent work before handling its result.
+This is registry provenance checking, without path loading, source resolution,
+type inference or per-instance semantic replay. A coherent owner/access or
+effect/operation ID permutation cannot authenticate its own defining slot.
+
 TASK38 exposed common source-resource boundaries without requiring privileged
 lifecycle helpers or source-given forwarding. Exported source access kinds retain
 the original checked family header. Ordinary lexical-header duplicate checks

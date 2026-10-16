@@ -3561,7 +3561,8 @@ fn reconstruct_provider_handler_context(
     work: &mut TypeWorkBudget,
 ) -> Result<ConditionalHandlerAdmission, ValidationError> {
     let mut entry = super::provider::HandlerFragmentEntry::reconstruct(draft, module, work)?;
-    let row_recipe = super::provider::HandlerRowRecipeDraft::reconstruct(&entry, work)?;
+    let row_recipe =
+        super::provider::HandlerRowRecipeDraft::reconstruct(&entry.handler_graph(), work)?;
     entry.row_recipe = Some(&row_recipe);
     let owned_associations = super::provider::HandlerAssociations::reconstruct(module, work)?;
     let associations = owned_associations.borrowed(work)?;
@@ -12312,7 +12313,6 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         {
             return Ok(true);
         }
-        use super::provider::HandlerGraph;
         let entry = self
             .provider_handler_entry
             .map(|entry| entry.handler_graph())
@@ -12335,7 +12335,6 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         row: &EffectRow,
         id: NodeId,
     ) -> Result<bool, ValidationError> {
-        use super::provider::HandlerGraph;
         let entry = self
             .provider_handler_entry
             .map(|entry| entry.handler_graph())
@@ -12354,7 +12353,6 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     }
 
     fn conditional_function_relation(&self, id: NodeId) -> Result<bool, ValidationError> {
-        use super::provider::HandlerGraph;
         let entry = self
             .provider_handler_entry
             .map(|entry| entry.handler_graph())

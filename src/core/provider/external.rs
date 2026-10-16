@@ -978,7 +978,7 @@ impl AuthenticatedProviderExternals<'_> {
                 .map(ProviderSourceCaptureView::declared_methods)
         };
         super::super::capture::reconstruct_conditional_handler_capture(
-            entry,
+            &entry.handler_graph(),
             nodes,
             arena,
             correspondence,

@@ -83,7 +83,7 @@ pub(in crate::core) use external::{
 pub(crate) use handler::HandlerFragmentDraft;
 pub(in crate::core) use handler::RetainedHandlerStateAssociation;
 pub(in crate::core) use handler::{
-    HandlerAssociations, HandlerFragmentEntry, HandlerGraph, HandlerGraphDraft, HandlerGraphView,
+    HandlerAssociations, HandlerFragmentEntry, HandlerGraphDraft, HandlerGraphView,
 };
 #[cfg(test)]
 pub(crate) use handler::{HandlerMutation, mutate_handler_for_test};
@@ -1416,7 +1416,7 @@ pub(in crate::core) fn check_handler_native_storage_relations(
                 let Some(recipe) = entry.row_recipe else {
                     return Err(invalid(id));
                 };
-                if !recipe.discard_port(entry, id, work)? {
+                if !recipe.discard_port(&entry.handler_graph(), id, work)? {
                     return Err(invalid(id));
                 }
                 controlled
@@ -1783,7 +1783,7 @@ fn execute_flow_paths(
                         let Some(recipe) = entry.row_recipe else {
                             return Err(invalid(id));
                         };
-                        if !recipe.discard_port(entry, id, work)? {
+                        if !recipe.discard_port(&entry.handler_graph(), id, work)? {
                             return Err(invalid(id));
                         }
                         // Unit is a data-flow fact only. The actual completion

@@ -10,8 +10,7 @@ use super::{
 };
 use crate::{
     core::provider::{
-        HandlerGraph, HandlerGraphDraft, HandlerGraphView, HandlerPendingRows,
-        HandlerRowRecipeDraft,
+        HandlerGraphDraft, HandlerGraphView, HandlerPendingRows, HandlerRowRecipeDraft,
     },
     types::{EffectRow, TypeVariableId, same_effect_rows_with_budget},
 };
@@ -182,8 +181,8 @@ impl<'a> SourceHandlerGraph<'a> {
     }
 }
 
-impl HandlerGraph for SourceHandlerGraph<'_> {
-    fn handler_graph(&self) -> HandlerGraphView<'_> {
+impl SourceHandlerGraph<'_> {
+    pub(in crate::core) fn handler_graph(&self) -> HandlerGraphView<'_> {
         let EffectExprKind::Operation(EffectOperation::Handler(handler)) =
             &self.program.nodes[self.wrapper.value() as usize].kind
         else {

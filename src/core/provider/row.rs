@@ -320,7 +320,7 @@ impl HandlerRowRecipeDraft {
         }
     }
     pub(in crate::core) fn reconstruct(
-        entry: &impl super::HandlerGraph,
+        entry: &super::HandlerGraphView<'_>,
         work: &mut TypeWorkBudget,
     ) -> Result<Self, super::ValidationError> {
         let entry = &entry.handler_graph();
@@ -639,7 +639,11 @@ impl HandlerRowRecipeDraft {
         Ok(recipe)
     }
 
-    fn equation_for(&self, entry: &impl super::HandlerGraph, id: NodeId) -> Option<RowEquationId> {
+    fn equation_for(
+        &self,
+        entry: &super::HandlerGraphView<'_>,
+        id: NodeId,
+    ) -> Option<RowEquationId> {
         let entry = &entry.handler_graph();
         if self.template != entry.draft.template || id.arena() != entry.draft.program.arena {
             return None;
@@ -649,7 +653,7 @@ impl HandlerRowRecipeDraft {
 
     pub(in crate::core) fn deferred_node(
         &self,
-        entry: &impl super::HandlerGraph,
+        entry: &super::HandlerGraphView<'_>,
         id: NodeId,
         work: &mut TypeWorkBudget,
     ) -> Result<bool, super::ValidationError> {
@@ -663,7 +667,7 @@ impl HandlerRowRecipeDraft {
 
     pub(in crate::core) fn deferred_function(
         &self,
-        entry: &impl super::HandlerGraph,
+        entry: &super::HandlerGraphView<'_>,
         id: NodeId,
         work: &mut TypeWorkBudget,
     ) -> Result<bool, super::ValidationError> {
@@ -677,7 +681,7 @@ impl HandlerRowRecipeDraft {
 
     pub(in crate::core) fn permits_row_position(
         &self,
-        entry: &impl super::HandlerGraph,
+        entry: &super::HandlerGraphView<'_>,
         id: NodeId,
         row: &EffectRow,
         work: &mut TypeWorkBudget,
@@ -736,7 +740,7 @@ impl HandlerRowRecipeDraft {
 
     pub(in crate::core) fn discard_port(
         &self,
-        entry: &impl super::HandlerGraph,
+        entry: &super::HandlerGraphView<'_>,
         id: NodeId,
         work: &mut TypeWorkBudget,
     ) -> Result<bool, super::ValidationError> {
@@ -757,7 +761,7 @@ impl HandlerRowRecipeDraft {
 
     fn reconstruct_callable_bodies(
         &mut self,
-        entry: &impl super::HandlerGraph,
+        entry: &super::HandlerGraphView<'_>,
         work: &mut TypeWorkBudget,
     ) -> Result<(), super::ValidationError> {
         let entry = &entry.handler_graph();
@@ -896,7 +900,7 @@ impl HandlerRowRecipeDraft {
 
     fn reconstruct_pending_positions(
         &mut self,
-        entry: &impl super::HandlerGraph,
+        entry: &super::HandlerGraphView<'_>,
         work: &mut TypeWorkBudget,
     ) -> Result<(), super::ValidationError> {
         let entry = &entry.handler_graph();
@@ -1174,7 +1178,7 @@ pub(crate) fn reconstructed_row_inventory_for_test(
 ) -> Result<(usize, usize, usize), super::ValidationError> {
     let entry = super::HandlerFragmentEntry::reconstruct(draft, module, work)
         .inspect_err(|error| eprintln!("row inventory entry boundary: {error:?}"))?;
-    let recipe = HandlerRowRecipeDraft::reconstruct(&entry, work)
+    let recipe = HandlerRowRecipeDraft::reconstruct(&entry.handler_graph(), work)
         .inspect_err(|error| eprintln!("row inventory recipe boundary: {error:?}"))?;
     for port in &recipe.discards {
         let stored = super::node(&draft.program, port.node)?;
@@ -1202,7 +1206,7 @@ pub(crate) fn row_recipe_links_for_test(
     work: &mut TypeWorkBudget,
 ) -> Result<Vec<(NodeId, HandlerId, bool)>, super::ValidationError> {
     let entry = super::HandlerFragmentEntry::reconstruct(draft, module, work)?;
-    let recipe = HandlerRowRecipeDraft::reconstruct(&entry, work)?;
+    let recipe = HandlerRowRecipeDraft::reconstruct(&entry.handler_graph(), work)?;
     let mut result = Vec::new();
     for equation in &recipe.nodes {
         if let RowEquationOperation::Resume { output } = equation.operation {
@@ -1284,7 +1288,7 @@ pub(crate) fn has_actual_open_equation_for_test(
     work: &mut TypeWorkBudget,
 ) -> Result<bool, super::ValidationError> {
     let entry = super::HandlerFragmentEntry::reconstruct(draft, module, work)?;
-    let recipe = HandlerRowRecipeDraft::reconstruct(&entry, work)?;
+    let recipe = HandlerRowRecipeDraft::reconstruct(&entry.handler_graph(), work)?;
     Ok(recipe.direct.as_ref().unwrap().has_open_leaf())
 }
 

@@ -1057,7 +1057,9 @@ impl CheckedSourceResourceTemplate {
             .transpose()?;
         let recipe = handler_graph
             .as_ref()
-            .map(|graph| super::provider::HandlerRowRecipeDraft::reconstruct(graph, work))
+            .map(|graph| {
+                super::provider::HandlerRowRecipeDraft::reconstruct(&graph.handler_graph(), work)
+            })
             .transpose()?;
         if let Some(graph) = &mut handler_graph {
             graph.recipe = recipe.as_ref();
@@ -1077,7 +1079,7 @@ impl CheckedSourceResourceTemplate {
                     )));
                 }
                 super::capture::reconstruct_conditional_handler_capture(
-                    graph,
+                    &graph.handler_graph(),
                     &handler.nodes,
                     handler.arena,
                     &correspondence,
@@ -3328,7 +3330,6 @@ fn check_handler(
 ) -> Result<SourcePhaseCalls, ValidationError> {
     let mut facts = facts(work)?;
     facts.globals = Some(globals);
-    use super::provider::HandlerGraph;
     facts.handler_graph = graph.map(|graph| graph.handler_graph());
     let mut path = FlowPath::new(work)?;
     path.bind(
