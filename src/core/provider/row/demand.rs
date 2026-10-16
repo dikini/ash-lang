@@ -933,6 +933,7 @@ impl DirectDemandProof {
                 RowEquationOperation::Empty
                     | RowEquationOperation::Handler { .. }
                     | RowEquationOperation::ProviderScope { .. }
+                    | RowEquationOperation::CopyWindow
             ) {
                 for input in &recipe.edges[equation.inputs.clone()] {
                     let input = Self::copy(&proof.nodes[input.0], work)?;
@@ -958,6 +959,38 @@ impl DirectDemandProof {
                         expression =
                             proof.remove(&expression, interpretation.effect(), true, work)?;
                     }
+                }
+                EffectExprKind::Operation(EffectOperation::SourceCopyWindow(scope)) => {
+                    charge(
+                        work,
+                        scope
+                            .interpretations()
+                            .len()
+                            .checked_add(2)
+                            .ok_or_else(resource)?,
+                    )?;
+                    let body = recipe
+                        .node_equations
+                        .get(scope.body().index().map_err(|_| invalid(equation.node))?)
+                        .copied()
+                        .flatten()
+                        .ok_or_else(|| invalid(equation.node))?;
+                    let mut body = Self::copy(&proof.nodes[body.0], work)?;
+                    for interpretation in scope.interpretations() {
+                        body = proof.remove(&body, interpretation.effect(), true, work)?;
+                    }
+                    if !body.atoms.is_empty() {
+                        return Err(invalid(equation.node));
+                    }
+                    // The state expression executes before the native window.
+                    // Its requests are never interpreted by the window body.
+                    let state = recipe
+                        .node_equations
+                        .get(scope.state().index().map_err(|_| invalid(equation.node))?)
+                        .copied()
+                        .flatten()
+                        .ok_or_else(|| invalid(equation.node))?;
+                    expression = Self::copy(&proof.nodes[state.0], work)?;
                 }
                 EffectExprKind::Operation(EffectOperation::Discard(_)) => {
                     let RowEquationOperation::Discard { capture } = equation.operation else {
