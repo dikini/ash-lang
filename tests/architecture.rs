@@ -9054,6 +9054,10 @@ fn private_core_allowlist_excludes_scalar_interface_carriers() {
 fn private_core_layout_and_family_authentication_is_path_confined() {
     let allowed: &[(&str, &[&str])] = &[
         (
+            "with_registry_method_evidence_and_rewrite_work",
+            &["src/core/dialect.rs", "src/core/transform.rs"],
+        ),
+        (
             "EvidenceSlot",
             &["src/core/provider/external.rs", "src/core/validate.rs"],
         ),
@@ -9218,6 +9222,7 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
                     | "same_interface_application_with_budget"
                     | "target_requirement"
                     | "with_registry_and_method_evidence"
+                    | "with_registry_method_evidence_and_rewrite_work"
                     | "with_registry_method_evidence_and_type_work"
             ),
             // These names reconstruct canonical imported catalogs and authenticate
@@ -9376,6 +9381,7 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
                     | "method_evidence_anchors"
                     | "requirement"
                     | "with_registry_and_method_evidence"
+                    | "with_registry_method_evidence_and_rewrite_work"
             ),
             _ => false,
         }
