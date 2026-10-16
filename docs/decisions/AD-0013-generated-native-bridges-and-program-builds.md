@@ -80,7 +80,7 @@ owners and for native preparation and startup. The accepted policy is:
 
 ```text
 preparation gas = 51 * (admitted source UTF8 bytes + validated main Core nodes)
-source gas      = 200 * (canonical loaded source UTF8 bytes, including builtins)
+source gas      = 300 * (canonical loaded source UTF8 bytes, including builtins)
 final gas       = 161 * (the same canonical source UTF8 closure)
 Core gas        = 345 * (the same canonical source UTF8 closure)
 startup gas     = 22 * (canonical image bytes + canonical expected-fact bytes)
@@ -89,7 +89,7 @@ startup gas     = 22 * (canonical image bytes + canonical expected-fact bytes)
 Source checking sizes the complete canonical loaded source closure before
 checking. Count each loaded module once, including builtin sources, rather than
 import edges or aliases. Pay one unit per source and one for the census in a
-finite source-count-derived bootstrap, then carry that work inside `200*S`
+finite source-count-derived bootstrap, then carry that work inside `300*S`
 through every module, source copy, closed entry and retained provenance. This is
 the total allowance; the historical ten-percent deficit does not apply.
 Final elaboration and independent compiler Core each pay their own identical
@@ -128,7 +128,7 @@ measured scope, errors and incomplete final SQLite coverage; it is informative.
 Require focused connected normal-host and adversarial tests and independent
 review of the implementation before transferring its verification.
 
-On 2026-10-16, the project lead adopted source `200S` under the user's explicit
+On 2026-10-16, the project lead first adopted source `200S` under the user's explicit
 delegation to choose recommended autonomous fixes. The unchanged 283-byte
 recursive-hook regression required 42,836 units through complete Source
 checking, including its paid census. The 25% reserve rule gives coefficient 190;
@@ -138,6 +138,16 @@ Source coefficient; the other phase policies and checks above remain unchanged.
 [DN-0050](../design/DN-0050-native-program-gas-estimates.md) records the measured
 scope and historical comparisons. Normal execution, implementation review and
 the integrated checkpoint remain separate verification obligations.
+
+The project lead subsequently selected `300S` under that same delegated human
+judgment after independent review of the larger product SQLite Source-only
+measurement. The unchanged 39,033-byte constraint workload requires 8,510,624
+units including its six paid census charges. Applying the same 25% reserve rule
+gives a minimum coefficient of 273; 300 is the conservative rounded choice.
+This changes only the Source coefficient. The finite diagnostic stopped before
+linking, Final/Core checking or native execution; it is not a normal-policy or
+whole-caller pass. Normal affected callers, implementation review, retaining
+verification and the integrated checkpoint retain their separate gates.
 
 ### Optional C/header verification
 

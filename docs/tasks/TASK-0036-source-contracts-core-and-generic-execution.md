@@ -673,6 +673,18 @@ on admitted i64 image payloads. Checked foreign literals now supply signed value
 and the complete u64 range directly, while ordinary negative-literal expression
 syntax and general arbitrary-precision image literals remain outside this slice.
 
+A complete product SQLite Source observation exceeded the earlier `200S`
+estimate while preserving the canonical source census and cumulative meter.
+The constraint case requires 8,510,624 units for 39,033 bytes, including census;
+its Source-only diagnostic stopped before linking, Final/Core or native work.
+After independent accounting review, the project lead selected `300S` under the
+user's delegated judgment, using the existing 25% reserve rule and conservative
+rounding. [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md)
+governs this Source-only coefficient revision; [DN-0050](../design/DN-0050-native-program-gas-estimates.md)
+records the fit and limitations. No predicate, witness, cumulative carry,
+other allowance, depth or stack policy changes. The diagnostic does not close
+normal caller, retained verification or checkpoint obligations.
+
 ## Deviations
 
 None authorized. Return concrete semantic gaps to CP-0022 instead of resolving

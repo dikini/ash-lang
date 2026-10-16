@@ -1,7 +1,7 @@
 # DN-0050: Native program gas estimates
 
 - ID: `DN-0050`
-- Status: calibration record; `200S` source, `161S` final elaboration, `345S` Core, `51P` preparation and `22B` startup accepted
+- Status: calibration record; `300S` source, `161S` final elaboration, `345S` Core, `51P` preparation and `22B` startup accepted
 - Related: [TASK-0040](../tasks/TASK-0040-ash-copying-sqlite-library.md),
   [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md),
   [CP-0022](../proposals/CP-0022-ash-authored-foreign-interfaces.md)
@@ -24,7 +24,7 @@ mechanism, normal-host and quality checks. The human then approved startup
 The current formulas are:
 
 ```text
-source checking = 200 * canonical loaded source UTF8 bytes, including builtins
+source checking = 300 * canonical loaded source UTF8 bytes, including builtins
 preparation     = 51 * (admitted source UTF8 bytes + validated main Core nodes)
 final elaboration = 161 * canonical loaded source UTF8 bytes, including builtins
 independent Core  = 345 * canonical loaded source UTF8 bytes, including builtins
@@ -72,7 +72,7 @@ prefixes both ended at 42,836. These are cumulative, not additive. Resolution
 remained separate at 253 of 327,680. The observer stopped before module linking,
 Final/Core checking or evaluation. This is not a normal result-`13` pass.
 
-| Source fitting row | Canonical S | Complete reported work | Work / S | Accepted `200S` forecast |
+| Source fitting row | Canonical S | Complete reported work | Work / S | Historical accepted `200S` forecast |
 | --- | ---: | ---: | ---: | ---: |
 | Persistence / 517 | 42,851 | 2,946,584 | 68.763483 | 8,570,200 |
 | Repeated / 539 | 37,603 | 1,045,628 | 27.807037 | 7,520,600 |
@@ -99,6 +99,49 @@ floor, extra ten-percent margin or static overall cap is added. Final/Core,
 preparation, startup and runtime metrics do not participate in this Source fit.
 Normal hook execution, focused policy verification and independent implementation
 review remain separate from this diagnostic and the required fresh checkpoint.
+
+## Product SQLite Source observation and delegated revision
+
+At PR #34's `f26dabe2c4d9` input, the normal full SQLite-library target passed 30
+cases and refused four during Source checking. These are incomplete work
+observations, not measured full demands. The constraint case admitted five
+canonical sources totaling 39,033 UTF8 bytes. Its six census charges remained
+inside the normal `200S` total of 7,806,600. Independent accounting review found
+no reset, top-up, missing census or double debit; nested original-admission,
+CST and row measurements are included in their parent totals.
+
+Run 891 used the byte-identical constraint Source closure with one disclosed
+finite Source-only total of 31,226,400, four times normal. Other allowances,
+stack, depth and checks remained unchanged. Complete Source work was 8,510,624:
+module checking ended at 8,510,573, then the closed-entry and retained-provenance
+work brought the same cumulative ledger to 8,510,624. The observer stopped
+before linking, Final/Core checking, evaluation or native execution. All
+temporary inputs were restored. The result and retained binary are recorded in
+`task36-sqlite-source-demand891-complete-result-20261016.json`.
+
+| Complete Source fitting group | Observations | Maximum work / S |
+| --- | ---: | ---: |
+| Historical rows above, at their distinct code/accounting pins | 6 | 151.363958 |
+| Current normal complete reports in run 886 | 35 | 128.169520 |
+| Current constraint Source-only measurement / 891 | 1 | 218.036636 |
+
+All 35 complete run-886 reports participate, including cases with more than one
+Source compilation. The literal table is
+`task36-source-demand891-fit-observations-corrected-20261016.json`. Failed,
+incomplete totals and Final/Core/preparation/startup/native costs do not enter
+this Source fit. There is no holdout or universal complexity guarantee.
+
+The existing 25% engineering-reserve rule gives
+`ceil(1.25 * 218.036636) = 273`. After independent measurement/accounting review,
+the project lead selected the conservative rounded `300S` under the user's
+delegated autonomous judgment; this was not a direct human choice of 300.
+It gives this constraint case 11,709,900 units, 37.59% above measured demand.
+Only the Source coefficient changes. Paid canonical sizing and cumulative
+carry, overflow and terminal refusal remain exact; no floor, intercept, reset,
+extra ten-percent margin or changes to other phase/depth/stack checks are added.
+The other three exhausted demands were not completed by this measurement.
+Normal affected callers, implementation review, retention and the fresh
+checkpoint remain separate evidence obligations.
 
 ## Complete persistence startup and accepted revision
 
