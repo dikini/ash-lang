@@ -734,12 +734,20 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/foreign/source_runtime.rs::NativeOwnerGuard.$alias", FieldSourceRuntimeOwnerShared),
     kind_site!("src/foreign/source_runtime.rs::NativeByteAccess.$alias", FieldSourceRuntimeOwnerShared, Borrowed),
     kind_site!("src/foreign/source_runtime.rs::NativeOwnerGuardReady.$alias", FieldSourceRuntimeOwnerShared),
-    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_source_resource_definitions::$block_161_0_3::$block_161_0_3_6::Effects.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
-    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_source_resource_definitions::$block_161_0_3::$block_161_0_3_6::Handlers.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
-    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_source_resource_definitions::$block_161_0_3::$block_161_0_3_6::Provider.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
+    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_source_resource_definitions::$block_162_0_3::$block_162_0_3_6::Effects.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
+    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_source_resource_definitions::$block_162_0_3::$block_162_0_3_6::Handlers.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
+    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_source_resource_definitions::$block_162_0_3::$block_162_0_3_6::Provider.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolve.rs::ResolvedDeclarations.source_resources", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolve.rs::ResolvedSourceResourceBuffer.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolve.rs::Resolver.source_foreign_libraries", FieldForeignPreparedKinds, Shared),
+    // Optional header verification borrows original passive facts; it carries no
+    // executable contract or new recursive owner. Source failures reuse the
+    // existing iterative pipeline diagnostic owner below.
+    kind_site!("src/check_ffi.rs::CheckedForeignModule.libraries", FieldForeignPreparedKinds, Shared),
+    kind_site!("src/check_ffi.rs::Declaration.library", FieldForeignPreparedKinds, Borrowed),
+    kind_site!("src/check_ffi.rs::Declaration.module", FieldForeignPreparedKinds, Borrowed),
+    kind_site!("src/check_ffi.rs::DeclarationIndex.0", FieldForeignPreparedKinds, Borrowed),
+    kind_site!("src/check_ffi.rs::CheckFailure.source", FieldTransientCarrierRetentionPreservedCarrierPipelineObservationPipelineTypeObservation),
     kind_site!("src/resolve.rs::SourceOwnerCandidate.$alias", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork, Mixed),
     kind_site!("src/resolve.rs::SourceOwnerCandidateBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork, Mixed),
     kind_site!("src/resolved.rs::$impl_ResolvedRegistry::$fn_with_image_interface_owner_definitions::Pending.0", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree),

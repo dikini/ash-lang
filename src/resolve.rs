@@ -1561,9 +1561,26 @@ pub(crate) fn resolve_module_with_budget(
     type_work: &mut TypeWorkBudget,
     constraint_work: &mut InterfaceConstraintBudget,
 ) -> Result<ResolvedModule, ResolveModuleError> {
-    let admission =
-        resolve_module_names_with_budget(loaded, dependencies, type_work, constraint_work)
-            .map_err(ResolveModuleError::Resolution)?;
+    resolve_module_with_foreign_catalog(loaded, dependencies, type_work, constraint_work, None)
+}
+
+/// Optional authoring-only retention of the original passive declarations.
+/// The driver exposes this catalogue only after the complete compilation succeeds.
+pub(crate) fn resolve_module_with_foreign_catalog(
+    loaded: &LoadedModule,
+    dependencies: &[DependencyExports<'_>],
+    type_work: &mut TypeWorkBudget,
+    constraint_work: &mut InterfaceConstraintBudget,
+    catalogue: Option<&mut Vec<Arc<crate::foreign::source_contract::PreparedForeignLibrary>>>,
+) -> Result<ResolvedModule, ResolveModuleError> {
+    let admission = resolve_module_names_with_budget(
+        loaded,
+        dependencies,
+        type_work,
+        constraint_work,
+        catalogue,
+    )
+    .map_err(ResolveModuleError::Resolution)?;
     finish_module_resolution(loaded, dependencies, type_work, admission)
 }
 
@@ -1614,6 +1631,7 @@ fn resolve_module_names_with_budget(
     dependencies: &[DependencyExports<'_>],
     type_work: &mut TypeWorkBudget,
     constraint_work: &mut InterfaceConstraintBudget,
+    catalogue: Option<&mut Vec<Arc<crate::foreign::source_contract::PreparedForeignLibrary>>>,
 ) -> Result<ResolvedModuleAdmission, ResolveError> {
     let module = loaded.id();
     let surface = loaded.surface();
@@ -1855,6 +1873,28 @@ fn resolve_module_names_with_budget(
             implementations,
             definitions,
         ) = declarations.into_parts();
+        if let Some(catalogue) = catalogue {
+            resolver
+                .type_work
+                .charge(resolver.source_foreign_libraries.len())
+                .map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        surface.span,
+                        "foreign verification catalogue retention exceeded its work budget",
+                    )
+                })?;
+            catalogue
+                .try_reserve_exact(resolver.source_foreign_libraries.len())
+                .map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        surface.span,
+                        "foreign verification catalogue storage could not be reserved",
+                    )
+                })?;
+            catalogue.extend(resolver.source_foreign_libraries.iter().map(Arc::clone));
+        }
         Ok(ResolvedModuleAdmission {
             parts: ResolvedModuleParts {
                 module,
@@ -16445,6 +16485,7 @@ mod tests {
             &dependencies,
             &mut type_work,
             &mut constraint_work,
+            None,
         )
         .map(|admission| ResolvedModule::new(admission.parts));
         (result, constraint_work.used())
@@ -16484,6 +16525,7 @@ mod tests {
             &dependencies,
             &mut type_work,
             &mut constraint_work,
+            None,
         )
         .map(|admission| ResolvedModule::new(admission.parts));
         (result, type_work.used())

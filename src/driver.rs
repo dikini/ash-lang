@@ -23,11 +23,14 @@ use crate::{
     },
     parser::{ParseDiagnostic, ProjectionError, ResourceFailure},
     pattern::UsefulnessBudget,
-    resolve::{DependencyExports, ResolveError, ResolveModuleError, resolve_module_with_budget},
+    resolve::{DependencyExports, ResolveError, ResolveModuleError},
     resolved::ResolvedModuleProgram,
     source::{SourceError, SourceFile, SourceId, Span},
     types::{IterativeTypeOwner, Type, TypeWorkBudget},
 };
+
+#[cfg(test)]
+use crate::resolve::resolve_module_with_budget;
 
 /// Tool-facing inputs for one modular Ash execution.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -815,6 +818,35 @@ pub fn compile_path(configuration: RunConfiguration) -> Result<CompiledProgram, 
     )
 }
 
+/// Authoring-only catalogue. No partial compilation or executable binding is
+/// exposed; the retained Arcs are the originals used by ordinary admission.
+pub(crate) fn compile_path_for_ffi(
+    configuration: RunConfiguration,
+) -> Result<(CompiledProgram, Vec<crate::check_ffi::CheckedForeignModule>), FileFailure> {
+    let graph = load_module_graph(&configuration.entry, &configuration.roots)
+        .map_err(FileFailure::Graph)?;
+    let mut catalogue = Vec::new();
+    let mut work = crate::compiler_work::CompilationWork::default();
+    let result = compile_graph_with_report(
+        &graph,
+        &mut InterfaceConstraintBudget::default(),
+        validate_interface_evidence_with_budget,
+        validate_modular_core,
+        true,
+        ProvenanceRetention::Retain,
+        &mut work,
+        Some(&mut catalogue),
+    );
+    match result {
+        Ok(program) => Ok((program, catalogue)),
+        Err(FileFailure::Pipeline(mut context)) => {
+            context.sources = graph.into_sources();
+            Err(FileFailure::Pipeline(context).with_compilation_work(work))
+        }
+        Err(failure) => Err(failure.with_compilation_work(work)),
+    }
+}
+
 fn compile_path_for_execution(
     configuration: RunConfiguration,
 ) -> Result<CompiledProgram, FileFailure> {
@@ -1178,10 +1210,15 @@ where
         select_effect_core,
         retention,
         &mut compilation_work,
+        None,
     )
     .map_err(|failure| failure.with_compilation_work(compilation_work))
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the optional authoring consumer shares the complete compiler pipeline without changing ordinary paths"
+)]
 fn compile_graph_with_report<I, V>(
     graph: &ModuleGraph,
     constraint_work: &mut InterfaceConstraintBudget,
@@ -1190,6 +1227,7 @@ fn compile_graph_with_report<I, V>(
     select_effect_core: bool,
     retention: ProvenanceRetention,
     compilation_work: &mut crate::compiler_work::CompilationWork,
+    mut foreign_catalogue: Option<&mut Vec<crate::check_ffi::CheckedForeignModule>>,
 ) -> Result<CompiledProgram, FileFailure>
 where
     I: FnOnce(
@@ -1244,17 +1282,32 @@ where
             .collect::<Result<Vec<_>, _>>()
             .map_err(FileFailure::from)?;
         let resolution_phase = crate::calibration::Phase::start("resolution");
-        let resolved = resolve_module_with_budget(
+        let mut libraries = Vec::new();
+        let resolved = crate::resolve::resolve_module_with_foreign_catalog(
             module,
             &dependencies,
             &mut resolution_type_work,
             constraint_work,
+            foreign_catalogue.as_ref().map(|_| &mut libraries),
         )
         .map_err(|error| match error {
             ResolveModuleError::Resolution(error) => PipelineFailure::Resolution(error),
             ResolveModuleError::Kind(error) => PipelineFailure::Kind(error),
         })
         .map_err(FileFailure::from)?;
+        if let Some(catalogue) = foreign_catalogue.as_deref_mut() {
+            crate::check_ffi::retain_module(
+                catalogue,
+                module,
+                libraries,
+                &mut resolution_type_work,
+            )
+            .map_err(|()| {
+                FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+                    crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+                )))
+            })?;
+        }
         resolution_phase.finish(
             Some(resolution_type_work.used()),
             crate::types::TYPE_WORK_LIMIT,

@@ -47,6 +47,23 @@ pins, commands and native observations; one Cargo job and final integrated gate.
 
 ## Discoveries
 
+The optional header checker retains original prepared library allocations from
+the canonical compiler pass, including unused and constant-only libraries. It
+returns this authoring catalogue only after complete source, linking and Core
+checking. Ordinary run/build paths do not collect it. Versioned mappings name
+defining source paths and exact library/member roles; imported aliases and equal
+donors cannot replace them. A separate finite authoring ledger pays mapping,
+index and C emission work using the existing structural work guard.
+
+C checks independently assert the authored integer category/width/sign, address
+families, exact native prototypes and mathematical constant/non-callable sentinel
+values. GNU C syntax-only compilation produces no object and never evaluates
+Ash. Mappings and output are absent from runtime facts, images and Rust bridge
+preparation. The [tool guide](../tools/ash.md#optional-c-header-checking) describes
+the explicit entry, mapping/header/compiler inputs, retained diagnostics and
+target limitations. These implementation findings do not certify a binary or
+change the source contract's validity, retention or consumption assumptions.
+
 The private image carries associated method spellings, lexical forwarding,
 complete applications, helper occurrence selections and original evidence
 anchors. Executable forwarding records are reconstructed and independently

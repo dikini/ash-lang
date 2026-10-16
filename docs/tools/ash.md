@@ -156,8 +156,71 @@ minimal allocation/usage/release lifecycle. The ordinary source buffer library
 supplies checked zeroed bytes and scoped access through the same generated path.
 The source [copying SQLite library](../../libraries/README.md#copying-sqlite)
 uses explicit native inputs, source protocol and guarded temporary copy windows.
-The separate optional `ash check-ffi` authoring tool remains unimplemented. These
-milestone additions have not yet integrated into Main.
+These milestone additions have not yet integrated into Main.
+
+## Optional C header checking
+
+`check-ffi` checks authored foreign declarations against explicitly supplied C
+headers. Its input is a valid entry with `main` which imports the bindings to
+check. It runs the complete source compiler without evaluating the entry.
+
+```sh
+ash check-ffi --header binding.h --mapping mapping.json --compiler cc \
+    --output checks --root ffi=libraries entry.ash
+```
+
+The current authoring compiler is GNU C 14 or later for
+`x86_64-unknown-linux-gnu`. Other target requests refuse. Headers may repeat;
+other check options may appear once and must precede the entry. Existing
+diagnostic format/locale and root options apply. Header/tool errors exit 2;
+source rejection keeps its source diagnostic and exit status.
+
+The mapping is JSON version 1. Each declaration selects its **defining source
+path**, library, role and member, rather than an importing alias or an equal
+donor. Paths in the JSON are UTF-8 and relative to the mapping file. All foreign
+members in the loaded closure require exactly one mapping, including private,
+unused and constant-only declarations. Profile directives need no mapping.
+
+```json
+{
+  "version": 1,
+  "declarations": [
+    {"module":"native.ash", "library":"C", "kind":"representation",
+     "member":"CInt", "c_type":"int"},
+    {"module":"native.ash", "library":"C", "kind":"symbol",
+     "member":"Abs", "c_name":"abs", "parameters":["int"], "result":"int"}
+  ]
+}
+```
+
+`representation`, `owner` and `access` take `c_type`. `constant` and `sentinel`
+take a `c_name` identifier; a helper header can define a macro for a C expression.
+`symbol` takes its original authored native `c_name`, ordered physical
+`parameters` and `result`. Source generics and logical source arguments do not
+add C parameters. Types accept C type words, qualifiers and pointer stars; use a
+header typedef for complex types, including function pointers. Arbitrary C
+fragments, missing/duplicate/wrong-role mappings and unsupported symbol spellings
+refuse before the compiler runs.
+
+Checks cover the admitted integer category/width/sign and `size_t`, object/byte
+pointer families, owner result/output slots, offsets and view/extent roles,
+fixed non-callable function-address sentinels, exact function prototypes, and
+mathematical constant/sentinel values. Same-width floating types cannot stand in
+for integer representations. A pointer mapping checks ABI facts and grants no
+Ash owner, access, lifetime or callback permission.
+
+The output directory contains `check-ffi.c`, `check-ffi.log` and
+`check-ffi-declarations.json`. Generated `ash-ffi-declaration-N` locations map to
+the original compiled source path, byte range, library, role and member in that
+index. Mismatch diagnostics retain the log and, when the C compiler identifies a
+generated declaration, its original source label. The tool invokes the selected
+compiler with explicit arguments, including `-std=gnu11 -m64 -fsyntax-only
+-Wstrict-prototypes -Werror`; it emits no object and performs no native calls.
+
+Verification mappings cannot supply missing executable facts, change a Rust
+bridge or select ownership behavior. Ordinary authored bindings build without
+headers or check output. Header success does not certify a separately supplied
+binary or its validity, retention and consumption assumptions.
 
 ## Diagnostic formats and locales
 
