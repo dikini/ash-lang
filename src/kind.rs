@@ -2591,6 +2591,59 @@ impl<'a> KindEnvironments<'a> {
         Ok(())
     }
 
+    /// Retains a sealed Source owner in a body-free summary environment.
+    /// The summary authenticates the original owner before installing its
+    /// nominal mirror; ordinary nominal kinds supply no Owner authority.
+    pub(crate) fn insert_source_owner_nominal(
+        &mut self,
+        owner: &'a crate::foreign::source_owner::CheckedForeignOwner,
+        parameters: &'a [crate::resolved::ResolvedTypeVariable],
+        origin: Span,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), KindFailure> {
+        let original = owner.parameters().as_ref();
+        budget.charge(original.len()).map_err(|_| {
+            KindFailure::resource(origin, "owner kind selection exceeded its work budget")
+        })?;
+        if original.len() != parameters.len() {
+            return Err(KindFailure::internal_cause(
+                origin,
+                KindInternalCause::LinkedValueType,
+            ));
+        }
+        for (left, right) in original.iter().zip(parameters) {
+            if !crate::resolved::same_checker_type_variable_with_budget(left, right, budget)
+                .map_err(|_| {
+                    KindFailure::resource(
+                        origin,
+                        "owner kind correspondence exceeded its work budget",
+                    )
+                })?
+            {
+                return Err(KindFailure::internal_cause(
+                    origin,
+                    KindInternalCause::LinkedValueType,
+                ));
+            }
+        }
+        self.insert_nominal(owner.nominal(), parameters, origin, budget)?;
+        if original
+            .iter()
+            .any(|parameter| parameter.kind == Kind::EffectRow)
+        {
+            budget.charge(1).map_err(|_| {
+                KindFailure::resource(origin, "owner kind retention exceeded its work budget")
+            })?;
+            if !self.row_foreign_owners.contains_key(&owner.nominal()) {
+                self.row_foreign_owners.try_reserve(1).map_err(|_| {
+                    KindFailure::resource(origin, "owner kind storage could not be reserved")
+                })?;
+                self.row_foreign_owners.insert(owner.nominal(), original);
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn insert_row_resource_family(
         &mut self,
         family: NominalTypeId,

@@ -11104,14 +11104,23 @@ impl ExportSummary {
                 &mut environments,
                 type_work,
             )?;
-            environments
-                .insert_nominal(
+            match source_owners.get(&nominal.id) {
+                Some(crate::foreign::source_access::CheckedForeignNominal::Owner(owner)) => {
+                    environments.insert_source_owner_nominal(
+                        owner,
+                        &nominal.parameters,
+                        nominal.origin.primary_span(),
+                        type_work,
+                    )
+                }
+                _ => environments.insert_nominal(
                     nominal.id,
                     &nominal.parameters,
                     nominal.origin.primary_span(),
                     type_work,
-                )
-                .map_err(map_summary_kind_failure)?;
+                ),
+            }
+            .map_err(map_summary_kind_failure)?;
             if let (Some(representation), Some(provenance)) =
                 (representation, representation_provenance)
             {
@@ -11206,14 +11215,23 @@ impl ExportSummary {
                 &mut environments,
                 type_work,
             )?;
-            environments
-                .insert_nominal(
+            match source_owners.get(&nominal.id) {
+                Some(crate::foreign::source_access::CheckedForeignNominal::Owner(owner)) => {
+                    environments.insert_source_owner_nominal(
+                        owner,
+                        &nominal.parameters,
+                        nominal.origin.primary_span(),
+                        type_work,
+                    )
+                }
+                _ => environments.insert_nominal(
                     nominal.id,
                     &nominal.parameters,
                     nominal.origin.primary_span(),
                     type_work,
-                )
-                .map_err(map_summary_kind_failure)?;
+                ),
+            }
+            .map_err(map_summary_kind_failure)?;
             if let (Some(representation), Some(provenance)) = (
                 nominal.representation.as_ref(),
                 nominal.representation_provenance.as_ref(),
