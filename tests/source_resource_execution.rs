@@ -68,6 +68,40 @@ fn owner_with_scalar_teardown_result() -> String {
 }
 
 #[test]
+fn source_control_open_delta_executes_with_type_only_native_owner() {
+    generated_owner_program_with_helpers(
+        include_str!("fixtures/source-owner/owner.ash"),
+        include_str!("fixtures/source-owner/control_open_delta_entry.ash"),
+        Some(include_str!("fixtures/source-owner/control_callbacks.ash")),
+        "(Completed(MissingRow, Closed), 42)",
+        "acquire:42\nrelease:42\n",
+    );
+}
+
+#[test]
+fn source_control_equal_substitution_keeps_distinct_capture_demands() {
+    generated_owner_program_with_helpers(
+        include_str!("fixtures/source-owner/owner.ash"),
+        include_str!("fixtures/source-owner/control_capture_entry.ash"),
+        Some(include_str!("fixtures/source-owner/control_capture.ash")),
+        "(Completed((MissingRow, MissingRow), Closed), 42)",
+        "acquire:42\nacquire:8\nrelease:8\nrelease:42\n",
+    );
+}
+
+#[test]
+fn source_control_qualified_resource_identity_before_later_formal() {
+    let entry = format!(
+        "import owner as Donor\n{}\nmain : Unit -> Donor.Scope<Unit, Unit, Int>\nmain () = resource Donor.Probe<{{}}, ImportedFresh, {{}}> owner = 42 {{\n    42\n}}\ninterface KeepConfig<A> {{\n    keepConfig : A -> A\n}}\n",
+        include_str!("fixtures/source-owner/owner.ash"),
+    );
+    let fixture = Fixture::new(&entry);
+    compile_path(fixture.configuration()).expect(
+        "an imported resource's fresh identity precedes a later declaration formal and reaches independent Core",
+    );
+}
+
+#[test]
 fn pr27_implicit_finish_tracks_replaced_private_payload_captures() {
     let owner = include_str!("fixtures/source-owner/replaced_payload_owner.ash");
     let entry = r#"import owner as Owner

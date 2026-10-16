@@ -12,6 +12,7 @@ use std::ops::Deref;
 pub use crate::syntax_resource::{ResourceFailure, SYNTAX_WORK_LIMIT};
 pub use cst::{ConcreteElement, ConcreteNode, ConcreteTree, InternalReason};
 pub use event::Event;
+pub(crate) use project::structural_weight as source_structural_weight;
 pub use project::{ProjectionError, project_module};
 
 use crate::{

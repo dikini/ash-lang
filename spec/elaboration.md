@@ -64,7 +64,11 @@ retained registry fact, empty row, exact `Int -> Call<Int>` signature and
 original provenance. Constructor-aware capture treats success as the original independent
 `Int` and failure as an opaque nullary error. The matching-compiler private
 image retains those facts and their shared codec once, reconstructs unchecked nodes,
-and independently validates them without reopening or checking source.
+and independently validates them without reopening source paths or running source
+semantic checking. Registry provenance admission may perform a paid, bounded
+syntax-only walk of resident embedded defining text to reconstruct original
+declaration coordinates. This supplies no resolution, type inference,
+implementation selection or executable authority.
 
 An ordinary native entry lowers to an explicit Effect Core interpretation of
 the generated entry application and interprets only owner-free scalar or void

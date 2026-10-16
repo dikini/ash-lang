@@ -4,7 +4,7 @@
 use crate::{module::ModuleId, source::SourceFile, types::TypeWorkBudget};
 use std::sync::Arc;
 
-const PREPARATION_PER_CELL: usize = 51;
+const PREPARATION_PER_CELL: usize = 125;
 const STARTUP_PER_BYTE: usize = 22;
 
 fn preparation_total(source_bytes: usize, main_nodes: usize) -> Result<usize, ()> {
@@ -61,12 +61,12 @@ mod tests {
         let source =
             Arc::new(SourceFile::new("gas.ash", "main : Unit -> Int\nmain () = 42\n").unwrap());
         let sources = [(ModuleId::new(0), source)];
-        let total = 51 * (sources[0].1.text().len() + 5);
+        let total = 125 * (sources[0].1.text().len() + 5);
         let admitted = preparation(&sources, 5).unwrap();
         assert_eq!((admitted.used(), admitted.limit()), (2, total));
         assert!(preparation(&[], 0).is_err());
         assert!(preparation_total(usize::MAX, 1).is_err());
-        assert!(preparation_total(usize::MAX / 51 + 1, 0).is_err());
+        assert!(preparation_total(usize::MAX / 125 + 1, 0).is_err());
         assert!(startup(usize::MAX, 1).is_err());
         assert!(startup(usize::MAX / 22 + 1, 0).is_err());
         assert_eq!(startup(10, 20).unwrap().limit(), 660);

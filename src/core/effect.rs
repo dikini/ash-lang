@@ -1780,6 +1780,26 @@ impl CoreBuilder<EffectOperationFamily> {
         Ok(())
     }
 
+    pub(crate) fn retain_source_resource_rows(
+        &mut self,
+        id: NodeId,
+        rows: Arc<super::provider::ResolvedProviderHandlerRows>,
+    ) -> Result<(), super::BuildError> {
+        self.compiler_node_kind(id)?;
+        self.type_work
+            .charge(1)
+            .map_err(|_| super::BuildError::TypeWorkExceeded)?;
+        let Some(stored) = self.nodes.get_mut(id.index()?) else {
+            return Err(super::BuildError::InvalidNodeId);
+        };
+        let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+            &mut stored.kind
+        else {
+            return Err(super::BuildError::InvalidPayload);
+        };
+        scope.retain_handler_rows(rows, &mut self.type_work)
+    }
+
     /// Finalizes instance claims after enclosing control equations are solved,
     /// before their output rows can feed the resume fixed point.
     pub(crate) fn finalize_source_resource_instances(

@@ -3674,6 +3674,7 @@ fn local_original_completion_requires_exact_ordered_allocations_and_budget() {
             &mut TypeWorkBudget::unbounded(),
             &mut UsefulnessBudget::default(),
             &mut InterfaceConstraintBudget::default(),
+            TypeWorkBudget::default().limit(),
         )
         .unwrap()
         .unwrap()
@@ -3815,6 +3816,7 @@ fn retained_state_associations_are_checked_at_the_original_template_view() {
             &mut TypeWorkBudget::unbounded(),
             &mut UsefulnessBudget::default(),
             &mut InterfaceConstraintBudget::default(),
+            TypeWorkBudget::default().limit(),
         )
         .unwrap()
         .unwrap()
@@ -4132,6 +4134,7 @@ fn prepared_original_views_preserve_publication_routes_and_budget_boundaries() {
         &mut TypeWorkBudget::unbounded(),
         &mut UsefulnessBudget::default(),
         &mut InterfaceConstraintBudget::default(),
+        TypeWorkBudget::default().limit(),
     );
     if let Ok(Some(pending)) = pending {
         let pending_owner =

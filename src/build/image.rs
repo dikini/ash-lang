@@ -188,6 +188,12 @@ enum TypeTag {
         known: u32,
         tail: Option<TypeVariableIdentity>,
     },
+    // Only the exact registered pending owner of an immutable source handler
+    // may encode/decode this tag. Ordinary executable/fact rows still refuse it.
+    SourcePendingRow {
+        known: u32,
+        identity: u32,
+    },
     Int,
     Bool,
     Unit,
@@ -672,6 +678,7 @@ struct Encoder<'a> {
         EncodedSourceTemplate,
     >,
     source_views: HashMap<*const crate::core::source_resource::CheckedSourceResourceTemplate, u32>,
+    source_pending_rows: std::collections::HashSet<crate::types::InferenceVariableId>,
     source_declaration_catalogs: HashMap<
         *const crate::core::dialect::MethodEvidenceCatalog,
         (Arc<crate::core::dialect::MethodEvidenceCatalog>, u32),
@@ -746,6 +753,7 @@ fn encode_program<'work, F: crate::core::dialect::CoreOperationFamily>(
         source_templates: HashMap::new(),
         source_views: HashMap::new(),
         source_declaration_catalogs: HashMap::new(),
+        source_pending_rows: std::collections::HashSet::new(),
         origin_records: HashMap::new(),
         origin_spans: HashMap::new(),
         original_native_symbols: Vec::new(),
@@ -1538,6 +1546,7 @@ struct Decoder<'a> {
     modules: CoordinateStorage<'a, ModuleId>,
     // Representation sharing within this immutable image/coordinate/prefix
     // context only. No registry or per-forest validation result is retained.
+    source_pending_rows: std::collections::HashSet<crate::types::InferenceVariableId>,
     source_declaration_catalogs: HashMap<u32, Arc<crate::core::dialect::MethodEvidenceCatalog>>,
     // Passive owned Type values only, within this immutable image and exact
     // append-only coordinate context. Prefix-bounded expectation reads never
@@ -1555,7 +1564,7 @@ struct DecodedType {
 
 // A private layout marker for the matching compiler/runtime only. Neither the
 // embedded byte sequence nor its numeric tags promise compatibility.
-const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x0f";
+const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x10";
 
 enum WireOutput<'a> {
     Encoded(Vec<u8>),
@@ -1791,6 +1800,8 @@ macro_rules! wire_struct {
 mod source_forwarding_image;
 #[path = "source_resource_image.rs"]
 mod source_resource_image;
+#[path = "source_resource_rows_image.rs"]
+mod source_resource_rows_image;
 use source_resource_image::{
     BinderPairRecord, ClauseRecord, EncodedSourceTemplate, FreshTypeRecord, HandlerRecord,
     InheritedParameterRecord, InterfaceIdentity, InterfaceOwnerRecord, MethodCatalogRecord,
@@ -1984,6 +1995,11 @@ impl Wire for TypeTag {
                 14u8.write(writer)?;
                 id.write(writer)
             }
+            Self::SourcePendingRow { known, identity } => {
+                17u8.write(writer)?;
+                known.write(writer)?;
+                identity.write(writer)
+            }
             Self::Row { known, tail } => {
                 15u8.write(writer)?;
                 known.write(writer)?;
@@ -1993,6 +2009,10 @@ impl Wire for TypeTag {
     }
     fn read(reader: &mut WireReader<'_>) -> Result<Self, ImageFailure> {
         Ok(match u8::read(reader)? {
+            17 => Self::SourcePendingRow {
+                known: Wire::read(reader)?,
+                identity: Wire::read(reader)?,
+            },
             16 => Self::Resource(Wire::read(reader)?),
             0 => Self::Int,
             1 => Self::Bool,
@@ -2840,6 +2860,7 @@ impl PureImage {
         let mut decoder = Decoder {
             image: self,
             source_declaration_catalogs: HashMap::new(),
+            source_pending_rows: std::collections::HashSet::new(),
             decoded_types: HashMap::new(),
             expected_fact_prefixes: None,
             sources: CoordinateStorage::Owned(Vec::new()),
@@ -3069,7 +3090,7 @@ impl Decoder<'_> {
     }
 
     fn ty(&mut self, root: u32) -> Result<IterativeTypeOwner, ImageFailure> {
-        if self.expected_fact_prefixes.is_some() {
+        if self.expected_fact_prefixes.is_some() || !self.source_pending_rows.is_empty() {
             return self.structural(root)?.ty();
         }
         // Coordinates are append-only during module restoration. Including
@@ -3673,6 +3694,7 @@ mod tests {
             source_templates: HashMap::new(),
             source_views: HashMap::new(),
             source_declaration_catalogs: HashMap::new(),
+            source_pending_rows: std::collections::HashSet::new(),
             origin_records: HashMap::new(),
             origin_spans: HashMap::new(),
             original_native_symbols: Vec::new(),
@@ -3798,6 +3820,7 @@ mod tests {
         let mut decoder = Decoder {
             image: &compact,
             source_declaration_catalogs: HashMap::new(),
+            source_pending_rows: std::collections::HashSet::new(),
             decoded_types: HashMap::new(),
             expected_fact_prefixes: None,
             sources: CoordinateStorage::Borrowed(&[]),
@@ -4289,6 +4312,7 @@ mod tests {
             let mut decoder = Decoder {
                 image: &wire,
                 source_declaration_catalogs: HashMap::new(),
+                source_pending_rows: std::collections::HashSet::new(),
                 decoded_types: HashMap::new(),
                 expected_fact_prefixes: None,
                 sources: CoordinateStorage::Borrowed(&[]),
@@ -4413,6 +4437,7 @@ mod tests {
                 source_templates: HashMap::new(),
                 source_views: HashMap::new(),
                 source_declaration_catalogs: HashMap::new(),
+                source_pending_rows: std::collections::HashSet::new(),
                 origin_records: HashMap::new(),
                 origin_spans: HashMap::new(),
                 original_native_symbols: Vec::new(),
@@ -5585,6 +5610,100 @@ main () = {
     }
 
     #[test]
+    fn source_control_image_pending_domain_is_checked_before_interning_and_memoization() {
+        let id = crate::types::InferenceVariableId::new(20);
+        let row = crate::types::EffectRow::open(
+            crate::types::EffectRowVariable::Inference(id),
+            Box::new([]),
+        );
+        let ty = IterativeTypeOwner::new(Type::EffectfulFunction(
+            Box::new(Type::Unit),
+            Box::new(crate::types::ComputationType::new(Type::Unit, row)),
+        ));
+        let mut work = TypeWorkBudget::default();
+        let mut encoder = Encoder {
+            image: PureImage {
+                effect_dialect: true,
+                ..PureImage::default()
+            },
+            structural: HashMap::new(),
+            kind_records: HashMap::new(),
+            quantifier_vectors: HashMap::new(),
+            modules: HashMap::new(),
+            sources: HashMap::new(),
+            binders: HashMap::new(),
+            remapped: Vec::new(),
+            prepared_libraries: HashMap::new(),
+            native_symbols: HashMap::new(),
+            call_codecs: HashMap::new(),
+            source_owners: HashMap::new(),
+            source_accesses: HashMap::new(),
+            source_headers: HashMap::new(),
+            source_templates: HashMap::new(),
+            source_views: HashMap::new(),
+            source_declaration_catalogs: HashMap::new(),
+            source_pending_rows: std::collections::HashSet::from([id]),
+            origin_records: HashMap::new(),
+            origin_spans: HashMap::new(),
+            original_native_symbols: Vec::new(),
+            work: &mut work,
+        };
+        let encoded = encoder.encode_type(&ty).unwrap();
+        let first = encoder.work.used();
+        encoder.source_pending_rows.clear();
+        assert!(matches!(
+            encoder.encode_type(&ty),
+            Err(ImageFailure::Unsupported(Unsupported::Type))
+        ));
+        assert!(encoder.work.used() > first);
+        encoder
+            .source_pending_rows
+            .insert(crate::types::InferenceVariableId::new(21));
+        assert!(matches!(
+            encoder.encode_type(&ty),
+            Err(ImageFailure::Unsupported(Unsupported::Type))
+        ));
+        encoder.source_pending_rows.clear();
+        encoder.source_pending_rows.insert(id);
+        assert_eq!(encoder.encode_type(&ty).unwrap(), encoded);
+        let image = encoder.image;
+        let mut work = TypeWorkBudget::default();
+        let mut decoder = Decoder {
+            image: &image,
+            expected_fact_prefixes: None,
+            sources: CoordinateStorage::Owned(Vec::new()),
+            modules: CoordinateStorage::Owned(Vec::new()),
+            source_declaration_catalogs: HashMap::new(),
+            decoded_types: HashMap::new(),
+            source_pending_rows: std::collections::HashSet::from([id]),
+            work: &mut work,
+        };
+        assert_eq!(*decoder.ty(encoded).unwrap(), *ty);
+        assert!(
+            decoder.decoded_types.is_empty(),
+            "original pending values never enter ordinary memoization"
+        );
+        let first = decoder.work.used();
+        decoder.source_pending_rows.clear();
+        assert!(matches!(
+            decoder.ty(encoded),
+            Err(ImageFailure::InvalidRecord)
+        ));
+        assert!(decoder.work.used() > first);
+        decoder
+            .source_pending_rows
+            .insert(crate::types::InferenceVariableId::new(21));
+        assert!(matches!(
+            decoder.ty(encoded),
+            Err(ImageFailure::InvalidRecord)
+        ));
+        decoder.source_pending_rows.clear();
+        decoder.source_pending_rows.insert(id);
+        assert_eq!(*decoder.ty(encoded).unwrap(), *ty);
+        assert!(decoder.decoded_types.is_empty());
+    }
+
+    #[test]
     fn decoded_type_values_are_local_paid_and_never_cross_fact_prefixes() {
         fn image() -> PureImage {
             PureImage {
@@ -5619,6 +5738,7 @@ main () = {
             let mut decoder = Decoder {
                 image,
                 source_declaration_catalogs: HashMap::new(),
+                source_pending_rows: std::collections::HashSet::new(),
                 decoded_types: HashMap::new(),
                 expected_fact_prefixes: prefix.then(|| NativeFactPrefixes::seal(image).unwrap()),
                 sources: CoordinateStorage::Borrowed(&[]),
@@ -5673,6 +5793,7 @@ main () = {
         let mut decoder = Decoder {
             image: &suffix,
             source_declaration_catalogs: HashMap::new(),
+            source_pending_rows: std::collections::HashSet::new(),
             decoded_types: HashMap::new(),
             expected_fact_prefixes: None,
             sources: CoordinateStorage::Borrowed(&[]),
@@ -5689,6 +5810,7 @@ main () = {
         let mut fresh = Decoder {
             image: &changed,
             source_declaration_catalogs: HashMap::new(),
+            source_pending_rows: std::collections::HashSet::new(),
             decoded_types: HashMap::new(),
             expected_fact_prefixes: None,
             sources: CoordinateStorage::Borrowed(&[]),
@@ -5723,6 +5845,7 @@ main () = {
         let mut decoder = Decoder {
             image: &image,
             source_declaration_catalogs: HashMap::new(),
+            source_pending_rows: std::collections::HashSet::new(),
             decoded_types: HashMap::new(),
             expected_fact_prefixes: None,
             sources: CoordinateStorage::Borrowed(&[]),
@@ -5874,6 +5997,7 @@ main () = {
                 source_templates: HashMap::new(),
                 source_views: HashMap::new(),
                 source_declaration_catalogs: HashMap::new(),
+                source_pending_rows: std::collections::HashSet::new(),
                 origin_records: HashMap::new(),
                 origin_spans: HashMap::new(),
                 original_native_symbols: Vec::new(),
@@ -5958,6 +6082,7 @@ main () = {
         let mut decoder = Decoder {
             image: &image,
             source_declaration_catalogs: HashMap::new(),
+            source_pending_rows: std::collections::HashSet::new(),
             decoded_types: HashMap::new(),
             expected_fact_prefixes: Some(prefix),
             sources: CoordinateStorage::Borrowed(&[]),
@@ -6009,6 +6134,7 @@ main () = {
                 source_templates: HashMap::new(),
                 source_views: HashMap::new(),
                 source_declaration_catalogs: HashMap::new(),
+                source_pending_rows: std::collections::HashSet::new(),
                 origin_records: HashMap::new(),
                 origin_spans: HashMap::new(),
                 original_native_symbols: Vec::new(),
@@ -6065,6 +6191,7 @@ main () = {
         let mut decoder = Decoder {
             image: &image,
             source_declaration_catalogs: HashMap::new(),
+            source_pending_rows: std::collections::HashSet::new(),
             decoded_types: HashMap::new(),
             expected_fact_prefixes: None,
             sources: CoordinateStorage::Borrowed(std::slice::from_ref(&source)),
@@ -7247,7 +7374,8 @@ fn structural_child_depth(tag: TypeTag, child: usize, depth: usize) -> usize {
         TypeTag::ArgumentType
         | TypeTag::ArgumentRow
         | TypeTag::Instance(_)
-        | TypeTag::Row { .. } => depth,
+        | TypeTag::Row { .. }
+        | TypeTag::SourcePendingRow { .. } => depth,
         TypeTag::Application if child == 0 => depth,
         _ => depth.saturating_add(1),
     }
@@ -7489,20 +7617,33 @@ impl Encoder<'_> {
                             instance.arguments().len(),
                         ),
                         StructuralInput::Row(row) => {
-                            let (tail, lacks) = if let Some(tail) = row.tail() {
-                                let crate::types::EffectRowVariable::Rigid(id) = tail.variable()
-                                else {
-                                    return Err(ImageFailure::Unsupported(Unsupported::Type));
-                                };
-                                (Some(self.type_variable(id)?), tail.lacks().len())
-                            } else {
-                                (None, 0)
+                            let known = index(row.known().len())?;
+                            let (tag, lacks) = match row.tail() {
+                                Some(tail) => match tail.variable() {
+                                    crate::types::EffectRowVariable::Rigid(id) => (
+                                        TypeTag::Row {
+                                            known,
+                                            tail: Some(self.type_variable(id)?),
+                                        },
+                                        tail.lacks().len(),
+                                    ),
+                                    crate::types::EffectRowVariable::Inference(id)
+                                        if self.source_pending_rows.contains(&id) =>
+                                    {
+                                        (
+                                            TypeTag::SourcePendingRow {
+                                                known,
+                                                identity: id.value(),
+                                            },
+                                            tail.lacks().len(),
+                                        )
+                                    }
+                                    _ => return Err(ImageFailure::Unsupported(Unsupported::Type)),
+                                },
+                                None => (TypeTag::Row { known, tail: None }, 0),
                             };
                             (
-                                TypeTag::Row {
-                                    known: index(row.known().len())?,
-                                    tail,
-                                },
+                                tag,
                                 row.known()
                                     .len()
                                     .checked_add(lacks)
@@ -7868,7 +8009,8 @@ impl Decoder<'_> {
                         return Err(ImageFailure::Resource);
                     }
                     maximum_depth = maximum_depth.max(depth);
-                    if self.expected_fact_prefixes.is_none() {
+                    if self.expected_fact_prefixes.is_none() && self.source_pending_rows.is_empty()
+                    {
                         let key = (slot, self.sources.len(), self.modules.len());
                         charge(self.work, 1)?;
                         if let Some(cached) = self.decoded_types.get(&key) {
@@ -7918,6 +8060,11 @@ impl Decoder<'_> {
                         }
                         TypeTag::Tuple => count >= 2,
                         TypeTag::Instance(_) | TypeTag::Resource(_) => true,
+                        TypeTag::SourcePendingRow { known, identity } => {
+                            self.source_pending_rows
+                                .contains(&crate::types::InferenceVariableId::new(identity))
+                                && usize::try_from(known).is_ok_and(|known| known <= count)
+                        }
                         TypeTag::Row { known, tail } => usize::try_from(known).is_ok_and(|known| {
                             known <= count && (tail.is_some() || known == count)
                         }),
@@ -7989,7 +8136,17 @@ impl Decoder<'_> {
                                 owned.into_boxed_slice(),
                             ))
                         }
-                        TypeTag::Row { known, tail } => {
+                        TypeTag::Row { known, .. } | TypeTag::SourcePendingRow { known, .. } => {
+                            let pending = match tag {
+                                TypeTag::SourcePendingRow { identity, .. } => {
+                                    Some(crate::types::InferenceVariableId::new(identity))
+                                }
+                                _ => None,
+                            };
+                            let tail = match tag {
+                                TypeTag::Row { tail, .. } => tail,
+                                _ => None,
+                            };
                             let known =
                                 usize::try_from(known).map_err(|_| ImageFailure::InvalidRecord)?;
                             let start = results
@@ -8015,13 +8172,17 @@ impl Decoder<'_> {
                                 .try_reserve_exact(count - known)
                                 .map_err(|_| ImageFailure::Resource)?;
                             lacks.extend(instances.drain(known..));
-                            let tail = tail
-                                .map(|id| {
-                                    self.type_variable(id).map(|id| {
-                                        (crate::types::EffectRowVariable::Rigid(id), lacks)
-                                    })
-                                })
-                                .transpose()?;
+                            let tail = match (pending, tail) {
+                                (Some(id), None) if self.source_pending_rows.contains(&id) => {
+                                    Some((crate::types::EffectRowVariable::Inference(id), lacks))
+                                }
+                                (None, Some(id)) => Some((
+                                    crate::types::EffectRowVariable::Rigid(self.type_variable(id)?),
+                                    lacks,
+                                )),
+                                (None, None) if lacks.is_empty() => None,
+                                _ => return Err(ImageFailure::InvalidRecord),
+                            };
                             let row = crate::types::effect_row_from_owned_parts_with_budget(
                                 instances, tail, self.work,
                             )
@@ -10872,6 +11033,7 @@ impl PureImage {
         let mut decoder = Decoder {
             image: self,
             source_declaration_catalogs: HashMap::new(),
+            source_pending_rows: std::collections::HashSet::new(),
             decoded_types: HashMap::new(),
             expected_fact_prefixes: None,
             sources: CoordinateStorage::Owned(Vec::new()),
@@ -11598,6 +11760,7 @@ impl ExpectedNativeFacts<'_> {
         let mut decoder = Decoder {
             image: self.image,
             source_declaration_catalogs: HashMap::new(),
+            source_pending_rows: std::collections::HashSet::new(),
             decoded_types: HashMap::new(),
             expected_fact_prefixes: Some(self.prefixes),
             sources: CoordinateStorage::Borrowed(&restored.sources),

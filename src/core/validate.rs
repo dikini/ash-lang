@@ -1,5 +1,8 @@
 //! Independent validation for unchecked pure Core arenas.
 
+pub(crate) mod semantic_type_variables;
+mod source_declarations;
+
 use std::{
     cell::Cell,
     collections::{HashMap, HashSet},
@@ -2978,6 +2981,89 @@ impl fmt::Display for ValidationError {
 
 impl Error for ValidationError {}
 
+#[cfg(test)]
+pub(in crate::core) fn assert_source_wrapper_coordinate_for_test(
+    template: &super::source_resource::CheckedSourceResourceTemplate,
+    sources: &[&crate::source::SourceFile],
+    modules: &[(crate::module::ModuleId, crate::source::SourceId)],
+) {
+    let graph = template
+        .reconstructed_handler_graph_for_test(&mut TypeWorkBudget::default())
+        .unwrap();
+    let program = template.original_handler();
+    let original_modules = template.module_sources();
+    let original_sources = original_modules
+        .iter()
+        .map(|pair| {
+            assert!(modules.contains(pair));
+            *sources.iter().find(|source| source.id() == pair.1).unwrap()
+        })
+        .collect::<Vec<_>>();
+    let mut validator =
+        Validator::new_modules(program, &original_sources, original_modules).unwrap();
+    validator.source_handler_graph = Some(&graph);
+    let wrapper = graph.wrapper();
+    let super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Handler(handler)) =
+        &program.nodes[wrapper.value() as usize].kind
+    else {
+        unreachable!()
+    };
+    let resume = program
+        .nodes
+        .iter()
+        .enumerate()
+        .find_map(|(index, node)| match &node.kind {
+            super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Resume(
+                resume,
+            )) if resume.handler() == handler.id() => {
+                Some(NodeId::new(program.arena, index as u32))
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_ne!(wrapper, resume);
+    let contract = EffectClauseContract::Ordinary {
+        handler: wrapper,
+        clause: 0,
+    };
+    assert!(matches!(
+        validator
+            .borrowed_clause_contract(contract, resume)
+            .unwrap()
+            .output,
+        ClauseOutput::ProvisionalOperand
+    ));
+    let nested = program
+        .nodes
+        .iter()
+        .enumerate()
+        .find_map(|(index, node)| {
+            let id = NodeId::new(program.arena, index as u32);
+            (id != wrapper
+                && matches!(
+                    &node.kind,
+                    super::effect::EffectExprKind::Operation(
+                        super::effect::EffectOperation::Handler(_)
+                    )
+                ))
+            .then_some(id)
+        })
+        .unwrap();
+    let contract = EffectClauseContract::Ordinary {
+        handler: nested,
+        clause: 0,
+    };
+    // Even a wrapper-shaped diagnostic coordinate cannot grant its exception
+    // to an independently owned nested handler's continuation.
+    assert!(matches!(
+        validator
+            .borrowed_clause_contract(contract, wrapper)
+            .unwrap()
+            .output,
+        ClauseOutput::Ordinary(_)
+    ));
+}
+
 fn valid_upper_spelling(spelling: &str) -> bool {
     let mut bytes = spelling.bytes();
     bytes.next().is_some_and(|byte| byte.is_ascii_uppercase())
@@ -3210,6 +3296,14 @@ pub(crate) struct CheckedHandlerContractCertificate {
 }
 
 impl CheckedHandlerContractCertificate {
+    pub(crate) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        self.contract.visit_semantic_type_variables(uses)?;
+        self.capture.visit_semantic_type_variables(uses)?;
+        self.externals.visit_semantic_type_variables(uses)
+    }
     pub(crate) fn authenticate(
         &self,
         fact: &crate::resolved::ResourceTypeFact,
@@ -3476,7 +3570,8 @@ fn reconstruct_provider_handler_context(
     work: &mut TypeWorkBudget,
 ) -> Result<ConditionalHandlerAdmission, ValidationError> {
     let mut entry = super::provider::HandlerFragmentEntry::reconstruct(draft, module, work)?;
-    let row_recipe = super::provider::HandlerRowRecipeDraft::reconstruct(&entry, work)?;
+    let row_recipe =
+        super::provider::HandlerRowRecipeDraft::reconstruct(&entry.handler_graph(), work)?;
     entry.row_recipe = Some(&row_recipe);
     let owned_associations = super::provider::HandlerAssociations::reconstruct(module, work)?;
     let associations = owned_associations.borrowed(work)?;
@@ -3623,7 +3718,37 @@ fn check_source_resource_structure_with_globals(
     globals: Option<&super::source_resource::SourceResourceGlobals>,
     work: &mut TypeWorkBudget,
 ) -> Result<(), ValidationError> {
+    check_source_resource_structure_with_handler_graph(
+        program,
+        original,
+        answer,
+        sources,
+        module_sources,
+        globals,
+        None,
+        None,
+        work,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_source_resource_structure_with_handler_graph(
+    program: &UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
+    original: &std::sync::Arc<crate::resolved::SourceResourceTypeFact>,
+    answer: bool,
+    sources: &[&SourceFile],
+    module_sources: &[(ModuleId, SourceId)],
+    globals: Option<&super::source_resource::SourceResourceGlobals>,
+    handler_graph: Option<&super::source_resource::SourceHandlerGraph<'_>>,
+    original_provider: Option<&crate::elaborate::provider::SourceOriginalProviderContext<'_>>,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ValidationError> {
+    if handler_graph.is_some_and(|graph| !answer || !graph.authenticates(program, original)) {
+        return Err(ValidationError::new(ValidationReason::Registry, None));
+    }
     let mut validator = Validator::new_modules(program, sources, module_sources)?;
+    validator.source_handler_graph = handler_graph;
+    validator.source_original_provider = original_provider;
     validator.provider_external_types = globals.map(|globals| &**globals);
     if !program
         .registry
@@ -3650,8 +3775,10 @@ fn check_source_resource_structure_with_globals(
 /// same immutable registry. This private receipt retains the complete registry
 /// proof and exact source objects; it never admits a forest or executable node.
 #[derive(Default)]
-pub(crate) struct SourceResourceStructureSession {
+pub(crate) struct SourceResourceStructureSession<'context> {
     admitted: Option<OriginalTemplateRegistryAdmission>,
+    original_provider:
+        Option<&'context crate::elaborate::provider::SourceOriginalProviderContext<'context>>,
 }
 
 struct OriginalTemplateRegistryAdmission {
@@ -3661,9 +3788,20 @@ struct OriginalTemplateRegistryAdmission {
     modules: HashMap<ModuleId, SourceId>,
     parameters: RegistryParameterOwners,
     abstract_nominals: HashSet<crate::types::NominalTypeId>,
+    unused_ordering: HashSet<crate::types::TypeVariableId>,
 }
 
-impl SourceResourceStructureSession {
+impl<'context> SourceResourceStructureSession<'context> {
+    pub(crate) fn with_original_provider(
+        original_provider: Option<
+            &'context crate::elaborate::provider::SourceOriginalProviderContext<'context>,
+        >,
+    ) -> Self {
+        Self {
+            admitted: None,
+            original_provider,
+        }
+    }
     #[cfg(test)]
     pub(crate) fn check(
         &mut self,
@@ -3685,6 +3823,7 @@ impl SourceResourceStructureSession {
         )
     }
 
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn check_with_globals(
         &mut self,
@@ -3696,6 +3835,47 @@ impl SourceResourceStructureSession {
         globals: &std::sync::Arc<super::source_resource::SourceResourceGlobals>,
         work: &mut TypeWorkBudget,
     ) -> Result<(), ValidationError> {
+        self.check_with_handler_graph(
+            program,
+            original,
+            answer,
+            sources,
+            module_sources,
+            globals,
+            None,
+            work,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::core) fn check_with_handler_graph(
+        &mut self,
+        program: &UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
+        original: &std::sync::Arc<crate::resolved::SourceResourceTypeFact>,
+        answer: bool,
+        sources: &[&SourceFile],
+        module_sources: &[(ModuleId, SourceId)],
+        globals: &std::sync::Arc<super::source_resource::SourceResourceGlobals>,
+        handler_graph: Option<&super::source_resource::SourceHandlerGraph<'_>>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
+        // Conditional source originals retain the same complete ordinary check.
+        // Their separately reconstructed graph authorizes only exact row positions.
+        // Pending transactions always receive a fresh complete admission; a
+        // completed cache entry cannot retarget another facts/publication loan.
+        if handler_graph.is_some() || self.original_provider.is_some() {
+            return check_source_resource_structure_with_handler_graph(
+                program,
+                original,
+                answer,
+                sources,
+                module_sources,
+                Some(globals),
+                handler_graph,
+                self.original_provider,
+                work,
+            );
+        }
         // Registry parameter ordering can depend on lexical method owners and
         // their graph-local provider instances. Those contexts keep their full
         // fresh registry check; the receipt carries no lexical exemption.
@@ -3753,7 +3933,9 @@ impl SourceResourceStructureSession {
                 // only the same retained immutable loan context; a changed
                 // context receives complete fresh registry authentication.
                 validator.charge_type_work(1)?;
-                if same_globals {
+                if same_globals
+                    && validator.unused_ordering_still_unused(&admitted.unused_ordering)?
+                {
                     validator.charge_type_work(admitted.abstract_nominals.len())?;
                     let mut inventory = validator.authenticated_abstract_nominals.borrow_mut();
                     inventory
@@ -3767,6 +3949,9 @@ impl SourceResourceStructureSession {
                     return validator.run_effect_with_registry(&admitted.parameters, &native);
                 }
             }
+            // No completed unused-order proof may survive a changed semantic
+            // footprint or scheme context, including a failed fresh admission.
+            self.admitted = None;
             {
                 let (parameters, native) = validator.authenticate_effect_registry_phase()?;
                 validator.run_effect_with_registry(&parameters, &native)?;
@@ -3791,6 +3976,7 @@ impl SourceResourceStructureSession {
                         .expect("original template admission has a complete module relation"),
                     parameters,
                     abstract_nominals: validator.authenticated_abstract_nominals.take(),
+                    unused_ordering: validator.unused_ordering.take(),
                 });
                 Ok(())
             }
@@ -4110,6 +4296,8 @@ struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily
     module_sources: Option<HashMap<ModuleId, SourceId>>,
     contextual_registry: Option<&'program crate::resolved::ResolvedRegistry>,
     contextual_native_authentication: Option<&'program crate::foreign::NativeAuthenticationSession>,
+    source_original_provider:
+        Option<&'program crate::elaborate::provider::SourceOriginalProviderContext<'program>>,
     binders: HashMap<BinderId, &'program TypedBinder>,
     provider_external_types: Option<&'program HashMap<BinderId, crate::types::IterativeTypeOwner>>,
     provider_method_evidence:
@@ -4117,9 +4305,11 @@ struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily
     provider_state_accesses:
         Option<&'program super::provider::AuthenticatedProviderStateAccesses<'program>>,
     provider_handler_entry: Option<&'program super::provider::HandlerFragmentEntry<'program>>,
+    source_handler_graph: Option<&'program super::source_resource::SourceHandlerGraph<'program>>,
     provider_fragment_locals: Option<&'program [crate::types::NominalTypeId]>,
     source_resource_context: SourceResourceValidationContext,
     authenticated_abstract_nominals: std::cell::RefCell<HashSet<crate::types::NominalTypeId>>,
+    unused_ordering: std::cell::RefCell<HashSet<crate::types::TypeVariableId>>,
     type_work: Cell<usize>,
     capture_layouts: std::cell::RefCell<Vec<(usize, crate::foreign::ForeignLayoutProducer)>>,
     type_work_limit: usize,
@@ -4504,14 +4694,17 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             module_sources: None,
             contextual_registry: None,
             contextual_native_authentication: None,
+            source_original_provider: None,
             binders: HashMap::new(),
             provider_external_types: None,
             provider_method_evidence: None,
             provider_state_accesses: None,
             provider_handler_entry: None,
+            source_handler_graph: None,
             provider_fragment_locals: None,
             source_resource_context: SourceResourceValidationContext::FinalProgram,
             authenticated_abstract_nominals: std::cell::RefCell::new(HashSet::new()),
+            unused_ordering: std::cell::RefCell::new(HashSet::new()),
             type_work: Cell::new(0),
             capture_layouts: std::cell::RefCell::new(Vec::new()),
             type_work_limit: core_validation_type_work_limit(),
@@ -8357,6 +8550,13 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     }
 
     fn validate_registry(&self) -> Result<RegistryParameterOwners, ValidationError> {
+        self.validate_registry_with_original_provenance(None)
+    }
+
+    fn validate_registry_with_original_provenance(
+        &self,
+        original: Option<&source_declarations::OriginalDeclarationProvenance>,
+    ) -> Result<RegistryParameterOwners, ValidationError> {
         self.validate_scalar_preflight_registry()?;
         if let Some(canonical) = self.contextual_registry {
             let mut work = TypeWorkBudget::with_limit(
@@ -8384,7 +8584,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             }
         }
         if self.module_sources.is_some() {
-            return self.validate_module_registry();
+            return self.validate_module_registry(original);
         }
         if self.program.registry.has_provider_contracts() {
             return Err(ValidationError::new(ValidationReason::Registry, None));
@@ -8742,7 +8942,11 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         ))
     }
 
-    fn validate_module_registry(&self) -> Result<RegistryParameterOwners, ValidationError> {
+    fn validate_module_registry(
+        &self,
+        original: Option<&source_declarations::OriginalDeclarationProvenance>,
+    ) -> Result<RegistryParameterOwners, ValidationError> {
+        let generatives = original.map(|original| &original.generatives);
         let registry = &self.program.registry;
         let relation = self
             .module_sources
@@ -8750,7 +8954,17 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             .expect("module registry validation requires an explicit relation");
         let mut contract_work =
             TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
-        let contract_result = registry.authenticate_provider_contracts(&mut contract_work);
+        let contract_result = if let Some(original) = self.source_original_provider {
+            if !matches!(self.source_resource_context,
+                SourceResourceValidationContext::OriginalTemplate { resource, .. }
+                    if resource.module() == original.module())
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+            registry.authenticate_source_original_provider_contracts(original, &mut contract_work)
+        } else {
+            registry.authenticate_provider_contracts(&mut contract_work)
+        };
         let authenticated_abstract_inventory = contract_result.is_ok();
         self.charge_type_work(contract_work.used())?;
         // Contextual provider checking has its separately admitted defining
@@ -8862,16 +9076,25 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let mut next_nominal = HashMap::<ModuleId, u32>::new();
         let mut previous_nominal_end = HashMap::new();
 
-        // Canonical closure retention order need not be source declaration
-        // order. Independently check ranges in source order without relaxing
-        // ordinary registry ordering or the canonical metadata comparison.
+        // A retained source-template closure follows dependency retention
+        // order. Reconstruct its defining declaration order; source foreign
+        // owner slots can follow data slots despite an earlier source span.
+        // Every exact ID and non-owner source range remains checked below.
+        let source_original = matches!(
+            self.source_resource_context,
+            SourceResourceValidationContext::OriginalTemplate { .. }
+        );
         let nominals = registry_source_order(
             registry.nominals(),
-            self.contextual_registry.is_some(),
+            self.contextual_registry.is_some() || source_original,
             |nominal| {
                 Ok((
                     nominal.id.module(),
-                    self.registry_source_start(&nominal.origin)?,
+                    if source_original {
+                        nominal.id.declaration()
+                    } else {
+                        self.registry_source_start(&nominal.origin)?
+                    },
                 ))
             },
             |amount| self.charge_type_work(amount),
@@ -8912,6 +9135,22 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             }
             let nominal_span = nominal.origin.primary_span();
             let nominal_range = nominal_span.range();
+            if let Some(original) = original {
+                self.charge_type_work(1)?;
+                let (defining_position, defining_origin) = original
+                    .nominal_positions
+                    .get(&nominal.id)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+                if *defining_origin != nominal_span {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+                // The paid original-source walk derives the position before
+                // this registry check. A selected import can omit preceding
+                // declarations; it cannot renumber the retained declaration.
+                if *defining_position > *expected {
+                    *expected = *defining_position;
+                }
+            }
             let names = nominal_names.entry(module).or_default();
             if self.contextual_registry.is_none() && nominal.id.declaration() != *expected
                 || nominal_span.source() != source
@@ -9019,7 +9258,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             let contextual = self.is_lexical_source_parameter(parameter.id)?
                 || self.is_provider_declaration_parameter(parameter.id)?
                 || source_owner_parameters.contains(&parameter.id)
-                || source_window_parameters.contains(&parameter.id);
+                || source_window_parameters.contains(&parameter.id)
+                || generatives.is_some_and(|original| original.contains(&parameter.id))
+                || original.is_some() && self.unused_ordering.borrow().contains(&parameter.id);
             if self.contextual_registry.is_none() && parameter.id.local() != *expected
                 || parameter_span.source() != source
                 || !origin_depth_within_limit(&parameter.origin)
@@ -9089,7 +9330,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let mut previous_constructor_start = HashMap::new();
         let constructors = registry_source_order(
             registry.constructors(),
-            self.contextual_registry.is_some(),
+            self.contextual_registry.is_some() || source_original,
             |constructor| {
                 Ok((
                     constructor.owner.module(),
@@ -9233,6 +9474,56 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         }
         self.validate_lexical_registry(&mut parameter_owners, None)?;
         self.validate_global_parameter_rows(&parameter_owners)?;
+        if let Some(generatives) = generatives {
+            self.charge_type_work(generatives.len())?;
+            if generatives
+                .iter()
+                .any(|id| parameter_owners.contains_key(id))
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+            let mut owner_work = TypeWorkBudget::with_limit(
+                self.type_work_limit.saturating_sub(self.type_work.get()),
+            );
+            let disjoint = registry
+                .source_parameters_disjoint_from_private_formals(generatives, &mut owner_work);
+            self.charge_type_work(owner_work.used())?;
+            if !disjoint.map_err(|()| ValidationError::new(ValidationReason::Resource, None))? {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+            for row in registry.global_parameter_rows() {
+                self.charge_type_work(
+                    row.parameters()
+                        .len()
+                        .checked_add(1)
+                        .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?,
+                )?;
+                if row.parameters().iter().any(|id| generatives.contains(id)) {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+            }
+            for method in self.program.method_evidence.methods() {
+                self.charge_type_work(
+                    method
+                        .parameters
+                        .len()
+                        .checked_add(method.interface_parameters.len())
+                        .and_then(|count| count.checked_add(1))
+                        .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?,
+                )?;
+                if method
+                    .parameters
+                    .iter()
+                    .any(|(id, _)| generatives.contains(id))
+                    || method
+                        .interface_parameters
+                        .iter()
+                        .any(|id| generatives.contains(id))
+                {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+            }
+        }
         Ok(parameter_owners)
     }
 
@@ -9413,7 +9704,16 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         next_declaration
             .try_reserve(self.program.registry.effects().len())
             .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
-        for effect in self.program.registry.effects() {
+        let effects = registry_source_order(
+            self.program.registry.effects(),
+            matches!(
+                self.source_resource_context,
+                SourceResourceValidationContext::OriginalTemplate { .. }
+            ),
+            |effect| Ok((effect.id.module(), effect.id.declaration())),
+            |amount| self.charge_type_work(amount),
+        )?;
+        for effect in effects {
             self.charge_type_work(
                 effect
                     .parameters
@@ -12135,7 +12435,17 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     }
 
     fn conditional_node_row(&self, id: NodeId) -> Result<bool, ValidationError> {
-        let Some(entry) = self.provider_handler_entry else {
+        if self
+            .source_handler_graph
+            .is_some_and(|graph| graph.wrapper() == id)
+        {
+            return Ok(true);
+        }
+        let entry = self
+            .provider_handler_entry
+            .map(|entry| entry.handler_graph())
+            .or_else(|| self.source_handler_graph.map(|graph| graph.handler_graph()));
+        let Some(entry) = entry.as_ref() else {
             return Ok(false);
         };
         let Some(recipe) = entry.row_recipe else {
@@ -12153,7 +12463,11 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         row: &EffectRow,
         id: NodeId,
     ) -> Result<bool, ValidationError> {
-        let Some(entry) = self.provider_handler_entry else {
+        let entry = self
+            .provider_handler_entry
+            .map(|entry| entry.handler_graph())
+            .or_else(|| self.source_handler_graph.map(|graph| graph.handler_graph()));
+        let Some(entry) = entry.as_ref() else {
             return Ok(false);
         };
         let Some(recipe) = entry.row_recipe else {
@@ -12167,7 +12481,11 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     }
 
     fn conditional_function_relation(&self, id: NodeId) -> Result<bool, ValidationError> {
-        let Some(entry) = self.provider_handler_entry else {
+        let entry = self
+            .provider_handler_entry
+            .map(|entry| entry.handler_graph())
+            .or_else(|| self.source_handler_graph.map(|graph| graph.handler_graph()));
+        let Some(entry) = entry.as_ref() else {
             return Ok(false);
         };
         let Some(recipe) = entry.row_recipe else {
@@ -15044,6 +15362,46 @@ enum ClauseOutput<'a> {
 }
 
 impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperationFamily> {
+    fn unused_ordering_candidates(
+        &self,
+        candidates: &HashSet<crate::types::TypeVariableId>,
+    ) -> Result<HashSet<crate::types::TypeVariableId>, ValidationError> {
+        if candidates.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let mut work =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let result = (|| {
+            let mut uses = semantic_type_variables::UnusedVariables::new(candidates, &mut work)?;
+            uses.program(self.program)?;
+            if let Some(globals) = self.provider_external_types {
+                uses.charge(globals.len())?;
+                for ty in globals.values() {
+                    uses.ty(ty)?;
+                }
+            }
+            if let Some(graph) = self.source_handler_graph {
+                graph.visit_semantic_type_variables(&mut uses)?;
+            }
+            if let Some(context) = self.source_original_provider {
+                context.visit_semantic_type_variables(&mut uses)?;
+            }
+            Ok(uses.finish())
+        })();
+        // The shared loan is debited even if traversal or allocation refuses.
+        self.charge_type_work(work.used())?;
+        result.map_err(|()| ValidationError::new(ValidationReason::Resource, None))
+    }
+
+    fn unused_ordering_still_unused(
+        &self,
+        candidates: &HashSet<crate::types::TypeVariableId>,
+    ) -> Result<bool, ValidationError> {
+        let unused = self.unused_ordering_candidates(candidates)?;
+        self.charge_type_work(candidates.len())?;
+        Ok(unused.len() == candidates.len())
+    }
+
     fn validate_cleanup_owner(
         &self,
         id: NodeId,
@@ -15455,7 +15813,35 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         ),
         ValidationError,
     > {
-        let mut owners = self.validate_registry()?;
+        let original = if matches!(
+            self.source_resource_context,
+            SourceResourceValidationContext::OriginalTemplate { .. }
+        ) {
+            let mut work = TypeWorkBudget::with_limit(
+                self.type_work_limit.saturating_sub(self.type_work.get()),
+            );
+            let result = source_declarations::authenticate(
+                &self.program.registry,
+                &self.sources,
+                self.module_sources
+                    .as_ref()
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?,
+                &mut work,
+            );
+            self.charge_type_work(work.used())?;
+            let original = result?;
+            let unused = self.unused_ordering_candidates(&original.ordering_candidates)?;
+            self.charge_type_work(unused.len())?;
+            let mut retained = self.unused_ordering.borrow_mut();
+            retained
+                .try_reserve(unused.len())
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+            retained.extend(unused);
+            Some(original)
+        } else {
+            None
+        };
+        let mut owners = self.validate_registry_with_original_provenance(original.as_ref())?;
         self.validate_effect_registry(self.module_sources.as_ref(), &mut owners)?;
         let empty_type_binders = CoreTypeBinders::new();
         for nominal in self
@@ -15548,6 +15934,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             || self
                 .provider_handler_entry
                 .is_some_and(|entry| entry.row_recipe.is_some())
+            || self.source_handler_graph.is_some()
         {
             return Ok(());
         }
@@ -16385,13 +16772,13 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     handler_ids,
                     clause_contracts,
                 )?;
-                let mut row = self.native_interpret_row(
+                let mut row = self.source_native_phase_row(
                     scope.handler_output.effects(),
                     scope.native_interpretations(),
                     id,
                 )?;
                 for root in [scope.acquire.body, scope.finish.body] {
-                    let phase = self.native_interpret_row(
+                    let phase = self.source_native_phase_row(
                         &self.node(root)?.effects,
                         scope.native_interpretations(),
                         id,
@@ -16862,6 +17249,32 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             }
         }
         Ok(false)
+    }
+
+    fn source_native_phase_row(
+        &self,
+        row: &EffectRow,
+        interpretations: &[super::effect::NativeInterpretation],
+        id: NodeId,
+    ) -> Result<EffectRow, ValidationError> {
+        let mut work =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let result = (|| {
+            let mut outward = crate::types::clone_effect_row_with_budget(row, &mut work)
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+            work.charge(interpretations.len())
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+            for interpretation in interpretations {
+                outward = super::provider::interpret_native_phase_row(
+                    &outward,
+                    interpretation.effect(),
+                    &mut work,
+                )?;
+            }
+            Ok(outward)
+        })();
+        self.charge_type_work(work.used())?;
+        result
     }
 
     fn native_interpret_row(
@@ -17714,8 +18127,11 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         id: NodeId,
     ) -> Result<BorrowedClauseContract<'_>, ValidationError> {
         match contract {
-            EffectClauseContract::Ordinary { handler, clause } => {
-                let node = self.node(handler)?;
+            EffectClauseContract::Ordinary {
+                handler: owner,
+                clause,
+            } => {
+                let node = self.node(owner)?;
                 let super::effect::EffectExprKind::Operation(
                     super::effect::EffectOperation::Handler(handler),
                 ) = &node.kind
@@ -17732,7 +18148,14 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     effect: handler.effect(),
                     clause,
                     answer: std::borrow::Cow::Borrowed(&node.ty),
-                    output: ClauseOutput::Ordinary(&node.effects),
+                    output: if self
+                        .source_handler_graph
+                        .is_some_and(|graph| graph.wrapper() == owner)
+                    {
+                        ClauseOutput::ProvisionalOperand
+                    } else {
+                        ClauseOutput::Ordinary(&node.effects)
+                    },
                 })
             }
             EffectClauseContract::Scoped {

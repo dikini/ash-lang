@@ -38,6 +38,48 @@ pub(crate) struct HandlerFragmentDraft {
     pub pending_rows: super::HandlerPendingRows,
 }
 
+/// Borrowed row/capture inputs shared by independently admitted handler kinds.
+/// This view carries coordinates only; its producer must authenticate the
+/// defining source before any reconstructed recipe can grant an allowance.
+#[derive(Clone, Copy)]
+pub(in crate::core) struct HandlerGraphDraft<'a> {
+    pub(in crate::core) program: &'a UnvalidatedEffectProgram,
+    pub(in crate::core) template: ProviderTemplateId,
+    pub(in crate::core) handler: HandlerId,
+    pub(in crate::core) state: &'a TypedBinder,
+    pub(in crate::core) hidden: &'a [(TypeVariableId, Kind); 2],
+    pub(in crate::core) clauses: &'a [EffectClause],
+    pub(in crate::core) direct_demands: &'a EffectRow,
+    pub(in crate::core) pending_rows: &'a super::HandlerPendingRows,
+}
+
+#[derive(Clone, Copy)]
+pub(in crate::core) struct HandlerGraphView<'a> {
+    pub(in crate::core) draft: HandlerGraphDraft<'a>,
+    pub(in crate::core) canonical: &'a crate::resolved::ResolvedRegistry,
+    pub(in crate::core) row_recipe: Option<&'a super::HandlerRowRecipeDraft>,
+    pub(in crate::core) roots: &'a [NodeId],
+    // A product original retains its independently checked parameter wrappers.
+    // The complete root is checked before projecting its exact clause forest.
+    pub(in crate::core) wrapper_root: Option<NodeId>,
+    pub(in crate::core) pattern_binders: &'a [BinderId],
+    pub(in crate::core) provided: &'a crate::types::EffectInstance,
+}
+impl HandlerGraphView<'_> {
+    pub(in crate::core) fn roots(&self) -> &[NodeId] {
+        self.roots
+    }
+    pub(in crate::core) fn provided(&self) -> &crate::types::EffectInstance {
+        self.provided
+    }
+}
+
+impl HandlerGraphView<'_> {
+    pub(in crate::core) fn handler_graph(&self) -> HandlerGraphView<'_> {
+        *self
+    }
+}
+
 /// Canonical entry roots, not a certificate that row realization is complete.
 /// Construction is private; every allowance stays within this exact draft.
 pub(in crate::core) struct HandlerFragmentEntry<'a> {
@@ -53,6 +95,29 @@ pub(in crate::core) struct HandlerFragmentEntry<'a> {
     type_parameters: HashSet<TypeVariableId>,
     pub(in crate::core) imports:
         HashMap<crate::source::Span, &'a crate::resolved::ResolvedOccurrence>,
+}
+
+impl HandlerFragmentEntry<'_> {
+    pub(in crate::core) fn handler_graph(&self) -> HandlerGraphView<'_> {
+        HandlerGraphView {
+            draft: HandlerGraphDraft {
+                program: &self.draft.program,
+                template: self.draft.template,
+                handler: self.draft.handler,
+                state: &self.draft.state,
+                hidden: &self.draft.hidden,
+                clauses: &self.draft.clauses,
+                direct_demands: &self.draft.direct_demands,
+                pending_rows: &self.draft.pending_rows,
+            },
+            canonical: &self.canonical,
+            row_recipe: self.row_recipe,
+            roots: self.roots(),
+            wrapper_root: None,
+            pattern_binders: &[],
+            provided: self.provided(),
+        }
+    }
 }
 
 impl<'a> HandlerFragmentEntry<'a> {

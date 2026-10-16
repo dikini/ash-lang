@@ -978,7 +978,7 @@ impl AuthenticatedProviderExternals<'_> {
                 .map(ProviderSourceCaptureView::declared_methods)
         };
         super::super::capture::reconstruct_conditional_handler_capture(
-            entry,
+            &entry.handler_graph(),
             nodes,
             arena,
             correspondence,
@@ -4580,6 +4580,62 @@ struct RetainedHandlerEvidenceAnchor {
 }
 
 impl RetainedHandlerExternals {
+    pub(crate) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        uses.catalog(&self.catalog)?;
+        uses.charge(
+            self.evidence_anchors.len()
+                + self.types.len()
+                + self.dictionary_formals.len()
+                + self.implementations.len()
+                + self.defining_implementations.len()
+                + self.methods.len()
+                + self.occurrences.len(),
+        )?;
+        for anchor in &self.evidence_anchors {
+            uses.application(&anchor.fact.application)?;
+        }
+        for ty in self.types.values().chain(self.dictionary_formals.values()) {
+            uses.ty(ty)?;
+        }
+        for implementation in &self.implementations {
+            implementation.fact.visit_semantic_type_variables(uses)?;
+        }
+        for implementation in &self.defining_implementations {
+            implementation.visit_semantic_type_variables(uses)?;
+        }
+        for method in &self.methods {
+            method.slot.visit_semantic_type_variables(uses)?;
+        }
+        for occurrence in &self.occurrences {
+            uses.ty(&occurrence.callable_type)?;
+            uses.charge(
+                occurrence.checked_evidence.len()
+                    + occurrence.slots.len()
+                    + occurrence.arguments.0.len()
+                    + occurrence.rows.len(),
+            )?;
+            for (application, selection) in &occurrence.checked_evidence {
+                uses.application(application)?;
+                uses.selection(selection)?;
+            }
+            for slot in &occurrence.slots {
+                slot.visit_semantic_type_variables(uses)?;
+            }
+            for argument in &occurrence.arguments.0 {
+                uses.ty(argument)?;
+            }
+            for row in &occurrence.rows {
+                uses.row(row)?;
+            }
+        }
+        if let Some(family) = self.family {
+            uses.id(family.parameter)?;
+        }
+        Ok(())
+    }
     pub(in crate::core) fn original_evidence_slots(
         &self,
     ) -> impl Iterator<Item = &crate::interface::EvidenceSlot> {

@@ -3,6 +3,7 @@
 mod image_registry;
 mod provider_instance;
 mod provider_registry;
+mod semantic_type_variables;
 pub(crate) use image_registry::{ImageRegistryItem, sort_image_registry_items};
 pub(crate) use provider_instance::{PendingProviderInstancePublication, ProviderInstanceSlot};
 
@@ -20237,18 +20238,45 @@ impl ResolvedRegistry {
                     )?;
                 }
                 OwnerId::Resource(id) => {
-                    if let Some(contracts) = self.provider_contracts.get(&id.module()) {
-                        let resource = contracts
+                    budget
+                        .charge(2)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    let source = self.source_resource_fact(id);
+                    let contracts = self.provider_contracts.get(&id.module());
+                    let ordinary = if let Some(contracts) = contracts {
+                        budget
+                            .charge(contracts.resource_count())
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                        contracts
                             .resource_contracts()
                             .find(|(_, _, fact)| fact.id == id)
-                            .ok_or(ResolvedBuildFailure::InvalidState)?
-                            .2;
-                        self.authenticate_owner_signature(
-                            definition.owner,
-                            Some(resource.family),
-                            &resource.parameters,
-                            budget,
-                        )?;
+                            .map(|(_, _, fact)| fact)
+                    } else {
+                        None
+                    };
+                    match (source, ordinary) {
+                        (Some(resource), None) if resource.id == id => {
+                            self.authenticate_owner_signature(
+                                definition.owner,
+                                Some(resource.family),
+                                &resource.parameters,
+                                budget,
+                            )?;
+                        }
+                        (None, Some(resource)) => {
+                            self.authenticate_owner_signature(
+                                definition.owner,
+                                Some(resource.family),
+                                &resource.parameters,
+                                budget,
+                            )?;
+                        }
+                        // Before ordinary contracts are prepared, their exact
+                        // retained definitions/signatures remain the authority.
+                        (None, None) if contracts.is_none() => {}
+                        // One full identity cannot name both declaration kinds,
+                        // or omit its member from an already present contract.
+                        _ => return Err(ResolvedBuildFailure::InvalidState),
                     }
                 }
                 OwnerId::Interface(_) => {}
@@ -20264,6 +20292,14 @@ impl ResolvedRegistry {
             return Err(ResolvedBuildFailure::InvalidState);
         }
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn source_control_take_original_resource_fact(
+        &mut self,
+        id: ResourceDefinitionId,
+    ) -> Option<Arc<SourceResourceTypeFact>> {
+        self.source_resource_facts.remove(&id)
     }
 
     fn retain_owner_signature(
@@ -21645,6 +21681,41 @@ impl ResolvedRegistry {
         imported: &ImportedFacts,
         budget: &mut TypeWorkBudget,
     ) -> Result<Self, ResolvedBuildFailure> {
+        self.checker_view_retaining_registered_originals(imported, false, budget)
+    }
+
+    /// A closed Source-original proof also needs the authenticated private rows
+    /// of registered ordinary foreign imports. This does not change source
+    /// constructor access, sealed SourceForeign owner/access roles, or images.
+    pub(crate) fn source_original_checker_view(
+        &self,
+        imported: &ImportedFacts,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, ResolvedBuildFailure> {
+        self.checker_view_retaining_registered_originals(imported, true, budget)
+    }
+
+    fn checker_view_retaining_registered_originals(
+        &self,
+        imported: &ImportedFacts,
+        retain_registered_originals: bool,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, ResolvedBuildFailure> {
+        if retain_registered_originals {
+            budget
+                .charge(imported.foreign_modules.len())
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            for (module, original) in &imported.foreign_modules {
+                if *module != original.admission.module_id {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                original
+                    .authenticate(budget)
+                    .map_err(foreign_build_failure)?;
+            }
+        }
+        let mut registered_opaque = HashMap::new();
+        let mut registered_constructor_count = 0usize;
         for fact in imported.nominals() {
             budget
                 .charge(
@@ -21666,6 +21737,89 @@ impl ResolvedRegistry {
             } else if !imported_nominal_family_is_valid(fact) {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
+            if retain_registered_originals
+                && fact.access != ImportedTypeAccess::Transparent
+                && let Some(original) = imported.foreign_modules.get(&fact.id.module())
+            {
+                budget
+                    .charge(
+                        self.source_foreign_nominals
+                            .len()
+                            .checked_add(1)
+                            .ok_or(ResolvedBuildFailure::TypeResource)?,
+                    )
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                if imported.source_owners.contains_key(&fact.id)
+                    || self
+                        .source_foreign_nominals
+                        .iter()
+                        .any(|candidate| candidate.nominal == fact.id)
+                {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                let original_registry = original.canonical_registry();
+                let nominal = original_registry
+                    .nominal(fact.id)
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                let parameters = original_registry
+                    .canonical_nominal_parameters(fact.id)
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                let mirror = imported
+                    .canonical_nominal_fact(fact.id)
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                budget
+                    .charge(
+                        nominal
+                            .constructors
+                            .len()
+                            .checked_add(parameters.len())
+                            .and_then(|count| count.checked_add(original.states.len()))
+                            .and_then(|count| count.checked_add(1))
+                            .ok_or(ResolvedBuildFailure::TypeResource)?,
+                    )
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                if mirror.declaration_kind != nominal.declaration_kind
+                    || mirror.parameter_count != parameters.len()
+                    || mirror.parameters.len() != parameters.len()
+                    || mirror.constructor_count != nominal.constructors.len()
+                    || (!mirror.constructors.is_empty()
+                        && mirror.constructors != nominal.constructors.as_ref())
+                    || mirror.representation_provenance
+                        != nominal.representation_provenance.as_ref()
+                    || !same_origin_with_budget(mirror.origin, &nominal.origin, budget)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                    || (original.states.iter().any(|state| state.id == fact.id)
+                        && !mirror.constructors.is_empty())
+                {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                match (mirror.representation, nominal.representation.as_ref()) {
+                    (None, None) => {}
+                    (Some(actual), Some(expected))
+                        if crate::types::same_type_with_budget(actual, expected, budget)
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)? => {}
+                    _ => return Err(ResolvedBuildFailure::InvalidState),
+                }
+                for (actual, expected) in mirror.parameters.iter().zip(parameters) {
+                    if !same_checker_type_variable_with_budget(actual, expected, budget)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                    {
+                        return Err(ResolvedBuildFailure::InvalidState);
+                    }
+                }
+                registered_opaque
+                    .try_reserve(1)
+                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                if registered_opaque
+                    .insert(fact.id, (nominal, parameters))
+                    .is_some()
+                {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                registered_constructor_count = registered_constructor_count
+                    .checked_add(nominal.constructors.len())
+                    .ok_or(ResolvedBuildFailure::TypeResource)?;
+            }
         }
         let materialized_import_count = imported
             .nominals()
@@ -21675,6 +21829,7 @@ impl ResolvedRegistry {
             .nominals
             .len()
             .checked_add(materialized_import_count)
+            .and_then(|count| count.checked_add(registered_opaque.len()))
             .ok_or(ResolvedBuildFailure::TypeResource)?;
         let mut nominals = ResolvedNominalBuffer(Vec::new());
         nominals
@@ -21701,6 +21856,7 @@ impl ResolvedRegistry {
             .constructors
             .len()
             .checked_add(imported.constructors.len())
+            .and_then(|count| count.checked_add(registered_constructor_count))
             .ok_or(ResolvedBuildFailure::TypeResource)?;
         let mut constructors = ResolvedConstructorBuffer(Vec::new());
         constructors
@@ -21810,6 +21966,76 @@ impl ResolvedRegistry {
         }
 
         for fact in imported.nominals() {
+            if let Some((nominal, original_parameters)) = registered_opaque.get(&fact.id) {
+                let original_registry =
+                    imported.foreign_modules[&fact.id.module()].canonical_registry();
+                budget
+                    .charge(
+                        nominal
+                            .constructors
+                            .len()
+                            .checked_add(nominal.spelling.len())
+                            .and_then(|count| count.checked_add(1))
+                            .ok_or(ResolvedBuildFailure::TypeResource)?,
+                    )
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                let mut constructor_ids = Vec::new();
+                constructor_ids
+                    .try_reserve_exact(nominal.constructors.len())
+                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                constructor_ids.extend(nominal.constructors.iter().copied());
+                for id in &nominal.constructors {
+                    let original = original_registry
+                        .constructor(*id)
+                        .ok_or(ResolvedBuildFailure::InvalidState)?;
+                    if original.id.owner() != nominal.id || original.owner != nominal.id {
+                        return Err(ResolvedBuildFailure::InvalidState);
+                    }
+                    budget
+                        .charge(
+                            original
+                                .spelling
+                                .len()
+                                .checked_add(1)
+                                .ok_or(ResolvedBuildFailure::TypeResource)?,
+                        )
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    constructors.0.push(ResolvedConstructor {
+                        id: original.id,
+                        owner: original.owner,
+                        spelling: try_clone_string(&original.spelling)
+                            .map_err(|_| ResolvedBuildFailure::TypeResource)?,
+                        payload: original
+                            .payload
+                            .as_ref()
+                            .map(|payload| clone_type_with_budget(payload, budget))
+                            .transpose()
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                        origin: original.origin.clone(),
+                    });
+                }
+                nominals.0.push(ResolvedNominalType {
+                    representation_provenance: nominal.representation_provenance.clone(),
+                    id: nominal.id,
+                    declaration_kind: nominal.declaration_kind,
+                    spelling: try_clone_string(&nominal.spelling)
+                        .map_err(|_| ResolvedBuildFailure::TypeResource)?,
+                    constructors: constructor_ids.into_boxed_slice(),
+                    representation: nominal
+                        .representation
+                        .as_ref()
+                        .map(|representation| clone_type_with_budget(representation, budget))
+                        .transpose()
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                    origin: nominal.origin.clone(),
+                });
+                parameters.0.push((
+                    fact.id,
+                    clone_resolved_type_variables_with_budget(original_parameters, budget)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                ));
+                continue;
+            }
             if fact.access != ImportedTypeAccess::Transparent {
                 continue;
             }
@@ -21864,7 +22090,10 @@ impl ResolvedRegistry {
 
         let abstract_nominal_count = imported
             .nominals()
-            .filter(|fact| fact.access != ImportedTypeAccess::Transparent)
+            .filter(|fact| {
+                fact.access != ImportedTypeAccess::Transparent
+                    && !registered_opaque.contains_key(&fact.id)
+            })
             .count();
         budget
             .charge(abstract_nominal_count)
@@ -21928,6 +22157,25 @@ impl ResolvedRegistry {
             }
         }
         for (spelling, resource) in imported.resource_facts() {
+            let spelling = if retain_registered_originals {
+                let certificate = imported
+                    .provider_groups
+                    .get(&resource.id.module())
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                budget
+                    .charge(certificate.resource_count())
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                let (canonical, _, original) = certificate
+                    .resource_contracts()
+                    .find(|(_, _, fact)| fact.id == resource.id)
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                if !Arc::ptr_eq(original, resource) {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                canonical
+            } else {
+                spelling
+            };
             let kind =
                 NonMaterializedNominalKind::for_resource(resource.id, &resource.parameters, budget)
                     .map_err(|()| ResolvedBuildFailure::TypeResource)?;
@@ -21940,10 +22188,10 @@ impl ResolvedRegistry {
             );
             abstract_nominal_names.insert(resource.family, spelling.to_owned());
         }
-        for fact in imported
-            .nominals()
-            .filter(|fact| fact.access != ImportedTypeAccess::Transparent)
-        {
+        for fact in imported.nominals().filter(|fact| {
+            fact.access != ImportedTypeAccess::Transparent
+                && !registered_opaque.contains_key(&fact.id)
+        }) {
             let kind = clone_arrows_with_budget(
                 fact.parameters.iter().map(|parameter| &parameter.kind),
                 Kind::Type,
@@ -22235,6 +22483,10 @@ impl ResolvedRegistry {
             if retained.constructor_count != 0 {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
+            // Opaque imports have no materialized nominal parameter row. The
+            // exact original owner/access formals still belong to the checker
+            // universe consumed by independent category authentication.
+            registry.retain_shared_canonical_parameters(owner.parameters(), budget)?;
             budget
                 .charge(registry.source_foreign_nominals.len())
                 .map_err(|_| ResolvedBuildFailure::TypeResource)?;
@@ -22293,6 +22545,7 @@ impl ResolvedRegistry {
                     .iter()
                     .any(|candidate| candidate.nominal == owner.nominal())
                 {
+                    registry.retain_shared_canonical_parameters(owner.parameters(), budget)?;
                     registry
                         .source_foreign_nominals
                         .push(SourceForeignNominalCandidate {
@@ -22317,6 +22570,155 @@ impl ResolvedRegistry {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
                 registry.foreign_modules.insert(*id, Arc::clone(fact));
+            }
+        }
+        if retain_registered_originals {
+            // A selected native type can retain a later formal while earlier
+            // native declarations are projected out. Their immutable canonical
+            // parameter records complete this private registry's provenance;
+            // they do not materialize those declarations or expose names.
+            budget
+                .charge(imported.foreign_modules.len())
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            for (module, original) in &imported.foreign_modules {
+                if *module != original.admission.module_id {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                let canonical = original.canonical_registry();
+                budget
+                    .charge(canonical.type_variable_count())
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                for parameter in canonical.type_variables() {
+                    if parameter.id.module() == Some(*module) {
+                        registry.retain_checker_type_variable(parameter, budget)?;
+                    }
+                }
+            }
+        }
+        if retain_registered_originals {
+            budget
+                .charge(imported.provider_groups.len())
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            for (module, certificate) in &imported.provider_groups {
+                if *module != certificate.module() {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                certificate.authenticate(true, budget)?;
+                budget
+                    .charge(certificate.resource_count())
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                for (spelling, _, fact) in certificate.resource_contracts() {
+                    for (owner, parameters) in
+                        certificate.provider_declaration_formals(fact.id, budget)?
+                    {
+                        match owner {
+                            OwnerId::Interface(_) => {
+                                registry.retain_owner_signature(owner, None, parameters, budget)?;
+                            }
+                            OwnerId::Effect(effect) => {
+                                budget
+                                    .charge(1)
+                                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                                if registry.effect(effect).is_some() {
+                                    registry.authenticate_owner_signature(
+                                        owner, None, parameters, budget,
+                                    )?;
+                                }
+                            }
+                            OwnerId::Resource(_) => return Err(ResolvedBuildFailure::InvalidState),
+                        }
+                        for parameter in parameters {
+                            registry.retain_checker_type_variable(parameter, budget)?;
+                        }
+                    }
+                    if fact.id.module() != *module
+                        || fact.family.module() != *module
+                        || registry.nominal(fact.family).is_some()
+                    {
+                        return Err(ResolvedBuildFailure::InvalidState);
+                    }
+                    let expected =
+                        NonMaterializedNominalKind::for_resource(fact.id, &fact.parameters, budget)
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    if let Some(actual) = registry.abstract_nominal_kinds.get(&fact.family) {
+                        if actual.origin != fact.origin.primary_span()
+                            || !actual
+                                .kind
+                                .same_with_budget(&expected, budget)
+                                .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                        {
+                            return Err(ResolvedBuildFailure::InvalidState);
+                        }
+                    } else {
+                        budget
+                            .charge(1)
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                        registry
+                            .abstract_nominal_kinds
+                            .try_reserve(1)
+                            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                        registry.abstract_nominal_kinds.insert(
+                            fact.family,
+                            NonMaterializedNominalKindFact {
+                                kind: expected,
+                                origin: fact.origin.primary_span(),
+                            },
+                        );
+                    }
+                    budget
+                        .charge(spelling.len())
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    if let Some(actual) = registry.abstract_nominal_names.get(&fact.family) {
+                        budget
+                            .charge(actual.len())
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                        if actual != spelling {
+                            return Err(ResolvedBuildFailure::InvalidState);
+                        }
+                    } else {
+                        registry
+                            .abstract_nominal_names
+                            .try_reserve(1)
+                            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                        registry.abstract_nominal_names.insert(
+                            fact.family,
+                            try_clone_string(spelling)
+                                .map_err(|_| ResolvedBuildFailure::TypeResource)?,
+                        );
+                    }
+                    registry.retain_owner_signature(
+                        OwnerId::Resource(fact.id),
+                        Some(fact.family),
+                        &fact.parameters,
+                        budget,
+                    )?;
+                    for parameter in fact
+                        .parameters
+                        .iter()
+                        .chain(fact.family_template.iter().map(|family| &family.parameter))
+                        .chain(std::iter::once(&fact.answer))
+                    {
+                        if let Some(actual) = registry.type_variables.get(&parameter.id) {
+                            if !same_checker_type_variable_with_budget(actual, parameter, budget)
+                                .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                            {
+                                return Err(ResolvedBuildFailure::InvalidState);
+                            }
+                        } else {
+                            registry.try_insert_checker_type_variable(parameter, budget)?;
+                        }
+                    }
+                }
+                match registry.provider_contracts.entry(*module) {
+                    std::collections::btree_map::Entry::Occupied(existing) => {
+                        if !Arc::ptr_eq(existing.get(), certificate) {
+                            return Err(ResolvedBuildFailure::InvalidState);
+                        }
+                    }
+                    std::collections::btree_map::Entry::Vacant(slot) => {
+                        slot.insert(Arc::clone(certificate));
+                    }
+                }
             }
         }
         for definition in &self.owner_definitions {
@@ -22515,7 +22917,11 @@ impl ResolvedRegistry {
             // Defining registries retain family metadata before checked code is
             // linked. Only the exact families authenticated above supplement
             // category coverage here; closed registries use their own contracts.
-            registry.authenticate_provider_contract_categories(original_families, type_work)?;
+            registry.authenticate_provider_contract_categories(
+                original_families,
+                None,
+                type_work,
+            )?;
             type_work
                 .charge(checked.exports.provider_groups.len())
                 .map_err(|()| ResolvedBuildFailure::TypeResource)?;
@@ -23051,6 +23457,25 @@ impl ResolvedRegistry {
         self
     }
 
+    #[cfg(test)]
+    pub(crate) fn rebuild_effect_identity_tables_for_core_test(
+        mut self,
+        effects: Vec<ResolvedEffectDeclaration>,
+    ) -> Self {
+        // This fixture starts with only effect owners. Reconstruct every
+        // corresponding table rather than testing a stale-position mismatch.
+        assert!(
+            self.owner_definitions
+                .iter()
+                .all(|value| matches!(value.owner, OwnerId::Effect(_)))
+        );
+        self.owner_definitions.clear();
+        self.owner_definition_positions.clear();
+        self.owner_signatures = OwnerSignatures::default();
+        self.native_symbols.clear();
+        self.with_effects(effects)
+    }
+
     /// Looks up one canonical effect declaration by stable identity.
     #[must_use]
     pub fn effect(&self, id: EffectId) -> Option<&ResolvedEffectDeclaration> {
@@ -23541,6 +23966,34 @@ impl ResolvedRegistry {
         }
     }
 
+    /// Compares or copies passive canonical parameter metadata. An existing
+    /// mirror must agree completely; this never creates a defining owner row.
+    fn retain_checker_type_variable(
+        &mut self,
+        parameter: &ResolvedTypeVariable,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ResolvedBuildFailure> {
+        budget
+            .charge(1)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        if let Some(actual) = self.type_variables.get(&parameter.id) {
+            if !same_checker_type_variable_with_budget(actual, parameter, budget)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            return Ok(());
+        }
+        self.type_variables
+            .try_reserve(1)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        let retained = clone_resolved_type_variable_with_budget(parameter, budget)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        let displaced = self.type_variables.insert(parameter.id, retained.into());
+        debug_assert!(displaced.is_none());
+        Ok(())
+    }
+
     /// Installs one checker-view binder from immutable canonical authority.
     /// The retained record is charged and every destination is reserved before
     /// cloning Kind or provenance. Duplicate identities never replace authority.
@@ -23671,6 +24124,59 @@ impl ResolvedRegistry {
             })
     }
 
+    /// The ordinary group has actually been checked in this same defining
+    /// transaction. Its immutable certificate supplies the closed Source
+    /// registry category; it grants no provider instance or publication slot.
+    pub(crate) fn with_source_prepared_provider_group(
+        mut self,
+        module: &ResolvedModule,
+        original: &crate::elaborate::provider::SourceOriginalProviderContext<'_>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, ResolvedBuildFailure> {
+        let code = original.code();
+        if code.module() != module.module()
+            || self.provider_contracts.contains_key(&module.module())
+        {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        original.authenticate(code.contracts(), work)?;
+        work.charge(
+            code.contracts()
+                .defining_sources()
+                .len()
+                .checked_mul(
+                    module
+                        .defining_sources()
+                        .len()
+                        .checked_add(1)
+                        .ok_or(ResolvedBuildFailure::TypeResource)?,
+                )
+                .ok_or(ResolvedBuildFailure::TypeResource)?,
+        )
+        .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for (owner, source) in code.contracts().defining_sources() {
+            if !module
+                .defining_sources()
+                .iter()
+                .any(|(actual, retained)| actual == owner && Arc::ptr_eq(retained, source))
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+        }
+        work.charge(1)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        match self.provider_contracts.entry(module.module()) {
+            std::collections::btree_map::Entry::Occupied(_) => {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            std::collections::btree_map::Entry::Vacant(slot) => {
+                slot.insert(Arc::clone(code.contracts()));
+            }
+        }
+        self.authenticate_source_original_provider_contracts(original, work)?;
+        Ok(self)
+    }
+
     pub(crate) fn provider_contracts(
         &self,
     ) -> impl Iterator<
@@ -23799,12 +24305,30 @@ impl ResolvedRegistry {
         &self,
         work: &mut TypeWorkBudget,
     ) -> Result<(), ResolvedBuildFailure> {
-        self.authenticate_provider_contract_categories(HashSet::new(), work)
+        self.authenticate_provider_contract_categories(HashSet::new(), None, work)
+    }
+
+    pub(crate) fn authenticate_source_original_provider_contracts(
+        &self,
+        original: &crate::elaborate::provider::SourceOriginalProviderContext<'_>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ResolvedBuildFailure> {
+        work.charge(1)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        if self
+            .provider_contracts
+            .get(&original.module())
+            .is_none_or(|certificate| !Arc::ptr_eq(certificate, original.code().contracts()))
+        {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        self.authenticate_provider_contract_categories(HashSet::new(), Some(original), work)
     }
 
     fn authenticate_provider_contract_categories(
         &self,
         mut families: HashSet<NominalTypeId>,
+        original: Option<&crate::elaborate::provider::SourceOriginalProviderContext<'_>>,
         work: &mut TypeWorkBudget,
     ) -> Result<(), ResolvedBuildFailure> {
         work.charge(self.provider_contracts.len())
@@ -23813,7 +24337,11 @@ impl ResolvedRegistry {
             if *module != certificate.module() {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
-            certificate.authenticate(true, work)?;
+            if let Some(original) = original.filter(|original| original.module() == *module) {
+                original.authenticate(certificate, work)?;
+            } else {
+                certificate.authenticate(true, work)?;
+            }
             certificate.authenticate_linked_native_facts(self, work)?;
             work.charge(certificate.resource_count())
                 .map_err(|()| ResolvedBuildFailure::TypeResource)?;
@@ -41009,6 +41537,139 @@ mod foreign_certificate_tests {
     }
     fn foreign_module() -> CheckedModule {
         registered_module(sqlite_manifest(ForeignRegistrationId::new(1)).unwrap())
+    }
+    fn imported_registered_states(module: &CheckedModule) -> ImportedFacts {
+        let mut imported = ImportedFacts::default();
+        let mut work = TypeWorkBudget::default();
+        imported
+            .retain_foreign(module.exports(), &mut work)
+            .unwrap();
+        for state in &module.registry.foreign_modules[&module.module()].states {
+            let original = module.exports().canonical_nominal_fact(state.id).unwrap();
+            assert_ne!(original.access, ImportedTypeAccess::Transparent);
+            assert!(original.constructors.is_empty());
+            let staged = imported
+                .prepare_nominal_merge(
+                    original,
+                    &mut work,
+                    &mut crate::interface::InterfaceConstraintBudget::default(),
+                )
+                .unwrap();
+            imported.commit_nominal_merge(staged).unwrap();
+        }
+        imported
+    }
+
+    #[test]
+    fn source_original_registered_rows_are_private_exact_and_cumulatively_paid() {
+        let module = foreign_module();
+        let imported = imported_registered_states(&module);
+        let registry = ResolvedRegistry::default();
+        let ordinary = registry
+            .checker_view(&imported, &mut TypeWorkBudget::default())
+            .unwrap();
+        let mut measured = TypeWorkBudget::default();
+        let view = registry
+            .source_original_checker_view(&imported, &mut measured)
+            .unwrap();
+        view.authenticate_provider_contracts(&mut TypeWorkBudget::default())
+            .unwrap();
+        let original = module.registry.foreign_modules[&module.module()].canonical_registry();
+        for fact in imported.nominals() {
+            assert!(ordinary.nominal(fact.id).is_none());
+            assert!(ordinary.abstract_nominal_kinds.contains_key(&fact.id));
+            assert_eq!(view.nominal(fact.id), original.nominal(fact.id));
+            assert_eq!(
+                view.nominal_parameters(fact.id),
+                original.nominal_parameters(fact.id)
+            );
+            assert!(!view.abstract_nominal_kinds.contains_key(&fact.id));
+            for id in &original.nominal(fact.id).unwrap().constructors {
+                assert_eq!(view.constructor(*id), original.constructor(*id));
+                assert!(imported.constructor(*id).is_none());
+            }
+            assert!(
+                fact.constructors.is_empty(),
+                "private proof rows create no source access"
+            );
+        }
+        let total = measured.used();
+        for prefix in [0, 19] {
+            let mut short = TypeWorkBudget::with_limit(prefix + total - 1);
+            short.charge(prefix).unwrap();
+            assert!(matches!(
+                registry.source_original_checker_view(&imported, &mut short),
+                Err(ResolvedBuildFailure::TypeResource)
+            ));
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + total);
+                exact.charge(prefix).unwrap();
+                registry
+                    .source_original_checker_view(&imported, &mut exact)
+                    .unwrap();
+                assert_eq!(exact.used(), prefix + total);
+            }
+        }
+    }
+
+    #[test]
+    fn source_original_registered_rows_reject_mirror_and_registration_donors() {
+        let module = foreign_module();
+        let original = &module.registry.foreign_modules[&module.module()];
+        let state = original.states.last().unwrap().id;
+        assert_eq!(
+            original
+                .canonical_registry()
+                .nominal_parameters(state)
+                .unwrap()
+                .len(),
+            2
+        );
+        for mutation in 0..8 {
+            let mut imported = imported_registered_states(&module);
+            let mirror = imported.nominals.get_mut(&state).unwrap();
+            match mutation {
+                0 => mirror.parameters[0].id = TypeVariableId::resolved(module.module(), u32::MAX),
+                1 => mirror.parameters[0].kind = Kind::EffectRow,
+                2 => mirror.parameters.swap(0, 1),
+                3 => mirror.constructor_count += 1,
+                4 => mirror.origin = original.canonical_registry().nominals()[0].origin.clone(),
+                5 => mirror.id = NominalTypeId::new(module.module(), u32::MAX),
+                6 => {
+                    mirror.constructors = original
+                        .canonical_registry()
+                        .nominal(state)
+                        .unwrap()
+                        .constructors
+                        .clone()
+                }
+                7 => {
+                    let donor = foreign_module();
+                    imported.foreign_modules.insert(
+                        module.module(),
+                        Arc::clone(&donor.registry.foreign_modules[&donor.module()]),
+                    );
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                matches!(
+                    ResolvedRegistry::default()
+                        .source_original_checker_view(&imported, &mut TypeWorkBudget::default()),
+                    Err(ResolvedBuildFailure::InvalidState)
+                ),
+                "registered mirror mutation {mutation} must be a semantic refusal"
+            );
+        }
+        let mut aliased = imported_registered_states(&module);
+        aliased.nominals.get_mut(&state).unwrap().display_spelling = Some("DisplayAlias".into());
+        let view = ResolvedRegistry::default()
+            .source_original_checker_view(&aliased, &mut TypeWorkBudget::default())
+            .unwrap();
+        assert_eq!(
+            view.nominal(state),
+            original.canonical_registry().nominal(state)
+        );
     }
     #[test]
     fn foreign_determinations_match_registered_layout_and_state_access_authority() {

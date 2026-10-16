@@ -30,6 +30,20 @@ the new callback from the completion report. The dependent-owner scalar query
 separately checks guard-held parent lineage after acquisition, with exact native
 query and cleanup traces.
 
+`control_callbacks.ash` and `control_open_delta_entry.ash` retain the open-Delta
+control case: only H is absent from the formal tail; the client still requires
+J. The generated host returns `(Completed(MissingRow, Closed), 42)` and acquires
+and releases one owner. `control_capture.ash` and `control_capture_entry.ash`
+retain two equal-typed requests to the same Probe and one original nested Stop
+discard. One callback captures an Inner owner and its H cleanup; the other
+requests H before Stop without capturing Inner. The result is
+`(Completed((MissingRow, MissingRow), Closed), 42)`, with Inner released before
+the outer owner. These cases use the current source compiler and generated
+bridges, with Ash source removed before host preparation and image/facts files
+removed before child execution. Independent Core/image controls retain each
+request separately and distinguish the complete client continuation row from
+direct handler requests, including overlapping effects.
+
 `acquired_only_owner.ash` and `acquired_only_entry.ash` use the same native fixture
 with a one-parameter `Outcome<T>` report. The public pipeline also checks renamed
 constructor roles, a generic error parameter, malformed report fields and forged
@@ -63,5 +77,6 @@ do not establish byte read/write, copy windows or a native-buffer library port.
 This fixture covers the bounded executable checkpoint under
 [CP-0022](../../../docs/proposals/CP-0022-ash-authored-foreign-interfaces.md) and
 [TASK-0036](../../../docs/tasks/TASK-0036-source-contracts-core-and-generic-execution.md).
-It does not establish byte access, dependent owners, outward capture/discard,
-retained-owner quarantine, library ports or the complete milestone outcome.
+The control cases establish only their stated source, capture and cleanup
+contrasts. This fixture does not establish byte access, retained-owner
+quarantine, library ports or the complete milestone outcome.

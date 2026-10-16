@@ -71,6 +71,34 @@ checks do not complete the shared-runtime regression checkpoint.
 
 ## Discoveries
 
+Source handler originals retain conditional row equations and exact callback-input
+coordinates until actual request captures are available. Their private
+continuation specializes to the complete client residual row; direct handler
+requests contribute separately to the outward row. Empty residuals and overlap
+with direct effects need distinct controls, since subtracting direct requests
+from the total can erase real client demand. Independent final Core derives both
+rows and each request capture from checked lexical/global roots before comparing
+copying claims. Private images scope unresolved original rows to their exact
+pending owner before interning or memoization, then re-admit originals and final
+copies. The current open-Delta and equal-substitution witnesses execute through
+generated hosts; they do not replace the full criterion's existing ownership,
+quarantine and failure evidence.
+
+Copy-window row proofs reconstruct state evaluation separately from the body.
+Only the body's exact native instances are interpreted, and any remaining body
+demand refuses admission. The complete state row remains outward demand, including
+an overlapping native instance and its row tail. These row facts do not replace
+the original family, phase, access and capture checks.
+
+Defining declaration slots require source-derived coordinates, not density of a
+claim-sorted table. A bounded syntax-only walk of resident original provenance
+reconstructs nominal category allocation and the separate written effect/native
+symbol order. The lexer and parser share a capped loan from the consuming
+validation ledger; every return debits spent work before handling its result.
+This is registry provenance checking, without path loading, source resolution,
+type inference or per-instance semantic replay. A coherent owner/access or
+effect/operation ID permutation cannot authenticate its own defining slot.
+
 TASK38 exposed common source-resource boundaries without requiring privileged
 lifecycle helpers or source-given forwarding. Exported source access kinds retain
 the original checked family header. Ordinary lexical-header duplicate checks
@@ -644,6 +672,58 @@ through owner-free scalar replies and larger values through ordinary arithmetic
 on admitted i64 image payloads. Checked foreign literals now supply signed values
 and the complete u64 range directly, while ordinary negative-literal expression
 syntax and general arbitrary-precision image literals remain outside this slice.
+
+A complete product SQLite Source observation exceeded the earlier `200S`
+estimate while preserving the canonical source census and cumulative meter.
+The constraint case requires 8,510,624 units for 39,033 bytes, including census;
+its Source-only diagnostic stopped before linking, Final/Core or native work.
+After independent accounting review, the project lead selected `300S` under the
+user's delegated judgment, using the existing 25% reserve rule and conservative
+rounding. [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md)
+governs this Source-only coefficient revision; [DN-0050](../design/DN-0050-native-program-gas-estimates.md)
+records the fit and limitations. No predicate, witness, cumulative carry,
+other allowance, depth or stack policy changes. The diagnostic does not close
+normal caller, retained verification or checkpoint obligations.
+
+The subsequent full SQLite run passed 30 cases and exhausted four required
+cases at Source `300S` / Final `161S`. Finite phase measurements completed all
+four unchanged source closures. Persistence used 28,158,349 Source units and
+26,809,274 Final units for 44,512 canonical bytes. Its separate builder rewrite
+meter first refused at the fixed implementation default, then completed at
+510,782 units under the explicitly bounded diagnostic. No Source-credit loan,
+reset or duplicate-debit repair was justified.
+
+After independent measurement/accounting review, the project lead adopted
+Source `800S`, Final `800S` and separate compiler-arena rewrite `16S` under the
+user's delegated judgment. The existing paid canonical census returns S
+alongside its budget; checked multiplication funds each empty compiler arena
+once, and every later rewrite retains that arena's cumulative spending. Fresh
+arenas inherit capacity only. Generic, standalone and private-image defaults,
+other limits, witnesses and semantic checks remain unchanged.
+[AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md)
+holds the policy and [DN-0050](../design/DN-0050-native-program-gas-estimates.md)
+records phase-separated fitting evidence and its limitations. These diagnostics
+stopped before independent Core and native execution. Normal four-case and
+whole-caller verification, current quality, actual-head review and retained
+acceptance remain pending on [PR #34](https://github.com/dikini/ash-lang/pull/34).
+
+The subsequent normal run completed Source, Final and independent Core in all
+four cases, then exhausted the existing `51P` native-preparation meter. An exact
+first-refusal observation confirmed the same carried census/encoder owner;
+there was no demonstrated reset, separate fixed encoding meter or duplicated
+debit to repair. One finite `204P` diagnostic completed all four preparations
+and stopped before generated-host building or execution.
+
+After independent accounting and fitting review, the project lead selected
+preparation `125P` under the user's delegated judgment. The largest observation
+used 4,984,019 units for P = 50,905, including 44,510 source bytes and 6,395 main
+nodes. The fixture's normal fresh database-path substitution is recorded, rather
+than calling it byte-identical to the earlier 44,512-byte input. A 25% fitting
+reserve requires coefficient 123; 125 is the conservative rounded choice. Only
+this coefficient and exact expected tests change; the same paid sizing and
+cumulative preparation meter, every other allowance and every semantic/native
+check remain intact. Normal full SQLite/native/caller checks, current quality,
+final-head review and retained acceptance still require their actual results.
 
 ## Deviations
 

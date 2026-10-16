@@ -1314,6 +1314,60 @@ pub(super) struct PreparedLocalProviderCode {
     code: Option<Arc<ProviderGroupPreparation>>,
     originals: Vec<Arc<ProviderOriginalPreparation>>,
 }
+
+/// Borrows one defining transaction during Source-original admission only.
+/// Every consumer authenticates the exact code, completed facts and still
+/// private publication together; this context cannot publish or enter an image.
+pub(crate) struct SourceOriginalProviderContext<'a> {
+    code: &'a Arc<CheckedProviderGroup>,
+    imported: &'a crate::resolved::ImportedFacts,
+    defining: &'a Arc<crate::resolved::ProviderDefiningFacts>,
+    publication: &'a PendingEvidencePublication,
+}
+
+impl SourceOriginalProviderContext<'_> {
+    pub(crate) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        crate::resolved::ProviderExternalFacts {
+            imported: self.imported,
+            defining: Some(self.defining),
+        }
+        .visit_semantic_type_variables(uses)
+    }
+    pub(crate) fn module(&self) -> crate::module::ModuleId {
+        self.code.module()
+    }
+    pub(crate) fn code(&self) -> &Arc<CheckedProviderGroup> {
+        self.code
+    }
+    pub(crate) fn authenticate(
+        &self,
+        certificate: &Arc<CheckedProviderContracts>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), crate::resolved::ResolvedBuildFailure> {
+        self.code
+            .local_template_view(
+                certificate,
+                crate::resolved::ProviderExternalFacts {
+                    imported: self.imported,
+                    defining: Some(self.defining),
+                },
+                self.publication,
+                work,
+            )
+            .map_err(|failure| match failure {
+                TypeError::Internal(super::ElaborationFailure::TypeResourceExhausted) => {
+                    crate::resolved::ResolvedBuildFailure::TypeResource
+                }
+                TypeError::Internal(super::ElaborationFailure::ConstraintResourceExhausted) => {
+                    crate::resolved::ResolvedBuildFailure::ConstraintResource
+                }
+                _ => crate::resolved::ResolvedBuildFailure::InvalidState,
+            })
+    }
+}
 impl std::fmt::Debug for PreparedLocalProviderCode {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -1362,6 +1416,19 @@ impl PreparedLocalProviderCode {
             .as_ref()
             .map(|code| &code.code)
             .ok_or_else(invalid_state)
+    }
+    pub(super) fn source_original_context<'a>(
+        &'a self,
+        imported: &'a crate::resolved::ImportedFacts,
+        defining: &'a Arc<crate::resolved::ProviderDefiningFacts>,
+        publication: &'a PendingEvidencePublication,
+    ) -> Result<SourceOriginalProviderContext<'a>, TypeError> {
+        Ok(SourceOriginalProviderContext {
+            code: self.code()?,
+            imported,
+            defining,
+            publication,
+        })
     }
     pub(super) fn contains(&self, definition: crate::resolved::ResourceDefinitionId) -> bool {
         self.code.as_ref().is_some_and(|code| {
@@ -1697,6 +1764,39 @@ fn authenticate_primary_provider_application(
 }
 
 impl CheckedProviderContracts {
+    pub(crate) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        uses.charge(self.declarations.len())?;
+        for declaration in &self.declarations {
+            uses.ordinary_header(&declaration.fact)?;
+            uses.application(&declaration.provider_application)?;
+            for lifecycle in [&declaration.acquire, &declaration.finish] {
+                uses.id(lifecycle.hidden_answer)?;
+                if let EffectRowVariable::Rigid(id) = lifecycle.hidden_row {
+                    uses.id(id)?;
+                }
+                uses.charge(lifecycle.formals.len())?;
+                for (source, target) in &lifecycle.formals {
+                    uses.id(*source)?;
+                    uses.id(*target)?;
+                }
+                lifecycle.externals.visit_semantic_type_variables(uses)?;
+            }
+            declaration.handlers.visit_semantic_type_variables(uses)?;
+            if let Some(family) = &declaration.family {
+                uses.id(family.identity.parameter)?;
+                uses.application(&family.application)?;
+                uses.charge(family.requirements.len())?;
+                for requirement in family.requirements.iter() {
+                    uses.application(&requirement.application)?;
+                }
+                family.handlers.visit_semantic_type_variables(uses)?;
+            }
+        }
+        Ok(())
+    }
     /// Original local carrier retained through publication. Callers charge
     /// resource_count before lookup and compare the returned Arc by identity.
     pub(super) fn family_original_authority(
@@ -1776,6 +1876,54 @@ impl CheckedProviderContracts {
     }
     pub(crate) fn resource_count(&self) -> usize {
         self.declarations.len()
+    }
+    /// Borrows the defining provider-interface and provided-effect rows from
+    /// the same canonical registry that authenticates this declaration.
+    pub(crate) fn provider_declaration_formals(
+        &self,
+        definition: crate::resolved::ResourceDefinitionId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<
+        [(
+            crate::resolved::OwnerId,
+            &[crate::resolved::ResolvedTypeVariable],
+        ); 2],
+        crate::resolved::ResolvedBuildFailure,
+    > {
+        use crate::resolved::ResolvedBuildFailure as Failure;
+        work.charge(
+            self.declarations
+                .len()
+                .checked_add(1)
+                .ok_or(Failure::TypeResource)?,
+        )
+        .map_err(|()| Failure::TypeResource)?;
+        let declaration = self
+            .declarations
+            .iter()
+            .find(|declaration| declaration.fact.id == definition)
+            .ok_or(Failure::InvalidState)?;
+        let canonical = &declaration.acquire.canonical;
+        let mut rows: [(
+            crate::resolved::OwnerId,
+            &[crate::resolved::ResolvedTypeVariable],
+        ); 2] = [
+            (
+                crate::resolved::OwnerId::Interface(declaration.provider_application.interface()),
+                &[],
+            ),
+            (
+                crate::resolved::OwnerId::Effect(declaration.fact.provided.instance.effect()),
+                &[],
+            ),
+        ];
+        for (owner, parameters) in &mut rows {
+            *parameters = canonical
+                .defining_owner_parameters(*owner)
+                .ok_or(Failure::InvalidState)?;
+            canonical.authenticate_owner_signature(*owner, None, parameters, work)?;
+        }
+        Ok(rows)
     }
     pub(crate) fn defining_sources(
         &self,
@@ -2730,6 +2878,7 @@ pub(super) fn check_module_provider_group(
     type_work: &mut TypeWorkBudget,
     coverage_work: &mut super::UsefulnessBudget,
     constraint_work: &mut super::InterfaceConstraintBudget,
+    rewrite_work_limit: usize,
 ) -> Result<Option<std::sync::Arc<CheckedProviderGroup>>, TypeError> {
     if module.resources().is_empty() {
         return Ok(None);
@@ -2740,6 +2889,7 @@ pub(super) fn check_module_provider_group(
         type_work,
         coverage_work,
         constraint_work,
+        rewrite_work_limit,
     )?;
     let mut components = Vec::new();
     type_work
@@ -2758,6 +2908,7 @@ pub(super) fn check_module_provider_group(
             type_work,
             coverage_work,
             constraint_work,
+            rewrite_work_limit,
         )?);
     }
     finish_module_provider_originals(module, &components, type_work).map(Some)
@@ -2776,6 +2927,7 @@ pub(super) fn prepare_module_provider_originals(
     type_work: &mut TypeWorkBudget,
     coverage_work: &mut super::UsefulnessBudget,
     constraint_work: &mut super::InterfaceConstraintBudget,
+    rewrite_work_limit: usize,
 ) -> Result<ModuleProviderOriginals, TypeError> {
     // Every declaration in this group borrows the same immutable module. Share
     // its authenticated source inventory and template registry; each compiler
@@ -2804,6 +2956,7 @@ pub(super) fn prepare_module_provider_originals(
             type_work,
             coverage_work,
             constraint_work,
+            rewrite_work_limit,
             |compiler| compiler.check_provider_header(module, definition),
         )?);
     }
@@ -2831,6 +2984,7 @@ pub(super) fn check_module_provider_original(
     type_work: &mut TypeWorkBudget,
     coverage_work: &mut super::UsefulnessBudget,
     constraint_work: &mut super::InterfaceConstraintBudget,
+    rewrite_work_limit: usize,
 ) -> Result<Arc<PreparedProviderOriginal>, TypeError> {
     let definition = module.resources().get(index).ok_or_else(invalid_state)?;
     let header = preparation.headers.get(index).ok_or_else(invalid_state)?;
@@ -2841,6 +2995,7 @@ pub(super) fn check_module_provider_original(
         type_work,
         coverage_work,
         constraint_work,
+        rewrite_work_limit,
         |compiler| {
             compiler
                 .type_work
@@ -2880,6 +3035,7 @@ pub(super) fn check_module_provider_original(
         type_work,
         coverage_work,
         constraint_work,
+        rewrite_work_limit,
         |compiler| {
             compiler
                 .type_work
@@ -2919,6 +3075,7 @@ pub(super) fn check_module_provider_original(
         type_work,
         coverage_work,
         constraint_work,
+        rewrite_work_limit,
         |compiler| compiler.compile_provider_handler(definition, header, module.imported_facts()),
     )?;
     type_work
@@ -2965,6 +3122,7 @@ pub(super) fn check_module_provider_original(
             type_work,
             coverage_work,
             constraint_work,
+            rewrite_work_limit,
             |compiler| {
                 let (application, methods) =
                     compiler.check_provider_family_header(module, definition, family)?;
@@ -3242,6 +3400,10 @@ fn module_provider_failure(failure: LifecycleDraftCheckError) -> TypeError {
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the two work owners stay separate from defining facts and publication"
+)]
 fn with_module_provider_compiler<T>(
     module: &crate::resolved::ResolvedModule,
     registry: &Arc<crate::resolved::ResolvedRegistry>,
@@ -3249,6 +3411,7 @@ fn with_module_provider_compiler<T>(
     type_work: &mut TypeWorkBudget,
     coverage_work: &mut super::UsefulnessBudget,
     constraint_work: &mut super::InterfaceConstraintBudget,
+    rewrite_work_limit: usize,
     check: impl FnOnce(&mut CoreElaborator<EffectOperationFamily>) -> Result<T, TypeError>,
 ) -> Result<T, TypeError> {
     let compiler_result =
@@ -3257,6 +3420,7 @@ fn with_module_provider_compiler<T>(
             Arc::clone(registry),
             type_work,
             coverage_work.clone(),
+            Some(TypeWorkBudget::with_limit(rewrite_work_limit)),
         );
 
     let mut compiler = compiler_result?;
@@ -4317,8 +4481,9 @@ impl CoreElaborator<EffectOperationFamily> {
                 &substitutions,
             )?
         } else {
-            let placeholder = CoreBuilder::<EffectOperationFamily>::with_registry_for_family(
+            let placeholder = CoreBuilder::<EffectOperationFamily>::with_registry_and_rewrite_work(
                 Arc::clone(&self.registry),
+                TypeWorkBudget::with_limit(self.builder.rewrite_work_limit()),
             );
             (
                 std::mem::replace(&mut self.builder, placeholder).finish(root)?,

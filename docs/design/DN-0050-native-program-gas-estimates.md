@@ -1,7 +1,7 @@
 # DN-0050: Native program gas estimates
 
 - ID: `DN-0050`
-- Status: calibration record; `200S` source, `161S` final elaboration, `345S` Core, `51P` preparation and `22B` startup accepted
+- Status: calibration record; `800S` source, `800S` final elaboration, `16S` compiler-arena rewrite, `345S` Core, `125P` preparation and `22B` startup accepted
 - Related: [TASK-0040](../tasks/TASK-0040-ash-copying-sqlite-library.md),
   [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md),
   [CP-0022](../proposals/CP-0022-ash-authored-foreign-interfaces.md)
@@ -24,15 +24,19 @@ mechanism, normal-host and quality checks. The human then approved startup
 The current formulas are:
 
 ```text
-source checking = 200 * canonical loaded source UTF8 bytes, including builtins
-preparation     = 51 * (admitted source UTF8 bytes + validated main Core nodes)
-final elaboration = 161 * canonical loaded source UTF8 bytes, including builtins
+source checking = 800 * canonical loaded source UTF8 bytes, including builtins
+preparation     = 125 * (admitted source UTF8 bytes + validated main Core nodes)
+final elaboration = 800 * canonical loaded source UTF8 bytes, including builtins
+compiler rewrite  = 16 * the same source closure, per compiler arena lifetime
 independent Core  = 345 * canonical loaded source UTF8 bytes, including builtins
 startup         = 22 * (canonical image bytes + canonical expected-fact bytes)
 ```
 
-Each total includes paid sizing and all subsequent work in its phase. Source gas
-has no additional historical ten-percent margin. Resolution and other construction/constraint, allocation, depth, stack and
+Each Source/Final/Core total includes paid sizing and subsequent work in its
+phase. The same paid canonical byte count separately funds each compiler rewrite
+arena once; repeated rewrites retain cumulative spending. These totals have no
+additional historical ten-percent margin. Generic, standalone and private-image
+rewrite defaults remain unchanged. Resolution and other construction/constraint, allocation, depth, stack and
 authority checks retain their existing policies. There is no static overall gas ceiling.
 
 | Earlier observation | Input size | Complete measured work | Historical forecast |
@@ -72,7 +76,7 @@ prefixes both ended at 42,836. These are cumulative, not additive. Resolution
 remained separate at 253 of 327,680. The observer stopped before module linking,
 Final/Core checking or evaluation. This is not a normal result-`13` pass.
 
-| Source fitting row | Canonical S | Complete reported work | Work / S | Accepted `200S` forecast |
+| Source fitting row | Canonical S | Complete reported work | Work / S | Historical accepted `200S` forecast |
 | --- | ---: | ---: | ---: | ---: |
 | Persistence / 517 | 42,851 | 2,946,584 | 68.763483 | 8,570,200 |
 | Repeated / 539 | 37,603 | 1,045,628 | 27.807037 | 7,520,600 |
@@ -99,6 +103,138 @@ floor, extra ten-percent margin or static overall cap is added. Final/Core,
 preparation, startup and runtime metrics do not participate in this Source fit.
 Normal hook execution, focused policy verification and independent implementation
 review remain separate from this diagnostic and the required fresh checkpoint.
+
+## Product SQLite Source observation and delegated revision
+
+At PR #34's `f26dabe2c4d9` input, the normal full SQLite-library target passed 30
+cases and refused four during Source checking. These are incomplete work
+observations, not measured full demands. The constraint case admitted five
+canonical sources totaling 39,033 UTF8 bytes. Its six census charges remained
+inside the normal `200S` total of 7,806,600. Independent accounting review found
+no reset, top-up, missing census or double debit; nested original-admission,
+CST and row measurements are included in their parent totals.
+
+Run 891 used the byte-identical constraint Source closure with one disclosed
+finite Source-only total of 31,226,400, four times normal. Other allowances,
+stack, depth and checks remained unchanged. Complete Source work was 8,510,624:
+module checking ended at 8,510,573, then the closed-entry and retained-provenance
+work brought the same cumulative ledger to 8,510,624. The observer stopped
+before linking, Final/Core checking, evaluation or native execution. All
+temporary inputs were restored. The result and retained binary are recorded in
+`task36-sqlite-source-demand891-complete-result-20261016.json`.
+
+| Complete Source fitting group | Observations | Maximum work / S |
+| --- | ---: | ---: |
+| Historical rows above, at their distinct code/accounting pins | 6 | 151.363958 |
+| Current normal complete reports in run 886 | 35 | 128.169520 |
+| Current constraint Source-only measurement / 891 | 1 | 218.036636 |
+
+All 35 complete run-886 reports participate, including cases with more than one
+Source compilation. The literal table is
+`task36-source-demand891-fit-observations-corrected-20261016.json`. Failed,
+incomplete totals and Final/Core/preparation/startup/native costs do not enter
+this Source fit. There is no holdout or universal complexity guarantee.
+
+The existing 25% engineering-reserve rule gives
+`ceil(1.25 * 218.036636) = 273`. After independent measurement/accounting review,
+the project lead selected the conservative rounded `300S` under the user's
+delegated autonomous judgment; this was not a direct human choice of 300.
+It gives this constraint case 11,709,900 units, 37.59% above measured demand.
+That revision changed only the Source coefficient. Paid canonical sizing and cumulative
+carry, overflow and terminal refusal remain exact; no floor, intercept, reset,
+extra ten-percent margin or changes to other phase/depth/stack checks are added.
+The other three exhausted demands were not completed by this measurement.
+Normal affected callers, implementation review, retention and the fresh
+checkpoint remain separate evidence obligations.
+
+## Current Source, Final and separate rewrite revision
+
+The earlier full SQLite library run at Source `300S` / Final `161S` passed 30
+cases and exhausted four required cases. Separate finite Source/Final
+measurements completed the constraint and native-index cases, then stopped at
+persistence's Source refusal. A single first-refusal observation identified the
+separate builder rewrite meter denying one unit at its implementation default
+of 327,680; the outer Source meter still had credit. No duplicated debit or
+missing Source funding was established.
+
+The remaining two cases completed with finite diagnostic Source `1200S`, Final
+`644S` and separate rewrite capacity 1,310,720 per arena. Each invocation used
+the original source texts and display paths, paid each phase's own canonical
+census once and stopped after complete Final, before independent Core,
+preparation or native execution. All temporary changes were restored.
+
+| Complete diagnostic case | Canonical S | Source | Final | Largest rewrite arena |
+| --- | ---: | ---: | ---: | ---: |
+| Constraint / 902 | 39,033 | 8,510,632 | 6,794,355 | At most 327,680; not measured |
+| Native index / 902 | 39,068 | 8,483,884 | 6,761,494 | At most 327,680; not measured |
+| Persistence / 904 | 44,512 | 28,158,349 | 26,809,274 | 510,782 |
+| Prepare refusals / 904 | 38,797 | 12,941,261 | 11,100,299 | 129,551 |
+
+The exact normal-895 table has 37 complete Source and 35 complete Final
+observations. Adding these four completed diagnostic observations gives 41 and
+39 separate fitting rows. Run 904 also records 25 distinct arena lifetimes and
+95 monotone checkpoints; checkpoints are not additional work, and owner
+capacities are not summed. Failed or absent phase totals do not enter the fit.
+The older measurements above remain at their own versions and accounting pins.
+These are fitting observations, not independent cases or holdout evidence.
+
+Persistence determines all three maxima: `632.601299*S` Source,
+`602.293179*S` Final and `11.475153*S` rewrite. Applying the same 25% fitting
+reserve gives integer minima 791, 753 and 15. After independent accounting and
+scope review, the project lead selected conservative rounded coefficients
+`800S`, `800S` and `16S` under the user's delegated judgment. This was not a
+direct human selection of those numbers. The rewrite rule uses the same trusted
+canonical S returned by the paid census and initializes a separate meter once
+for each empty compiler arena; generic, standalone and private-image defaults
+remain unchanged. [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md)
+governs this accepted policy. Normal affected callers, implementation review,
+retained verification and the full checkpoint remain separate obligations.
+
+## Current complete-preparation revision
+
+The next normal full SQLite run passed 30 cases. The other four completed Source,
+Final and independent Core, then exhausted preparation `51P`. One exact owning
+refusal requested five units for a paid flat structural-key lookup at 2,154,186
+of 2,154,189 units. The census and encoder retained the same cumulative meter;
+no reset, fixed inner meter or duplicate debit was established.
+
+One finite `204P` batch completed preparation for the four existing integration
+witnesses. Source `800S`, Final `800S`, rewrite `16S`, Core `345S`, startup and
+all checks retained their normal policies. Each helper returned after complete
+image encoding and emission, before generated-host building, startup or
+execution. Existing C/archive input creation remained unchanged. All temporary
+changes were restored; these diagnostic completions are not normal host passes.
+
+| Complete preparation case | Source bytes S | Main nodes N | P = S + N | Complete work |
+| --- | ---: | ---: | ---: | ---: |
+| Constraint / 920 | 39,033 | 3,206 | 42,239 | 2,570,536 |
+| Native index / 921 | 39,068 | 3,211 | 42,279 | 2,572,659 |
+| Persistence / 922 | 44,510 | 6,395 | 50,905 | 4,984,019 |
+| Prepare refusals / 923 | 38,797 | 3,968 | 42,765 | 3,193,663 |
+
+The actual source hashes are pinned. The first, second and fourth source texts
+match the earlier observation; persistence's existing fixture substitutes its
+fresh `session.db` directory in two string literals. This accounts for its
+44,510-byte input instead of the historical 44,512 bytes. Display and process
+identities are fresh. Repeated emission/completion markers report the same
+cumulative work and are not added.
+
+These are four exact P fitting rows. The normal run also records 31 completed
+preparation observations with S but without N. Their conservative `work/S`
+upper bound for `work/P` is at most 50.025664 because P >= S; they are separate
+from the exact P rows. Censored refusals and compilation-only reports do not
+supply complete preparation rows. Earlier observations retain their own pins.
+
+Persistence sets the exact maximum at `97.908241P`. The 25% fitting reserve gives
+minimum integer coefficient 123. After independent accounting, input and fit
+review, the project lead selected conservative rounded `125P` under the user's
+delegated judgment, rather than a direct human numeric choice. It gives this
+measured case 27.67056% headroom. Only the coefficient changes; paid sizing,
+cumulative carry, overflow, terminal refusal and all other allowances/checks
+remain unchanged. These fitting observations are not holdout evidence or a
+universal bound. Normal native/caller verification, actual-head review and
+retention remain separate obligations under
+[AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md).
 
 ## Complete persistence startup and accepted revision
 

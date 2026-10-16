@@ -79,9 +79,10 @@ Use input-derived cumulative work allowances at the modular compiler phase
 owners and for native preparation and startup. The accepted policy is:
 
 ```text
-preparation gas = 51 * (admitted source UTF8 bytes + validated main Core nodes)
-source gas      = 200 * (canonical loaded source UTF8 bytes, including builtins)
-final gas       = 161 * (the same canonical source UTF8 closure)
+preparation gas = 125 * (admitted source UTF8 bytes + validated main Core nodes)
+source gas      = 800 * (canonical loaded source UTF8 bytes, including builtins)
+final gas       = 800 * (the same canonical source UTF8 closure)
+rewrite gas     = 16 * (the same canonical source UTF8 closure), per compiler arena
 Core gas        = 345 * (the same canonical source UTF8 closure)
 startup gas     = 22 * (canonical image bytes + canonical expected-fact bytes)
 ```
@@ -89,15 +90,22 @@ startup gas     = 22 * (canonical image bytes + canonical expected-fact bytes)
 Source checking sizes the complete canonical loaded source closure before
 checking. Count each loaded module once, including builtin sources, rather than
 import edges or aliases. Pay one unit per source and one for the census in a
-finite source-count-derived bootstrap, then carry that work inside `200*S`
+finite source-count-derived bootstrap, then carry that work inside `800*S`
 through every module, source copy, closed entry and retained provenance. This is
 the total allowance; the historical ten-percent deficit does not apply.
 Final elaboration and independent compiler Core each pay their own identical
 resident-length census before work begins and carry it inside their respective
-`161*S` and `345*S` totals. Apply this at both Pure and Effect modular driver
+`800*S` and `345*S` totals. Apply this at both Pure and Effect modular driver
 entries. Their existing remaining-credit loans debit the same cumulative meter.
-These totals have no historical extra ten percent. Resolution, constraints and
-other construction/rewrite budgets remain separate.
+These totals have no historical extra ten percent.
+
+The paid census also returns its canonical byte count for a separate `16*S`
+rewrite meter, installed once when an empty compiler-owned arena is constructed.
+All rewrites in that arena consume the same meter. A fresh compiler arena
+inherits only the allowance, never spent work or unused Source/Final credit.
+Reject multiplication overflow. There is no floor, intercept, refill or extra
+margin. Generic builder, standalone and private-image defaults remain unchanged;
+resolution, constraints and other construction budgets remain separate.
 
 Preparation reads resident admitted source lengths and main arena length before
 image construction. Pay one unit per source and one for the node count using a
@@ -128,16 +136,53 @@ measured scope, errors and incomplete final SQLite coverage; it is informative.
 Require focused connected normal-host and adversarial tests and independent
 review of the implementation before transferring its verification.
 
-On 2026-10-16, the project lead adopted source `200S` under the user's explicit
+On 2026-10-16, the project lead first adopted source `200S` under the user's explicit
 delegation to choose recommended autonomous fixes. The unchanged 283-byte
 recursive-hook regression required 42,836 units through complete Source
 checking, including its paid census. The 25% reserve rule gives coefficient 190;
 200 is the conservative rounded choice. Independent review cleared the finite
-Source-only measurement and accounting before adoption. This changes only the
-Source coefficient; the other phase policies and checks above remain unchanged.
+Source-only measurement and accounting before adoption. That revision changed
+only the Source coefficient and retained the other then-current phase policies.
 [DN-0050](../design/DN-0050-native-program-gas-estimates.md) records the measured
 scope and historical comparisons. Normal execution, implementation review and
 the integrated checkpoint remain separate verification obligations.
+
+The project lead subsequently selected `300S` under that same delegated human
+judgment after independent review of the larger product SQLite Source-only
+measurement. The unchanged 39,033-byte constraint workload requires 8,510,624
+units including its six paid census charges. Applying the same 25% reserve rule
+gives a minimum coefficient of 273; 300 is the conservative rounded choice.
+That revision changed only the Source coefficient. The finite diagnostic stopped before
+linking, Final/Core checking or native execution; it is not a normal-policy or
+whole-caller pass. Normal affected callers, implementation review, retaining
+verification and the integrated checkpoint retain their separate gates.
+
+The project lead later selected Source `800S`, Final `800S` and separate
+compiler-arena rewrite `16S` under the same delegated judgment, after independent
+review of all four complete SQLite phase observations. The 44,512-byte
+persistence workload used 28,158,349 Source units, 26,809,274 Final units and
+510,782 units in its largest rewrite arena. A 25% fitting reserve gives minimum
+coefficients 791, 753 and 15; 800, 800 and 16 are the conservative rounded
+choices. The fixed implementation rewrite default had independently refused
+one unit at 327,680; Source credit did not fund it. The replacement preserves
+that ledger separation and does not change the shared structural default.
+These finite measurements stopped before independent Core, preparation or
+native execution. They are fitting evidence, not a holdout, normal caller pass
+or universal complexity guarantee. Normal verification and retained delivery
+remain separate obligations.
+
+The project lead subsequently selected preparation `125P` under the same
+delegated judgment after independent review of four complete preparation
+observations. Here P retains its existing paid definition: canonical admitted
+source bytes plus validated main Core nodes. Persistence used 4,984,019 units
+for P = 50,905 (44,510 source bytes and 6,395 main nodes). Its ordinary fixture
+substitutes a fresh database path, so those actual inputs are recorded separately
+from the earlier 44,512-byte observation. A 25% fitting reserve requires integer
+coefficient 123; 125 is the conservative rounded choice. The same cumulative
+meter carries its census, native-input checks, image encoding and emission.
+The finite measurements used `204P` and stopped before generated-host building
+or evaluation; normal native verification and retained delivery remain required.
+Source/Final/rewrite/Core/startup policies and every other check remain unchanged.
 
 ### Optional C/header verification
 

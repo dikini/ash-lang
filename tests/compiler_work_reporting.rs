@@ -36,11 +36,11 @@ fn ordinary_public_execution_reports_completed_costs_without_changing_the_value(
     let report = result.compilation_work();
     assert_eq!(
         report.source_checking.unwrap().allowance,
-        Some(200 * "main : Unit -> Int\nmain () = 42\n".len())
+        Some(800 * "main : Unit -> Int\nmain () = 42\n".len())
     );
     assert_eq!(
         report.final_elaboration.unwrap().allowance,
-        Some(161 * "main : Unit -> Int\nmain () = 42\n".len())
+        Some(800 * "main : Unit -> Int\nmain () = 42\n".len())
     );
     assert_eq!(
         report.independent_core.unwrap().allowance,
@@ -76,8 +76,8 @@ fn effect_execution_reports_paid_canonical_totals_without_alias_credit() {
             assert_eq!(result.value_display(), "42");
             let report = result.compilation_work();
             for (cost, coefficient) in [
-                (report.source_checking.unwrap(), 200),
-                (report.final_elaboration.unwrap(), 161),
+                (report.source_checking.unwrap(), 800),
+                (report.final_elaboration.unwrap(), 800),
                 (report.independent_core.unwrap(), 345),
             ] {
                 assert!(cost.completed);

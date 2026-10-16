@@ -71,7 +71,10 @@ checked before provider binding; passive native facts are compared separately
 with the generated host's original EXPECTED_FACTS. A forwarding-only corruption
 can preserve that comparison and still fail independent Core admission. A
 changed original method name fails the fact comparison first. Neither boundary
-rechecks Ash source or selects an implementation at startup.
+runs Ash semantic checking or selects an implementation at startup. Registry
+provenance admission can reconstruct original declaration coordinates through a
+paid, bounded syntax-only walk of resident embedded defining text; it never
+reopens source paths, resolves names or infers source types.
 
 Selective imports and facades retain provenance-bound source headers and a
 passive implemented-interface census even when the resource name or prior
@@ -94,7 +97,9 @@ The initial private construction carrier explicitly refuses unsupported registry
 and method facts instead of dropping them. Flat records reconstruct unchecked
 Core with fresh identities, then invoke the existing modular validator. Decode,
 reconstruction and independent validation share one cumulative bounded meter;
-generated startup performs no source checking. The matching-runtime identity
+generated startup performs no source semantic checking. Its independent registry
+proof may inspect embedded defining syntax for exact declaration coordinates,
+within the same cumulative meter. The matching-runtime identity
 includes compiler/runtime sources, package dependencies, target, enabled features
 and Rust toolchain inputs. Generated hosts must preserve dependency versions and
 features as well as the admitted program data.

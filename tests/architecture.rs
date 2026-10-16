@@ -603,6 +603,52 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/effect.rs::EffectOperation.SourceResourceScope.0", FieldSourceTemplateMixed),
     kind_site!("src/core/dialect.rs::ImageNodeView.$alias", FieldBuildNodeBorrow),
     kind_site!("src/core/mod.rs::SourceResourceScopeNode.$alias", FieldSourceTemplateMixed),
+    // Source control originals, complete row claims and borrowed graph views.
+    kind_site!("src/build/source_resource_image.rs::RestoredSourceCopy.node_rows", FieldBuildTypeOwned),
+    kind_site!("src/core/provider.rs::HandlerGraphDraft.$alias", FieldProviderInputsBorrow),
+    kind_site!("src/core/provider.rs::HandlerGraphView.$alias", FieldProviderInputsBorrow),
+    kind_site!("src/core/provider/handler.rs::HandlerGraphDraft.clauses", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeCoreTree),
+    kind_site!("src/core/provider/handler.rs::HandlerGraphDraft.direct_demands", FieldProviderTypeBorrow),
+    kind_site!("src/core/provider/handler.rs::HandlerGraphDraft.hidden", FieldProviderKindBorrow),
+    kind_site!("src/core/provider/handler.rs::HandlerGraphDraft.pending_rows", FieldProviderTypeBorrow),
+    kind_site!("src/core/provider/handler.rs::HandlerGraphDraft.program", FieldProviderDraftBorrow),
+    kind_site!("src/core/provider/handler.rs::HandlerGraphDraft.state", FieldProviderTypeBorrow),
+    kind_site!("src/core/provider/handler.rs::HandlerGraphView.canonical", FieldProviderRegistryBorrow),
+    kind_site!("src/core/provider/handler.rs::HandlerGraphView.draft", FieldProviderInputsBorrow),
+    kind_site!("src/core/provider/handler.rs::HandlerGraphView.provided", FieldProviderTypeBorrow),
+    kind_site!("src/core/provider/handler.rs::HandlerGraphView.row_recipe", FieldProviderTypeBorrow),
+    kind_site!("src/core/source_resource.rs::CheckedSourceResourceTemplate.handler_rows", FieldConditionalCodeSummaryMixed),
+    kind_site!("src/core/source_resource.rs::FlowFact.HandlerInputCallable.binder", FieldProviderTypeBorrow),
+    kind_site!("src/core/source_resource.rs::FlowFact.HandlerInputCallable.original", FieldProviderResolvedBorrow),
+    kind_site!("src/core/source_resource.rs::FlowFact.HandlerInputCallable.pattern", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeCoreTree),
+    kind_site!("src/core/source_resource.rs::FlowFact.HandlerInputCallable.value_type", FieldProviderTypeBorrow),
+    kind_site!("src/core/source_resource.rs::FlowFacts.handler_graph", FieldProviderInputsBorrow),
+    kind_site!("src/core/source_resource.rs::SourceHandlerGraph.$alias", FieldProviderInputsMixed),
+    kind_site!("src/core/source_resource.rs::SourceHandlerRowInputs.$alias", FieldProviderCoreOwned),
+    kind_site!("src/core/source_resource.rs::SourceResourceCopy.node_rows", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/source_resource.rs::SourceResourceCopy.pending", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/source_resource.rs::SourceResourceCopyClaim.node_rows", FieldProviderTypeBorrow),
+    kind_site!("src/core/source_resource.rs::SourceResourceScopeDescriptor.handler_rows", FieldProviderCoreOwned, Shared),
+    kind_site!("src/core/source_resource/handler_rows.rs::SourceHandlerGraph.header", FieldSourceHeaderShared, Borrowed),
+    kind_site!("src/core/source_resource/handler_rows.rs::SourceHandlerGraph.hidden", FieldProviderCoreOwned),
+    kind_site!("src/core/source_resource/handler_rows.rs::SourceHandlerGraph.inputs", FieldProviderTypeBorrow),
+    kind_site!("src/core/source_resource/handler_rows.rs::SourceHandlerGraph.program", FieldProviderDraftBorrow),
+    kind_site!("src/core/source_resource/handler_rows.rs::SourceHandlerGraph.recipe", FieldProviderTypeBorrow),
+    kind_site!("src/core/source_resource/handler_rows.rs::SourceHandlerGraph.state", FieldProviderCoreOwned),
+    kind_site!("src/core/source_resource/handler_rows.rs::SourceHandlerRowInputs.direct", FieldProviderCoreOwned),
+    kind_site!("src/core/source_resource/handler_rows.rs::SourceHandlerRowInputs.pending", FieldProviderCoreOwned),
+    kind_site!("src/core/source_resource/handler_rows.rs::SourceHandlerRows.capture", FieldConditionalCaptureMixed),
+    kind_site!("src/core/source_resource/handler_rows.rs::SourceHandlerRows.inputs", FieldProviderCoreOwned),
+    kind_site!("src/core/source_resource/handler_rows.rs::SourceHandlerRows.recipe", FieldProviderCoreOwned),
+    kind_site!("src/core/validate.rs::Validator.source_handler_graph", FieldProviderInputsBorrow),
+    kind_site!("src/elaborate.rs::CoreElaborator.deferred_source_resources", FieldSourceElaborationMixed),
+    kind_site!("src/elaborate/source_resource.rs::DeferredSourceResourceInstance.answer", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate/source_resource.rs::DeferredSourceResourceInstance.arguments", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate/source_resource.rs::DeferredSourceResourceInstance.body_effects", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate/source_resource.rs::DeferredSourceResourceInstance.copies", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate/source_resource.rs::DeferredSourceResourceInstance.provided", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate/source_resource.rs::DeferredSourceResourceInstance.rows", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate/source_resource.rs::DeferredSourceResourceInstance.template", FieldSourceElaborationTemplateShared),
     kind_site!("src/core/source_resource.rs::ArgumentsGuard.0", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/source_resource.rs::CheckedSourceResourceHeader.acquire", FieldSourceHeaderShared),
     kind_site!("src/core/source_resource.rs::CheckedSourceResourceHeader.original", FieldProviderResolvedBorrow, Shared),
@@ -849,6 +895,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/validate.rs::OriginalTemplateRegistryAdmission.registry", FieldProviderRegistryShared),
     kind_site!("src/core/validate.rs::OriginalTemplateRegistryAdmission.globals", FieldSourceGlobalShared),
     kind_site!("src/core/validate.rs::SourceResourceStructureSession.admitted", FieldProviderRegistryShared),
+    kind_site!("src/core/validate.rs::SourceResourceStructureSession.original_provider", FieldProviderAuthenticationMixed, Borrowed),
     kind_site!("src/core/capture/control.rs::Control.NativeInterpret.effects", FieldSummaryCarrierRetentionPreservedCarrierElaborationInferenceTypeSummaryTree, Shared),
     kind_site!("src/eval/machine.rs::Frame.NativeInterpretBoundary.environment", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
     kind_site!("src/eval/machine.rs::Machine.source_bindings", FieldNativeBindingBorrow),
@@ -1456,6 +1503,10 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/elaborate/provider.rs::CommittedOriginalComponent.certificate", FieldProviderContractShared),
     kind_site!("src/elaborate/provider.rs::PreparedLocalProviderCode.code", FieldProviderCodeShared),
     kind_site!("src/elaborate/provider.rs::PreparedLocalProviderCode.originals", FieldProviderCodeShared),
+    kind_site!("src/elaborate/provider.rs::SourceOriginalProviderContext.code", FieldProviderCodeShared, Borrowed),
+    kind_site!("src/elaborate/provider.rs::SourceOriginalProviderContext.imported", FieldProviderSummaryBorrow),
+    kind_site!("src/elaborate/provider.rs::SourceOriginalProviderContext.defining", FieldProviderSummaryBorrow),
+    kind_site!("src/elaborate/provider.rs::SourceOriginalProviderContext.publication", FieldProviderGlobalsMixed, Borrowed),
     kind_site!("src/elaborate/provider.rs::PreparedProviderCode.Group.0", FieldProviderCodeShared),
     kind_site!("src/elaborate/provider.rs::PreparedProviderCode.Original.0", FieldProviderCodeShared),
     kind_site!("src/elaborate/provider.rs::PreparedProviderOriginal.declaration", FieldProviderCodeShared),
@@ -1861,6 +1912,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/transform.rs::$fn_rebuild_pattern_with_origin_work::Task.FinishConstructor.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/validate.rs::Validator.contextual_registry", FieldProviderRegistryBorrow),
     kind_site!("src/core/validate.rs::Validator.contextual_native_authentication", FieldNativeAuthenticationBorrow),
+    kind_site!("src/core/validate.rs::Validator.source_original_provider", FieldProviderAuthenticationMixed, Borrowed),
     kind_site!("src/core/validate.rs::Validator.provider_external_types", FieldProviderWorkBorrow),
     kind_site!("src/core/validate.rs::Validator.provider_method_evidence", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeCoreTree),
     kind_site!("src/core/validate.rs::Validator.provider_state_accesses", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeCoreTree),
@@ -9002,6 +9054,10 @@ fn private_core_allowlist_excludes_scalar_interface_carriers() {
 fn private_core_layout_and_family_authentication_is_path_confined() {
     let allowed: &[(&str, &[&str])] = &[
         (
+            "with_registry_method_evidence_and_rewrite_work",
+            &["src/core/dialect.rs", "src/core/transform.rs"],
+        ),
+        (
             "EvidenceSlot",
             &["src/core/provider/external.rs", "src/core/validate.rs"],
         ),
@@ -9166,6 +9222,7 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
                     | "same_interface_application_with_budget"
                     | "target_requirement"
                     | "with_registry_and_method_evidence"
+                    | "with_registry_method_evidence_and_rewrite_work"
                     | "with_registry_method_evidence_and_type_work"
             ),
             // These names reconstruct canonical imported catalogs and authenticate
@@ -9324,6 +9381,7 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
                     | "method_evidence_anchors"
                     | "requirement"
                     | "with_registry_and_method_evidence"
+                    | "with_registry_method_evidence_and_rewrite_work"
             ),
             _ => false,
         }

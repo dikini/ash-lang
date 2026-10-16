@@ -62,6 +62,28 @@ pub(super) struct SourceResourceProgress<'a> {
     previous: Option<usize>,
 }
 
+pub(super) struct DeferredSourceResourceInstance {
+    scope: NodeId,
+    body: NodeId,
+    answer: IterativeTypeOwner,
+    body_effects: EffectRow,
+    template: Arc<CheckedSourceResourceTemplate>,
+    arguments: SourceArguments,
+    rows: crate::core::provider::DeferredProviderHandlerRows,
+    copies: [provider_instance::PreparedPhaseCopy; 3],
+    provided: EffectInstance,
+    marker: Option<crate::evidence::PendingObligationMarker>,
+}
+impl std::fmt::Debug for DeferredSourceResourceInstance {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DeferredSourceResourceInstance")
+            .field("scope", &self.scope)
+            .field("body", &self.body)
+            .finish_non_exhaustive()
+    }
+}
+
 pub(super) struct PreparedSourceResource<'a> {
     pub(super) resource: &'a crate::resolved::ResolvedProviderResourceExpr,
     span: Span,
@@ -347,15 +369,44 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             associated.into_boxed_slice(),
         );
         let body_row = self.zonk_effect_row(&body.effects)?;
-        let residual = self.remove_cleanup_effect(&body_row, &provided, progress.span, true)?;
-        let direct = progress
-            .template
-            .handler_direct_row(&mut self.type_work)
-            .map_err(validation)?;
-        let direct = progress
-            .replacements
-            .substitute_row(&direct, &mut self.type_work)?;
-        let residual = self.union_effects(&residual, &direct, progress.span)?;
+        let client_residual =
+            self.remove_cleanup_effect(&body_row, &provided, progress.span, true)?;
+        let deferred = if progress.template.has_conditional_handler_rows() {
+            let count = progress
+                .template
+                .handler_row_count(&mut self.type_work)
+                .map_err(validation)?;
+            let mut fresh = Vec::new();
+            self.type_work.charge(count).map_err(|_| type_resource())?;
+            fresh
+                .try_reserve_exact(count)
+                .map_err(|_| type_resource())?;
+            for _ in 0..count {
+                fresh.push(self.defer_provider_row(progress.span)?);
+            }
+            let mut fresh = fresh.into_iter();
+            Some(
+                progress
+                    .template
+                    .defer_handler_rows(|| fresh.next(), &mut self.type_work)
+                    .map_err(validation)?,
+            )
+        } else {
+            None
+        };
+        let residual = if let Some(deferred) = &deferred {
+            clone_effect_row_with_budget(deferred.output(), &mut self.type_work)
+                .map_err(|_| type_resource())?
+        } else {
+            let direct = progress
+                .template
+                .handler_direct_row(&mut self.type_work)
+                .map_err(validation)?;
+            let direct = progress
+                .replacements
+                .substitute_row(&direct, &mut self.type_work)?;
+            self.union_effects(&client_residual, &direct, progress.span)?
+        };
 
         self.zonk_builder_types_since(None, false)
             .map_err(TypeError::Internal)?;
@@ -370,8 +421,30 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 .replacements
                 .substitute(&header.result.ty, &mut self.type_work)?,
         );
-        let mut effects =
-            self.union_effects(&progress.initializer.effects, &residual, progress.span)?;
+        let mut outward_handler = clone_effect_row_with_budget(&residual, &mut self.type_work)
+            .map_err(|_| type_resource())?;
+        for interpretation in &header.interpreted {
+            let interpreted = progress.replacements.substitute_row(
+                &EffectRow::singleton(
+                    clone_effect_instance_with_budget(
+                        &interpretation.instance,
+                        &mut self.type_work,
+                    )
+                    .map_err(|_| type_resource())?,
+                ),
+                &mut self.type_work,
+            )?;
+            outward_handler = self.provider_native_phase_row(
+                &outward_handler,
+                interpreted.known().first().ok_or_else(invalid_state)?,
+                progress.span,
+            )?;
+        }
+        let mut effects = self.union_effects(
+            &progress.initializer.effects,
+            &outward_handler,
+            progress.span,
+        )?;
         for acquire in [true, false] {
             let original = progress
                 .template
@@ -390,21 +463,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     .replacements
                     .substitute_row(&EffectRow::singleton(original), &mut self.type_work)?;
                 let effect = interpreted.known().first().ok_or_else(invalid_state)?;
-                outward = self.remove_cleanup_effect(&outward, effect, progress.span, true)?;
+                outward = self.provider_native_phase_row(&outward, effect, progress.span)?;
             }
             effects = self.union_effects(&effects, &outward, progress.span)?;
-        }
-        // Selected source-handler native calls belong to this same sealed
-        // scope; preserve all other outward instances, including ordinary overrides.
-        for interpretation in &header.interpreted {
-            let original =
-                clone_effect_instance_with_budget(&interpretation.instance, &mut self.type_work)
-                    .map_err(|_| type_resource())?;
-            let interpreted = progress
-                .replacements
-                .substitute_row(&EffectRow::singleton(original), &mut self.type_work)?;
-            let effect = interpreted.known().first().ok_or_else(invalid_state)?;
-            effects = self.remove_cleanup_effect(&effects, effect, progress.span, true)?;
         }
         self.check_provider_instance_escape(
             progress.resource,
@@ -418,10 +479,23 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             clone_effect_row_with_budget(&residual, &mut self.type_work)
                 .map_err(|_| type_resource())?,
         );
+        let empty_pending = HashMap::new();
+        let empty_nodes = HashMap::new();
         let phases = self.prepare_source_resource_copies(
             &progress.template,
             &progress.arguments.0,
             &output,
+            provider_instance::copy::ProviderScopeCopyRows {
+                residual: deferred
+                    .as_ref()
+                    .map_or(&client_residual, |rows| rows.residual()),
+                pending: deferred
+                    .as_ref()
+                    .map_or(&empty_pending, |rows| rows.pending()),
+                nodes: deferred
+                    .as_ref()
+                    .map_or(&empty_nodes, |rows| rows.node_rows()),
+            },
             progress
                 .resource
                 .identity
@@ -497,8 +571,21 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     nodes: &copied.forests[index].nodes,
                     freshening: phases[index].freshening(),
                     substitution: phases[index].substitution(),
+                    node_rows: phases[index].node_rows(),
                 },
             );
+        let deferred_arguments = if deferred.is_some() {
+            Some(SourceArguments(
+                crate::types::clone_kinded_arguments_with_budget(
+                    progress.arguments.0.iter(),
+                    &mut self.type_work,
+                )
+                .map_err(|_| type_resource())?
+                .into_vec(),
+            ))
+        } else {
+            None
+        };
         let handle = progress.handle.take().ok_or_else(invalid_state)?;
         let scope = crate::core::source_resource::SourceResourceScopeNode::new(
             Arc::clone(&progress.template),
@@ -529,12 +616,185 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 EffectOperation::SourceResourceScope(Box::new(scope)),
             )
             .map_err(TypeError::from)?;
+        if let Some(rows) = deferred {
+            self.type_work.charge(1).map_err(|_| type_resource())?;
+            self.deferred_source_resources
+                .try_reserve(1)
+                .map_err(|_| type_resource())?;
+            let marker = if self.purpose == super::ElaborationPurpose::ModuleCheck {
+                Some(self.evidence_marker()?)
+            } else {
+                None
+            };
+            let answer = IterativeTypeOwner::new(self.clone_type(&body_type)?);
+            self.deferred_source_resources
+                .push(DeferredSourceResourceInstance {
+                    scope: node,
+                    body: body_node,
+                    answer,
+                    body_effects: body_row,
+                    template: progress.template,
+                    arguments: deferred_arguments.ok_or_else(invalid_state)?,
+                    rows,
+                    copies: phases,
+                    provided,
+                    marker,
+                });
+        }
         Ok(TypedNode {
             node,
             ty: report.into_inner(),
             effects,
             provenance,
         })
+    }
+    pub(super) fn complete_deferred_source_resources(
+        &mut self,
+        marker: Option<crate::evidence::PendingObligationMarker>,
+        owner: NodeId,
+    ) -> Result<(), TypeError> {
+        if self.deferred_source_resources.is_empty() {
+            return Ok(());
+        }
+        if matches!(self.purpose, super::ElaborationPurpose::ModuleCheck) != marker.is_some() {
+            return Err(invalid_state());
+        }
+        let mut stack = Vec::new();
+        let mut reachable = std::collections::HashSet::new();
+        self.type_work.charge(1).map_err(|_| type_resource())?;
+        stack.try_reserve(1).map_err(|_| type_resource())?;
+        stack.push(owner);
+        while let Some(node) = stack.pop() {
+            self.type_work.charge(1).map_err(|_| type_resource())?;
+            reachable.try_reserve(1).map_err(|_| type_resource())?;
+            if !reachable.insert(node) {
+                continue;
+            }
+            let kind = self.builder.compiler_node_kind(node)?;
+            self.type_work
+                .charge(F::child_count(kind))
+                .map_err(|_| type_resource())?;
+            stack
+                .try_reserve(F::child_count(kind))
+                .map_err(|_| type_resource())?;
+            for ordinal in 0..F::child_count(kind) {
+                stack.push(F::child_at(kind, ordinal).ok_or_else(invalid_state)?);
+            }
+        }
+        let count = self.deferred_source_resources.len();
+        self.type_work.charge(count).map_err(|_| type_resource())?;
+        let mut retained = Vec::new();
+        retained
+            .try_reserve_exact(count)
+            .map_err(|_| type_resource())?;
+        let pending = std::mem::replace(&mut self.deferred_source_resources, retained);
+        for instance in pending {
+            let covered = match (marker, instance.marker) {
+                (Some(owner), Some(child)) => owner.covers(child),
+                (None, None) => true,
+                _ => false,
+            };
+            if !covered || !reachable.contains(&instance.scope) {
+                self.deferred_source_resources.push(instance);
+                continue;
+            }
+            self.complete_deferred_source_resource(instance)?;
+        }
+        Ok(())
+    }
+
+    fn complete_deferred_source_resource(
+        &mut self,
+        instance: DeferredSourceResourceInstance,
+    ) -> Result<(), TypeError> {
+        self.complete_ready_provider_row_equations()?;
+        self.zonk_builder_types_since(None, false)
+            .map_err(TypeError::Internal)?;
+        let answer = IterativeTypeOwner::new(self.zonk(&instance.answer)?);
+        let body_row = self.zonk_effect_row(&instance.body_effects)?;
+        let mut replacements = OwnerReplacementBuffer::new();
+        for (formal, argument) in instance
+            .template
+            .header()
+            .original
+            .parameters
+            .iter()
+            .zip(&instance.arguments.0)
+        {
+            let argument =
+                crate::types::IterativeArgumentOwner::new(self.zonk_owner_argument(argument)?);
+            replacements.insert_cloned(formal.id, &argument, &mut self.type_work)?;
+        }
+        let completed = self.provider_completed_roots.as_deref().unwrap_or(&[]);
+        self.type_work
+            .charge(completed.len())
+            .map_err(|_| type_resource())?;
+        let mut roots = Vec::new();
+        roots
+            .try_reserve_exact(completed.len())
+            .map_err(|_| type_resource())?;
+        roots.extend_from_slice(completed);
+        let (methods, adapters) = if self.purpose == super::ElaborationPurpose::ModuleCheck {
+            self.capture_provider_actual_routes(instance.scope, &roots)?
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        let provided = self.zonk_effect_row(&EffectRow::singleton(instance.provided))?;
+        let imported = self.provider_imported_captures.as_deref().unwrap_or(&[]);
+        self.type_work
+            .charge(imported.len())
+            .map_err(|_| type_resource())?;
+        let mut imports = Vec::new();
+        imports
+            .try_reserve_exact(imported.len())
+            .map_err(|_| type_resource())?;
+        imports.extend(imported.iter().map(|(binder, summary)| (*binder, summary)));
+        let actual = instance
+            .template
+            .prepare_instance_rows(
+                &self.builder,
+                instance.scope,
+                &roots,
+                &imports,
+                &methods,
+                &adapters,
+                F::capture_operation,
+                replacements.types.as_map(),
+                &replacements.rows,
+                &answer,
+                &body_row,
+                provided.known().first().ok_or_else(invalid_state)?,
+                &mut self.type_work,
+            )
+            .map_err(validation)?;
+        let completion = instance
+            .rows
+            .completion(&actual, &mut self.type_work)
+            .map_err(validation)?;
+        for (position, identity, row) in completion {
+            use crate::core::provider::DeferredProviderRowPosition as Position;
+            let row = match position {
+                Position::Node(_) | Position::Pending(_) | Position::Handler(_) => instance.copies
+                    [2]
+                .context()
+                .realized_row(row, &mut self.type_work)
+                .map_err(|error| TypeError::Internal(error.into()))?,
+                Position::Output | Position::Residual => {
+                    clone_effect_row_with_budget(row, &mut self.type_work)
+                        .map_err(|_| type_resource())?
+                }
+            };
+            self.complete_provider_row(identity, row)?;
+        }
+        self.complete_ready_provider_row_equations()?;
+        self.zonk_builder_types_since(None, false)
+            .map_err(TypeError::Internal)?;
+        F::effect_builder(&mut self.builder)
+            .ok_or_else(invalid_state)?
+            .with_caller_type_work(&mut self.type_work, |builder| {
+                builder.retain_source_resource_rows(instance.scope, Arc::new(actual))
+            })?;
+        Ok(())
     }
 }
 
@@ -962,6 +1222,7 @@ fn source_module_binders(
 
 /// Transfers the caller's cumulative meter into one ordinary effect checker.
 /// Both successful and refused compilation return the consumed meter.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn compile(
     module: &ResolvedModule,
     registry: &Arc<ResolvedRegistry>,
@@ -970,6 +1231,8 @@ pub(super) fn compile(
     work: &mut TypeWorkBudget,
     coverage: &mut UsefulnessBudget,
     constraints: &mut InterfaceConstraintBudget,
+    original_provider: Option<&provider::SourceOriginalProviderContext<'_>>,
+    rewrite_work_limit: usize,
 ) -> Result<Option<Arc<CheckedSourceResourceTemplates>>, TypeError> {
     if module.source_resources().is_empty() {
         return Ok(None);
@@ -998,6 +1261,7 @@ pub(super) fn compile(
         Arc::clone(registry),
         work,
         coverage.clone(),
+        TypeWorkBudget::with_limit(rewrite_work_limit),
     )?;
     let result = (|| {
         // These original declaration headers were checked by the caller.
@@ -1086,7 +1350,7 @@ pub(super) fn compile(
                 &header,
                 provider::Phase::Finish,
             )?;
-            let handler =
+            let (handler, handler_inputs) =
                 compiler.compile_source_handler(&binders, &catalog, definition, &header)?;
             records.push(Arc::new(
                 CheckedSourceResourceTemplate::admit_with_globals(
@@ -1094,11 +1358,12 @@ pub(super) fn compile(
                     acquire,
                     finish,
                     handler,
+                    handler_inputs,
                     Arc::clone(&globals),
                     &sources,
                     &module_sources,
                     &mut compiler.type_work,
-                    &mut crate::core::validate::SourceResourceStructureSession::default(),
+                    &mut crate::core::validate::SourceResourceStructureSession::with_original_provider(original_provider),
                 )
                 .map_err(|error| template_validation(error, definition.span))?,
             ));
@@ -1119,8 +1384,10 @@ impl CoreElaborator<EffectOperationFamily> {
         registry: Arc<ResolvedRegistry>,
         work: &mut TypeWorkBudget,
         coverage: UsefulnessBudget,
+        rewrite_work: TypeWorkBudget,
     ) -> Result<Self, TypeError> {
-        let builder = CoreBuilder::with_registry_for_family(Arc::clone(&registry));
+        let builder =
+            CoreBuilder::with_registry_and_rewrite_work(Arc::clone(&registry), rewrite_work);
         Self::for_module_with_prepared_builder(module, registry, work, coverage, builder)
     }
 
@@ -1189,9 +1456,10 @@ impl CoreElaborator<EffectOperationFamily> {
         {
             return Err(invalid_state());
         }
-        self.builder = CoreBuilder::with_registry_and_method_evidence(
+        self.builder = CoreBuilder::with_registry_method_evidence_and_rewrite_work(
             Arc::clone(&self.registry),
             Arc::clone(catalog),
+            TypeWorkBudget::with_limit(self.builder.rewrite_work_limit()),
         )?;
         self.builder
             .reserve_provider_draft_binders(binders, &mut self.type_work)?;
@@ -1327,7 +1595,10 @@ impl CoreElaborator<EffectOperationFamily> {
             self.builder
                 .type_abstraction(parameters, function, scheme, header.origin.clone())?;
         crate::core::transform::discharge_provider_draft_work(&self.builder, &mut self.type_work)?;
-        let replacement = CoreBuilder::with_registry_for_family(Arc::clone(&self.registry));
+        let replacement = CoreBuilder::with_registry_and_rewrite_work(
+            Arc::clone(&self.registry),
+            TypeWorkBudget::with_limit(self.builder.rewrite_work_limit()),
+        );
         std::mem::replace(&mut self.builder, replacement)
             .finish(root)
             .map_err(Into::into)
@@ -1446,7 +1717,13 @@ impl CoreElaborator<EffectOperationFamily> {
         catalog: &Arc<MethodEvidenceCatalog>,
         definition: &ResolvedSourceResourceDefinition,
         header: &Arc<CheckedSourceResourceHeader>,
-    ) -> Result<crate::core::UnvalidatedEffectProgram, TypeError> {
+    ) -> Result<
+        (
+            crate::core::UnvalidatedEffectProgram,
+            Option<crate::core::source_resource::SourceHandlerRowInputs>,
+        ),
+        TypeError,
+    > {
         let mut context = std::mem::take(&mut self.base_context);
         let result = (|| {
             self.begin_source_program(binders, catalog)?;
@@ -1484,7 +1761,17 @@ impl CoreElaborator<EffectOperationFamily> {
             let cleanup = self.remove_pattern_binders(&mut context, &binders);
             let (handler, demands, checked_clauses) = handled?;
             cleanup?;
-            let demands = self.zonk_effect_row(&demands)?;
+            let direct = self.zonk_effect_row(&demands)?;
+            let conditional = !direct.is_empty()
+                || !self.cleanup_rows.is_empty()
+                || checked_clauses.iter().any(|clause| {
+                    clause
+                        .pattern
+                        .binder_iter()
+                        .any(|binder| binder.ty().function_view().is_some())
+                });
+            let demands = clone_effect_row_with_budget(&direct, &mut self.type_work)
+                .map_err(|_| type_resource())?;
             let placeholder_effect = clone_effect_instance_with_budget(
                 &definition.provided.instance,
                 &mut self.type_work,
@@ -1496,12 +1783,17 @@ impl CoreElaborator<EffectOperationFamily> {
                 demands
                     .known()
                     .iter()
+                    .filter(|_| !conditional)
                     .chain(std::iter::once(&placeholder_effect)),
                 crate::types::clone_type_with_budget,
                 &mut self.type_work,
             )
             .map_err(|_| type_resource())?;
-            let demands = self.union_effects(&demands, &residual, definition.span)?;
+            let demands = if conditional {
+                residual
+            } else {
+                self.union_effects(&demands, &residual, definition.span)?
+            };
             // The original thunk carries the complete ordinary continuation row.
             // At specialization its private residual is solved from the client's
             // least output, while direct clause demands remain explicit.
@@ -1541,7 +1833,9 @@ impl CoreElaborator<EffectOperationFamily> {
                 .try_reserve_exact(checked_clauses.len())
                 .map_err(|_| type_resource())?;
             for clause in checked_clauses {
-                self.recompute_cleanup_clause(clause.range, &demands, handler, clause.resume)?;
+                if !conditional {
+                    self.recompute_cleanup_clause(clause.range, &demands, handler, clause.resume)?;
+                }
                 clauses.push(EffectClause::new(
                     clause.operation,
                     clause.resume,
@@ -1600,7 +1894,47 @@ impl CoreElaborator<EffectOperationFamily> {
                 core_type,
                 Origin::Source(definition.span),
             )?;
-            self.finish_source_program(function, &function_type, definition, Some(continuation))
+            if conditional {
+                self.zonk_builder_types_since(None, false)
+                    .map_err(TypeError::Internal)?;
+                let mut parameters = self.source_parameters(definition, true)?;
+                self.type_work.charge(1).map_err(|_| type_resource())?;
+                parameters.try_reserve(1).map_err(|_| type_resource())?;
+                parameters.push((continuation, Kind::EffectRow));
+                let quantified =
+                    clone_kinded_type_parameters_with_budget(&parameters, &mut self.type_work)
+                        .map_err(|_| type_resource())?
+                        .into_boxed_slice();
+                let ty = IterativeTypeOwner::new(self.zonk(&function_type)?);
+                let root = self.builder.type_abstraction(
+                    parameters,
+                    function,
+                    Type::Forall(quantified, Box::new(ty.into_inner())),
+                    definition.origin.clone(),
+                )?;
+                let pending = self.cleanup_rows.take_provider_pending(
+                    &self.builder,
+                    root,
+                    &mut self.type_work,
+                )?;
+                crate::core::transform::discharge_provider_draft_work(
+                    &self.builder,
+                    &mut self.type_work,
+                )?;
+                let replacement = CoreBuilder::with_registry_and_rewrite_work(
+                    Arc::clone(&self.registry),
+                    TypeWorkBudget::with_limit(self.builder.rewrite_work_limit()),
+                );
+                let (program, pending) = std::mem::replace(&mut self.builder, replacement)
+                    .finish_provider_conditional_draft(root, pending, &mut self.type_work)?;
+                Ok((
+                    program,
+                    Some(crate::core::source_resource::SourceHandlerRowInputs { direct, pending }),
+                ))
+            } else {
+                self.finish_source_program(function, &function_type, definition, Some(continuation))
+                    .map(|program| (program, None))
+            }
         })();
         self.base_context = context;
         self.provider_context = None;

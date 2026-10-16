@@ -351,6 +351,21 @@ pub(super) struct Graph {
     evidence_index: Vec<EvidenceIndex>,
 }
 
+impl Graph {
+    pub(super) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        // Expr and ProviderQueryBindings carry graph/term coordinates. The
+        // canonical type identities in this data graph live in metadata.
+        uses.charge(self.metadata.len())?;
+        for id in self.metadata.values() {
+            uses.id(*id)?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 pub(super) fn provider_capture_graph_for_test(
     metadata: Option<crate::types::TypeVariableId>,

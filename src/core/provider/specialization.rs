@@ -579,6 +579,110 @@ pub(crate) struct ResolvedProviderHandlerRows {
     captures: crate::core::capture::ActualCaptureInputs,
 }
 impl ResolvedProviderHandlerRows {
+    pub(in crate::core) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        for row in self.source_rows() {
+            uses.row(row)?;
+        }
+        uses.charge(self.pending.len() + self.node_rows.len() + self.handler_outputs.len())?;
+        for row in self
+            .pending
+            .values()
+            .chain(self.node_rows.values())
+            .chain(self.handler_outputs.values())
+        {
+            uses.row(row)?;
+        }
+        uses.capture_inputs(&self.captures)
+    }
+    pub(crate) fn source_rows(&self) -> [&crate::types::EffectRow; 4] {
+        [&self.direct, &self.epsilon, &self.output, &self.residual]
+    }
+    pub(crate) fn capture_inputs(&self) -> &crate::core::capture::ActualCaptureInputs {
+        &self.captures
+    }
+    pub(crate) fn handler_outputs(
+        &self,
+    ) -> &std::collections::HashMap<crate::core::HandlerId, crate::types::EffectRow> {
+        &self.handler_outputs
+    }
+
+    pub(in crate::core) fn rewrite_source_claim(
+        &self,
+        rewrite: &mut dyn FnMut(
+            &crate::types::EffectRow,
+        )
+            -> Result<crate::types::EffectRow, crate::core::BuildError>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, crate::core::BuildError> {
+        fn rows<K: Copy + Eq + std::hash::Hash>(
+            source: &std::collections::HashMap<K, crate::types::EffectRow>,
+            rewrite: &mut dyn FnMut(
+                &crate::types::EffectRow,
+            )
+                -> Result<crate::types::EffectRow, crate::core::BuildError>,
+            work: &mut TypeWorkBudget,
+        ) -> Result<std::collections::HashMap<K, crate::types::EffectRow>, crate::core::BuildError>
+        {
+            work.charge(source.len())
+                .map_err(|_| crate::core::BuildError::TypeWorkExceeded)?;
+            let mut result = std::collections::HashMap::new();
+            result
+                .try_reserve(source.len())
+                .map_err(|_| crate::core::BuildError::TypeWorkExceeded)?;
+            for (id, row) in source {
+                result.insert(*id, rewrite(row)?);
+            }
+            Ok(result)
+        }
+        Ok(Self {
+            original_arena: self.original_arena,
+            direct: rewrite(&self.direct)?,
+            epsilon: rewrite(&self.epsilon)?,
+            output: rewrite(&self.output)?,
+            residual: rewrite(&self.residual)?,
+            pending: rows(&self.pending, rewrite, work)?,
+            node_rows: rows(&self.node_rows, rewrite, work)?,
+            handler_outputs: rows(&self.handler_outputs, rewrite, work)?,
+            captures: self.captures.rewrite_rows(rewrite, work)?,
+        })
+    }
+
+    /// Plain source specialization data. Final source-scope admission derives
+    /// every row and actual request witness again; this is no execution proof.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::core) fn from_source_solution(
+        original_arena: crate::core::dialect::ArenaId,
+        rows: [crate::types::EffectRow; 3],
+        pending: std::collections::HashMap<
+            crate::types::InferenceVariableId,
+            crate::types::EffectRow,
+        >,
+        node_rows: std::collections::HashMap<NodeId, crate::types::EffectRow>,
+        handler_outputs: std::collections::HashMap<crate::core::HandlerId, crate::types::EffectRow>,
+        captures: crate::core::capture::ActualCaptureInputs,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, ValidationError> {
+        let [direct, epsilon, output] = rows;
+        // The private continuation retains the complete client residual,
+        // including effects that also occur in the independent direct demand.
+        let residual = crate::types::clone_effect_row_with_budget(&epsilon, work)
+            .map_err(|_| super::resource())?;
+        Ok(Self {
+            original_arena,
+            direct,
+            epsilon,
+            output,
+            residual,
+            pending,
+            node_rows,
+            handler_outputs,
+            captures,
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn assert_distinct_actual_captures_for_test(&self, effect: crate::types::EffectId) {
         assert!(
@@ -717,7 +821,7 @@ impl DeferredProviderHandlerRows {
         )
     }
 
-    fn from_domain(
+    pub(in crate::core) fn from_domain(
         original_arena: crate::core::dialect::ArenaId,
         original_pending: &[crate::types::InferenceVariableId],
         original_nodes: &[NodeId],
@@ -1658,6 +1762,118 @@ struct SpecializationProof {
     families: Vec<SpecializedFamily>,
     native_storage: Vec<AdmittedNativeStorageRelation>,
     native: Option<std::sync::Arc<crate::foreign::ForeignModuleFact>>,
+}
+
+impl SpecializationProof {
+    fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        uses.catalog(&self.catalog)?;
+        uses.charge(
+            self.nodes.len()
+                + self.parameters.len()
+                + self.clauses.len()
+                + self.occurrences.len()
+                + self.anchors.len()
+                + self.families.len()
+                + self.native_storage.len(),
+        )?;
+        for projection in self
+            .nodes
+            .iter()
+            .chain(&self.parameters)
+            .chain(&self.clauses)
+        {
+            projection.visit_semantic_type_variables(uses)?;
+        }
+        for occurrence in &self.occurrences {
+            uses.selection(&occurrence.selection)?;
+            uses.application(&occurrence.application)?;
+            uses.charge(occurrence.arguments.len() + occurrence.original.arguments.len())?;
+            for argument in occurrence
+                .arguments
+                .iter()
+                .chain(&occurrence.original.arguments)
+            {
+                uses.ty(argument)?;
+            }
+            if let Some(ty) = &occurrence.value_type {
+                uses.ty(ty)?;
+            }
+            if let Some(ty) = &occurrence.original.value {
+                uses.ty(ty)?;
+            }
+            occurrence
+                .original
+                .allocation
+                .visit_semantic_type_variables(uses)?;
+            uses.application(&occurrence.original.application)?;
+            uses.selection(&occurrence.original.selection)?;
+        }
+        for anchor in &self.anchors {
+            uses.application(&anchor.application)?;
+        }
+        for family in &self.families {
+            family.header.visit_semantic_type_variables(uses)?;
+            family.certificate.visit_semantic_type_variables(uses)?;
+            uses.instance(&family.provided)?;
+            family.state.visit_semantic_type_variables(uses)?;
+            uses.charge(family.clauses.len() + family.dictionaries.len())?;
+            for clause in &family.clauses {
+                clause.visit_semantic_type_variables(uses)?;
+            }
+            for dictionary in &family.dictionaries {
+                dictionary.projection.visit_semantic_type_variables(uses)?;
+                dictionary.initializer.visit_semantic_type_variables(uses)?;
+            }
+        }
+        for relation in &self.native_storage {
+            uses.id(relation.owner)?;
+            uses.id(relation.family.parameter)?;
+            uses.instance(&relation.effect)?;
+            relation
+                .request_projection
+                .visit_semantic_type_variables(uses)?;
+            relation
+                .operand_projection
+                .visit_semantic_type_variables(uses)?;
+        }
+        Ok(())
+    }
+}
+
+impl OriginalProviderSpecialization {
+    pub(super) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        self.0.visit_semantic_type_variables(uses)
+    }
+}
+impl PreparedProviderCaptureReceipt {
+    pub(super) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        self.0.visit_semantic_type_variables(uses)
+    }
+}
+impl ProviderFamilyAdmission {
+    pub(super) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        uses.id(self.identity.parameter)?;
+        uses.ty(&self.payload)?;
+        uses.application(&self.application)?;
+        uses.instance(&self.native_effect)?;
+        uses.charge(self.requirements.len() + self.selections.len())?;
+        for (selection, _) in self.requirements.iter().chain(&self.selections) {
+            uses.selection(selection)?;
+        }
+        Ok(())
+    }
 }
 
 struct SpecializedFamily {
