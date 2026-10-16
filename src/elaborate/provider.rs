@@ -1326,6 +1326,16 @@ pub(crate) struct SourceOriginalProviderContext<'a> {
 }
 
 impl SourceOriginalProviderContext<'_> {
+    pub(crate) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        crate::resolved::ProviderExternalFacts {
+            imported: self.imported,
+            defining: Some(self.defining),
+        }
+        .visit_semantic_type_variables(uses)
+    }
     pub(crate) fn module(&self) -> crate::module::ModuleId {
         self.code.module()
     }
@@ -1754,6 +1764,39 @@ fn authenticate_primary_provider_application(
 }
 
 impl CheckedProviderContracts {
+    pub(crate) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        uses.charge(self.declarations.len())?;
+        for declaration in &self.declarations {
+            uses.ordinary_header(&declaration.fact)?;
+            uses.application(&declaration.provider_application)?;
+            for lifecycle in [&declaration.acquire, &declaration.finish] {
+                uses.id(lifecycle.hidden_answer)?;
+                if let EffectRowVariable::Rigid(id) = lifecycle.hidden_row {
+                    uses.id(id)?;
+                }
+                uses.charge(lifecycle.formals.len())?;
+                for (source, target) in &lifecycle.formals {
+                    uses.id(*source)?;
+                    uses.id(*target)?;
+                }
+                lifecycle.externals.visit_semantic_type_variables(uses)?;
+            }
+            declaration.handlers.visit_semantic_type_variables(uses)?;
+            if let Some(family) = &declaration.family {
+                uses.id(family.identity.parameter)?;
+                uses.application(&family.application)?;
+                uses.charge(family.requirements.len())?;
+                for requirement in family.requirements.iter() {
+                    uses.application(&requirement.application)?;
+                }
+                family.handlers.visit_semantic_type_variables(uses)?;
+            }
+        }
+        Ok(())
+    }
     /// Original local carrier retained through publication. Callers charge
     /// resource_count before lookup and compare the returned Arc by identity.
     pub(super) fn family_original_authority(

@@ -90,6 +90,18 @@ fn source_control_equal_substitution_keeps_distinct_capture_demands() {
 }
 
 #[test]
+fn source_control_qualified_resource_identity_before_later_formal() {
+    let entry = format!(
+        "import owner as Donor\n{}\nmain : Unit -> Donor.Scope<Unit, Unit, Int>\nmain () = resource Donor.Probe<{{}}, ImportedFresh, {{}}> owner = 42 {{\n    42\n}}\ninterface KeepConfig<A> {{\n    keepConfig : A -> A\n}}\n",
+        include_str!("fixtures/source-owner/owner.ash"),
+    );
+    let fixture = Fixture::new(&entry);
+    compile_path(fixture.configuration()).expect(
+        "an imported resource's fresh identity precedes a later declaration formal and reaches independent Core",
+    );
+}
+
+#[test]
 fn pr27_implicit_finish_tracks_replaced_private_payload_captures() {
     let owner = include_str!("fixtures/source-owner/replaced_payload_owner.ash");
     let entry = r#"import owner as Owner

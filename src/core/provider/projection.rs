@@ -96,6 +96,28 @@ fn invalid() -> ValidationError {
 }
 
 impl NodeProjection {
+    pub(in crate::core) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        uses.charge(self.atoms.len() + self.metadata.len())?;
+        for atom in &self.atoms {
+            match atom {
+                Atom::Variable(id) => uses.id(*id)?,
+                Atom::Acquisition(acquisition) => uses.id(acquisition.identity)?,
+                _ => {}
+            }
+        }
+        for metadata in &self.metadata {
+            match metadata.view() {
+                MetadataView::Type(ty) => uses.ty(ty)?,
+                MetadataView::Argument(argument) => uses.argument(argument)?,
+                MetadataView::Row(row) => uses.row(row)?,
+                MetadataView::Kind(_) => {}
+            }
+        }
+        Ok(())
+    }
     pub(in crate::core) fn replace_effects(
         &mut self,
         row: EffectRow,

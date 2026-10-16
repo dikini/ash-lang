@@ -3,6 +3,7 @@
 mod image_registry;
 mod provider_instance;
 mod provider_registry;
+mod semantic_type_variables;
 pub(crate) use image_registry::{ImageRegistryItem, sort_image_registry_items};
 pub(crate) use provider_instance::{PendingProviderInstancePublication, ProviderInstanceSlot};
 

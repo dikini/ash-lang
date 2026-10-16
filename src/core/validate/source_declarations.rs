@@ -346,13 +346,18 @@ impl ResourceBinderCoordinates {
                     })
                     .ok_or_else(registry)?;
                 charge(work, instance.children.len())?;
-                if instance.children.iter().any(|child| matches!(child, ConcreteElement::Node(child) if child.kind == NodeKind::QualifiedName)) {
-                    // Qualified imported names retain the existing original
-                    // graph/lexical-owner proof; a short spelling cannot choose
-                    // another module's resource-owned slot.
-                    continue;
-                }
-                let family = name(instance, tokens, work)?;
+                let qualified = instance.children.iter().find_map(|child| match child {
+                    ConcreteElement::Node(child) if child.kind == NodeKind::QualifiedName => {
+                        Some(child)
+                    }
+                    _ => None,
+                });
+                // A qualified spelling is not resolved here. It may identify a
+                // raw argument coordinate, never a local family-owned slot.
+                let family = match qualified {
+                    Some(qualified) => span(qualified, tokens, work)?,
+                    None => name(instance, tokens, work)?,
+                };
                 let mut arguments = Vec::new();
                 charge(work, instance.children.len())?;
                 for child in &instance.children {
@@ -480,6 +485,62 @@ impl ResourceBinderCoordinates {
         // every retained matching record; the source file is not a census of
         // the projected registry. Ordinary scope/type checks still require the
         // canonical record for every identity actually used by the forest.
+        Ok(())
+    }
+
+    fn unused_candidates(
+        &self,
+        registry: &ResolvedRegistry,
+        module: ModuleId,
+        source: &SourceFile,
+        work: &mut TypeWorkBudget,
+        candidates: &mut HashSet<TypeVariableId>,
+    ) -> Result<(), ValidationError> {
+        let mut coordinates = HashSet::new();
+        for binder in &self.bindings {
+            charge(work, 1)?;
+            if !super::valid_upper_spelling(text(source, binder.argument)?) {
+                continue;
+            }
+            if binder.scope.source() != source.id()
+                || !super::span_contains(binder.scope, binder.argument)
+            {
+                return Err(registry_error());
+            }
+            coordinates.try_reserve(1).map_err(|_| resource())?;
+            if !coordinates.insert(binder.argument) {
+                return Err(registry_error());
+            }
+        }
+        let mut found = HashSet::new();
+        charge(work, registry.type_variable_count())?;
+        for parameter in registry.type_variables() {
+            if parameter.id.module() != Some(module) {
+                continue;
+            }
+            let origin = parameter.origin.primary_span();
+            charge(work, 1)?;
+            if !coordinates.contains(&origin) {
+                continue;
+            }
+            if parameter.kind != Kind::Type
+                || !matches!(&parameter.origin, Origin::Source(span) if *span == origin)
+                || !same_name(source, origin, &parameter.spelling, work)?
+                || registry
+                    .type_variable(parameter.id)
+                    .is_none_or(|canonical| !std::ptr::eq(canonical, parameter))
+            {
+                return Err(registry_error());
+            }
+            charge(work, 2)?;
+            found.try_reserve(1).map_err(|_| resource())?;
+            candidates.try_reserve(1).map_err(|_| resource())?;
+            if !found.insert(origin) || !candidates.insert(parameter.id) {
+                return Err(registry_error());
+            }
+        }
+        // This is only a coordinate candidate. Complete current-forest non-use
+        // and formal disjointness must hold before written-order classification.
         Ok(())
     }
 }
@@ -736,6 +797,9 @@ impl DeclarationCoordinates {
 #[derive(Debug, Default)]
 pub(super) struct OriginalDeclarationProvenance {
     pub(super) generatives: HashSet<TypeVariableId>,
+    // Coordinates alone grant nothing: the validator separately proves
+    // complete semantic non-use and formal disjointness for the current forest.
+    pub(super) ordering_candidates: HashSet<TypeVariableId>,
     pub(super) nominal_positions: HashMap<NominalTypeId, (u32, Span)>,
 }
 
@@ -765,7 +829,18 @@ pub(super) fn authenticate(
             work,
             &mut original.generatives,
         )?;
+        coordinates.resource_binders.unused_candidates(
+            registry,
+            *module,
+            source,
+            work,
+            &mut original.ordering_candidates,
+        )?;
     }
+    charge(work, original.ordering_candidates.len())?;
+    original
+        .ordering_candidates
+        .retain(|id| !original.generatives.contains(id));
     Ok(original)
 }
 
@@ -1832,6 +1907,358 @@ main () = 42
                 .source_original_checker_view(resolved.imported_facts(), &mut short),
             Err(crate::resolved::ResolvedBuildFailure::TypeResource)
         ));
+    }
+
+    #[test]
+    fn source_control_unused_ordering_checks_the_current_cached_forest() {
+        use crate::{
+            core::{
+                dialect::{
+                    MethodEvidenceCatalog, MethodEvidenceMethod, StoredNode, UnvalidatedCoreProgram,
+                },
+                effect::{
+                    EffectExprKind, EffectOperation, NativeInterpretNode, NativeInterpretation,
+                    UnvalidatedEffectProgram,
+                },
+                source_resource::SourceResourceGlobals,
+                validate::{SourceResourceStructureSession, Validator},
+            },
+            interface::{InterfaceId, MethodId},
+            module::{ModuleRoots, load_module_graph},
+            resolve::{DependencyExports, resolve_module},
+            resolved::CheckedModule,
+            types::{
+                ComputationType, EffectInstance, EffectRow, EffectRowVariable, IterativeTypeOwner,
+            },
+        };
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static IDS: AtomicU64 = AtomicU64::new(0);
+        struct Directory(std::path::PathBuf);
+        impl Drop for Directory {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let directory = Directory(std::env::temp_dir().join(format!(
+            "ash-unused-ordering-{}-{}",
+            std::process::id(),
+            IDS.fetch_add(1, Ordering::Relaxed)
+        )));
+        std::fs::create_dir(&directory.0).unwrap();
+        let owner = include_str!("../../../tests/fixtures/source-owner/owner.ash");
+        std::fs::write(directory.0.join("owner.ash"), owner).unwrap();
+        // The exact qualified-family/later-formal contrast from integration851.
+        let entry = format!(
+            "import owner as Donor\n{owner}\nmain : Unit -> Donor.Scope<Unit, Unit, Int>\nmain () = resource Donor.Probe<{{}}, ImportedFresh, {{}}> owner = 42 {{\n    42\n}}\ninterface KeepConfig<A> {{\n    keepConfig : A -> A\n}}\n"
+        );
+        std::fs::write(directory.0.join("entry.ash"), entry).unwrap();
+        let graph =
+            load_module_graph(&directory.0.join("entry.ash"), &ModuleRoots::empty()).unwrap();
+        let mut checked: Vec<CheckedModule> = Vec::new();
+        let mut provider_codes = crate::elaborate::ProviderCodeAvailability::default();
+        let mut checking_work = crate::compiler_work::source_work(&graph).unwrap();
+        let mut coverage_work = crate::pattern::UsefulnessBudget::default();
+        let mut constraint_work = crate::interface::InterfaceConstraintBudget::default();
+        for loaded in graph.modules() {
+            let dependencies = loaded
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    DependencyExports::new(
+                        edge,
+                        checked
+                            .iter()
+                            .find(|module| module.module() == edge.target())
+                            .unwrap()
+                            .exports(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let compiled = crate::elaborate::check_module_with_budget_and_provider_codes(
+                resolve_module(loaded, &dependencies).unwrap(),
+                &provider_codes,
+                &mut checking_work,
+                &mut coverage_work,
+                &mut constraint_work,
+            )
+            .unwrap();
+            if let Some(code) = compiled.provider_code() {
+                provider_codes
+                    .retain(loaded.id(), code, &mut checking_work)
+                    .unwrap();
+            }
+            if let Some(code) = compiled.source_resource_code() {
+                provider_codes
+                    .retain_source(loaded.id(), code, &mut checking_work)
+                    .unwrap();
+            }
+            checked.push(compiled);
+        }
+        let original = checked
+            .iter()
+            .find(|module| module.module() == graph.entry())
+            .unwrap()
+            .source_resource_code()
+            .unwrap()
+            .resource(0)
+            .unwrap();
+        let original = original.original_acquire();
+        let header = Arc::clone(
+            original
+                .registry
+                .source_resource_facts()
+                .find(|fact| fact.id.module() == graph.entry())
+                .unwrap(),
+        );
+        let identity = original
+            .registry
+            .type_variables()
+            .find(|parameter| {
+                parameter.id.module() == Some(graph.entry())
+                    && parameter.spelling == "ImportedFresh"
+            })
+            .unwrap()
+            .id;
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|loaded| loaded.source())
+            .collect::<Vec<_>>();
+        let modules = graph
+            .modules()
+            .iter()
+            .map(|loaded| (loaded.id(), loaded.source().id()))
+            .collect::<Vec<_>>();
+        let globals = Arc::new(SourceResourceGlobals::new());
+        let check = |session: &mut SourceResourceStructureSession<'_>,
+                     program: &UnvalidatedEffectProgram,
+                     globals: &Arc<SourceResourceGlobals>,
+                     work: &mut TypeWorkBudget| {
+            session.check_with_globals(program, &header, false, &sources, &modules, globals, work)
+        };
+        let mut session = SourceResourceStructureSession::default();
+        let mut measured = TypeWorkBudget::default();
+        check(&mut session, original, &globals, &mut measured).unwrap();
+        let first = measured.used();
+        assert!(
+            session
+                .admitted
+                .as_ref()
+                .unwrap()
+                .unused_ordering
+                .contains(&identity)
+        );
+        check(&mut session, original, &globals, &mut measured).unwrap();
+        let reused = measured.used() - first;
+        assert!(
+            reused < first,
+            "unchanged current forest must take the real completed-admission reuse path"
+        );
+        assert!(
+            session
+                .admitted
+                .as_ref()
+                .unwrap()
+                .unused_ordering
+                .contains(&identity)
+        );
+        for prefix in [0, 13] {
+            let mut work = TypeWorkBudget::with_limit(prefix + first);
+            work.charge(prefix).unwrap();
+            check(
+                &mut SourceResourceStructureSession::default(),
+                original,
+                &globals,
+                &mut work,
+            )
+            .unwrap();
+            assert_eq!(work.used(), prefix + first);
+            let mut short = TypeWorkBudget::with_limit(prefix + first - 1);
+            short.charge(prefix).unwrap();
+            assert_eq!(
+                check(
+                    &mut SourceResourceStructureSession::default(),
+                    original,
+                    &globals,
+                    &mut short
+                )
+                .unwrap_err()
+                .reason(),
+                ValidationReason::Resource
+            );
+            check(
+                &mut SourceResourceStructureSession::default(),
+                original,
+                &globals,
+                &mut TypeWorkBudget::default(),
+            )
+            .unwrap();
+        }
+        fn copy(program: &UnvalidatedEffectProgram) -> UnvalidatedEffectProgram {
+            UnvalidatedCoreProgram {
+                registry: Arc::clone(&program.registry),
+                method_evidence: Arc::clone(&program.method_evidence),
+                arena: program.arena,
+                root: program.root,
+                method_evidence_anchors: program
+                    .method_evidence_anchors
+                    .iter()
+                    .map(|anchor| crate::core::dialect::MethodEvidenceAnchor {
+                        node: anchor.node,
+                        owner: anchor.owner,
+                        requirement: anchor.requirement,
+                        method: anchor.method,
+                        application: anchor.application.clone(),
+                        role: anchor.role,
+                        occurrence: anchor.occurrence,
+                        expectation: anchor.expectation,
+                    })
+                    .collect(),
+                nodes: program
+                    .nodes
+                    .iter()
+                    .map(|node| StoredNode {
+                        dialect: node.dialect,
+                        ty: node.ty.clone(),
+                        effects: node.effects.clone(),
+                        origin: node.origin.clone(),
+                        kind: node.kind.clone(),
+                    })
+                    .collect(),
+            }
+        }
+        for mutation in 0..6 {
+            let mut changed = copy(original);
+            match mutation {
+                0 => changed.nodes[changed.root.index().unwrap()].ty = Type::Variable(identity),
+                1 | 2 | 3 | 5 => {
+                    let value_type = match mutation {
+                        1 => Type::Forall(
+                            Box::new([(identity, Kind::Type)]),
+                            Box::new(Type::Variable(identity)),
+                        ),
+                        5 => Type::Forall(Box::new([(identity, Kind::Type)]), Box::new(Type::Unit)),
+                        2 => Type::EffectfulFunction(
+                            Box::new(Type::Unit),
+                            Box::new(ComputationType::new(
+                                Type::Unit,
+                                EffectRow::open(EffectRowVariable::rigid(identity), Box::new([])),
+                            )),
+                        ),
+                        _ => Type::Unit,
+                    };
+                    let method = MethodEvidenceMethod {
+                        id: MethodId::new(InterfaceId::new(graph.entry(), 0), 0),
+                        spelling: "metadata_only".into(),
+                        interface_parameters: Box::new([]),
+                        inherited_parameters: Box::new([]),
+                        parameters: if mutation == 3 {
+                            Box::new([(identity, Kind::Type)])
+                        } else {
+                            Box::new([])
+                        },
+                        value_type,
+                    };
+                    changed.method_evidence = Arc::new(MethodEvidenceCatalog::new(
+                        vec![method],
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                    ));
+                }
+                4 => {
+                    let symbol = Arc::clone(
+                        changed
+                            .registry
+                            .effects()
+                            .iter()
+                            .find_map(|effect| effect.native_contract.as_ref())
+                            .unwrap(),
+                    );
+                    let effect =
+                        EffectInstance::new(symbol.effect(), Box::new([Type::Variable(identity)]));
+                    changed.nodes[changed.root.index().unwrap()].kind = EffectExprKind::Operation(
+                        EffectOperation::NativeInterpret(NativeInterpretNode::new(
+                            changed.root,
+                            Box::new([NativeInterpretation::new(effect, symbol)]),
+                        )),
+                    );
+                }
+                _ => unreachable!(),
+            }
+            assert!(Arc::ptr_eq(&changed.registry, &original.registry));
+            let validator = Validator::new_modules(&changed, &sources, &modules).unwrap();
+            assert!(
+                validator
+                    .unused_ordering_candidates(&HashSet::from([identity]))
+                    .unwrap()
+                    .is_empty(),
+                "semantic carrier mutation {mutation}"
+            );
+            let mut session = SourceResourceStructureSession::default();
+            check(
+                &mut session,
+                original,
+                &globals,
+                &mut TypeWorkBudget::default(),
+            )
+            .unwrap();
+            let failure = check(
+                &mut session,
+                &changed,
+                &globals,
+                &mut TypeWorkBudget::default(),
+            )
+            .unwrap_err();
+            assert_eq!(
+                failure.reason(),
+                ValidationReason::Registry,
+                "mutation {mutation}"
+            );
+            assert_eq!(
+                failure.node(),
+                None,
+                "written-order guard mutation {mutation}"
+            );
+            assert!(
+                session.admitted.is_none(),
+                "the actual same-registry/source/modules/globals reuse branch must invalidate the prior unused proof before fresh refusal: {mutation}"
+            );
+            check(
+                &mut session,
+                original,
+                &globals,
+                &mut TypeWorkBudget::default(),
+            )
+            .unwrap();
+            changed.discard_iteratively();
+        }
+        // A changed globals Arc deliberately tests fresh context, separately
+        // from the SAME-Arc cache cases above.
+        let mut used_globals = SourceResourceGlobals::new();
+        used_globals.insert(
+            crate::resolved::BinderId::new(987654),
+            IterativeTypeOwner::new(Type::Variable(identity)),
+        );
+        let mut fresh = SourceResourceStructureSession::default();
+        assert_eq!(
+            check(
+                &mut fresh,
+                original,
+                &Arc::new(used_globals),
+                &mut TypeWorkBudget::default()
+            )
+            .unwrap_err()
+            .reason(),
+            ValidationReason::Registry
+        );
+        println!(
+            "unused ordering: exact={first}, reused={reused}; six actual cache-hit carrier changes refused before reuse; globals-only use, exact/one-short prefix and retries"
+        );
     }
 
     #[test]

@@ -286,6 +286,28 @@ pub struct ProviderScopeNode {
 }
 
 impl ProviderScopeNode {
+    pub(in crate::core) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        uses.ordinary_header(self.descriptor.definition())?;
+        uses.arguments(self.descriptor.arguments())?;
+        uses.instance(self.descriptor.native_effect())?;
+        uses.charge(self.descriptor.retained().len() + self.descriptor.family_members().len())?;
+        for id in self.descriptor.retained() {
+            uses.id(*id)?;
+        }
+        for family in self.descriptor.family_members() {
+            family.visit_semantic_type_variables(uses)?;
+        }
+        if let Some(proof) = self.descriptor.specialization() {
+            proof.visit_semantic_type_variables(uses)?;
+        }
+        if let Some(proof) = self.descriptor.prepared_capture() {
+            proof.visit_semantic_type_variables(uses)?;
+        }
+        Ok(())
+    }
     pub(crate) fn initializer(&self) -> NodeId {
         self.initializer
     }

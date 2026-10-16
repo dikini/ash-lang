@@ -257,6 +257,17 @@ fn primary_span_with_work(origin: &Origin, work: &mut TypeWorkBudget) -> Result<
 }
 
 impl HandlerRowRecipeDraft {
+    pub(in crate::core) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        // Equation/port coordinates are graph and inference identities. Only
+        // the retained direct demand has Type/Row payloads of its own.
+        if let Some(direct) = &self.direct {
+            direct.visit_semantic_type_variables(uses)?;
+        }
+        Ok(())
+    }
     /// Scalar original equation domains; this supplies no row solution.
     pub(in crate::core) fn deferred_copy_counts(&self) -> (usize, usize) {
         (self.nodes.len(), self.outputs.len())
@@ -1325,6 +1336,23 @@ struct HandlerClauseRowContract {
 }
 
 impl HandlerRowContract {
+    pub(in crate::core) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        uses.id(self.shared.residual)?;
+        uses.charge(self.hidden.len() + self.formals.len())?;
+        for (id, _) in self.hidden.iter().chain(self.formals.iter()) {
+            uses.id(*id)?;
+        }
+        if let Some(family) = self.family {
+            uses.id(family.parameter)?;
+        }
+        uses.instance(&self.provided)?;
+        uses.instance(&self.interpreted)?;
+        uses.ty(&self.state)?;
+        self.demands.visit_semantic_type_variables(uses)
+    }
     pub(in crate::core) fn realize_direct(
         &self,
         types: &std::collections::HashMap<crate::types::TypeVariableId, crate::types::Type>,

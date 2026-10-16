@@ -1151,6 +1151,12 @@ pub(super) struct HandlerDemandContract {
     direct: DemandExpression,
 }
 impl HandlerDemandContract {
+    pub(super) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        visit_atom_type_variables(&self.atoms, uses)
+    }
     pub(super) fn realize(
         &self,
         types: &HashMap<crate::types::TypeVariableId, crate::types::Type>,
@@ -1175,6 +1181,30 @@ impl HandlerDemandContract {
         }
         Ok(direct)
     }
+}
+
+impl DirectDemandProof {
+    pub(super) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        visit_atom_type_variables(&self.atoms, uses)
+    }
+}
+
+fn visit_atom_type_variables(
+    atoms: &[DemandAtom],
+    uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+) -> Result<(), ()> {
+    uses.charge(atoms.len())?;
+    for atom in atoms {
+        match atom {
+            DemandAtom::Ordinary(row) => uses.row(row)?,
+            DemandAtom::Remove { effect, .. } => uses.instance(effect)?,
+            DemandAtom::Capture(_) => {}
+        }
+    }
+    Ok(())
 }
 impl DirectDemandProof {
     pub(super) fn defining_contract(

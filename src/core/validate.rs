@@ -1,5 +1,6 @@
 //! Independent validation for unchecked pure Core arenas.
 
+pub(crate) mod semantic_type_variables;
 mod source_declarations;
 
 use std::{
@@ -3295,6 +3296,14 @@ pub(crate) struct CheckedHandlerContractCertificate {
 }
 
 impl CheckedHandlerContractCertificate {
+    pub(crate) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        self.contract.visit_semantic_type_variables(uses)?;
+        self.capture.visit_semantic_type_variables(uses)?;
+        self.externals.visit_semantic_type_variables(uses)
+    }
     pub(crate) fn authenticate(
         &self,
         fact: &crate::resolved::ResourceTypeFact,
@@ -3779,6 +3788,7 @@ struct OriginalTemplateRegistryAdmission {
     modules: HashMap<ModuleId, SourceId>,
     parameters: RegistryParameterOwners,
     abstract_nominals: HashSet<crate::types::NominalTypeId>,
+    unused_ordering: HashSet<crate::types::TypeVariableId>,
 }
 
 impl<'context> SourceResourceStructureSession<'context> {
@@ -3923,7 +3933,9 @@ impl<'context> SourceResourceStructureSession<'context> {
                 // only the same retained immutable loan context; a changed
                 // context receives complete fresh registry authentication.
                 validator.charge_type_work(1)?;
-                if same_globals {
+                if same_globals
+                    && validator.unused_ordering_still_unused(&admitted.unused_ordering)?
+                {
                     validator.charge_type_work(admitted.abstract_nominals.len())?;
                     let mut inventory = validator.authenticated_abstract_nominals.borrow_mut();
                     inventory
@@ -3937,6 +3949,9 @@ impl<'context> SourceResourceStructureSession<'context> {
                     return validator.run_effect_with_registry(&admitted.parameters, &native);
                 }
             }
+            // No completed unused-order proof may survive a changed semantic
+            // footprint or scheme context, including a failed fresh admission.
+            self.admitted = None;
             {
                 let (parameters, native) = validator.authenticate_effect_registry_phase()?;
                 validator.run_effect_with_registry(&parameters, &native)?;
@@ -3961,6 +3976,7 @@ impl<'context> SourceResourceStructureSession<'context> {
                         .expect("original template admission has a complete module relation"),
                     parameters,
                     abstract_nominals: validator.authenticated_abstract_nominals.take(),
+                    unused_ordering: validator.unused_ordering.take(),
                 });
                 Ok(())
             }
@@ -4293,6 +4309,7 @@ struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily
     provider_fragment_locals: Option<&'program [crate::types::NominalTypeId]>,
     source_resource_context: SourceResourceValidationContext,
     authenticated_abstract_nominals: std::cell::RefCell<HashSet<crate::types::NominalTypeId>>,
+    unused_ordering: std::cell::RefCell<HashSet<crate::types::TypeVariableId>>,
     type_work: Cell<usize>,
     capture_layouts: std::cell::RefCell<Vec<(usize, crate::foreign::ForeignLayoutProducer)>>,
     type_work_limit: usize,
@@ -4687,6 +4704,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             provider_fragment_locals: None,
             source_resource_context: SourceResourceValidationContext::FinalProgram,
             authenticated_abstract_nominals: std::cell::RefCell::new(HashSet::new()),
+            unused_ordering: std::cell::RefCell::new(HashSet::new()),
             type_work: Cell::new(0),
             capture_layouts: std::cell::RefCell::new(Vec::new()),
             type_work_limit: core_validation_type_work_limit(),
@@ -9241,7 +9259,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 || self.is_provider_declaration_parameter(parameter.id)?
                 || source_owner_parameters.contains(&parameter.id)
                 || source_window_parameters.contains(&parameter.id)
-                || generatives.is_some_and(|original| original.contains(&parameter.id));
+                || generatives.is_some_and(|original| original.contains(&parameter.id))
+                || original.is_some() && self.unused_ordering.borrow().contains(&parameter.id);
             if self.contextual_registry.is_none() && parameter.id.local() != *expected
                 || parameter_span.source() != source
                 || !origin_depth_within_limit(&parameter.origin)
@@ -15343,6 +15362,46 @@ enum ClauseOutput<'a> {
 }
 
 impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperationFamily> {
+    fn unused_ordering_candidates(
+        &self,
+        candidates: &HashSet<crate::types::TypeVariableId>,
+    ) -> Result<HashSet<crate::types::TypeVariableId>, ValidationError> {
+        if candidates.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let mut work =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let result = (|| {
+            let mut uses = semantic_type_variables::UnusedVariables::new(candidates, &mut work)?;
+            uses.program(self.program)?;
+            if let Some(globals) = self.provider_external_types {
+                uses.charge(globals.len())?;
+                for ty in globals.values() {
+                    uses.ty(ty)?;
+                }
+            }
+            if let Some(graph) = self.source_handler_graph {
+                graph.visit_semantic_type_variables(&mut uses)?;
+            }
+            if let Some(context) = self.source_original_provider {
+                context.visit_semantic_type_variables(&mut uses)?;
+            }
+            Ok(uses.finish())
+        })();
+        // The shared loan is debited even if traversal or allocation refuses.
+        self.charge_type_work(work.used())?;
+        result.map_err(|()| ValidationError::new(ValidationReason::Resource, None))
+    }
+
+    fn unused_ordering_still_unused(
+        &self,
+        candidates: &HashSet<crate::types::TypeVariableId>,
+    ) -> Result<bool, ValidationError> {
+        let unused = self.unused_ordering_candidates(candidates)?;
+        self.charge_type_work(candidates.len())?;
+        Ok(unused.len() == candidates.len())
+    }
+
     fn validate_cleanup_owner(
         &self,
         id: NodeId,
@@ -15770,7 +15829,15 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 &mut work,
             );
             self.charge_type_work(work.used())?;
-            Some(result?)
+            let original = result?;
+            let unused = self.unused_ordering_candidates(&original.ordering_candidates)?;
+            self.charge_type_work(unused.len())?;
+            let mut retained = self.unused_ordering.borrow_mut();
+            retained
+                .try_reserve(unused.len())
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+            retained.extend(unused);
+            Some(original)
         } else {
             None
         };

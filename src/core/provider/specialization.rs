@@ -579,6 +579,24 @@ pub(crate) struct ResolvedProviderHandlerRows {
     captures: crate::core::capture::ActualCaptureInputs,
 }
 impl ResolvedProviderHandlerRows {
+    pub(in crate::core) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        for row in self.source_rows() {
+            uses.row(row)?;
+        }
+        uses.charge(self.pending.len() + self.node_rows.len() + self.handler_outputs.len())?;
+        for row in self
+            .pending
+            .values()
+            .chain(self.node_rows.values())
+            .chain(self.handler_outputs.values())
+        {
+            uses.row(row)?;
+        }
+        uses.capture_inputs(&self.captures)
+    }
     pub(crate) fn source_rows(&self) -> [&crate::types::EffectRow; 4] {
         [&self.direct, &self.epsilon, &self.output, &self.residual]
     }
@@ -1744,6 +1762,115 @@ struct SpecializationProof {
     families: Vec<SpecializedFamily>,
     native_storage: Vec<AdmittedNativeStorageRelation>,
     native: Option<std::sync::Arc<crate::foreign::ForeignModuleFact>>,
+}
+
+impl SpecializationProof {
+    fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        uses.catalog(&self.catalog)?;
+        uses.charge(
+            self.nodes.len()
+                + self.parameters.len()
+                + self.clauses.len()
+                + self.occurrences.len()
+                + self.anchors.len()
+                + self.families.len()
+                + self.native_storage.len(),
+        )?;
+        for projection in self
+            .nodes
+            .iter()
+            .chain(&self.parameters)
+            .chain(&self.clauses)
+        {
+            projection.visit_semantic_type_variables(uses)?;
+        }
+        for occurrence in &self.occurrences {
+            uses.selection(&occurrence.selection)?;
+            uses.application(&occurrence.application)?;
+            uses.charge(occurrence.arguments.len() + occurrence.original.arguments.len())?;
+            for argument in occurrence
+                .arguments
+                .iter()
+                .chain(&occurrence.original.arguments)
+            {
+                uses.ty(argument)?;
+            }
+            if let Some(ty) = &occurrence.value_type {
+                uses.ty(ty)?;
+            }
+            if let Some(ty) = &occurrence.original.value {
+                uses.ty(ty)?;
+            }
+            uses.evidence_slot(&occurrence.original.allocation)?;
+            uses.application(&occurrence.original.application)?;
+            uses.selection(&occurrence.original.selection)?;
+        }
+        for anchor in &self.anchors {
+            uses.application(&anchor.application)?;
+        }
+        for family in &self.families {
+            family.header.visit_semantic_type_variables(uses)?;
+            family.certificate.visit_semantic_type_variables(uses)?;
+            uses.instance(&family.provided)?;
+            family.state.visit_semantic_type_variables(uses)?;
+            uses.charge(family.clauses.len() + family.dictionaries.len())?;
+            for clause in &family.clauses {
+                clause.visit_semantic_type_variables(uses)?;
+            }
+            for dictionary in &family.dictionaries {
+                dictionary.projection.visit_semantic_type_variables(uses)?;
+                dictionary.initializer.visit_semantic_type_variables(uses)?;
+            }
+        }
+        for relation in &self.native_storage {
+            uses.id(relation.owner)?;
+            uses.id(relation.family.parameter)?;
+            uses.instance(&relation.effect)?;
+            relation
+                .request_projection
+                .visit_semantic_type_variables(uses)?;
+            relation
+                .operand_projection
+                .visit_semantic_type_variables(uses)?;
+        }
+        Ok(())
+    }
+}
+
+impl OriginalProviderSpecialization {
+    pub(super) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        self.0.visit_semantic_type_variables(uses)
+    }
+}
+impl PreparedProviderCaptureReceipt {
+    pub(super) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        self.0.visit_semantic_type_variables(uses)
+    }
+}
+impl ProviderFamilyAdmission {
+    pub(super) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        uses.id(self.identity.parameter)?;
+        uses.ty(&self.payload)?;
+        uses.application(&self.application)?;
+        uses.instance(&self.native_effect)?;
+        uses.charge(self.requirements.len() + self.selections.len())?;
+        for (selection, _) in self.requirements.iter().chain(&self.selections) {
+            uses.selection(selection)?;
+        }
+        Ok(())
+    }
 }
 
 struct SpecializedFamily {

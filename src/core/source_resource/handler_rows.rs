@@ -51,6 +51,19 @@ pub(in crate::core) struct SourceHandlerGraph<'a> {
 }
 
 impl<'a> SourceHandlerGraph<'a> {
+    pub(in crate::core) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        uses.source_header(&self.header.original)?;
+        uses.ty(self.state.ty())?;
+        uses.row(&self.inputs.direct)?;
+        uses.pending_rows(&self.inputs.pending)?;
+        if let Some(recipe) = self.recipe {
+            recipe.visit_semantic_type_variables(uses)?;
+        }
+        Ok(())
+    }
     pub(super) fn reconstruct(
         program: &'a UnvalidatedEffectProgram,
         header: &'a CheckedSourceResourceHeader,

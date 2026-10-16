@@ -840,6 +840,29 @@ pub(crate) struct CheckedSourceResourceTemplate {
     window_calls: [Box<[SourceWindowCall]>; 3],
 }
 
+impl CheckedSourceResourceTemplate {
+    pub(in crate::core) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        uses.source_header(&self.header.original)?;
+        uses.charge(self.globals.len())?;
+        for ty in self.globals.values() {
+            uses.ty(ty)?;
+        }
+        for (entry, _) in [&self.acquire_entry, &self.finish_entry, &self.handler_entry] {
+            uses.ty(entry.ty())?;
+        }
+        if let Some(rows) = &self.handler_rows {
+            uses.row(&rows.inputs.direct)?;
+            uses.pending_rows(&rows.inputs.pending)?;
+            rows.recipe.visit_semantic_type_variables(uses)?;
+            rows.capture.visit_semantic_type_variables(uses)?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct CheckedSourceResourceTemplates {
     records: Box<[Arc<CheckedSourceResourceTemplate>]>,
@@ -3656,6 +3679,48 @@ impl Drop for SourceResourceScopeNode {
     }
 }
 impl SourceResourceScopeNode {
+    pub(in crate::core) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        uses.source_header(&self.header().original)?;
+        // Operation metadata already visits the ordered arguments and every
+        // interpretation. This additional walk covers retained copy/original
+        // correspondence and conditional row/capture claims.
+        for copy in self.copy_claims() {
+            uses.charge(copy.freshening.types.len())?;
+            for (original, copied, _) in copy.freshening.types {
+                uses.id(*original)?;
+                uses.id(*copied)?;
+            }
+            uses.charge(
+                copy.substitution.types.len()
+                    + copy.substitution.rows.len()
+                    + copy.substitution.pending.len()
+                    + copy.node_rows.len(),
+            )?;
+            for (id, ty) in copy.substitution.types {
+                uses.id(*id)?;
+                uses.ty(ty)?;
+            }
+            for (id, row) in copy.substitution.rows {
+                uses.id(*id)?;
+                uses.row(row)?;
+            }
+            for row in copy
+                .substitution
+                .pending
+                .values()
+                .chain(copy.node_rows.values())
+            {
+                uses.row(row)?;
+            }
+        }
+        if let Some(rows) = self.handler_row_claim() {
+            rows.visit_semantic_type_variables(uses)?;
+        }
+        self.original().visit_semantic_type_variables(uses)
+    }
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         template: Arc<CheckedSourceResourceTemplate>,

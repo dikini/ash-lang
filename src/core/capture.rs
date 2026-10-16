@@ -381,6 +381,52 @@ struct SummaryGraph {
     data: Option<Arc<value::Graph>>,
 }
 
+impl SummaryGraph {
+    fn visit_semantic_type_variables(
+        &self,
+        uses: &mut super::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        uses.charge(self.callables.positions.len() + self.types.0.len() + self.code.len())?;
+        for callable in self.callables.positions.iter().flatten() {
+            uses.ty(&callable.ty)?;
+        }
+        for ty in &self.types.0 {
+            uses.ty(ty)?;
+        }
+        for code in &self.code {
+            for request in code.requests() {
+                uses.charge(1 + request.members.len())?;
+                if let Some(effect) = &request.effect {
+                    uses.instance(effect)?;
+                }
+                if let Some(row) = &request.opaque_row {
+                    uses.row(row)?;
+                }
+                for member in &request.members {
+                    uses.instance(&member.provided)?;
+                    uses.instance(&member.native)?;
+                }
+            }
+        }
+        if let Some(data) = &self.data {
+            data.visit_semantic_type_variables(uses)?;
+        }
+        Ok(())
+    }
+}
+
+impl CaptureValueSummary {
+    pub(crate) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut super::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        if let Some(graph) = &self.graph {
+            graph.visit_semantic_type_variables(uses)?;
+        }
+        Ok(())
+    }
+}
+
 // Dense original code coordinates remain stable even where no callable exists.
 // Absence is metadata presence, never a test of the original callable's Type.
 #[derive(Debug)]
@@ -3742,6 +3788,22 @@ pub(in crate::core) struct ConditionalCaptureGraph {
     source_arena: super::dialect::ArenaId,
     projected_arena: super::dialect::ArenaId,
     correspondence: Vec<Option<NodeId>>,
+}
+
+impl ConditionalCaptureGraph {
+    pub(in crate::core) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut super::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        self.graph.visit_semantic_type_variables(uses)?;
+        uses.charge(self.ports.clauses.len())?;
+        for port in &self.ports.clauses {
+            uses.ty(&port.input)?;
+            uses.id(port.answer)?;
+            uses.id(port.residual)?;
+        }
+        Ok(())
+    }
 }
 struct ConditionalTypeReplacements(HashMap<TypeVariableId, Type>);
 impl ConditionalTypeReplacements {
