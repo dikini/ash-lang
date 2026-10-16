@@ -730,27 +730,43 @@ impl DeclarationCoordinates {
     }
 }
 
+/// Successful defining-source correspondence for this one immutable registry.
+/// These positions account for declaration slots omitted by an import view;
+/// they do not supply a declaration, type, scope, or executable permission.
+#[derive(Debug, Default)]
+pub(super) struct OriginalDeclarationProvenance {
+    pub(super) generatives: HashSet<TypeVariableId>,
+    pub(super) nominal_positions: HashMap<NominalTypeId, (u32, Span)>,
+}
+
 pub(super) fn authenticate(
     registry: &ResolvedRegistry,
     sources: &HashMap<SourceId, &SourceFile>,
     modules: &HashMap<ModuleId, SourceId>,
     work: &mut TypeWorkBudget,
-) -> Result<HashSet<TypeVariableId>, ValidationError> {
-    let mut generatives = HashSet::new();
+) -> Result<OriginalDeclarationProvenance, ValidationError> {
+    let mut original = OriginalDeclarationProvenance::default();
     for (module, source) in modules {
         charge(work, 1)?;
         let source = *sources.get(source).ok_or_else(registry_error)?;
         let coordinates = DeclarationCoordinates::from_source(source, work)?;
-        authenticate_module(registry, *module, source, &coordinates, work)?;
+        authenticate_module(
+            registry,
+            *module,
+            source,
+            &coordinates,
+            work,
+            &mut original.nominal_positions,
+        )?;
         coordinates.resource_binders.authenticate(
             registry,
             *module,
             source,
             work,
-            &mut generatives,
+            &mut original.generatives,
         )?;
     }
-    Ok(generatives)
+    Ok(original)
 }
 
 fn registry_error() -> ValidationError {
@@ -763,6 +779,7 @@ fn authenticate_module(
     source: &SourceFile,
     coordinates: &DeclarationCoordinates,
     work: &mut TypeWorkBudget,
+    nominal_positions: &mut HashMap<NominalTypeId, (u32, Span)>,
 ) -> Result<(), ValidationError> {
     for nominal in registry.nominals() {
         charge(work, 1)?;
@@ -788,6 +805,14 @@ fn authenticate_module(
             }
             NominalRole::Foreign { .. } if nominal.constructors.is_empty() => {}
             _ => return Err(registry_error()),
+        }
+        charge(work, 1)?;
+        nominal_positions.try_reserve(1).map_err(|_| resource())?;
+        if nominal_positions
+            .insert(nominal.id, (expected, origin))
+            .is_some()
+        {
+            return Err(registry_error());
         }
     }
     for (prepared, role, id, _) in registry.source_foreign_nominal_candidates() {
@@ -1044,6 +1069,83 @@ mod tests {
             ),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn source_control_original_nominal_projection_keeps_defining_positions() {
+        let source = SourceFile::new(
+            "nominal-projection.ash",
+            "type UnusedFirst = First\ntype UnusedSecond = Second\ntype Needed = Kept\n",
+        )
+        .unwrap();
+        let module = ModuleId::from(source.id());
+        let coordinates =
+            DeclarationCoordinates::from_source(&source, &mut TypeWorkBudget::default()).unwrap();
+        let registry = |position, origin, constructor_position| {
+            let family = NominalTypeId::new(module, position);
+            let constructor = ConstructorId::new(family, constructor_position);
+            ResolvedRegistry::new(
+                vec![ResolvedNominalType {
+                    id: family,
+                    declaration_kind: ResolvedNominalDeclarationKind::Data,
+                    spelling: "Needed".to_owned(),
+                    constructors: Box::new([constructor]),
+                    representation: None,
+                    representation_provenance: None,
+                    origin: Origin::Source(origin),
+                }],
+                vec![crate::resolved::ResolvedConstructor {
+                    id: constructor,
+                    owner: family,
+                    spelling: "Kept".to_owned(),
+                    payload: None,
+                    origin: Origin::Source(coordinates.constructors[2].origin),
+                }],
+            )
+            .with_type_parameters_with_budget(
+                vec![(family, Vec::new())],
+                &mut TypeWorkBudget::default(),
+            )
+            .unwrap()
+        };
+        let original = coordinates.nominals[2].origin;
+        let projected = registry(2, original, 0);
+        original_registry_phase(&source, projected.clone()).unwrap();
+        for (position, origin, constructor_position) in [
+            (0, original, 0),
+            (2, coordinates.nominals[0].origin, 0),
+            (2, original, 1),
+        ] {
+            assert_eq!(
+                original_registry_phase(&source, registry(position, origin, constructor_position),)
+                    .unwrap_err()
+                    .reason(),
+                ValidationReason::Registry,
+                "a projected view cannot renumber the original, borrow another declaration, or change constructor position"
+            );
+        }
+
+        // The exception comes from the successful defining-coordinate proof,
+        // not a relaxed rule for ordinary whole-registry admission.
+        let mut builder = EffectCoreBuilder::with_effect_registry(Arc::new(projected));
+        let root = builder
+            .unit(
+                Type::Unit,
+                Origin::Source(
+                    source
+                        .span(crate::source::ByteRange::new(0, 1).unwrap())
+                        .unwrap(),
+                ),
+            )
+            .unwrap();
+        let program = builder.finish(root).unwrap();
+        let mut ordinary =
+            super::super::Validator::new_modules(&program, &[&source], &[(module, source.id())])
+                .unwrap();
+        assert_eq!(
+            ordinary.run_effect().unwrap_err().reason(),
+            ValidationReason::Registry
+        );
     }
 
     fn owner_access_registry(source: &SourceFile, permutation: [u32; 2]) -> ResolvedRegistry {

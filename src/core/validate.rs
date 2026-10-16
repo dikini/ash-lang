@@ -8532,12 +8532,12 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     }
 
     fn validate_registry(&self) -> Result<RegistryParameterOwners, ValidationError> {
-        self.validate_registry_with_generatives(None)
+        self.validate_registry_with_original_provenance(None)
     }
 
-    fn validate_registry_with_generatives(
+    fn validate_registry_with_original_provenance(
         &self,
-        generatives: Option<&HashSet<crate::types::TypeVariableId>>,
+        original: Option<&source_declarations::OriginalDeclarationProvenance>,
     ) -> Result<RegistryParameterOwners, ValidationError> {
         self.validate_scalar_preflight_registry()?;
         if let Some(canonical) = self.contextual_registry {
@@ -8566,7 +8566,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             }
         }
         if self.module_sources.is_some() {
-            return self.validate_module_registry(generatives);
+            return self.validate_module_registry(original);
         }
         if self.program.registry.has_provider_contracts() {
             return Err(ValidationError::new(ValidationReason::Registry, None));
@@ -8926,8 +8926,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
 
     fn validate_module_registry(
         &self,
-        generatives: Option<&HashSet<crate::types::TypeVariableId>>,
+        original: Option<&source_declarations::OriginalDeclarationProvenance>,
     ) -> Result<RegistryParameterOwners, ValidationError> {
+        let generatives = original.map(|original| &original.generatives);
         let registry = &self.program.registry;
         let relation = self
             .module_sources
@@ -9116,6 +9117,22 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             }
             let nominal_span = nominal.origin.primary_span();
             let nominal_range = nominal_span.range();
+            if let Some(original) = original {
+                self.charge_type_work(1)?;
+                let (defining_position, defining_origin) = original
+                    .nominal_positions
+                    .get(&nominal.id)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+                if *defining_origin != nominal_span {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+                // The paid original-source walk derives the position before
+                // this registry check. A selected import can omit preceding
+                // declarations; it cannot renumber the retained declaration.
+                if *defining_position > *expected {
+                    *expected = *defining_position;
+                }
+            }
             let names = nominal_names.entry(module).or_default();
             if self.contextual_registry.is_none() && nominal.id.declaration() != *expected
                 || nominal_span.source() != source
@@ -15737,7 +15754,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         ),
         ValidationError,
     > {
-        let generatives = if matches!(
+        let original = if matches!(
             self.source_resource_context,
             SourceResourceValidationContext::OriginalTemplate { .. }
         ) {
@@ -15757,7 +15774,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         } else {
             None
         };
-        let mut owners = self.validate_registry_with_generatives(generatives.as_ref())?;
+        let mut owners = self.validate_registry_with_original_provenance(original.as_ref())?;
         self.validate_effect_registry(self.module_sources.as_ref(), &mut owners)?;
         let empty_type_binders = CoreTypeBinders::new();
         for nominal in self
