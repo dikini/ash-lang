@@ -1834,6 +1834,41 @@ impl CheckedProviderContracts {
     pub(crate) fn resource_count(&self) -> usize {
         self.declarations.len()
     }
+    /// Borrows the defining provider-interface row from the same canonical
+    /// registry that authenticates this declaration's checked application.
+    pub(crate) fn provider_interface_formals(
+        &self,
+        definition: crate::resolved::ResourceDefinitionId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<
+        (
+            crate::interface::InterfaceId,
+            &[crate::resolved::ResolvedTypeVariable],
+        ),
+        crate::resolved::ResolvedBuildFailure,
+    > {
+        use crate::resolved::ResolvedBuildFailure as Failure;
+        work.charge(
+            self.declarations
+                .len()
+                .checked_add(1)
+                .ok_or(Failure::TypeResource)?,
+        )
+        .map_err(|()| Failure::TypeResource)?;
+        let declaration = self
+            .declarations
+            .iter()
+            .find(|declaration| declaration.fact.id == definition)
+            .ok_or(Failure::InvalidState)?;
+        let interface = declaration.provider_application.interface();
+        let owner = crate::resolved::OwnerId::Interface(interface);
+        let canonical = &declaration.acquire.canonical;
+        let parameters = canonical
+            .defining_owner_parameters(owner)
+            .ok_or(Failure::InvalidState)?;
+        canonical.authenticate_owner_signature(owner, None, parameters, work)?;
+        Ok((interface, parameters))
+    }
     pub(crate) fn defining_sources(
         &self,
     ) -> &[(
