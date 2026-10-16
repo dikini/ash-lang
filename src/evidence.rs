@@ -4634,7 +4634,7 @@ impl EvidenceSelector {
                     pending.push(codomain.value());
                     pending.push(domain);
                 }
-                Type::ResourceApply(_, arguments) => {
+                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                     extend_owner_type_children_with_charge(
                         arguments.iter(),
                         &mut pending,
@@ -4824,7 +4824,7 @@ fn validate_candidate_scope(
                 pending.push(argument);
                 pending.push(function);
             }
-            Type::ResourceApply(_, arguments) => {
+            Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                 visit_owner_components_with_charge(
                     arguments.iter(),
                     &mut |cells| constraint_work.charge(cells),
@@ -5206,7 +5206,7 @@ fn type_is_inference_free(
             .map_err(|()| SelectionFailure::ConstraintResource)?;
         match ty {
             Type::Inference(_) => return Ok(false),
-            Type::ResourceApply(_, arguments) => {
+            Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                 visit_owner_components_with_charge(
                     arguments.iter(),
                     &mut |cells| constraint_work.charge(cells),
@@ -5477,6 +5477,7 @@ enum GoalCell {
     TypeArgument,
     RowArgument,
     Resource(crate::types::ResourceDefinitionId, usize),
+    ForeignOwner(NominalTypeId, usize),
     Tail(EffectRowVariable, usize),
     EffectInstance(crate::types::EffectId, usize),
     Variable(TypeVariableId),
@@ -5612,6 +5613,16 @@ fn goal_key(
                 }
                 Type::ResourceApply(id, arguments) => {
                     cells.push(GoalCell::Resource(*id, arguments.len()));
+                    constraint_work
+                        .charge(arguments.len())
+                        .map_err(|()| SelectionFailure::ConstraintResource)?;
+                    pending
+                        .try_reserve(arguments.len())
+                        .map_err(|_| SelectionFailure::ConstraintResource)?;
+                    pending.extend(arguments.iter().rev().map(Task::Argument));
+                }
+                Type::ForeignOwnerApply(id, arguments) => {
+                    cells.push(GoalCell::ForeignOwner(*id, arguments.len()));
                     constraint_work
                         .charge(arguments.len())
                         .map_err(|()| SelectionFailure::ConstraintResource)?;

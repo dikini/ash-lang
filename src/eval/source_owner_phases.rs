@@ -1787,6 +1787,7 @@ pub(super) fn source_type_leaf<'a>(
 
 struct OwnerTypeReplacements(
     std::collections::HashMap<crate::types::TypeVariableId, crate::types::Type>,
+    std::collections::HashMap<crate::types::TypeVariableId, crate::types::EffectRow>,
 );
 impl OwnerTypeReplacements {
     fn insert(&mut self, variable: crate::types::TypeVariableId, ty: crate::types::Type) {
@@ -1803,19 +1804,15 @@ impl Drop for OwnerTypeReplacements {
     }
 }
 
-/// The original declared host destructor is not a new source effect request.
-/// Its state/dependency views are specialized from this owner and initializer
-/// receipts, and every operand is retained before acquisition can enter C.
-fn prepare_destruction_operands(
+/// Specializes the original destructor's complete Type/Row domain before any
+/// operand selection, including for address-only and fixed-operand teardown.
+fn specialize_destruction_domain(
     destructor: &crate::foreign::checked_source::CheckedForeignSymbol,
     state: &crate::types::Type,
-    dependencies: &[crate::foreign::source_runtime::NativeOwnerDependency],
     work: &mut TypeWorkBudget,
-) -> Result<Vec<NativeOwnerOperand>, super::RuntimeFailure> {
-    use crate::foreign::source_contract::{
-        PreparedOperandSource, PreparedOwnerArgument, PreparedOwnerCall,
-    };
-    use crate::types::{IterativeTypeOwner, Type};
+) -> Result<(usize, crate::types::IterativeTypeOwner), super::RuntimeFailure> {
+    use crate::foreign::source_contract::{PreparedOwnerArgument, PreparedOwnerCall};
+    use crate::types::IterativeTypeOwner;
     let owner = destructor
         .owner()
         .ok_or(super::RuntimeFailure::ForeignBinding)?;
@@ -1834,46 +1831,107 @@ fn prepare_destruction_operands(
     else {
         return Err(super::RuntimeFailure::ForeignBinding);
     };
-    let mut arguments = Vec::new();
-    let mut head = state;
-    while let Type::Application(function, argument) = head {
-        super::charge_effect_work(work, 1, super::RuntimePhase::Acquisition)?;
-        arguments.try_reserve(1).map_err(|_| operand_storage(1))?;
-        arguments.push(argument.as_ref());
-        head = function;
-    }
-    if head != &Type::Nominal(owner.nominal()) || arguments.len() != application.arguments().len() {
+    let arguments = crate::foreign::source_owner::state_arguments(
+        state,
+        owner.nominal(),
+        owner.parameters(),
+        application.span(),
+        work,
+    )
+    .map_err(|error| {
+        if error.is_resource_exhaustion() {
+            super::effect_work_failure(work, None, super::RuntimePhase::Acquisition)
+        } else {
+            super::RuntimeFailure::ForeignBinding
+        }
+    })?;
+    if arguments.len() != application.arguments().len() {
         return Err(super::RuntimeFailure::ForeignBinding);
     }
-    let mut replacements = OwnerTypeReplacements(std::collections::HashMap::new());
+    let mut replacements = OwnerTypeReplacements(
+        std::collections::HashMap::new(),
+        std::collections::HashMap::new(),
+    );
     super::charge_effect_work(work, arguments.len(), super::RuntimePhase::Acquisition)?;
+    let type_count = arguments
+        .iter()
+        .filter(|argument| {
+            matches!(
+                argument,
+                crate::foreign::source_owner::StateArgument::Type(_)
+            )
+        })
+        .count();
     replacements
         .0
-        .try_reserve(arguments.len())
-        .map_err(|_| operand_storage(arguments.len()))?;
-    for (formal, argument) in application.arguments().iter().zip(arguments.iter().rev()) {
-        let PreparedOwnerArgument::Type(position) = formal else {
-            return Err(super::RuntimeFailure::ForeignBinding);
+        .try_reserve(type_count)
+        .map_err(|_| operand_storage(type_count))?;
+    replacements
+        .1
+        .try_reserve(arguments.len() - type_count)
+        .map_err(|_| operand_storage(arguments.len() - type_count))?;
+    for (formal, argument) in application.arguments().iter().zip(arguments) {
+        let position = match formal {
+            PreparedOwnerArgument::Type(position) | PreparedOwnerArgument::EffectRow(position) => {
+                *position
+            }
         };
-        let parameter = destructor
+        let parameter = *destructor
             .parameter_ids()
-            .get(*position)
+            .get(position)
             .ok_or(super::RuntimeFailure::ForeignBinding)?;
-        let argument = crate::types::clone_type_with_budget(argument, work).map_err(|()| {
-            super::effect_work_failure(work, None, super::RuntimePhase::Acquisition)
-        })?;
-        replacements.insert(*parameter, argument);
+        match (formal, argument) {
+            (
+                PreparedOwnerArgument::Type(_),
+                crate::foreign::source_owner::StateArgument::Type(argument),
+            ) => {
+                let argument =
+                    crate::types::clone_type_with_budget(argument, work).map_err(|()| {
+                        super::effect_work_failure(work, None, super::RuntimePhase::Acquisition)
+                    })?;
+                replacements.insert(parameter, argument);
+            }
+            (
+                PreparedOwnerArgument::EffectRow(_),
+                crate::foreign::source_owner::StateArgument::EffectRow(argument),
+            ) => {
+                let argument =
+                    crate::types::clone_effect_row_with_budget(argument, work).map_err(|()| {
+                        super::effect_work_failure(work, None, super::RuntimePhase::Acquisition)
+                    })?;
+                replacements.1.insert(parameter, argument);
+            }
+            _ => return Err(super::RuntimeFailure::ForeignBinding),
+        }
     }
     let signature = destructor
         .source_signature()
         .function_view()
         .ok_or(super::RuntimeFailure::ForeignBinding)?;
-    let domain = IterativeTypeOwner::new(crate::types::substitute_type_variables_with(
-        signature.domain(),
-        &replacements.0,
-        |cells| super::charge_effect_work(work, cells, super::RuntimePhase::Acquisition),
-        || operand_storage(1),
-    )?);
+    let domain = IterativeTypeOwner::new(
+        crate::types::substitute_type_and_row_variables_with(
+            signature.domain(),
+            &replacements.0,
+            &replacements.1,
+            |cells| super::charge_effect_work(work, cells, super::RuntimePhase::Acquisition),
+            || operand_storage(1),
+        )?
+        .map_err(|_| super::RuntimeFailure::ForeignBinding)?,
+    );
+    Ok((*current_operand, domain))
+}
+
+/// The original destructor is not a new source effect request. Its complete
+/// domain and dependency operands are retained before acquisition can enter C.
+fn prepare_destruction_operands(
+    destructor: &crate::foreign::checked_source::CheckedForeignSymbol,
+    state: &crate::types::Type,
+    dependencies: &[crate::foreign::source_runtime::NativeOwnerDependency],
+    work: &mut TypeWorkBudget,
+) -> Result<Vec<NativeOwnerOperand>, super::RuntimeFailure> {
+    use crate::foreign::source_contract::PreparedOperandSource;
+
+    let (current_operand, domain) = specialize_destruction_domain(destructor, state, work)?;
     let mut operands = Vec::new();
     super::charge_effect_work(
         work,
@@ -1903,7 +1961,7 @@ fn prepare_destruction_operands(
                     super::RuntimePhase::Acquisition,
                 )?)
             }
-            PreparedOperandSource::Current(_) if position == *current_operand => {
+            PreparedOperandSource::Current(_) if position == current_operand => {
                 NativeOwnerOperand::Address(std::ptr::null_mut())
             }
             PreparedOperandSource::Enclosing(path) => {
@@ -2117,6 +2175,178 @@ fn operand_storage(units: usize) -> super::RuntimeFailure {
         Some(units),
         None,
     )
+}
+
+#[cfg(test)]
+mod inherited_row_tests {
+    use super::{NativeOwnerOperand, TypeWorkBudget};
+    use crate::{
+        core::{EffectExprKind, EffectOperation},
+        driver::{RunConfiguration, compile_path},
+        eval::RuntimeFailure,
+        module::ModuleRoots,
+        types::{IterativeTypeOwner, KindedArgument, Type},
+    };
+    use std::{
+        fs,
+        path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    struct Fixture(PathBuf);
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn inherited_row_destructor_specializes_full_domain_before_operands_and_work_refusal() {
+        static IDS: AtomicU64 = AtomicU64::new(0);
+        let fixture = Fixture(std::env::temp_dir().join(format!(
+            "ash-row-destruction-{}-{}",
+            std::process::id(),
+            IDS.fetch_add(1, Ordering::Relaxed)
+        )));
+        fs::create_dir(&fixture.0).unwrap();
+        let owner = include_str!("../../tests/fixtures/source-owner/owner.ash")
+            .replace(
+                "owner State<R>",
+                "owner State<Before : EffectRow, R, After : EffectRow>",
+            )
+            .replace("State<R>", "State<{| Before}, R, {| After}>");
+        fs::write(fixture.0.join("owner.ash"), owner).unwrap();
+        fs::write(fixture.0.join("entry.ash"), "import owner as Owner\neffect First {\n    first : Unit -> Unit\n}\neffect Last {\n    last : Unit -> Unit\n}\nmain : Unit -> Owner.Scope<Unit, Unit, Int>\nmain () = resource Owner.Probe<{First}, Fresh, {Last}> owner = 42 {\n    Owner.read owner\n}\n").unwrap();
+        let compiled = compile_path(RunConfiguration {
+            entry: fixture.0.join("entry.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap();
+        let (program, _) = compiled.effect_build_input().unwrap();
+        let scope = program
+            .nodes()
+            .iter()
+            .find_map(|node| match &node.kind {
+                EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
+                    Some(scope)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let Type::Tuple(state_data) = scope.finish.parameter.ty() else {
+            panic!("complete finish domain")
+        };
+        let state = &state_data[0];
+        let Type::ForeignOwnerApply(_, arguments) = state else {
+            panic!("row-bearing original owner")
+        };
+        assert!(matches!(&arguments[0], KindedArgument::RowArg(row) if !row.known().is_empty()));
+        assert!(matches!(&arguments[2], KindedArgument::RowArg(row) if !row.known().is_empty()));
+        assert_ne!(arguments[0], arguments[2]);
+        let destructor = &scope.header().teardown;
+        let mut measured = TypeWorkBudget::default();
+        let (current, domain) =
+            super::specialize_destruction_domain(destructor, state, &mut measured).unwrap();
+        assert_eq!(current, 0);
+        assert!(
+            crate::types::same_type_with_budget(&domain, state, &mut TypeWorkBudget::default())
+                .unwrap(),
+            "both distinct phantom Rows must specialize even though the sole C operand is the current address"
+        );
+        let specialization_cost = measured.used();
+        for operands in [false, true] {
+            let check = |work: &mut TypeWorkBudget| {
+                if operands {
+                    let prepared =
+                        super::prepare_destruction_operands(destructor, state, &[], work)?;
+                    assert!(
+                        matches!(prepared.as_slice(), [NativeOwnerOperand::Address(address)] if address.is_null())
+                    );
+                } else {
+                    let (_, specialized) =
+                        super::specialize_destruction_domain(destructor, state, work)?;
+                    assert!(
+                        crate::types::same_type_with_budget(
+                            &specialized,
+                            state,
+                            &mut TypeWorkBudget::default()
+                        )
+                        .unwrap()
+                    );
+                }
+                Ok::<_, RuntimeFailure>(())
+            };
+            let mut measured = TypeWorkBudget::default();
+            check(&mut measured).unwrap();
+            let cost = measured.used();
+            assert!(cost >= specialization_cost);
+            for prefix in [0, 13] {
+                let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+                short.charge(prefix).unwrap();
+                let RuntimeFailure::Report(report) = check(&mut short).unwrap_err() else {
+                    panic!("ordinary work refusal before native entry")
+                };
+                let reason = report.primary.reason_code();
+                let resource = report.primary.resource().unwrap();
+                assert_eq!(reason, "runtime.environment-capacity");
+                assert_eq!(
+                    (resource.cause, resource.phase, resource.resource),
+                    (
+                        crate::eval::ResourceFailureCause::WorkBudgetExhausted,
+                        crate::eval::RuntimePhase::Acquisition,
+                        crate::eval::RuntimeResource::WorkUnits,
+                    ),
+                    "pre-call refusal: operands={operands}, prefix={prefix}"
+                );
+                assert_eq!(resource.available, Some(short.remaining()));
+                assert!(resource.requested.unwrap() > short.remaining());
+                println!(
+                    "inherited Row pre-call work: operands={operands}, cost={cost}, prefix={prefix}, refusal={reason}, resource={resource:?}"
+                );
+                assert!(short.used() < prefix + cost);
+                for _ in 0..2 {
+                    let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                    exact.charge(prefix).unwrap();
+                    check(&mut exact).unwrap();
+                    assert_eq!(exact.used(), prefix + cost);
+                }
+                check(&mut TypeWorkBudget::default()).unwrap();
+            }
+        }
+        for change in 0..3 {
+            let cloned =
+                crate::types::clone_type_with_budget(state, &mut TypeWorkBudget::default())
+                    .unwrap();
+            let Type::ForeignOwnerApply(mut head, mut arguments) = cloned else {
+                unreachable!()
+            };
+            match change {
+                0 => head = scope.header().original.family,
+                1 => {
+                    let old =
+                        std::mem::replace(&mut arguments[0], KindedArgument::TypeArg(Type::Unit));
+                    crate::types::discard_kinded_argument_iteratively(old);
+                }
+                _ => {
+                    let old = std::mem::replace(
+                        &mut arguments[1],
+                        KindedArgument::RowArg(crate::types::EffectRow::empty()),
+                    );
+                    crate::types::discard_kinded_argument_iteratively(old);
+                }
+            }
+            let forged = IterativeTypeOwner::new(Type::ForeignOwnerApply(head, arguments));
+            assert!(matches!(
+                super::prepare_destruction_operands(
+                    destructor,
+                    &forged,
+                    &[],
+                    &mut TypeWorkBudget::default()
+                ),
+                Err(RuntimeFailure::ForeignBinding)
+            ));
+        }
+    }
 }
 
 /// Scoped test-only continuation-work refusal after generated acquisition or

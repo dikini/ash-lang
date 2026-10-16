@@ -144,7 +144,8 @@ impl InterfaceConstraintBudget {
                             pending.push(Task::Type(right));
                             pending.push(Task::Type(left));
                         }
-                        Type::ResourceApply(_, arguments) => {
+                        Type::ResourceApply(_, arguments)
+                        | Type::ForeignOwnerApply(_, arguments) => {
                             self.charge(arguments.len())?;
                             pending.try_reserve(arguments.len()).map_err(|_| ())?;
                             pending.extend(arguments.iter().map(Task::Argument));
@@ -335,6 +336,18 @@ impl InterfaceConstraintBudget {
                 (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
                 (Type::Variable(left), Type::Variable(right)) if left == right => {}
                 (Type::Inference(left), Type::Inference(right)) if left == right => {}
+                (
+                    Type::ForeignOwnerApply(left_id, left),
+                    Type::ForeignOwnerApply(right_id, right),
+                ) if left_id == right_id && left.len() == right.len() => {
+                    self.charge(left.len())?;
+                    pending.try_reserve(left.len()).map_err(|_| ())?;
+                    pending.extend(
+                        left.iter()
+                            .zip(right)
+                            .map(|(left, right)| Task::Arguments(left, right)),
+                    );
+                }
                 (Type::ResourceApply(left_id, left), Type::ResourceApply(right_id, right))
                     if left_id == right_id && left.len() == right.len() =>
                 {
@@ -518,7 +531,7 @@ fn type_contains_any_variable(
                 pending.try_reserve(elements.len()).map_err(|_| ())?;
                 pending.extend(elements.iter().rev());
             }
-            Type::ResourceApply(_, arguments) => {
+            Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                 if extend_owner_type_children_with_charge(arguments, &mut pending, &mut |cells| {
                     budget.charge(cells)
                 })? {
@@ -584,7 +597,7 @@ fn schedule_type_children<'a>(
             pending.try_reserve(elements.len()).map_err(|_| ())?;
             pending.extend(elements.iter().rev());
         }
-        Type::ResourceApply(_, arguments) => {
+        Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
             extend_owner_type_children_with_charge(arguments, pending, &mut |cells| {
                 budget.charge(cells)
             })?;
@@ -684,7 +697,10 @@ pub(crate) fn collect_type_nominal_identities_with_constraint_budget(
     while let Some(ty) = pending.pop() {
         match ty {
             Type::Nominal(id) => nominal_identities.observe(*id, budget)?,
-            Type::ResourceApply(_, arguments) => {
+            Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
+                if let Type::ForeignOwnerApply(id, _) = ty {
+                    nominal_identities.observe(*id, budget)?;
+                }
                 extend_owner_type_children_with_charge(arguments, &mut pending, &mut |cells| {
                     budget.charge(cells)
                 })?;
@@ -950,6 +966,18 @@ fn same_type_with_constraint_budget_inner(
             }
             (Type::Variable(left), Type::Variable(right)) if left == right => {}
             (Type::Inference(left), Type::Inference(right)) if left == right => {}
+            (Type::ForeignOwnerApply(left_id, left), Type::ForeignOwnerApply(right_id, right))
+                if left_id == right_id && left.len() == right.len() =>
+            {
+                budget.charge(left.len())?;
+                pending.try_reserve(left.len()).map_err(|_| ())?;
+                pending.extend(
+                    left.iter()
+                        .zip(right)
+                        .rev()
+                        .map(|(left, right)| Task::Arguments(left, right)),
+                );
+            }
             (Type::ResourceApply(left_id, left), Type::ResourceApply(right_id, right))
                 if left_id == right_id && left.len() == right.len() =>
             {
@@ -1524,6 +1552,21 @@ where
             | (Type::Bool, Type::Bool)
             | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(candidate), Type::Nominal(goal)) if candidate == goal => {}
+            (
+                Type::ForeignOwnerApply(candidate_id, candidate),
+                Type::ForeignOwnerApply(goal_id, goal),
+            ) if candidate_id == goal_id => {
+                if !extend_owner_type_pairs_with_charge(
+                    candidate,
+                    goal,
+                    &mut pending,
+                    &mut |cells| constraint_budget.charge(cells),
+                )
+                .map_err(|()| HeadMatchFailure::ConstraintResource)?
+                {
+                    return Ok(None);
+                }
+            }
             (Type::ResourceApply(candidate_id, candidate), Type::ResourceApply(goal_id, goal))
                 if candidate_id == goal_id =>
             {
@@ -1630,7 +1673,7 @@ fn validate_match_type(
             continue;
         }
         match ty {
-            Type::ResourceApply(_, arguments) => {
+            Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                 if extend_owner_type_children_with_charge(arguments, &mut pending, &mut |cells| {
                     budget.charge(cells)
                 })
@@ -1769,6 +1812,17 @@ fn match_types_equal(
             | (Type::Bool, Type::Bool)
             | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
+            (Type::ForeignOwnerApply(left_id, left), Type::ForeignOwnerApply(right_id, right))
+                if left_id == right_id =>
+            {
+                if !extend_owner_type_pairs_with_charge(left, right, &mut pending, &mut |cells| {
+                    budget.charge(cells)
+                })
+                .map_err(|()| HeadMatchFailure::ConstraintResource)?
+                {
+                    return Ok(false);
+                }
+            }
             (Type::ResourceApply(left_id, left), Type::ResourceApply(right_id, right))
                 if left_id == right_id =>
             {
@@ -2222,6 +2276,21 @@ where
             | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
             (
+                Type::ForeignOwnerApply(left_id, left_arguments),
+                Type::ForeignOwnerApply(right_id, right_arguments),
+            ) if left_id == right_id => {
+                if !schedule_overlap_owner_pairs(
+                    left_arguments,
+                    left.side,
+                    right_arguments,
+                    right.side,
+                    &mut pending,
+                    budget,
+                )? {
+                    return Ok(false);
+                }
+            }
+            (
                 Type::ResourceApply(left_id, left_arguments),
                 Type::ResourceApply(right_id, right_arguments),
             ) if left_id == right_id => {
@@ -2481,7 +2550,7 @@ fn overlap_occurs<'a>(
             continue;
         }
         match head.ty {
-            Type::ResourceApply(_, arguments) => {
+            Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                 if schedule_overlap_owner_children(arguments, head.side, &mut pending, budget)? {
                     return Err(OverlapFailure::InvalidState);
                 }

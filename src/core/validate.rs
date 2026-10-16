@@ -3099,6 +3099,7 @@ fn representation_provenance_span(node: &ResolvedTypeProvenanceNode) -> Span {
         | ResolvedTypeProvenanceNode::Tuple { span, .. }
         | ResolvedTypeProvenanceNode::Function { span, .. }
         | ResolvedTypeProvenanceNode::Resource { span, .. }
+        | ResolvedTypeProvenanceNode::ForeignOwner { span, .. }
         | ResolvedTypeProvenanceNode::Row { span, .. }
         | ResolvedTypeProvenanceNode::Application { span, .. } => *span,
     }
@@ -5896,7 +5897,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
                     pending.extend(elements);
                 }
-                Type::ResourceApply(_, arguments) => {
+                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                     self.schedule_owner_type_scan_children(&mut pending, arguments, None, false)?;
                 }
                 Type::Bytes
@@ -7231,7 +7232,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         return Ok(true);
                     }
                 }
-                Type::ResourceApply(_, arguments) => {
+                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                     if self.schedule_owner_type_scan_children(
                         &mut pending,
                         arguments,
@@ -9930,6 +9931,26 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 }
 
                 (
+                    Type::ForeignOwnerApply(id, arguments),
+                    ResolvedTypeProvenanceNode::ForeignOwner {
+                        nominal: resource,
+                        arguments: roots,
+                        ..
+                    },
+                ) if id == resource && arguments.len() == roots.len() => {
+                    self.charge_type_work(arguments.len())?;
+                    work.try_reserve(arguments.len())
+                        .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                    work.extend(
+                        arguments
+                            .iter()
+                            .zip(roots.iter().copied())
+                            .rev()
+                            .map(|(argument, index)| (Payload::Argument(argument), index, span)),
+                    );
+                }
+
+                (
                     Type::Bytes
                     | Type::String
                     | Type::Int
@@ -10121,7 +10142,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             work.push(Task::Visit(codomain, false, child_depth, 0));
                             work.push(Task::Visit(domain, false, child_depth, 0));
                         }
-                        Type::ResourceApply(_, arguments) => {
+                        Type::ResourceApply(_, arguments)
+                        | Type::ForeignOwnerApply(_, arguments) => {
                             work.try_reserve(1).map_err(|_| {
                                 ValidationError::new(ValidationReason::Resource, None)
                             })?;
@@ -10244,7 +10266,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     work.push(Task::Sequence(elements.iter(), depth.saturating_add(1)));
                 }
                 Type::Tuple(_) => return Ok(false),
-                Type::ResourceApply(_, arguments) => {
+                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                     let child_depth = depth.saturating_add(1);
                     crate::types::visit_owner_type_children_with_charge(
                         arguments.iter(),
@@ -11104,6 +11126,63 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         work.push(Task::Argument(argument));
                     }
                 }
+                Task::Visit(Type::ForeignOwnerApply(nominal, arguments)) => {
+                    if !F::ALLOWS_EFFECTFUL_TYPES {
+                        return Ok(OwnerValidationOutput::Kind(None));
+                    }
+                    let registry = &self.program.registry;
+                    let span = match registry
+                        .nominal_kind(*nominal)
+                        .ok_or_else(|| ValidationError::new(ValidationReason::Registry, node))?
+                    {
+                        crate::resolved::CanonicalNominalKind::Parameters { origin, .. }
+                        | crate::resolved::CanonicalNominalKind::Frozen { origin, .. }
+                        | crate::resolved::CanonicalNominalKind::RowBearingResource {
+                            origin,
+                            ..
+                        } => origin,
+                    };
+                    let mut owner_work = TypeWorkBudget::with_limit(
+                        self.type_work_limit.saturating_sub(self.type_work.get()),
+                    );
+                    let result = crate::foreign::source_owner::row_owner_parameters(
+                        *nominal,
+                        registry,
+                        span,
+                        &mut owner_work,
+                    );
+                    self.charge_type_work(owner_work.used())?;
+                    let parameters = result.map_err(|error| {
+                        ValidationError::new(
+                            if error.is_resource_exhaustion() {
+                                ValidationReason::Resource
+                            } else {
+                                ValidationReason::Registry
+                            },
+                            node,
+                        )
+                    })?;
+                    if parameters.len() != arguments.len() {
+                        return Ok(OwnerValidationOutput::Kind(None));
+                    }
+                    let count = arguments
+                        .len()
+                        .checked_mul(2)
+                        .and_then(|n| n.checked_add(1))
+                        .ok_or_else(resource)?;
+                    self.charge_type_work(count)?;
+                    work.try_reserve(count).map_err(|_| resource())?;
+                    work.push(Task::FinishResource);
+                    for (argument, parameter) in arguments.iter().zip(parameters.iter()).rev() {
+                        if matches!(argument, crate::types::KindedArgument::RowArg(_))
+                            != (parameter.kind == Kind::EffectRow)
+                        {
+                            return Ok(OwnerValidationOutput::Kind(None));
+                        }
+                        work.push(Task::CheckArgument(&parameter.kind));
+                        work.push(Task::Argument(argument));
+                    }
+                }
                 Task::FinishResource => {
                     self.charge_type_work(1)?;
                     completed.try_reserve(1).map_err(|_| resource())?;
@@ -11331,7 +11410,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     }
                 }
                 Task::TypeRows(ty) => match ty {
-                    Type::ResourceApply(_, arguments) => {
+                    Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                         let count = arguments.len();
                         self.charge_type_work(count)?;
                         work.try_reserve(count).map_err(|_| resource())?;
@@ -11608,7 +11687,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     work.push(Task::Visit(argument));
                     work.push(Task::Visit(function));
                 }
-                Type::ResourceApply(_, arguments) => {
+                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                     crate::types::visit_owner_type_children_with_charge(
                         arguments.iter(),
                         &mut |cells| self.charge_type_work(cells),
@@ -12507,7 +12586,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let mut work =
             TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let result = crate::types::visit_type_structure_with_budget(ty, &mut work, |node, work| {
-            if let crate::types::TypeStructureNode::Type(Type::Nominal(nominal)) = node {
+            if let crate::types::TypeStructureNode::Type(
+                Type::Nominal(nominal) | Type::ForeignOwnerApply(nominal, _),
+            ) = node
+            {
                 work.charge(candidates)?;
                 return Ok(registry.source_foreign_nominal(*nominal));
             }
@@ -13059,6 +13141,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         | Type::Nominal(_)
                         | Type::Application(_, _)
                         | Type::ResourceApply(_, _)
+                        | Type::ForeignOwnerApply(_, _)
                         | Type::Variable(_)
                         | Type::Inference(_)
                         | Type::EffectfulFunction(_, _)
@@ -14531,7 +14614,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     work.push(Task::Visit(codomain));
                     work.push(Task::Visit(domain));
                 }
-                Task::Visit(Type::ResourceApply(_, arguments)) => {
+                Task::Visit(
+                    Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments),
+                ) => {
                     schedule_owner_arguments!(arguments.iter());
                 }
                 Task::Visit(Type::EffectfulFunction(domain, codomain)) => {
@@ -17077,7 +17162,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                         )?;
                     }
                 }
-                Type::ResourceApply(_, arguments) => {
+                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                     crate::types::visit_owner_type_children_with_charge(
                         arguments.iter(),
                         &mut |units| self.charge_type_work(units),
@@ -27570,7 +27655,7 @@ mod tests {
                 Task::Visit(Type::Nominal(id)) => output.push(Type::Nominal(*id)),
                 Task::Visit(Type::Variable(id)) => output.push(Type::Variable(*id)),
                 Task::Visit(Type::Inference(id)) => output.push(Type::Inference(*id)),
-                Task::Visit(Type::ResourceApply(..)) => {
+                Task::Visit(Type::ResourceApply(..) | Type::ForeignOwnerApply(..)) => {
                     panic!("forged pure adapter fixture has no resource applications")
                 }
                 Task::Visit(Type::Application(function, argument)) => {
@@ -28093,7 +28178,7 @@ mod tests {
                     work.push(argument);
                     work.push(function);
                 }
-                Type::ResourceApply(_, arguments) => {
+                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                     for argument in arguments {
                         let mut work = TypeWorkBudget::unbounded();
                         let mapped = crate::types::map_kinded_argument_types_with_budget(
@@ -30298,7 +30383,7 @@ mod tests {
                     work.push(argument);
                     work.push(function);
                 }
-                Type::ResourceApply(_, arguments) => {
+                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                     for argument in arguments {
                         let mut work = TypeWorkBudget::unbounded();
                         let mapped = crate::types::map_kinded_argument_types_with_budget(
@@ -30353,7 +30438,7 @@ mod tests {
                     work.push(argument);
                     work.push(function);
                 }
-                Type::ResourceApply(_, arguments) => {
+                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                     let mut budget = TypeWorkBudget::unbounded();
                     crate::types::extend_owner_type_children_with_charge(
                         arguments,
@@ -30392,7 +30477,7 @@ mod tests {
                     work.push(argument);
                     work.push(function);
                 }
-                Type::ResourceApply(_, arguments) => {
+                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                     let mut budget = TypeWorkBudget::unbounded();
                     let mut contains_tail = false;
                     crate::types::visit_owner_components_with_charge(

@@ -2337,7 +2337,7 @@ fn collect_linked_constraint_variables(
                     output.push(*identity);
                 }
             }
-            Type::ResourceApply(_, arguments) => {
+            Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                 visit_owner_components_with_charge(
                     arguments.iter(),
                     &mut |cells| charge(budget, cells, span),
@@ -9184,7 +9184,7 @@ fn validate_type_with_application_policy(
                         pending.push(Task::Visit(argument));
                         pending.push(Task::Visit(function));
                     }
-                    Type::ResourceApply(_, arguments) => {
+                    Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                         visit_owner_components_with_charge(
                             arguments.iter(),
                             &mut |cells| charge(budget, cells, span),

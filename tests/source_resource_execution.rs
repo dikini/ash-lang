@@ -68,6 +68,39 @@ fn owner_with_scalar_teardown_result() -> String {
 }
 
 #[test]
+fn inherited_owner_rows_survive_import_copy_image_and_native_lifecycle() {
+    let owner = include_str!("fixtures/source-owner/owner.ash")
+        .replace(
+            "owner State<R>",
+            "owner State<Before : EffectRow, R, After : EffectRow>",
+        )
+        .replace("State<R>", "State<{| Before}, R, {| After}>");
+    let entry = r#"import owner as Renamed
+effect FirstNoise {
+    first : Unit -> Unit
+}
+effect SecondNoise {
+    second : Unit -> Unit
+}
+main : Unit -> (Renamed.Scope<Unit, Unit, Int>, Renamed.Scope<Unit, Unit, Int>, Renamed.Scope<Unit, Unit, Int>)
+main () = (resource Renamed.Probe<{}, Empty, {}> owner = 42 {
+    Renamed.read owner
+}, resource Renamed.Probe<{FirstNoise}, Forward, {SecondNoise}> owner = 7 {
+    Renamed.read owner
+}, resource Renamed.Probe<{SecondNoise}, Reverse, {FirstNoise}> owner = 8 {
+    Renamed.read owner
+})
+"#;
+    generated_owner_program_with_helpers(
+        &owner,
+        entry,
+        None,
+        "(Completed(42, Closed), Completed(7, Closed), Completed(8, Closed))",
+        "acquire:42\nrelease:42\nacquire:7\nrelease:7\nacquire:8\nrelease:8\n",
+    );
+}
+
+#[test]
 fn source_control_open_delta_executes_with_type_only_native_owner() {
     generated_owner_program_with_helpers(
         include_str!("fixtures/source-owner/owner.ash"),

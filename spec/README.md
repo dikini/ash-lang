@@ -110,7 +110,8 @@ sentinel supplies only a fixed all-bits-one native operand; it publishes no
 ordinary value and grants no call permission. Copy windows remain outside
 the admitted subset. Source resource declarations admit opaque and
 initialized byte owners with declared dependencies, private data and checked
-`scope` or `acquired_only` reports. Their Type-only owner families support one
+`scope` or `acquired_only` reports. Their owner families retain complete ordered
+Type/Row arguments with a Type-kind owned identity and support one
 acquisition and `void` or scalar-status finish and host-destruction contracts
 with total consumed or retained dispositions. Scalar status predicates use
 checked literal facts from the original owner library; the predicate itself

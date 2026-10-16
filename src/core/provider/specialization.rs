@@ -4826,7 +4826,7 @@ fn authenticate_caller_disjointness(
                         retain_identity(&mut self.variables, *id, work).map_err(|_| ())?;
                     }
                 }
-                TypeStructureNode::Type(Type::Nominal(id)) => {
+                TypeStructureNode::Type(Type::Nominal(id) | Type::ForeignOwnerApply(id, _)) => {
                     retain_identity(&mut self.nominals, *id, work).map_err(|_| ())?
                 }
                 TypeStructureNode::Tail(tail) => {

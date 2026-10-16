@@ -190,7 +190,9 @@ fn pure_core_type_from_precharged(ty: &Type) -> Result<Type, ()> {
             Task::Visit(Type::Bool) => rebuilt.push(Type::Bool),
             Task::Visit(Type::Unit) => rebuilt.push(Type::Unit),
             Task::Visit(Type::Nominal(identity)) => rebuilt.push(Type::Nominal(*identity)),
-            Task::Visit(Type::ResourceApply(_, _)) => return Err(()),
+            Task::Visit(Type::ResourceApply(_, _) | Type::ForeignOwnerApply(_, _)) => {
+                return Err(());
+            }
             Task::Visit(Type::Variable(identity)) => rebuilt.push(Type::Variable(*identity)),
             Task::Visit(Type::Inference(identity)) => rebuilt.push(Type::Inference(*identity)),
             Task::Visit(Type::Tuple(elements)) => {
@@ -307,7 +309,9 @@ fn requires_pure_core_projection(
     schedule(&mut work, ty, &mut budget)?;
     while let Some(current) = work.pop() {
         match current {
-            Type::EffectfulFunction(_, _) | Type::ResourceApply(_, _) => return Ok(true),
+            Type::EffectfulFunction(_, _)
+            | Type::ResourceApply(_, _)
+            | Type::ForeignOwnerApply(_, _) => return Ok(true),
             Type::Tuple(elements) => {
                 for element in elements {
                     schedule(&mut work, element, &mut budget)?;
@@ -1522,7 +1526,8 @@ impl TypeProvenance {
                 | Type::Variable(_)
                 | Type::Inference(_)
                 | Type::Forall(_, _)
-                | Type::ResourceApply(_, _) => {
+                | Type::ResourceApply(_, _)
+                | Type::ForeignOwnerApply(_, _) => {
                     nodes.push(TypeProvenanceNode::Fact(span));
                     roots.push(nodes.len() - 1);
                 }
@@ -1681,7 +1686,8 @@ impl TypeProvenance {
                         | Type::Variable(_)
                         | Type::Inference(_)
                         | Type::Forall(_, _)
-                        | Type::ResourceApply(_, _),
+                        | Type::ResourceApply(_, _)
+                        | Type::ForeignOwnerApply(_, _),
                         Some(TypeProvenanceNode::Fact(_)),
                     ) => {}
                     (
@@ -1777,6 +1783,21 @@ impl TypeProvenance {
                             Type::ResourceApply(resource, arguments),
                             Some(ResolvedTypeProvenanceNode::Resource {
                                 resource: source,
+                                arguments: roots,
+                                ..
+                            }),
+                        ) if resource == source && arguments.len() == roots.len() => {
+                            reserve(&mut work, roots.len(), &mut budget)?;
+                            work.extend(arguments.iter().zip(roots.iter().copied()).map(
+                                |(argument, root)| {
+                                    (Value::Argument(argument), Cursor::Resolved(resolved, root))
+                                },
+                            ));
+                        }
+                        (
+                            Type::ForeignOwnerApply(resource, arguments),
+                            Some(ResolvedTypeProvenanceNode::ForeignOwner {
+                                nominal: source,
                                 arguments: roots,
                                 ..
                             }),
@@ -10221,6 +10242,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                 Type::ResourceApply(left_id, left),
                                 Type::ResourceApply(right_id, right),
                             ) if left_id == right_id && left.len() == right.len() => left.len(),
+                            (
+                                Type::ForeignOwnerApply(left_id, left),
+                                Type::ForeignOwnerApply(right_id, right),
+                            ) if left_id == right_id && left.len() == right.len() => left.len(),
                             (Type::Tuple(left), Type::Tuple(right))
                                 if left.len() == right.len() =>
                             {
@@ -10269,6 +10294,20 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             (
                                 Type::ResourceApply(left_id, left),
                                 Type::ResourceApply(right_id, right),
+                            ) if left_id == right_id && left.len() == right.len() => {
+                                // Capacity was admitted while both complete roots were still guarded.
+                                for (left, right) in
+                                    left.into_vec().into_iter().zip(right.into_vec()).rev()
+                                {
+                                    work.push(Task::Argument(
+                                        ArgumentOwner::new(left),
+                                        ArgumentOwner::new(right),
+                                    ));
+                                }
+                            }
+                            (
+                                Type::ForeignOwnerApply(left_id, left),
+                                Type::ForeignOwnerApply(right_id, right),
                             ) if left_id == right_id && left.len() == right.len() => {
                                 // Capacity was admitted while both complete roots were still guarded.
                                 for (left, right) in
@@ -21902,6 +21941,7 @@ fn check_newtype_representation_cycles(
                 | ResolvedTypeProvenanceNode::Function { span, .. }
                 | ResolvedTypeProvenanceNode::Application { span, .. }
                 | ResolvedTypeProvenanceNode::Resource { span, .. }
+                | ResolvedTypeProvenanceNode::ForeignOwner { span, .. }
                 | ResolvedTypeProvenanceNode::Row { span, .. } => *span,
             };
             let ty = match value {
@@ -22005,6 +22045,31 @@ fn check_newtype_representation_cycles(
                 Type::ResourceApply(resource, arguments) => {
                     let ResolvedTypeProvenanceNode::Resource {
                         resource: source,
+                        arguments: roots,
+                        ..
+                    } = provenance
+                    else {
+                        return Err(invalid_state());
+                    };
+                    if resource != source || arguments.len() != roots.len() {
+                        return Err(invalid_state());
+                    }
+                    type_work
+                        .charge(arguments.len())
+                        .map_err(|()| type_resource())?;
+                    pending
+                        .try_reserve(arguments.len())
+                        .map_err(|_| type_resource())?;
+                    pending.extend(
+                        arguments
+                            .iter()
+                            .zip(roots.iter().copied())
+                            .map(|(argument, root)| (Value::Argument(argument), root)),
+                    );
+                }
+                Type::ForeignOwnerApply(resource, arguments) => {
+                    let ResolvedTypeProvenanceNode::ForeignOwner {
+                        nominal: source,
                         arguments: roots,
                         ..
                     } = provenance
@@ -25208,6 +25273,23 @@ fn candidate_kind_environment<'a>(
                             .map_err(kind_failure_for_unification)?;
                     }
                 }
+                crate::types::TypeStructureNode::Type(Type::ForeignOwnerApply(identity, _))
+                    if !environments.contains_nominal(*identity) =>
+                {
+                    let parameters = crate::foreign::source_owner::row_owner_parameters(
+                        *identity, registry, span, budget,
+                    )
+                    .map_err(|error| {
+                        if error.is_resource_exhaustion() {
+                            UnificationFailure::Resource
+                        } else {
+                            UnificationFailure::Invariant
+                        }
+                    })?;
+                    environments
+                        .insert_nominal(*identity, parameters, span, budget)
+                        .map_err(kind_failure_for_unification)?;
+                }
                 crate::types::TypeStructureNode::Type(Type::Nominal(identity))
                     if !environments.contains_nominal(*identity) =>
                 {
@@ -25596,7 +25678,8 @@ fn validate_recursive_member(
         | Type::Variable(_)
         | Type::Inference(_)
         | Type::Forall(_, _)
-        | Type::ResourceApply(_, _) => Err(unsafe_recursive_root(group, member)),
+        | Type::ResourceApply(_, _)
+        | Type::ForeignOwnerApply(_, _) => Err(unsafe_recursive_root(group, member)),
     }
 }
 
@@ -25984,6 +26067,43 @@ fn validate_and_charge_public_monotype(
                     push(&mut work, Task::Argument(argument, child_depth), budget)?;
                 }
             }
+            Type::ForeignOwnerApply(nominal, arguments) if applied_arguments == 0 => {
+                if child_depth > CORE_PAYLOAD_DEPTH_LIMIT {
+                    return Err(PublicTypeAdmissionError::Invalid);
+                }
+                let span = match registry
+                    .nominal_kind(*nominal)
+                    .ok_or(PublicTypeAdmissionError::Invalid)?
+                {
+                    CanonicalNominalKind::Parameters { origin, .. }
+                    | CanonicalNominalKind::Frozen { origin, .. }
+                    | CanonicalNominalKind::RowBearingResource { origin, .. } => origin,
+                };
+                let parameters = crate::foreign::source_owner::row_owner_parameters(
+                    *nominal, registry, span, budget,
+                )
+                .map_err(|error| {
+                    if error.is_resource_exhaustion() {
+                        PublicTypeAdmissionError::Resource
+                    } else {
+                        PublicTypeAdmissionError::Invalid
+                    }
+                })?;
+                if parameters.len() != arguments.len() {
+                    return Err(PublicTypeAdmissionError::Invalid);
+                }
+                budget
+                    .charge(arguments.len())
+                    .map_err(|_| PublicTypeAdmissionError::Resource)?;
+                for (parameter, argument) in parameters.iter().zip(arguments.iter()).rev() {
+                    if (parameter.kind == Kind::EffectRow)
+                        != matches!(argument, crate::types::KindedArgument::RowArg(_))
+                    {
+                        return Err(PublicTypeAdmissionError::Invalid);
+                    }
+                    push(&mut work, Task::Argument(argument, child_depth), budget)?;
+                }
+            }
             Type::Application(function, argument) => {
                 if child_depth > CORE_PAYLOAD_DEPTH_LIMIT {
                     return Err(PublicTypeAdmissionError::Invalid);
@@ -26026,6 +26146,7 @@ fn validate_and_charge_public_monotype(
             }
             Type::Tuple(_)
             | Type::ResourceApply(_, _)
+            | Type::ForeignOwnerApply(_, _)
             | Type::Function(_, _)
             | Type::EffectfulFunction(_, _)
             | Type::Inference(_)
@@ -26220,8 +26341,18 @@ fn compare_concrete_types(
         match (left, right) {
             (Type::Inference(_) | Type::Forall(_, _), _)
             | (_, Type::Inference(_) | Type::Forall(_, _))
-            | (Type::EffectfulFunction(_, _) | Type::ResourceApply(_, _), _)
-            | (_, Type::EffectfulFunction(_, _) | Type::ResourceApply(_, _)) => Some(None),
+            | (
+                Type::EffectfulFunction(_, _)
+                | Type::ResourceApply(_, _)
+                | Type::ForeignOwnerApply(_, _),
+                _,
+            )
+            | (
+                _,
+                Type::EffectfulFunction(_, _)
+                | Type::ResourceApply(_, _)
+                | Type::ForeignOwnerApply(_, _),
+            ) => Some(None),
             (Type::Bytes, Type::Bytes)
             | (Type::String, Type::String)
             | (Type::Int, Type::Int)
@@ -26611,6 +26742,7 @@ fn zonk_compound_root_with_status_and_inference_and_rows<E>(
         Instances(std::slice::Iter<'a, EffectInstance>),
         Tuple(usize),
         Resource(crate::types::ResourceDefinitionId, usize),
+        ForeignOwner(NominalTypeId, usize),
         InstanceResult(crate::types::EffectId, usize),
         Application,
         Function,
@@ -26760,6 +26892,18 @@ fn zonk_compound_root_with_status_and_inference_and_rows<E>(
                 schedule(
                     &mut work,
                     Task::Resource(*id, arguments.len()),
+                    &mut work_charge,
+                )?;
+                schedule(
+                    &mut work,
+                    Task::Arguments(arguments.iter()),
+                    &mut work_charge,
+                )?;
+            }
+            Task::Type(Type::ForeignOwnerApply(id, arguments)) => {
+                schedule(
+                    &mut work,
+                    Task::ForeignOwner(*id, arguments.len()),
                     &mut work_charge,
                 )?;
                 schedule(
@@ -26936,6 +27080,19 @@ fn zonk_compound_root_with_status_and_inference_and_rows<E>(
                     &mut work_charge,
                 )?;
             }
+            Task::ForeignOwner(id, count) => {
+                let staged = suffix(&mut values, count, &mut work_charge)?;
+                let mut arguments = Vec::new();
+                arguments
+                    .try_reserve_exact(count)
+                    .map_err(|_| allocation(&mut work_charge))?;
+                arguments.extend(staged.into_iter().map(Value::into_argument));
+                retain(
+                    &mut values,
+                    Value::ty(Type::ForeignOwnerApply(id, arguments.into_boxed_slice())),
+                    &mut work_charge,
+                )?;
+            }
             Task::InstanceResult(id, count) => {
                 let staged = suffix(&mut values, count, &mut work_charge)?;
                 let mut arguments = Vec::new();
@@ -27097,6 +27254,7 @@ fn zonk_owned_root_with_rows<B: crate::types::TypeWorkMeter>(
         Function,
         EffectfulFunction,
         Resource(crate::types::ResourceDefinitionId, usize),
+        ForeignOwner(NominalTypeId, usize),
         TypeArgument,
         RowArgument,
         Row(RowShape),
@@ -27245,6 +27403,12 @@ fn zonk_owned_root_with_rows<B: crate::types::TypeWorkMeter>(
                     let count = arguments.len();
                     let arguments = argument_sequence(arguments, budget)?;
                     schedule(&mut work, Task::Resource(owner, count), budget)?;
+                    schedule(&mut work, Task::Sequence(arguments.into_iter()), budget)?;
+                }
+                Type::ForeignOwnerApply(owner, arguments) => {
+                    let count = arguments.len();
+                    let arguments = argument_sequence(arguments, budget)?;
+                    schedule(&mut work, Task::ForeignOwner(owner, count), budget)?;
                     schedule(&mut work, Task::Sequence(arguments.into_iter()), budget)?;
                 }
                 Type::Application(function, argument) => {
@@ -27410,6 +27574,20 @@ fn zonk_owned_root_with_rows<B: crate::types::TypeWorkMeter>(
                 retain(
                     &mut values,
                     Value::ty(Type::ResourceApply(owner, arguments.into_boxed_slice())),
+                    budget,
+                )?;
+            }
+            Task::ForeignOwner(owner, count) => {
+                let staged = suffix(&mut values, count, budget)?;
+                budget.charge(count)?;
+                let mut arguments = Vec::new();
+                arguments
+                    .try_reserve_exact(count)
+                    .map_err(|_| crate::types::allocation_error(budget))?;
+                arguments.extend(staged.into_iter().map(Value::into_argument));
+                retain(
+                    &mut values,
+                    Value::ty(Type::ForeignOwnerApply(owner, arguments.into_boxed_slice())),
                     budget,
                 )?;
             }
@@ -27637,7 +27815,7 @@ fn inference_occurs_in_owner_graph(
                 schedule!(Task::Visit(codomain));
                 schedule!(Task::Visit(domain));
             }
-            Type::ResourceApply(_, arguments) => {
+            Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                 for argument in arguments {
                     schedule!(Task::Argument(argument));
                 }
@@ -27730,7 +27908,9 @@ fn collect_unsolved_inference(
                 schedule(&mut work, Task::Type(argument), budget)?;
                 schedule(&mut work, Task::Type(function), budget)?;
             }
-            Task::Type(Type::ResourceApply(_, arguments)) => {
+            Task::Type(
+                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments),
+            ) => {
                 for argument in arguments {
                     schedule(&mut work, Task::Argument(argument), budget)?;
                 }
@@ -27816,7 +27996,9 @@ fn type_contains_unsolved_row_inference(
                 schedule(&mut work, Task::Type(argument), budget)?;
                 schedule(&mut work, Task::Type(function), budget)?;
             }
-            Task::Type(Type::ResourceApply(_, arguments)) => {
+            Task::Type(
+                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments),
+            ) => {
                 for argument in arguments {
                     schedule(&mut work, Task::Argument(argument), budget)?;
                 }

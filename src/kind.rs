@@ -1324,6 +1324,7 @@ pub(crate) struct KindEnvironments<'a> {
     xi: HashMap<NominalTypeId, NominalKindFact>,
     row_resource_families: HashMap<NominalTypeId, (crate::types::ResourceDefinitionId, Span)>,
     row_resource_owners: HashMap<crate::types::ResourceDefinitionId, ResourceKindFact<'a>>,
+    row_foreign_owners: HashMap<NominalTypeId, &'a [crate::resolved::ResolvedTypeVariable]>,
     owner_registry: Option<&'a ResolvedRegistry>,
     // Source modules retain local canonical records separately from imports.
     // The borrowed body-free inventory supplies original imported owner formals.
@@ -1340,6 +1341,7 @@ impl<'a> KindEnvironments<'a> {
             xi: HashMap::new(),
             row_resource_families: HashMap::new(),
             row_resource_owners: HashMap::new(),
+            row_foreign_owners: HashMap::new(),
             owner_registry: None,
             imported_resource_owners: None,
             iota: HashMap::new(),
@@ -2505,7 +2507,140 @@ impl<'a> KindEnvironments<'a> {
                 "nominal kind retention exceeded its type-work budget",
             )
         })?;
+        budget.charge(parameters.len()).map_err(|_| {
+            KindFailure::resource(origin, "owner kind selection exceeded its work budget")
+        })?;
+        if parameters
+            .iter()
+            .any(|parameter| parameter.kind == Kind::EffectRow)
+        {
+            let original = if let Some(registry) = self.owner_registry {
+                budget
+                    .charge(registry.source_owner_candidate_count())
+                    .map_err(|_| {
+                        KindFailure::resource(
+                            origin,
+                            "owner kind selection exceeded its work budget",
+                        )
+                    })?;
+                if registry
+                    .source_owner_candidates()
+                    .any(|(_, _, nominal, _)| nominal == identity)
+                {
+                    Some(
+                        crate::foreign::source_owner::row_owner_parameters(
+                            identity, registry, origin, budget,
+                        )
+                        .map_err(|error| {
+                            if error.is_resource_exhaustion() {
+                                KindFailure::resource(
+                                    origin,
+                                    "owner kind authentication exceeded its work budget",
+                                )
+                            } else {
+                                KindFailure::internal_cause(
+                                    origin,
+                                    KindInternalCause::LinkedValueType,
+                                )
+                            }
+                        })?,
+                    )
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let original = original.or_else(|| {
+                self.imported_resource_owners
+                    .and_then(|imported| imported.source_owner(identity))
+                    .map(|owner| owner.parameters().as_ref())
+            });
+            if let Some(original) = original {
+                if original.len() != parameters.len() {
+                    return Err(KindFailure::internal_cause(
+                        origin,
+                        KindInternalCause::LinkedValueType,
+                    ));
+                }
+                for (left, right) in original.iter().zip(parameters) {
+                    if !crate::resolved::same_checker_type_variable_with_budget(left, right, budget)
+                        .map_err(|_| {
+                            KindFailure::resource(
+                                origin,
+                                "owner kind correspondence exceeded its work budget",
+                            )
+                        })?
+                    {
+                        return Err(KindFailure::internal_cause(
+                            origin,
+                            KindInternalCause::LinkedValueType,
+                        ));
+                    }
+                }
+                budget.charge(1).map_err(|_| {
+                    KindFailure::resource(origin, "owner kind retention exceeded its work budget")
+                })?;
+                self.row_foreign_owners.try_reserve(1).map_err(|_| {
+                    KindFailure::resource(origin, "owner kind storage could not be reserved")
+                })?;
+                self.row_foreign_owners.insert(identity, original);
+            }
+        }
         self.xi.insert(identity, NominalKindFact { kind, origin });
+        Ok(())
+    }
+
+    /// Retains a sealed Source owner in a body-free summary environment.
+    /// The summary authenticates the original owner before installing its
+    /// nominal mirror; ordinary nominal kinds supply no Owner authority.
+    pub(crate) fn insert_source_owner_nominal(
+        &mut self,
+        owner: &'a crate::foreign::source_owner::CheckedForeignOwner,
+        parameters: &'a [crate::resolved::ResolvedTypeVariable],
+        origin: Span,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), KindFailure> {
+        let original = owner.parameters().as_ref();
+        budget.charge(original.len()).map_err(|_| {
+            KindFailure::resource(origin, "owner kind selection exceeded its work budget")
+        })?;
+        if original.len() != parameters.len() {
+            return Err(KindFailure::internal_cause(
+                origin,
+                KindInternalCause::LinkedValueType,
+            ));
+        }
+        for (left, right) in original.iter().zip(parameters) {
+            if !crate::resolved::same_checker_type_variable_with_budget(left, right, budget)
+                .map_err(|_| {
+                    KindFailure::resource(
+                        origin,
+                        "owner kind correspondence exceeded its work budget",
+                    )
+                })?
+            {
+                return Err(KindFailure::internal_cause(
+                    origin,
+                    KindInternalCause::LinkedValueType,
+                ));
+            }
+        }
+        self.insert_nominal(owner.nominal(), parameters, origin, budget)?;
+        if original
+            .iter()
+            .any(|parameter| parameter.kind == Kind::EffectRow)
+        {
+            budget.charge(1).map_err(|_| {
+                KindFailure::resource(origin, "owner kind retention exceeded its work budget")
+            })?;
+            if !self.row_foreign_owners.contains_key(&owner.nominal()) {
+                self.row_foreign_owners.try_reserve(1).map_err(|_| {
+                    KindFailure::resource(origin, "owner kind storage could not be reserved")
+                })?;
+                self.row_foreign_owners.insert(owner.nominal(), original);
+            }
+        }
         Ok(())
     }
 
@@ -3583,6 +3718,32 @@ impl<'a> KindEnvironments<'a> {
                         &mut pending,
                     )?;
                 }
+                Type::ForeignOwnerApply(resource, arguments) => {
+                    let roots = match node {
+                        Some(ResolvedTypeProvenanceNode::ForeignOwner {
+                            nominal: source,
+                            arguments: roots,
+                            ..
+                        }) if source == resource && roots.len() == arguments.len() => {
+                            Some(roots.as_ref())
+                        }
+                        None => None,
+                        _ => {
+                            return Err(KindFailure::internal_cause(
+                                span,
+                                KindInternalCause::EffectTypeProvenanceShape,
+                            ));
+                        }
+                    };
+                    self.owner_argument_source_roots(
+                        arguments.iter(),
+                        roots,
+                        provenance,
+                        span,
+                        budget,
+                        &mut pending,
+                    )?;
+                }
                 Type::Tuple(elements) => {
                     let roots = match node {
                         Some(ResolvedTypeProvenanceNode::Tuple {
@@ -4256,23 +4417,70 @@ impl<'a> KindEnvironments<'a> {
     where
         'a: 'environment,
     {
-        let Type::ResourceApply(resource, arguments) = ty else {
-            unreachable!("resource argument synthesis requires the resource application arm");
-        };
         charge_synthesis_cell(span, budget)?;
-        let source_roots = match node {
-            Some(ResolvedTypeProvenanceNode::Resource {
-                resource: source,
-                arguments: roots,
-                ..
-            }) if source == resource && roots.len() == arguments.len() => Some(roots.as_ref()),
-            None => None,
-            _ => {
-                return Err(KindFailure::internal_cause(
-                    span,
-                    KindInternalCause::LinkedValueType,
-                ));
+        let (arguments, source_roots, parameters, owned_position) = match ty {
+            Type::ResourceApply(resource, arguments) => {
+                let source_roots = match node {
+                    Some(ResolvedTypeProvenanceNode::Resource {
+                        resource: source,
+                        arguments: roots,
+                        ..
+                    }) if source == resource && roots.len() == arguments.len() => {
+                        Some(roots.as_ref())
+                    }
+                    None => None,
+                    _ => {
+                        return Err(KindFailure::internal_cause(
+                            span,
+                            KindInternalCause::LinkedValueType,
+                        ));
+                    }
+                };
+                let definition = self.row_resource_owners.get(resource).ok_or_else(|| {
+                    KindFailure::internal_cause(span, KindInternalCause::LinkedValueType)
+                })?;
+                if self.row_resource_families.get(&definition.family)
+                    != Some(&(*resource, definition.origin))
+                {
+                    return Err(KindFailure::internal_cause(
+                        span,
+                        KindInternalCause::LinkedValueType,
+                    ));
+                }
+                (
+                    arguments,
+                    source_roots,
+                    definition.parameters,
+                    Some(definition.owned_position),
+                )
             }
+            Type::ForeignOwnerApply(nominal, arguments) => {
+                let source_roots = match node {
+                    Some(ResolvedTypeProvenanceNode::ForeignOwner {
+                        nominal: source,
+                        arguments: roots,
+                        ..
+                    }) if source == nominal && roots.len() == arguments.len() => {
+                        Some(roots.as_ref())
+                    }
+                    None => None,
+                    _ => {
+                        return Err(KindFailure::internal_cause(
+                            span,
+                            KindInternalCause::LinkedValueType,
+                        ));
+                    }
+                };
+                let parameters =
+                    self.row_foreign_owners
+                        .get(nominal)
+                        .copied()
+                        .ok_or_else(|| {
+                            KindFailure::internal_cause(span, KindInternalCause::LinkedValueType)
+                        })?;
+                (arguments, source_roots, parameters, None::<usize>)
+            }
+            _ => unreachable!("owner argument synthesis requires a tagged owner application"),
         };
         if let Some(mirror) = type_mirror {
             let equal = crate::types::compare_types_with_charge(
@@ -4294,19 +4502,7 @@ impl<'a> KindEnvironments<'a> {
                 ));
             }
         }
-        let definition = self
-            .row_resource_owners
-            .get(resource)
-            .ok_or_else(|| KindFailure::internal_cause(span, KindInternalCause::LinkedValueType))?;
-        if self.row_resource_families.get(&definition.family)
-            != Some(&(*resource, definition.origin))
-        {
-            return Err(KindFailure::internal_cause(
-                span,
-                KindInternalCause::LinkedValueType,
-            ));
-        }
-        if definition.parameters.len() != arguments.len() {
+        if parameters.len() != arguments.len() {
             if provenance.is_some() {
                 return Err(source_owner_shape_error(
                     span,
@@ -4319,11 +4515,11 @@ impl<'a> KindEnvironments<'a> {
                 KindInternalCause::LinkedValueType,
             ));
         }
-        if !definition
-            .parameters
-            .get(definition.owned_position)
-            .is_some_and(|identity| identity.kind == Kind::Type)
-        {
+        if owned_position.is_some_and(|position| {
+            !parameters
+                .get(position)
+                .is_some_and(|identity| identity.kind == Kind::Type)
+        }) {
             return Err(KindFailure::internal_cause(
                 span,
                 KindInternalCause::LinkedValueType,
@@ -4343,11 +4539,7 @@ impl<'a> KindEnvironments<'a> {
             )
         })?;
         let mut has_row = false;
-        for (slot, (argument, parameter)) in arguments
-            .iter()
-            .zip(definition.parameters.iter())
-            .enumerate()
-        {
+        for (slot, (argument, parameter)) in arguments.iter().zip(parameters.iter()).enumerate() {
             if matches!(argument, KindedArgument::RowArg(_)) != (parameter.kind == Kind::EffectRow)
             {
                 if provenance.is_some() {
@@ -4674,7 +4866,7 @@ impl<'a> KindEnvironments<'a> {
                                 occurrence: span,
                             })
                         }
-                        Type::ResourceApply(_, _) => {
+                        Type::ResourceApply(_, _) | Type::ForeignOwnerApply(_, _) => {
                             let tagged_inputs = self.resource_argument_inputs(
                                 ty,
                                 node,
@@ -5516,6 +5708,34 @@ pub(crate) fn canonical_body_free_environments<'a>(
                     retention_budget,
                 )?;
             }
+            Type::ForeignOwnerApply(nominal, arguments) => {
+                let parameters = crate::foreign::source_owner::row_owner_parameters(
+                    *nominal,
+                    registry,
+                    _span,
+                    retention_budget,
+                )
+                .map_err(|error| {
+                    if error.is_resource_exhaustion() {
+                        CanonicalEnvironmentFailure::TypeResource
+                    } else {
+                        CanonicalEnvironmentFailure::InvalidState
+                    }
+                })?;
+                if !environments.contains_nominal(*nominal) {
+                    environments
+                        .insert_nominal(*nominal, parameters, _span, retention_budget)
+                        .map_err(map_canonical_environment_retention_failure)?;
+                }
+                discover_owner_argument_types(
+                    registry,
+                    arguments.iter(),
+                    &mut pending,
+                    &mut environments,
+                    discovery_budget,
+                    retention_budget,
+                )?;
+            }
             Type::Tuple(elements) => {
                 discovery_budget
                     .charge(elements.len())
@@ -5877,8 +6097,15 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
                     KindInternalCause::LookupNominalParameters,
                     budget,
                 )?;
+                budget.charge(1).map_err(|_| {
+                    KindFailure::resource(
+                        nominal.origin.primary_span(),
+                        "foreign owner classification exceeded its work budget",
+                    )
+                })?;
+                let row_owner = environments.row_foreign_owners.contains_key(&nominal.id);
                 for parameter in parameters {
-                    if parameter.kind == Kind::EffectRow {
+                    if parameter.kind == Kind::EffectRow && !row_owner {
                         return Err(KindFailure::Source(Box::new(structured_error(
                             KindReason::ExpectedType,
                             parameter.origin.primary_span(),
@@ -5890,7 +6117,11 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
                         )?)));
                     }
                 }
-                environments.install_owner_parameters(parameters, budget)?;
+                if row_owner {
+                    environments.install_complete_owner_parameters(parameters, budget)?;
+                } else {
+                    environments.install_owner_parameters(parameters, budget)?;
+                }
                 let payload_provenance = required_lookup(
                     constructor_payload_provenance.get(index),
                     nominal.origin.primary_span(),
@@ -7094,7 +7325,7 @@ fn collect_type_variables(
                     output.push(*identity);
                 }
             }
-            Type::ResourceApply(_, arguments) => {
+            Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                 push_determination_owner_arguments(
                     arguments.iter(),
                     &mut work,
@@ -8466,6 +8697,7 @@ fn provenance_node_span(node: &ResolvedTypeProvenanceNode) -> Span {
         | ResolvedTypeProvenanceNode::Function { span, .. }
         | ResolvedTypeProvenanceNode::Application { span, .. }
         | ResolvedTypeProvenanceNode::Resource { span, .. }
+        | ResolvedTypeProvenanceNode::ForeignOwner { span, .. }
         | ResolvedTypeProvenanceNode::Row { span, .. } => *span,
     }
 }

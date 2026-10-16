@@ -291,7 +291,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }
         let source_scan_work = self.registry.source_foreign_nominal_count();
         crate::types::visit_type_structure_with_budget(root, &mut self.type_work, |node, work| {
-            let crate::types::TypeStructureNode::Type(Type::Nominal(id)) = node else {
+            let crate::types::TypeStructureNode::Type(
+                Type::Nominal(id) | Type::ForeignOwnerApply(id, _),
+            ) = node
+            else {
                 return Ok(false);
             };
             work.charge(foreign_scan_work)?;

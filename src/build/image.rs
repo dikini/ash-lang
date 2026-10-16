@@ -175,6 +175,7 @@ struct CellAcquisitionRecord {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 enum TypeTag {
     Resource(ResourceIdentity),
+    ForeignOwner(NominalId),
     Variable(TypeVariableIdentity),
     Application,
     Forall {
@@ -1964,6 +1965,10 @@ impl Wire for TypeTag {
     const MINIMUM: usize = 1;
     fn write(&self, writer: &mut WireWriter<'_>) -> Result<(), ImageFailure> {
         match self {
+            Self::ForeignOwner(id) => {
+                18u8.write(writer)?;
+                id.write(writer)
+            }
             Self::Resource(id) => {
                 16u8.write(writer)?;
                 id.write(writer)
@@ -2013,6 +2018,7 @@ impl Wire for TypeTag {
                 known: Wire::read(reader)?,
                 identity: Wire::read(reader)?,
             },
+            18 => Self::ForeignOwner(Wire::read(reader)?),
             16 => Self::Resource(Wire::read(reader)?),
             0 => Self::Int,
             1 => Self::Bool,
@@ -4686,18 +4692,70 @@ main () = match perform Measure.call 42 {
 
     #[test]
     fn status_owner_image_retains_total_original_branches_and_rejects_copied_fact_forgery() {
+        status_owner_image_case(false);
+    }
+
+    #[test]
+    fn inherited_row_owner_image_rejects_changed_tag_index_arity_and_same_kind_donor() {
+        status_owner_image_case(true);
+    }
+
+    fn status_owner_image_case(inherited_rows: bool) {
         let tree = SourceTree::new();
-        tree.write(
-            "owner.ash",
-            include_str!("../../tests/fixtures/source-owner/status_owner.ash"),
-        );
-        tree.write("entry.ash", "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Int, Int>\nmain () = resource Owner.Probe<{}, R, {}> owner = 42 {\n    Owner.read owner\n}\n");
+        let owner = include_str!("../../tests/fixtures/source-owner/status_owner.ash");
+        let owner = if inherited_rows {
+            owner
+                .replace(
+                    "owner State<R>",
+                    "owner State<Before : EffectRow, R, After : EffectRow>",
+                )
+                .replace("State<R>", "State<{| Before}, R, {| After}>")
+        } else {
+            owner.to_owned()
+        };
+        tree.write("owner.ash", &owner);
+        tree.write("entry.ash", if inherited_rows {
+            "import owner as Owner\neffect First {\n    first : Unit -> Unit\n}\neffect Last {\n    last : Unit -> Unit\n}\nmain : Unit -> Owner.Scope<Unit, Int, Int>\nmain () = resource Owner.Probe<{First}, R, {Last}> owner = 42 {\n    Owner.read owner\n}\n"
+        } else {
+            "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Int, Int>\nmain () = resource Owner.Probe<{}, R, {}> owner = 42 {\n    Owner.read owner\n}\n"
+        });
         let compiled = compile_path(tree.configuration()).unwrap();
         let (program, provenance) = compiled.effect_build_input().unwrap();
         let mut work = TypeWorkBudget::default();
         let build =
             encode_effect_for_build(program, provenance, "x86_64-unknown-linux-gnu", &mut work)
                 .unwrap();
+        let same_kind_donor = if inherited_rows {
+            let header = program
+                .registry()
+                .source_resource_facts()
+                .find(|header| header.spelling == "Probe")
+                .unwrap();
+            let (_, _, nominal, parameters) =
+                program.registry().source_owner_candidates().next().unwrap();
+            assert_eq!(header.family.module(), nominal.module());
+            assert_eq!(header.parameters.len(), parameters.len());
+            assert!(
+                header
+                    .parameters
+                    .iter()
+                    .zip(parameters)
+                    .all(|(left, right)| left.kind == right.kind)
+            );
+            assert_eq!(build.image.source_owners.len(), 1);
+            assert_eq!(
+                build.image.source_owners[0].nominal.local,
+                nominal.declaration()
+            );
+            let donor = NominalId {
+                module: build.image.source_owners[0].nominal.module,
+                local: header.family.declaration(),
+            };
+            assert_ne!(donor, build.image.source_owners[0].nominal);
+            Some(donor)
+        } else {
+            None
+        };
         let bytes = build.image.encode_bytes(&mut work).unwrap();
         let expected = build.image.encode_native_expectations(&mut work).unwrap();
         let library = &build.libraries[0];
@@ -4731,7 +4789,35 @@ main () = match perform Measure.call 42 {
             image.restore_effect(work)
         };
         let mut normal = TypeWorkBudget::default();
-        restore(&mut normal).unwrap();
+        let restored = restore(&mut normal).unwrap();
+        if inherited_rows {
+            assert_eq!(
+                restored
+                    .symbols
+                    .iter()
+                    .filter(|symbol| symbol.owner().is_some())
+                    .count(),
+                2
+            );
+            for symbol in &restored.symbols {
+                if let Some(owner) = symbol.owner() {
+                    assert_eq!(owner.owned_parameter(), 1);
+                    assert_eq!(symbol.symbol().native_type_projection(), &[1]);
+                    assert!(matches!(
+                        owner.parameters()[0].kind,
+                        crate::types::Kind::EffectRow
+                    ));
+                    assert!(matches!(
+                        owner.parameters()[1].kind,
+                        crate::types::Kind::Type
+                    ));
+                    assert!(matches!(
+                        owner.parameters()[2].kind,
+                        crate::types::Kind::EffectRow
+                    ));
+                }
+            }
+        }
         let exact = normal.used();
         for prefix in [0, 11] {
             let mut short = TypeWorkBudget::with_limit(prefix + exact - 1);
@@ -4751,7 +4837,7 @@ main () = match perform Measure.call 42 {
             ordinal: metadata.2,
             members: &members,
         }];
-        for mutation in 0..6 {
+        for mutation in 0..if inherited_rows { 12 } else { 6 } {
             let mut corrupt =
                 PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
             let first = corrupt.prepared_owner_status_outcomes[0];
@@ -4775,31 +4861,102 @@ main () = match perform Measure.call 42 {
                             _ => None,
                         })
                         .unwrap();
-                    corrupt.prepared_owner_arguments[application.arguments.start as usize]
-                        .parameter = 0;
+                    let argument =
+                        &mut corrupt.prepared_owner_arguments[application.arguments.start as usize];
+                    let changed = u32::from(inherited_rows);
+                    assert_ne!(argument.parameter, changed);
+                    argument.parameter = changed;
                 }
-                _ => {
+                5 => {
                     corrupt.prepared_owner_status_outcomes[0].outcome_span =
                         corrupt.prepared_owner_status_outcomes[1].outcome_span
                 }
+                6..=8 => {
+                    let symbol = corrupt
+                        .prepared_symbols
+                        .iter_mut()
+                        .find(|symbol| {
+                            matches!(
+                                symbol.owner_call,
+                                Some(PreparedOwnerCallRecord::StatusTeardown { .. })
+                            )
+                        })
+                        .unwrap();
+                    let Some(PreparedOwnerCallRecord::StatusTeardown { application, .. }) =
+                        &mut symbol.owner_call
+                    else {
+                        unreachable!()
+                    };
+                    let first = application.arguments.start as usize;
+                    let last = first + application.arguments.len as usize - 1;
+                    assert_eq!(application.arguments.len, 3);
+                    assert!(
+                        corrupt.prepared_owner_arguments[first].row
+                            && corrupt.prepared_owner_arguments[last].row
+                    );
+                    assert_ne!(
+                        corrupt.prepared_owner_arguments[first].parameter,
+                        corrupt.prepared_owner_arguments[last].parameter
+                    );
+                    match mutation {
+                        6 => corrupt.prepared_owner_arguments[first].row = false,
+                        7 => corrupt.prepared_owner_arguments.swap(first, last),
+                        _ => application.arguments.len -= 1,
+                    }
+                }
+                9..=11 => {
+                    let index = corrupt
+                        .types
+                        .iter()
+                        .position(|record| matches!(record.tag, TypeTag::ForeignOwner(_)))
+                        .unwrap();
+                    assert!(
+                        index < corrupt.native_fact_prefixes.unwrap().types as usize,
+                        "the changed canonical State is part of the independently generated native facts"
+                    );
+                    let record = &mut corrupt.types[index];
+                    assert_eq!(record.children.len, 3);
+                    match mutation {
+                        9 => record.tag = TypeTag::ForeignOwner(same_kind_donor.unwrap()),
+                        10 => {
+                            let first = record.children.start as usize;
+                            let last = first + record.children.len as usize - 1;
+                            assert_ne!(corrupt.type_children[first], corrupt.type_children[last]);
+                            corrupt.type_children.swap(first, last);
+                        }
+                        _ => record.children.len -= 1,
+                    }
+                }
+                _ => unreachable!(),
             }
-            assert!(
-                corrupt
-                    .compare_native_expectations(expected, &mut TypeWorkBudget::default())
-                    .is_err()
-            );
+            assert!(matches!(
+                corrupt.compare_native_expectations(expected, &mut TypeWorkBudget::default()),
+                Err(ImageFailure::InvalidRecord)
+            ));
             // Well-formed foreign disposition assertions are
             // authenticated by the separately generated complete facts, not
             // inferred from structural Core validity or native observations.
             // A bare raw scalar is always readable, so that mutation also
             // violates independently checked result shape.
             if mutation >= 1 {
-                assert!(
-                    corrupt
-                        .restore_effect(&mut TypeWorkBudget::default())
-                        .is_err(),
-                    "malformed status/application/span mutation {mutation} fails independent reconstruction"
-                );
+                let refusal = match corrupt.restore_effect(&mut TypeWorkBudget::default()) {
+                    Err(refusal) => refusal,
+                    Ok(_) => {
+                        panic!("malformed status/application/span mutation {mutation} restored")
+                    }
+                };
+                if mutation >= 6 {
+                    // Prepared application changes fail original library
+                    // reconstruction; State changes fail original native
+                    // signature admission. Both semantic consumers map their
+                    // failures to RegistryAdmission, distinct from wire shape
+                    // and the separate expected-facts comparison above.
+                    assert!(
+                        matches!(refusal, ImageFailure::RegistryAdmission),
+                        "semantic Row mutation {mutation} must map to RegistryAdmission, got {refusal}"
+                    );
+                    println!("inherited Row image mutation {mutation}: {refusal}");
+                }
             } else {
                 corrupt
                     .restore_effect(&mut TypeWorkBudget::default())
@@ -6361,6 +6518,11 @@ enum ProvenanceRecord {
         span: SpanRecord,
         arguments: Slice,
     },
+    ForeignOwner {
+        span: SpanRecord,
+        nominal: NominalId,
+        arguments: Slice,
+    },
     Resource {
         span: SpanRecord,
         resource: ResourceIdentity,
@@ -7270,6 +7432,16 @@ impl Wire for ProvenanceRecord {
     const MINIMUM: usize = 1 + SpanRecord::MINIMUM;
     fn write(&self, writer: &mut WireWriter<'_>) -> Result<(), ImageFailure> {
         match self {
+            Self::ForeignOwner {
+                span,
+                nominal,
+                arguments,
+            } => {
+                6u8.write(writer)?;
+                span.write(writer)?;
+                nominal.write(writer)?;
+                arguments.write(writer)
+            }
             Self::Resource {
                 span,
                 resource,
@@ -7322,6 +7494,11 @@ impl Wire for ProvenanceRecord {
     }
     fn read(reader: &mut WireReader<'_>) -> Result<Self, ImageFailure> {
         match u8::read(reader)? {
+            6 => Ok(Self::ForeignOwner {
+                span: Wire::read(reader)?,
+                nominal: Wire::read(reader)?,
+                arguments: Wire::read(reader)?,
+            }),
             5 => Ok(Self::Resource {
                 span: Wire::read(reader)?,
                 resource: Wire::read(reader)?,
@@ -7604,6 +7781,9 @@ impl Encoder<'_> {
                                 TypeTag::Resource(self.resource_identity(*id)?),
                                 arguments.len(),
                             ),
+                            Type::ForeignOwnerApply(id, arguments) => {
+                                (TypeTag::ForeignOwner(self.nominal(*id)?), arguments.len())
+                            }
                             Type::Inference(_) => {
                                 return Err(ImageFailure::Unsupported(Unsupported::Type));
                             }
@@ -7709,7 +7889,8 @@ impl Encoder<'_> {
                                     self.work,
                                 )?;
                             }
-                            Type::ResourceApply(_, arguments) => {
+                            Type::ResourceApply(_, arguments)
+                            | Type::ForeignOwnerApply(_, arguments) => {
                                 for argument in arguments.iter().rev() {
                                     push(
                                         &mut tasks,
@@ -8059,7 +8240,9 @@ impl Decoder<'_> {
                             count == 1
                         }
                         TypeTag::Tuple => count >= 2,
-                        TypeTag::Instance(_) | TypeTag::Resource(_) => true,
+                        TypeTag::Instance(_) | TypeTag::Resource(_) | TypeTag::ForeignOwner(_) => {
+                            true
+                        }
                         TypeTag::SourcePendingRow { known, identity } => {
                             self.source_pending_rows
                                 .contains(&crate::types::InferenceVariableId::new(identity))
@@ -8214,6 +8397,30 @@ impl Decoder<'_> {
                                         owned.push(child.into_inner());
                                     }
                                     Type::ResourceApply(id, owned.into_boxed_slice())
+                                }
+                                TypeTag::ForeignOwner(id) => {
+                                    let id = self.nominal(id)?;
+                                    let start = results
+                                        .len()
+                                        .checked_sub(count)
+                                        .ok_or(ImageFailure::InvalidRecord)?;
+                                    let mut guarded = Vec::new();
+                                    charge(self.work, count)?;
+                                    guarded
+                                        .try_reserve_exact(count)
+                                        .map_err(|_| ImageFailure::Resource)?;
+                                    for child in results.drain(start..) {
+                                        guarded.push(child.argument()?);
+                                    }
+                                    let mut owned = Vec::new();
+                                    charge(self.work, count)?;
+                                    owned
+                                        .try_reserve_exact(count)
+                                        .map_err(|_| ImageFailure::Resource)?;
+                                    for child in guarded {
+                                        owned.push(child.into_inner());
+                                    }
+                                    Type::ForeignOwnerApply(id, owned.into_boxed_slice())
                                 }
                                 TypeTag::Int => Type::Int,
                                 TypeTag::Bool => Type::Bool,
@@ -8438,9 +8645,7 @@ impl Encoder<'_> {
         for argument in application.arguments() {
             let (row, parameter) = match argument {
                 PreparedOwnerArgument::Type(parameter) => (false, *parameter),
-                PreparedOwnerArgument::EffectRow(_) => {
-                    return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
-                }
+                PreparedOwnerArgument::EffectRow(parameter) => (true, *parameter),
             };
             push(
                 &mut self.image.prepared_owner_arguments,
@@ -9301,6 +9506,27 @@ impl Encoder<'_> {
                         arguments: Slice::of(&self.image.provenance_children, start)?,
                     }
                 }
+                P::ForeignOwner {
+                    span,
+                    nominal,
+                    arguments,
+                } => {
+                    let span = self.span(*span)?;
+                    let nominal = self.nominal(*nominal)?;
+                    let start = self.image.provenance_children.len();
+                    for child in arguments {
+                        push(
+                            &mut self.image.provenance_children,
+                            root(*child)?,
+                            self.work,
+                        )?;
+                    }
+                    ProvenanceRecord::ForeignOwner {
+                        span,
+                        nominal,
+                        arguments: Slice::of(&self.image.provenance_children, start)?,
+                    }
+                }
             };
             push(&mut self.image.provenance, record, self.work)?;
         }
@@ -9822,6 +10048,15 @@ impl Decoder<'_> {
                     resource: self.resource_identity(resource)?,
                     arguments: roots(arguments, self.work)?,
                 },
+                ProvenanceRecord::ForeignOwner {
+                    span,
+                    nominal,
+                    arguments,
+                } => P::ForeignOwner {
+                    span: self.span(span)?,
+                    nominal: self.nominal(nominal)?,
+                    arguments: roots(arguments, self.work)?,
+                },
                 ProvenanceRecord::Fact(span) => P::Fact(self.span(span)?),
                 ProvenanceRecord::Tuple { span, elements } => P::Tuple {
                     span: self.span(span)?,
@@ -9916,16 +10151,14 @@ impl Decoder<'_> {
         use crate::foreign::source_contract::{PreparedOwnerApplication, PreparedOwnerArgument};
         let mut arguments = Vec::new();
         for record in record.arguments.get(&self.image.prepared_owner_arguments)? {
-            if record.row {
-                return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
-            }
             let parameter =
                 usize::try_from(record.parameter).map_err(|_| ImageFailure::InvalidRecord)?;
-            push(
-                &mut arguments,
-                PreparedOwnerArgument::Type(parameter),
-                self.work,
-            )?;
+            let argument = if record.row {
+                PreparedOwnerArgument::EffectRow(parameter)
+            } else {
+                PreparedOwnerArgument::Type(parameter)
+            };
+            push(&mut arguments, argument, self.work)?;
         }
         Ok(PreparedOwnerApplication {
             owner: usize::try_from(record.owner).map_err(|_| ImageFailure::InvalidRecord)?,

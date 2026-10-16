@@ -339,30 +339,62 @@ pub(crate) fn window_state_type<'a>(
         owner = Some(Arc::clone(candidate));
     }
     let owner = owner.ok_or_else(invalid)?;
-    let mut state = IterativeTypeOwner::new(Type::Nominal(owner.nominal()));
     let projection = access.declaration().owner().arguments();
     charge(work, projection.len(), span)?;
     if projection.len() != owner.parameters().len() {
         return Err(invalid());
     }
+    let mut arguments = Vec::new();
+    arguments
+        .try_reserve_exact(projection.len())
+        .map_err(|_| failure(ForeignAdmissionReason::StorageRefused, span))?;
+    let mut has_row = false;
     for (argument, parameter) in projection.iter().zip(owner.parameters().iter()) {
-        let PreparedOwnerArgument::Type(position) = argument else {
-            return Err(invalid());
+        let (position, row) = match argument {
+            PreparedOwnerArgument::Type(position) => (*position, false),
+            PreparedOwnerArgument::EffectRow(position) => (*position, true),
         };
-        let Some(KindedArgument::TypeArg(argument)) = actuals.get(*position).copied() else {
-            return Err(invalid());
-        };
-        if parameter.kind != Kind::Type {
+        let actual = actuals.get(position).copied().ok_or_else(invalid)?;
+        if row != (parameter.kind == Kind::EffectRow)
+            || row != matches!(actual, KindedArgument::RowArg(_))
+        {
             return Err(invalid());
         }
-        let argument = crate::types::clone_type_with_budget(argument, work)
-            .map_err(|()| failure(ForeignAdmissionReason::WorkExhausted, span))?;
-        charge(work, 1, span)?;
-        state = IterativeTypeOwner::new(Type::Application(
-            Box::new(state.into_inner()),
-            Box::new(argument),
+        has_row |= row;
+        arguments.push(crate::types::IterativeArgumentOwner::new(
+            crate::types::clone_kinded_argument_with_budget(actual, work)
+                .map_err(|_| failure(ForeignAdmissionReason::WorkExhausted, span))?,
         ));
     }
+    let state = if has_row {
+        charge(work, arguments.len(), span)?;
+        let mut actuals = Vec::new();
+        actuals
+            .try_reserve_exact(arguments.len())
+            .map_err(|_| failure(ForeignAdmissionReason::StorageRefused, span))?;
+        actuals.extend(
+            arguments
+                .into_iter()
+                .map(crate::types::IterativeArgumentOwner::into_inner),
+        );
+        IterativeTypeOwner::new(Type::ForeignOwnerApply(
+            owner.nominal(),
+            actuals.into_boxed_slice(),
+        ))
+    } else {
+        let mut state = IterativeTypeOwner::new(Type::Nominal(owner.nominal()));
+        for argument in arguments {
+            charge(work, 1, span)?;
+            let KindedArgument::TypeArg(argument) = argument.into_inner() else {
+                unreachable!("the complete projection checked each Type tag")
+            };
+            state = IterativeTypeOwner::new(Type::Application(
+                Box::new(state.into_inner()),
+                Box::new(argument),
+            ));
+        }
+        state
+    };
     Ok((owner, state))
 }
 

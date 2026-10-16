@@ -2533,6 +2533,7 @@ struct Resolver {
     source_access_window_positions: HashMap<NominalTypeId, usize>,
     source_foreign_libraries: Vec<Arc<crate::foreign::source_contract::PreparedForeignLibrary>>,
     row_resource_families: HashSet<NominalTypeId>,
+    row_foreign_owners: HashSet<NominalTypeId>,
     handler_family_resources: HashSet<NominalTypeId>,
     resource_provider_interfaces: HashMap<NominalTypeId, InterfaceId>,
     resource_origins: HashMap<NominalTypeId, Origin>,
@@ -2980,6 +2981,7 @@ impl Resolver {
             source_access_window_positions: HashMap::new(),
             source_foreign_libraries: Vec::new(),
             row_resource_families: HashSet::new(),
+            row_foreign_owners: HashSet::new(),
             handler_family_resources: HashSet::new(),
             resource_provider_interfaces: HashMap::new(),
             resource_origins: HashMap::new(),
@@ -6248,7 +6250,7 @@ impl Resolver {
                     }
                     pending.extend(arguments.iter().map(Task::Argument));
                 }
-                Type::Nominal(id) => {
+                Type::Nominal(id) | Type::ForeignOwnerApply(id, _) => {
                     // Only capture metadata may mention internal lexical IDs.
                     // Keep traversing its complete types, including embedded
                     // effect instances, but demand no ordinary fact for them.
@@ -6278,6 +6280,9 @@ impl Resolver {
                             )
                         })?;
                         seen.push(*id);
+                    }
+                    if let Type::ForeignOwnerApply(_, arguments) = ty {
+                        pending.extend(arguments.iter().map(Task::Argument));
                     }
                 }
                 Type::Application(function, argument) => {
@@ -8043,6 +8048,41 @@ impl Resolver {
                         })?;
                     self.source_access_window_positions
                         .insert(id, prepared.accesses()[index].window_parameter());
+                }
+                if let crate::foreign::source_contract::PreparedForeignNominalRole::Owner(index) =
+                    role
+                {
+                    let original = &prepared.owners()[index];
+                    self.type_work
+                        .charge(original.parameters().len())
+                        .map_err(|_| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                written_span,
+                                "source owner kind selection exceeded its budget",
+                            )
+                        })?;
+                    if original
+                        .parameters()
+                        .iter()
+                        .any(|parameter| parameter.kind() == &Kind::EffectRow)
+                    {
+                        self.type_work.charge(1).map_err(|_| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                written_span,
+                                "source owner kind retention exceeded its budget",
+                            )
+                        })?;
+                        self.row_foreign_owners.try_reserve(1).map_err(|_| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                written_span,
+                                "source owner kind storage could not be reserved",
+                            )
+                        })?;
+                        self.row_foreign_owners.insert(id);
+                    }
                 }
                 let mut parameters = ImportedTypeVariableBuffer(Vec::new());
                 parameters
@@ -10056,6 +10096,7 @@ impl Resolver {
             Nominal(NominalTypeId),
             Variable(TypeVariableId),
             Resource(crate::resolved::ResourceDefinitionId),
+            ForeignOwner(NominalTypeId),
         }
         enum Task<'a> {
             Visit(&'a SurfaceType),
@@ -10162,15 +10203,47 @@ impl Resolver {
                                 ApplicationHead::Variable(*variable)
                             } else {
                                 let family = self.nominal_reference(constructor)?.id;
-                                match self.resource_families.get(&family).copied() {
-                                    Some(resource)
-                                        if arguments.iter().any(|argument| {
-                                            matches!(argument.kind, SurfaceTypeKind::RowArgument(_))
-                                        }) =>
-                                    {
-                                        ApplicationHead::Resource(resource)
+                                self.type_work.charge(1).map_err(|_| {
+                                    error(
+                                        ResolveReason::TypeResourceExhausted,
+                                        current.span,
+                                        "source owner selection exceeded its budget",
+                                    )
+                                })?;
+                                let imported_row_owner =
+                                    if let Some(owner) = self.imported.source_owner(family) {
+                                        self.type_work.charge(owner.parameters().len()).map_err(
+                                        |_| {
+                                            error(
+                                                ResolveReason::TypeResourceExhausted,
+                                                current.span,
+                                                "source owner kind selection exceeded its budget",
+                                            )
+                                        },
+                                    )?;
+                                        owner
+                                            .parameters()
+                                            .iter()
+                                            .any(|parameter| parameter.kind == Kind::EffectRow)
+                                    } else {
+                                        false
+                                    };
+                                if self.row_foreign_owners.contains(&family) || imported_row_owner {
+                                    ApplicationHead::ForeignOwner(family)
+                                } else {
+                                    match self.resource_families.get(&family).copied() {
+                                        Some(resource)
+                                            if arguments.iter().any(|argument| {
+                                                matches!(
+                                                    argument.kind,
+                                                    SurfaceTypeKind::RowArgument(_)
+                                                )
+                                            }) =>
+                                        {
+                                            ApplicationHead::Resource(resource)
+                                        }
+                                        _ => ApplicationHead::Nominal(family),
                                     }
-                                    _ => ApplicationHead::Nominal(family),
                                 }
                             };
                             tasks.push(Task::Application(
@@ -10583,11 +10656,52 @@ impl Resolver {
                         ));
                         continue;
                     }
+                    if let ApplicationHead::ForeignOwner(nominal) = head {
+                        let resource = || {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                span,
+                                "foreign owner application storage exceeded its type-work budget",
+                            )
+                        };
+                        self.type_work
+                            .charge(
+                                count
+                                    .checked_mul(2)
+                                    .and_then(|n| n.checked_add(2))
+                                    .ok_or_else(resource)?,
+                            )
+                            .map_err(|_| resource())?;
+                        let mut roots = Vec::new();
+                        let mut actuals = Vec::new();
+                        roots.try_reserve_exact(count).map_err(|_| resource())?;
+                        actuals.try_reserve_exact(count).map_err(|_| resource())?;
+                        provenance.try_reserve(1).map_err(|_| resource())?;
+                        completed.0.try_reserve(1).map_err(|_| resource())?;
+                        // All failure points precede consumption of the complete
+                        // iterative argument owner. The remaining transfers cannot refuse.
+                        for (argument, root) in arguments.into_vec() {
+                            actuals.push(argument);
+                            roots.push(root);
+                        }
+                        provenance.push(ResolvedTypeProvenanceNode::ForeignOwner {
+                            span,
+                            nominal,
+                            arguments: roots.into_boxed_slice(),
+                        });
+                        completed.push((
+                            Type::ForeignOwnerApply(nominal, actuals.into_boxed_slice()),
+                            provenance.len() - 1,
+                        ));
+                        continue;
+                    }
                     provenance.push(ResolvedTypeProvenanceNode::Fact(constructor_span));
                     let mut function = match head {
                         ApplicationHead::Nominal(owner) => Type::Nominal(owner),
                         ApplicationHead::Variable(variable) => Type::Variable(variable),
-                        ApplicationHead::Resource(_) => unreachable!(),
+                        ApplicationHead::Resource(_) | ApplicationHead::ForeignOwner(_) => {
+                            unreachable!()
+                        }
                     };
                     let mut function_root = provenance.len() - 1;
                     for ((argument, argument_root), source_argument) in

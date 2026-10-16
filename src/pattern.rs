@@ -643,7 +643,7 @@ fn charge_types(types: &[Type], budget: &mut UsefulnessBudget) -> Result<(), Use
             Task::Type(ty) => {
                 budget.charge(1)?;
                 match ty {
-                    Type::ResourceApply(_, arguments) => {
+                    Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                         work.extend(arguments.iter().map(Task::Argument))
                     }
                     Type::Tuple(elements) => work.push(Task::Slice(elements.iter())),
@@ -745,7 +745,8 @@ fn heads_for_type<'a>(ty: &Type, registry: &'a ResolvedRegistry) -> Option<Heads
         | Type::Variable(_)
         | Type::Inference(_)
         | Type::Forall(_, _)
-        | Type::ResourceApply(_, _) => None,
+        | Type::ResourceApply(_, _)
+        | Type::ForeignOwnerApply(_, _) => None,
     }
 }
 

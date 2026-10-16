@@ -1415,6 +1415,7 @@ where
         | Type::Unit
         | Type::Tuple(_)
         | Type::ResourceApply(_, _)
+        | Type::ForeignOwnerApply(_, _)
         | Type::Nominal(_)
         | Type::Application(_, _)
         | Type::Variable(_)

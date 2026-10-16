@@ -5569,7 +5569,7 @@ fn scan_type_admission<'a>(
                     }
                     work.push(TypeAdmissionTask::Visit(body, child_depth));
                 }
-                Type::ResourceApply(_, arguments) => {
+                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                     let child_depth = depth.saturating_add(1);
                     exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
                     work.push(TypeAdmissionTask::Owner(arguments, child_depth));
