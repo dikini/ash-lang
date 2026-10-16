@@ -1724,6 +1724,116 @@ main () = 42
         }
     }
 
+    fn source_control_native_formal_metadata_inputs(
+        resolved: &crate::resolved::ResolvedModule,
+        view: &ResolvedRegistry,
+        cost: usize,
+    ) {
+        let native = view
+            .foreign_modules()
+            .find(|native| {
+                native.data_types.contains_key("Acquire")
+                    && native.data_types.contains_key("Result")
+            })
+            .unwrap();
+        let module = native.admission.module_id;
+        let canonical = native.canonical_registry();
+        for parameter in canonical
+            .type_variables()
+            .filter(|parameter| parameter.id.module() == Some(module))
+        {
+            assert_eq!(view.type_variable(parameter.id), Some(parameter));
+        }
+        let statement = native
+            .states
+            .iter()
+            .find(|state| canonical.nominal(state.id).unwrap().spelling == "StatementState")
+            .unwrap();
+        assert!(view.nominal(statement.id).is_none());
+        assert!(view.nominal(native.data_types["Result"]).is_none());
+        let donor = SourceFile::new("unrelated-native-formal.ash", "T").unwrap();
+        for (local, spelling) in [(1, "S"), (2, "C"), (3, "T")] {
+            let parameter = canonical
+                .type_variable(TypeVariableId::resolved(module, local))
+                .unwrap();
+            assert_eq!(parameter.spelling, spelling);
+            assert_eq!(view.type_variable(parameter.id), Some(parameter));
+            let matching = crate::resolved::clone_resolved_type_variable_with_budget(
+                parameter,
+                &mut TypeWorkBudget::default(),
+            )
+            .unwrap();
+            let matching_view = resolved
+                .registry()
+                .as_ref()
+                .clone()
+                .with_additional_type_variables([matching])
+                .source_original_checker_view(
+                    resolved.imported_facts(),
+                    &mut TypeWorkBudget::default(),
+                )
+                .unwrap();
+            assert_eq!(matching_view.type_variable(parameter.id), Some(parameter));
+            for mutation in 0..5 {
+                let mut changed = crate::resolved::clone_resolved_type_variable_with_budget(
+                    parameter,
+                    &mut TypeWorkBudget::default(),
+                )
+                .unwrap();
+                match mutation {
+                    0 => changed.id = TypeVariableId::resolved(module, local % 3 + 1),
+                    1 => changed.kind = Kind::EffectRow,
+                    2 => {
+                        changed.origin = canonical
+                            .type_variable(TypeVariableId::resolved(module, 4))
+                            .unwrap()
+                            .origin
+                            .clone()
+                    }
+                    3 => {
+                        changed.origin = Origin::Source(
+                            donor
+                                .span(crate::source::ByteRange::new(0, 1).unwrap())
+                                .unwrap(),
+                        )
+                    }
+                    4 => changed.spelling = "Different".to_owned(),
+                    _ => unreachable!(),
+                }
+                assert!(
+                    matches!(
+                        resolved
+                            .registry()
+                            .as_ref()
+                            .clone()
+                            .with_additional_type_variables([changed])
+                            .source_original_checker_view(
+                                resolved.imported_facts(),
+                                &mut TypeWorkBudget::default()
+                            ),
+                        Err(crate::resolved::ResolvedBuildFailure::InvalidState)
+                    ),
+                    "native canonical formal {local}, mirror mutation {mutation}"
+                );
+            }
+        }
+        let mut exact = TypeWorkBudget::with_limit(13 + cost);
+        exact.charge(13).unwrap();
+        resolved
+            .registry()
+            .source_original_checker_view(resolved.imported_facts(), &mut exact)
+            .unwrap();
+        assert_eq!(exact.used(), 13 + cost);
+        let mut short = TypeWorkBudget::with_limit(13 + cost - 1);
+        short.charge(13).unwrap();
+        assert!(matches!(
+            resolved
+                .registry()
+                .source_original_checker_view(resolved.imported_facts(), &mut short),
+            Err(crate::resolved::ResolvedBuildFailure::TypeResource)
+        ));
+    }
+
     #[test]
     fn source_control_original_registry_retains_distinct_resource_categories() {
         use crate::{
@@ -2138,13 +2248,12 @@ main () = 42
                     .provider_contract(fact.id.module())
                     .unwrap();
                 assert_eq!(certificate.resource_count(), 2);
+                let mut view_work = TypeWorkBudget::default();
                 let view = resolved
                     .registry()
-                    .source_original_checker_view(
-                        resolved.imported_facts(),
-                        &mut TypeWorkBudget::default(),
-                    )
+                    .source_original_checker_view(resolved.imported_facts(), &mut view_work)
                     .unwrap();
+                source_control_native_formal_metadata_inputs(&resolved, &view, view_work.used());
                 let donor_source = graph
                     .modules()
                     .iter()

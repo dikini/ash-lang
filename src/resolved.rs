@@ -22572,6 +22572,29 @@ impl ResolvedRegistry {
             }
         }
         if retain_registered_originals {
+            // A selected native type can retain a later formal while earlier
+            // native declarations are projected out. Their immutable canonical
+            // parameter records complete this private registry's provenance;
+            // they do not materialize those declarations or expose names.
+            budget
+                .charge(imported.foreign_modules.len())
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            for (module, original) in &imported.foreign_modules {
+                if *module != original.admission.module_id {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                let canonical = original.canonical_registry();
+                budget
+                    .charge(canonical.type_variable_count())
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                for parameter in canonical.type_variables() {
+                    if parameter.id.module() == Some(*module) {
+                        registry.retain_checker_type_variable(parameter, budget)?;
+                    }
+                }
+            }
+        }
+        if retain_registered_originals {
             budget
                 .charge(imported.provider_groups.len())
                 .map_err(|()| ResolvedBuildFailure::TypeResource)?;
@@ -22604,30 +22627,7 @@ impl ResolvedRegistry {
                             OwnerId::Resource(_) => return Err(ResolvedBuildFailure::InvalidState),
                         }
                         for parameter in parameters {
-                            budget
-                                .charge(1)
-                                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-                            if let Some(actual) = registry.type_variables.get(&parameter.id) {
-                                if !same_checker_type_variable_with_budget(
-                                    actual, parameter, budget,
-                                )
-                                .map_err(|()| ResolvedBuildFailure::TypeResource)?
-                                {
-                                    return Err(ResolvedBuildFailure::InvalidState);
-                                }
-                            } else {
-                                registry
-                                    .type_variables
-                                    .try_reserve(1)
-                                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-                                let retained =
-                                    clone_resolved_type_variable_with_budget(parameter, budget)
-                                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-                                let displaced = registry
-                                    .type_variables
-                                    .insert(parameter.id, retained.into());
-                                debug_assert!(displaced.is_none());
-                            }
+                            registry.retain_checker_type_variable(parameter, budget)?;
                         }
                     }
                     if fact.id.module() != *module
@@ -23963,6 +23963,34 @@ impl ResolvedRegistry {
         if let Some(replaced) = self.type_variables.insert(parameter.id, parameter.into()) {
             drop(replaced);
         }
+    }
+
+    /// Compares or copies passive canonical parameter metadata. An existing
+    /// mirror must agree completely; this never creates a defining owner row.
+    fn retain_checker_type_variable(
+        &mut self,
+        parameter: &ResolvedTypeVariable,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ResolvedBuildFailure> {
+        budget
+            .charge(1)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        if let Some(actual) = self.type_variables.get(&parameter.id) {
+            if !same_checker_type_variable_with_budget(actual, parameter, budget)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            return Ok(());
+        }
+        self.type_variables
+            .try_reserve(1)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        let retained = clone_resolved_type_variable_with_budget(parameter, budget)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        let displaced = self.type_variables.insert(parameter.id, retained.into());
+        debug_assert!(displaced.is_none());
+        Ok(())
     }
 
     /// Installs one checker-view binder from immutable canonical authority.
