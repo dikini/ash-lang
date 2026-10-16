@@ -707,6 +707,24 @@ stopped before independent Core and native execution. Normal four-case and
 whole-caller verification, current quality, actual-head review and retained
 acceptance remain pending on [PR #34](https://github.com/dikini/ash-lang/pull/34).
 
+The subsequent normal run completed Source, Final and independent Core in all
+four cases, then exhausted the existing `51P` native-preparation meter. An exact
+first-refusal observation confirmed the same carried census/encoder owner;
+there was no demonstrated reset, separate fixed encoding meter or duplicated
+debit to repair. One finite `204P` diagnostic completed all four preparations
+and stopped before generated-host building or execution.
+
+After independent accounting and fitting review, the project lead selected
+preparation `125P` under the user's delegated judgment. The largest observation
+used 4,984,019 units for P = 50,905, including 44,510 source bytes and 6,395 main
+nodes. The fixture's normal fresh database-path substitution is recorded, rather
+than calling it byte-identical to the earlier 44,512-byte input. A 25% fitting
+reserve requires coefficient 123; 125 is the conservative rounded choice. Only
+this coefficient and exact expected tests change; the same paid sizing and
+cumulative preparation meter, every other allowance and every semantic/native
+check remain intact. Normal full SQLite/native/caller checks, current quality,
+final-head review and retained acceptance still require their actual results.
+
 ## Deviations
 
 None authorized. Return concrete semantic gaps to CP-0022 instead of resolving

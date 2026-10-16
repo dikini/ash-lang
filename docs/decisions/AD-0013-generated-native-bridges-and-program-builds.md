@@ -79,7 +79,7 @@ Use input-derived cumulative work allowances at the modular compiler phase
 owners and for native preparation and startup. The accepted policy is:
 
 ```text
-preparation gas = 51 * (admitted source UTF8 bytes + validated main Core nodes)
+preparation gas = 125 * (admitted source UTF8 bytes + validated main Core nodes)
 source gas      = 800 * (canonical loaded source UTF8 bytes, including builtins)
 final gas       = 800 * (the same canonical source UTF8 closure)
 rewrite gas     = 16 * (the same canonical source UTF8 closure), per compiler arena
@@ -170,6 +170,19 @@ These finite measurements stopped before independent Core, preparation or
 native execution. They are fitting evidence, not a holdout, normal caller pass
 or universal complexity guarantee. Normal verification and retained delivery
 remain separate obligations.
+
+The project lead subsequently selected preparation `125P` under the same
+delegated judgment after independent review of four complete preparation
+observations. Here P retains its existing paid definition: canonical admitted
+source bytes plus validated main Core nodes. Persistence used 4,984,019 units
+for P = 50,905 (44,510 source bytes and 6,395 main nodes). Its ordinary fixture
+substitutes a fresh database path, so those actual inputs are recorded separately
+from the earlier 44,512-byte observation. A 25% fitting reserve requires integer
+coefficient 123; 125 is the conservative rounded choice. The same cumulative
+meter carries its census, native-input checks, image encoding and emission.
+The finite measurements used `204P` and stopped before generated-host building
+or evaluation; normal native verification and retained delivery remain required.
+Source/Final/rewrite/Core/startup policies and every other check remain unchanged.
 
 ### Optional C/header verification
 

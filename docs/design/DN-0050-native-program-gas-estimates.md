@@ -1,7 +1,7 @@
 # DN-0050: Native program gas estimates
 
 - ID: `DN-0050`
-- Status: calibration record; `800S` source, `800S` final elaboration, `16S` compiler-arena rewrite, `345S` Core, `51P` preparation and `22B` startup accepted
+- Status: calibration record; `800S` source, `800S` final elaboration, `16S` compiler-arena rewrite, `345S` Core, `125P` preparation and `22B` startup accepted
 - Related: [TASK-0040](../tasks/TASK-0040-ash-copying-sqlite-library.md),
   [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md),
   [CP-0022](../proposals/CP-0022-ash-authored-foreign-interfaces.md)
@@ -25,7 +25,7 @@ The current formulas are:
 
 ```text
 source checking = 800 * canonical loaded source UTF8 bytes, including builtins
-preparation     = 51 * (admitted source UTF8 bytes + validated main Core nodes)
+preparation     = 125 * (admitted source UTF8 bytes + validated main Core nodes)
 final elaboration = 800 * canonical loaded source UTF8 bytes, including builtins
 compiler rewrite  = 16 * the same source closure, per compiler arena lifetime
 independent Core  = 345 * canonical loaded source UTF8 bytes, including builtins
@@ -149,7 +149,7 @@ checkpoint remain separate evidence obligations.
 
 ## Current Source, Final and separate rewrite revision
 
-The current full SQLite library run at Source `300S` / Final `161S` passed 30
+The earlier full SQLite library run at Source `300S` / Final `161S` passed 30
 cases and exhausted four required cases. Separate finite Source/Final
 measurements completed the constraint and native-index cases, then stopped at
 persistence's Source refusal. A single first-refusal observation identified the
@@ -189,6 +189,52 @@ for each empty compiler arena; generic, standalone and private-image defaults
 remain unchanged. [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md)
 governs this accepted policy. Normal affected callers, implementation review,
 retained verification and the full checkpoint remain separate obligations.
+
+## Current complete-preparation revision
+
+The next normal full SQLite run passed 30 cases. The other four completed Source,
+Final and independent Core, then exhausted preparation `51P`. One exact owning
+refusal requested five units for a paid flat structural-key lookup at 2,154,186
+of 2,154,189 units. The census and encoder retained the same cumulative meter;
+no reset, fixed inner meter or duplicate debit was established.
+
+One finite `204P` batch completed preparation for the four existing integration
+witnesses. Source `800S`, Final `800S`, rewrite `16S`, Core `345S`, startup and
+all checks retained their normal policies. Each helper returned after complete
+image encoding and emission, before generated-host building, startup or
+execution. Existing C/archive input creation remained unchanged. All temporary
+changes were restored; these diagnostic completions are not normal host passes.
+
+| Complete preparation case | Source bytes S | Main nodes N | P = S + N | Complete work |
+| --- | ---: | ---: | ---: | ---: |
+| Constraint / 920 | 39,033 | 3,206 | 42,239 | 2,570,536 |
+| Native index / 921 | 39,068 | 3,211 | 42,279 | 2,572,659 |
+| Persistence / 922 | 44,510 | 6,395 | 50,905 | 4,984,019 |
+| Prepare refusals / 923 | 38,797 | 3,968 | 42,765 | 3,193,663 |
+
+The actual source hashes are pinned. The first, second and fourth source texts
+match the earlier observation; persistence's existing fixture substitutes its
+fresh `session.db` directory in two string literals. This accounts for its
+44,510-byte input instead of the historical 44,512 bytes. Display and process
+identities are fresh. Repeated emission/completion markers report the same
+cumulative work and are not added.
+
+These are four exact P fitting rows. The normal run also records 31 completed
+preparation observations with S but without N. Their conservative `work/S`
+upper bound for `work/P` is at most 50.025664 because P >= S; they are separate
+from the exact P rows. Censored refusals and compilation-only reports do not
+supply complete preparation rows. Earlier observations retain their own pins.
+
+Persistence sets the exact maximum at `97.908241P`. The 25% fitting reserve gives
+minimum integer coefficient 123. After independent accounting, input and fit
+review, the project lead selected conservative rounded `125P` under the user's
+delegated judgment, rather than a direct human numeric choice. It gives this
+measured case 27.67056% headroom. Only the coefficient changes; paid sizing,
+cumulative carry, overflow, terminal refusal and all other allowances/checks
+remain unchanged. These fitting observations are not holdout evidence or a
+universal bound. Normal native/caller verification, actual-head review and
+retention remain separate obligations under
+[AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md).
 
 ## Complete persistence startup and accepted revision
 
