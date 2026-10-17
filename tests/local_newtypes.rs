@@ -55,6 +55,9 @@ fn resolution_error(text: &str) -> ResolveReason {
         ResolveModuleError::Kind(error) => {
             panic!("kind checking stole resolution ownership: {error:?}")
         }
+        ResolveModuleError::Representation(error) => {
+            panic!("fixture unexpectedly reached representation checking: {error:?}")
+        }
     }
 }
 

@@ -1412,6 +1412,12 @@ messages! {
     kind_not_applicable => "kind-not-applicable" { found: &'a str = "Type" },
     /// A type, interface or effect argument has the wrong kind.
     kind_argument => "kind-argument" { expected: &'a str = "Type -> Type", found: &'a str = "Type" },
+    /// A written effect application disagrees with its original parameter count.
+    effect_argument_count => "effect-argument-count" { expected: usize = 1, found: usize = 2 },
+    /// The malformed written effect application.
+    effect_application => "effect-application" {},
+    /// The original effect parameter declaration.
+    effect_parameters => "effect-parameters" {},
     /// The kind of the causal source occurrence.
     kind_found => "kind-found" { found: &'a str = "Type" },
     /// A declaration fixes the actual kind of the source occurrence.

@@ -354,10 +354,9 @@ fn module_newtype_representation_cycle_is_rejected_after_kinding() {
     let graph =
         load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
 
-    let resolved =
-        resolve_module(module_named(&graph, "entry.ash"), &[]).expect("representation kind fits");
-    let TypeError::Source(error) =
-        check_module(resolved).expect_err("a representation cycle should be rejected by checking")
+    let ResolveModuleError::Representation(TypeError::Source(error)) =
+        resolve_module(module_named(&graph, "entry.ash"), &[])
+            .expect_err("kind-correct representation cycles must reject before remaining kinds")
     else {
         panic!("representation recursion belongs to module checking");
     };
@@ -371,11 +370,9 @@ fn module_newtype_cycle_primary_is_the_first_closing_representation_occurrence()
     let entry = tree.write("entry.ash", text);
     let graph =
         load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
-    let resolved = resolve_module(module_named(&graph, "entry.ash"), &[])
-        .expect("both representations are kind-correct");
-
-    let TypeError::Source(error) =
-        check_module(resolved).expect_err("the mutual representation cycle should be rejected")
+    let ResolveModuleError::Representation(TypeError::Source(error)) =
+        resolve_module(module_named(&graph, "entry.ash"), &[])
+            .expect_err("the mutual representation cycle should be rejected")
     else {
         panic!("the representation cycle should retain a source diagnostic");
     };
@@ -410,11 +407,9 @@ fn module_newtype_cycle_through_effect_argument_retains_the_closing_occurrence()
     let entry = tree.write("entry.ash", text);
     let graph =
         load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
-    let resolved = resolve_module(module_named(&graph, "entry.ash"), &[])
-        .expect("effect-argument representations should resolve");
-
-    let TypeError::Source(error) = check_module(resolved)
-        .expect_err("a cycle through effect arguments should be rejected by checking")
+    let ResolveModuleError::Representation(TypeError::Source(error)) =
+        resolve_module(module_named(&graph, "entry.ash"), &[])
+            .expect_err("a cycle through effect arguments should be rejected")
     else {
         panic!("the effect-argument cycle should retain a source diagnostic");
     };
@@ -709,11 +704,9 @@ fn module_parameterized_newtype_cycle_uses_the_applied_nominal_identity() {
     let entry = tree.write("entry.ash", "newtype Loop<A> = Loop(Loop<A>)\n");
     let graph =
         load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
-    let resolved = resolve_module(module_named(&graph, "entry.ash"), &[])
-        .expect("the parameterized representation should kind-check");
-
-    let TypeError::Source(error) = check_module(resolved)
-        .expect_err("an applied self representation must remain a newtype cycle")
+    let ResolveModuleError::Representation(TypeError::Source(error)) =
+        resolve_module(module_named(&graph, "entry.ash"), &[])
+            .expect_err("an applied self representation must remain a newtype cycle")
     else {
         panic!("the parameterized cycle must be a source typing diagnostic");
     };

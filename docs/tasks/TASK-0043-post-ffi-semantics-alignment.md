@@ -115,23 +115,79 @@ executions across both output orders. Formatting and strict all-target/all-featu
 Clippy pass. Source, configuration, tool, environment and explicit external-input
 pins agree before and after all 14 focused commands. Changed Markdown has no new
 finding or broken link; the same 84 existing line-length findings remain.
-Independent review and verified retention of this package remain pending.
+[PR #48](https://github.com/dikini/ash-lang/pull/48) has
+[clear independent review](https://github.com/dikini/ash-lang/pull/48#pullrequestreview-5560259300)
+at `0bd5f7b`. Unsigned merge `55f30714c2bb040f6651ac6898d433abbe2c1004` retains its
+exact tree on `integration/semantics-alignment`; canonical source, configuration,
+tool, environment, external-input and selected-artifact equality connects the
+focused evidence to that result.
+[Independent retained verification](https://github.com/dikini/ash-lang/pull/48#issuecomment-6241839571)
+confirms that exact result.
+[Issue #46 acceptance](https://github.com/dikini/ash-lang/issues/46#issuecomment-6241851985)
+is closed with its original body preserved. The baseline documentation conflict
+is resolved; the final combined gate and Main retention remain pending.
 The original receipts and explicit setup failures remain in
 `.worktrees/semantics-alignment-context-20261017/foreign-output-order`.
 
-This delivery prioritizes issue #46's overview, detailed-rule and tool-guide
-alignment. At `ffi-base`, the detailed rules and implementation already admitted
-bounded sealed copy windows in permitted direct provider phases. The overview
-and tool guide need correction; this adds no capability or tag rewrite. The
-privileged lifecycle-wrapper exclusion remains. Current composition receipts
+Issue #46's overview, detailed-rule and tool-guide alignment is retained
+through PR #48. At `ffi-base`, the detailed rules and implementation already
+admitted bounded sealed copy windows in permitted direct provider phases. The
+corrected overview and tool guide describe that existing scope; this adds no
+capability or tag rewrite. The privileged lifecycle-wrapper exclusion remains.
+Current composition receipts
 belong in
 `.worktrees/semantics-alignment-context-20261017/foreign-output-refresh-on-b8`.
+
+[PR #49](https://github.com/dikini/ash-lang/pull/49) starts from retained
+integration `55f3071` on `codex/diagnostic-precedence-alignment`. The affected
+kind and resolver sources
+and representation-cycle pass still equal `ffi-base`. The corrected baseline
+regressions pass two controls and fail seven precedence/source-classification
+cases. An earlier global and a representation can both report
+`kind.expected-type`; their winning primary and related spans and structured
+kinds distinguish the failures. The repair checks module representations, then
+representation cycles, then remaining kinds without changing the existing
+cycle algorithm or its closing/member labels. Primitive contextual wording
+now describes the operand heap threaded by the existing machine; it changes
+no runtime rule.
+
+Diagnostic-contract decision: an arity-invalid effect instance in a written
+type reports `effect.argument-count` with expected/supplied counts, its complete
+application and the original effect header. This implements existing arity-before-kind
+source responsibility under AD-0006. Admission-only scalar origins preserve
+those sites through row canonicalization and are discarded before resolved
+module publication. Imported and authenticated/body-free carrier corruption
+retains `KindInternalCause::EffectArgumentCount`; there is no blanket remapping.
+The repaired candidate passes 891 focused cases: 403 kind/resolver/elaborator
+units, 13 precedence regressions, 252 front-end/module callers, 161 diagnostic
+callers, 47 architecture cases, 12 source-owner controls, the both-order image
+control, the real reversed-output SQLite host and the mixed static/shared CLI
+fixture. All 14 focused commands pass, including formatting and strict
+all-target/all-feature Clippy. Canonical inputs and state agree before/after.
+Changed Markdown has the same 80 existing line-length findings, no new finding
+and no broken relative link. The subsequent results prose has separate metadata
+and manual-check evidence. Independent review, retention and the final combined
+gate remain pending for this package. Receipts belong in
+`.worktrees/semantics-alignment-context-20261017/diagnostic-precedence`.
+
+The PR #49 review found that interface-application preflight could still mask
+an invalid remaining effect declaration. Its arity refusal returned before the
+effect traversal; its positional-kind failure could also win. The unchanged
+effect traversal now runs before that preflight. Both exact source regressions
+assert the winning effect occurrence at `46..49`, its constructor declaration
+at `0..20`, and structured expected/found kinds and label facts. Repairing the
+effect keeps each original interface failure reachable. Per-application arity
+still precedes positional kinds. No check body, meter, limit or budget
+assertion changed. The red and refreshed focused receipts remain separate in
+`diagnostic-precedence/remaining-effect-repair`; the earlier 889-case evidence
+remains scoped to the earlier head. Current re-review, retention and the final
+combined full gate remain pending.
 
 Acceptance remains separate for each original scope:
 
 - [x] Row unification: regression, negative and resource evidence; independent
   review; verified retention.
-- [ ] ABI-order outputs and connected documentation: focused and real-wrapper
+- [x] ABI-order outputs and connected documentation: focused and real-wrapper
   native evidence; independent review; verified retention.
 - [ ] Diagnostic precedence and primitive wording: focused evidence;
   independent review; verified retention.
@@ -139,12 +195,17 @@ Acceptance remains separate for each original scope:
 
 Delivered: the row repair, current focused/native evidence and independent
 review are retained on `integration/semantics-alignment` at `b8fe5b3` through
-PR #44. The record is
-`.worktrees/semantics-alignment-context-20261017/row-refresh-on-main1573/integration/retained-handoff.json`.
+PR #44. ABI-order outputs and the connected issue #46 documentation correction
+are retained at `55f3071` through PR #48, with
+[retained-result evidence](https://github.com/dikini/ash-lang/pull/48#issuecomment-6241785767).
+Exact records are
+`.worktrees/semantics-alignment-context-20261017/row-refresh-on-main1573/integration/retained-handoff.json`
+and
+`.worktrees/semantics-alignment-context-20261017/foreign-output-refresh-on-b8/integration/retained-handoff.json`.
 
-Remaining: ABI/output repair and issue #46 documentation, diagnostic precedence,
-primitive wording, the final combined fresh workspace gate and verified Main
-retention. These original combined obligations remain unchecked above.
+Remaining: diagnostic precedence, primitive wording, the final combined fresh
+workspace gate and verified Main retention. These original combined obligations
+remain unchecked above.
 Owner: the developer under PM's checkpoint and review assignment.
 
 ## Verification
@@ -167,6 +228,20 @@ input-derived native preparation/startup meters for the product-library image
 fixture. Run affected owner contract/admission, Core, post-record and native
 callers, formatting, strict focused Clippy, architecture and manual specification
 checks. No production work coefficient or limit changes are part of this repair.
+
+For diagnostic precedence, test representation kinds before interface arity,
+determination, earlier global and local kinds; representation cycles before
+remaining kinds and interface checks; and remaining effect kinds before
+interface-application arity and positional kinds, determination and method
+kinds. Assert causal spans and structured facts when reason codes coincide,
+preserve cycle-closing/member labels and retain repaired positive and
+later-failure controls. Test nested written effect arity locally and through
+imported headers, type and row arguments, zero arguments, structured counts,
+both catalogues, and retained/internal negative controls. Keep exact
+origin/label work boundaries, fresh retries and small-stack graph checks. Run
+affected kind, resolution, elaboration, module, diagnostic, row and
+native/image composition callers, architecture, formatting, strict Clippy and
+manual docs.
 
 These PR checks are partial verification. The next fresh full workspace gate
 belongs to the developer at the connected output/checking completion boundary,
@@ -209,8 +284,15 @@ ownership or native-call authority. Reversed native execution uses a dedicated
 reversed-signature wrapper that forwards to SQLite in its actual argument order;
 the reversed declaration naming SQLite directly remains admission-only.
 
+The separate representation stage charges one scan cell per declaration.
+The relational-interface fixture therefore costs 11 rather than 10 work cells;
+the two-nominal partition fixture costs 12 rather than 10. Their one-short,
+exact and fresh-retry assertions remain. A malformed written effect origin costs
+one header lookup and one retained scalar record; source diagnostic lookup and
+its related label each cost one work cell. Production limits are unchanged.
+
 ## Deviations
 
-None. The row and output repairs implement current rules. The connected
-acquisition and copy-window wording corrections add no semantic mechanism.
-The diagnostic package remains separate.
+None. The row, output and checking repairs implement current rules. The
+connected acquisition, copy-window and primitive-heap wording corrections add
+no semantic mechanism. The diagnostic package remains a separate delivery.

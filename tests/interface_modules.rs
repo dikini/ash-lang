@@ -325,6 +325,9 @@ fn expect_resolution_error(error: ResolveModuleError) -> ResolveError {
         ResolveModuleError::Kind(error) => {
             panic!("resolution fixture unexpectedly reached kind checking: {error:?}")
         }
+        ResolveModuleError::Representation(error) => {
+            panic!("fixture unexpectedly reached representation checking: {error:?}")
+        }
     }
 }
 

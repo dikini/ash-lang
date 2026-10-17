@@ -21913,20 +21913,11 @@ struct NewtypeRepresentationEdge {
     occurrence: Span,
 }
 
-/// Checks every local definition and publishes an immutable dependency summary.
-///
-/// No Core program escapes this phase. A summary is created only after all
-/// bodies have checked against their declared interfaces.
-///
-/// # Errors
-///
-/// Returns the first source typing error or bounded internal elaboration
-/// failure. Failed modules do not produce a [`CheckedModule`].
-fn check_newtype_representation_cycles(
-    resolved: &ResolvedModule,
+/// Rejects module-level representation cycles after their kinds have checked.
+pub(crate) fn check_newtype_representation_cycles(
+    registry: &ResolvedRegistry,
     type_work: &mut TypeWorkBudget,
 ) -> Result<(), TypeError> {
-    let registry = resolved.registry();
     let vertex_count = registry
         .nominals()
         .iter()
@@ -22301,6 +22292,15 @@ fn check_newtype_representation_cycles(
     Ok(())
 }
 
+/// Checks every local definition and publishes an immutable dependency summary.
+///
+/// No Core program escapes this phase. A summary is created only after all
+/// bodies have checked against their declared interfaces.
+///
+/// # Errors
+///
+/// Returns the first source typing error or bounded internal elaboration
+/// failure. Failed modules do not produce a [`CheckedModule`].
 pub fn check_module(resolved: ResolvedModule) -> Result<CheckedModule, TypeError> {
     let mut type_work = TypeWorkBudget::default();
     let mut coverage_work = UsefulnessBudget::default();
@@ -22454,7 +22454,6 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
     resolved
         .authenticate_owner_definitions(type_work)
         .map_err(resolved_build_error)?;
-    check_newtype_representation_cycles(&resolved, type_work)?;
     let checked_interfaces = check_interface_declarations(&resolved, constraint_work)?;
     check_global_requirements(&resolved, &checked_interfaces, constraint_work)?;
     let registry = Arc::new(
@@ -31382,7 +31381,7 @@ mod tests {
 
         let resolved = fixture();
         let mut measured_type_work = TypeWorkBudget::unbounded();
-        check_newtype_representation_cycles(&resolved, &mut measured_type_work)
+        check_newtype_representation_cycles(resolved.registry(), &mut measured_type_work)
             .expect("the isolated newtype representation graph should check");
         const VERTEX_INDEX_WORK: usize = 2; // declaration row + identity map row
         const ADJACENCY_WORK: usize = 2; // outer row + one outgoing-row carrier
@@ -31393,15 +31392,16 @@ mod tests {
         assert_eq!(exact_work, EXACT_WORK);
 
         let mut short_type_work = TypeWorkBudget::with_limit(exact_work - 1);
-        let failure = check_newtype_representation_cycles(&resolved, &mut short_type_work)
-            .expect_err("one graph work cell short must not admit a graph");
+        let failure =
+            check_newtype_representation_cycles(resolved.registry(), &mut short_type_work)
+                .expect_err("one graph work cell short must not admit a graph");
         let TypeError::Internal(failure) = failure else {
             panic!("graph budget exhaustion must remain an internal resource failure");
         };
         assert_eq!(failure.reason_code(), "internal.resource.type-work");
 
         let mut exact_type_work = TypeWorkBudget::with_limit(exact_work);
-        check_newtype_representation_cycles(&resolved, &mut exact_type_work)
+        check_newtype_representation_cycles(resolved.registry(), &mut exact_type_work)
             .expect("the exact isolated graph budget should be retryable");
         assert_eq!(exact_type_work.used(), exact_work);
 
@@ -31412,7 +31412,7 @@ mod tests {
             "()",
         );
         let mut ordinary_work = TypeWorkBudget::with_limit(0);
-        check_newtype_representation_cycles(&ordinary, &mut ordinary_work)
+        check_newtype_representation_cycles(ordinary.registry(), &mut ordinary_work)
             .expect("ordinary data must not allocate a newtype representation graph");
         assert_eq!(ordinary_work.used(), 0);
     }
@@ -31445,25 +31445,25 @@ mod tests {
                     "Unit",
                     "()",
                 );
-                check_newtype_representation_cycles(&accepted, &mut TypeWorkBudget::unbounded())
+                check_newtype_representation_cycles(accepted.registry(), &mut TypeWorkBudget::unbounded())
                     .expect("the wide acyclic newtype graph should check");
                 drop(accepted);
 
-                let rejected = resolved_module_fixture(
-                    "wide-newtype-graph-rejected.ash",
-                    &declarations(true),
-                    "Unit",
-                    "()",
+                let rejected_source = format!(
+                    "{}main : Unit -> Unit\nmain () = ()\n",
+                    declarations(true),
                 );
+                let file = ModuleFixtureFile::write(
+                    "wide-newtype-graph-rejected.ash", &rejected_source,
+                );
+                let graph = load_module_graph(&file.0, &ModuleRoots::empty())
+                    .expect("the wide cyclic module should load");
+                let loaded = graph.module(graph.entry()).expect("entry module");
                 assert!(matches!(
-                    check_newtype_representation_cycles(
-                        &rejected,
-                        &mut TypeWorkBudget::unbounded(),
-                    ),
-                    Err(TypeError::Source(error))
+                    resolve_module(loaded, &[]),
+                    Err(crate::resolve::ResolveModuleError::Representation(TypeError::Source(error)))
                         if error.reason == TypeReason::NewtypeRecursiveRepresentation
                 ));
-                drop(rejected);
             })
             .expect("wide graph thread should start")
             .join()

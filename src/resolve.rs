@@ -1489,6 +1489,8 @@ pub enum ResolveModuleError {
     Resolution(ResolveError),
     /// Total resolved kind checking rejected the source or lost an invariant.
     Kind(crate::kind::KindFailure),
+    /// Module representation admission rejected a cycle or exhausted its ledger.
+    Representation(crate::elaborate::TypeError),
 }
 
 impl fmt::Display for ResolveModuleError {
@@ -1496,6 +1498,7 @@ impl fmt::Display for ResolveModuleError {
         match self {
             Self::Resolution(error) => error.fmt(formatter),
             Self::Kind(error) => error.fmt(formatter),
+            Self::Representation(error) => error.fmt(formatter),
         }
     }
 }
@@ -1543,8 +1546,9 @@ impl std::error::Error for DependencyExportMismatch {}
 ///
 /// # Errors
 ///
-/// Returns either a structured name/identity-resolution failure or a resolved
-/// kind-stage failure. A successful result has passed both stages.
+/// Returns a structured name/identity, kind or representation-cycle failure.
+/// A successful result has passed representation kinds, cycles and remaining
+/// resolved kind checks in that order.
 pub fn resolve_module(
     loaded: &LoadedModule,
     dependencies: &[DependencyExports<'_>],
@@ -1593,12 +1597,17 @@ fn finish_module_resolution(
     type_work: &mut TypeWorkBudget,
     admission: ResolvedModuleAdmission,
 ) -> Result<ResolvedModule, ResolveModuleError> {
-    crate::kind::check_resolved_module_with_budget(
+    let environments = crate::kind::prepare_module_representation_kinds(
         &admission.parts,
         &admission.constructor_payload_provenance,
+        &admission.written_effect_arities,
         type_work,
     )
     .map_err(ResolveModuleError::Kind)?;
+    crate::elaborate::check_newtype_representation_cycles(&admission.parts.registry, type_work)
+        .map_err(ResolveModuleError::Representation)?;
+    crate::kind::check_remaining_module_kinds(&admission.parts, environments, type_work)
+        .map_err(ResolveModuleError::Kind)?;
     let mut resolved = ResolvedModule::new(admission.parts);
     resolved
         .retain_defining_sources(
@@ -1623,6 +1632,20 @@ fn finish_module_resolution(
 struct ResolvedModuleAdmission {
     parts: ResolvedModuleParts,
     constructor_payload_provenance: Vec<Vec<ConstructorPayloadProvenance>>,
+    written_effect_arities: Vec<WrittenEffectArity>,
+}
+
+/// Admission-only origins for malformed written rows. These scalar diagnostics
+/// never enter a resolved module, summary or executable image.
+#[derive(Clone, Copy)]
+pub(crate) struct WrittenEffectArity {
+    pub(crate) effect: EffectId,
+    pub(crate) owner: Span,
+    pub(crate) application: Span,
+    pub(crate) declaration: Span,
+    pub(crate) expected: usize,
+    pub(crate) supplied: usize,
+    pub(crate) first_argument_root: Option<usize>,
 }
 
 /// Performs name and identity resolution without publishing unchecked output.
@@ -1912,6 +1935,7 @@ fn resolve_module_names_with_budget(
                 span: surface.span,
             },
             constructor_payload_provenance,
+            written_effect_arities: std::mem::take(&mut resolver.written_effect_arities),
         })
     })();
     *type_work = std::mem::take(&mut resolver.type_work);
@@ -2550,6 +2574,8 @@ struct Resolver {
     type_names: HashMap<String, NominalTypeId>,
     interface_names: HashMap<String, InterfaceId>,
     effect_names: HashMap<String, EffectId>,
+    local_effect_headers: Vec<(usize, Span)>,
+    written_effect_arities: Vec<WrittenEffectArity>,
     local_operation_names: HashMap<EffectId, HashMap<String, OperationId>>,
     method_names: HashMap<String, ResolvedTermBinding>,
     global_requirement_counts: HashMap<BinderId, usize>,
@@ -2999,6 +3025,8 @@ impl Resolver {
             type_names: HashMap::new(),
             interface_names: HashMap::new(),
             effect_names: HashMap::new(),
+            local_effect_headers: Vec::new(),
+            written_effect_arities: Vec::new(),
             local_operation_names: HashMap::new(),
             method_names: HashMap::new(),
             global_requirement_counts: HashMap::new(),
@@ -3343,6 +3371,28 @@ impl Resolver {
         &mut self,
         declarations: &[EffectSource<'_>],
     ) -> Result<Vec<EffectDeclarationIdentity>, ResolveError> {
+        self.type_work.charge(declarations.len()).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                declarations
+                    .last()
+                    .expect("nonempty charged effect headers")
+                    .span(),
+                "effect-header diagnostic origins exceeded their type-work budget",
+            )
+        })?;
+        self.local_effect_headers
+            .try_reserve_exact(declarations.len())
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    declarations
+                        .last()
+                        .expect("nonempty effect header reservation")
+                        .span(),
+                    "effect-header diagnostic origins could not reserve storage",
+                )
+            })?;
         let mut identities = Vec::new();
         identities
             .try_reserve_exact(declarations.len())
@@ -3368,6 +3418,8 @@ impl Resolver {
                 ))
             })?;
             let id = EffectId::new(self.module, declaration_index);
+            self.local_effect_headers
+                .push((declaration.parameters().len(), declaration.span()));
             self.effect_names
                 .insert(declaration.name().text.clone(), id);
             self.type_work
@@ -7246,10 +7298,67 @@ impl Resolver {
         ))
     }
 
+    fn retain_written_effect_arity(
+        &mut self,
+        effect: EffectId,
+        owner: Span,
+        application: Span,
+        supplied: usize,
+        first_argument_root: Option<usize>,
+    ) -> Result<(), ResolveError> {
+        self.type_work.charge(1).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                application,
+                "written effect-header lookup exceeded its type-work budget",
+            )
+        })?;
+        let header = if effect.module() == self.module {
+            self.local_effect_headers
+                .get(effect.declaration() as usize)
+                .copied()
+        } else {
+            self.imported
+                .effect(effect)
+                .map(|declaration| (declaration.parameters.len(), declaration.span))
+        };
+        let Some((expected, declaration)) = header else {
+            return Ok(());
+        };
+        if expected == supplied {
+            return Ok(());
+        }
+        self.type_work.charge(1).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                application,
+                "written effect-arity origin exceeded its type-work budget",
+            )
+        })?;
+        self.written_effect_arities.try_reserve(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                application,
+                "written effect-arity origin could not reserve storage",
+            )
+        })?;
+        self.written_effect_arities.push(WrittenEffectArity {
+            effect,
+            owner,
+            application,
+            declaration,
+            expected,
+            supplied,
+            first_argument_root,
+        });
+        Ok(())
+    }
+
     #[allow(clippy::type_complexity)]
     fn resolve_effect_row(
         &mut self,
         row: &crate::surface::SurfaceEffectRow,
+        owner: Span,
     ) -> Result<(EffectRow, Box<[ResolvedTypeProvenance]>, Box<[usize]>), ResolveError> {
         let argument_count = row.effects.iter().try_fold(0usize, |count, instance| {
             count.checked_add(instance.arguments.len())
@@ -7350,6 +7459,13 @@ impl Resolver {
             for argument in arguments {
                 retained.push(argument.into_inner());
             }
+            self.retain_written_effect_arity(
+                effect,
+                owner,
+                written.span,
+                retained.len(),
+                roots.first().copied(),
+            )?;
             let instance = EffectInstance::new_kinded(effect, retained.into_boxed_slice());
             resolved_instances.push((instance, written.span, roots.into_boxed_slice()));
         }
@@ -9189,7 +9305,12 @@ impl Resolver {
                             .header
                             .result_effects
                             .as_ref()
-                            .map(|effects| self.resolve_effect_row(effects))
+                            .map(|effects| {
+                                self.resolve_effect_row(
+                                    effects,
+                                    operational.header.result_type.span,
+                                )
+                            })
                             .transpose()?
                             .unwrap_or_else(|| {
                                 (
@@ -10455,9 +10576,17 @@ impl Resolver {
                             }
                             arguments.reverse();
                             roots.reverse();
+                            let effect = self.effect_reference(&source_instance.effect)?;
+                            self.retain_written_effect_arity(
+                                effect,
+                                span,
+                                source_instance.span,
+                                count,
+                                roots.first().copied(),
+                            )?;
                             written.push((
                                 EffectInstance::new_kinded(
-                                    self.effect_reference(&source_instance.effect)?,
+                                    effect,
                                     arguments
                                         .into_iter()
                                         .map(|argument| argument.into_inner())
@@ -10566,11 +10695,16 @@ impl Resolver {
                         }
                         args.reverse();
                         roots.reverse();
+                        let effect = self.effect_reference(&member.effect)?;
+                        self.retain_written_effect_arity(
+                            effect,
+                            row.span,
+                            member.span,
+                            args.len(),
+                            roots.first().copied(),
+                        )?;
                         written.push((
-                            EffectInstance::new_kinded(
-                                self.effect_reference(&member.effect)?,
-                                args.into_boxed_slice(),
-                            ),
+                            EffectInstance::new_kinded(effect, args.into_boxed_slice()),
                             member.span,
                             roots.into_boxed_slice(),
                         ));
@@ -14759,6 +14893,50 @@ mod module_tests;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn written_effect_arity_origins_are_exact_atomic_and_retryable() {
+        use crate::source::{ByteRange, SourceFile};
+        let source = SourceFile::new("written-effect-origin.ash", "origin").unwrap();
+        let span = source.span(ByteRange::new(0, 6).unwrap()).unwrap();
+        let module = ModuleId::new(0);
+        let effect = EffectId::new(module, 0);
+        const HEADER_LOOKUP: usize = 1;
+        const ORIGIN_RECORD: usize = 1;
+        const EXACT_WORK: usize = HEADER_LOOKUP + ORIGIN_RECORD;
+        let mut resolver =
+            Resolver::with_type_work(module, TypeWorkBudget::with_limit(EXACT_WORK - 1));
+        resolver.local_effect_headers.push((1, span));
+        let failure = resolver
+            .retain_written_effect_arity(effect, span, span, 2, Some(7))
+            .expect_err("the origin record must be charged before retention");
+        assert_eq!(failure.reason, ResolveReason::TypeResourceExhausted);
+        assert!(resolver.written_effect_arities.is_empty());
+        assert_eq!(resolver.type_work.used(), HEADER_LOOKUP);
+
+        resolver.type_work = TypeWorkBudget::with_limit(EXACT_WORK);
+        resolver
+            .retain_written_effect_arity(effect, span, span, 2, Some(7))
+            .expect("the exact source-origin budget must be retryable");
+        assert_eq!(resolver.type_work.used(), EXACT_WORK);
+        let [origin] = resolver.written_effect_arities.as_slice() else {
+            panic!("exactly one malformed written application")
+        };
+        assert_eq!(origin.effect, effect);
+        assert_eq!(origin.owner, span);
+        assert_eq!(origin.application, span);
+        assert_eq!(origin.declaration, span);
+        assert_eq!((origin.expected, origin.supplied), (1, 2));
+        assert_eq!(origin.first_argument_root, Some(7));
+
+        resolver.written_effect_arities.clear();
+        resolver.type_work = TypeWorkBudget::with_limit(HEADER_LOOKUP);
+        resolver
+            .retain_written_effect_arity(effect, span, span, 1, Some(7))
+            .expect("an arity-correct application retains no diagnostic record");
+        assert!(resolver.written_effect_arities.is_empty());
+        assert_eq!(resolver.type_work.used(), HEADER_LOOKUP);
+    }
+
     #[test]
     fn imported_kind_context_reaches_presentation() {
         use crate::{

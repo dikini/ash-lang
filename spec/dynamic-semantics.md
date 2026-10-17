@@ -439,7 +439,10 @@ Primitive operands evaluate from left to right. Addition and multiplication
 operate on mathematical integers and cannot overflow. Integer equality is
 `true` exactly when its operands denote the same integer. The rules below use
 `expression -> expression'` as shorthand for the corresponding control and
-continuation transition within one unchanged heap configuration.
+continuation transition. An operand step threads its resulting heap into the
+enclosing primitive evaluation; operand allocation and effects follow their
+ordinary rules. A primitive reduction on integer values leaves its incoming
+heap unchanged.
 
 ```sequent
 family primitive-operation-steps:
