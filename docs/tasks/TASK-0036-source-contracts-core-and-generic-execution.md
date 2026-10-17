@@ -123,6 +123,28 @@ directly affected boundary controls. Production code, cumulative charges,
 allowances, defaults, stacks and checks are unchanged. Checkpoint 1043 remains
 failed; a fresh integrated full checkpoint is still required.
 
+Fresh checkpoint 1047 at `28335192` passed its first five stages and nineteen
+owning test targets, including all 1,879 library tests. The next target,
+`data_and_adts`, recorded 31 passes and one isolated child stack overflow in the
+public type-wrapper regression. Cargo returned 101 and xtask recorded failure;
+the outer wrapper later terminated with 143 after saving that result. Read-only
+postchecks confirmed the frozen inputs. Later targets and documentation were
+unrun.
+
+The first operational fixture completed resolution and body preparation, then
+reached `CheckBlock` through the ordinary expression dispatcher. Its scheduler
+call did not reach the first entry marker. Block scheduling now uses the thin
+engine's direct route, keeping unrelated dispatcher scratch off that call chain.
+The same scheduler receives the owned expected type, declaration position and
+cumulative ledger; task order, guards and error cleanup remain unchanged.
+
+The unchanged 256 KiB regression passes in run 1051, including both operational
+tuple/function and constructor-payload wrappers. Run 1052 passes all 24 selected
+existing integration stack tests across fifteen targets. Run 1053 passes six
+related scope, work, Finish and evaluator-disposal controls. These are focused
+results under the original stacks, assertions and budgets; checkpoint 1047
+remains failed, and a fresh integrated full checkpoint is still required.
+
 Scalar destruction-input mapping A binds a producer's original `Int` input path
 to an ABI slot of that owner's exact original host destructor. Producer ABI
 input coverage is independent, so cleanup-only inputs need no native producer
