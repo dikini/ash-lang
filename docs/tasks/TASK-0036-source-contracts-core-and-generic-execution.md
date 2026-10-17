@@ -86,6 +86,26 @@ unchanged 256 KiB regression passes in focused run 1008, including its exact
 row-work refusal and fresh retries. Stack, depth, work and authority policies
 are unchanged; a fresh integrated full checkpoint remains required.
 
+An iterative worklist can still retain unrelated construction scratch across
+reentrant calls. Core kind/row validation and source resolution keep their owned
+buffers and final result checks in thin drivers, with construction work in
+private noninlined helpers. Application-argument admission uses the existing
+direct elaborator route; the four checking branches use a private borrowed
+helper. These changes retain the same checks, charges, scheduling, guarded moves
+and error cleanup.
+
+The unchanged 64 KiB captured-control regression passes in focused run 1020.
+The existing 34-test stack/kind batch first recorded 33 passes and one failure
+at its own input pin. Subsequent diagnostics reached nested handler-clause
+checking after resolution, application admission and cleanup returned; those
+failures occurred during source compilation, before evaluator draining.
+The unchanged 256 KiB owned-deep-drain regression passes in run 1037, including
+successful execution and both partial-work refusal checks. The same 34-test
+owning batch passes in run 1038, including both stack regressions and the prior
+Finish regression. Original stacks, assertions and work, depth and authority
+policies remain unchanged. Checkpoint 1014 remains a historical failure; a fresh
+integrated full checkpoint is still required.
+
 Scalar destruction-input mapping A binds a producer's original `Int` input path
 to an ABI slot of that owner's exact original host destructor. Producer ABI
 input coverage is independent, so cleanup-only inputs need no native producer
