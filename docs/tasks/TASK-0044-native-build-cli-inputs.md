@@ -54,10 +54,22 @@ mutation. That new test and the native fixture pass in the assigned shared cache
 with formatting and strict affected Clippy. No additional native cache was built.
 The repair's pins, red/green logs and timings are retained with the other receipts.
 
+[Re-review](https://github.com/dikini/ash-lang/pull/47#pullrequestreview-5559719504)
+cleared that candidate. Its fresh workspace gate passed format, metadata, check,
+build and strict Clippy, then failed one of 1,879 library tests. Two native-image
+tests shared a callback counter: both passed alone, while their first parallel
+pair reproduced the same false callback observation. The synchronous callback
+observer is now local to each test thread; all refusal and callback-count
+assertions remain. The failed gate and isolated/parallel reproduction receipts
+remain under `full-gate` in the evidence directory below. The changed candidate
+passes all three native-image tests concurrently, 20 further parallel pairs,
+the refreshed native CLI fixture, formatting and strict affected Clippy. It
+requires independent re-review and a fresh full gate.
+
 Focused commands, timings, hashes and equal source/configuration pins remain in
 `.worktrees/semantics-alignment-context-20261017/issue-45-native-inputs`.
-Independent review, the fresh pre-Main workspace gate, verified retention and
-issue acceptance remain pending:
+Re-review of the gate repair, the fresh pre-Main workspace gate, verified
+retention and issue acceptance remain pending:
 
 - [ ] CLI/parser and OS-path evidence, including mixed order and duplicates.
 - [ ] Real static/shared CLI execution and preserved failure behavior.
