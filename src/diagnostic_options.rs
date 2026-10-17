@@ -100,7 +100,13 @@ impl DiagnosticOptions {
                     || build
                         && matches!(
                             argument.to_str(),
-                            Some("--output" | "--target" | "--cargo-target-dir")
+                            Some(
+                                "--output"
+                                    | "--target"
+                                    | "--cargo-target-dir"
+                                    | "--native-static"
+                                    | "--native-shared"
+                            )
                         ))
             {
                 program_arguments.push(argument);
