@@ -4,6 +4,53 @@ Design notes record exploration, research, alternatives, experiments, tradeoffs,
 
 Use [the template](template.md), allocate the next `DN-NNNN` ID, and link related artifacts. When a non-language choice converges, record it in an architectural decision. When a language-semantic change becomes concrete, write a change proposal.
 
+## Implementation and evidence boundaries
+
+A note's `exploring` or `evaluating` status describes its design work, not the
+completion of every feature it discusses. Read each claim within its scope:
+
+- **Implemented** means a specified product slice, or an accepted architectural
+  choice present in the implementation. It does not accept the rest of a note.
+- **Experimental** means a bounded prototype, formal model, or comparison with
+  stated assumptions. Retention on `main` does not make it product semantics.
+- **Open** means a candidate, unresolved question, or incomplete delivery.
+  A delivery sketch or worked fragment does not establish the full capability.
+
+The [specification](../../spec/README.md) owns language truth; accepted
+[decisions](../decisions/README.md) own non-language architecture. The
+[feature inventory](../project/implemented-features.md) links product and
+experimental implementation evidence, while the [trajectory](../trajectory.md)
+records milestone maturity. The following summary identifies scope rather
+than assigning new artifact statuses or authorizing work. Detailed evidence
+and exclusions remain at their linked owners.
+
+| Notes | Implemented or retained evidence | Open scope and limits |
+| --- | --- | --- |
+| DN-0001–0003: foundations, Core, parser | Accepted implementation, parser, front-end, Core, and evaluator choices are recorded in the [decisions](../decisions/README.md). | Broader foundation goals and unselected representation alternatives remain informative. |
+| DN-0005–0008: functions, typing, data, elaboration | Functions, rank-1 typing, tuples, nominal ADTs, patterns, and typed Core are specified. [Mini-Ash closure](mini-ash/closure.md) retains the bounded result. | Record forms and other unselected candidates are not current Ash. |
+| DN-0009–0013: effects, identities, composition, hooks, protocols | Exact effects, one-shot handlers/discard, scoped ownership, and synchronous hooks are implemented within the [Effect Ash boundary](effect-ash/milestone-closure-evidence.md). | General protocols, dynamic composition, multi-shot/escaping continuations, suspension, and concurrency remain open. |
+| DN-0014: finite kinds and promotion | Current fixed higher kinds are distinct from this proposal. | Nominal finite kinds and datatype promotion are not implemented. |
+| DN-0015–0016, DN-0020: corpus and milestones | Mini-Ash and Modular Ash are complete; their [closure reports](modular-ash/closure.md) and tags retain evidence. | Historical milestone grammar is not a selectable current dialect. |
+| DN-0017–0018: storage and runtime-established evidence | Current resources supply scoped dependency and completion checks. | General storage policies, ownership transfer, and runtime-established proof evidence remain exploratory. |
+| DN-0019: primitive feature composition | A separate [Float prototype and comparison](DN-0019-primitive-feature-composition.md#retained-experiment) retain maintenance findings. | No Float semantics or feature-composition architecture was adopted. |
+| DN-0022–0023: modules and interfaces | Passive modules and method-only interfaces are implemented; [Modular Ash closure](modular-ash/closure.md) retains evidence. | Runtime module loading and interface lookup are not supplied by these increments. |
+| DN-0024: executable learning | [Migration evidence](migration-repair-evidence.md) records concrete compiler repairs and source outcomes. | The external learning programme is outlined; its adoption belongs to the external project. |
+| DN-0025: libraries and packages | Four bounded library increments are complete, with the final [relational-interface evidence](lib-ash/relational-interfaces-evidence.md). | Package resolution, persistent compiled modules, and separate object linking remain exploratory. |
+| DN-0026–0028: Effect Ash programme | The selected milestone is [complete and integrated](effect-ash/milestone-closure-evidence.md). | General foreign acquisition, suspension, and concurrency were excluded; planning forecasts are not active tasks. |
+| DN-0029: diagnostics | [AD-0010](../decisions/AD-0010-human-diagnostic-presentation-and-localization.md) and the [tool guide](../tools/ash.md) record implemented human/localized and JSON output. | Editor protocols and interactive correction remain excluded from that checkpoint. |
+| DN-0030: compiler macros and hooks | Typed Core validation and runtime effect/resource contracts provide the foundation. | Macros, compiler-phase hooks, staged handlers, registration/selection, and specialized kernels are not implemented. |
+| DN-0031–0032: resource composition | Concept maps and [bounded algebraic derivations](DN-0032-algebra-of-scoped-resource-composition.md) relate candidates to current sequencing and scopes. | General contextual provision, composition laws, and combined soundness remain open. |
+| DN-0033–0034: direct effects and verification | The [one-shot formalization](direct-effects/one-shot/README.md#current-proof-status) establishes stated annotated-model admission, preservation, progress, and bounded execution results. | It is not a complete Ash compiler-correctness proof. Core alignment evidence remains branch-local and incomplete. |
+| DN-0035: regions and verified providers | Current dependency rules and scalar Arena experiments supply limited evidence. | General region interfaces, borrowing, ordinary storage policy, and provider verification remain open. |
+| DN-0036: foreign/provider experiments | [Main delivery](provider-experiments/main-delivery-2026-10-08/README.md) retains verified Rust-authored SQLite and scalar Arena experiments. | Product adoption, general borrowing, and wider Arena payload/graph work remain incomplete. |
+| DN-0037: Ash-authored foreign interfaces | The [specified foreign-interface profile](../../spec/static-semantics.md#source-foreign-declarations), [Ash-authored libraries](../../libraries/README.md) and [generated-host builds](../tools/ash.md#generated-host-linkage-checks) implement the selected source contracts and native lifecycle. The [readiness brief](foreign-authoring/dn-0036-readiness.md) preserves the bounded comparison. | The specification defines the exact profile and exclusions; source `given` providers and privileged lifecycle wrappers remain unsupported. This note does not authorize wider FFI or borrowing. |
+| DN-0038: resource properties and mutation | Scoped cells already distinguish reusable access from scope-owned release. | General linear/unique usage, borrowing, disposal permissions, and mutable syntax remain candidates. |
+| DN-0039–0041: files, Float, serialization | Existing effects/interfaces and retained native experiments provide foundations and comparison cases. | Filesystem contracts, Float semantics, and serialization APIs are delivery sketches, not implemented capabilities. |
+| DN-0042–0043: native/data direction and shorter syntax | Synthesis and syntax comparisons reuse existing checked forms. | The summaries add no implementation; shorter forms need parsing, elaboration, and equivalence evidence. |
+| DN-0044–0046: runtime services, native execution, agent tooling | Existing Core, evaluator, and diagnostics provide foundations; native execution and agent tooling are outlined in the trajectory. | Selectable runtime services, a native backend, interactive native execution, LSP, and the agent semantic interface remain design work. |
+| DN-0047: ECS and heterogeneous stores | [Checked source fragments](DN-0047-ecs-and-open-heterogeneous-stores.md#evidence-and-experiments) validate limited current-language encodings. | No ECS implementation or measured performance follows; open stores and existential packaging remain candidates. |
+| DN-0048: parallel kernels | Current Pure Core and strict evaluation supply reference obligations. | Kernel extraction, a kernel IR, interaction-net translation, and SIMD/GPU lowering are not implemented by this note. |
+
 ## Current notes
 
 ### Foundations
@@ -16,7 +63,7 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 - [DN-0003: Parser Architecture](DN-0003-parser-architecture.md)
 - [DN-0019: Primitive Feature Composition](DN-0019-primitive-feature-composition.md)
   — transferable findings from the retained Float composition experiment.
-- [DN-0015: Mini-Ash Phase](DN-0015-mini-ash-phase.md) — growing evaluation
+- [DN-0015: Mini-Ash Phase](DN-0015-mini-ash-phase.md) — completed evaluation
   corpus, component experiments, and retained product increments.
 - [DN-0016: First Mini-Ash Corpus Stratum](DN-0016-first-mini-ash-corpus.md) —
   shared evidence for the initial monomorphic functional nucleus.
@@ -81,6 +128,14 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 - [DN-0050: Native program gas estimates](DN-0050-native-program-gas-estimates.md)
   — calibration and prediction errors for the input-derived gas policies adopted
   in AD-0013; predecessor diagnostics remain scoped evidence, not full-port verification.
+- [DN-0048: Pure Core Kernels and Parallel Lowering](DN-0048-pure-core-kernels-and-parallel-lowering.md)
+  — Pure Core first, a typed Ash-owned kernel IR with strict completion,
+  optional interaction-net dependencies and sharing, and SIMD/GPU lowering;
+  exploratory contracts, law obligations and bounded comparison criteria.
+- [DN-0045: Native Compilation and Interactive Execution](DN-0045-native-compilation-and-interactive-execution.md)
+  — AOT and interactive paths, human and AI feedback needs, shared lowering,
+  LLVM/MLIR/Cranelift alternatives, continuation representations and CPS;
+  no accepted native architecture.
 - [DN-0044: No Default Runtime](DN-0044-no-default-runtime.md)
   — working exploration of library-supplied services, compiler defaults,
   ordinary construction and storage lowering, constrained targets, and foreign
@@ -89,6 +144,13 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
   — work-in-progress exploration of typed compiler transformations,
   declarative phase hooks, registration scopes, unresolved selection policy,
   staged handlers and providers, and library-defined specialized kernels.
+
+### Tooling and feedback
+
+- [DN-0046: Agent Semantic Exploration and Feedback](DN-0046-agent-semantic-exploration-and-feedback.md)
+  — an agent interface combining semantic navigation, search and executable
+  probes alongside intended LSP support; depends on DN-0045's shared compiler
+  and execution boundaries, without requiring completed optimizing AOT or JIT.
 
 ### Surface language, typing, and elaboration
 
@@ -161,6 +223,10 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 
 ### Downstream type-system and resource exploration
 
+- [DN-0047: ECS and Open Heterogeneous Stores](DN-0047-ecs-and-open-heterogeneous-stores.md)
+  — ECS as a stress case for typed immutable worlds, generic queries, static
+  heterogeneous schemas, authenticated type-key composition, checked lookup
+  and future existential packaging; theoretical costs without measurements.
 - [DN-0042: Native Interaction and Efficient Data](DN-0042-native-interaction-and-efficient-data.md)
   — a summary connecting FFI, resources, regions, native use cases, numeric
   representations and data processing, with missing collection and SIMD
@@ -171,7 +237,8 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
   type/runtime costs.
 - [DN-0040: Floating-Point Semantics and Representation](DN-0040-floating-point-semantics-and-representation.md)
   — a minimal binary64 language direction, source/Core/operational obligations,
-  numerical conversions and format contracts, with measured representation costs.
+  numerical conversions and format contracts, with proposed representation-cost
+  comparisons.
 - [DN-0039: Files and Filesystem Resources](DN-0039-files-and-filesystem-resources.md)
   — scoped file access and filesystem authority, copying I/O, partial progress,
   fallible completion, host profiles and later arena/buffer integration.

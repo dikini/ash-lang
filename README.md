@@ -5,10 +5,11 @@ lessons from historical Ash while rebuilding the language from a small,
 coherent base. Historical Ash is evidence for design work, not authority for
 this project.
 
-Ash is a rank-1 language whose programs are acyclic graphs of passive source
+Ash is a rank-1 language with nominal data, interfaces, effects, lexical
+handlers and scoped resources. Programs are acyclic graphs of passive source
 modules. Each `.ash` file contains imports and declarations. Function signatures
 may state interface constraints and effect rows. The entry module supplies a
-local `main` function:
+local `main` function with an empty outward effect row:
 
 ```ash
 main : Unit -> Int
@@ -20,13 +21,21 @@ and runtime behavior.
 The [`ash` tool guide](docs/tools/ash.md) explains module roots, invocation,
 output and failures, including [explicit native link inputs](docs/tools/ash.md#native-link-inputs)
 and [generated-host linkage checks](docs/tools/ash.md#generated-host-linkage-checks).
-The ffi-ash implementation is retained on `integration/ffi-ash`; its final
-checkpoint and separate Main integration gate remain pending.
 
 The annotated `mini-ash` and `modular-ash` Git tags retain the earlier single-file
-and passive-module/interface milestones. Current source contains no dialect
-selector; the tags retain historical milestone states rather than selectable
-compiler modes.
+and passive-module/interface milestones. The completed library and effect
+increments add explicit implementation selection, higher-kinded parameters,
+relational interfaces, module and local `newtype`, scoped evidence, checked
+one-shot resume/discard, cells, native buffers, synchronous hooks and cleanup.
+Current source contains no dialect selector; the tags retain historical
+milestone states rather than selectable compiler modes.
+
+The [earlier Main feature inventory](docs/project/implemented-features.md)
+records the specified capabilities and bounded Rust-authored provider experiments
+of its named historical snapshot. Those experiments remain separate evidence
+from the bounded Ash-authored foreign-interface profile in the specification. The
+[design-note scope summary](docs/design/README.md#implementation-and-evidence-boundaries)
+identifies implemented slices, experimental evidence, and open directions.
 
 Project artifacts answer different questions:
 

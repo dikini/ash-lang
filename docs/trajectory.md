@@ -5,17 +5,20 @@ uses: `idea → speculative → outlined → designed → specified →
 implementation`. A completed row records `complete / implementation` to
 distinguish its result from its maturity.
 
-The next bounded product milestone is
-[`ffi-ash`](design/DN-0037-ash-authored-foreign-library-interfaces.md#agreed-ffi-ash-milestone):
-Ash-authored foreign contracts and library policy, generated Rust native-call
-bridges and runnable evaluator hosts. Its durable scope and sequence live in
+The bounded
+[`ffi-ash`](design/DN-0037-ash-authored-foreign-library-interfaces.md#agreed-ffi-ash-milestone)
+delivery contains Ash-authored foreign contracts and library policy, generated
+Rust native-call bridges and runnable evaluator hosts. Its durable scope and sequence live in
 DN-0037; [DN-0042](design/DN-0042-native-interaction-and-efficient-data.md) supplies
 the broader context. [GitHub](https://github.com/dikini/ash-lang/milestone/1)
 owns live progress and PR status. The bounded transition's implementation,
 specification, tests, reviews and verification are retained on
 `integration/ffi-ash`. [AD-0013](decisions/AD-0013-generated-native-bridges-and-program-builds.md)
-records the build boundary. [TASK-0041](tasks/TASK-0041-ffi-ash-milestone-closure.md)
-owns remaining transition cleanup and the separate Main integration gate.
+records the build boundary. The existing [closure handoff](https://github.com/dikini/ash-lang/issues/7#issuecomment-6234064548)
+tracks final Main verification, acceptance and checkpoint lifecycle. It supersedes
+TASK-0041 for coordination; the [exact task history](https://github.com/dikini/ash-lang/blob/7471200efb1bd90782fcad81be54b992fbd92982/docs/tasks/TASK-0041-ffi-ash-milestone-closure.md)
+preserves its work and findings. Supersession does not satisfy the separate Main
+gate or the remaining original acceptance clauses.
 
 The Mini-Ash milestone is retained historically at the `mini-ash` tag, whose
 peeled commit is `d62d3ba`. Its
@@ -146,6 +149,8 @@ automation adoption remains that project's responsibility.
 | [Multi-parameter relational interfaces](design/lib-ash/relational-interfaces-evidence.md) | complete / implementation | integrated [method-parameter increment](design/lib-ash/method-parameters-evidence.md), current relational [specification](../spec/README.md), stable identities, body-free summaries, occurrence-owned evidence, linked validation, typed Core erasure, and completed transition cleanup | Preserve forward-only improvement, full-application selection, and the effects, proofs, and existentials exclusions during separately authorized future work. |
 | [`effect-ash`: resource-first effects, handlers, and providers](design/DN-0026-effect-ash-resource-first-milestones.md) | complete / implementation; integrated into main; 100/100 planning units closed | retained [module-newtype](design/effect-ash/module-newtype-evidence.md), [local-newtype](design/effect-ash/local-newtype-evidence.md), [effect-kernel](design/effect-ash/resume-required-effect-kernel-evidence.md), [scoped-evidence](design/effect-ash/scoped-evidence-evidence.md), [capture/discard](design/effect-ash/capture-discard-evidence.md), [resource-scope](design/effect-ash/resource-scope-evidence.md), [hook](design/effect-ash/synchronous-hooks-evidence.md), [cleanup](design/effect-ash/reliable-cleanup-evidence.md) and [foreign-provider](design/effect-ash/narrow-foreign-provider-evidence.md) evidence; current [specification](../spec/README.md); accepted typed Core and evaluator boundaries; no ordering dependency on `proof-ash` or `pack-ash` | See merged-main verification and documentation checks in the [closure evidence](design/effect-ash/milestone-closure-evidence.md). Signed annotated tag `effect-ash` identifies the final documentation closeout above signed merge `5d126b2`; no push was performed. Preserve lexical identity, erasure, rows, handler order, one-shot non-escape, validation and resource accounting. Library-defined acquisition and a general FFI remain later work. |
 | [`proof-ash`: propositions, laws, program proofs, and law-derived testing](design/DN-0001-reboot-foundations.md#14-propositions-laws-and-proofs) | idea | current [specification](../spec/README.md), accepted [small-step semantic method](decisions/AD-0004-small-step-semantic-method.md) and [front-end](decisions/AD-0006-front-end-semantic-boundaries.md) and [typed Core](decisions/AD-0007-typed-core-dialects.md) boundaries, implemented [checked interface evidence flow](../spec/elaboration.md#interface-evidence-lowering), and exploratory [runtime-established static evidence](design/DN-0018-runtime-established-static-evidence.md) | Define a bounded pure proposition-and-law corpus and compare proof-evidence and program-logic models before selecting a calculus. Any work that requires effect semantics must name a synchronization checkpoint with `effect-ash` and state its required inputs and retained outputs. |
+| [DN-0045: Native compilation and interactive execution](design/DN-0045-native-compilation-and-interactive-execution.md) | outlined | current [specification](../spec/README.md), accepted backend-independent [implementation environment](decisions/AD-0001-implementation-environment.md) and [typed Core](decisions/AD-0007-typed-core-dialects.md), exploratory [FFI](design/DN-0037-ash-authored-foreign-library-interfaces.md) and [storage services](design/DN-0044-no-default-runtime.md) | Scope a comparison of native lowering, continuation representations and complete feedback costs before selecting a backend or control architecture. Both AOT delivery and interactive development are goals. |
+| [DN-0046: Agent semantic exploration and feedback](design/DN-0046-agent-semantic-exploration-and-feedback.md) | outlined | [DN-0045](design/DN-0045-native-compilation-and-interactive-execution.md) shared checking, source-version and execution boundaries; accepted [front-end](decisions/AD-0006-front-end-semantic-boundaries.md) and [diagnostic](decisions/AD-0010-human-diagnostic-presentation-and-localization.md) boundaries | Compare LSP-only, separate tools and an integrated agent interface on navigation, semantic search and repeatable probes. Interpreter-based exploration need not wait for completed optimizing AOT or JIT. |
 | [Core representation](decisions/AD-0007-typed-core-dialects.md) | implementation | accepted typed-dialect and pure-computation boundaries | Preserve the closed Pure dialect and shared operation-family seam under later feature pressure. |
 | [Parser architecture](decisions/AD-0005-parser-architecture.md) | implementation | accepted event-producing recursive-descent boundary and current grammar | Measure locality, recovery, and source coverage when a later proposal adds syntax. |
 | [Front-end semantic boundaries](decisions/AD-0006-front-end-semantic-boundaries.md) | implementation | accepted resolved-surface and bidirectional typed-elaboration boundaries | Extend stage interfaces and structured diagnostics only with an authorized semantic increment. |

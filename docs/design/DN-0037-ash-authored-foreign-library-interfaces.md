@@ -65,10 +65,13 @@ merge into Main is signed, following the updated execution instruction.
 Issues #2–#6 delivered connected stages of the CP-0022 transition. Their
 implementation, library migrations, tests, specification, review and verification
 are retained in milestone history. Completed proposals, tasks and plans leave
-the current tree under the artifact policy. [TASK-0041](../tasks/TASK-0041-ffi-ash-milestone-closure.md)
-owns remaining closure and the separate Main gate. Keep the active product
-checkout and compatible cache until that work closes under AD-0011. Artifact
-retirement alone does not authorize worktree removal or Main integration.
+the current tree under the artifact policy. The existing [closure handoff](https://github.com/dikini/ash-lang/issues/7#issuecomment-6234064548)
+supersedes TASK-0041 for final Main verification, acceptance and checkpoint
+coordination. The [exact task history](https://github.com/dikini/ash-lang/blob/7471200efb1bd90782fcad81be54b992fbd92982/docs/tasks/TASK-0041-ffi-ash-milestone-closure.md)
+preserves its work and findings; supersession does not complete its outcome.
+Keep the active product checkout and compatible cache until their owners release
+them under AD-0011. Artifact retirement alone does not authorize worktree removal
+or Main integration.
 
 The original contract used TASK-0036 through TASK-0041 for its implementation
 issues. Their delivering commits and PRs retain completed work; the
