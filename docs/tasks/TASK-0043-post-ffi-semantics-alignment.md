@@ -158,8 +158,8 @@ source responsibility under AD-0006. Admission-only scalar origins preserve
 those sites through row canonicalization and are discarded before resolved
 module publication. Imported and authenticated/body-free carrier corruption
 retains `KindInternalCause::EffectArgumentCount`; there is no blanket remapping.
-The candidate passes 889 focused cases: 403 kind/resolver/elaborator units,
-11 new precedence regressions, 252 front-end/module callers, 161 diagnostic
+The repaired candidate passes 891 focused cases: 403 kind/resolver/elaborator
+units, 13 precedence regressions, 252 front-end/module callers, 161 diagnostic
 callers, 47 architecture cases, 12 source-owner controls, the both-order image
 control, the real reversed-output SQLite host and the mixed static/shared CLI
 fixture. All 14 focused commands pass, including formatting and strict
@@ -169,6 +169,19 @@ and no broken relative link. The subsequent results prose has separate metadata
 and manual-check evidence. Independent review, retention and the final combined
 gate remain pending for this package. Receipts belong in
 `.worktrees/semantics-alignment-context-20261017/diagnostic-precedence`.
+
+The PR #49 review found that interface-application preflight could still mask
+an invalid remaining effect declaration. Its arity refusal returned before the
+effect traversal; its positional-kind failure could also win. The unchanged
+effect traversal now runs before that preflight. Both exact source regressions
+assert the winning effect occurrence at `46..49`, its constructor declaration
+at `0..20`, and structured expected/found kinds and label facts. Repairing the
+effect keeps each original interface failure reachable. Per-application arity
+still precedes positional kinds. No check body, meter, limit or budget
+assertion changed. The red and refreshed focused receipts remain separate in
+`diagnostic-precedence/remaining-effect-repair`; the earlier 889-case evidence
+remains scoped to the earlier head. Current re-review, retention and the final
+combined full gate remain pending.
 
 Acceptance remains separate for each original scope:
 
@@ -219,14 +232,16 @@ checks. No production work coefficient or limit changes are part of this repair.
 For diagnostic precedence, test representation kinds before interface arity,
 determination, earlier global and local kinds; representation cycles before
 remaining kinds and interface checks; and remaining effect kinds before
-determination and method kinds. Assert causal spans and structured facts when
-reason codes coincide, preserve cycle-closing/member labels and retain repaired
-positive and later-failure controls. Test nested written effect arity locally
-and through imported headers, type and row arguments, zero arguments, structured
-counts, both catalogues, and retained/internal negative controls. Keep exact
+interface-application arity and positional kinds, determination and method
+kinds. Assert causal spans and structured facts when reason codes coincide,
+preserve cycle-closing/member labels and retain repaired positive and
+later-failure controls. Test nested written effect arity locally and through
+imported headers, type and row arguments, zero arguments, structured counts,
+both catalogues, and retained/internal negative controls. Keep exact
 origin/label work boundaries, fresh retries and small-stack graph checks. Run
-affected kind, resolution, elaboration, module, diagnostic, row and native/image
-composition callers, architecture, formatting, strict Clippy and manual docs.
+affected kind, resolution, elaboration, module, diagnostic, row and
+native/image composition callers, architecture, formatting, strict Clippy and
+manual docs.
 
 These PR checks are partial verification. The next fresh full workspace gate
 belongs to the developer at the connected output/checking completion boundary,

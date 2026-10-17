@@ -6124,11 +6124,6 @@ pub(crate) fn check_remaining_module_kinds<'a>(
     mut environments: KindEnvironments<'a>,
     budget: &mut TypeWorkBudget,
 ) -> Result<(), KindFailure> {
-    let all_application_arities_complete =
-        preflight_interface_application_kinds(module, &mut environments, budget)?;
-    if !all_application_arities_complete {
-        return Ok(());
-    }
     for index in 0..module.effects.len() {
         let effect = required_lookup(
             module.effects.get(index),
@@ -6137,6 +6132,11 @@ pub(crate) fn check_remaining_module_kinds<'a>(
             budget,
         )?;
         check_effect(effect, &module.registry, &mut environments, budget)?;
+    }
+    let all_application_arities_complete =
+        preflight_interface_application_kinds(module, &mut environments, budget)?;
+    if !all_application_arities_complete {
+        return Ok(());
     }
     for interface in &module.interfaces {
         if !interface_determination_is_total(interface, budget)? {

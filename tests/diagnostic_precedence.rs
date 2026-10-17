@@ -15,6 +15,7 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 const MAIN: &str = "main : Unit -> Int\nmain () = 0\n";
 const BAD_ARITY: &str =
     "interface C<A> {\n    c : A -> Int\n}\nbad : Unit -> Unit where C<Int, Bool>\nbad () = ()\n";
+const BAD_ARGUMENT_KIND: &str = "interface C<F : Type -> Type> {\n    c : F<Int> -> Int\n}\nbad : Unit -> Unit where C<Int>\nbad () = ()\n";
 const BAD_DETERMINATION: &str =
     "interface Invalid<A, B, C> where A -> B {\n    invalid : A -> B\n}\n";
 
@@ -333,6 +334,77 @@ fn remaining_effect_kinds_precede_determination_and_method_kinds() {
             "Box",
         );
     }
+}
+
+fn assert_effect_kind_precedes_interface_application(
+    interface: &str,
+    later_reason: &str,
+    later_primary: &str,
+) {
+    let source = format!(
+        "type Box<A> = Box(A)\neffect Later {{\n    use : Box -> Unit\n}}\n{interface}{MAIN}"
+    );
+    let failure = rejected(&source, "kind.expected-type", "Box");
+    let Some(PipelineFailure::Kind(KindFailure::Source(error))) = failure.pipeline_failure() else {
+        panic!("the earlier effect annotation must own the kind failure")
+    };
+    assert_eq!(error.primary.span().range().start(), 46);
+    assert_eq!(error.primary.span().range().end(), 49);
+    let [related] = error.related.as_slice() else {
+        panic!("the found constructor kind must retain its declaration")
+    };
+    assert_eq!(related.span().range().start(), 0);
+    assert_eq!(related.span().range().end(), 20);
+    let sources: Vec<_> = failure.sources().iter().collect();
+    let view = ash::presentation::compile_kind_diagnostic(error, &sources).unwrap();
+    let mut output = Vec::new();
+    ash::presentation::write_json(&mut output, &view).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        json["facts"],
+        serde_json::json!([
+            {"name": "expected_kind", "kind": "kind", "value": "Type"},
+            {"name": "found_kind", "kind": "kind", "value": "Type -> Type"},
+            {"name": "expectation_shape", "kind": "kind-expectation", "value": "exact"},
+        ])
+    );
+    assert_eq!(json["labels"].as_array().unwrap().len(), 2);
+    assert_eq!(json["labels"][0]["role"], "primary");
+    assert_eq!(json["labels"][0]["relationship"], "kind_mismatch");
+    assert_eq!(json["labels"][0]["byte_start"], 46);
+    assert_eq!(json["labels"][0]["byte_end"], 49);
+    assert_eq!(
+        json["labels"][0]["facts"],
+        serde_json::json!([{"name": "found_kind", "kind": "kind", "value": "Type -> Type"}])
+    );
+    assert_eq!(json["labels"][1]["role"], "related");
+    assert_eq!(json["labels"][1]["relationship"], "found_kind_declaration");
+    assert_eq!(json["labels"][1]["byte_start"], 0);
+    assert_eq!(json["labels"][1]["byte_end"], 20);
+    assert_eq!(
+        json["labels"][1]["facts"],
+        serde_json::json!([{"name": "kind", "kind": "kind", "value": "Type -> Type"}])
+    );
+
+    rejected(
+        &source.replace("use : Box -> Unit", "use : Box<Int> -> Unit"),
+        later_reason,
+        later_primary,
+    );
+}
+
+#[test]
+fn remaining_effect_kinds_precede_interface_arity() {
+    assert_effect_kind_precedes_interface_application(
+        BAD_ARITY,
+        "interface.argument-count",
+        "C<Int, Bool>",
+    );
+}
+
+#[test]
+fn remaining_effect_kinds_precede_interface_argument_kinds() {
+    assert_effect_kind_precedes_interface_application(BAD_ARGUMENT_KIND, "kind.argument", "Int");
 }
 
 #[test]
