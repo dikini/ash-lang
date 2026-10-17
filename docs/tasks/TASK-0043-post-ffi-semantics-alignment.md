@@ -46,7 +46,16 @@ the failing generic row, passing concrete/single-member controls and compiler
 SHA-256 `8621279869c3c87f297c80406a0bad182651eb382fccec35be60a244d4ea0ebb`.
 [PR #44](https://github.com/dikini/ash-lang/pull/44) publishes row repair code
 commit `2a4091479f22335dd48343a610765f753703066f` against Main `354c76b`.
-Independent review and retained verification remain pending.
+Independent review cleared the exact published row head `f077fd4` in
+[the PR review](https://github.com/dikini/ash-lang/pull/44#pullrequestreview-5559465031).
+The reviewer authenticated fresh 4/4 row-choice and 1/1 exact-budget reruns and
+released the frozen reader lease. Retained verification remains pending.
+
+Cleanup Result: the row checkout was clean with no owned scratch to retire;
+its live receipts and compatible cache remain needed by the stack. Next owner:
+the developer continues the ABI-order package on
+`codex/foreign-output-abi-order`, based on exact `f077fd4`, with PR #44 as its
+dependency. The row PR head remains frozen.
 
 The frozen candidate passed 235 elaborator tests, 260 tests across 13 affected
 caller targets, and all 47 architecture tests. The four new private row-choice
@@ -67,6 +76,36 @@ failed sweeps and the independent budget measurement remain available for
 review. These checks establish focused candidate evidence, not a fresh full
 workspace gate. Exact model runtime remains unavailable.
 
+The ABI-order regression first passes owner-before-offset source admission and
+then fails the consistently reordered offset-before-owner declaration on the
+unchanged reviewed implementation. Its candidate checks cover original
+source/Core reconstruction, independent image facts and coordinate tampering,
+both native output orders and terminal extraction cleanup. The reversed native
+test uses a real reversed-signature wrapper that forwards to SQLite in SQLite's
+actual argument order; the baseline reversed SQLite declaration is admission-only.
+Receipts remain in
+`.worktrees/semantics-alignment-context-20261017/foreign-output-order`.
+
+The local ABI package passed 68 focused unit tests, 14 source caller/output
+tests, five native tests and all 47 architecture tests. Its six statement hosts
+ran both normal and injected invalid-tail executions across both ABI orders,
+scalar refusal and private-data mutation. Formatting and strict all-target Ash
+Clippy passed. The changed Markdown adds no lint finding; the 82 pre-existing
+specification line-length findings remain. `focused-pre-fixture-depth-repair-summary.json`
+and `repair-summary.json` retain the successful unchanged compiler checks and
+fresh repaired-fixture/native evidence. Setup failures remain explicit evidence,
+including the copied-offset assertion moved before a deep result branch to
+preserve the parser's existing structural-depth limit.
+
+Before ABI PR publication, the user prioritized
+[issue #45](https://github.com/dikini/ash-lang/issues/45), native-library CLI inputs.
+Preserve this unreviewed ABI package as a recoverable local checkpoint on
+`codex/foreign-output-abi-order`; no ABI PR has been published. Next owner: the
+developer handles the separate Main-based CLI PR, then resumes this exact ABI
+checkpoint after that PR's focused evidence, independent review and publication.
+The row head, Main and `ffi-base` remain unchanged. Retention and all acceptance
+below remain pending.
+
 Acceptance remains separate for each original scope:
 
 - [ ] Row unification: regression, negative and resource evidence; independent
@@ -86,6 +125,17 @@ refusal, rollback and exact-budget fresh retries on a 256 KiB stack. Run the
 affected elaborator/row/source callers and architecture tests, formatting and
 strict focused Clippy. Check changed Markdown links, artifact structure and
 authority manually.
+
+For ABI-order outputs, preserve distinct owner/offset slots, exact input,
+representation, status, ownership and lifetime checks. Test both orders through
+source, independent Core/image validation and a real native wrapper. Verify
+initially null output storage, an independent copied offset, child-before-parent
+completion and terminal invalid-tail extraction with no ordinary fallback,
+no C replay and exactly one unpublished-owner cleanup. Use the existing
+input-derived native preparation/startup meters for the product-library image
+fixture. Run affected owner contract/admission, Core, post-record and native
+callers, formatting, strict focused Clippy, architecture and manual specification
+checks. No production work coefficient or limit changes are part of this repair.
 
 These PR checks are partial verification. The next fresh full workspace gate
 belongs to the developer at the connected output/checking completion boundary,
@@ -116,6 +166,14 @@ equation before capture checking. It now verifies successful specialization and
 owned-discard execution; an inconsistent expected row retains its original
 binding-initializer diagnostic obligation. The specification, rather than that
 old assertion, governs admission.
+
+Output acquisition already retains its owner's ABI operand and the offset's
+separate ABI operand. Passive preparation incorrectly orders those roles, while
+signature admission, Core lineage and runtime reporting assume owner field one
+and offset field two. Deriving report positions from the retained coordinates
+implements the current ABI-order rule. The guard still records a readable
+non-null owner before fallible offset extraction; output order supplies no new
+ownership or native-call authority.
 
 ## Deviations
 

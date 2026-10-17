@@ -623,8 +623,10 @@ The admitted product source resource scope combines an Ash initializer, acquire
 and finish functions, private data `D`, and an associated ordinary effect handler.
 This checkpoint supports opaque and initialized byte foreign owners with declared
 dependencies and complete ordered Type/Row owner formals, with a Type-kind owned
-identity. Acquisition admits scalar and exact
-declared enclosing-State operands with one pointer result. Finish and host
+identity. Acquisition admits scalar and NUL `String` inputs and exact declared
+enclosing-State operands. Its owner comes from a direct pointer result or an
+initialized opaque output slot alongside a scalar status and optional
+input-relative offset. Canonical report fields retain ABI order. Finish and host
 destruction contracts use the exact Current State and declared Enclosing pointer
 operands, with checked original scalar constants at declared scalar ABI positions
 and fixed non-callable sentinels at their exact function-address ABI positions.
