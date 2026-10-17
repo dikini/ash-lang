@@ -118,6 +118,22 @@ and the trace establish child-before-parent destruction after retained-dependent
 blocking. The earlier direct-result/explicit-Finish discriminator also passes.
 The same source/image-removal harness applies throughout.
 
+Normal runs 992–998 at `9533ddd0` pass the complete owner target (77 tests),
+Buffer target (13), SQLite library (34), copying target (26), architecture
+target (47), expanded strict linting and formatting. All 1,737 source records
+and the recorded configuration remain equal throughout. The named set of 99
+native/header/tool files and four Rust tools matches before and after; this is
+not an environment-wide attestation or a full workspace checkpoint.
+
+Focused run 1000 additionally executes the reordered, cleanup-only capture
+witness through an actual shared library. Its source, native generator and
+result/trace oracle match the static case exactly: explicit Finish uses
+`5/999`, while unpublished fallback uses `-7/U64MAX`. Run 999 had completed
+Source, Final, Core, preparation and host building but failed before C because
+the test library was absent from the loader search path. The correction uses
+the existing Buffer harness's child-only shared-library search path; static
+callers keep their previous setup. Production code and budgets do not change.
+
 The initial setup and assertion failures remain recorded at their own pins;
 they did not justify changing product guards, image literal limits or errors.
 Delivery verification also requires current affected caller, architecture and

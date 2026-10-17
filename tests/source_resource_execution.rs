@@ -141,15 +141,31 @@ fn native_with_scalar_destruction_captures() -> String {
         )
 }
 
+#[derive(Clone, Copy)]
+enum OwnerLink {
+    Static,
+    Shared,
+}
+
 #[test]
 fn generated_scalar_destruction_captures_keep_cleanup_only_inputs_and_separate_finish_arguments() {
-    generated_owner_program_with_native(
+    scalar_destruction_capture_case(OwnerLink::Static);
+}
+
+#[test]
+fn generated_scalar_destruction_captures_shared_library_keeps_original_snapshot() {
+    scalar_destruction_capture_case(OwnerLink::Shared);
+}
+
+fn scalar_destruction_capture_case(link: OwnerLink) {
+    generated_owner_execution_with_native_link(
         &owner_with_scalar_destruction_captures(),
         "import owner as Owner\neffect BeforeNoise {\n    before : Unit -> Unit\n}\neffect AfterNoise {\n    after : Unit -> Unit\n}\nmain : Unit -> (Owner.Scope<Unit, Unit, Int>, Owner.Scope<Unit, Unit, Int>)\nmain () = (resource Owner.Probe<{BeforeNoise}, Accepted, {AfterNoise}> owner = (42, (18446744073709551615, Owner.Negative)) {\n    Owner.read owner\n}, resource Owner.Probe<{AfterNoise}, Refused, {BeforeNoise}> owner = (9, (18446744073709551615, Owner.Negative)) {\n    Owner.read owner\n})\n",
         None,
-        "(Completed(42, Closed), NotAcquired(()))",
+        Ok("(Completed(42, Closed), NotAcquired(()))"),
         "acquire:42\ncaptures:5:999\nrelease:42\nacquire:9\ncaptures:-7:18446744073709551615\nrelease:9\n",
         &native_with_scalar_destruction_captures(),
+        link,
     );
 }
 
@@ -1843,6 +1859,26 @@ fn generated_owner_execution_with_native(
     expected_trace: &str,
     native_source: &str,
 ) {
+    generated_owner_execution_with_native_link(
+        owner,
+        entry,
+        helpers,
+        expected_result,
+        expected_trace,
+        native_source,
+        OwnerLink::Static,
+    );
+}
+
+fn generated_owner_execution_with_native_link(
+    owner: &str,
+    entry: &str,
+    helpers: Option<&str>,
+    expected_result: Result<&str, &str>,
+    expected_trace: &str,
+    native_source: &str,
+    link: OwnerLink,
+) {
     let fixture = Fixture::new(entry);
     fs::write(fixture.0.join("owner.ash"), owner).unwrap();
     if let Some(helpers) = helpers {
@@ -1855,22 +1891,40 @@ fn generated_owner_execution_with_native(
     );
     let native = fixture.0.join("native_owner.c");
     let object = fixture.0.join("native_owner.o");
-    let archive = fixture.0.join("libash_owner.a");
+    let library = fixture.0.join(match link {
+        OwnerLink::Static => "libash_owner.a",
+        OwnerLink::Shared => "libash_owner.so",
+    });
     fs::write(&native, native_source).unwrap();
+    let mut compile = Command::new("cc");
+    compile.args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-c"]);
+    if matches!(link, OwnerLink::Shared) {
+        compile.arg("-fPIC");
+    }
+    let mut linker = match link {
+        OwnerLink::Static => {
+            let mut command = Command::new("ar");
+            command.arg("crs").arg(&library).arg(&object);
+            command
+        }
+        OwnerLink::Shared => {
+            let mut command = Command::new("cc");
+            command
+                .args(["-shared", "-Wl,-soname,libash_owner.so"])
+                .arg(&object)
+                .arg("-o")
+                .arg(&library);
+            command
+        }
+    };
     for output in [
-        Command::new("cc")
-            .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-c"])
+        compile
             .arg(&native)
             .arg("-o")
             .arg(&object)
             .output()
             .unwrap(),
-        Command::new("ar")
-            .arg("crs")
-            .arg(&archive)
-            .arg(&object)
-            .output()
-            .unwrap(),
+        linker.output().unwrap(),
     ] {
         assert!(
             output.status.success(),
@@ -1886,7 +1940,17 @@ fn generated_owner_execution_with_native(
     }
     let executable = fixture.0.join("program");
     let mut configuration = BuildConfiguration::new(executable.clone());
-    configuration.native_inputs = vec![NativeLinkInput::StaticArchive(archive)];
+    configuration.native_inputs = vec![match link {
+        OwnerLink::Static => NativeLinkInput::StaticArchive(library),
+        OwnerLink::Shared => NativeLinkInput::SharedLibrary(library),
+    }];
+    println!(
+        "owner/native link mode: {}",
+        match link {
+            OwnerLink::Static => "static",
+            OwnerLink::Shared => "shared",
+        }
+    );
     let cache = std::env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
@@ -1909,12 +1973,15 @@ fn generated_owner_execution_with_native(
     fs::remove_file(image).unwrap();
     fs::remove_file(facts).unwrap();
     let trace = fixture.0.join("native-trace");
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    command
         .env("ASH_OWNER_TRACE", &trace)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+        .stderr(Stdio::piped());
+    if matches!(link, OwnerLink::Shared) {
+        command.env("LD_LIBRARY_PATH", &fixture.0);
+    }
+    let mut child = command.spawn().unwrap();
     let started = Instant::now();
     while child.try_wait().unwrap().is_none() {
         if started.elapsed() > Duration::from_secs(30) {
