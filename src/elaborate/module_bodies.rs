@@ -865,6 +865,99 @@ impl ModuleBodySchedule {
                 clause.span,
             )?;
         }
+        self.source_dependencies(pending, work)
+    }
+
+    /// Chooses only prerequisites whose original body closure needs no local
+    /// resource code. This schedules checking; only the resulting checked
+    /// bodies and selected evidence can authenticate an ordinary original.
+    pub(super) fn available_original_prerequisites(
+        &self,
+        module: &ResolvedModule,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Vec<ResolvedDeclarationIndex>, TypeError> {
+        let mut pending = Vec::new();
+        for definition in module.resources() {
+            for dependency in self.original_source_dependencies(definition, work)? {
+                work.charge(pending.len().checked_add(1).ok_or_else(type_resource)?)
+                    .map_err(|()| type_resource())?;
+                if !pending.contains(&dependency) {
+                    pending.try_reserve(1).map_err(|_| type_resource())?;
+                    pending.push(dependency);
+                }
+            }
+        }
+        let mut rows: Vec<(
+            ResolvedDeclarationIndex,
+            Vec<ResolvedDeclarationIndex>,
+            bool,
+        )> = Vec::new();
+        while let Some(declaration) = pending.pop() {
+            work.charge(rows.len().checked_add(1).ok_or_else(type_resource)?)
+                .map_err(|()| type_resource())?;
+            if rows.iter().any(|(retained, _, _)| *retained == declaration) {
+                continue;
+            }
+            // Validate the coordinate against this exact defining schedule.
+            self.position(declaration)?;
+            let items = declaration_source_items(module, declaration, work)?;
+            let dependencies = self.source_dependencies(items, work)?;
+            let blocked = declaration_has_local_provider_instance(module, declaration, work)?;
+            for dependency in &dependencies {
+                work.charge(pending.len().checked_add(1).ok_or_else(type_resource)?)
+                    .map_err(|()| type_resource())?;
+                if !pending.contains(dependency) {
+                    pending.try_reserve(1).map_err(|_| type_resource())?;
+                    pending.push(*dependency);
+                }
+            }
+            work.charge(1).map_err(|()| type_resource())?;
+            rows.try_reserve(1).map_err(|_| type_resource())?;
+            rows.push((declaration, dependencies, blocked));
+        }
+        loop {
+            let mut changed = false;
+            for index in 0..rows.len() {
+                work.charge(1).map_err(|()| type_resource())?;
+                if rows[index].2 {
+                    continue;
+                }
+                let mut blocked = false;
+                for dependency in &rows[index].1 {
+                    work.charge(rows.len()).map_err(|()| type_resource())?;
+                    let dependency = rows
+                        .iter()
+                        .find(|(retained, _, _)| retained == dependency)
+                        .ok_or_else(invalid_state)?;
+                    blocked |= dependency.2;
+                }
+                if blocked {
+                    rows[index].2 = true;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        let mut available = Vec::new();
+        work.charge(rows.len()).map_err(|()| type_resource())?;
+        available
+            .try_reserve_exact(rows.len())
+            .map_err(|_| type_resource())?;
+        for (declaration, _, blocked) in rows {
+            if !blocked {
+                available.push(declaration);
+            }
+        }
+        Ok(available)
+    }
+
+    fn source_dependencies(
+        &self,
+        pending: Vec<BodySourceItem<'_>>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Vec<ResolvedDeclarationIndex>, TypeError> {
         let mut dependencies = Vec::new();
         visit_source_items(pending, work, |expression, work| {
             let ResolvedExprKind::Occurrence(occurrence) = &expression.kind else {
@@ -916,7 +1009,8 @@ fn declaration_source_items<'a>(
         ResolvedDeclarationIndex::Global(index) => {
             let definition = module.definitions().get(index).ok_or_else(invalid_state)?;
             match &definition.kind {
-                ResolvedDefinitionKind::Equational(global) => {
+                ResolvedDefinitionKind::Equational(global)
+                | ResolvedDefinitionKind::ForeignConstant(global) => {
                     for equation in &global.equations {
                         push_source(
                             &mut pending,
@@ -953,6 +1047,7 @@ fn declaration_source_items<'a>(
             }
         }
         ResolvedDeclarationIndex::Resource(_)
+        | ResolvedDeclarationIndex::SourceResource(_)
         | ResolvedDeclarationIndex::Type(_)
         | ResolvedDeclarationIndex::Interface(_)
         | ResolvedDeclarationIndex::Effect(_) => return Ok(pending),
@@ -1044,6 +1139,20 @@ fn visit_source_items<'a>(
                     return Ok(true);
                 }
                 match &expression.kind {
+                    ResolvedExprKind::CopyWindow(window) => {
+                        push_source(
+                            &mut pending,
+                            BodySourceItem::Expression(&window.body),
+                            work,
+                            expression.span,
+                        )?;
+                        push_source(
+                            &mut pending,
+                            BodySourceItem::Expression(&window.state),
+                            work,
+                            expression.span,
+                        )?;
+                    }
                     ResolvedExprKind::ProviderResource(resource) => {
                         push_source(
                             &mut pending,

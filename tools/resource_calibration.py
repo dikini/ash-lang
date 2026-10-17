@@ -35,7 +35,9 @@ PHASES = (
     "linked-interface", "final-elaboration", "independent-effect-core",
     "evaluation", "pipeline",
 )
-OPTIONAL_PHASES = ("input-metrics",)
+# Containing timers overlap their child phases; retain them separately from
+# charged-work owners. Older receipts predate the compilation endpoint.
+OPTIONAL_PHASES = ("input-metrics", "compilation")
 LEDGERS = (
     "resolution", "source-checking", "module-linking", "linked-interface",
     "final-elaboration", "independent-effect-core",

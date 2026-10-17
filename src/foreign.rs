@@ -1,9 +1,32 @@
-//! Immutable host registration and identity-bound foreign declaration metadata.
+//! Checked source contracts and retained experimental host registrations.
 //!
-//! Registrations generate passive declarations for the ordinary frontend. They
-//! carry no dynamic symbol names and do not initialize or execute an adapter.
+//! Source declarations and registrations are passive. Checked source contracts
+//! retain defining operation identities for generated native bridges; retained
+//! DN-0036 registrations use their separate manifest/adapter execution boundary.
+//!
+//! SQLite libraries use passive Ash declarations and generated native bridges.
+//! The product API supplies no library-specific SQLite registration:
+//!
+//! ```compile_fail
+//! use ash::foreign::sqlite_manifest;
+//! ```
 mod arena;
+// Historical manifest data is needed by generic registration unit tests only.
+// Production SQLite interfaces come from passive Ash source declarations.
+#[cfg(test)]
+use crate as contract;
+#[cfg(test)]
+#[path = "../foreign-adapter/src/sqlite_manifest.rs"]
+mod sqlite_reference;
+#[cfg(test)]
+pub(crate) use sqlite_reference::sqlite_manifest;
+pub mod checked_source;
 pub mod runtime;
+pub(crate) mod scalar_preflight;
+pub(crate) mod source_access;
+pub mod source_contract;
+pub mod source_owner;
+pub mod source_runtime;
 pub use arena::{arena_manifest, typed_arena_manifest};
 
 use crate::{
@@ -2271,234 +2294,6 @@ fn operation(
         result,
     }
 }
-/// Builds the selected synchronous copying SQLite manifest, without initializing SQLite.
-/// # Errors
-/// Returns a manifest error if its authored declaration schema is invalid.
-pub fn sqlite_manifest(
-    id: ForeignRegistrationId,
-) -> Result<ForeignManifest, ForeignRegistrationError> {
-    use ForeignOperationRole::{Acquire, Borrow, Finish};
-    let types = vec![
-        state("ConnectionState", &["R"]),
-        state("StatementState", &["S", "C"]),
-        data(
-            "OpenConfig",
-            &[],
-            &[("InMemory", None), ("File", Some("String"))],
-        ),
-        data(
-            "InputFault",
-            &[],
-            &[
-                ("BadIndex", None),
-                ("BadInteger", None),
-                ("BadBytes", None),
-                ("BadColumn", None),
-                ("ColumnTypeMismatch", None),
-                ("BadSql", None),
-                ("MultipleStatements", None),
-                ("BadPath", None),
-                ("BadText", None),
-            ],
-        ),
-        data(
-            "ProtocolFault",
-            &[],
-            &[
-                ("NotPrepared", None),
-                ("NotRow", None),
-                ("AfterDone", None),
-                ("ClosedOwner", None),
-            ],
-        ),
-        data(
-            "Error",
-            &[],
-            &[
-                ("NativeFailure", Some("Int, String")),
-                ("InputFailure", Some("InputFault")),
-                ("ProtocolFailure", Some("ProtocolFault")),
-                ("ConversionFailure", None),
-                ("AllocationFailure", None),
-            ],
-        ),
-        data("OpenError", &[], &[("OpenFailure", Some("Error"))]),
-        data("CloseError", &[], &[("CloseFailure", Some("Error"))]),
-        data(
-            "PrepareError",
-            &[],
-            &[("PrepareFailure", Some("Error")), ("EmptySql", None)],
-        ),
-        data("FinalizeError", &[], &[("FinalizeFailure", Some("Error"))]),
-        data(
-            "Result",
-            &["T"],
-            &[("Ok", Some("T")), ("Err", Some("Error"))],
-        ),
-        data(
-            "StepResult",
-            &[],
-            &[("Row", None), ("Done", None), ("StepError", Some("Error"))],
-        ),
-        data(
-            "BytesOrNull",
-            &[],
-            &[("NullBytes", None), ("BlobBytes", Some("Bytes"))],
-        ),
-        data(
-            "Acquire",
-            &["State", "E"],
-            &[("Acquired", Some("State")), ("Refused", Some("E"))],
-        ),
-        data(
-            "Finish",
-            &["State", "E"],
-            &[
-                ("Consumed", None),
-                ("ConsumedFailure", Some("E")),
-                ("Retained", Some("State, E")),
-            ],
-        ),
-        data(
-            "TextOrNull",
-            &[],
-            &[("NullText", None), ("TextValue", Some("String"))],
-        ),
-    ];
-    let acquire = |state: &str, error: &str, retained_parameters| ForeignResultRelation::Acquire {
-        state: state.into(),
-        error: error.into(),
-        report: "Acquire".into(),
-        retained_parameters,
-    };
-    let finish = |state: &str, error: &str| ForeignResultRelation::Finish {
-        state: state.into(),
-        error: error.into(),
-        report: "Finish".into(),
-    };
-    let connection = ForeignEffectDeclaration {
-        name: "Connection".into(),
-        parameters: vec!["R".into()],
-        operations: vec![
-            operation(
-                "open",
-                "OpenConfig -> Acquire<ConnectionState<R>, OpenError>",
-                Acquire,
-                vec![],
-                acquire("ConnectionState", "OpenError", vec![]),
-            ),
-            operation(
-                "diagnostic",
-                "ConnectionState<R> -> Error",
-                Borrow,
-                vec![vec![]],
-                ForeignResultRelation::Independent,
-            ),
-            operation(
-                "close",
-                "ConnectionState<R> -> Finish<ConnectionState<R>, CloseError>",
-                Finish,
-                vec![vec![]],
-                finish("ConnectionState", "CloseError"),
-            ),
-        ],
-    };
-    let mut statement = ForeignEffectDeclaration {
-        name: "Statement".into(),
-        parameters: vec!["S".into(), "C".into()],
-        operations: vec![
-            operation(
-                "prepare",
-                "(ConnectionState<C>, String) -> Acquire<StatementState<S, C>, PrepareError>",
-                Acquire,
-                vec![vec![0]],
-                acquire("StatementState", "PrepareError", vec![1]),
-            ),
-            operation(
-                "bind_int",
-                "(StatementState<S, C>, Int, Int) -> Result<Unit>",
-                Borrow,
-                vec![vec![0]],
-                ForeignResultRelation::Independent,
-            ),
-            operation(
-                "step",
-                "StatementState<S, C> -> StepResult",
-                Borrow,
-                vec![vec![]],
-                ForeignResultRelation::Independent,
-            ),
-            operation(
-                "column_int",
-                "(StatementState<S, C>, Int) -> Result<Int>",
-                Borrow,
-                vec![vec![0]],
-                ForeignResultRelation::Independent,
-            ),
-            operation(
-                "finalize",
-                "StatementState<S, C> -> Finish<StatementState<S, C>, FinalizeError>",
-                Finish,
-                vec![vec![]],
-                finish("StatementState", "FinalizeError"),
-            ),
-            operation(
-                "bind_bytes",
-                "(StatementState<S, C>, Int, BytesOrNull) -> Result<Unit>",
-                Borrow,
-                vec![vec![0]],
-                ForeignResultRelation::Independent,
-            ),
-            operation(
-                "column_bytes",
-                "(StatementState<S, C>, Int) -> Result<BytesOrNull>",
-                Borrow,
-                vec![vec![0]],
-                ForeignResultRelation::Independent,
-            ),
-            operation(
-                "reset",
-                "StatementState<S, C> -> Result<Unit>",
-                Borrow,
-                vec![vec![]],
-                ForeignResultRelation::Independent,
-            ),
-            operation(
-                "clear_bindings",
-                "StatementState<S, C> -> Result<Unit>",
-                Borrow,
-                vec![vec![]],
-                ForeignResultRelation::Independent,
-            ),
-        ],
-    };
-    statement.operations.extend([
-        operation(
-            "bind_text",
-            "(StatementState<S, C>, Int, TextOrNull) -> Result<Unit>",
-            Borrow,
-            vec![vec![0]],
-            ForeignResultRelation::Independent,
-        ),
-        operation(
-            "column_text",
-            "(StatementState<S, C>, Int) -> Result<TextOrNull>",
-            Borrow,
-            vec![vec![0]],
-            ForeignResultRelation::Independent,
-        ),
-    ]);
-    ForeignManifest::new(
-        "@foreign.sqlite",
-        id,
-        ForeignManifestSchema {
-            types,
-            effects: vec![connection, statement],
-            state_access: None,
-            foundation: None,
-        },
-    )
-}
 /// Builds the registered sealed generic state-access primitive manifest.
 /// # Errors
 /// Returns a manifest error if its authored declaration schema is invalid.
@@ -2626,3 +2421,5 @@ mod storage_tests {
             .unwrap();
     }
 }
+
+pub(crate) mod source_bindings;

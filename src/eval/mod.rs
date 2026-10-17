@@ -13,8 +13,12 @@ pub use failure::{
 pub use machine::{
     Control, EffectTraceEvent, Environment, Evaluation, RuntimeFailure, TraceEvent, evaluate,
     evaluate_effect, evaluate_effect_with_foreign_runtime,
+    evaluate_effect_with_source_native_program,
 };
-#[cfg(test)]
-pub(crate) use machine::{native_buffer_counters_for_test, reset_native_buffer_counters_for_test};
 pub(crate) use value::ObservedHeap;
 pub use value::{Closure, ExecutableNode, ExecutableProgram, ObservedValue, Value};
+
+#[cfg(test)]
+pub(crate) use machine::source_owner_post_record_test;
+#[cfg(test)]
+pub(crate) use machine::source_scalar_post_record_test;

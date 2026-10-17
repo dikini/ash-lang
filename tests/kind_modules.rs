@@ -399,11 +399,13 @@ fn detached_summaries_preserve_defining_kinds_across_every_import_route() {
                     .iter()
                     .find_map(|definition| match &definition.kind {
                         ResolvedDefinitionKind::Equational(global)
+                        | ResolvedDefinitionKind::ForeignConstant(global)
                             if global.interface.name.spelling == "lift" =>
                         {
                             Some(global.interface.name.id)
                         }
                         ResolvedDefinitionKind::Equational(_)
+                        | ResolvedDefinitionKind::ForeignConstant(_)
                         | ResolvedDefinitionKind::InlineOperational(_) => None,
                     })
                     .expect("lift should retain its defining binder identity"),

@@ -7,7 +7,7 @@ use super::{CaptureInputId, HandlerRowRecipeDraft, PendingRowEquation, RowEquati
 use crate::{
     core::{
         EffectExprKind, EffectOperation, NodeId, PureExprKind, PureValue, ValidationError,
-        provider::{HandlerFragmentEntry, charge, invalid, node, resource},
+        provider::{charge, invalid, node, resource},
     },
     types::{
         EffectInstance, EffectRow, EffectRowError, EffectRowVariable, InferenceVariableId,
@@ -524,10 +524,11 @@ impl DirectDemandProof {
     fn authenticate_annotations(
         &mut self,
         recipe: &HandlerRowRecipeDraft,
-        entry: &HandlerFragmentEntry<'_>,
+        entry: &crate::core::provider::HandlerGraphView<'_>,
         identities: &HashMap<InferenceVariableId, usize>,
         work: &mut TypeWorkBudget,
     ) -> Result<(), ValidationError> {
+        let entry = &entry.handler_graph();
         let program = &entry.draft.program;
         charge(
             work,
@@ -686,10 +687,11 @@ impl DirectDemandProof {
     fn authenticate_recomputations(
         &mut self,
         recipe: &HandlerRowRecipeDraft,
-        entry: &HandlerFragmentEntry<'_>,
+        entry: &crate::core::provider::HandlerGraphView<'_>,
         identities: &HashMap<InferenceVariableId, usize>,
         work: &mut TypeWorkBudget,
     ) -> Result<(), ValidationError> {
+        let entry = &entry.handler_graph();
         use std::collections::HashSet;
         let program = &entry.draft.program;
         let mut replayed = HashSet::new();
@@ -781,9 +783,10 @@ impl DirectDemandProof {
     fn authenticate_source_equalities(
         &self,
         recipe: &HandlerRowRecipeDraft,
-        entry: &HandlerFragmentEntry<'_>,
+        entry: &crate::core::provider::HandlerGraphView<'_>,
         work: &mut TypeWorkBudget,
     ) -> Result<(), ValidationError> {
+        let entry = &entry.handler_graph();
         let program = &entry.draft.program;
         // Scalar source equalities are diagnostic replay claims. Their actual
         // typing endpoints are reconstructed from immutable function bodies and
@@ -843,9 +846,10 @@ impl DirectDemandProof {
 
     pub(super) fn reconstruct(
         recipe: &HandlerRowRecipeDraft,
-        entry: &HandlerFragmentEntry<'_>,
+        entry: &crate::core::provider::HandlerGraphView<'_>,
         work: &mut TypeWorkBudget,
     ) -> Result<Self, ValidationError> {
+        let entry = &entry.handler_graph();
         let program = &entry.draft.program;
         let records = &entry.draft.pending_rows.equations;
         let mut proof = Self {
@@ -929,6 +933,7 @@ impl DirectDemandProof {
                 RowEquationOperation::Empty
                     | RowEquationOperation::Handler { .. }
                     | RowEquationOperation::ProviderScope { .. }
+                    | RowEquationOperation::CopyWindow
             ) {
                 for input in &recipe.edges[equation.inputs.clone()] {
                     let input = Self::copy(&proof.nodes[input.0], work)?;
@@ -947,6 +952,45 @@ impl DirectDemandProof {
                     .map_err(|()| resource())?;
                     let requested = proof.ordinary(&row, work)?;
                     expression = proof.union(expression, &requested, work)?;
+                }
+                EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) => {
+                    charge(work, boundary.interpretations().len())?;
+                    for interpretation in boundary.interpretations() {
+                        expression =
+                            proof.remove(&expression, interpretation.effect(), true, work)?;
+                    }
+                }
+                EffectExprKind::Operation(EffectOperation::SourceCopyWindow(scope)) => {
+                    charge(
+                        work,
+                        scope
+                            .interpretations()
+                            .len()
+                            .checked_add(2)
+                            .ok_or_else(resource)?,
+                    )?;
+                    let body = recipe
+                        .node_equations
+                        .get(scope.body().index().map_err(|_| invalid(equation.node))?)
+                        .copied()
+                        .flatten()
+                        .ok_or_else(|| invalid(equation.node))?;
+                    let mut body = Self::copy(&proof.nodes[body.0], work)?;
+                    for interpretation in scope.interpretations() {
+                        body = proof.remove(&body, interpretation.effect(), true, work)?;
+                    }
+                    if !body.atoms.is_empty() {
+                        return Err(invalid(equation.node));
+                    }
+                    // The state expression executes before the native window.
+                    // Its requests are never interpreted by the window body.
+                    let state = recipe
+                        .node_equations
+                        .get(scope.state().index().map_err(|_| invalid(equation.node))?)
+                        .copied()
+                        .flatten()
+                        .ok_or_else(|| invalid(equation.node))?;
+                    expression = Self::copy(&proof.nodes[state.0], work)?;
                 }
                 EffectExprKind::Operation(EffectOperation::Discard(_)) => {
                     let RowEquationOperation::Discard { capture } = equation.operation else {
@@ -1105,14 +1149,14 @@ impl DirectDemandProof {
             }
         }
         let mut direct = DemandExpression::default();
-        for clause in &entry.draft.clauses {
+        for clause in entry.draft.clauses {
             let equation = recipe.node_equations
                 [clause.body().index().map_err(|_| invalid(clause.body()))?]
             .ok_or_else(|| invalid(clause.body()))?;
             let clause = Self::copy(&proof.nodes[equation.0], work)?;
             direct = proof.union(direct, &clause, work)?;
         }
-        let claimed = proof.row(&entry.draft.direct_demands, &identities, program.root, work)?;
+        let claimed = proof.row(entry.draft.direct_demands, &identities, program.root, work)?;
         charge(
             work,
             direct
@@ -1140,6 +1184,12 @@ pub(super) struct HandlerDemandContract {
     direct: DemandExpression,
 }
 impl HandlerDemandContract {
+    pub(super) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        visit_atom_type_variables(&self.atoms, uses)
+    }
     pub(super) fn realize(
         &self,
         types: &HashMap<crate::types::TypeVariableId, crate::types::Type>,
@@ -1164,6 +1214,30 @@ impl HandlerDemandContract {
         }
         Ok(direct)
     }
+}
+
+impl DirectDemandProof {
+    pub(super) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        visit_atom_type_variables(&self.atoms, uses)
+    }
+}
+
+fn visit_atom_type_variables(
+    atoms: &[DemandAtom],
+    uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+) -> Result<(), ()> {
+    uses.charge(atoms.len())?;
+    for atom in atoms {
+        match atom {
+            DemandAtom::Ordinary(row) => uses.row(row)?,
+            DemandAtom::Remove { effect, .. } => uses.instance(effect)?,
+            DemandAtom::Capture(_) => {}
+        }
+    }
+    Ok(())
 }
 impl DirectDemandProof {
     pub(super) fn defining_contract(

@@ -3,7 +3,7 @@
 use ash::{
     compiler_work::{CompilationPhase, WorkAssessment},
     driver::{RunConfiguration, run_path},
-    module::ModuleRoots,
+    module::{ModuleRoots, load_module_graph},
 };
 use std::{
     fs,
@@ -34,6 +34,18 @@ fn ordinary_public_execution_reports_completed_costs_without_changing_the_value(
     });
     assert_eq!(result.value_display(), "42");
     let report = result.compilation_work();
+    assert_eq!(
+        report.source_checking.unwrap().allowance,
+        Some(800 * "main : Unit -> Int\nmain () = 42\n".len())
+    );
+    assert_eq!(
+        report.final_elaboration.unwrap().allowance,
+        Some(800 * "main : Unit -> Int\nmain () = 42\n".len())
+    );
+    assert_eq!(
+        report.independent_core.unwrap().allowance,
+        Some(345 * "main : Unit -> Int\nmain () = 42\n".len())
+    );
     for (cost, phase) in [
         (report.source_checking, CompilationPhase::SourceChecking),
         (report.final_elaboration, CompilationPhase::FinalElaboration),
@@ -46,6 +58,34 @@ fn ordinary_public_execution_reports_completed_costs_without_changing_the_value(
         assert_eq!(cost.assessment(), WorkAssessment::WithinBudget);
         assert!(!cost.optimization_target());
     }
+}
+
+#[test]
+fn effect_execution_reports_paid_canonical_totals_without_alias_credit() {
+    with_source(
+        "import @builtin.cell as Cell\nimport @builtin.cell as Alias\nmain : Unit -> Int\nmain () = resource cell<R> value = 42 {\n    Cell.read value\n}\n",
+        |configuration| {
+            let graph = load_module_graph(&configuration.entry, &configuration.roots).unwrap();
+            assert_eq!(graph.modules().len(), 2);
+            let bytes: usize = graph
+                .modules()
+                .iter()
+                .map(|module| module.source().text().len())
+                .sum();
+            let result = run_path(configuration).unwrap();
+            assert_eq!(result.value_display(), "42");
+            let report = result.compilation_work();
+            for (cost, coefficient) in [
+                (report.source_checking.unwrap(), 800),
+                (report.final_elaboration.unwrap(), 800),
+                (report.independent_core.unwrap(), 345),
+            ] {
+                assert!(cost.completed);
+                assert_eq!(cost.allowance, Some(coefficient * bytes));
+                assert_eq!(cost.assessment(), WorkAssessment::WithinBudget);
+            }
+        },
+    );
 }
 
 #[test]

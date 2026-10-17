@@ -137,11 +137,14 @@ impl ObservedValue {
                 Task::Value(value) => match value {
                     Value::ResourceHandle(_) => output.push_str("<resource-handle>"),
                     Value::NativeStateView(_) => output.push_str("<native-state-view>"),
+                    Value::NativeWindowView(_) => output.push_str("<native-window-view>"),
+                    Value::NativeWindowExtent(_) => output.push_str("<native-window-extent>"),
                     Value::LayoutWitness(_) => output.push_str("<layout-witness>"),
                     Value::Reference { .. } => output.push_str("<arena-reference>"),
                     Value::Bytes(value) => output.push_str(&format!("{value:?}")),
+                    Value::BytePrefix(value) => output.push_str(&format!("{value:?}")),
                     Value::String(value) => output.push_str(&format!("{value:?}")),
-                    Value::Intrinsic(_) => output.push_str("<function>"),
+                    Value::Intrinsic(_) | Value::ByteCallable(_) => output.push_str("<function>"),
                     Value::Integer(value) => output.push_str(&value.to_string()),
                     Value::Boolean(value) => output.push_str(if value { "true" } else { "false" }),
                     Value::Unit => output.push_str("()"),
@@ -272,6 +275,30 @@ impl fmt::Debug for Closure {
     }
 }
 
+/// Independent copied bytes backed by a preallocated bounded buffer. The
+/// logical prefix may shrink after a NUL scan without allocating after reads.
+/// Unused backing bytes are never observable through Ash Bytes operations.
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct BytePrefix {
+    storage: Arc<[u8]>,
+    length: usize,
+}
+impl BytePrefix {
+    pub(crate) fn new(storage: Arc<[u8]>, length: usize) -> Self {
+        assert!(length <= storage.len());
+        Self { storage, length }
+    }
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        &self.storage[..self.length]
+    }
+}
+impl fmt::Debug for BytePrefix {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.as_bytes().fmt(formatter)
+    }
+}
+
 /// A fully evaluated Ash value.
 ///
 /// Values intentionally do not implement host equality because Ash functions
@@ -280,14 +307,22 @@ impl fmt::Debug for Closure {
 pub enum Value {
     /// Immutable finite bytes in ordinary shared storage.
     Bytes(Arc<[u8]>),
+    /// Independent logical byte prefix; contains no foreign address or authority.
+    BytePrefix(BytePrefix),
     /// Immutable UTF-8 text, including embedded NUL.
     String(Arc<str>),
     /// An authenticated compiler-owned first-order pure callable.
     Intrinsic(crate::core::packed::IntrinsicNode),
+    /// A sealed byte callable retaining its selected original instantiation.
+    ByteCallable(super::machine::SourceByteCallable),
     /// An opaque, non-owning access key for a live resource activation.
     ResourceHandle(ActivationKey),
     /// An opaque borrowed native state view with no native ownership edge.
     NativeStateView(ActivationKey),
+    /// Nonowning exact lexical-window view; contains no native address.
+    NativeWindowView(super::machine::source_window_phases::WindowViewKey),
+    /// Opaque extent tied to one exact lexical-window view.
+    NativeWindowExtent(super::machine::source_window_phases::WindowExtentKey),
     /// Complete authenticated layout metadata, with no native ownership edge.
     LayoutWitness(crate::foreign::runtime::ForeignLayoutWitness),
     /// Nonowning access bound to the original live activation.
@@ -318,16 +353,29 @@ pub enum Value {
     Data(ObservedValue),
 }
 
+impl Value {
+    pub(crate) fn bytes(&self) -> Option<&[u8]> {
+        match self {
+            Self::Bytes(bytes) => Some(bytes),
+            Self::BytePrefix(bytes) => Some(bytes.as_bytes()),
+            _ => None,
+        }
+    }
+}
+
 impl fmt::Display for Value {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ResourceHandle(_) => formatter.write_str("<resource-handle>"),
             Self::NativeStateView(_) => formatter.write_str("<native-state-view>"),
+            Self::NativeWindowView(_) => formatter.write_str("<native-window-view>"),
+            Self::NativeWindowExtent(_) => formatter.write_str("<native-window-extent>"),
             Self::LayoutWitness(_) => formatter.write_str("<layout-witness>"),
             Self::Reference { .. } => formatter.write_str("<arena-reference>"),
             Self::Bytes(value) => write!(formatter, "{value:?}"),
+            Self::BytePrefix(value) => write!(formatter, "{value:?}"),
             Self::String(value) => write!(formatter, "{value:?}"),
-            Self::Intrinsic(_) => formatter.write_str("<function>"),
+            Self::Intrinsic(_) | Self::ByteCallable(_) => formatter.write_str("<function>"),
             Self::Integer(value) => value.fmt(formatter),
             Self::Boolean(value) => value.fmt(formatter),
             Self::Unit => formatter.write_str("()"),

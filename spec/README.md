@@ -9,7 +9,8 @@ Ash is a rank-1 language whose programs are acyclic graphs of passive source
 modules. Each `.ash` source file defines one unnamed module containing
 imports followed by nominal data or `newtype` declarations, method-only
 interface declarations, effect declarations, anonymous implementation
-declarations, and global function definitions. Global signatures may state
+declarations, scalar foreign-library declarations, and global function
+definitions. Global signatures may state
 explicit interface constraints and latent effect rows, and implementation
 heads may state explicit prerequisite constraints. A module has no result
 expression, runtime module value, or initialization.
@@ -94,6 +95,51 @@ live captures in structural order, then continues the clause with `Unit`.
 Inference proves safe closure without skipping outside or running completion
 owners. Its effect row includes invoked cleanup actions.
 
+An owner-free `foreign library` declaration supplies passive ABI facts
+and exact native effects with one `call` operation each. Complete ordered
+`Type` and `EffectRow` parameters and original contracts survive publication
+and imports. `@builtin.foreign` supplies ordinary common result types,
+including `Call<T>` and opaque `ConversionError`. Compilation installs an
+explicit checked Core interpretation for admitted owner-free native entry
+instances, leaving an empty outward row. Ordinary source handlers cannot
+install a native symbol's interpreter. Source contracts and checked Core supply
+no executable binding; default execution refuses missing bindings before Ash
+runs. Checked scalar literal constants publish ordinary mathematical `Int`
+values and supply exact declared native operands. A declared `function_address`
+sentinel supplies only a fixed all-bits-one native operand; it publishes no
+ordinary value and grants no call permission. Copy windows remain outside
+the admitted subset. Source resource declarations admit opaque and
+initialized byte owners with declared dependencies, private data and checked
+`scope` or `acquired_only` reports. Their owner families retain complete ordered
+Type/Row arguments with a Type-kind owned identity and support one
+acquisition and `void` or scalar-status finish and host-destruction contracts
+with total consumed or retained dispositions. Scalar status predicates use
+checked literal facts from the original owner library; the predicate itself
+grants no value or operand authority. Retention revokes ordinary access and
+quarantines the same
+owner and dependency closure; safe host destruction preserves dependency order.
+Ordinary pure module-global helpers may transform independent lifecycle payloads,
+including through same-module and imported polymorphic definitions. Their complete
+Type/Row instances and original copied calls remain checked; they cannot carry
+native State or acquire native permission. Privileged lifecycle wrappers and
+library migrations remain unsupported. Checked
+lexical forwarding supports the associated interface methods and ordinary
+constrained helpers, preserving exact operation types, effect rows and typed
+access operands. Sealed common byte reads and writes borrow the exact
+initialized live state in acquire, handler and finish phases. Original call
+correspondence, complete Type/Row instances and the unique guard authenticate
+access; private data and a compatible state type grant no permission.
+Conversion refusals are ordinary `Foreign.Call` results, and complete reply
+admission precedes native access. Outward capture/resume moves the same source
+owner; owned discard runs required finish computations in structural order with
+needed outer resources live, without an abandoned result wrapper. Running
+completion cannot be abandoned. Acquisition discard revokes an unpublished
+guard without fabricating private data. Exact constructor and native-call
+identities authenticate publication and completion; declarations alone confer
+no ownership. The [source-resource
+rules](static-semantics.md#source-resource-declarations) bound this lifecycle
+and its supported associated handler shape.
+
 `resource cell<R> c = initializer { body }` acquires one scoped mutable integer
 cell through the compiler-owned `@builtin.cell` API. The scope owns release;
 handles provide reusable access while it remains live. Inferred dependencies
@@ -103,15 +149,17 @@ Each execution has a fresh activation, and capture/resume moves the owned
 scope without duplication. Normal completion or owned abandonment releases it
 once.
 
-`resource native_buffer<R> b = length { body }` uses the fixed
-`@builtin.native_buffer` API to acquire zeroed native bytes. Checked length,
-read and write operations preserve the same scoped authority and activation
-rules as cells. Acquisition returns ordinary `Failure(Error)` without entering
-the body, or releases on normal completion and returns `Success(body_value)`.
-Nested outcomes remain nested. Owned discard skips the abandoned wrapper;
-internal host teardown invokes no source cleanup and reports detectable resource
-failure without claiming incomplete cleanup succeeded.
-This provider adds no source pointers or general FFI.
+The ordinary passive [native-buffer library](../libraries/native_buffer.ash)
+uses `resource Buffer.Buffer<R> b = length { body }` after an explicit import.
+Its Ash acquisition, associated handlers and finish use common checked foreign
+contracts, bytes, guards and the `acquired_only` codec. Positive lengths acquire
+zeroed writable bytes; invalid lengths refuse before C. Acquisition returns
+ordinary `Failure(Error)` without a body, or releases normally and returns
+`Success(body_value)`. Nested outcomes remain nested. Capture/resume moves the
+same owner; owned discard completes it once without the abandoned wrapper.
+Generated hosts execute the native calls. The old builtin module, lowercase
+resource designator and fixed evaluator adapter are removed; cell semantics
+remain unchanged.
 
 `hook H { body }` supplies the empty identity chain for an exact effect API
 with one endomorphic `publish` operation. `register H transformer { body }`
@@ -128,7 +176,8 @@ dependencies remain checked.
 Normal completion invokes it, then returns the saved body value unchanged.
 Capture/resume transfers the invocation owner; copies of the callable gain no
 cleanup authority. Owned abandonment invokes actions under the surviving
-context and still-live builtin resources, not restored captured source handlers.
+context with needed live resource handlers. Ordinary source handlers removed by
+the cut are not restored.
 Required removed interpreters reject at each action's closing position.
 An executing action and its unfinished close operation remain required
 completions and cannot be discarded. Action effects and stored dependencies
@@ -176,11 +225,11 @@ patterns, exhaustive matches and equations, sequential bindings, method-only
 interfaces, explicit constraints, anonymous implementations, and pure and
 effectful expressions with single-use, non-escaping handler continuations.
 
-Beyond the fixed sealed cell provider and acquisition form, the effect kernel
-adds no general provider or resource declarations, first-class registration
-tokens, arbitrary removal or priorities, general destructor declarations,
-foreign resources, escaping or multi-shot resume, asynchronous execution, or
-dynamic loading.
+Beyond the fixed builtin providers and the bounded source-resource forms
+described above, the effect kernel adds no general provider or resource
+declarations, first-class registration tokens, arbitrary removal or priorities,
+general destructor declarations, escaping or multi-shot resume, asynchronous
+execution, or dynamic loading.
 A linked nonempty effect row is a source rejection rather than an
 unhandled-operation runtime result.
 
@@ -210,15 +259,15 @@ bare `Option` constructor, and a global whose explicit parameter has kind
 
 ```ash
 pub type Option<A> =
-None
-| Some(A)
+    None
+    | Some(A)
 
 pub interface Observe<F : Type -> Type> {
-observe : F<Int> -> Int
+    observe : F<Int> -> Int
 }
 
 pub impl Observe<Option> {
-observe value = 40 + 2
+    observe value = 40 + 2
 }
 
 pub relay<F : Type -> Type> : F<Int> -> F<Int>
@@ -413,7 +462,7 @@ and once from `Bool` to `Int`:
 
 ```ash
 pub interface Functor<F : Type -> Type> {
-map<A, B> : (A -> B, F<A>) -> F<B>
+    map<A, B> : (A -> B, F<A>) -> F<B>
 }
 
 to_bool : Int -> Bool
@@ -436,7 +485,7 @@ pub import api (Functor, map)
 pub type Box<A> = Box(A)
 
 pub impl Functor<Box> {
-map (function, Box(value)) = Box(function(value))
+    map (function, Box(value)) = Box(function(value))
 }
 ```
 

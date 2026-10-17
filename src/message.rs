@@ -152,6 +152,8 @@ macro_rules! messages {
 
 messages! {
     invocation_usage => "invocation-usage" {},
+    build_failure => "build-failure" { detail: &'a str = "unsupported target" },
+    check_ffi_failure => "check-ffi-failure" { detail: &'a str = "header mismatch" },
     output_write => "output-write" {},
     runtime_missing_node => "runtime-missing-node" {},
     runtime_unexpected_primitive_value => "runtime-unexpected-primitive-value" {},
@@ -161,6 +163,7 @@ messages! {
     runtime_environment_capacity => "runtime-environment-capacity" {},
     runtime_invalid_control_state => "runtime-invalid-control-state" {},
     runtime_foreign_binding => "runtime-foreign-binding" {},
+    runtime_resource_completion => "runtime-resource-completion" {},
     runtime_heap_capacity => "runtime-heap-capacity" {},
     runtime_captured_control_capacity => "runtime-captured-control-capacity" {},
     runtime_resource_capacity => "runtime-resource-capacity" {},

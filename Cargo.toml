@@ -12,7 +12,6 @@ resource-calibration = []
 
 [dependencies]
 sha2 = "=0.10.9"
-ash-native-buffer = { path = "native-buffer" }
 fluent-bundle = "=0.16.0"
 fluent-syntax = "=0.12.0"
 unic-langid = "=0.9.6"
@@ -21,12 +20,20 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "=1.0.151"
 num-bigint = { version = "=0.5.1", default-features = false, features = ["std"] }
 
+[build-dependencies]
+sha2 = "=0.10.9"
+
 [dev-dependencies]
 ash-foreign-adapter = { path = "foreign-adapter" }
 
 [workspace]
-members = ["native-buffer", "foreign-adapter", "xtask"]
+members = ["foreign-adapter", "xtask"]
 resolver = "3"
+
+# Receipt hashing is verification tooling. Product gates keep the default profile.
+[profile.verification]
+inherits = "dev"
+opt-level = 2
 
 [lints]
 workspace = true

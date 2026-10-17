@@ -202,7 +202,10 @@ fn renamed<T: Copy + Eq>(
 }
 
 impl ProviderFreshening<'_> {
-    fn authenticate(&self, work: &mut TypeWorkBudget) -> Result<(), ValidationError> {
+    pub(in crate::core) fn authenticate(
+        &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
         fn pairs<T: Eq>(
             pairs: &[(T, T)],
             work: &mut TypeWorkBudget,
@@ -313,14 +316,14 @@ impl ProviderFreshening<'_> {
 impl ProviderTemplateSubstitution<'_> {
     fn metadata(
         &self,
-        metadata: &super::projection::Metadata,
+        metadata: super::projection::MetadataView<'_>,
         renaming: &crate::types::TemplateIdentityRenaming<'_>,
         work: &mut TypeWorkBudget,
     ) -> Result<super::projection::Metadata, ValidationError> {
-        use super::projection::Metadata;
+        use super::projection::{Metadata, MetadataView};
         let invalid = || ValidationError::new(crate::core::ValidationReason::EffectRow, None);
         Ok(match metadata {
-            Metadata::Type(ty) => Metadata::Type(crate::types::IterativeTypeOwner::new(
+            MetadataView::Type(ty) => Metadata::Type(crate::types::IterativeTypeOwner::new(
                 crate::types::substitute_type_for_template_with(
                     ty,
                     self.types,
@@ -333,7 +336,7 @@ impl ProviderTemplateSubstitution<'_> {
                 .map_err(|()| super::resource())?
                 .map_err(|_| invalid())?,
             )),
-            Metadata::Row(row) => Metadata::Row(
+            MetadataView::Row(row) => Metadata::Row(
                 crate::types::substitute_row_for_template_with(
                     row,
                     self.types,
@@ -346,7 +349,7 @@ impl ProviderTemplateSubstitution<'_> {
                 .map_err(|()| super::resource())?
                 .map_err(|_| invalid())?,
             ),
-            Metadata::Argument(argument) => {
+            MetadataView::Argument(argument) => {
                 Metadata::Argument(crate::types::IterativeArgumentOwner::new(
                     crate::types::substitute_argument_for_template_with(
                         argument,
@@ -361,17 +364,143 @@ impl ProviderTemplateSubstitution<'_> {
                     .map_err(|_| invalid())?,
                 ))
             }
-            Metadata::Kind(kind) => Metadata::Kind(
+            MetadataView::Kind(kind) => Metadata::Kind(
                 crate::types::clone_kind_with_budget(kind, work).map_err(|()| super::resource())?,
             ),
         })
     }
 }
 
-fn specialize_projection(
+/// Paid lookup representation of one source-scope copy phase. It is not a
+/// freshening certificate: callers still authenticate every exact original,
+/// fresh pair, cross-phase space and complete substitution before using it.
+pub(in crate::core) struct SourceScopeFreshening<'a, 'pairs> {
+    fresh: &'a ProviderFreshening<'pairs>,
+    variables:
+        &'a std::collections::HashMap<crate::types::TypeVariableId, crate::types::TypeVariableId>,
+    binders: std::collections::HashMap<crate::resolved::BinderId, crate::resolved::BinderId>,
+    handlers: std::collections::HashMap<crate::core::HandlerId, crate::core::HandlerId>,
+    resumes: std::collections::HashMap<crate::resolved::ResumeId, crate::resolved::ResumeId>,
+}
+impl<'a, 'pairs> SourceScopeFreshening<'a, 'pairs> {
+    pub(in crate::core) fn new(
+        fresh: &'a ProviderFreshening<'pairs>,
+        variables: &'a std::collections::HashMap<
+            crate::types::TypeVariableId,
+            crate::types::TypeVariableId,
+        >,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, ValidationError> {
+        // This source profile has no local nominal/lexical declarations. The
+        // optimized path cannot silently admit or erase either identity space.
+        super::charge(work, 1)?;
+        if !fresh.nominals.is_empty()
+            || !fresh.lexicals.is_empty()
+            || variables.len() != fresh.types.len()
+        {
+            return Err(ValidationError::new(
+                crate::core::ValidationReason::ResourceEscape,
+                None,
+            ));
+        }
+        super::charge(work, fresh.types.len())?;
+        for (source, target, _) in fresh.types {
+            if variables.get(source) != Some(target) {
+                return Err(ValidationError::new(
+                    crate::core::ValidationReason::TypeOperation,
+                    None,
+                ));
+            }
+        }
+        fn index<T: Copy + Eq + std::hash::Hash>(
+            pairs: &[(T, T)],
+            work: &mut TypeWorkBudget,
+        ) -> Result<std::collections::HashMap<T, T>, ValidationError> {
+            super::charge(work, pairs.len())?;
+            let mut map = std::collections::HashMap::new();
+            map.try_reserve(pairs.len())
+                .map_err(|_| super::resource())?;
+            for (source, target) in pairs {
+                if map.insert(*source, *target).is_some() {
+                    return Err(ValidationError::new(
+                        crate::core::ValidationReason::Scope,
+                        None,
+                    ));
+                }
+            }
+            Ok(map)
+        }
+        Ok(Self {
+            fresh,
+            variables,
+            binders: index(fresh.binders, work)?,
+            handlers: index(fresh.handlers, work)?,
+            resumes: index(fresh.resumes, work)?,
+        })
+    }
+    fn atom(
+        &self,
+        atom: &super::projection::Atom,
+        work: &mut TypeWorkBudget,
+    ) -> Result<super::projection::Atom, ValidationError> {
+        use super::projection::Atom;
+        // Preserve the original atom visit plus one bounded typed lookup. A
+        // miss is the same unchanged external identity as the linear path.
+        let mapped = match atom {
+            Atom::Binder(id) => Atom::Binder(*self.binders.get(id).unwrap_or(id)),
+            Atom::Variable(id) => Atom::Variable(*self.variables.get(id).unwrap_or(id)),
+            Atom::Handler(id) => Atom::Handler(*self.handlers.get(id).unwrap_or(id)),
+            Atom::Resume(id) => Atom::Resume(*self.resumes.get(id).unwrap_or(id)),
+            _ => return self.fresh.atom(atom, work),
+        };
+        super::charge(work, 2)?;
+        Ok(mapped)
+    }
+}
+
+pub(in crate::core) fn specialize_source_projection(
+    original: &impl super::projection::ProjectionView,
+    copied: &std::collections::HashMap<NodeId, NodeId>,
+    fresh: &SourceScopeFreshening<'_, '_>,
+    substitution: &ProviderTemplateSubstitution<'_>,
+    renaming: &crate::types::TemplateIdentityRenaming<'_>,
+    work: &mut TypeWorkBudget,
+) -> Result<super::projection::NodeProjection, ValidationError> {
+    specialize_projection_with_atom(
+        original,
+        copied,
+        |atom, work| fresh.atom(atom, work),
+        substitution,
+        renaming,
+        work,
+    )
+}
+
+pub(in crate::core) fn specialize_projection(
     original: &super::projection::NodeProjection,
     copied: &std::collections::HashMap<NodeId, NodeId>,
     fresh: &ProviderFreshening<'_>,
+    substitution: &ProviderTemplateSubstitution<'_>,
+    renaming: &crate::types::TemplateIdentityRenaming<'_>,
+    work: &mut TypeWorkBudget,
+) -> Result<super::projection::NodeProjection, ValidationError> {
+    specialize_projection_with_atom(
+        original,
+        copied,
+        |atom, work| fresh.atom(atom, work),
+        substitution,
+        renaming,
+        work,
+    )
+}
+
+fn specialize_projection_with_atom(
+    original: &impl super::projection::ProjectionView,
+    copied: &std::collections::HashMap<NodeId, NodeId>,
+    mut atom: impl FnMut(
+        &super::projection::Atom,
+        &mut TypeWorkBudget,
+    ) -> Result<super::projection::Atom, ValidationError>,
     substitution: &ProviderTemplateSubstitution<'_>,
     renaming: &crate::types::TemplateIdentityRenaming<'_>,
     work: &mut TypeWorkBudget,
@@ -385,16 +514,16 @@ fn specialize_projection(
     super::charge(
         work,
         original
-            .children
+            .children()
             .len()
-            .checked_add(original.atoms.len())
-            .and_then(|n| n.checked_add(original.metadata.len()))
-            .and_then(|n| n.checked_add(original.origins.len()))
+            .checked_add(original.atoms().len())
+            .and_then(|n| n.checked_add(original.metadata().len()))
+            .and_then(|n| n.checked_add(original.origins().len()))
             .and_then(|n| n.checked_add(1))
             .ok_or_else(super::resource)?,
     )?;
     let mut result = super::projection::NodeProjection {
-        node: mapped(original.node)?,
+        node: mapped(original.node())?,
         children: Vec::new(),
         atoms: Vec::new(),
         metadata: Vec::new(),
@@ -402,36 +531,35 @@ fn specialize_projection(
     };
     result
         .children
-        .try_reserve_exact(original.children.len())
+        .try_reserve_exact(original.children().len())
         .map_err(|_| super::resource())?;
     result
         .atoms
-        .try_reserve_exact(original.atoms.len())
+        .try_reserve_exact(original.atoms().len())
         .map_err(|_| super::resource())?;
     result
         .metadata
-        .try_reserve_exact(original.metadata.len())
+        .try_reserve_exact(original.metadata().len())
         .map_err(|_| super::resource())?;
     result
         .origins
-        .try_reserve_exact(original.origins.len())
+        .try_reserve_exact(original.origins().len())
         .map_err(|_| super::resource())?;
-    for child in &original.children {
+    for child in original.children() {
         result.children.push(mapped(*child)?);
     }
-    for atom in &original.atoms {
-        result.atoms.push(fresh.atom(atom, work)?);
+    for original_atom in original.atoms() {
+        result.atoms.push(atom(original_atom, work)?);
     }
-    for metadata in &original.metadata {
+    for metadata in original.metadata() {
         result
             .metadata
             .push(substitution.metadata(metadata, renaming, work)?);
     }
-    for origin in &original.origins {
-        result.origins.push(super::RetainedHandlerOrigin::copy(
-            origin.as_origin(),
-            work,
-        )?);
+    for origin in original.origins() {
+        result
+            .origins
+            .push(super::RetainedHandlerOrigin::copy(origin, work)?);
     }
     Ok(result)
 }
@@ -451,6 +579,110 @@ pub(crate) struct ResolvedProviderHandlerRows {
     captures: crate::core::capture::ActualCaptureInputs,
 }
 impl ResolvedProviderHandlerRows {
+    pub(in crate::core) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        for row in self.source_rows() {
+            uses.row(row)?;
+        }
+        uses.charge(self.pending.len() + self.node_rows.len() + self.handler_outputs.len())?;
+        for row in self
+            .pending
+            .values()
+            .chain(self.node_rows.values())
+            .chain(self.handler_outputs.values())
+        {
+            uses.row(row)?;
+        }
+        uses.capture_inputs(&self.captures)
+    }
+    pub(crate) fn source_rows(&self) -> [&crate::types::EffectRow; 4] {
+        [&self.direct, &self.epsilon, &self.output, &self.residual]
+    }
+    pub(crate) fn capture_inputs(&self) -> &crate::core::capture::ActualCaptureInputs {
+        &self.captures
+    }
+    pub(crate) fn handler_outputs(
+        &self,
+    ) -> &std::collections::HashMap<crate::core::HandlerId, crate::types::EffectRow> {
+        &self.handler_outputs
+    }
+
+    pub(in crate::core) fn rewrite_source_claim(
+        &self,
+        rewrite: &mut dyn FnMut(
+            &crate::types::EffectRow,
+        )
+            -> Result<crate::types::EffectRow, crate::core::BuildError>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, crate::core::BuildError> {
+        fn rows<K: Copy + Eq + std::hash::Hash>(
+            source: &std::collections::HashMap<K, crate::types::EffectRow>,
+            rewrite: &mut dyn FnMut(
+                &crate::types::EffectRow,
+            )
+                -> Result<crate::types::EffectRow, crate::core::BuildError>,
+            work: &mut TypeWorkBudget,
+        ) -> Result<std::collections::HashMap<K, crate::types::EffectRow>, crate::core::BuildError>
+        {
+            work.charge(source.len())
+                .map_err(|_| crate::core::BuildError::TypeWorkExceeded)?;
+            let mut result = std::collections::HashMap::new();
+            result
+                .try_reserve(source.len())
+                .map_err(|_| crate::core::BuildError::TypeWorkExceeded)?;
+            for (id, row) in source {
+                result.insert(*id, rewrite(row)?);
+            }
+            Ok(result)
+        }
+        Ok(Self {
+            original_arena: self.original_arena,
+            direct: rewrite(&self.direct)?,
+            epsilon: rewrite(&self.epsilon)?,
+            output: rewrite(&self.output)?,
+            residual: rewrite(&self.residual)?,
+            pending: rows(&self.pending, rewrite, work)?,
+            node_rows: rows(&self.node_rows, rewrite, work)?,
+            handler_outputs: rows(&self.handler_outputs, rewrite, work)?,
+            captures: self.captures.rewrite_rows(rewrite, work)?,
+        })
+    }
+
+    /// Plain source specialization data. Final source-scope admission derives
+    /// every row and actual request witness again; this is no execution proof.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::core) fn from_source_solution(
+        original_arena: crate::core::dialect::ArenaId,
+        rows: [crate::types::EffectRow; 3],
+        pending: std::collections::HashMap<
+            crate::types::InferenceVariableId,
+            crate::types::EffectRow,
+        >,
+        node_rows: std::collections::HashMap<NodeId, crate::types::EffectRow>,
+        handler_outputs: std::collections::HashMap<crate::core::HandlerId, crate::types::EffectRow>,
+        captures: crate::core::capture::ActualCaptureInputs,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, ValidationError> {
+        let [direct, epsilon, output] = rows;
+        // The private continuation retains the complete client residual,
+        // including effects that also occur in the independent direct demand.
+        let residual = crate::types::clone_effect_row_with_budget(&epsilon, work)
+            .map_err(|_| super::resource())?;
+        Ok(Self {
+            original_arena,
+            direct,
+            epsilon,
+            output,
+            residual,
+            pending,
+            node_rows,
+            handler_outputs,
+            captures,
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn assert_distinct_actual_captures_for_test(&self, effect: crate::types::EffectId) {
         assert!(
@@ -589,7 +821,7 @@ impl DeferredProviderHandlerRows {
         )
     }
 
-    fn from_domain(
+    pub(in crate::core) fn from_domain(
         original_arena: crate::core::dialect::ArenaId,
         original_pending: &[crate::types::InferenceVariableId],
         original_nodes: &[NodeId],
@@ -1530,6 +1762,118 @@ struct SpecializationProof {
     families: Vec<SpecializedFamily>,
     native_storage: Vec<AdmittedNativeStorageRelation>,
     native: Option<std::sync::Arc<crate::foreign::ForeignModuleFact>>,
+}
+
+impl SpecializationProof {
+    fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        uses.catalog(&self.catalog)?;
+        uses.charge(
+            self.nodes.len()
+                + self.parameters.len()
+                + self.clauses.len()
+                + self.occurrences.len()
+                + self.anchors.len()
+                + self.families.len()
+                + self.native_storage.len(),
+        )?;
+        for projection in self
+            .nodes
+            .iter()
+            .chain(&self.parameters)
+            .chain(&self.clauses)
+        {
+            projection.visit_semantic_type_variables(uses)?;
+        }
+        for occurrence in &self.occurrences {
+            uses.selection(&occurrence.selection)?;
+            uses.application(&occurrence.application)?;
+            uses.charge(occurrence.arguments.len() + occurrence.original.arguments.len())?;
+            for argument in occurrence
+                .arguments
+                .iter()
+                .chain(&occurrence.original.arguments)
+            {
+                uses.ty(argument)?;
+            }
+            if let Some(ty) = &occurrence.value_type {
+                uses.ty(ty)?;
+            }
+            if let Some(ty) = &occurrence.original.value {
+                uses.ty(ty)?;
+            }
+            occurrence
+                .original
+                .allocation
+                .visit_semantic_type_variables(uses)?;
+            uses.application(&occurrence.original.application)?;
+            uses.selection(&occurrence.original.selection)?;
+        }
+        for anchor in &self.anchors {
+            uses.application(&anchor.application)?;
+        }
+        for family in &self.families {
+            family.header.visit_semantic_type_variables(uses)?;
+            family.certificate.visit_semantic_type_variables(uses)?;
+            uses.instance(&family.provided)?;
+            family.state.visit_semantic_type_variables(uses)?;
+            uses.charge(family.clauses.len() + family.dictionaries.len())?;
+            for clause in &family.clauses {
+                clause.visit_semantic_type_variables(uses)?;
+            }
+            for dictionary in &family.dictionaries {
+                dictionary.projection.visit_semantic_type_variables(uses)?;
+                dictionary.initializer.visit_semantic_type_variables(uses)?;
+            }
+        }
+        for relation in &self.native_storage {
+            uses.id(relation.owner)?;
+            uses.id(relation.family.parameter)?;
+            uses.instance(&relation.effect)?;
+            relation
+                .request_projection
+                .visit_semantic_type_variables(uses)?;
+            relation
+                .operand_projection
+                .visit_semantic_type_variables(uses)?;
+        }
+        Ok(())
+    }
+}
+
+impl OriginalProviderSpecialization {
+    pub(super) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        self.0.visit_semantic_type_variables(uses)
+    }
+}
+impl PreparedProviderCaptureReceipt {
+    pub(super) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        self.0.visit_semantic_type_variables(uses)
+    }
+}
+impl ProviderFamilyAdmission {
+    pub(super) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        uses.id(self.identity.parameter)?;
+        uses.ty(&self.payload)?;
+        uses.application(&self.application)?;
+        uses.instance(&self.native_effect)?;
+        uses.charge(self.requirements.len() + self.selections.len())?;
+        for (selection, _) in self.requirements.iter().chain(&self.selections) {
+            uses.selection(selection)?;
+        }
+        Ok(())
+    }
 }
 
 struct SpecializedFamily {
@@ -4482,7 +4826,7 @@ fn authenticate_caller_disjointness(
                         retain_identity(&mut self.variables, *id, work).map_err(|_| ())?;
                     }
                 }
-                TypeStructureNode::Type(Type::Nominal(id)) => {
+                TypeStructureNode::Type(Type::Nominal(id) | Type::ForeignOwnerApply(id, _)) => {
                     retain_identity(&mut self.nominals, *id, work).map_err(|_| ())?
                 }
                 TypeStructureNode::Tail(tail) => {
@@ -5682,6 +6026,9 @@ impl LocalDeclarations {
                     self.pattern(clause.pattern(), work)?;
                 }
             }
+            E::Operation(O::SourceCopyWindow(scope)) => {
+                self.variable(scope.identity(), &crate::types::Kind::Type, work)?;
+            }
             E::Operation(O::Resource(resource)) => {
                 retain_identity(&mut self.binders, resource.handle.id(), work)?
             }
@@ -5695,31 +6042,27 @@ impl LocalDeclarations {
         sigma: &ProviderTemplateSubstitution<'_>,
         work: &mut TypeWorkBudget,
     ) -> Result<(), ValidationError> {
-        use crate::types::{Type, TypeStructureNode, TypeVariableId};
-        let mut visit =
-            |node: TypeStructureNode<'_>, work: &mut TypeWorkBudget| -> Result<bool, ()> {
-                if let TypeStructureNode::Type(Type::Forall(parameters, _)) = node {
-                    for (id, kind) in parameters {
-                        if matches!(id, TypeVariableId::Generated(_))
-                            && !sigma.types.contains_key(id)
-                            && !sigma.rows.contains_key(id)
-                        {
-                            self.variable(*id, kind, work).map_err(|_| ())?;
-                        }
-                    }
-                }
-                Ok(false)
-            };
+        self.foralls_view(metadata.view(), sigma, work)
+    }
+    fn foralls_view(
+        &mut self,
+        metadata: super::projection::MetadataView<'_>,
+        sigma: &ProviderTemplateSubstitution<'_>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
+        let mut visit = |node: crate::types::TypeStructureNode<'_>, work: &mut TypeWorkBudget| {
+            self.forall_structure(node, sigma, work)
+        };
         match metadata {
-            super::projection::Metadata::Type(ty) => {
+            super::projection::MetadataView::Type(ty) => {
                 crate::types::visit_type_structure_with_budget(ty, work, &mut visit)
                     .map_err(|()| super::resource())?;
             }
-            super::projection::Metadata::Argument(argument) => {
+            super::projection::MetadataView::Argument(argument) => {
                 crate::types::visit_argument_structure_with_budget(argument, work, &mut visit)
                     .map_err(|()| super::resource())?;
             }
-            super::projection::Metadata::Row(row) => {
+            super::projection::MetadataView::Row(row) => {
                 super::charge(
                     work,
                     row.known()
@@ -5741,7 +6084,74 @@ impl LocalDeclarations {
                     }
                 }
             }
-            super::projection::Metadata::Kind(_) => {}
+            super::projection::MetadataView::Kind(_) => {}
+        }
+        Ok(())
+    }
+    fn forall_structure(
+        &mut self,
+        node: crate::types::TypeStructureNode<'_>,
+        sigma: &ProviderTemplateSubstitution<'_>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ()> {
+        use crate::types::{Type, TypeStructureNode, TypeVariableId};
+        if let TypeStructureNode::Type(Type::Forall(parameters, _)) = node {
+            for (id, kind) in parameters {
+                if matches!(id, TypeVariableId::Generated(_))
+                    && !sigma.types.contains_key(id)
+                    && !sigma.rows.contains_key(id)
+                {
+                    self.variable(*id, kind, work).map_err(|_| ())?;
+                }
+            }
+        }
+        Ok(false)
+    }
+    fn type_foralls(
+        &mut self,
+        ty: &crate::types::Type,
+        sigma: &ProviderTemplateSubstitution<'_>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
+        crate::types::visit_type_structure_with_budget(ty, work, |node, work| {
+            self.forall_structure(node, sigma, work)
+        })
+        .map_err(|()| super::resource())?;
+        Ok(())
+    }
+    fn pattern_foralls(
+        &mut self,
+        root: &crate::core::CorePattern,
+        sigma: &ProviderTemplateSubstitution<'_>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
+        use crate::core::CorePatternKind;
+        super::charge(work, 1)?;
+        let mut pending = Vec::new();
+        pending.try_reserve(1).map_err(|_| super::resource())?;
+        pending.push(root);
+        while let Some(pattern) = pending.pop() {
+            super::charge(work, 1)?;
+            self.type_foralls(&pattern.ty, sigma, work)?;
+            match &pattern.kind {
+                CorePatternKind::Binder(binder) => self.type_foralls(binder.ty(), sigma, work)?,
+                CorePatternKind::Tuple(fields) => {
+                    super::charge(work, fields.len())?;
+                    pending
+                        .try_reserve(fields.len())
+                        .map_err(|_| super::resource())?;
+                    pending.extend(fields.iter().rev());
+                }
+                CorePatternKind::Constructor {
+                    payload: Some(payload),
+                    ..
+                } => {
+                    super::charge(work, 1)?;
+                    pending.try_reserve(1).map_err(|_| super::resource())?;
+                    pending.push(payload);
+                }
+                _ => {}
+            }
         }
         Ok(())
     }
@@ -5909,6 +6319,130 @@ pub(crate) struct ProviderLocalInventory {
     pub(crate) resumes: Box<[crate::resolved::ResumeId]>,
     pub(crate) nominals: Box<[crate::types::NominalTypeId]>,
     pub(crate) lexicals: Box<[crate::interface::LexicalEvidenceId]>,
+}
+/// One invocation's exact original forest. No checked result escapes this
+/// representation owner or transfers between programs, phases or contexts.
+pub(in crate::core) struct SourceResourceOriginalForest<'a> {
+    pub(in crate::core) inventory: ProviderLocalInventory,
+    pub(in crate::core) projections:
+        std::collections::HashMap<NodeId, super::projection::BorrowedNodeProjection<'a>>,
+}
+
+/// Original source-resource forest declarations, without an experimental
+/// provider certificate. Extra wrapper metadata is retained explicitly.
+pub(in crate::core) fn source_resource_original_forest<'a>(
+    program: &'a UnvalidatedEffectProgram,
+    roots: &[NodeId],
+    extra_binders: &[&crate::core::TypedBinder],
+    extra_patterns: &[&crate::core::CorePattern],
+    extra_handler: Option<&crate::core::HandlerNode>,
+    sigma: &ProviderTemplateSubstitution<'_>,
+    work: &mut TypeWorkBudget,
+) -> Result<SourceResourceOriginalForest<'a>, ValidationError> {
+    let order = crate::core::transform::provider_entry_forest_order(
+        program,
+        roots,
+        &std::collections::HashSet::new(),
+        work,
+    )
+    .map_err(|_| super::resource())?;
+    let mut declarations = LocalDeclarations::default();
+    // This map exists only for this invocation and exact original forest. It
+    // retains representation already paid by project(), never a validation or
+    // specialization result. Target projections and comparisons remain fresh.
+    super::charge(work, order.len())?;
+    let mut projections = std::collections::HashMap::new();
+    projections
+        .try_reserve(order.len())
+        .map_err(|_| super::resource())?;
+    for id in order {
+        let stored = super::node(program, id)?;
+        declarations.node(stored, work)?;
+        let projection = super::projection::project_borrowed(id, stored, work)?;
+        for metadata in &projection.metadata {
+            declarations.foralls_view(*metadata, sigma, work)?;
+        }
+        if projections.insert(id, projection).is_some() {
+            return Err(super::invalid(id));
+        }
+    }
+    for binder in extra_binders {
+        retain_identity(&mut declarations.binders, binder.id(), work)?;
+        declarations.type_foralls(binder.ty(), sigma, work)?;
+    }
+    for pattern in extra_patterns {
+        declarations.pattern(pattern, work)?;
+        declarations.pattern_foralls(pattern, sigma, work)?;
+    }
+    if let Some(handler) = extra_handler {
+        retain_identity(&mut declarations.handlers, handler.id(), work)?;
+        for clause in handler.clauses() {
+            retain_identity(&mut declarations.resumes, clause.resume(), work)?;
+            declarations.pattern(clause.pattern(), work)?;
+            declarations.pattern_foralls(clause.pattern(), sigma, work)?;
+        }
+        for argument in handler.effect().arguments() {
+            crate::types::visit_argument_structure_with_budget(argument, work, |node, work| {
+                declarations.forall_structure(node, sigma, work)
+            })
+            .map_err(|()| super::resource())?;
+        }
+    }
+    if !program.method_evidence.lexical_owners().is_empty() {
+        return Err(super::invalid(program.root));
+    }
+    fn array<T>(
+        set: std::collections::HashSet<T>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Box<[T]>, ValidationError> {
+        super::charge(work, set.len())?;
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(set.len())
+            .map_err(|_| super::resource())?;
+        values.extend(set);
+        Ok(values.into_boxed_slice())
+    }
+    super::charge(work, declarations.variables.len())?;
+    let mut types = Vec::new();
+    types
+        .try_reserve_exact(declarations.variables.len())
+        .map_err(|_| super::resource())?;
+    types.extend(declarations.variables);
+    let inventory = ProviderLocalInventory {
+        binders: array(declarations.binders, work)?,
+        types: types.into_boxed_slice(),
+        handlers: array(declarations.handlers, work)?,
+        resumes: array(declarations.resumes, work)?,
+        nominals: array(declarations.nominals, work)?,
+        lexicals: Box::new([]),
+    };
+    Ok(SourceResourceOriginalForest {
+        inventory,
+        projections,
+    })
+}
+/// Original source-resource forest declarations, without an experimental
+/// provider certificate. Extra wrapper metadata is retained explicitly.
+pub(crate) fn source_resource_local_identities(
+    program: &UnvalidatedEffectProgram,
+    roots: &[NodeId],
+    extra_binders: &[&crate::core::TypedBinder],
+    extra_patterns: &[&crate::core::CorePattern],
+    extra_handler: Option<&crate::core::HandlerNode>,
+    sigma: &ProviderTemplateSubstitution<'_>,
+    work: &mut TypeWorkBudget,
+) -> Result<ProviderLocalInventory, ValidationError> {
+    Ok(source_resource_original_forest(
+        program,
+        roots,
+        extra_binders,
+        extra_patterns,
+        extra_handler,
+        sigma,
+        work,
+    )?
+    .inventory)
 }
 impl ProviderOriginalTemplate<'_> {
     pub(crate) fn local_identities(

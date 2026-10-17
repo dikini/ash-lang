@@ -10,6 +10,284 @@ The invocation requires exactly one entry path. Every `--root` option must
 precede that path. The executable reads UTF-8 Ash source files and does not read
 a program from standard input.
 
+## Building an executable
+
+The program-build path supports the retained Pure subset, scalar/void foreign
+calls, declared dependent opaque owners, initialized byte resource scopes and
+scoped read-only copying windows on Linux x86-64 GNU. It
+compiles the source graph once
+and generates a Rust host containing private Core construction data, the
+existing evaluator and any required typed native bridges:
+
+```text
+ash build --output ./program [--target TARGET] [--cargo-target-dir PATH] entry.ash
+./program
+```
+
+The target is `x86_64-unknown-linux-gnu`. Repeatable `--root name=path` options
+configure imports as in ordinary execution. Diagnostic options may precede
+`build` or follow it, before the entry path.
+Build options must precede the entry path; `--output` is required exactly once.
+Success prints the executable's absolute path. The resulting program prints its
+result value on one line. It can run after the original Ash source files are
+removed. Startup reconstructs fresh Core identities, independently validates
+the construction data, and invokes the evaluator without source compilation.
+
+Building requires the matching Ash checkout, Rust toolchain and cached Cargo
+dependencies. Native tools run offline with one build job. `--cargo-target-dir`
+selects a reusable build cache; otherwise the tool uses `CARGO_TARGET_DIR` or a
+cache inside the generated project. Generated Rust, its manifest and the native
+tool log remain in a fresh `.ash-build` directory beside the requested output.
+After copying, the build removes only its generated Cargo root package from a
+shared cache, including executable aliases and leaf build metadata. Shared
+dependencies and current test executables remain. A private cache inside the
+generated project is removed completely. Publication follows successful cleanup.
+Failed linking preserves an existing output executable and its diagnostic log,
+while cleanup retires partial generated Cargo artifacts. A cleanup failure also
+preserves the existing destination and records its cause in the native build log.
+A compiler/runtime
+configuration mismatch rejects during Rust compilation, before publication;
+startup checks compatibility again.
+
+The Rust API separates `driver::compile_path`, `build::prepare_program` and
+`build::build_prepared`. The prepared phase owns generated inputs and is
+consumed by linking. Reusable compiled programs retain their original source
+provenance; preparation does not reopen those source paths.
+
+`BuiltProgram::generated_source` and `BuiltProgram::build_log` still return
+retained working records. Callers own their lifetime: keep useful records while
+a PR or checkpoint is live, then preserve lasting conclusions and scoped results
+in documentation and discard obsolete build/review history when the PR closes.
+Keep records needed by another live PR or checkpoint until that need ends.
+The generator does not infer PR closure or delete published executables.
+
+### Native link inputs
+
+Configuring explicit native link inputs currently requires the Rust build API. Set
+`build::BuildConfiguration::native_inputs` to an ordered list of
+`build::NativeLinkInput::StaticArchive(PathBuf)` and
+`build::NativeLinkInput::SharedLibrary(PathBuf)` values before calling
+`build::prepare_program`. The command-line build path has no native-input
+options yet. Ordinary `ash entry.ash`, `driver::execute` and `driver::run_path`
+refuse required source-native bindings before Ash execution; they do not compile
+or link a host implicitly.
+
+For an existing authored `entry.ash` and regular static archive
+`libcounter.a`, a Rust caller can build the linked program with:
+
+```rust
+use ash::build::{BuildConfiguration, NativeLinkInput, build_path};
+use ash::driver::RunConfiguration;
+use ash::module::ModuleRoots;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut build = BuildConfiguration::new("./program".into());
+    build.native_inputs.push(NativeLinkInput::StaticArchive("./libcounter.a".into()));
+    let source = RunConfiguration {
+        entry: "entry.ash".into(),
+        roots: ModuleRoots::empty(),
+    };
+    let program = build_path(source, build)?;
+    println!("{}", program.executable().display());
+    Ok(())
+}
+```
+
+This builds the executable; run `./program` separately. The C linkage integration
+fixture in `tests/program_build_native.rs` constructs both supported input kinds
+and uses the separate compile, prepare and build phases.
+
+Native preparation retains the exact encoded Core and expected-contract bytes
+once. The build writes them to fixed files in its generated project and embeds
+them at Rust compile time. The executable reads neither these files nor the
+original Ash sources at startup. Failed linking retains the generated project
+and its diagnostics without replacing an existing output executable.
+
+Each link input names an existing whole-program native file. Preparation
+canonicalizes the paths and checks the supported file kind: a regular static
+archive or an ELF64 little-endian x86-64 shared library. It preserves input
+order, including archive dependency order. These inputs do not supply Ash
+contract facts or prove that a binary follows the authored signature and foreign
+assumptions. The generated host checks its linked bridge registrations against
+its independently validated original contracts before Ash execution.
+
+Shared dependencies use the system loader. The build emits no automatic rpath
+and provides no runtime library-name resolver. Install dependencies in the
+loader's search path or set `LD_LIBRARY_PATH` explicitly for the generated
+process. A missing shared dependency can prevent the host from starting.
+
+### Supported foreign execution
+
+The first source-native subset admits owner-free scalar calls and zero-operand
+`void` calls. Scalar representations are signed/unsigned 8-, 32-
+and 64-bit integers and the profile's 64-bit `size_t`. Ash `Int` remains
+mathematical: checked narrowing refuses an out-of-range input before the native
+call, reporting `Foreign.ConversionFailed`; a scalar reply widens exactly,
+including unsigned 64-bit results. A successful `void` call reports
+`Foreign.Returned(())` without reading a native result.
+
+Imports and generic helpers retain complete ordered Type/EffectRow arguments.
+Executable interpreter instances must be closed; unused row arguments are not
+removed from their identity. The generated host supplies the mandatory native
+interpretation, rather than selecting an ordinary Ash handler for a native
+symbol. Work/storage admission failures terminate execution instead of becoming
+conversion outcomes. A returned native call is recorded before reporting or
+ordinary continuation work can refuse; subsequent failure does not retry the
+call or undo its external effects.
+
+The Pure carrier retains its restrictions on polymorphic or lexical type
+operations. It admits the common side-effect-free `Foreign.checked_i64` and
+`Foreign.checked_size_t` checks, both returning `Foreign.Call<Int>` with the
+unchanged integer or a conversion failure. The Effect carrier also admits
+generic helper abstraction/application, native requests, declared dependent
+opaque or initialized byte source resource scopes, and the admitted read-only
+copy-window profile. Ordinary handler precedence, local resumption, resource
+capture/resume, owned discard, retained quarantine and nested reports use the
+existing evaluator and authenticated original lifecycle forests. Window views
+and extents retain exact live owner/family/window identities; an ordinary helper
+or matching function type grants no native-call permission.
+
+Both carriers refuse unsupported method evidence, newtype conversion, other
+intrinsics and integer literal payloads outside signed 64-bit range. Evaluated
+integer arithmetic and widened native results retain their mathematical
+semantics. These are build-path limitations, not changes to ordinary non-foreign
+execution. The source [arena library](../../libraries/README.md) provides the
+minimal allocation/usage/release lifecycle. The ordinary source buffer library
+supplies checked zeroed bytes and scoped access through the same generated path.
+The source [copying SQLite library](../../libraries/README.md#copying-sqlite)
+uses explicit native inputs, source protocol and guarded temporary copy windows.
+These milestone additions have not yet integrated into Main.
+
+### Generated-host linkage checks
+
+The source Arena target runs its complete real-allocation and separately labelled
+injected-refusal scenarios with both static and shared fixture libraries. Shared
+execution sets its loader path only on the generated child process. The SQLite
+target runs the unchanged complete copying workload with the installed shared
+library and with a genuine implementation archive. The static case requires
+`ASH_SQLITE_STATIC_ARCHIVE`; a missing input fails the test.
+
+Build that archive once from the pinned official SQLite 3.46.1 amalgamation.
+Run these commands from the repository root, keeping the resulting inputs while
+the verification receipts depend on them:
+
+```sh
+task41_sqlite_dir=$(mktemp -d)
+python3 - "$task41_sqlite_dir" <<'PY'
+import hashlib, pathlib, sys, urllib.request, zipfile
+directory = pathlib.Path(sys.argv[1])
+archive = directory / 'sqlite-amalgamation-3460100.zip'
+with urllib.request.urlopen('https://www.sqlite.org/2024/sqlite-amalgamation-3460100.zip') as response:
+    contents = response.read()
+assert hashlib.sha256(contents).hexdigest() == '77823cb110929c2bcb0f5d48e4833b5c59a8a6e40cdea3936b99e199dbbe5784'
+archive.write_bytes(contents)
+with zipfile.ZipFile(archive) as source:
+    for name in ('sqlite3.c', 'sqlite3.h'):
+        (directory / name).write_bytes(source.read('sqlite-amalgamation-3460100/' + name))
+assert hashlib.sha256((directory / 'sqlite3.c').read_bytes()).hexdigest() == '6c35bc5f7f85eac9c49928bacbb02bb694b547aabf69197e058cca245ad80e83'
+assert hashlib.sha256((directory / 'sqlite3.h').read_bytes()).hexdigest() == '89b62c671c5964e137409ce034941b7b05a3af2c9875aba41f47f9483d0c2515'
+assert (directory / 'sqlite3.h').read_bytes() == pathlib.Path('foreign-adapter/vendor/sqlite3.h').read_bytes()
+PY
+cc -O2 -fPIC -c "$task41_sqlite_dir/sqlite3.c" -o "$task41_sqlite_dir/sqlite3.o"
+ar crs "$task41_sqlite_dir/libsqlite3.a" "$task41_sqlite_dir/sqlite3.o"
+export ASH_SQLITE_STATIC_ARCHIVE="$task41_sqlite_dir/libsqlite3.a"
+CARGO_BUILD_JOBS=1 cargo +1.97.1 test --all-features \
+  --test source_arena_execution --test sqlite_library -- --test-threads=1
+```
+
+This preserves SQLite's default compile-time options. Record the selected
+compiler/archive tools, options, source/header hashes and resulting archive
+hash for the actual build. The test checks defined `sqlite3_*` implementation
+symbols in the archive and executable, and rejects a SQLite `DT_NEEDED`
+dependency. Platform Rust/libc shared dependencies remain permitted. It removes
+Ash inputs before host construction and external image/facts before execution,
+then checks the complete copying result. The optional test-only
+`ASH_ARENA_EVIDENCE_DIR` and `ASH_SQLITE_DIAGNOSTIC_DIR` retain generated artifacts
+while the normal harness removes their execution-side source/image/facts files.
+
+For checkpoint or explicit receipt reuse, name the archive **bytes** as an
+external input; the environment variable alone pins only its path. Use the same
+declared source/header/archive/tool inputs for the before/after observations:
+
+```sh
+CARGO_BUILD_JOBS=1 cargo +1.97.1 xtask verify \
+  --input "$ASH_SQLITE_STATIC_ARCHIVE" \
+  --input "$task41_sqlite_dir/sqlite-amalgamation-3460100.zip" \
+  --input "$task41_sqlite_dir/sqlite3.c" \
+  --input "$task41_sqlite_dir/sqlite3.h" \
+  --input "$task41_sqlite_dir/sqlite3.o" \
+  --input /usr/bin/cc --input /usr/bin/ar --input /usr/bin/nm --input /usr/bin/readelf
+```
+
+Keep the other native/header/tool inputs required by the current checkpoint in
+that invocation. The [verification guide](../project/verification.md) defines
+the complete input and reuse boundary. These linkage tests do not close the
+milestone or authorize Main integration.
+
+## Optional C header checking
+
+`check-ffi` checks authored foreign declarations against explicitly supplied C
+headers. Its input is a valid entry with `main` which imports the bindings to
+check. It runs the complete source compiler without evaluating the entry.
+
+```sh
+ash check-ffi --header binding.h --mapping mapping.json --compiler cc \
+    --output checks --root ffi=libraries entry.ash
+```
+
+The current authoring compiler is GNU C 14 or later for
+`x86_64-unknown-linux-gnu`. Other target requests refuse. Headers may repeat;
+other check options may appear once and must precede the entry. Existing
+diagnostic format/locale and root options apply. Header/tool errors exit 2;
+source rejection keeps its source diagnostic and exit status.
+
+The mapping is JSON version 1. Each declaration selects its **defining source
+path**, library, role and member, rather than an importing alias or an equal
+donor. Paths in the JSON are UTF-8 and relative to the mapping file. All foreign
+members in the loaded closure require exactly one mapping, including private,
+unused and constant-only declarations. Profile directives need no mapping.
+
+```json
+{
+  "version": 1,
+  "declarations": [
+    {"module":"native.ash", "library":"C", "kind":"representation",
+     "member":"CInt", "c_type":"int"},
+    {"module":"native.ash", "library":"C", "kind":"symbol",
+     "member":"Abs", "c_name":"abs", "parameters":["int"], "result":"int"}
+  ]
+}
+```
+
+`representation`, `owner` and `access` take `c_type`. `constant` and `sentinel`
+take a `c_name` identifier; a helper header can define a macro for a C expression.
+`symbol` takes its original authored native `c_name`, ordered physical
+`parameters` and `result`. Source generics and logical source arguments do not
+add C parameters. Types accept C type words, qualifiers and pointer stars; use a
+header typedef for complex types, including function pointers. Arbitrary C
+fragments, missing/duplicate/wrong-role mappings and unsupported symbol spellings
+refuse before the compiler runs.
+
+Checks cover the admitted integer category/width/sign and `size_t`, object/byte
+pointer families, owner result/output slots, offsets and view/extent roles,
+fixed non-callable function-address sentinels, exact function prototypes, and
+mathematical constant/sentinel values. Same-width floating types cannot stand in
+for integer representations. A pointer mapping checks ABI facts and grants no
+Ash owner, access, lifetime or callback permission.
+
+The output directory contains `check-ffi.c`, `check-ffi.log` and
+`check-ffi-declarations.json`. Generated `ash-ffi-declaration-N` locations map to
+the original compiled source path, byte range, library, role and member in that
+index. Mismatch diagnostics retain the log and, when the C compiler identifies a
+generated declaration, its original source label. The tool invokes the selected
+compiler with explicit arguments, including `-std=gnu11 -m64 -fsyntax-only
+-Wstrict-prototypes -Werror`; it emits no object and performs no native calls.
+
+Verification mappings cannot supply missing executable facts, change a Rust
+bridge or select ownership behavior. Ordinary authored bindings build without
+headers or check output. Header success does not certify a separately supplied
+binary or its validity, retention and consumption assumptions.
+
 ## Diagnostic formats and locales
 
 Diagnostics use human-readable explanations by default. Explicit options select
@@ -56,8 +334,8 @@ once.
 `import @builtin.cell as Cell` loads the compiler-owned cell API without a
 `--root` option or filesystem lookup. `builtin` cannot be configured as a root:
 `--root builtin=path` reports `invocation.reserved-root` before inspecting
-configured paths. `@builtin.cell` and `@builtin.native_buffer` are the fixed
-modules beneath this root; another path
+configured paths. `@builtin.cell`, `@builtin.bytes`, `@builtin.string` and
+`@builtin.foreign` are the fixed modules beneath this root; another path
 reports `module.unknown-builtin`. Ordinary aliases, targeted imports and
 facade re-exports preserve the API's identity, but a module that acquires a
 resource must directly import its selected builtin module.
@@ -201,24 +479,37 @@ The executable test `native_buffer_documentation_example_has_exact_cli_output`
 checks this complete native-buffer program:
 
 ```ash
-import @builtin.native_buffer as Buffer
+import @ffi.native_buffer as Buffer
 
 main : Unit -> Buffer.Outcome<Buffer.Outcome<Int>>
-main () = resource native_buffer<R> b = 4 {
-match Buffer.write (b, 0, 42) {
-Buffer.Success(()) => Buffer.read (b, 0)
-Buffer.Failure(error) => Buffer.Failure error
-}
+main () = resource Buffer.Buffer<R> b = 4 {
+    match Buffer.write (b, 0, 42) {
+        Buffer.Success(()) => Buffer.read (b, 0)
+        Buffer.Failure(error) => Buffer.Failure error
+    }
 }
 ```
 
-On successful allocation, `ash entry.ash` prints
-`Success(Success(42)) : Outcome<Outcome<Int>>` and a newline. The outer success
+From the repository root, build and run it with:
+
+```sh
+CARGO_BUILD_JOBS=1 cargo run --bin ash -- build --root ffi=libraries \
+    --cargo-target-dir target/ffi-native-hosts --output ./program entry.ash
+./program
+```
+
+On successful allocation, the generated program prints
+`Success(Success(42))` and a newline. The outer success
 records acquisition and normal body completion; the inner result is the body's
 ordinary read outcome. Allocation failure skips the body. Length must be
 positive and fit the bridge's addressable bound; indices and byte values are
 checked before access or mutation. Release occurs before the outer success is
-observed. This fixed byte-buffer provider is not a general FFI or file API.
+observed. The library owns this policy; no compiler dispatch depends on its
+filename. The former `@builtin.native_buffer` import and lowercase builtin
+resource form are removed. See the [migration table](../../libraries/README.md#native-buffer-migration)
+for explicit source type and effect spellings. The ordinary local-newtype and
+non-resource lexical-dictionary native-image limitation remains; source/Core
+capture checks still apply to those programs.
 
 The executable test `synchronous_hooks_documentation_example_has_exact_cli_output`
 checks this complete hook program:
@@ -450,7 +741,7 @@ global that uses it at two unrelated instantiations:
 
 ```ash
 pub interface Functor<F : Type -> Type> {
-map<A, B> : (A -> B, F<A>) -> F<B>
+    map<A, B> : (A -> B, F<A>) -> F<B>
 }
 
 to_bool : Int -> Bool
@@ -472,7 +763,7 @@ pub import api (Functor, map)
 pub type Box<A> = Box(A)
 
 pub impl Functor<Box> {
-map (function, Box(value)) = Box(function(value))
+    map (function, Box(value)) = Box(function(value))
 }
 ```
 
@@ -616,7 +907,9 @@ implementation is reported without exposing that declaration's metadata.
 
 Entry failures are ordered as `entry.missing-main`, `entry.main-polymorphic`,
 `entry.main-domain`, `entry.main-effects`, `entry.main-open-result`, and
-`entry.main-constrained`. A nonempty effect row is a source rejection, so
+`entry.main-constrained`. After mandatory exact owner-free native interpretation,
+any residual ordinary effect requirement or open entry row is a source rejection.
+Required source-native bindings are admitted separately before Ash execution;
 execution has no source-level unhandled-operation outcome.
 
 Effect declaration and resolution failures use `effect.operation-shape`,

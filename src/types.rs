@@ -82,6 +82,16 @@ impl TypeWorkBudget {
         self.used = next;
         Ok(())
     }
+
+    // A bounded sizing phase may admit an input-derived TOTAL. Every sizing
+    // charge remains in that total; this never resets or adds spent work.
+    pub(crate) fn finish_sizing(&mut self, total: usize) -> Result<(), ()> {
+        if self.used > total {
+            return Err(());
+        }
+        self.limit = total;
+        Ok(())
+    }
 }
 
 pub(crate) trait TypeWorkMeter {
@@ -320,7 +330,7 @@ fn visit_structural_components<B: TypeWorkMeter>(
                             push(&mut pending, StructuralRoot::Type(ty), budget)?;
                         }
                     }
-                    Type::ResourceApply(_, arguments) => {
+                    Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                         for argument in arguments.iter().rev() {
                             push(&mut pending, StructuralRoot::Argument(argument), budget)?;
                         }
@@ -1480,6 +1490,7 @@ fn compare_structural_with_charge<B: TypeWorkMeter>(
             Type::Inference(_) => 6,
             Type::Application(_, _) => 7,
             Type::ResourceApply(_, _) => 10,
+            Type::ForeignOwnerApply(_, _) => 13,
             Type::Forall(_, _) => 8,
             Type::Function(_, _) | Type::EffectfulFunction(_, _) => 9,
         }
@@ -1555,6 +1566,22 @@ fn compare_structural_with_charge<B: TypeWorkMeter>(
                         | (Type::Unit, Type::Unit) => Ordering::Equal,
                         (Type::Nominal(left), Type::Nominal(right)) => left.cmp(right),
                         (Type::Variable(left), Type::Variable(right)) => left.cmp(right),
+                        (
+                            Type::ForeignOwnerApply(left_id, left),
+                            Type::ForeignOwnerApply(right_id, right),
+                        ) => {
+                            let identity = left_id.cmp(right_id);
+                            if identity != Ordering::Equal {
+                                return Ok(identity);
+                            }
+                            let lengths = left.len().cmp(&right.len());
+                            if lengths == Ordering::Equal {
+                                for (left, right) in left.iter().zip(right).rev() {
+                                    schedule!(Task::Arguments(left, right));
+                                }
+                            }
+                            lengths
+                        }
                         (
                             Type::ResourceApply(left_id, left),
                             Type::ResourceApply(right_id, right),
@@ -1902,6 +1929,8 @@ pub enum Type {
     Application(Box<Type>, Box<Type>),
     /// One saturated row-bearing resource owner application.
     ResourceApply(ResourceDefinitionId, Box<[KindedArgument]>),
+    /// One saturated row-bearing source foreign State application.
+    ForeignOwnerApply(NominalTypeId, Box<[KindedArgument]>),
     /// A rank-1 type scheme binding variables in its monotype body.
     Forall(Box<[(TypeVariableId, Kind)]>, Box<Type>),
     /// A unary function whose canonical computation codomain has an empty row.
@@ -2019,7 +2048,9 @@ impl Type {
         let mut current = self;
         loop {
             match current {
-                Self::Nominal(identity) => return Some(*identity),
+                Self::Nominal(identity) | Self::ForeignOwnerApply(identity, _) => {
+                    return Some(*identity);
+                }
                 Self::Application(function, _) => current = function,
                 _ => return None,
             }
@@ -2148,7 +2179,9 @@ pub fn discard_type_iteratively(root: Type) {
         if let Task::Visit(ty) = &task {
             let children = match ty {
                 Type::Tuple(elements) => elements.len(),
-                Type::ResourceApply(_, arguments) => argument_type_child_count(arguments),
+                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
+                    argument_type_child_count(arguments)
+                }
                 Type::Application(_, _) => 2,
                 Type::Function(_, _) => 2,
                 Type::EffectfulFunction(_, codomain) => {
@@ -2179,7 +2212,9 @@ pub fn discard_type_iteratively(root: Type) {
             observe_type_discard_visit(children);
         }
         match task {
-            Task::Visit(Type::ResourceApply(_, arguments)) => {
+            Task::Visit(
+                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments),
+            ) => {
                 work.push(Task::Arguments(arguments.into_vec().into_iter()));
             }
             Task::Visit(Type::Tuple(elements)) => {
@@ -2397,6 +2432,17 @@ fn write_structural_inner(
                 work.push(Task::Arguments(arguments.iter()));
                 work.push(Task::Text("<"));
             }
+            Task::Visit(Type::ForeignOwnerApply(id, arguments)) => {
+                write!(
+                    formatter,
+                    "<foreign-owner:{}:{}>",
+                    id.module(),
+                    id.declaration()
+                )?;
+                work.push(Task::Text(">"));
+                work.push(Task::Arguments(arguments.iter()));
+                work.push(Task::Text("<"));
+            }
             Task::Visit(Type::Nominal(identity)) => {
                 if identity.is_lexical() {
                     write!(
@@ -2590,6 +2636,11 @@ pub fn same_type(left: &Type, right: &Type) -> bool {
             | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
             (Type::Variable(left), Type::Variable(right)) if left == right => {}
+            (Type::ForeignOwnerApply(left_id, left), Type::ForeignOwnerApply(right_id, right))
+                if left_id == right_id && left.len() == right.len() =>
+            {
+                pending.push(Task::ArgumentSequence(left.iter().zip(right.iter())));
+            }
             (Type::ResourceApply(left_id, left), Type::ResourceApply(right_id, right))
                 if left_id == right_id && left.len() == right.len() =>
             {
@@ -2824,6 +2875,12 @@ pub(crate) fn same_type_with_budget(
             | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
             (Type::Variable(left), Type::Variable(right)) if left == right => {}
+            (Type::ForeignOwnerApply(left_id, left), Type::ForeignOwnerApply(right_id, right))
+                if left_id == right_id && left.len() == right.len() =>
+            {
+                reserve_row(&mut pending, 1, RowReservationSite::ComparisonWork).map_err(|_| ())?;
+                pending.push(Task::ArgumentSequence(left.iter().zip(right.iter())));
+            }
             (Type::ResourceApply(left_id, left), Type::ResourceApply(right_id, right))
                 if left_id == right_id && left.len() == right.len() =>
             {
@@ -3025,6 +3082,12 @@ fn hash_type_or_effect_row_with_reservation<'a, H: Hasher>(
             }
             TypeHashTask::Visit(Type::ResourceApply(id, arguments)) => {
                 10_u8.hash(state);
+                id.hash(state);
+                arguments.len().hash(state);
+                push!(TypeHashTask::Arguments(arguments.iter()));
+            }
+            TypeHashTask::Visit(Type::ForeignOwnerApply(id, arguments)) => {
+                13_u8.hash(state);
                 id.hash(state);
                 arguments.len().hash(state);
                 push!(TypeHashTask::Arguments(arguments.iter()));
@@ -3453,7 +3516,9 @@ pub(crate) fn kinded_arguments_have_rigid_rows_with_budget<'a>(
                     push(Task::Type(ty))?;
                 }
             }
-            Task::Type(Type::ResourceApply(_, arguments)) => {
+            Task::Type(
+                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments),
+            ) => {
                 for argument in arguments {
                     push(Task::Argument(argument))?;
                 }
@@ -3589,6 +3654,7 @@ fn substitute_structural_type_and_row_variables<E, R: Borrow<Type>>(
         FinishTypeArgument,
         FinishRowArgument,
         FinishResource(ResourceDefinitionId, usize),
+        FinishForeignOwner(NominalTypeId, usize),
         FinishRow(RowShape<'a>),
         Sequence(std::slice::Iter<'a, Type>, bool),
         EnterForall(&'a [(TypeVariableId, Kind)]),
@@ -3699,6 +3765,21 @@ fn substitute_structural_type_and_row_variables<E, R: Borrow<Type>>(
                 )
                 .map_err(|_| allocation_error())?;
                 work.push(Task::FinishResource(*definition, arguments.len()));
+                for argument in arguments.iter().rev() {
+                    work.push(Task::VisitArgument(argument, substitute));
+                }
+            }
+            Task::Visit(Type::ForeignOwnerApply(definition, arguments), substitute) => {
+                charge(1)?;
+                charge(arguments.len())?;
+                work.try_reserve(
+                    arguments
+                        .len()
+                        .checked_add(1)
+                        .ok_or_else(&mut *allocation_error)?,
+                )
+                .map_err(|_| allocation_error())?;
+                work.push(Task::FinishForeignOwner(*definition, arguments.len()));
                 for argument in arguments.iter().rev() {
                     work.push(Task::VisitArgument(argument, substitute));
                 }
@@ -3961,6 +4042,20 @@ fn substitute_structural_type_and_row_variables<E, R: Borrow<Type>>(
                     arguments.push(value.into_argument_inner());
                 }
                 rebuilt.push(StructuralValue::type_value(Type::ResourceApply(
+                    definition,
+                    arguments.into_boxed_slice(),
+                )));
+            }
+            Task::FinishForeignOwner(definition, count) => {
+                charge(count)?;
+                let mut arguments = Vec::new();
+                arguments
+                    .try_reserve_exact(count)
+                    .map_err(|_| allocation_error())?;
+                for value in rebuilt.drain(rebuilt.len() - count..) {
+                    arguments.push(value.into_argument_inner());
+                }
+                rebuilt.push(StructuralValue::type_value(Type::ForeignOwnerApply(
                     definition,
                     arguments.into_boxed_slice(),
                 )));
@@ -6968,7 +7063,9 @@ pub(crate) fn qualify_scheme_row_replacements_with_budget(
                 push(&mut pending, budget, Task::Type(left))?;
                 push(&mut pending, budget, Task::Type(right))?;
             }
-            Task::Type(Type::ResourceApply(_, arguments)) => {
+            Task::Type(
+                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments),
+            ) => {
                 for argument in arguments {
                     push(&mut pending, budget, Task::Argument(argument))?;
                 }

@@ -65,8 +65,10 @@ impl Drop for Scope {
     }
 }
 
+#[cfg(test)]
 pub(crate) struct NoGrowth(bool);
 
+#[cfg(test)]
 impl NoGrowth {
     pub(crate) fn enter() -> Self {
         let mut state = STATE.get();
@@ -77,6 +79,7 @@ impl NoGrowth {
     }
 }
 
+#[cfg(test)]
 impl Drop for NoGrowth {
     fn drop(&mut self) {
         STATE.set(State {
@@ -229,16 +232,6 @@ impl<T> Pending<T> {
         while let Some(value) = self.pop_retained() {
             std::mem::forget(value);
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
-        self.used + self.spill.len()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn capacity(&self) -> usize {
-        INLINE + self.spill.capacity()
     }
 }
 

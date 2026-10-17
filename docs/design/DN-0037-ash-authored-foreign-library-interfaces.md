@@ -5,15 +5,94 @@
 - Related: [DN-0036](DN-0036-foreign-library-and-memory-provider-experiments.md),
   [DN-0035](DN-0035-region-memory-management-and-verified-providers.md),
   [DN-0025](DN-0025-library-and-package-milestones.md),
+  [DN-0042](DN-0042-native-interaction-and-efficient-data.md),
   [AD-0007](../decisions/AD-0007-typed-core-dialects.md),
-  [AD-0008](../decisions/AD-0008-explicit-evaluator-machine.md)
+  [AD-0008](../decisions/AD-0008-explicit-evaluator-machine.md),
+  [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md),
+  [CP-0022 transition history](https://github.com/dikini/ash-lang/blob/adddeffe5d135bd03bf5fc30051965e5da70ed24/docs/proposals/CP-0022-ash-authored-foreign-interfaces.md)
 
 > This design note records a separate foreign-library authoring program. It
-> selects no new syntax, accepts no implementation architecture, and defines
+> selects no new syntax and defines
 > no current Ash semantics. It does not change DN-0036's experiment contracts,
 > implementation plan or completion criteria. Later bounded work needs its own
 > governing contract and the product workflow in the
 > [artifact guide](../project/artifacts.md).
+
+The selected build boundary is recorded separately in AD-0013. The retained
+CP-0022 transition records the semantic change; the
+[product-branch specification](../../spec/static-semantics.md#source-foreign-declarations)
+contains the implemented profile. This informative note does not define current Ash.
+
+## Agreed ffi-ash milestone
+
+[The GitHub milestone](https://github.com/dikini/ash-lang/milestone/1) tracks the
+bounded product delivery, without a deadline. [DN-0042](DN-0042-native-interaction-and-efficient-data.md)
+remains the broader motivation and relationship map. GitHub owns assignment,
+blockers, progress and PR status; this section records durable scope and order.
+
+Deliver Ash-authored foreign declarations and library policy, generated **Rust**
+native-call bridges, optional separate C/header verification, and a runnable
+executable containing checked Core and the existing evaluator. Target only
+`x86_64-unknown-linux-gnu`, with static archives and ordinary shared linkage.
+Libraries remain passive Ash source. Build whole programs; do not add a native
+Ash backend, separately compiled Ash libraries or a stable Ash/Core ABI.
+
+Port copying SQLite, native buffer and minimal arena lifecycle. Native buffer
+uses an explicit source-library migration and loses special compiler dispatch;
+cell stays unchanged. Minimal arena uses generic allocation/release primitives,
+not a new shim for the experimental Rust Arena backing. General borrowing and
+typed storage, files, serialization, numeric additions, SIMD, callbacks, async
+calls, dynamic loading and Lean proofs remain outside the milestone. Finite
+copying access and call-duration input borrows are required, bounded mechanisms.
+
+| Sequence | Issue and bounded outcome | Dependency |
+| --- | --- | --- |
+| 1 | [#1: FFI semantic and architectural contract](https://github.com/dikini/ash-lang/issues/1): CP-0022 and AD-0013, precise semantics and reviewed authoring/build boundary. | Review and acceptance before product implementation. |
+| 2 | [#2: Source contracts, Core and generic execution](https://github.com/dikini/ash-lang/issues/2): authenticated source admission, access, ownership, validation and evaluator. | Accepted #1 contract. |
+| 3 | [#3: Program build and interface verification](https://github.com/dikini/ash-lang/issues/3): embedded Core, Rust bridges, static/shared linkage and separate C checks. | #1; connected executable support from #2. |
+| 4 | [#4: Ash native-buffer library](https://github.com/dikini/ash-lang/issues/4): preserved behavior, explicit callers and removal of special dispatch. | Verified common #2/#3 mechanisms. |
+| 4 | [#5: Ash arena lifecycle](https://github.com/dikini/ash-lang/issues/5): real acquisition, configuration, usage, refusal and release. | Same common mechanisms; no typed storage prerequisite. |
+| 5 | [#6: Ash copying SQLite library](https://github.com/dikini/ash-lang/issues/6): source declarations, constants, protocol, conversions and lifecycle; realistic programs. | #2/#3; complete after the contrasting library deliveries. |
+| 6 | [#7: Milestone closure](https://github.com/dikini/ash-lang/issues/7): integrated verification, specification, migration and build/run evidence. | All complete issue outcomes verified on the retaining branch. |
+
+Use [AD-0011](../decisions/AD-0011-milestone-worktree-lifecycle.md): persistent
+`integration/ffi-ash` plus one active product checkpoint worktree. Main stays
+unchanged until the separate final integration gate. PRs target that branch;
+the final delivery PR targets Main. Preserve checkpoint histories with explicit
+merges. Milestone commits and intermediate merges are unsigned; the final
+merge into Main is signed, following the updated execution instruction.
+
+Issues #2–#6 delivered connected stages of the CP-0022 transition. Their
+implementation, library migrations, tests, specification, review and verification
+are retained in milestone history. Completed proposals, tasks and plans leave
+the current tree under the artifact policy. The existing [closure handoff](https://github.com/dikini/ash-lang/issues/7#issuecomment-6234064548)
+supersedes TASK-0041 for final Main verification, acceptance and checkpoint
+coordination. The [exact task history](https://github.com/dikini/ash-lang/blob/7471200efb1bd90782fcad81be54b992fbd92982/docs/tasks/TASK-0041-ffi-ash-milestone-closure.md)
+preserves its work and findings; supersession does not complete its outcome.
+Keep the active product checkout and compatible cache until their owners release
+them under AD-0011. Artifact retirement alone does not authorize worktree removal
+or Main integration.
+
+The original contract used TASK-0036 through TASK-0041 for its implementation
+issues. Their delivering commits and PRs retain completed work; the
+[task index](../tasks/README.md) lists the work that remains active.
+Tasks link their governing proposal/decision and issue, and contain bounded work,
+dependencies, required verification and durable discoveries/deviations. Ordered
+steps go in the existing Work section; add a task-owned plan only when needed.
+Do not add a parallel daily-status document. Reciprocal issue/TASK/PR links carry
+the delivery chain; remove completed tasks/plans under the artifact policy and
+retain historical links through delivering commits and PRs.
+
+Open draft PRs when changes are reviewable. Incremental PRs reference issues
+without closing them. Close an issue explicitly only after its complete outcome
+is verified on the retaining branch and its delivering PRs, integration commit
+and verification receipt are recorded. Main semantics remain a separate gate.
+
+Reuse native lifecycle/copy/control observations and focused negative regressions.
+Use one Cargo job, connected checks during development and full architecture/
+workspace verification at integration. Exact source pins and commands make
+evidence reusable. The final Main PR includes implementation, normative updates,
+Ash libraries, caller migration and reproducible build/run instructions.
 
 ## Question
 
@@ -70,11 +149,11 @@ remain separate questions with separate evidence.
 The [DN-0036 readiness review](foreign-authoring/dn-0036-readiness.md) records
 the verified Main capabilities, outstanding and worktree evidence, and the
 selected first authoring target: a copying SQLite binding on one host ABI.
-The selected first execution direction generates typed native bridges and links
-a host using the existing evaluator. This starts proposal design without
-accepting source forms or an architectural decision. SQLite is the first complete
-binding delivery; a minimal native arena acquisition, usage and release
-interface is a second worked design case through the same generated bridges.
+The selected execution direction generates Rust bridges and links a host using
+the existing evaluator; AD-0013 records that non-language boundary. The retained
+CP-0022 history records the source and operational transition. SQLite, native
+buffer and minimal arena provide the implemented profile's contrasting authoring
+and lifecycle evidence.
 Unfinished general borrowing and wider Arena work are not prerequisites.
 Native storage interfaces and region validity contracts remain distinct.
 

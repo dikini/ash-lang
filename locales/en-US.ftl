@@ -1080,6 +1080,7 @@ runtime-unexpected-recursive-binding = A recursive binding does not have its val
 runtime-environment-capacity = The runtime cannot retain another lexical binding.
 runtime-invalid-control-state = The runtime reached an inconsistent control state.
 runtime-foreign-binding = An executable foreign binding or conversion contract failed.
+runtime-resource-completion = Source resource completion failed.
 runtime-heap-capacity = The runtime heap cannot hold another cell.
 runtime-captured-control-capacity = The runtime cannot retain another captured control frame.
 runtime-resource-capacity = The runtime cannot represent another live resource or fresh activation.
@@ -1133,7 +1134,9 @@ runtime-label-requested = Requested additional units
 runtime-label-available = Available additional units
 runtime-label-teardown = First teardown failure
 runtime-label-cleanup = Cleanup status
-invocation-usage = Expected: ash [--message-format human|short|json] [--locale NAME] [--root name=path]... <entry-file>. Options must precede the entry file; format and locale may each be supplied only once.
+invocation-usage = Expected: ash [--message-format human|short|json] [--locale NAME] [--root name=path]... <entry-file>, or ash build --output FILE [--target TARGET] [--cargo-target-dir PATH] [--root name=path]... <entry-file>, or ash check-ffi --header FILE... --mapping FILE --compiler FILE --output DIR [--target TARGET] [--root name=path]... <entry-file>. Options must precede the entry file and may be supplied only once, except roots and check-ffi headers.
+build-failure = Ash could not build the native program: { $detail }.
+check-ffi-failure = Ash could not verify the C headers: { $detail }.
 output-write = Ash could not write the program result to standard output.
 resolve-dependency-summary-mismatch = The compiler received incomplete or mismatched checked information for this module's imports.
 resolve-dependency-summary-invalid = The compiler could not validate the checked information for this imported module.

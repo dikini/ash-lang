@@ -1,5 +1,8 @@
 //! Independent validation for unchecked pure Core arenas.
 
+pub(crate) mod semantic_type_variables;
+mod source_declarations;
+
 use std::{
     cell::Cell,
     collections::{HashMap, HashSet},
@@ -75,13 +78,20 @@ fn same_provider_family_application(
     Ok(true)
 }
 
-/// Membership in canonical foreign registrations requires visiting their
-/// module inventory and exact effect identities. Pay before each traversal.
+/// Checks the exact source-native operation table, then legacy registrations.
+/// Pay before the lookup and each legacy inventory traversal.
 pub(crate) fn registered_foreign_effect_with_charge<E>(
     registry: &crate::resolved::ResolvedRegistry,
     effect: crate::types::EffectId,
     mut charge: impl FnMut(usize) -> Result<(), E>,
 ) -> Result<bool, E> {
+    charge(1)?;
+    if registry
+        .native_symbol(OperationId::new(effect, 0))
+        .is_some()
+    {
+        return Ok(true);
+    }
     for module in registry.foreign_modules() {
         charge(1)?;
         charge(module.effects.len())?;
@@ -312,6 +322,21 @@ enum MonotypeVariableKinds<'scope, 'kind> {
         owner: crate::types::NominalTypeId,
         parameter_owners: &'scope RegistryParameterOwners,
     },
+}
+
+enum OwnerKindTask<'a> {
+    Visit(&'a Type),
+    Argument(&'a crate::types::KindedArgument),
+    Instance(&'a EffectInstance),
+    Row(&'a EffectRow),
+    TypeRows(&'a Type),
+    CheckArgument(&'a Kind),
+    FinishResource,
+    FinishRowArgument,
+    Sequence(std::slice::Iter<'a, Type>),
+    FinishTuple(usize),
+    FinishApplication,
+    FinishFunction,
 }
 
 enum OwnerValidationRoot<'a> {
@@ -2630,6 +2655,13 @@ impl ValidationError {
         }
     }
 
+    pub(crate) fn resource_exhausted<O: CoreOperationFamily>(
+        program: UnvalidatedCoreProgram<O>,
+    ) -> Self {
+        program.discard_iteratively();
+        Self::new(ValidationReason::Resource, None)
+    }
+
     fn origin_span_message(
         error: crate::source::SourceError,
         node: Option<usize>,
@@ -2964,6 +2996,89 @@ impl fmt::Display for ValidationError {
 
 impl Error for ValidationError {}
 
+#[cfg(test)]
+pub(in crate::core) fn assert_source_wrapper_coordinate_for_test(
+    template: &super::source_resource::CheckedSourceResourceTemplate,
+    sources: &[&crate::source::SourceFile],
+    modules: &[(crate::module::ModuleId, crate::source::SourceId)],
+) {
+    let graph = template
+        .reconstructed_handler_graph_for_test(&mut TypeWorkBudget::default())
+        .unwrap();
+    let program = template.original_handler();
+    let original_modules = template.module_sources();
+    let original_sources = original_modules
+        .iter()
+        .map(|pair| {
+            assert!(modules.contains(pair));
+            *sources.iter().find(|source| source.id() == pair.1).unwrap()
+        })
+        .collect::<Vec<_>>();
+    let mut validator =
+        Validator::new_modules(program, &original_sources, original_modules).unwrap();
+    validator.source_handler_graph = Some(&graph);
+    let wrapper = graph.wrapper();
+    let super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Handler(handler)) =
+        &program.nodes[wrapper.value() as usize].kind
+    else {
+        unreachable!()
+    };
+    let resume = program
+        .nodes
+        .iter()
+        .enumerate()
+        .find_map(|(index, node)| match &node.kind {
+            super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Resume(
+                resume,
+            )) if resume.handler() == handler.id() => {
+                Some(NodeId::new(program.arena, index as u32))
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_ne!(wrapper, resume);
+    let contract = EffectClauseContract::Ordinary {
+        handler: wrapper,
+        clause: 0,
+    };
+    assert!(matches!(
+        validator
+            .borrowed_clause_contract(contract, resume)
+            .unwrap()
+            .output,
+        ClauseOutput::ProvisionalOperand
+    ));
+    let nested = program
+        .nodes
+        .iter()
+        .enumerate()
+        .find_map(|(index, node)| {
+            let id = NodeId::new(program.arena, index as u32);
+            (id != wrapper
+                && matches!(
+                    &node.kind,
+                    super::effect::EffectExprKind::Operation(
+                        super::effect::EffectOperation::Handler(_)
+                    )
+                ))
+            .then_some(id)
+        })
+        .unwrap();
+    let contract = EffectClauseContract::Ordinary {
+        handler: nested,
+        clause: 0,
+    };
+    // Even a wrapper-shaped diagnostic coordinate cannot grant its exception
+    // to an independently owned nested handler's continuation.
+    assert!(matches!(
+        validator
+            .borrowed_clause_contract(contract, wrapper)
+            .unwrap()
+            .output,
+        ClauseOutput::Ordinary(_)
+    ));
+}
+
 fn valid_upper_spelling(spelling: &str) -> bool {
     let mut bytes = spelling.bytes();
     bytes.next().is_some_and(|byte| byte.is_ascii_uppercase())
@@ -2999,6 +3114,7 @@ fn representation_provenance_span(node: &ResolvedTypeProvenanceNode) -> Span {
         | ResolvedTypeProvenanceNode::Tuple { span, .. }
         | ResolvedTypeProvenanceNode::Function { span, .. }
         | ResolvedTypeProvenanceNode::Resource { span, .. }
+        | ResolvedTypeProvenanceNode::ForeignOwner { span, .. }
         | ResolvedTypeProvenanceNode::Row { span, .. }
         | ResolvedTypeProvenanceNode::Application { span, .. } => *span,
     }
@@ -3196,6 +3312,14 @@ pub(crate) struct CheckedHandlerContractCertificate {
 }
 
 impl CheckedHandlerContractCertificate {
+    pub(crate) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        self.contract.visit_semantic_type_variables(uses)?;
+        self.capture.visit_semantic_type_variables(uses)?;
+        self.externals.visit_semantic_type_variables(uses)
+    }
     pub(crate) fn authenticate(
         &self,
         fact: &crate::resolved::ResourceTypeFact,
@@ -3462,7 +3586,8 @@ fn reconstruct_provider_handler_context(
     work: &mut TypeWorkBudget,
 ) -> Result<ConditionalHandlerAdmission, ValidationError> {
     let mut entry = super::provider::HandlerFragmentEntry::reconstruct(draft, module, work)?;
-    let row_recipe = super::provider::HandlerRowRecipeDraft::reconstruct(&entry, work)?;
+    let row_recipe =
+        super::provider::HandlerRowRecipeDraft::reconstruct(&entry.handler_graph(), work)?;
     entry.row_recipe = Some(&row_recipe);
     let owned_associations = super::provider::HandlerAssociations::reconstruct(module, work)?;
     let associations = owned_associations.borrowed(work)?;
@@ -3577,6 +3702,305 @@ pub(in crate::core) fn check_provider_external_structure(
     work.charge(validator.type_work.get() - prefix)
         .map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
     result
+}
+
+#[cfg(test)]
+pub(crate) fn check_source_resource_structure(
+    program: &UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
+    original: &std::sync::Arc<crate::resolved::SourceResourceTypeFact>,
+    answer: bool,
+    sources: &[&SourceFile],
+    module_sources: &[(ModuleId, SourceId)],
+    work: &mut TypeWorkBudget,
+) -> Result<(), ValidationError> {
+    check_source_resource_structure_with_globals(
+        program,
+        original,
+        answer,
+        sources,
+        module_sources,
+        None,
+        work,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_source_resource_structure_with_globals(
+    program: &UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
+    original: &std::sync::Arc<crate::resolved::SourceResourceTypeFact>,
+    answer: bool,
+    sources: &[&SourceFile],
+    module_sources: &[(ModuleId, SourceId)],
+    globals: Option<&super::source_resource::SourceResourceGlobals>,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ValidationError> {
+    check_source_resource_structure_with_handler_graph(
+        program,
+        original,
+        answer,
+        sources,
+        module_sources,
+        globals,
+        None,
+        None,
+        work,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_source_resource_structure_with_handler_graph(
+    program: &UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
+    original: &std::sync::Arc<crate::resolved::SourceResourceTypeFact>,
+    answer: bool,
+    sources: &[&SourceFile],
+    module_sources: &[(ModuleId, SourceId)],
+    globals: Option<&super::source_resource::SourceResourceGlobals>,
+    handler_graph: Option<&super::source_resource::SourceHandlerGraph<'_>>,
+    original_provider: Option<&crate::elaborate::provider::SourceOriginalProviderContext<'_>>,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ValidationError> {
+    if handler_graph.is_some_and(|graph| !answer || !graph.authenticates(program, original)) {
+        return Err(ValidationError::new(ValidationReason::Registry, None));
+    }
+    let mut validator = Validator::new_modules(program, sources, module_sources)?;
+    validator.source_handler_graph = handler_graph;
+    validator.source_original_provider = original_provider;
+    validator.provider_external_types = globals.map(|globals| &**globals);
+    if !program
+        .registry
+        .source_resource_fact(original.id)
+        .is_some_and(|registered| std::sync::Arc::ptr_eq(registered, original))
+    {
+        return Err(ValidationError::new(ValidationReason::Registry, None));
+    }
+    validator.source_resource_context = SourceResourceValidationContext::OriginalTemplate {
+        resource: original.id,
+        answer,
+    };
+    let capacity = validator.type_work_limit;
+    let allowance = work.remaining().min(capacity);
+    let prefix = capacity - allowance;
+    validator.type_work.set(prefix);
+    let result = validator.run_effect();
+    work.charge(validator.type_work.get() - prefix)
+        .map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
+    result
+}
+
+/// A single reconstruction may contain several original forests sharing the
+/// same immutable registry. This private receipt retains the complete registry
+/// proof and exact source objects; it never admits a forest or executable node.
+#[derive(Default)]
+pub(crate) struct SourceResourceStructureSession<'context> {
+    admitted: Option<OriginalTemplateRegistryAdmission>,
+    original_provider:
+        Option<&'context crate::elaborate::provider::SourceOriginalProviderContext<'context>>,
+}
+
+struct OriginalTemplateRegistryAdmission {
+    globals: Option<std::sync::Arc<super::source_resource::SourceResourceGlobals>>,
+    registry: std::sync::Arc<crate::resolved::ResolvedRegistry>,
+    sources: HashMap<SourceId, *const SourceFile>,
+    modules: HashMap<ModuleId, SourceId>,
+    parameters: RegistryParameterOwners,
+    abstract_nominals: HashSet<crate::types::NominalTypeId>,
+    unused_ordering: HashSet<crate::types::TypeVariableId>,
+}
+
+impl<'context> SourceResourceStructureSession<'context> {
+    pub(crate) fn with_original_provider(
+        original_provider: Option<
+            &'context crate::elaborate::provider::SourceOriginalProviderContext<'context>,
+        >,
+    ) -> Self {
+        Self {
+            admitted: None,
+            original_provider,
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn check(
+        &mut self,
+        program: &UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
+        original: &std::sync::Arc<crate::resolved::SourceResourceTypeFact>,
+        answer: bool,
+        sources: &[&SourceFile],
+        module_sources: &[(ModuleId, SourceId)],
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
+        self.check_with_globals(
+            program,
+            original,
+            answer,
+            sources,
+            module_sources,
+            &std::sync::Arc::new(super::source_resource::SourceResourceGlobals::new()),
+            work,
+        )
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn check_with_globals(
+        &mut self,
+        program: &UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
+        original: &std::sync::Arc<crate::resolved::SourceResourceTypeFact>,
+        answer: bool,
+        sources: &[&SourceFile],
+        module_sources: &[(ModuleId, SourceId)],
+        globals: &std::sync::Arc<super::source_resource::SourceResourceGlobals>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
+        self.check_with_handler_graph(
+            program,
+            original,
+            answer,
+            sources,
+            module_sources,
+            globals,
+            None,
+            work,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::core) fn check_with_handler_graph(
+        &mut self,
+        program: &UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
+        original: &std::sync::Arc<crate::resolved::SourceResourceTypeFact>,
+        answer: bool,
+        sources: &[&SourceFile],
+        module_sources: &[(ModuleId, SourceId)],
+        globals: &std::sync::Arc<super::source_resource::SourceResourceGlobals>,
+        handler_graph: Option<&super::source_resource::SourceHandlerGraph<'_>>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
+        // Conditional source originals retain the same complete ordinary check.
+        // Their separately reconstructed graph authorizes only exact row positions.
+        // Pending transactions always receive a fresh complete admission; a
+        // completed cache entry cannot retarget another facts/publication loan.
+        if handler_graph.is_some() || self.original_provider.is_some() {
+            return check_source_resource_structure_with_handler_graph(
+                program,
+                original,
+                answer,
+                sources,
+                module_sources,
+                Some(globals),
+                handler_graph,
+                self.original_provider,
+                work,
+            );
+        }
+        // Registry parameter ordering can depend on lexical method owners and
+        // their graph-local provider instances. Those contexts keep their full
+        // fresh registry check; the receipt carries no lexical exemption.
+        if !program.method_evidence.lexical_owners().is_empty() {
+            return check_source_resource_structure_with_globals(
+                program,
+                original,
+                answer,
+                sources,
+                module_sources,
+                Some(globals),
+                work,
+            );
+        }
+        let mut validator = Validator::new_modules(program, sources, module_sources)?;
+        validator.provider_external_types = Some(globals);
+        if !program
+            .registry
+            .source_resource_fact(original.id)
+            .is_some_and(|registered| std::sync::Arc::ptr_eq(registered, original))
+        {
+            return Err(ValidationError::new(ValidationReason::Registry, None));
+        }
+        validator.source_resource_context = SourceResourceValidationContext::OriginalTemplate {
+            resource: original.id,
+            answer,
+        };
+        let capacity = validator.type_work_limit;
+        let prefix = capacity - work.remaining().min(capacity);
+        validator.type_work.set(prefix);
+        let result = (|| {
+            if let Some(admitted) = &self.admitted {
+                validator.charge_type_work(1 + sources.len() + module_sources.len())?;
+                if !std::sync::Arc::ptr_eq(&admitted.registry, &program.registry)
+                    || admitted.sources.len() != sources.len()
+                    || admitted.modules.len() != module_sources.len()
+                    || sources.iter().any(|source| {
+                        admitted
+                            .sources
+                            .get(&source.id())
+                            .is_none_or(|old| !std::ptr::eq(*old, *source))
+                    })
+                    || module_sources
+                        .iter()
+                        .any(|(module, source)| admitted.modules.get(module) != Some(source))
+                {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+                let same_globals = match (&admitted.globals, globals.is_empty()) {
+                    (None, true) => true,
+                    (Some(previous), false) => std::sync::Arc::ptr_eq(previous, globals),
+                    _ => false,
+                };
+                // Scheme kinds may participate in contextual kind checks. Reuse
+                // only the same retained immutable loan context; a changed
+                // context receives complete fresh registry authentication.
+                validator.charge_type_work(1)?;
+                if same_globals
+                    && validator.unused_ordering_still_unused(&admitted.unused_ordering)?
+                {
+                    validator.charge_type_work(admitted.abstract_nominals.len())?;
+                    let mut inventory = validator.authenticated_abstract_nominals.borrow_mut();
+                    inventory
+                        .try_reserve(admitted.abstract_nominals.len())
+                        .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                    inventory.extend(admitted.abstract_nominals.iter().copied());
+                    drop(inventory);
+                    let native = AuthenticatedNativeRegistry {
+                        registry: &program.registry,
+                    };
+                    return validator.run_effect_with_registry(&admitted.parameters, &native);
+                }
+            }
+            // No completed unused-order proof may survive a changed semantic
+            // footprint or scheme context, including a failed fresh admission.
+            self.admitted = None;
+            {
+                let (parameters, native) = validator.authenticate_effect_registry_phase()?;
+                validator.run_effect_with_registry(&parameters, &native)?;
+                validator.charge_type_work(1 + sources.len())?;
+                let mut source_objects = HashMap::new();
+                source_objects
+                    .try_reserve(sources.len())
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                for source in sources {
+                    // Compare addresses only; this receipt never dereferences
+                    // them. Immutable SourceFile IDs additionally prevent a
+                    // moved or replaced source object from granting authority.
+                    source_objects.insert(source.id(), *source as *const SourceFile);
+                }
+                self.admitted = Some(OriginalTemplateRegistryAdmission {
+                    globals: (!globals.is_empty()).then(|| std::sync::Arc::clone(globals)),
+                    registry: std::sync::Arc::clone(&program.registry),
+                    sources: source_objects,
+                    modules: validator
+                        .module_sources
+                        .take()
+                        .expect("original template admission has a complete module relation"),
+                    parameters,
+                    abstract_nominals: validator.authenticated_abstract_nominals.take(),
+                    unused_ordering: validator.unused_ordering.take(),
+                });
+                Ok(())
+            }
+        })();
+        work.charge(validator.type_work.get() - prefix)
+            .map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
+        result
+    }
 }
 
 #[cfg(test)]
@@ -3774,12 +4198,122 @@ impl AuthenticatedCaptureLayouts<'_> {
     }
 }
 
+/// Borrowed admission for one independent Effect validation phase. The only
+/// construction site follows complete registry and native correspondence checks.
+struct AuthenticatedNativeRegistry<'registry> {
+    registry: &'registry crate::resolved::ResolvedRegistry,
+}
+
+impl AuthenticatedNativeRegistry<'_> {
+    fn authenticates(
+        &self,
+        registry: &crate::resolved::ResolvedRegistry,
+        interpretation: &super::effect::NativeInterpretation,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ()> {
+        work.charge(4)?;
+        if !std::ptr::eq(self.registry, registry) {
+            return Ok(false);
+        }
+        let symbol = interpretation.symbol();
+        let instance = interpretation.effect();
+        let Some(registered) = self.registry.native_symbol(symbol.operation()) else {
+            return Ok(false);
+        };
+        let Some(declaration) = self.registry.effect(instance.effect()) else {
+            return Ok(false);
+        };
+        let [operation] = declaration.operations.as_ref() else {
+            return Ok(false);
+        };
+        Ok(std::sync::Arc::ptr_eq(registered, symbol)
+            && declaration
+                .native_contract
+                .as_ref()
+                .is_some_and(|original| std::sync::Arc::ptr_eq(original, symbol))
+            && instance.effect() == symbol.effect()
+            && operation.id == symbol.operation()
+            && symbol.operation() == OperationId::new(instance.effect(), 0))
+    }
+}
+
+// Reuse the registry source-order merge pattern with a fallible complete-effect
+// comparator. Only scalar indices move; the retained metadata keeps source order.
+fn native_interpretations_are_unique(
+    interpretations: &[super::effect::NativeInterpretation],
+    work: &mut TypeWorkBudget,
+) -> Result<bool, ()> {
+    let count = interpretations.len();
+    if count < 2 {
+        return Ok(true);
+    }
+    work.charge(count)?;
+    let mut order = Vec::new();
+    order.try_reserve_exact(count).map_err(|_| ())?;
+    order.extend(0..count);
+    work.charge(count)?;
+    let mut scratch = Vec::new();
+    scratch.try_reserve_exact(count).map_err(|_| ())?;
+    scratch.resize(count, 0usize);
+    let mut width = 1usize;
+    while width < count {
+        work.charge(1)?;
+        let mut start = 0usize;
+        while start < count {
+            work.charge(3)?;
+            let middle = start.saturating_add(width).min(count);
+            let end = middle.saturating_add(width).min(count);
+            let (mut left, mut right) = (start, middle);
+            for target in &mut scratch[start..end] {
+                work.charge(1)?;
+                let take_left = if left == middle {
+                    false
+                } else if right == end {
+                    true
+                } else {
+                    crate::types::compare_effect_instances_with_budget(
+                        interpretations[order[left]].effect(),
+                        interpretations[order[right]].effect(),
+                        work,
+                    )? != std::cmp::Ordering::Greater
+                };
+                *target = if take_left {
+                    let index = order[left];
+                    left += 1;
+                    index
+                } else {
+                    let index = order[right];
+                    right += 1;
+                    index
+                };
+            }
+            start = end;
+        }
+        std::mem::swap(&mut order, &mut scratch);
+        width = width.saturating_mul(2);
+    }
+    for pair in order.windows(2) {
+        work.charge(1)?;
+        if crate::types::compare_effect_instances_with_budget(
+            interpretations[pair[0]].effect(),
+            interpretations[pair[1]].effect(),
+            work,
+        )? == std::cmp::Ordering::Equal
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily> {
     program: &'program UnvalidatedCoreProgram<F>,
     sources: HashMap<SourceId, &'source SourceFile>,
     module_sources: Option<HashMap<ModuleId, SourceId>>,
     contextual_registry: Option<&'program crate::resolved::ResolvedRegistry>,
     contextual_native_authentication: Option<&'program crate::foreign::NativeAuthenticationSession>,
+    source_original_provider:
+        Option<&'program crate::elaborate::provider::SourceOriginalProviderContext<'program>>,
     binders: HashMap<BinderId, &'program TypedBinder>,
     provider_external_types: Option<&'program HashMap<BinderId, crate::types::IterativeTypeOwner>>,
     provider_method_evidence:
@@ -3787,7 +4321,11 @@ struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily
     provider_state_accesses:
         Option<&'program super::provider::AuthenticatedProviderStateAccesses<'program>>,
     provider_handler_entry: Option<&'program super::provider::HandlerFragmentEntry<'program>>,
+    source_handler_graph: Option<&'program super::source_resource::SourceHandlerGraph<'program>>,
     provider_fragment_locals: Option<&'program [crate::types::NominalTypeId]>,
+    source_resource_context: SourceResourceValidationContext,
+    authenticated_abstract_nominals: std::cell::RefCell<HashSet<crate::types::NominalTypeId>>,
+    unused_ordering: std::cell::RefCell<HashSet<crate::types::TypeVariableId>>,
     type_work: Cell<usize>,
     capture_layouts: std::cell::RefCell<Vec<(usize, crate::foreign::ForeignLayoutProducer)>>,
     type_work_limit: usize,
@@ -3797,6 +4335,15 @@ struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily
     newtype_conversion_parameter_work: Cell<usize>,
     #[cfg(test)]
     type_validation_pending_peak: Cell<usize>,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum SourceResourceValidationContext {
+    FinalProgram,
+    OriginalTemplate {
+        resource: crate::resolved::ResourceDefinitionId,
+        answer: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -3821,6 +4368,16 @@ pub(super) trait ScopeFamily: CoreOperationFamily {
     fn provider_scope(_kind: &Self::Kind) -> Option<&super::provider::ProviderScopeNode> {
         None
     }
+    fn source_scope(
+        _kind: &Self::Kind,
+    ) -> Option<&super::source_resource::SourceResourceScopeNode> {
+        None
+    }
+
+    fn copy_window(_kind: &Self::Kind) -> Option<&super::source_window::SourceCopyWindowNode> {
+        None
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn authenticate_provider_family_use(
         _program: &UnvalidatedCoreProgram<Self>,
@@ -3921,6 +4478,22 @@ impl ScopeFamily for super::effect::EffectOperationFamily {
         match kind {
             super::effect::EffectExprKind::Operation(
                 super::effect::EffectOperation::ProviderScope(scope),
+            ) => Some(scope),
+            _ => None,
+        }
+    }
+    fn source_scope(kind: &Self::Kind) -> Option<&super::source_resource::SourceResourceScopeNode> {
+        match kind {
+            super::effect::EffectExprKind::Operation(
+                super::effect::EffectOperation::SourceResourceScope(scope),
+            ) => Some(scope),
+            _ => None,
+        }
+    }
+    fn copy_window(kind: &Self::Kind) -> Option<&super::source_window::SourceCopyWindowNode> {
+        match kind {
+            super::effect::EffectExprKind::Operation(
+                super::effect::EffectOperation::SourceCopyWindow(scope),
             ) => Some(scope),
             _ => None,
         }
@@ -4045,6 +4618,9 @@ impl ScopeFamily for super::effect::EffectOperationFamily {
                     .and_then(|clause| scope.clause_member_at(clause))
                     .map(|(_, handler, clause)| (handler.id(), clause.resume()));
             }
+            super::effect::EffectExprKind::Operation(
+                super::effect::EffectOperation::SourceResourceScope(scope),
+            ) => (&scope.handler, 4),
             _ => return None,
         };
         child
@@ -4088,6 +4664,28 @@ impl ScopeFamily for super::effect::EffectOperationFamily {
                 }
                 return;
             }
+            super::effect::EffectExprKind::Operation(
+                super::effect::EffectOperation::SourceResourceScope(scope),
+            ) => {
+                match child {
+                    1 => visit(scope.acquire.parameter.id()),
+                    2 => visit(scope.finish.parameter.id()),
+                    3 => visit(scope.handle.id()),
+                    4.. => {
+                        visit(scope.handler_state.id());
+                        for binder in scope.handler_pattern.binder_iter() {
+                            visit(binder.id());
+                        }
+                        if let Some(clause) = scope.handler.clauses().get(child - 4) {
+                            for binder in clause.pattern().binder_iter() {
+                                visit(binder.id());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                return;
+            }
             _ => return,
         };
         if let Some(clause) = child
@@ -4112,12 +4710,17 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             module_sources: None,
             contextual_registry: None,
             contextual_native_authentication: None,
+            source_original_provider: None,
             binders: HashMap::new(),
             provider_external_types: None,
             provider_method_evidence: None,
             provider_state_accesses: None,
             provider_handler_entry: None,
+            source_handler_graph: None,
             provider_fragment_locals: None,
+            source_resource_context: SourceResourceValidationContext::FinalProgram,
+            authenticated_abstract_nominals: std::cell::RefCell::new(HashSet::new()),
+            unused_ordering: std::cell::RefCell::new(HashSet::new()),
             type_work: Cell::new(0),
             capture_layouts: std::cell::RefCell::new(Vec::new()),
             type_work_limit: core_validation_type_work_limit(),
@@ -4217,7 +4820,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             &authenticated_method_evidence,
         )?;
         self.validate_scopes()?;
-        self.validate_type_scopes()
+        self.validate_type_scopes()?;
+        self.reject_pure_byte_applications()
     }
 
     fn validate_method_evidence_type_owners(
@@ -4978,8 +5582,19 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             Ok(())
         };
 
+        let source_sealed = |interface| -> Result<bool, ValidationError> {
+            for header in self.program.registry.source_resource_facts() {
+                self.charge_type_work(1)?;
+                if header.provider.interface.id == interface {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        };
         for owner in catalog.implementation_owners() {
-            if owner.application.interface().module().is_builtin_resource() {
+            if owner.application.interface().module().is_builtin_resource()
+                || source_sealed(owner.application.interface())?
+            {
                 return Err(ValidationError::new(ValidationReason::NodeType, None));
             }
             validate_application(
@@ -4996,6 +5611,14 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         }
         self.charge_type_work(catalog.lexical_owners().len())?;
         for owner in catalog.lexical_owners() {
+            if source_sealed(owner.application.interface())?
+                && !matches!(
+                    owner.resource,
+                    Some(super::dialect::MethodEvidenceResourceOwner::Provider(_))
+                )
+            {
+                return Err(ValidationError::new(ValidationReason::NodeType, None));
+            }
             if owner.application.interface().module().is_builtin_resource() {
                 let acquisition = owner
                     .resource
@@ -5042,26 +5665,45 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 let mut found = false;
                 for node in &self.program.nodes {
                     self.charge_type_work(1)?;
-                    let Some(scope) = F::provider_scope(&node.kind) else {
-                        continue;
-                    };
-                    if scope.lexical != owner.source {
+                    let (definition, family, identity, arguments, lexical, forwardings) =
+                        if let Some(scope) = F::provider_scope(&node.kind) {
+                            let descriptor = scope.descriptor();
+                            (
+                                descriptor.definition().id,
+                                descriptor.definition().family,
+                                descriptor.identity(),
+                                descriptor.arguments(),
+                                scope.lexical,
+                                &*scope.forwardings,
+                            )
+                        } else if let Some(scope) = F::source_scope(&node.kind) {
+                            (
+                                scope.header().original.id,
+                                scope.header().original.family,
+                                scope.identity(),
+                                scope.arguments(),
+                                scope.lexical,
+                                &*scope.forwardings,
+                            )
+                        } else {
+                            continue;
+                        };
+                    if lexical != owner.source {
                         continue;
                     }
-                    let descriptor = scope.descriptor();
-                    self.charge_type_work(scope.forwardings.len())?;
+                    self.charge_type_work(forwardings.len())?;
                     if found
-                        || evidence.definition != descriptor.definition().id
-                        || evidence.family != descriptor.definition().family
-                        || evidence.identity != descriptor.identity()
-                        || evidence.arguments.len() != descriptor.arguments().len()
-                        || !scope.forwardings.iter().any(|method| {
+                        || evidence.definition != definition
+                        || evidence.family != family
+                        || evidence.identity != identity
+                        || evidence.arguments.len() != arguments.len()
+                        || !forwardings.iter().any(|method| {
                             method.method == owner.method && method.binder == owner.binder
                         })
                     {
                         return Err(ValidationError::new(ValidationReason::NodeType, None));
                     }
-                    for (left, right) in evidence.arguments.iter().zip(descriptor.arguments()) {
+                    for (left, right) in evidence.arguments.iter().zip(arguments) {
                         let mut budget = TypeWorkBudget::with_limit(
                             self.type_work_limit.saturating_sub(self.type_work.get()),
                         );
@@ -5270,7 +5912,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
                     pending.extend(elements);
                 }
-                Type::ResourceApply(_, arguments) => {
+                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                     self.schedule_owner_type_scan_children(&mut pending, arguments, None, false)?;
                 }
                 Type::Bytes
@@ -5938,6 +6580,22 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         id: crate::types::TypeVariableId,
     ) -> Result<bool, ValidationError> {
         let registry = &self.program.registry;
+        for fact in registry.source_resource_facts() {
+            self.charge_type_work(
+                fact.parameters
+                    .len()
+                    .checked_add(1)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?,
+            )?;
+            if fact
+                .parameters
+                .iter()
+                .chain(std::iter::once(&fact.answer))
+                .any(|parameter| parameter.id == id)
+            {
+                return Ok(true);
+            }
+        }
         self.charge_type_work(registry.provider_contract_count())?;
         for (_, certificate) in registry.provider_contracts() {
             self.charge_type_work(certificate.resource_count())?;
@@ -5967,6 +6625,12 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     ) -> Result<bool, ValidationError> {
         for node in &self.program.nodes {
             self.charge_type_work(1)?;
+            if F::copy_window(&node.kind).is_some_and(|scope| scope.identity() == id) {
+                return Ok(true);
+            }
+            if F::source_scope(&node.kind).is_some_and(|scope| scope.identity() == id) {
+                return Ok(true);
+            }
             if let Some(scope) = F::provider_scope(&node.kind)
                 && let Some(admitted) = scope.descriptor.admitted_arc()
                 && admitted.identity() == id
@@ -6583,7 +7247,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         return Ok(true);
                     }
                 }
-                Type::ResourceApply(_, arguments) => {
+                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                     if self.schedule_owner_type_scan_children(
                         &mut pending,
                         arguments,
@@ -7902,6 +8566,14 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     }
 
     fn validate_registry(&self) -> Result<RegistryParameterOwners, ValidationError> {
+        self.validate_registry_with_original_provenance(None)
+    }
+
+    fn validate_registry_with_original_provenance(
+        &self,
+        original: Option<&source_declarations::OriginalDeclarationProvenance>,
+    ) -> Result<RegistryParameterOwners, ValidationError> {
+        self.validate_scalar_preflight_registry()?;
         if let Some(canonical) = self.contextual_registry {
             let mut work = TypeWorkBudget::with_limit(
                 self.type_work_limit.saturating_sub(self.type_work.get()),
@@ -7928,7 +8600,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             }
         }
         if self.module_sources.is_some() {
-            return self.validate_module_registry();
+            return self.validate_module_registry(original);
         }
         if self.program.registry.has_provider_contracts() {
             return Err(ValidationError::new(ValidationReason::Registry, None));
@@ -8167,6 +8839,40 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         Ok(parameter_owners)
     }
 
+    fn validate_scalar_preflight_registry(&self) -> Result<(), ValidationError> {
+        let registry = &self.program.registry;
+        for (function, fact) in registry.scalar_preflights() {
+            self.charge_type_work(1)?;
+            if function != fact.function()
+                || registry
+                    .scalar_preflight(fact.function())
+                    .is_none_or(|indexed| !std::sync::Arc::ptr_eq(indexed, fact))
+                || fact.function().module() != Some(fact.module())
+                || self.module_sources.as_ref().is_some_and(|sources| {
+                    sources.get(&fact.module()).copied() != Some(fact.source().source())
+                })
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+            let mut work = TypeWorkBudget::with_limit(
+                self.type_work_limit.saturating_sub(self.type_work.get()),
+            );
+            let result = fact.authenticate(registry, &mut work);
+            self.charge_type_work(work.used())?;
+            result.map_err(|failure| {
+                ValidationError::new(
+                    if failure.is_resource_exhaustion() {
+                        ValidationReason::Resource
+                    } else {
+                        ValidationReason::Registry
+                    },
+                    None,
+                )
+            })?;
+        }
+        Ok(())
+    }
+
     fn validate_global_parameter_rows(
         &self,
         nominal_parameter_owners: &RegistryParameterOwners,
@@ -8252,7 +8958,11 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         ))
     }
 
-    fn validate_module_registry(&self) -> Result<RegistryParameterOwners, ValidationError> {
+    fn validate_module_registry(
+        &self,
+        original: Option<&source_declarations::OriginalDeclarationProvenance>,
+    ) -> Result<RegistryParameterOwners, ValidationError> {
+        let generatives = original.map(|original| &original.generatives);
         let registry = &self.program.registry;
         let relation = self
             .module_sources
@@ -8260,7 +8970,18 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             .expect("module registry validation requires an explicit relation");
         let mut contract_work =
             TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
-        let contract_result = registry.authenticate_provider_contracts(&mut contract_work);
+        let contract_result = if let Some(original) = self.source_original_provider {
+            if !matches!(self.source_resource_context,
+                SourceResourceValidationContext::OriginalTemplate { resource, .. }
+                    if resource.module() == original.module())
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+            registry.authenticate_source_original_provider_contracts(original, &mut contract_work)
+        } else {
+            registry.authenticate_provider_contracts(&mut contract_work)
+        };
+        let authenticated_abstract_inventory = contract_result.is_ok();
         self.charge_type_work(contract_work.used())?;
         // Contextual provider checking has its separately admitted defining
         // registry. Ordinary linked Core must authenticate the complete
@@ -8288,21 +9009,108 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 }
             }
         }
+        // Source owner declarations have no constructor and retain their own
+        // original source position. Authenticate their original prepared
+        // declaration before treating them as a distinct nominal category.
+        self.charge_type_work(registry.source_foreign_nominal_count())?;
+        let mut source_owners = HashSet::new();
+        let mut source_owner_parameters = HashSet::new();
+        source_owners
+            .try_reserve(registry.source_foreign_nominal_count())
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+        for (prepared, owner_index, nominal, parameters) in
+            registry.source_foreign_nominal_candidates()
+        {
+            if registry.nominal(nominal).is_none() {
+                // Imported opaque candidates have no defining nominal record here.
+                // The complete provider-contract proof authenticates their exact
+                // passive original owner category above.
+                continue;
+            }
+            let mut owner_work = TypeWorkBudget::with_limit(
+                self.type_work_limit.saturating_sub(self.type_work.get()),
+            );
+            let result =
+                crate::foreign::source_access::authenticate_source_foreign_nominal_candidate(
+                    prepared,
+                    owner_index,
+                    nominal,
+                    parameters,
+                    registry,
+                    &mut owner_work,
+                );
+            self.charge_type_work(owner_work.used())?;
+            result.map_err(|error| {
+                ValidationError::new(
+                    if matches!(
+                        error.reason(),
+                        crate::foreign::checked_source::ForeignAdmissionReason::WorkExhausted
+                            | crate::foreign::checked_source::ForeignAdmissionReason::StorageRefused
+                    ) {
+                        ValidationReason::Resource
+                    } else {
+                        ValidationReason::Registry
+                    },
+                    None,
+                )
+            })?;
+            if !source_owners.insert(nominal) {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+            self.charge_type_work(parameters.len())?;
+            source_owner_parameters
+                .try_reserve(parameters.len())
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+            for parameter in parameters {
+                if !source_owner_parameters.insert(parameter.id) {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+            }
+        }
+        // Complete registry category authentication above covers every abstract
+        // resource family and native-backed common opaque role. Their exact
+        // reserved declaration slots precede some materialized nominal records.
+        let mut nonmaterialized_nominals = HashSet::new();
+        self.charge_type_work(registry.abstract_nominal_kind_count())?;
+        nonmaterialized_nominals
+            .try_reserve(registry.abstract_nominal_kind_count())
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+        for (id, _, _) in registry.abstract_nominal_kind_entries() {
+            if !nonmaterialized_nominals.insert(id) {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+        }
+        // Transfer only the exact inventory covered by the successful original
+        // category proof. Payload and kind checks consume the same paid IDs;
+        // the existence of an arbitrary Frozen record supplies no authority.
+        if authenticated_abstract_inventory {
+            *self.authenticated_abstract_nominals.borrow_mut() = nonmaterialized_nominals;
+        }
+        let nonmaterialized_nominals = self.authenticated_abstract_nominals.borrow();
         let mut nominal_ids = HashSet::new();
         let mut nominal_names = HashMap::<ModuleId, HashSet<&str>>::new();
         let mut next_nominal = HashMap::<ModuleId, u32>::new();
         let mut previous_nominal_end = HashMap::new();
 
-        // Canonical closure retention order need not be source declaration
-        // order. Independently check ranges in source order without relaxing
-        // ordinary registry ordering or the canonical metadata comparison.
+        // A retained source-template closure follows dependency retention
+        // order. Reconstruct its defining declaration order; source foreign
+        // owner slots can follow data slots despite an earlier source span.
+        // Every exact ID and non-owner source range remains checked below.
+        let source_original = matches!(
+            self.source_resource_context,
+            SourceResourceValidationContext::OriginalTemplate { .. }
+        );
         let nominals = registry_source_order(
             registry.nominals(),
-            self.contextual_registry.is_some(),
+            self.contextual_registry.is_some() || source_original,
             |nominal| {
                 Ok((
                     nominal.id.module(),
-                    self.registry_source_start(&nominal.origin)?,
+                    if source_original {
+                        nominal.id.declaration()
+                    } else {
+                        self.registry_source_start(&nominal.origin)?
+                    },
                 ))
             },
             |amount| self.charge_type_work(amount),
@@ -8322,6 +9130,14 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             };
             let expected = next_nominal.entry(module).or_insert(0);
+            while nonmaterialized_nominals
+                .contains(&crate::types::NominalTypeId::new(module, *expected))
+            {
+                self.charge_type_work(1)?;
+                *expected = expected
+                    .checked_add(1)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+            }
             if registry.has_provider_contracts() {
                 while matches!(
                     registry.nominal_kind(crate::types::NominalTypeId::new(module, *expected)),
@@ -8335,26 +9151,91 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             }
             let nominal_span = nominal.origin.primary_span();
             let nominal_range = nominal_span.range();
+            if let Some(original) = original {
+                self.charge_type_work(1)?;
+                let (defining_position, defining_origin) = original
+                    .nominal_positions
+                    .get(&nominal.id)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+                if *defining_origin != nominal_span {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+                // The paid original-source walk derives the position before
+                // this registry check. A selected import can omit preceding
+                // declarations; it cannot renumber the retained declaration.
+                if *defining_position > *expected {
+                    *expected = *defining_position;
+                }
+            }
             let names = nominal_names.entry(module).or_default();
             if self.contextual_registry.is_none() && nominal.id.declaration() != *expected
                 || nominal_span.source() != source
                 || !origin_depth_within_limit(&nominal.origin)
-                || nominal.constructors.is_empty()
+                || nominal.constructors.is_empty() && !source_owners.contains(&nominal.id)
                 || !valid_upper_spelling(&nominal.spelling)
                 || !nominal_ids.insert(nominal.id)
                 || !names.insert(nominal.spelling.as_str())
                 || nominal_range.start() >= nominal_range.end()
-                || previous_nominal_end
-                    .get(&module)
-                    .is_some_and(|previous| nominal_range.start() < *previous)
+                || !source_owners.contains(&nominal.id)
+                    && previous_nominal_end
+                        .get(&module)
+                        .is_some_and(|previous| nominal_range.start() < *previous)
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
             *expected = expected
                 .checked_add(1)
                 .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
-            previous_nominal_end.insert(module, nominal_range.end());
+            if !source_owners.contains(&nominal.id) {
+                previous_nominal_end.insert(module, nominal_range.end());
+            }
             self.validate_origin(&nominal.origin, self.program.root)?;
+        }
+
+        // Lexical window binders are allocated while resolving phase bodies,
+        // after declaration parameters. Retain their exact declaration category
+        // without placing a dormant sibling binder in this graph's scope.
+        let mut source_window_parameters = HashSet::new();
+        for fact in registry.source_resource_facts() {
+            self.charge_type_work(
+                fact.windows
+                    .len()
+                    .checked_mul(2)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?,
+            )?;
+            source_window_parameters
+                .try_reserve(fact.windows.len())
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+            for declaration in &fact.windows {
+                let parameter = registry
+                    .type_variable(declaration.identity)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+                self.charge_type_work(
+                    registry
+                        .source_foreign_nominal_count()
+                        .checked_add(fact.parameters.len())
+                        .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?,
+                )?;
+                if declaration.identity.module() != Some(fact.id.module())
+                    || parameter.kind != Kind::Type
+                    || parameter.origin.primary_span() != declaration.identity_span
+                    || declaration.span.source() != declaration.identity_span.source()
+                    || declaration.span.range().start() > declaration.identity_span.range().start()
+                    || declaration.span.range().end() < declaration.identity_span.range().end()
+                    || !registry
+                        .source_accesses()
+                        .any(|family| family.nominal() == declaration.family)
+                    || fact
+                        .parameters
+                        .iter()
+                        .any(|formal| formal.id == declaration.identity)
+                    || fact.answer.id == declaration.identity
+                    || !source_window_parameters.insert(declaration.identity)
+                {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+                self.validate_span(declaration.span, self.program.root)?;
+            }
         }
 
         let owner_parameter_count =
@@ -8391,7 +9272,11 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             let parameter_range = parameter_span.range();
             self.charge_type_work(1)?;
             let contextual = self.is_lexical_source_parameter(parameter.id)?
-                || self.is_provider_declaration_parameter(parameter.id)?;
+                || self.is_provider_declaration_parameter(parameter.id)?
+                || source_owner_parameters.contains(&parameter.id)
+                || source_window_parameters.contains(&parameter.id)
+                || generatives.is_some_and(|original| original.contains(&parameter.id))
+                || original.is_some() && self.unused_ordering.borrow().contains(&parameter.id);
             if self.contextual_registry.is_none() && parameter.id.local() != *expected
                 || parameter_span.source() != source
                 || !origin_depth_within_limit(&parameter.origin)
@@ -8461,7 +9346,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let mut previous_constructor_start = HashMap::new();
         let constructors = registry_source_order(
             registry.constructors(),
-            self.contextual_registry.is_some(),
+            self.contextual_registry.is_some() || source_original,
             |constructor| {
                 Ok((
                     constructor.owner.module(),
@@ -8577,8 +9462,84 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 }
             }
         }
+        for fact in registry.source_resource_facts() {
+            self.charge_type_work(
+                fact.parameters
+                    .len()
+                    .checked_add(1)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?,
+            )?;
+            parameter_owners
+                .try_reserve(fact.parameters.len() + 1)
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+            for parameter in fact.parameters.iter().chain(std::iter::once(&fact.answer)) {
+                let canonical = registry
+                    .type_variable(parameter.id)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+                if !self.same_registry_type_variable(canonical, parameter)?
+                    || parameter_owners
+                        .insert(
+                            parameter.id,
+                            RegistryParameterOwner::ProviderDeclaration(fact.id),
+                        )
+                        .is_some()
+                {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+            }
+        }
         self.validate_lexical_registry(&mut parameter_owners, None)?;
         self.validate_global_parameter_rows(&parameter_owners)?;
+        if let Some(generatives) = generatives {
+            self.charge_type_work(generatives.len())?;
+            if generatives
+                .iter()
+                .any(|id| parameter_owners.contains_key(id))
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+            let mut owner_work = TypeWorkBudget::with_limit(
+                self.type_work_limit.saturating_sub(self.type_work.get()),
+            );
+            let disjoint = registry
+                .source_parameters_disjoint_from_private_formals(generatives, &mut owner_work);
+            self.charge_type_work(owner_work.used())?;
+            if !disjoint.map_err(|()| ValidationError::new(ValidationReason::Resource, None))? {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+            for row in registry.global_parameter_rows() {
+                self.charge_type_work(
+                    row.parameters()
+                        .len()
+                        .checked_add(1)
+                        .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?,
+                )?;
+                if row.parameters().iter().any(|id| generatives.contains(id)) {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+            }
+            for method in self.program.method_evidence.methods() {
+                self.charge_type_work(
+                    method
+                        .parameters
+                        .len()
+                        .checked_add(method.interface_parameters.len())
+                        .and_then(|count| count.checked_add(1))
+                        .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?,
+                )?;
+                if method
+                    .parameters
+                    .iter()
+                    .any(|(id, _)| generatives.contains(id))
+                    || method
+                        .interface_parameters
+                        .iter()
+                        .any(|id| generatives.contains(id))
+                {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+            }
+        }
         Ok(parameter_owners)
     }
 
@@ -8759,7 +9720,16 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         next_declaration
             .try_reserve(self.program.registry.effects().len())
             .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
-        for effect in self.program.registry.effects() {
+        let effects = registry_source_order(
+            self.program.registry.effects(),
+            matches!(
+                self.source_resource_context,
+                SourceResourceValidationContext::OriginalTemplate { .. }
+            ),
+            |effect| Ok((effect.id.module(), effect.id.declaration())),
+            |amount| self.charge_type_work(amount),
+        )?;
+        for effect in effects {
             self.charge_type_work(
                 effect
                     .parameters
@@ -8976,6 +9946,26 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 }
 
                 (
+                    Type::ForeignOwnerApply(id, arguments),
+                    ResolvedTypeProvenanceNode::ForeignOwner {
+                        nominal: resource,
+                        arguments: roots,
+                        ..
+                    },
+                ) if id == resource && arguments.len() == roots.len() => {
+                    self.charge_type_work(arguments.len())?;
+                    work.try_reserve(arguments.len())
+                        .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                    work.extend(
+                        arguments
+                            .iter()
+                            .zip(roots.iter().copied())
+                            .rev()
+                            .map(|(argument, index)| (Payload::Argument(argument), index, span)),
+                    );
+                }
+
+                (
                     Type::Bytes
                     | Type::String
                     | Type::Int
@@ -9073,6 +10063,18 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         }
         Ok(visited.len() == nodes.len())
     }
+    fn authenticated_abstract_nominal(
+        &self,
+        id: crate::types::NominalTypeId,
+    ) -> Result<bool, ValidationError> {
+        let inventory = self.authenticated_abstract_nominals.borrow();
+        if inventory.is_empty() {
+            return Ok(false);
+        }
+        self.charge_type_work(1)?;
+        Ok(inventory.contains(&id))
+    }
+
     fn valid_type(&self, root: Option<&Type>) -> Result<bool, ValidationError> {
         self.valid_type_with_scheme(root, true)
     }
@@ -9112,6 +10114,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                                 && !((self.contextual_registry.is_some()
                                     || self.program.registry.has_provider_contracts())
                                     && self.program.registry.nominal_kind(*id).is_some())
+                                && !self.authenticated_abstract_nominal(*id)?
                             {
                                 return Ok(false);
                             }
@@ -9154,7 +10157,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             work.push(Task::Visit(codomain, false, child_depth, 0));
                             work.push(Task::Visit(domain, false, child_depth, 0));
                         }
-                        Type::ResourceApply(_, arguments) => {
+                        Type::ResourceApply(_, arguments)
+                        | Type::ForeignOwnerApply(_, arguments) => {
                             work.try_reserve(1).map_err(|_| {
                                 ValidationError::new(ValidationReason::Resource, None)
                             })?;
@@ -9257,6 +10261,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         && !((self.contextual_registry.is_some()
                             || self.program.registry.has_provider_contracts())
                             && self.program.registry.nominal_kind(*id).is_some())
+                        && !self.authenticated_abstract_nominal(*id)?
                     {
                         return Ok(false);
                     }
@@ -9276,7 +10281,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     work.push(Task::Sequence(elements.iter(), depth.saturating_add(1)));
                 }
                 Type::Tuple(_) => return Ok(false),
-                Type::ResourceApply(_, arguments) => {
+                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                     let child_depth = depth.saturating_add(1);
                     crate::types::visit_owner_type_children_with_charge(
                         arguments.iter(),
@@ -9822,48 +10827,463 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         }
     }
 
+    // Keep row-only admission scratch off the primitive-kind validation stack.
+    #[inline(never)]
+    fn validate_owner_row_header(
+        &self,
+        row: &EffectRow,
+        variable_kinds: MonotypeVariableKinds<'_, '_>,
+        role: OwnerValidationRole,
+        node: Option<NodeId>,
+    ) -> Result<(), ValidationError> {
+        let resource = || ValidationError::new(ValidationReason::Resource, None);
+        self.charge_type_work(row.known().len())?;
+        if let Some(tail) = row.tail() {
+            self.charge_type_work(tail.lacks().len().checked_add(1).ok_or_else(resource)?)?;
+            match tail.variable() {
+                crate::types::EffectRowVariable::Inference(_) => match role {
+                    OwnerValidationRole::KindOnly => {
+                        // No-node kind output confers no final row authority.
+                        if !matches!(variable_kinds, MonotypeVariableKinds::Core(_)) {
+                            return Err(ValidationError::new(ValidationReason::Registry, None));
+                        }
+                    }
+                    OwnerValidationRole::FinalRows(node) => {
+                        if !self.conditional_row_position(row, node)? {
+                            return Err(ValidationError::with_cause(
+                                ValidationCause::UnresolvedCoreRow,
+                                Some(node),
+                            ));
+                        }
+                    }
+                },
+                crate::types::EffectRowVariable::Rigid(identity) => {
+                    // An exclusion cannot depend on its own row through
+                    // a nested exact-owner argument: that would introduce
+                    // a recursive lacks constraint in final Core.
+                    for excluded in tail.lacks() {
+                        let mut dependencies = HashSet::new();
+                        for argument in excluded.arguments() {
+                            self.collect_owner_argument_type_variables(
+                                argument,
+                                &mut dependencies,
+                            )?;
+                        }
+                        if dependencies.contains(&identity) {
+                            return Err(ValidationError::with_cause(
+                                ValidationCause::UnprovedRowLacks,
+                                node,
+                            ));
+                        }
+                    }
+                    let kind = match variable_kinds {
+                        MonotypeVariableKinds::Core(type_binders) => match identity {
+                            crate::types::TypeVariableId::Resolved { .. } => {
+                                if let Some(parameter) =
+                                    self.program.registry.type_variable(identity)
+                                {
+                                    Some(&parameter.kind)
+                                } else {
+                                    self.provider_external_parameter_kind(identity)?
+                                }
+                            }
+                            crate::types::TypeVariableId::Generated(_) => {
+                                type_binders.get(&identity).map(|(kind, _)| *kind)
+                            }
+                        },
+                        MonotypeVariableKinds::CatalogOwner(parameters) => {
+                            self.charge_type_work(parameters.len())?;
+                            let mut found = None;
+                            for (parameter, kind) in parameters {
+                                if *parameter == identity {
+                                    if found.is_some() {
+                                        return Err(ValidationError::new(
+                                            ValidationReason::Registry,
+                                            node,
+                                        ));
+                                    }
+                                    found = Some(kind);
+                                }
+                            }
+                            found
+                        }
+                        MonotypeVariableKinds::Registry {
+                            owner,
+                            parameter_owners,
+                        } => {
+                            if parameter_owners.get(&identity)
+                                != Some(&RegistryParameterOwner::Nominal(owner))
+                                && !owner.is_lexical()
+                            {
+                                return Err(ValidationError::new(ValidationReason::Registry, node));
+                            }
+                            self.program
+                                .registry
+                                .type_variable(identity)
+                                .map(|parameter| &parameter.kind)
+                        }
+                    };
+                    let kind = kind.ok_or_else(|| {
+                        ValidationError::with_cause(ValidationCause::UnknownCoreRowBinder, node)
+                    })?;
+                    if !matches!(kind, Kind::EffectRow) {
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::NonRowTailKind,
+                            node,
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn admitted_owner_kind(&self, kind: &Kind) -> Result<bool, ValidationError> {
+        let resource = || ValidationError::new(ValidationReason::Resource, None);
+        let mut pending = Vec::new();
+        self.charge_type_work(1)?;
+        pending.try_reserve(1).map_err(|_| resource())?;
+        pending.push((kind, true));
+        while let Some((kind, complete)) = pending.pop() {
+            match kind {
+                Kind::Type => {}
+                Kind::EffectRow if complete => {}
+                Kind::EffectRow => return Ok(false),
+                Kind::Arrow(domain, codomain) => {
+                    self.charge_type_work(2)?;
+                    pending.try_reserve(2).map_err(|_| resource())?;
+                    pending.push((codomain.as_ref(), false));
+                    pending.push((domain.as_ref(), false));
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    // Type visits share the existing worklists without retaining their scratch
+    // through row and completed-result validation.
+    #[inline(never)]
+    fn visit_owner_kind_type<'task>(
+        &'task self,
+        ty: &'task Type,
+        variable_kinds: MonotypeVariableKinds<'_, '_>,
+        node: Option<NodeId>,
+        work: &mut Vec<OwnerKindTask<'task>>,
+        completed: &mut Vec<Kind>,
+    ) -> Result<bool, ValidationError> {
+        use OwnerKindTask as Task;
+        let resource = || ValidationError::new(ValidationReason::Resource, None);
+        match ty {
+            Type::Bytes | Type::String | Type::Int | Type::Bool | Type::Unit => {
+                self.charge_type_work(1)?;
+                completed.try_reserve(1).map_err(|_| resource())?;
+                completed.push(Kind::Type);
+            }
+            Type::Nominal(identity) => {
+                self.charge_type_work(1)?;
+                let result = match self.program.registry.nominal_kind(*identity) {
+                    Some(crate::resolved::CanonicalNominalKind::Parameters {
+                        parameters, ..
+                    }) => {
+                        let mut result = Kind::Type;
+                        for parameter in parameters.iter().rev() {
+                            let domain = self.clone_kind_charged(&parameter.kind)?;
+                            self.charge_type_work(1)?;
+                            result = Kind::Arrow(Box::new(domain), Box::new(result));
+                        }
+                        result
+                    }
+                    Some(crate::resolved::CanonicalNominalKind::Frozen { kind, .. })
+                        if self.contextual_registry.is_some()
+                            || self.program.registry.has_provider_contracts()
+                            || self.authenticated_abstract_nominal(*identity)? =>
+                    {
+                        self.clone_kind_charged(kind)?
+                    }
+                    _ => {
+                        return Err(ValidationError::new(ValidationReason::Registry, None));
+                    }
+                };
+                completed.try_reserve(1).map_err(|_| resource())?;
+                completed.push(result);
+            }
+            Type::Variable(identity) => {
+                let kind = match variable_kinds {
+                    MonotypeVariableKinds::Registry {
+                        owner,
+                        parameter_owners,
+                    } => {
+                        if parameter_owners.get(identity)
+                            != Some(&RegistryParameterOwner::Nominal(owner))
+                            && !owner.is_lexical()
+                        {
+                            self.charge_type_work(1)?;
+
+                            return Err(ValidationError::new(ValidationReason::Registry, None));
+                        }
+                        let Some(parameter) = self.program.registry.type_variable(*identity) else {
+                            self.charge_type_work(1)?;
+
+                            return Err(ValidationError::new(ValidationReason::Registry, None));
+                        };
+                        &parameter.kind
+                    }
+                    MonotypeVariableKinds::CatalogOwner(parameters) => {
+                        self.charge_type_work(parameters.len())?;
+                        let mut found = None;
+                        for (parameter, kind) in parameters {
+                            if parameter == identity {
+                                if found.is_some() {
+                                    return Err(ValidationError::new(
+                                        ValidationReason::Registry,
+                                        None,
+                                    ));
+                                }
+                                found = Some(kind);
+                            }
+                        }
+                        found
+                            .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?
+                    }
+                    MonotypeVariableKinds::Core(type_binders) => match identity {
+                        crate::types::TypeVariableId::Resolved { .. } => {
+                            if let Some(parameter) = self.program.registry.type_variable(*identity)
+                            {
+                                &parameter.kind
+                            } else if let Some(kind) =
+                                self.provider_external_parameter_kind(*identity)?
+                            {
+                                kind
+                            } else {
+                                self.charge_type_work(1)?;
+
+                                return Err(ValidationError::new(ValidationReason::Registry, None));
+                            }
+                        }
+                        crate::types::TypeVariableId::Generated(_) => {
+                            if let Some((kind, _)) = type_binders.get(identity) {
+                                *kind
+                            } else if let Some(kind) =
+                                self.provider_external_parameter_kind(*identity)?
+                            {
+                                kind
+                            } else {
+                                self.charge_type_work(1)?;
+                                return Err(ValidationError::with_cause(
+                                    ValidationCause::MissingGeneratedTypeBinder,
+                                    None,
+                                ));
+                            }
+                        }
+                    },
+                };
+                let retained = self.clone_kind_charged(kind)?;
+                completed.try_reserve(1).map_err(|_| resource())?;
+                completed.push(retained);
+            }
+            Type::Inference(_) => {
+                self.charge_type_work(1)?;
+                return Err(match variable_kinds {
+                    MonotypeVariableKinds::Core(_) => {
+                        ValidationError::with_cause(ValidationCause::UnresolvedCoreInference, None)
+                    }
+                    MonotypeVariableKinds::Registry { .. }
+                    | MonotypeVariableKinds::CatalogOwner(_) => {
+                        ValidationError::new(ValidationReason::Registry, None)
+                    }
+                });
+            }
+            Type::Forall(_, _) => {
+                self.charge_type_work(1)?;
+                return Ok(false);
+            }
+            Type::Tuple(elements) => {
+                self.charge_type_work(1)?;
+                work.try_reserve(2).map_err(|_| resource())?;
+                work.push(Task::FinishTuple(elements.len()));
+                work.push(Task::Sequence(elements.iter()));
+            }
+            Type::Application(function, argument) => {
+                self.charge_type_work(1)?;
+                work.try_reserve(3).map_err(|_| resource())?;
+                work.push(Task::FinishApplication);
+                work.push(Task::Visit(argument));
+                work.push(Task::Visit(function));
+            }
+            Type::Function(domain, codomain) => {
+                self.charge_type_work(1)?;
+                work.try_reserve(3).map_err(|_| resource())?;
+                work.push(Task::FinishFunction);
+                work.push(Task::Visit(codomain));
+                work.push(Task::Visit(domain));
+            }
+            Type::EffectfulFunction(domain, codomain) => {
+                if !F::ALLOWS_EFFECTFUL_TYPES {
+                    return Ok(false);
+                }
+                self.charge_type_work(1)?;
+                self.charge_type_work(1)?;
+                work.try_reserve(4).map_err(|_| resource())?;
+                work.push(Task::FinishFunction);
+                work.push(Task::Row(codomain.effects()));
+                work.push(Task::Visit(codomain.value()));
+                work.push(Task::Visit(domain));
+            }
+            Type::ResourceApply(resource_id, arguments) => {
+                self.charge_type_work(1)?;
+                let registry = &self.program.registry;
+                let signature = registry
+                    .owner_signature(crate::resolved::OwnerId::Resource(*resource_id))
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, node))?;
+                let family = registry
+                    .resource_signature_family(*resource_id)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, node))?;
+                if !matches!(registry.nominal_kind(family), Some(crate::resolved::CanonicalNominalKind::RowBearingResource { resource: canonical, .. }) if canonical == *resource_id)
+                    || signature.parameters.len() != arguments.len()
+                {
+                    return Ok(false);
+                }
+                let owned_position =
+                    if let Some(original) = registry.source_resource_fact(*resource_id) {
+                        self.charge_type_work(original.parameters.len())?;
+                        if original.family != family
+                            || original.parameters.len() != signature.parameters.len()
+                            || !original
+                                .parameters
+                                .iter()
+                                .zip(signature.parameters.iter())
+                                .all(|(formal, canonical)| formal.id == *canonical)
+                        {
+                            return Err(ValidationError::new(ValidationReason::Registry, node));
+                        }
+                        original.owned_position
+                    } else {
+                        // Experimental provider certificates retain their
+                        // existing first-owned formal convention.
+                        0
+                    };
+                let owned = signature
+                    .parameters
+                    .get(owned_position)
+                    .and_then(|id| registry.type_variable(*id))
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, node))?;
+                if owned.kind != Kind::Type {
+                    return Ok(false);
+                }
+                self.charge_type_work(arguments.len())?;
+                let mut has_row = false;
+                for identity in signature.parameters.iter() {
+                    let parameter = registry
+                        .type_variable(*identity)
+                        .ok_or_else(|| ValidationError::new(ValidationReason::Registry, node))?;
+                    if !self.admitted_owner_kind(&parameter.kind)? {
+                        return Ok(false);
+                    }
+                    has_row |= parameter.kind == Kind::EffectRow;
+                }
+                if !has_row {
+                    return Ok(false);
+                }
+                self.charge_type_work(
+                    arguments
+                        .len()
+                        .checked_mul(2)
+                        .and_then(|n| n.checked_add(1))
+                        .ok_or_else(resource)?,
+                )?;
+                work.try_reserve(
+                    arguments
+                        .len()
+                        .checked_mul(2)
+                        .and_then(|n| n.checked_add(1))
+                        .ok_or_else(resource)?,
+                )
+                .map_err(|_| resource())?;
+                work.push(Task::FinishResource);
+                for (argument, identity) in arguments.iter().zip(signature.parameters.iter()).rev()
+                {
+                    let parameter = registry
+                        .type_variable(*identity)
+                        .ok_or_else(|| ValidationError::new(ValidationReason::Registry, node))?;
+                    if matches!(argument, crate::types::KindedArgument::RowArg(_))
+                        != matches!(parameter.kind, Kind::EffectRow)
+                    {
+                        return Ok(false);
+                    }
+                    work.push(Task::CheckArgument(&parameter.kind));
+                    work.push(Task::Argument(argument));
+                }
+            }
+            Type::ForeignOwnerApply(nominal, arguments) => {
+                if !F::ALLOWS_EFFECTFUL_TYPES {
+                    return Ok(false);
+                }
+                let registry = &self.program.registry;
+                let span = match registry
+                    .nominal_kind(*nominal)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, node))?
+                {
+                    crate::resolved::CanonicalNominalKind::Parameters { origin, .. }
+                    | crate::resolved::CanonicalNominalKind::Frozen { origin, .. }
+                    | crate::resolved::CanonicalNominalKind::RowBearingResource {
+                        origin, ..
+                    } => origin,
+                };
+                let mut owner_work = TypeWorkBudget::with_limit(
+                    self.type_work_limit.saturating_sub(self.type_work.get()),
+                );
+                let result = crate::foreign::source_owner::row_owner_parameters(
+                    *nominal,
+                    registry,
+                    span,
+                    &mut owner_work,
+                );
+                self.charge_type_work(owner_work.used())?;
+                let parameters = result.map_err(|error| {
+                    ValidationError::new(
+                        if error.is_resource_exhaustion() {
+                            ValidationReason::Resource
+                        } else {
+                            ValidationReason::Registry
+                        },
+                        node,
+                    )
+                })?;
+                if parameters.len() != arguments.len() {
+                    return Ok(false);
+                }
+                let count = arguments
+                    .len()
+                    .checked_mul(2)
+                    .and_then(|n| n.checked_add(1))
+                    .ok_or_else(resource)?;
+                self.charge_type_work(count)?;
+                work.try_reserve(count).map_err(|_| resource())?;
+                work.push(Task::FinishResource);
+                for (argument, parameter) in arguments.iter().zip(parameters.iter()).rev() {
+                    if matches!(argument, crate::types::KindedArgument::RowArg(_))
+                        != (parameter.kind == Kind::EffectRow)
+                    {
+                        return Ok(false);
+                    }
+                    work.push(Task::CheckArgument(&parameter.kind));
+                    work.push(Task::Argument(argument));
+                }
+            }
+        }
+        Ok(true)
+    }
+
     fn validate_owner_kind_engine(
         &self,
         root: OwnerValidationRoot<'_>,
         variable_kinds: MonotypeVariableKinds<'_, '_>,
         role: OwnerValidationRole,
     ) -> Result<OwnerValidationOutput, ValidationError> {
-        enum Task<'a> {
-            Visit(&'a Type),
-            Argument(&'a crate::types::KindedArgument),
-            Instance(&'a EffectInstance),
-            Row(&'a EffectRow),
-            TypeRows(&'a Type),
-            CheckArgument(&'a Kind),
-            FinishResource,
-            FinishRowArgument,
-            Sequence(std::slice::Iter<'a, Type>),
-            FinishTuple(usize),
-            FinishApplication,
-            FinishFunction,
-        }
+        use OwnerKindTask as Task;
 
         let resource = || ValidationError::new(ValidationReason::Resource, None);
-        let admitted_owner_kind = |kind: &Kind| -> Result<bool, ValidationError> {
-            let mut pending = Vec::new();
-            self.charge_type_work(1)?;
-            pending.try_reserve(1).map_err(|_| resource())?;
-            pending.push((kind, true));
-            while let Some((kind, complete)) = pending.pop() {
-                match kind {
-                    Kind::Type => {}
-                    Kind::EffectRow if complete => {}
-                    Kind::EffectRow => return Ok(false),
-                    Kind::Arrow(domain, codomain) => {
-                        self.charge_type_work(2)?;
-                        pending.try_reserve(2).map_err(|_| resource())?;
-                        pending.push((codomain.as_ref(), false));
-                        pending.push((domain.as_ref(), false));
-                    }
-                }
-            }
-            Ok(true)
-        };
         let mut work = Vec::new();
         if matches!(root, OwnerValidationRoot::TypeRows(_)) {
             self.charge_type_work(1)?;
@@ -9887,233 +11307,15 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let mut completed = Vec::new();
         while let Some(task) = work.pop() {
             match task {
-                Task::Visit(Type::Bytes | Type::String | Type::Int | Type::Bool | Type::Unit) => {
-                    self.charge_type_work(1)?;
-                    completed.try_reserve(1).map_err(|_| resource())?;
-                    completed.push(Kind::Type);
-                }
-                Task::Visit(Type::Nominal(identity)) => {
-                    self.charge_type_work(1)?;
-                    let result = match self.program.registry.nominal_kind(*identity) {
-                        Some(crate::resolved::CanonicalNominalKind::Parameters {
-                            parameters,
-                            ..
-                        }) => {
-                            let mut result = Kind::Type;
-                            for parameter in parameters.iter().rev() {
-                                let domain = self.clone_kind_charged(&parameter.kind)?;
-                                self.charge_type_work(1)?;
-                                result = Kind::Arrow(Box::new(domain), Box::new(result));
-                            }
-                            result
-                        }
-                        Some(crate::resolved::CanonicalNominalKind::Frozen { kind, .. })
-                            if self.contextual_registry.is_some()
-                                || self.program.registry.has_provider_contracts() =>
-                        {
-                            self.clone_kind_charged(kind)?
-                        }
-                        _ => {
-                            return Err(ValidationError::new(ValidationReason::Registry, None));
-                        }
-                    };
-                    completed.try_reserve(1).map_err(|_| resource())?;
-                    completed.push(result);
-                }
-                Task::Visit(Type::Variable(identity)) => {
-                    let kind = match variable_kinds {
-                        MonotypeVariableKinds::Registry {
-                            owner,
-                            parameter_owners,
-                        } => {
-                            if parameter_owners.get(identity)
-                                != Some(&RegistryParameterOwner::Nominal(owner))
-                                && !owner.is_lexical()
-                            {
-                                self.charge_type_work(1)?;
-
-                                return Err(ValidationError::new(ValidationReason::Registry, None));
-                            }
-                            let Some(parameter) = self.program.registry.type_variable(*identity)
-                            else {
-                                self.charge_type_work(1)?;
-
-                                return Err(ValidationError::new(ValidationReason::Registry, None));
-                            };
-                            &parameter.kind
-                        }
-                        MonotypeVariableKinds::CatalogOwner(parameters) => {
-                            self.charge_type_work(parameters.len())?;
-                            let mut found = None;
-                            for (parameter, kind) in parameters {
-                                if parameter == identity {
-                                    if found.is_some() {
-                                        return Err(ValidationError::new(
-                                            ValidationReason::Registry,
-                                            None,
-                                        ));
-                                    }
-                                    found = Some(kind);
-                                }
-                            }
-                            found.ok_or_else(|| {
-                                ValidationError::new(ValidationReason::Registry, None)
-                            })?
-                        }
-                        MonotypeVariableKinds::Core(type_binders) => match identity {
-                            crate::types::TypeVariableId::Resolved { .. } => {
-                                if let Some(parameter) =
-                                    self.program.registry.type_variable(*identity)
-                                {
-                                    &parameter.kind
-                                } else if let Some(kind) =
-                                    self.provider_external_parameter_kind(*identity)?
-                                {
-                                    kind
-                                } else {
-                                    self.charge_type_work(1)?;
-
-                                    return Err(ValidationError::new(
-                                        ValidationReason::Registry,
-                                        None,
-                                    ));
-                                }
-                            }
-                            crate::types::TypeVariableId::Generated(_) => {
-                                if let Some((kind, _)) = type_binders.get(identity) {
-                                    *kind
-                                } else if let Some(kind) =
-                                    self.provider_external_parameter_kind(*identity)?
-                                {
-                                    kind
-                                } else {
-                                    self.charge_type_work(1)?;
-                                    return Err(ValidationError::with_cause(
-                                        ValidationCause::MissingGeneratedTypeBinder,
-                                        None,
-                                    ));
-                                }
-                            }
-                        },
-                    };
-                    let retained = self.clone_kind_charged(kind)?;
-                    completed.try_reserve(1).map_err(|_| resource())?;
-                    completed.push(retained);
-                }
-                Task::Visit(Type::Inference(_)) => {
-                    self.charge_type_work(1)?;
-                    return Err(match variable_kinds {
-                        MonotypeVariableKinds::Core(_) => ValidationError::with_cause(
-                            ValidationCause::UnresolvedCoreInference,
-                            None,
-                        ),
-                        MonotypeVariableKinds::Registry { .. }
-                        | MonotypeVariableKinds::CatalogOwner(_) => {
-                            ValidationError::new(ValidationReason::Registry, None)
-                        }
-                    });
-                }
-                Task::Visit(Type::Forall(_, _)) => {
-                    self.charge_type_work(1)?;
-                    return Ok(OwnerValidationOutput::Kind(None));
-                }
-                Task::Visit(Type::Tuple(elements)) => {
-                    self.charge_type_work(1)?;
-                    work.try_reserve(2).map_err(|_| resource())?;
-                    work.push(Task::FinishTuple(elements.len()));
-                    work.push(Task::Sequence(elements.iter()));
-                }
-                Task::Visit(Type::Application(function, argument)) => {
-                    self.charge_type_work(1)?;
-                    work.try_reserve(3).map_err(|_| resource())?;
-                    work.push(Task::FinishApplication);
-                    work.push(Task::Visit(argument));
-                    work.push(Task::Visit(function));
-                }
-                Task::Visit(Type::Function(domain, codomain)) => {
-                    self.charge_type_work(1)?;
-                    work.try_reserve(3).map_err(|_| resource())?;
-                    work.push(Task::FinishFunction);
-                    work.push(Task::Visit(codomain));
-                    work.push(Task::Visit(domain));
-                }
-                Task::Visit(Type::EffectfulFunction(domain, codomain)) => {
-                    if !F::ALLOWS_EFFECTFUL_TYPES {
+                Task::Visit(ty) => {
+                    if !self.visit_owner_kind_type(
+                        ty,
+                        variable_kinds,
+                        node,
+                        &mut work,
+                        &mut completed,
+                    )? {
                         return Ok(OwnerValidationOutput::Kind(None));
-                    }
-                    self.charge_type_work(1)?;
-                    self.charge_type_work(1)?;
-                    work.try_reserve(4).map_err(|_| resource())?;
-                    work.push(Task::FinishFunction);
-                    work.push(Task::Row(codomain.effects()));
-                    work.push(Task::Visit(codomain.value()));
-                    work.push(Task::Visit(domain));
-                }
-                Task::Visit(Type::ResourceApply(resource_id, arguments)) => {
-                    self.charge_type_work(1)?;
-                    let registry = &self.program.registry;
-                    let signature = registry
-                        .owner_signature(crate::resolved::OwnerId::Resource(*resource_id))
-                        .ok_or_else(|| ValidationError::new(ValidationReason::Registry, node))?;
-                    let family = registry
-                        .resource_signature_family(*resource_id)
-                        .ok_or_else(|| ValidationError::new(ValidationReason::Registry, node))?;
-                    if !matches!(registry.nominal_kind(family), Some(crate::resolved::CanonicalNominalKind::RowBearingResource { resource: canonical, .. }) if canonical == *resource_id)
-                        || signature.parameters.len() != arguments.len()
-                    {
-                        return Ok(OwnerValidationOutput::Kind(None));
-                    }
-                    let first = signature
-                        .parameters
-                        .first()
-                        .and_then(|id| registry.type_variable(*id))
-                        .ok_or_else(|| ValidationError::new(ValidationReason::Registry, node))?;
-                    if first.kind != Kind::Type {
-                        return Ok(OwnerValidationOutput::Kind(None));
-                    }
-                    self.charge_type_work(arguments.len())?;
-                    let mut has_row = false;
-                    for identity in signature.parameters.iter() {
-                        let parameter = registry.type_variable(*identity).ok_or_else(|| {
-                            ValidationError::new(ValidationReason::Registry, node)
-                        })?;
-                        if !admitted_owner_kind(&parameter.kind)? {
-                            return Ok(OwnerValidationOutput::Kind(None));
-                        }
-                        has_row |= parameter.kind == Kind::EffectRow;
-                    }
-                    if !has_row {
-                        return Ok(OwnerValidationOutput::Kind(None));
-                    }
-                    self.charge_type_work(
-                        arguments
-                            .len()
-                            .checked_mul(2)
-                            .and_then(|n| n.checked_add(1))
-                            .ok_or_else(resource)?,
-                    )?;
-                    work.try_reserve(
-                        arguments
-                            .len()
-                            .checked_mul(2)
-                            .and_then(|n| n.checked_add(1))
-                            .ok_or_else(resource)?,
-                    )
-                    .map_err(|_| resource())?;
-                    work.push(Task::FinishResource);
-                    for (argument, identity) in
-                        arguments.iter().zip(signature.parameters.iter()).rev()
-                    {
-                        let parameter = registry.type_variable(*identity).ok_or_else(|| {
-                            ValidationError::new(ValidationReason::Registry, node)
-                        })?;
-                        if matches!(argument, crate::types::KindedArgument::RowArg(_))
-                            != matches!(parameter.kind, Kind::EffectRow)
-                        {
-                            return Ok(OwnerValidationOutput::Kind(None));
-                        }
-                        work.push(Task::CheckArgument(&parameter.kind));
-                        work.push(Task::Argument(argument));
                     }
                 }
                 Task::FinishResource => {
@@ -10200,7 +11402,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             .ok_or_else(|| {
                                 ValidationError::new(ValidationReason::Registry, node)
                             })?;
-                        if !admitted_owner_kind(&parameter.kind)?
+                        if !self.admitted_owner_kind(&parameter.kind)?
                             || !self.same_kind_charged(&canonical.kind, &parameter.kind)?
                         {
                             return Err(ValidationError::new(ValidationReason::Registry, node));
@@ -10218,115 +11420,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     }
                 }
                 Task::Row(row) => {
-                    self.charge_type_work(row.known().len())?;
-                    if let Some(tail) = row.tail() {
-                        self.charge_type_work(
-                            tail.lacks().len().checked_add(1).ok_or_else(resource)?,
-                        )?;
-                        match tail.variable() {
-                            crate::types::EffectRowVariable::Inference(_) => match role {
-                                OwnerValidationRole::KindOnly => {
-                                    // No-node kind output confers no final row authority.
-                                    if !matches!(variable_kinds, MonotypeVariableKinds::Core(_)) {
-                                        return Err(ValidationError::new(
-                                            ValidationReason::Registry,
-                                            None,
-                                        ));
-                                    }
-                                }
-                                OwnerValidationRole::FinalRows(node) => {
-                                    if !self.conditional_row_position(row, node)? {
-                                        return Err(ValidationError::with_cause(
-                                            ValidationCause::UnresolvedCoreRow,
-                                            Some(node),
-                                        ));
-                                    }
-                                }
-                            },
-                            crate::types::EffectRowVariable::Rigid(identity) => {
-                                // An exclusion cannot depend on its own row through
-                                // a nested exact-owner argument: that would introduce
-                                // a recursive lacks constraint in final Core.
-                                for excluded in tail.lacks() {
-                                    let mut dependencies = HashSet::new();
-                                    for argument in excluded.arguments() {
-                                        self.collect_owner_argument_type_variables(
-                                            argument,
-                                            &mut dependencies,
-                                        )?;
-                                    }
-                                    if dependencies.contains(&identity) {
-                                        return Err(ValidationError::with_cause(
-                                            ValidationCause::UnprovedRowLacks,
-                                            node,
-                                        ));
-                                    }
-                                }
-                                let kind = match variable_kinds {
-                                    MonotypeVariableKinds::Core(type_binders) => match identity {
-                                        crate::types::TypeVariableId::Resolved { .. } => {
-                                            if let Some(parameter) =
-                                                self.program.registry.type_variable(identity)
-                                            {
-                                                Some(&parameter.kind)
-                                            } else {
-                                                self.provider_external_parameter_kind(identity)?
-                                            }
-                                        }
-                                        crate::types::TypeVariableId::Generated(_) => {
-                                            type_binders.get(&identity).map(|(kind, _)| *kind)
-                                        }
-                                    },
-                                    MonotypeVariableKinds::CatalogOwner(parameters) => {
-                                        self.charge_type_work(parameters.len())?;
-                                        let mut found = None;
-                                        for (parameter, kind) in parameters {
-                                            if *parameter == identity {
-                                                if found.is_some() {
-                                                    return Err(ValidationError::new(
-                                                        ValidationReason::Registry,
-                                                        node,
-                                                    ));
-                                                }
-                                                found = Some(kind);
-                                            }
-                                        }
-                                        found
-                                    }
-                                    MonotypeVariableKinds::Registry {
-                                        owner,
-                                        parameter_owners,
-                                    } => {
-                                        if parameter_owners.get(&identity)
-                                            != Some(&RegistryParameterOwner::Nominal(owner))
-                                            && !owner.is_lexical()
-                                        {
-                                            return Err(ValidationError::new(
-                                                ValidationReason::Registry,
-                                                node,
-                                            ));
-                                        }
-                                        self.program
-                                            .registry
-                                            .type_variable(identity)
-                                            .map(|parameter| &parameter.kind)
-                                    }
-                                };
-                                let kind = kind.ok_or_else(|| {
-                                    ValidationError::with_cause(
-                                        ValidationCause::UnknownCoreRowBinder,
-                                        node,
-                                    )
-                                })?;
-                                if !matches!(kind, Kind::EffectRow) {
-                                    return Err(ValidationError::with_cause(
-                                        ValidationCause::NonRowTailKind,
-                                        node,
-                                    ));
-                                }
-                            }
-                        }
-                    }
+                    self.validate_owner_row_header(row, variable_kinds, role, node)?;
                     let count = row
                         .known()
                         .len()
@@ -10343,7 +11437,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     }
                 }
                 Task::TypeRows(ty) => match ty {
-                    Type::ResourceApply(_, arguments) => {
+                    Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                         let count = arguments.len();
                         self.charge_type_work(count)?;
                         work.try_reserve(count).map_err(|_| resource())?;
@@ -10473,6 +11567,29 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         &self,
         identity: crate::types::TypeVariableId,
     ) -> Result<Option<&Kind>, ValidationError> {
+        if matches!(
+            self.source_resource_context,
+            SourceResourceValidationContext::OriginalTemplate { .. }
+        ) {
+            let mut found = None;
+            for (_, fact) in self.program.registry.scalar_preflights() {
+                self.charge_type_work(1)?;
+                if (fact.role().borrowed_parameter(fact.module()) == Some(identity)
+                    || fact.role().data_parameter(fact.module()) == Some(identity))
+                    && let Type::Forall(parameters, _) = fact.core_signature()
+                {
+                    // Registry authentication established this sealed defining
+                    // declaration. This admits its scheme kind only; lexical
+                    // scope still rejects an unbound S or a forged application.
+                    let index =
+                        usize::from(fact.role().data_parameter(fact.module()) == Some(identity));
+                    found = parameters.get(index).map(|(_, kind)| kind);
+                }
+            }
+            if found.is_some() {
+                return Ok(found);
+            }
+        }
         let Some(types) = self.provider_external_types else {
             return Ok(None);
         };
@@ -10597,7 +11714,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     work.push(Task::Visit(argument));
                     work.push(Task::Visit(function));
                 }
-                Type::ResourceApply(_, arguments) => {
+                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                     crate::types::visit_owner_type_children_with_charge(
                         arguments.iter(),
                         &mut |cells| self.charge_type_work(cells),
@@ -11021,6 +12138,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         if self
             .provider_external_types
             .is_some_and(|types| types.contains_key(&binder.id()))
+            || self
+                .original_source_scalar_preflight(binder.id())?
+                .is_some()
         {
             return Err(ValidationError::new(ValidationReason::Registry, Some(node)));
         }
@@ -11082,10 +12202,40 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         }
 
         let mut consumed_rows = 0_usize;
+        let mut original_root_seen = false;
         for (index, node) in self.program.nodes.iter().enumerate() {
+            if let Some(window) = F::copy_window(&node.kind) {
+                let id = node_id(self.program.arena, index)?;
+                let parameter = window.identity();
+                self.charge_type_work(1)?;
+                let kind = if let Some(canonical) = self.program.registry.type_variable(parameter) {
+                    &canonical.kind
+                } else if parameter.module().is_none()
+                    && self.source_resource_context == SourceResourceValidationContext::FinalProgram
+                {
+                    // Copied lexical binders are compiler-generated, just like
+                    // copied TypeAbstraction parameters. The exact original
+                    // window, complete freshening and kind are independently
+                    // checked by the source-scope forest and coverage proof.
+                    window.identity_kind()
+                } else {
+                    return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                };
+                if *kind != Kind::Type
+                    || nominal_parameter_owners.contains_key(&parameter)
+                    || definitions.contains_key(&parameter)
+                {
+                    return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                }
+                definitions
+                    .try_reserve(1)
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+                definitions.insert(parameter, (kind, id));
+            }
             if let Some(parameter) = F::resource_scope(&node.kind)
                 .map(|resource| resource.acquisition.identity)
                 .or_else(|| F::provider_scope(&node.kind).map(|scope| scope.descriptor.identity()))
+                .or_else(|| F::source_scope(&node.kind).map(|scope| scope.identity()))
             {
                 let id = node_id(self.program.arena, index)?;
                 self.charge_type_work(1)?;
@@ -11111,11 +12261,53 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 continue;
             };
             let id = node_id(self.program.arena, index)?;
+            let original_root = match self.source_resource_context {
+                SourceResourceValidationContext::OriginalTemplate { resource, answer }
+                    if id == self.program.root =>
+                {
+                    let original = self
+                        .program
+                        .registry
+                        .source_resource_fact(resource)
+                        .ok_or_else(|| {
+                            ValidationError::new(ValidationReason::Registry, Some(id))
+                        })?;
+                    if abstraction.parameters().len()
+                        != original.parameters.len() + 2 * usize::from(answer)
+                    {
+                        return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                    }
+                    for ((actual, kind), expected) in abstraction.parameters().iter().zip(
+                        original
+                            .parameters
+                            .iter()
+                            .chain(answer.then_some(&original.answer)),
+                    ) {
+                        self.charge_type_work(1)?;
+                        if *actual != expected.id
+                            || !self.same_kind_charged(kind, &expected.kind)?
+                        {
+                            return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                        }
+                    }
+                    if answer
+                        && !matches!(
+                            abstraction.parameters().last(),
+                            Some((crate::types::TypeVariableId::Generated(_), Kind::EffectRow))
+                        )
+                    {
+                        return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                    }
+                    original_root_seen = true;
+                    Some(resource)
+                }
+                _ => None,
+            };
             let mut linked_identity_class = None;
             for (parameter, kind) in abstraction.parameters() {
                 let parameter_is_resolved =
                     matches!(parameter, crate::types::TypeVariableId::Resolved { .. });
-                if self.module_sources.is_some() {
+                if self.module_sources.is_some() && original_root.is_none() {
                     self.charge_type_work(1)?;
                     if linked_identity_class
                         .replace(parameter_is_resolved)
@@ -11132,7 +12324,13 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         else {
                             return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
                         };
-                        if nominal_parameter_owners.contains_key(parameter)
+                        if nominal_parameter_owners
+                            .get(parameter)
+                            .is_some_and(|owner| {
+                                original_root.is_none_or(|resource| {
+                                    *owner != RegistryParameterOwner::ProviderDeclaration(resource)
+                                })
+                            })
                             || !self.same_kind_charged(&canonical.kind, kind)?
                         {
                             return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
@@ -11158,7 +12356,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
                 definitions.insert(*parameter, (kind, id));
             }
-            let linked_row = if linked_identity_class == Some(true) {
+            let linked_row = if linked_identity_class == Some(true) && original_root.is_none() {
                 let owner = abstraction_owners
                     .get(&id)
                     .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
@@ -11203,12 +12401,46 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     .ok_or_else(|| ValidationError::new(ValidationReason::Resource, Some(id)))?;
             }
         }
+        if matches!(
+            self.source_resource_context,
+            SourceResourceValidationContext::OriginalTemplate { .. }
+        ) && !original_root_seen
+        {
+            return Err(ValidationError::new(
+                ValidationReason::Registry,
+                Some(self.program.root),
+            ));
+        }
         if self.module_sources.is_some()
+            && self.source_resource_context == SourceResourceValidationContext::FinalProgram
             && consumed_rows != self.program.registry.global_parameter_rows().len()
         {
             return Err(ValidationError::new(ValidationReason::Registry, None));
         }
         Ok(definitions)
+    }
+
+    // Original source forests borrow only these authenticated compiler-owned
+    // globals. Executable forests must bind their globals in the ordinary graph.
+    fn original_source_scalar_preflight(
+        &self,
+        function: BinderId,
+    ) -> Result<
+        Option<&crate::foreign::scalar_preflight::CheckedForeignScalarPreflight>,
+        ValidationError,
+    > {
+        if !matches!(
+            self.source_resource_context,
+            SourceResourceValidationContext::OriginalTemplate { .. }
+        ) {
+            return Ok(None);
+        }
+        self.charge_type_work(1)?;
+        Ok(self
+            .program
+            .registry
+            .scalar_preflight(function)
+            .map(std::convert::AsRef::as_ref))
     }
 
     fn validate_node_types(
@@ -11244,6 +12476,13 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         .and_then(|types| types.get(&variable.binder()))
                     {
                         &**ty
+                    } else if let Some(fact) =
+                        self.original_source_scalar_preflight(variable.binder())?
+                    {
+                        if !F::effect_row(&node.effects).is_empty() {
+                            return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                        }
+                        fact.core_signature()
                     } else {
                         return Err(ValidationError::with_cause(
                             ValidationCause::UnknownVariableBinder,
@@ -11302,7 +12541,17 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     }
 
     fn conditional_node_row(&self, id: NodeId) -> Result<bool, ValidationError> {
-        let Some(entry) = self.provider_handler_entry else {
+        if self
+            .source_handler_graph
+            .is_some_and(|graph| graph.wrapper() == id)
+        {
+            return Ok(true);
+        }
+        let entry = self
+            .provider_handler_entry
+            .map(|entry| entry.handler_graph())
+            .or_else(|| self.source_handler_graph.map(|graph| graph.handler_graph()));
+        let Some(entry) = entry.as_ref() else {
             return Ok(false);
         };
         let Some(recipe) = entry.row_recipe else {
@@ -11320,7 +12569,11 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         row: &EffectRow,
         id: NodeId,
     ) -> Result<bool, ValidationError> {
-        let Some(entry) = self.provider_handler_entry else {
+        let entry = self
+            .provider_handler_entry
+            .map(|entry| entry.handler_graph())
+            .or_else(|| self.source_handler_graph.map(|graph| graph.handler_graph()));
+        let Some(entry) = entry.as_ref() else {
             return Ok(false);
         };
         let Some(recipe) = entry.row_recipe else {
@@ -11334,7 +12587,11 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     }
 
     fn conditional_function_relation(&self, id: NodeId) -> Result<bool, ValidationError> {
-        let Some(entry) = self.provider_handler_entry else {
+        let entry = self
+            .provider_handler_entry
+            .map(|entry| entry.handler_graph())
+            .or_else(|| self.source_handler_graph.map(|graph| graph.handler_graph()));
+        let Some(entry) = entry.as_ref() else {
             return Ok(false);
         };
         let Some(recipe) = entry.row_recipe else {
@@ -11345,6 +12602,273 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let result = recipe.deferred_function(entry, id, &mut work);
         self.charge_type_work(work.used())?;
         result
+    }
+
+    fn function_contains_source_owner_state(&self, ty: &Type) -> Result<bool, ValidationError> {
+        let registry = &self.program.registry;
+        let candidates = registry.source_foreign_nominal_count();
+        if candidates == 0 {
+            return Ok(false);
+        }
+        let mut work =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let result = crate::types::visit_type_structure_with_budget(ty, &mut work, |node, work| {
+            if let crate::types::TypeStructureNode::Type(
+                Type::Nominal(nominal) | Type::ForeignOwnerApply(nominal, _),
+            ) = node
+            {
+                work.charge(candidates)?;
+                return Ok(registry.source_foreign_nominal(*nominal));
+            }
+            Ok(false)
+        });
+        self.charge_type_work(work.used())?;
+        result.map_err(|()| ValidationError::new(ValidationReason::Resource, None))
+    }
+
+    fn sealed_byte_application(&self, function: NodeId) -> Result<bool, ValidationError> {
+        let ty = &self.node(function)?.ty;
+        let Type::Forall(parameters, _) = ty else {
+            return Ok(false);
+        };
+        self.charge_type_work(parameters.len())?;
+        let mut found = false;
+        // Complete the charged unordered traversal before returning. A fresh
+        // reconstructed registry must have the same exact admission cost.
+        for (_, fact) in self.program.registry.scalar_preflights() {
+            self.charge_type_work(1)?;
+            let Some(_) = fact.role().borrowed_parameter(fact.module()) else {
+                continue;
+            };
+            // Exact declaration-owned quantifier identity is necessary. An
+            // alpha-equivalent ordinary generic function has no byte role.
+            if fact.matches_parameters(parameters)
+                && self.same_type_charged(ty, fact.core_signature())?
+            {
+                found = true;
+            }
+        }
+        Ok(found)
+    }
+
+    fn borrowed_view_call_shape(&self, function: NodeId) -> Result<bool, ValidationError> {
+        let Some(function) = self.node(function)?.ty.function_view() else {
+            return Ok(false);
+        };
+        fn extent(ty: &Type) -> Option<&Type> {
+            match ty {
+                Type::Application(head, view) if matches!(head.as_ref(), Type::Nominal(id) if id.module().is_builtin_foreign() && id.declaration() == 5) => {
+                    Some(view.as_ref())
+                }
+                _ => None,
+            }
+        }
+        if *function.value() == Type::Int
+            && let Some(view) = extent(function.domain())
+        {
+            return self.function_contains_source_owner_state(view);
+        }
+        let Type::Tuple(fields) = function.domain() else {
+            return Ok(false);
+        };
+        if fields.len() != 2 || !self.function_contains_source_owner_state(&fields[0])? {
+            return Ok(false);
+        }
+        Ok(matches!(function.value(), Type::Application(call, payload)
+            if matches!(call.as_ref(), Type::Nominal(id) if id.module().is_builtin_foreign() && id.declaration() == 1)
+                && **payload == Type::Bytes)
+            && (fields[1] == Type::Int || extent(&fields[1]).is_some()))
+    }
+
+    fn borrowed_byte_call_shape(&self, function: NodeId) -> Result<bool, ValidationError> {
+        let Some(function) = self.node(function)?.ty.function_view() else {
+            return Ok(false);
+        };
+        let Type::Tuple(fields) = function.domain() else {
+            return Ok(false);
+        };
+        if !matches!(fields.len(), 2 | 3) {
+            return Ok(false);
+        }
+        self.charge_type_work(fields.len())?;
+        if !fields[1..].iter().all(|field| *field == Type::Int)
+            || !self.function_contains_source_owner_state(&fields[0])?
+        {
+            return Ok(false);
+        }
+        let Type::Application(call, output) = function.value() else {
+            return Ok(false);
+        };
+        let mut found = false;
+        for (_, fact) in self.program.registry.scalar_preflights() {
+            self.charge_type_work(1)?;
+            if fact.role().byte_parameter(fact.module()).is_some()
+                && matches!(call.as_ref(), Type::Nominal(id) if *id == fact.call_codec().ids().call)
+                && **output
+                    == if fields.len() == 2 {
+                        Type::Int
+                    } else {
+                        Type::Unit
+                    }
+            {
+                found = true;
+            }
+        }
+        Ok(found)
+    }
+
+    fn reject_pure_byte_applications(&self) -> Result<(), ValidationError> {
+        for (index, stored) in self.program.nodes.iter().enumerate() {
+            self.charge_type_work(1)?;
+            if let Some(PureExprKind::Computation(PureComputation::TypeApplication(application))) =
+                F::pure(&stored.kind)
+                && self.sealed_byte_application(application.function())?
+            {
+                return Err(ValidationError::new(
+                    ValidationReason::Registry,
+                    Some(node_id(self.program.arena, index)?),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn original_source_phase_function(&self, id: NodeId) -> Result<bool, ValidationError> {
+        let SourceResourceValidationContext::OriginalTemplate { answer, .. } =
+            self.source_resource_context
+        else {
+            return Ok(false);
+        };
+        // The private context authenticates the original header Arc; the earlier
+        // type-binder pass authenticates this exact root's full parameter vector.
+        // Its immediate lifecycle wrapper and the handler's synthetic callback
+        // are phase boundaries. Template admission separately checks that exact
+        // callback's Unit domain, answer type and provided/continuation row;
+        // executable scopes copy the callback's body, never the callback value.
+        self.charge_type_work(1)?;
+        let Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) =
+            F::pure(&self.node(self.program.root)?.kind)
+        else {
+            return Ok(false);
+        };
+        if abstraction.body() == id {
+            return Ok(true);
+        }
+        if !answer {
+            return Ok(false);
+        }
+        self.charge_type_work(1)?;
+        Ok(matches!(
+            F::pure(&self.node(abstraction.body())?.kind),
+            Some(PureExprKind::Value(PureValue::Function(wrapper)))
+                if wrapper.body() == id
+        ))
+    }
+
+    fn source_forwarding_function(&self, id: NodeId) -> Result<bool, ValidationError> {
+        // Only the defining scope's exact generated lexical bindings qualify.
+        // Independent scope admission later reconstructs their original method,
+        // operation, operand, complete effect instance and specialized signature.
+        // A compatible ordinary function type supplies no such authority.
+        let mut found = false;
+        for stored in &self.program.nodes {
+            self.charge_type_work(1)?;
+            let Some(scope) = F::source_scope(&stored.kind) else {
+                continue;
+            };
+            let mut current = scope.handler.body();
+            for forwarding in &scope.forwardings {
+                self.charge_type_work(1)?;
+                let Some(PureExprKind::Computation(PureComputation::Bind(binding))) =
+                    F::pure(&self.node(current)?.kind)
+                else {
+                    return Err(ValidationError::new(
+                        ValidationReason::Registry,
+                        Some(current),
+                    ));
+                };
+                if binding.binder().id() != forwarding.binder {
+                    return Err(ValidationError::new(
+                        ValidationReason::Registry,
+                        Some(current),
+                    ));
+                }
+                found |= binding.initializer() == id;
+                current = binding.body();
+            }
+        }
+        Ok(found)
+    }
+
+    // Keep original-fact comparison temporaries out of the shared value frame.
+    #[inline(never)]
+    fn validate_scalar_preflight_intrinsic(
+        &self,
+        id: NodeId,
+        node: &StoredNode<F>,
+        intrinsic: super::packed::IntrinsicNode,
+        function: BinderId,
+    ) -> Result<(), ValidationError> {
+        use super::packed::Intrinsic;
+        use crate::foreign::scalar_preflight::ForeignScalarPreflightRole;
+        self.charge_type_work(1)?;
+        let fact = self
+            .program
+            .registry
+            .scalar_preflight(function)
+            .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
+        let role = match intrinsic.operation() {
+            Intrinsic::ForeignCheckedI64 { .. } => ForeignScalarPreflightRole::I64,
+            Intrinsic::ForeignCheckedSizeT { .. } => ForeignScalarPreflightRole::SizeT,
+            Intrinsic::ForeignCheckedNul { .. } => ForeignScalarPreflightRole::Nul,
+            Intrinsic::ForeignDataOf { .. } => ForeignScalarPreflightRole::DataOf,
+            Intrinsic::ForeignReplaceData { .. } => ForeignScalarPreflightRole::ReplaceData,
+            Intrinsic::ForeignCopyBytes { .. } => ForeignScalarPreflightRole::CopyBytes,
+            Intrinsic::ForeignCopyNul { .. } => ForeignScalarPreflightRole::CopyNul,
+            Intrinsic::ForeignExtentValue { .. } => ForeignScalarPreflightRole::ExtentValue,
+            Intrinsic::ForeignByteRead { .. } => ForeignScalarPreflightRole::ByteRead,
+            Intrinsic::ForeignByteWrite { .. } => ForeignScalarPreflightRole::ByteWrite,
+            _ => return Err(ValidationError::new(ValidationReason::Registry, Some(id))),
+        };
+        if fact.function() != function
+            || fact.module() != intrinsic.module()
+            || fact.role() != role
+            || fact.conversion_error_constructor().is_none()
+            || !F::effect_row(&node.effects).is_empty()
+            || !self.same_type_charged(&node.ty, &fact.annotation().ty)?
+        {
+            return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+        }
+        self.charge_type_work(1)?;
+        let error = fact
+            .conversion_error_constructor()
+            .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
+        let error_constructor = self
+            .program
+            .registry
+            .constructor(error)
+            .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
+        if error_constructor.owner != fact.call_codec().ids().conversion_error
+            || error_constructor.payload.is_some()
+        {
+            return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+        }
+        let mut origin = node
+            .origin
+            .as_ref()
+            .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
+        while let Origin::Generated { cause, .. } = origin {
+            self.charge_type_work(1)?;
+            origin = cause;
+        }
+        let mut work =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let matches = crate::resolved::same_origin_with_budget(origin, fact.origin(), &mut work);
+        self.charge_type_work(work.used())?;
+        if !matches.map_err(|()| ValidationError::new(ValidationReason::Resource, Some(id)))? {
+            return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+        }
+        Ok(())
     }
 
     fn validate_value(
@@ -11364,6 +12888,18 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             PureValue::Intrinsic(intrinsic) => {
                 use super::packed::Intrinsic;
                 match intrinsic.operation() {
+                    Intrinsic::ForeignCheckedI64 { function }
+                    | Intrinsic::ForeignCheckedSizeT { function }
+                    | Intrinsic::ForeignCheckedNul { function }
+                    | Intrinsic::ForeignDataOf { function }
+                    | Intrinsic::ForeignReplaceData { function }
+                    | Intrinsic::ForeignByteRead { function }
+                    | Intrinsic::ForeignByteWrite { function }
+                    | Intrinsic::ForeignCopyBytes { function }
+                    | Intrinsic::ForeignCopyNul { function }
+                    | Intrinsic::ForeignExtentValue { function } => {
+                        self.validate_scalar_preflight_intrinsic(id, node, *intrinsic, function)?;
+                    }
                     Intrinsic::ForeignLayoutWitness { producer } => {
                         let mut work = TypeWorkBudget::with_limit(
                             self.type_work_limit.saturating_sub(self.type_work.get()),
@@ -11408,15 +12944,16 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 }
                 let result = match intrinsic.operation() {
                     Intrinsic::BytesAppendByte { appended, invalid } => {
-                        Some((appended, invalid, Type::Bytes))
+                        Some((appended, invalid, Type::Bytes, 0))
                     }
+                    Intrinsic::BytesAt { found, invalid } => Some((found, invalid, Type::Int, 1)),
                     Intrinsic::StringFromUtf8 { decoded, invalid } => {
-                        Some((decoded, invalid, Type::String))
+                        Some((decoded, invalid, Type::String, 0))
                     }
                     _ => None,
                 };
-                if let Some((success, invalid, payload)) = result {
-                    let owner = crate::types::NominalTypeId::new(intrinsic.module(), 0);
+                if let Some((success, invalid, payload, local)) = result {
+                    let owner = crate::types::NominalTypeId::new(intrinsic.module(), local);
                     if success != ConstructorId::new(owner, 0)
                         || invalid != ConstructorId::new(owner, 1)
                     {
@@ -11465,6 +13002,15 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             PureValue::Boolean(boolean) => boolean.expected_type(),
             PureValue::Unit(unit) => unit.expected_type(),
             PureValue::Function(function) => {
+                if !self.original_source_phase_function(id)?
+                    && self.function_contains_source_owner_state(&node.ty)?
+                    && !self.source_forwarding_function(id)?
+                {
+                    return Err(ValidationError::new(
+                        ValidationReason::ResourceEscape,
+                        Some(id),
+                    ));
+                }
                 let body = self.node(function.body())?;
                 let Some(function_type) = node.ty.function_view() else {
                     return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
@@ -11606,7 +13152,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             } else {
                                 (!matches!(
                                     F::pure(&self.node(abstraction.body())?.kind),
-                                    Some(PureExprKind::Value(PureValue::Function(_)))
+                                    Some(PureExprKind::Value(
+                                        PureValue::Function(_) | PureValue::Intrinsic(_)
+                                    ))
                                 ))
                                 .then_some(ValidationCause::RecursiveFunctionBody)
                             }
@@ -11620,6 +13168,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         | Type::Nominal(_)
                         | Type::Application(_, _)
                         | Type::ResourceApply(_, _)
+                        | Type::ForeignOwnerApply(_, _)
                         | Type::Variable(_)
                         | Type::Inference(_)
                         | Type::EffectfulFunction(_, _)
@@ -11809,7 +13358,16 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 } else if abstraction
                     .parameters()
                     .iter()
-                    .any(|(parameter, _)| nominal_parameter_owners.contains_key(parameter))
+                    .any(|(parameter, _)| {
+                        nominal_parameter_owners.get(parameter).is_some_and(|owner| {
+                            !matches!(
+                                self.source_resource_context,
+                                SourceResourceValidationContext::OriginalTemplate { resource, .. }
+                                    if id == self.program.root
+                                        && *owner == RegistryParameterOwner::ProviderDeclaration(resource)
+                            )
+                        })
+                    })
                 {
                     Some(ValidationCause::AbstractionNominalParameter)
                 } else if !self
@@ -12544,12 +14102,23 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 None,
             ));
         }
-        if let Some((key, requirement)) = analysis
-            .root_requirements
-            .iter()
-            .filter(|(key, _)| !matches!(key, ScopeRequirementKey::Binder(binder) if self.provider_external_types.is_some_and(|types| types.contains_key(binder))))
-            .min_by_key(|(_, requirement)| requirement.occurrence.value())
-        {
+        let mut first = None;
+        for (key, requirement) in &analysis.root_requirements {
+            if let ScopeRequirementKey::Binder(binder) = key
+                && (self
+                    .provider_external_types
+                    .is_some_and(|types| types.contains_key(binder))
+                    || self.original_source_scalar_preflight(*binder)?.is_some())
+            {
+                continue;
+            }
+            if first.is_none_or(|(_, previous): (_, &ScopeRequirement)| {
+                requirement.occurrence.value() < previous.occurrence.value()
+            }) {
+                first = Some((key, requirement));
+            }
+        }
+        if let Some((key, requirement)) = first {
             return Err(match key {
                 ScopeRequirementKey::Resume(_, _) => ValidationError::with_cause(
                     ValidationCause::UnboundContinuation,
@@ -12702,6 +14271,18 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             ));
                         }
                     }
+                    if let Some(identity) = F::source_scope(&node.kind)
+                        .map(|scope| scope.identity())
+                        .or_else(|| F::copy_window(&node.kind).map(|scope| scope.identity()))
+                    {
+                        self.charge_type_work(1)?;
+                        if free.contains(&identity) {
+                            return Err(ValidationError::new(
+                                ValidationReason::ResourceEscape,
+                                Some(id),
+                            ));
+                        }
+                    }
                     self.charge_type_work(F::operation_extra_edge_count(&node.kind))?;
                     for child_index in 0..F::child_count(&node.kind) {
                         let child = F::child_at(&node.kind, child_index).ok_or_else(|| {
@@ -12732,6 +14313,21 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             }
                             if child_index > 0 {
                                 child_free.remove(&scope.descriptor.identity());
+                            }
+                        }
+                        if let Some(identity) = F::source_scope(&node.kind)
+                            .map(|scope| scope.identity())
+                            .or_else(|| F::copy_window(&node.kind).map(|scope| scope.identity()))
+                        {
+                            self.charge_type_work(1)?;
+                            if child_index == 0 && child_free.contains(&identity) {
+                                return Err(ValidationError::new(
+                                    ValidationReason::ResourceEscape,
+                                    Some(id),
+                                ));
+                            }
+                            if child_index > 0 {
+                                child_free.remove(&identity);
                             }
                         }
                         self.merge_type_scope_requirements(&mut free, child_free)?;
@@ -12871,6 +14467,13 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     if let Some(scope) = F::provider_scope(&node.kind) {
                         self.charge_type_work(1)?;
                         free.remove(&scope.descriptor.identity());
+                    }
+                    if let Some(identity) = F::source_scope(&node.kind)
+                        .map(|scope| scope.identity())
+                        .or_else(|| F::copy_window(&node.kind).map(|scope| scope.identity()))
+                    {
+                        self.charge_type_work(1)?;
+                        free.remove(&identity);
                     }
                     requirements[self.index(id)?] = Some(free);
                 }
@@ -13038,7 +14641,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     work.push(Task::Visit(codomain));
                     work.push(Task::Visit(domain));
                 }
-                Task::Visit(Type::ResourceApply(_, arguments)) => {
+                Task::Visit(
+                    Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments),
+                ) => {
                     schedule_owner_arguments!(arguments.iter());
                 }
                 Task::Visit(Type::EffectfulFunction(domain, codomain)) => {
@@ -13869,6 +15474,46 @@ enum ClauseOutput<'a> {
 }
 
 impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperationFamily> {
+    fn unused_ordering_candidates(
+        &self,
+        candidates: &HashSet<crate::types::TypeVariableId>,
+    ) -> Result<HashSet<crate::types::TypeVariableId>, ValidationError> {
+        if candidates.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let mut work =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let result = (|| {
+            let mut uses = semantic_type_variables::UnusedVariables::new(candidates, &mut work)?;
+            uses.program(self.program)?;
+            if let Some(globals) = self.provider_external_types {
+                uses.charge(globals.len())?;
+                for ty in globals.values() {
+                    uses.ty(ty)?;
+                }
+            }
+            if let Some(graph) = self.source_handler_graph {
+                graph.visit_semantic_type_variables(&mut uses)?;
+            }
+            if let Some(context) = self.source_original_provider {
+                context.visit_semantic_type_variables(&mut uses)?;
+            }
+            Ok(uses.finish())
+        })();
+        // The shared loan is debited even if traversal or allocation refuses.
+        self.charge_type_work(work.used())?;
+        result.map_err(|()| ValidationError::new(ValidationReason::Resource, None))
+    }
+
+    fn unused_ordering_still_unused(
+        &self,
+        candidates: &HashSet<crate::types::TypeVariableId>,
+    ) -> Result<bool, ValidationError> {
+        let unused = self.unused_ordering_candidates(candidates)?;
+        self.charge_type_work(candidates.len())?;
+        Ok(unused.len() == candidates.len())
+    }
+
     fn validate_cleanup_owner(
         &self,
         id: NodeId,
@@ -14271,9 +15916,45 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         Ok(())
     }
 
-    fn run_effect(&mut self) -> Result<(), ValidationError> {
-        let mut nominal_parameter_owners = self.validate_registry()?;
-        self.validate_effect_registry(self.module_sources.as_ref(), &mut nominal_parameter_owners)?;
+    fn authenticate_effect_registry_phase(
+        &self,
+    ) -> Result<
+        (
+            RegistryParameterOwners,
+            AuthenticatedNativeRegistry<'program>,
+        ),
+        ValidationError,
+    > {
+        let original = if matches!(
+            self.source_resource_context,
+            SourceResourceValidationContext::OriginalTemplate { .. }
+        ) {
+            let mut work = TypeWorkBudget::with_limit(
+                self.type_work_limit.saturating_sub(self.type_work.get()),
+            );
+            let result = source_declarations::authenticate(
+                &self.program.registry,
+                &self.sources,
+                self.module_sources
+                    .as_ref()
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?,
+                &mut work,
+            );
+            self.charge_type_work(work.used())?;
+            let original = result?;
+            let unused = self.unused_ordering_candidates(&original.ordering_candidates)?;
+            self.charge_type_work(unused.len())?;
+            let mut retained = self.unused_ordering.borrow_mut();
+            retained
+                .try_reserve(unused.len())
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+            retained.extend(unused);
+            Some(original)
+        } else {
+            None
+        };
+        let mut owners = self.validate_registry_with_original_provenance(original.as_ref())?;
+        self.validate_effect_registry(self.module_sources.as_ref(), &mut owners)?;
         let empty_type_binders = CoreTypeBinders::new();
         for nominal in self
             .program
@@ -14304,19 +15985,43 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 )?;
             }
         }
+        Ok((
+            owners,
+            AuthenticatedNativeRegistry {
+                registry: &self.program.registry,
+            },
+        ))
+    }
+
+    fn run_effect(&mut self) -> Result<(), ValidationError> {
+        let (nominal_parameter_owners, native_registry) =
+            self.authenticate_effect_registry_phase()?;
+        self.run_effect_with_registry(&nominal_parameter_owners, &native_registry)
+    }
+
+    fn run_effect_with_registry(
+        &mut self,
+        nominal_parameter_owners: &RegistryParameterOwners,
+        native_registry: &AuthenticatedNativeRegistry<'_>,
+    ) -> Result<(), ValidationError> {
         let authenticated_method_evidence = self.validate_method_evidence_authority()?;
         self.validate_envelopes(&authenticated_method_evidence)?;
         self.validate_graph()?;
         let abstraction_owners = self.collect_binders(&authenticated_method_evidence)?;
         let type_binders =
-            self.collect_type_binders(&nominal_parameter_owners, &abstraction_owners)?;
+            self.collect_type_binders(nominal_parameter_owners, &abstraction_owners)?;
         self.validate_method_evidence_type_owners(&type_binders)?;
         self.validate_node_types(
-            &nominal_parameter_owners,
+            nominal_parameter_owners,
             &type_binders,
             &authenticated_method_evidence,
         )?;
-        let has_discard = self.validate_effect_nodes(&type_binders)?;
+        let has_discard = self.validate_effect_nodes(&type_binders, native_registry)?;
+        if self.source_resource_context == SourceResourceValidationContext::FinalProgram {
+            self.validate_source_owner_request_coverage()?;
+            self.validate_source_byte_call_coverage()?;
+            self.validate_source_window_coverage()?;
+        }
         self.validate_registration_edges()?;
         self.validate_effect_abstraction_shapes(&authenticated_method_evidence)?;
         self.validate_scopes()?;
@@ -14329,6 +16034,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 super::effect::EffectExprKind::Operation(
                     super::effect::EffectOperation::Resource(_)
                         | super::effect::EffectOperation::ProviderScope(_)
+                        | super::effect::EffectOperation::SourceResourceScope(_)
                         | super::effect::EffectOperation::Cleanup(_)
                         | super::effect::EffectOperation::Registration(_)
                 )
@@ -14340,6 +16046,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             || self
                 .provider_handler_entry
                 .is_some_and(|entry| entry.row_recipe.is_some())
+            || self.source_handler_graph.is_some()
         {
             return Ok(());
         }
@@ -14411,6 +16118,201 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             ),
         })?;
         Ok(())
+    }
+
+    fn validate_source_window_coverage(&self) -> Result<(), ValidationError> {
+        use super::effect::{EffectExprKind, EffectOperation};
+        let mut work =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let mut covered = HashSet::new();
+        let result = (|| {
+            work.charge(self.program.nodes.len())
+                .map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
+            for stored in &self.program.nodes {
+                if let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+                    &stored.kind
+                {
+                    scope.visit_windows(
+                        |id, work| {
+                            work.charge(1).map_err(|()| {
+                                ValidationError::new(ValidationReason::Resource, Some(id))
+                            })?;
+                            covered.try_reserve(1).map_err(|_| {
+                                ValidationError::new(ValidationReason::Resource, Some(id))
+                            })?;
+                            if !covered.insert(id) {
+                                return Err(ValidationError::new(
+                                    ValidationReason::Registry,
+                                    Some(id),
+                                ));
+                            }
+                            Ok(())
+                        },
+                        &mut work,
+                    )?;
+                }
+            }
+            for (index, stored) in self.program.nodes.iter().enumerate() {
+                work.charge(1)
+                    .map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
+                let id = node_id(self.program.arena, index)?;
+                if matches!(
+                    stored.kind,
+                    EffectExprKind::Operation(EffectOperation::SourceCopyWindow(_))
+                ) && !covered.contains(&id)
+                {
+                    return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                }
+            }
+            Ok(())
+        })();
+        self.charge_type_work(work.used())?;
+        result
+    }
+
+    fn validate_source_byte_call_coverage(&self) -> Result<(), ValidationError> {
+        use super::effect::{EffectExprKind, EffectOperation};
+        let mut work =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let mut calls = HashSet::new();
+        let mut applications = HashSet::new();
+        let result = (|| {
+            work.charge(self.program.nodes.len())
+                .map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
+            for stored in &self.program.nodes {
+                let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+                    &stored.kind
+                else {
+                    continue;
+                };
+                scope.visit_byte_calls(
+                    |call, work| {
+                        work.charge(2)
+                            .map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
+                        applications
+                            .try_reserve(1)
+                            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                        applications.insert(call.application);
+                        if let Some(apply) = call.apply {
+                            calls.try_reserve(1).map_err(|_| {
+                                ValidationError::new(ValidationReason::Resource, None)
+                            })?;
+                            calls.insert(apply);
+                        }
+                        Ok(())
+                    },
+                    &mut work,
+                )?;
+            }
+            Ok(())
+        })();
+        self.charge_type_work(work.used())?;
+        result?;
+        for (index, stored) in self.program.nodes.iter().enumerate() {
+            self.charge_type_work(1)?;
+            let id = node_id(self.program.arena, index)?;
+            let forbidden = match &stored.kind {
+                EffectExprKind::Pure(PureExprKind::Computation(
+                    PureComputation::TypeApplication(application),
+                )) => {
+                    self.sealed_byte_application(application.function())?
+                        && !applications.contains(&id)
+                }
+                EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(
+                    application,
+                ))) => {
+                    (self.borrowed_byte_call_shape(application.function())?
+                        || self.borrowed_view_call_shape(application.function())?)
+                        && !calls.contains(&id)
+                }
+                _ => false,
+            };
+            if forbidden {
+                return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_source_owner_request_coverage(&self) -> Result<(), ValidationError> {
+        use super::effect::{EffectExprKind, EffectOperation};
+        // Registry authentication has already reconstructed every native owner
+        // symbol's original candidate relation. Zero candidates therefore means
+        // zero checked owner symbols and needs no additional arena traversal.
+        if self.program.registry.source_owner_candidate_count() == 0 {
+            return Ok(());
+        }
+        let mut work =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let result = (|| {
+            let mut covered = HashSet::new();
+            work.charge(self.program.nodes.len())
+                .map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
+            for stored in &self.program.nodes {
+                let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+                    &stored.kind
+                else {
+                    continue;
+                };
+                scope.visit_phase_requests(
+                    self.program,
+                    |request, work| {
+                        work.charge(1).map_err(|()| {
+                            ValidationError::new(ValidationReason::Resource, Some(request))
+                        })?;
+                        covered.try_reserve(1).map_err(|_| {
+                            ValidationError::new(ValidationReason::Resource, Some(request))
+                        })?;
+                        if !covered.insert(request) {
+                            return Err(ValidationError::new(
+                                ValidationReason::Registry,
+                                Some(request),
+                            ));
+                        }
+                        Ok(())
+                    },
+                    &mut work,
+                )?;
+            }
+            work.charge(self.program.nodes.len())
+                .map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
+            for (index, stored) in self.program.nodes.iter().enumerate() {
+                let id = node_id(self.program.arena, index)?;
+                match &stored.kind {
+                    EffectExprKind::Operation(EffectOperation::Request(request)) => {
+                        work.charge(1).map_err(|()| {
+                            ValidationError::new(ValidationReason::Resource, Some(id))
+                        })?;
+                        if self
+                            .program
+                            .registry
+                            .native_symbol(request.operation())
+                            .is_some_and(|symbol| symbol.owner().is_some())
+                            && !covered.contains(&id)
+                        {
+                            return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                        }
+                    }
+                    EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) => {
+                        work.charge(boundary.interpretations().len())
+                            .map_err(|()| {
+                                ValidationError::new(ValidationReason::Resource, Some(id))
+                            })?;
+                        if boundary
+                            .interpretations()
+                            .iter()
+                            .any(|interpretation| interpretation.symbol().owner().is_some())
+                        {
+                            return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(())
+        })();
+        self.charge_type_work(work.used())?;
+        result
     }
 
     fn effect_signature(
@@ -14630,11 +16532,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             || Some(authority.span) != node.origin.as_ref().map(Origin::primary_span)
             || !matches!(resource.handle.ty(), Type::Application(head, argument) if **head == Type::Nominal(api.handle()) && **argument == Type::Variable(authority.identity))
             || !self.same_type_charged(&initializer.ty, &Type::Int)?
-            || if let Some(outcome) = api.outcome() {
-                !matches!(&node.ty, Type::Application(head, argument) if **head == Type::Nominal(outcome) && self.same_type_charged(&body.ty, argument)?)
-            } else {
-                !self.same_type_charged(&body.ty, &node.ty)?
-            }
+            || !self.same_type_charged(&body.ty, &node.ty)?
         {
             return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
         }
@@ -14900,6 +16798,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         id: NodeId,
         node: &StoredNode<super::effect::EffectOperationFamily>,
         type_binders: &CoreTypeBinders<'_>,
+        native_registry: &AuthenticatedNativeRegistry<'_>,
         handler_ids: &mut HashSet<super::effect::HandlerId>,
         clause_contracts: &mut HashMap<
             (super::effect::HandlerId, crate::resolved::ResumeId),
@@ -14952,6 +16851,63 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     handler_ids,
                     clause_contracts,
                 )?;
+            }
+            EffectExprKind::Operation(EffectOperation::SourceCopyWindow(scope)) => {
+                self.validate_copy_window(id, node, scope, type_binders, native_registry)?;
+            }
+            EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
+                // Original forests borrow ordinary global schemes only. Every
+                // loan must close against the actual lexical executable binder;
+                // it is never an exemption in final Core scope validation.
+                for (global, expected) in scope.original().globals().iter() {
+                    self.charge_type_work(1)?;
+                    let actual = self.binders.get(global).ok_or_else(|| {
+                        ValidationError::new(ValidationReason::Registry, Some(id))
+                    })?;
+                    if !self.same_type_charged(actual.ty(), expected)? {
+                        return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                    }
+                }
+                let mut budget = TypeWorkBudget::with_limit(
+                    self.type_work_limit.saturating_sub(self.type_work.get()),
+                );
+                let result = scope.authenticate(id, self.program, &mut budget);
+                self.charge_type_work(budget.used())?;
+                result?;
+                self.validate_pattern(&scope.handler_pattern, scope.handler_state.ty(), id)?;
+                self.validate_effect_handler(
+                    id,
+                    node,
+                    &scope.handler,
+                    Some((&scope.handler_output, 0)),
+                    type_binders,
+                    handler_ids,
+                    clause_contracts,
+                )?;
+                let mut row = self.source_native_phase_row(
+                    scope.handler_output.effects(),
+                    scope.native_interpretations(),
+                    id,
+                )?;
+                for root in [scope.acquire.body, scope.finish.body] {
+                    let phase = self.source_native_phase_row(
+                        &self.node(root)?.effects,
+                        scope.native_interpretations(),
+                        id,
+                    )?;
+                    row = self.union_effect_rows_charged(&row, &phase, id)?;
+                }
+                row = self.union_effect_rows_charged(
+                    &row,
+                    &self.node(scope.initializer)?.effects,
+                    id,
+                )?;
+                if !self.same_effect_row_charged(&row, &node.effects, id)? {
+                    return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
+                }
+            }
+            EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) => {
+                self.validate_native_interpret(id, node, boundary, type_binders, native_registry)?;
             }
             EffectExprKind::Operation(EffectOperation::Request(request)) => {
                 self.validate_effect_instance(&request.effect, type_binders, id)?;
@@ -15020,6 +16976,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
     fn validate_effect_nodes(
         &mut self,
         type_binders: &CoreTypeBinders<'_>,
+        native_registry: &AuthenticatedNativeRegistry<'_>,
     ) -> Result<bool, ValidationError> {
         use super::effect::{EffectExprKind, EffectOperation};
 
@@ -15041,6 +16998,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 id,
                 node,
                 type_binders,
+                native_registry,
                 &mut handler_ids,
                 &mut clause_contracts,
             )?;
@@ -15119,7 +17077,11 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 pending.push(current);
                 match super::effect::EffectOperationFamily::pure(&self.node(current)?.kind) {
                     Some(
-                        PureExprKind::Value(PureValue::Function(_) | PureValue::Constructor(_))
+                        PureExprKind::Value(
+                            PureValue::Function(_)
+                            | PureValue::Constructor(_)
+                            | PureValue::Intrinsic(_),
+                        )
                         | PureExprKind::Variable(_)
                         | PureExprKind::Computation(PureComputation::TypeAbstraction(_)),
                     ) => break,
@@ -15227,7 +17189,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                         )?;
                     }
                 }
-                Type::ResourceApply(_, arguments) => {
+                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                     crate::types::visit_owner_type_children_with_charge(
                         arguments.iter(),
                         &mut |units| self.charge_type_work(units),
@@ -15401,6 +17363,190 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         Ok(false)
     }
 
+    fn source_native_phase_row(
+        &self,
+        row: &EffectRow,
+        interpretations: &[super::effect::NativeInterpretation],
+        id: NodeId,
+    ) -> Result<EffectRow, ValidationError> {
+        let mut work =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let result = (|| {
+            let mut outward = crate::types::clone_effect_row_with_budget(row, &mut work)
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+            work.charge(interpretations.len())
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+            for interpretation in interpretations {
+                outward = super::provider::interpret_native_phase_row(
+                    &outward,
+                    interpretation.effect(),
+                    &mut work,
+                )?;
+            }
+            Ok(outward)
+        })();
+        self.charge_type_work(work.used())?;
+        result
+    }
+
+    fn native_interpret_row(
+        &self,
+        row: &EffectRow,
+        interpretations: &[super::effect::NativeInterpretation],
+        id: NodeId,
+    ) -> Result<EffectRow, ValidationError> {
+        let mut budget =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let result = super::effect::native_interpret_outward_row(row, interpretations, &mut budget);
+        self.charge_type_work(budget.used())?;
+        result.map_err(|error| {
+            ValidationError::new(
+                match error {
+                    super::BuildError::TypeWorkExceeded => ValidationReason::Resource,
+                    _ => ValidationReason::EffectRow,
+                },
+                Some(id),
+            )
+        })
+    }
+
+    fn validate_copy_window(
+        &self,
+        id: NodeId,
+        node: &StoredNode<super::effect::EffectOperationFamily>,
+        scope: &super::source_window::SourceCopyWindowNode,
+        type_binders: &CoreTypeBinders<'_>,
+        native_registry: &AuthenticatedNativeRegistry<'_>,
+    ) -> Result<(), ValidationError> {
+        let invalid = || ValidationError::new(ValidationReason::Registry, Some(id));
+        let resource = || ValidationError::new(ValidationReason::Resource, Some(id));
+        let mut work =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let expected = crate::foreign::source_access::window_state_type(
+            scope.family(),
+            scope.arguments().iter(),
+            scope.identity(),
+            &self.program.registry,
+            &mut work,
+        );
+        self.charge_type_work(work.used())?;
+        let (_, state) = expected.map_err(|error| {
+            if error.is_resource_exhaustion() {
+                resource()
+            } else {
+                invalid()
+            }
+        })?;
+        if !self.same_type_charged(&self.node(scope.state())?.ty, &state)? {
+            return Err(invalid());
+        }
+        for interpretation in scope.interpretations() {
+            let mut work = TypeWorkBudget::with_limit(
+                self.type_work_limit.saturating_sub(self.type_work.get()),
+            );
+            let checked = (|| {
+                if !native_registry
+                    .authenticates(&self.program.registry, interpretation, &mut work)
+                    .map_err(|()| resource())?
+                {
+                    return Ok(false);
+                }
+                crate::foreign::source_access::window_interpretation_matches(
+                    scope.family(),
+                    scope.arguments(),
+                    interpretation,
+                    &self.program.registry,
+                    &mut work,
+                )
+                .map_err(|error| {
+                    if error.is_resource_exhaustion() {
+                        resource()
+                    } else {
+                        invalid()
+                    }
+                })
+            })();
+            self.charge_type_work(work.used())?;
+            if !checked? {
+                return Err(invalid());
+            }
+            self.validate_effect_instance(interpretation.effect(), type_binders, id)?;
+        }
+        let mut work =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let unique = native_interpretations_are_unique(scope.interpretations(), &mut work);
+        self.charge_type_work(work.used())?;
+        if !unique.map_err(|()| resource())? {
+            return Err(invalid());
+        }
+        let body = self.node(scope.body())?;
+        if !self.same_type_charged(&node.ty, &body.ty)? {
+            return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+        }
+        let outward = self.native_interpret_row(&body.effects, scope.interpretations(), id)?;
+        if !outward.is_empty() {
+            return Err(ValidationError::new(
+                ValidationReason::ResourceEscape,
+                Some(id),
+            ));
+        }
+        if !self.same_effect_row_charged(&node.effects, &self.node(scope.state())?.effects, id)? {
+            return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
+        }
+        Ok(())
+    }
+
+    fn validate_native_interpret(
+        &self,
+        id: NodeId,
+        node: &StoredNode<super::effect::EffectOperationFamily>,
+        boundary: &super::effect::NativeInterpretNode,
+        type_binders: &CoreTypeBinders<'_>,
+        native_registry: &AuthenticatedNativeRegistry<'_>,
+    ) -> Result<(), ValidationError> {
+        let invalid = || ValidationError::new(ValidationReason::Registry, Some(id));
+        let resource = || ValidationError::new(ValidationReason::Resource, Some(id));
+        self.charge_type_work(boundary.interpretations().len())?;
+        for interpretation in boundary.interpretations() {
+            if !matches!(
+                interpretation.symbol().symbol().call(),
+                crate::foreign::source_contract::PreparedForeignCall::Scalar { .. }
+            ) {
+                return Err(invalid());
+            }
+            let mut budget = TypeWorkBudget::with_limit(
+                self.type_work_limit.saturating_sub(self.type_work.get()),
+            );
+            let admitted =
+                native_registry.authenticates(&self.program.registry, interpretation, &mut budget);
+            self.charge_type_work(budget.used())?;
+            if !admitted.map_err(|()| resource())? {
+                return Err(invalid());
+            }
+            // Ordered original parameters, signature and provenance were
+            // reconstructed once by this phase's independent registry gate.
+            // Complete actuals still require node-local kinds and lexical scope.
+            self.validate_effect_instance(interpretation.effect(), type_binders, id)?;
+        }
+        let mut budget =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let unique = native_interpretations_are_unique(boundary.interpretations(), &mut budget);
+        self.charge_type_work(budget.used())?;
+        if !unique.map_err(|()| resource())? {
+            return Err(invalid());
+        }
+        let body = self.node(boundary.body())?;
+        self.validate_effect_row(&body.effects, type_binders, id)?;
+        if !self.same_type_charged(&node.ty, &body.ty)? {
+            return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+        }
+        let expected = self.native_interpret_row(&body.effects, boundary.interpretations(), id)?;
+        if !self.same_effect_row_charged(&node.effects, &expected, id)? {
+            return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
+        }
+        Ok(())
+    }
+
     fn remove_provider_native_row(
         &self,
         row: &EffectRow,
@@ -15491,6 +17637,9 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             }
             let discovered_handler = match &node.kind {
                 EffectExprKind::Operation(EffectOperation::Handler(handler)) => Some(handler),
+                EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
+                    Some(&scope.handler)
+                }
                 EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
                     Some(&scope.handler)
                 }
@@ -15682,6 +17831,42 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                             }
                             self.union_effect_rows_charged(child_row(scope.initializer)?, &row, id)?
                         }
+                        EffectExprKind::Operation(EffectOperation::SourceCopyWindow(scope)) => {
+                            let outward = self.native_interpret_row(
+                                child_row(scope.body())?,
+                                scope.interpretations(),
+                                id,
+                            )?;
+                            self.union_effect_rows_charged(child_row(scope.state())?, &outward, id)?
+                        }
+                        EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
+                            let mut row = self.provider_body_outward_row(
+                                child_row(scope.handler.body())?,
+                                scope.handler.effect(),
+                                id,
+                            )?;
+                            for clause in scope.handler.clauses() {
+                                row = self.union_effect_rows_charged(
+                                    &row,
+                                    child_row(clause.body())?,
+                                    id,
+                                )?;
+                            }
+                            row = self.native_interpret_row(
+                                &row,
+                                scope.native_interpretations(),
+                                id,
+                            )?;
+                            for root in [scope.acquire.body, scope.finish.body] {
+                                let phase = self.native_interpret_row(
+                                    child_row(root)?,
+                                    scope.native_interpretations(),
+                                    id,
+                                )?;
+                                row = self.union_effect_rows_charged(&row, &phase, id)?;
+                            }
+                            self.union_effect_rows_charged(child_row(scope.initializer)?, &row, id)?
+                        }
                         EffectExprKind::Operation(EffectOperation::Resource(resource)) => {
                             let outward = self.resource_outward_row(
                                 child_row(resource.body)?,
@@ -15706,6 +17891,13 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                                 child_row(scope.body)?,
                                 id,
                             )?,
+                        EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) => {
+                            self.native_interpret_row(
+                                child_row(boundary.body())?,
+                                boundary.interpretations(),
+                                id,
+                            )?
+                        }
                         EffectExprKind::Operation(EffectOperation::Request(request)) => {
                             let requested =
                                 self.singleton_effect_row_charged(request.effect(), id)?;
@@ -16047,8 +18239,11 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         id: NodeId,
     ) -> Result<BorrowedClauseContract<'_>, ValidationError> {
         match contract {
-            EffectClauseContract::Ordinary { handler, clause } => {
-                let node = self.node(handler)?;
+            EffectClauseContract::Ordinary {
+                handler: owner,
+                clause,
+            } => {
+                let node = self.node(owner)?;
                 let super::effect::EffectExprKind::Operation(
                     super::effect::EffectOperation::Handler(handler),
                 ) = &node.kind
@@ -16065,7 +18260,14 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     effect: handler.effect(),
                     clause,
                     answer: std::borrow::Cow::Borrowed(&node.ty),
-                    output: ClauseOutput::Ordinary(&node.effects),
+                    output: if self
+                        .source_handler_graph
+                        .is_some_and(|graph| graph.wrapper() == owner)
+                    {
+                        ClauseOutput::ProvisionalOperand
+                    } else {
+                        ClauseOutput::Ordinary(&node.effects)
+                    },
                 })
             }
             EffectClauseContract::Scoped {
@@ -16074,6 +18276,23 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 clause,
             } => {
                 let node = self.node(scope)?;
+                if let super::effect::EffectExprKind::Operation(
+                    super::effect::EffectOperation::SourceResourceScope(source),
+                ) = &node.kind
+                {
+                    if member != 0 {
+                        return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                    }
+                    let clause = source.handler.clauses().get(clause).ok_or_else(|| {
+                        ValidationError::new(ValidationReason::Registry, Some(id))
+                    })?;
+                    return Ok(BorrowedClauseContract {
+                        effect: source.handler.effect(),
+                        clause,
+                        answer: std::borrow::Cow::Borrowed(source.handler_output.value()),
+                        output: ClauseOutput::Ordinary(source.handler_output.effects()),
+                    });
+                }
                 let super::effect::EffectExprKind::Operation(
                     super::effect::EffectOperation::ProviderScope(scope),
                 ) = &node.kind
@@ -18114,6 +20333,7 @@ mod tests {
         let effect = crate::types::EffectId::new(module, 0);
         let registry = crate::resolved::ResolvedRegistry::default().with_effects(vec![
             ResolvedEffectDeclaration {
+                native_contract: None,
                 id: effect,
                 public: false,
                 spelling: "Ask".into(),
@@ -20552,6 +22772,7 @@ mod tests {
             .methods
             .iter()
             .map(|method| MethodEvidenceMethod {
+                spelling: method.spelling.clone().into_boxed_str(),
                 id: method.id,
                 interface_parameters: interface
                     .parameters
@@ -21136,207 +23357,6 @@ mod tests {
                 assert_eq!(result.unwrap_err().reason, ValidationReason::Registry);
             } else {
                 result.unwrap();
-            }
-        }
-    }
-
-    #[test]
-    fn native_buffer_core_authenticates_authority_and_result_after_both_transforms() {
-        use super::super::effect::{EffectExprKind, EffectOperation};
-        let directory = LinkedValidationDirectory::create();
-        let entry = directory.write("entry.ash", "import @builtin.native_buffer as Buffer\nmain : Unit -> Buffer.Outcome<Int>\nmain () = resource native_buffer<R> b = 4 {\nBuffer.length b + 1\n}\n");
-        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
-        let linked = link_modules(checked_linked_validation_graph(&graph), graph.entry()).unwrap();
-        let linked = validate_linked_facts_for_test(linked).unwrap();
-        let mut elaborator =
-            crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
-        let typed = elaborator
-            .synthesize_effect_module_program(&linked)
-            .unwrap();
-        let core = elaborator.finish(typed.node).unwrap();
-        let sources = graph
-            .modules()
-            .iter()
-            .map(|module| module.source())
-            .collect::<Vec<_>>();
-        let relation = graph
-            .modules()
-            .iter()
-            .map(|module| (module.id(), module.source().id()))
-            .collect::<Vec<_>>();
-        let mut measured = Validator::new_modules(&core, &sources, &relation).unwrap();
-        measured.run_effect().unwrap();
-        let work = measured.type_work.get();
-        for remaining in [work - 1, work, work] {
-            let mut retry = Validator::new_modules(&core, &sources, &relation).unwrap();
-            retry
-                .type_work
-                .set(CORE_VALIDATION_TYPE_WORK_LIMIT - remaining);
-            assert_eq!(
-                retry.run_effect().err().map(|error| error.reason()),
-                if remaining < work {
-                    Some(ValidationReason::Resource)
-                } else {
-                    None
-                }
-            );
-        }
-        let validated = super::super::validate_effect_modules(core, &sources, &relation).unwrap();
-        for fold in [false, true] {
-            for mutation in 0..13 {
-                crate::eval::reset_native_buffer_counters_for_test();
-                let mut rebuilt = if fold {
-                    crate::core::transform::fold_effect_literal_primitives(&validated).unwrap()
-                } else {
-                    crate::core::transform::identity_effect_traversal(&validated).unwrap()
-                };
-                let resource_index = rebuilt
-                    .nodes
-                    .iter()
-                    .position(|node| {
-                        matches!(
-                            &node.kind,
-                            EffectExprKind::Operation(EffectOperation::Resource(_))
-                        )
-                    })
-                    .unwrap();
-                let resource_node = &mut rebuilt.nodes[resource_index];
-                let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
-                    &mut resource_node.kind
-                else {
-                    unreachable!()
-                };
-                match mutation {
-                    0 => {}
-                    1 => {
-                        resource.acquisition.identity =
-                            crate::types::TypeVariableId::generated(u32::MAX)
-                    }
-                    2 => {
-                        resource.acquisition.provider = crate::interface::LexicalEvidenceId::new(
-                            resource.acquisition.provider.module(),
-                            u32::MAX,
-                        )
-                    }
-                    3 => resource.acquisition.builtin = graph.entry(),
-                    4 => {
-                        resource.acquisition.span =
-                            sources[0].span(ByteRange::new(0, 1).unwrap()).unwrap()
-                    }
-                    5 => resource.acquisition.handle = resource.acquisition.methods[0],
-                    6 => resource.acquisition.methods.swap(0, 2),
-                    7 => resource_node.ty = Type::Int,
-                    8 => {
-                        resource_node.ty = Type::Application(
-                            Box::new(Type::Nominal(
-                                resource.acquisition.api().unwrap().error().unwrap(),
-                            )),
-                            Box::new(Type::Int),
-                        )
-                    }
-                    9 => {
-                        resource_node.effects = EffectRow::closed(Box::new([EffectInstance::new(
-                            resource.acquisition.api().unwrap().ops(),
-                            Box::new([Type::Variable(resource.acquisition.identity)]),
-                        )]))
-                    }
-                    10 => {
-                        let request = rebuilt
-                            .nodes
-                            .iter_mut()
-                            .find_map(|node| match &mut node.kind {
-                                EffectExprKind::Operation(EffectOperation::Request(request)) => {
-                                    Some(request)
-                                }
-                                _ => None,
-                            })
-                            .unwrap();
-                        request.operation = OperationId::new(request.effect.effect(), u32::MAX);
-                    }
-                    11 => rebuilt.method_evidence = Arc::default(),
-                    12 => {
-                        resource.acquisition.methods = crate::resolved::ResourceMethods::Cell([
-                            resource.acquisition.methods[0],
-                            resource.acquisition.methods[1],
-                        ])
-                    }
-                    _ => unreachable!(),
-                }
-                let result = super::super::validate_effect_modules(rebuilt, &sources, &relation);
-                if mutation == 0 {
-                    let executable = result.unwrap();
-                    assert_eq!(
-                        crate::eval::evaluate_effect(&executable)
-                            .unwrap()
-                            .value
-                            .to_string(),
-                        "Success(5)"
-                    );
-                    assert_eq!(
-                        crate::eval::native_buffer_counters_for_test(),
-                        [1, 1, 0, 0, 1, 1]
-                    );
-                } else {
-                    assert!(result.is_err(), "fold={fold}, mutation={mutation}");
-                    assert_eq!(
-                        crate::eval::native_buffer_counters_for_test(),
-                        [0; 6],
-                        "fold={fold}, mutation={mutation}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn native_buffer_core_registry_authenticates_result_constructors_after_transforms() {
-        for fold in [false, true] {
-            for error_payload in [false, true] {
-                crate::eval::reset_native_buffer_counters_for_test();
-                let directory = LinkedValidationDirectory::create();
-                let entry = directory.write(
-                    "entry.ash",
-                    "import @builtin.native_buffer as Buffer\nmain : Unit -> Int\nmain () = 42\n",
-                );
-                let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
-                let linked =
-                    link_modules(checked_linked_validation_graph(&graph), graph.entry()).unwrap();
-                let linked = validate_linked_facts_for_test(linked).unwrap();
-                let mut elaborator =
-                    crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
-                let typed = elaborator
-                    .synthesize_effect_module_program(&linked)
-                    .unwrap();
-                let core = elaborator.finish(typed.node).unwrap();
-                drop(linked);
-                let sources = graph
-                    .modules()
-                    .iter()
-                    .map(|module| module.source())
-                    .collect::<Vec<_>>();
-                let relation = graph
-                    .modules()
-                    .iter()
-                    .map(|module| (module.id(), module.source().id()))
-                    .collect::<Vec<_>>();
-                let validated =
-                    super::super::validate_effect_modules(core, &sources, &relation).unwrap();
-                let mut rebuilt = if fold {
-                    crate::core::transform::fold_effect_literal_primitives(&validated).unwrap()
-                } else {
-                    crate::core::transform::identity_effect_traversal(&validated).unwrap()
-                };
-                drop(validated);
-                Arc::get_mut(&mut rebuilt.registry)
-                    .unwrap()
-                    .corrupt_native_constructor_for_test(error_payload);
-                assert_eq!(
-                    super::super::validate_effect_modules(rebuilt, &sources, &relation)
-                        .unwrap_err()
-                        .reason(),
-                    ValidationReason::Registry
-                );
-                assert_eq!(crate::eval::native_buffer_counters_for_test(), [0; 6]);
             }
         }
     }
@@ -25662,7 +27682,7 @@ mod tests {
                 Task::Visit(Type::Nominal(id)) => output.push(Type::Nominal(*id)),
                 Task::Visit(Type::Variable(id)) => output.push(Type::Variable(*id)),
                 Task::Visit(Type::Inference(id)) => output.push(Type::Inference(*id)),
-                Task::Visit(Type::ResourceApply(..)) => {
+                Task::Visit(Type::ResourceApply(..) | Type::ForeignOwnerApply(..)) => {
                     panic!("forged pure adapter fixture has no resource applications")
                 }
                 Task::Visit(Type::Application(function, argument)) => {
@@ -26185,7 +28205,7 @@ mod tests {
                     work.push(argument);
                     work.push(function);
                 }
-                Type::ResourceApply(_, arguments) => {
+                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                     for argument in arguments {
                         let mut work = TypeWorkBudget::unbounded();
                         let mapped = crate::types::map_kinded_argument_types_with_budget(
@@ -28390,7 +30410,7 @@ mod tests {
                     work.push(argument);
                     work.push(function);
                 }
-                Type::ResourceApply(_, arguments) => {
+                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                     for argument in arguments {
                         let mut work = TypeWorkBudget::unbounded();
                         let mapped = crate::types::map_kinded_argument_types_with_budget(
@@ -28445,7 +30465,7 @@ mod tests {
                     work.push(argument);
                     work.push(function);
                 }
-                Type::ResourceApply(_, arguments) => {
+                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                     let mut budget = TypeWorkBudget::unbounded();
                     crate::types::extend_owner_type_children_with_charge(
                         arguments,
@@ -28484,7 +30504,7 @@ mod tests {
                     work.push(argument);
                     work.push(function);
                 }
-                Type::ResourceApply(_, arguments) => {
+                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                     let mut budget = TypeWorkBudget::unbounded();
                     let mut contains_tail = false;
                     crate::types::visit_owner_components_with_charge(
@@ -30141,6 +32161,7 @@ mod tests {
                 Mutation::DuplicateEffectOwner | Mutation::NominalCrossOwner => {}
             }
             let mut effects = vec![ResolvedEffectDeclaration {
+                native_contract: None,
                 id: effect,
                 public: false,
                 spelling: "Build".into(),
@@ -30154,6 +32175,7 @@ mod tests {
                 operation.id = OperationId::new(second, 0);
                 operation.spelling = "more".into();
                 effects.push(ResolvedEffectDeclaration {
+                    native_contract: None,
                     id: second,
                     public: false,
                     spelling: "More".into(),
@@ -34452,3 +36474,7 @@ pub(crate) fn owned_handler_links_for_test(
     );
     links
 }
+
+#[cfg(test)]
+#[path = "native_interpret_tests.rs"]
+mod native_interpret_tests;

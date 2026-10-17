@@ -1,36 +1,25 @@
-use ash::{
-    driver::{RunConfiguration, run_path},
-    module::ModuleRoots,
-    source::SourceFile,
-};
+#[path = "support/source_buffer.rs"]
+mod source_buffer;
 
 fn run_imported(helper: &str, entry: &str) -> Result<String, String> {
-    let directory = std::env::temp_dir().join(format!(
-        "ash-native-imports-{}-{}",
-        std::process::id(),
-        SourceFile::new("native-imports", "").unwrap().id().value()
-    ));
-    std::fs::create_dir(&directory).unwrap();
-    std::fs::write(directory.join("helper.ash"), helper).unwrap();
-    let path = directory.join("entry.ash");
-    std::fs::write(&path, entry).unwrap();
-    let result = run_path(RunConfiguration {
-        entry: path,
-        roots: ModuleRoots::empty(),
-    });
-    std::fs::remove_dir_all(&directory).unwrap();
-    result
-        .map(|observation| observation.value_display())
-        .map_err(|error| format!("{error:?}"))
+    source_buffer::run_modules("entry.ash", &[("helper.ash", helper), ("entry.ash", entry)])
+        .map(|observed| observed.value_display())
+        .map_err(|error| {
+            format!(
+                "{}: {:?} {:?}",
+                error.reason_code(),
+                error.pipeline_failure(),
+                error.graph_failure()
+            )
+        })
 }
 
 #[test]
-fn facade_only_import_does_not_authorize_native_buffer_acquisition() {
-    let failure = run_imported(
-        "pub import @builtin.native_buffer (Outcome, length)\n",
-        "import helper (Outcome, length)\nmain : Unit -> Outcome<Int>\nmain () = resource native_buffer<R> b = 4 {\nlength b\n}\n",
-    ).unwrap_err();
-    assert!(failure.contains("ResourceBuiltinRequired"), "{failure}");
+fn facade_reexports_original_source_buffer_acquisition() {
+    assert_eq!(run_imported(
+        "pub import @ffi.native_buffer (Buffer, Outcome, length)\n",
+        "import helper (Buffer, Outcome, length)\nmain : Unit -> Outcome<Int>\nmain () = resource Buffer<R> b = 4 {\nlength b\n}\n",
+    ).unwrap(), "Success(4)");
 }
 
 #[test]
@@ -61,25 +50,28 @@ write : (Handle<R>, Int, Int) -> Outcome<Unit> ! {Ops<R>}
         .unwrap(),
         "42"
     );
-    let failure = run_imported(helper, "import helper as Buffer\nmain : Unit -> Buffer.Outcome<Int>\nmain () = resource native_buffer<R> b = 4 {\nBuffer.length b\n}\n").unwrap_err();
-    assert!(failure.contains("ResourceBuiltinRequired"), "{failure}");
+    let failure = run_imported(helper, "import helper as Buffer\nmain : Unit -> Buffer.Outcome<Int>\nmain () = resource Buffer.Buffer<R> b = 4 {\nBuffer.length b\n}\n").unwrap_err();
+    assert!(
+        failure.starts_with("resolve.unavailable-export:"),
+        "{failure}"
+    );
 }
 
 #[test]
 fn imported_generic_callback_retains_native_authority_inside_its_owner() {
-    let helper = r#"import @builtin.native_buffer as Buffer
-pub reader<R> : Buffer.Handle<R> -> (Int -> Int ! {Buffer.Ops<R>}) where Buffer.Provider<R>
+    let helper = r#"import @ffi.native_buffer as Buffer
+pub reader<R> : Buffer.Buffer<R> -> (Int -> Int ! {Buffer.Ops<Buffer.Buffer<R>>}) where Buffer.Provider<Buffer.Buffer<R>>
 reader b = fn(value) {
 value + Buffer.length b
 }
 "#;
-    let entry = r#"import @builtin.native_buffer as Buffer
+    let entry = r#"import @ffi.native_buffer as Buffer
 import helper (reader)
 effect Adjust {
 publish : Int -> Int
 }
 main : Unit -> Int
-main () = match (resource native_buffer<R> b = 2 {
+main () = match (resource Buffer.Buffer<R> b = 2 {
 hook Adjust {
 register Adjust (reader b) {
 perform Adjust.publish 40
@@ -100,13 +92,13 @@ scoped action = cleanup action {
 42
 }
 "#;
-    let entry = r#"import @builtin.native_buffer as Buffer
+    let entry = r#"import @ffi.native_buffer as Buffer
 import @builtin.cell as Cell
 import helper (scoped)
 main : Unit -> Int
 main () = resource cell<S> trace = 0 {
-let _ = resource native_buffer<R> b = 2 {
-let action : Unit -> Unit ! {Buffer.Ops<R>, Cell.Ops<S>} = fn(ignored) {
+let _ = resource Buffer.Buffer<R> b = 2 {
+let action : Unit -> Unit ! {Buffer.Ops<Buffer.Buffer<R>>, Cell.Ops<S>} = fn(ignored) {
 Cell.write (trace, Buffer.length b + 40)
 }
 scoped action
@@ -125,20 +117,20 @@ let retained = value
 42
 }
 "#;
-    let inside = r#"import @builtin.native_buffer as Buffer
+    let inside = r#"import @ffi.native_buffer as Buffer
 import helper (keep)
 main : Unit -> Buffer.Outcome<Int>
-main () = resource native_buffer<R> b = 2 {
+main () = resource Buffer.Buffer<R> b = 2 {
 let action = keep b
 action ()
 }
 "#;
     assert_eq!(run_imported(helper, inside).unwrap(), "Success(42)");
 
-    let escaping = r#"import @builtin.native_buffer as Buffer
+    let escaping = r#"import @ffi.native_buffer as Buffer
 import helper (keep)
 main : Unit -> Buffer.Outcome<Unit -> Int>
-main () = resource native_buffer<R> b = 2 {
+main () = resource Buffer.Buffer<R> b = 2 {
 keep b
 }
 "#;
@@ -156,11 +148,11 @@ invoke value = read value
 "#;
     for body in ["let retained = b\n42", "copied"] {
         let entry = format!(
-            r#"import @builtin.native_buffer as Buffer
+            r#"import @ffi.native_buffer as Buffer
 import helper (Read, read, invoke)
 main : Unit -> Int
 main () = {{
-let escaped = resource native_buffer<R> b = 2 {{
+let escaped = resource Buffer.Buffer<R> b = 2 {{
 let copied = Buffer.length b
 newtype Token = Token(Unit)
 let saved = Token(())
@@ -178,23 +170,45 @@ later
 }}
 "#
         );
-        let result = run_imported(helper, &entry);
+        let result = source_buffer::compile_modules(
+            "entry.ash",
+            &[("helper.ash", helper), ("entry.ash", &entry)],
+        );
         if body == "copied" {
-            assert_eq!(result.unwrap(), "42");
+            let compiled = result.unwrap();
+            assert!(
+                compiled
+                    .compilation_work()
+                    .independent_core
+                    .unwrap()
+                    .completed
+            );
+            // This pre-existing generic native-build exclusion is not buffer
+            // permission. Preserve the exact source/Core capture witness rather
+            // than adding general local-newtype/dictionary image support here.
+            let output =
+                std::env::temp_dir().join(format!("ash-buffer-unsupported-{}", std::process::id()));
+            let error =
+                ash::build::prepare_program(&compiled, ash::build::BuildConfiguration::new(output))
+                    .unwrap_err();
+            assert!(
+                format!("{error:?}").contains("Unsupported(RegistryMetadata)"),
+                "{error:?}"
+            );
         } else {
             let error = result.unwrap_err();
-            assert!(error.contains("ResourceEscape"), "{error}");
+            assert!(format!("{error:?}").contains("ResourceEscape"), "{error:?}");
         }
     }
 }
 
 #[test]
 fn imported_native_cleanup_row_requires_existing_hook_lacks_authority() {
-    let entry = r#"import @builtin.native_buffer as Buffer
+    let entry = r#"import @ffi.native_buffer as Buffer
 import helper (Adjust, scoped)
 main : Unit -> Buffer.Outcome<Int>
-main () = resource native_buffer<R> b = 2 {
-let action : Unit -> Unit ! {Buffer.Ops<R>} = fn(ignored) {
+main () = resource Buffer.Buffer<R> b = 2 {
+let action : Unit -> Unit ! {Buffer.Ops<Buffer.Buffer<R>>} = fn(ignored) {
 let length = Buffer.length b
 ()
 }
@@ -236,7 +250,7 @@ let retained = value
 "#;
     for (second, expected) in [("()", "Success(42)"), ("true", "Success(13)")] {
         let entry = format!(
-            r#"import @builtin.native_buffer as Buffer
+            r#"import @ffi.native_buffer as Buffer
 import helper (keep)
 effect Mark<T> {{
 publish : (Unit -> Int) -> (Unit -> Int)
@@ -246,7 +260,7 @@ probe (first, second, payload) = hook Mark<U> {{
 perform Mark<T>.publish payload
 }}
 main : Unit -> Buffer.Outcome<Int>
-main () = resource native_buffer<R> b = 2 {{
+main () = resource Buffer.Buffer<R> b = 2 {{
 let restored = handle (probe ((), {second}, keep b)) with Mark<Unit> {{
 publish input => resume (fn(ignored) {{
 13
@@ -275,13 +289,13 @@ pack value = Hidden value
 "#;
     for body in ["let retained = b\ncopied", "copied"] {
         let entry = format!(
-            r#"import @builtin.native_buffer as Buffer
+            r#"import @ffi.native_buffer as Buffer
 import helper (Box, pack)
 effect Send {{
 send : Box<Unit -> Int> -> Unit
 }}
 main : Unit -> Buffer.Outcome<Int>
-main () = handle (resource native_buffer<R> b = 2 {{
+main () = handle (resource Buffer.Buffer<R> b = 2 {{
 let copied = Buffer.length b
 let later : Unit -> Int = fn(ignored) {{
 {body}

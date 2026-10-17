@@ -1,7 +1,8 @@
 # Lexical Structure
 
 An Ash source file is UTF-8 text. Ash identifiers, reserved words,
-punctuation, module paths, and literal spellings use ASCII characters. A byte
+punctuation, module paths, and integer spellings use ASCII characters. Quoted
+strings may contain UTF-8 text. A byte
 order mark is not part of the source language.
 
 ## Tokens
@@ -17,14 +18,18 @@ syntactic position and scope.
 
 The reserved words `fn`, `let`, `rec`, `and`, `type`, `newtype`, `interface`,
 `impl`, `effect`, `perform`, `handle`, `with`, `resume`, `discard`, `resource`,
-`hook`, `register`, `cleanup`, `where`,
-`match`, `import`, `as`, `pub`, `opaque`, `Int`, `Bool`, `Unit`, `true`, and
+`hook`, `register`, `cleanup`, `copy_window`, `where`,
+`match`, `import`, `as`, `pub`, `opaque`, `Int`, `Bool`, `Unit`, `String`, `Bytes`, `true`, and
 `false` cannot be identifiers. The single spelling `_` is the
 wildcard token rather than an ordinary identifier; spellings such as `_tail`
 remain ordinary identifiers.
 
 `publish` remains an ordinary operation identifier. `cell` is contextual in a
 resource acquisition and remains an ordinary identifier elsewhere.
+Foreign-declaration words such as `foreign`, `library`, `profile`, `repr`,
+`symbol`, `signed`, `unsigned`, `size_t`, `name`, `abi`, `operand`, `output`,
+`outcome`, `otherwise`, `from`, `scalar`, `readable`, `result` and `void` are contextual
+in those declarations and do not become generally reserved identifiers.
 `builtin` is reserved as a module-root name, not as an
 identifier; [name resolution](name-resolution.md#compiler-owned-cell-module)
 defines that root's fixed import.
@@ -48,9 +53,19 @@ written angle-bracketed parameter or argument list is nonempty. The longest
 token wins where one spelling prefixes another.
 Semicolon is recognized only to provide its specified source rejection; no
 grammar production admits it as source punctuation.
+The lexer also recognizes a standalone minus for foreign constant integers;
+ordinary negative integer expressions remain outside the syntax.
 
-Ash has no comments, string or character literals, escapes, Unicode
-identifiers, floating-point literals, or negative literals.
+Ordinary `String` literals, foreign profiles and native-symbol names use
+double-quoted strings. Their
+contents admit `\"`, `\\`, `\n`, `\r`, `\t` and `\0` escapes; other escapes,
+unescaped ASCII control characters and a missing closing quote reject. These
+declaration strings specify profile and native-symbol data. An ordinary string
+literal has type `String` and contains its decoded UTF-8 text, including escaped
+NUL. Interior NUL rejection belongs to the selected native input conversion,
+not to string lexing. Ash has no
+comments, character literals, Unicode identifiers,
+floating-point literals, or negative integer expressions.
 
 This complete entry module is rejected with the lexical reason `lex.comment`.
 The executable test

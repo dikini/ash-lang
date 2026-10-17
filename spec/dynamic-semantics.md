@@ -3,7 +3,8 @@
 Ash evaluation is defined by one deterministic small-step relation over
 configurations `CONFIG(heap, environment, control, continuation)`. The heap is
 fresh for one evaluation and maps numeric locations to tuples, completed
-constructors, uninitialized recursive data slots, or aliases. Tuple elements
+constructors, uninitialized slots for recursive data or native reports, or
+aliases. Tuple elements
 and constructor payloads are runtime values. The environment maps resolved term
 identities to runtime values. Effect execution also retains lexical type/row
 instantiation in the environment, separately from term bindings. This metadata
@@ -13,7 +14,8 @@ one suffix of that continuation into a clause-owned captured continuation. The
 suffix is moved, not copied. Its clause boundary records whether the unique
 resume capability still owns that captured control or has consumed it.
 
-Runtime values are arbitrary-precision integers, Booleans, unit, lexical
+Runtime values are arbitrary-precision integers, Booleans, unit, independent
+immutable byte sequences, validated UTF-8 strings, lexical
 functions, internal lexical polymorphic functions, payload-constructor
 functions, opaque non-owning resource handles, or heap locations. A function
 template becomes a lexical function with the recursive environment when its
@@ -32,14 +34,17 @@ static operations rather than values.
 
 Elaboration produces one validated linked Core expression: dependency-ordered
 recursive global groups around the generated application of the entry module's
-local `main` to unit. Static checking has already established an empty entry
-effect row. Evaluation starts with that expression as control, a fresh empty
-heap and environment, and an empty continuation:
+local `main` to unit. The final linked expression has an empty outward effect
+row after mandatory owner-free native interpretation and exact discharge by
+admitted source resource scopes. Evaluation starts
+with that expression as control, a fresh empty heap and environment, and an
+empty continuation:
 
 ```sequent
 E-Program-Start :=
   elaborate(modules, entry) = linked_program
   validate(linked_program) = success
+  required_source_native_bindings(linked_program) are admitted
   ===>
   INITIAL(modules, entry) = CONFIG(empty_heap, empty_environment, linked_program, empty_continuation)
 ```
@@ -50,6 +55,15 @@ whole-program validation before evaluation. Neither premise performs module
 loading at runtime. The ordinary recursive-binding and application rules enter
 the linked groups and call `main`. Imports have no initialization step, and
 modules are not runtime values.
+
+For a program with owner-free source-native effects, the linked expression
+includes the mandatory native interpretation described below. A source resource
+scope instead retains its exact acquisition and teardown interpretations. Both
+forms require their executable bindings before any Ash expression runs. The
+binding premise is vacuous for a program requiring none. Binding admission
+retains the exact original checked symbol and bridge authority, independently checked against
+the validated program; a missing or changed binding is an internal failure.
+It performs no Ash evaluation or implicit native compilation/linkage.
 
 ## Type instantiation and erasure
 
@@ -480,6 +494,465 @@ over Boolean values. The left rules propagate a step in the left operand. The
 right rules apply only after the left operand is an integer value. The value
 rules compute the primitive result.
 
+## Owner-free scalar native execution
+
+This section describes source-native scalar operands/results and zero-operand
+`void` calls in the admitted Linux x86-64 GNU profile. Supported integer
+representations are signed/unsigned 8-, 32- and 64-bit scalars and 64-bit
+`size_t`. These calls create no resource activation or owning source value.
+The ordinary source buffer library behavior remains described separately.
+
+`NativeInterpret(S, body)` is a checked Core boundary installed for the program's
+required owner-free native effects. It is not a source expression. Independent
+validation checks its exact symbol identities, complete ordered Type/EffectRow
+instances and row discharge; it removes only the listed native instances.
+Ordinary outward effects still require their own interpretation.
+
+Entering this boundary evaluates `body` with a continuation boundary retaining
+`S` and the current lexical instantiation. Ordinary return removes that boundary
+and passes the value outward. A source-native request evaluates its operand once,
+then authenticates its original operation and checked symbol against the admitted
+binding. Its complete actual vector must match a listed instance under the
+request's and boundary's saved lexical instantiations. Every argument retains
+its declared kind and position, including unused row arguments. The native
+Type-only projection does not replace this complete source authority.
+A source-native request never selects an ordinary source handler or a legacy
+manifest binding. The native boundary and remaining continuation stay in place
+through the synchronous call and its report.
+
+Before calling native code, the machine traverses the checked operand paths,
+charges mathematical-integer magnitude work, and narrows each borrowed `Int`
+exactly into its declared representation. A value outside that representation's
+range produces canonical `Foreign.ConversionFailed(error)` before invocation.
+The error belongs to the original opaque `Foreign.ConversionError` type.
+Constructing this refusal report also requires work and storage admission; an
+internal refusal terminates without invoking native code.
+
+Successful preparation retains stable native operands in ABI order. It prepays
+bounded reply conversion and recording work and reserves the ordinary
+`Foreign.Returned` constructor slot before publishing `CallReady`. Binding,
+conversion, work or storage refusal before readiness invokes no native function.
+These checks do not establish that the external binary obeys its authored
+signature or foreign assumptions.
+
+The following three steps separate invocation, recording and reporting.
+`d` retains the exact admitted symbol/bridge and complete instantiated source
+arguments. `p` retains the prepaid recording/report allowance and reserved
+constructor slot. `native` denotes one synchronous external invocation under the
+contract's assumptions; `raw` is a native scalar or a void reply. `report`
+authenticates its expected representation, widens a scalar exactly to
+mathematical `Int`, or supplies `Unit` for void, and initializes the reserved
+constructor with canonical `Foreign.Returned`.
+
+```sequent
+family scalar-native-call-steps:
+  E-Scalar-Native-Call :=
+    native(d, operands) = raw
+    ===>
+    CONFIG(heap, environment, CallReady(d, operands, p), continuation) -> CONFIG(heap, environment, CallReturned(d, raw, p), continuation)
+
+  E-Scalar-Native-Record :=
+    ===>
+    CONFIG(heap, environment, CallReturned(d, raw, p), continuation) -> CONFIG(heap, environment, CallRecorded(d, raw, p), continuation)
+
+  E-Scalar-Native-Report :=
+    report(heap, d, raw, p) = heap_1, value
+    ===>
+    CONFIG(heap, environment, CallRecorded(d, raw, p), continuation) -> CONFIG(heap_1, environment, value, continuation)
+```
+
+Only `CallReady` can invoke the function, and that step consumes readiness.
+`CallReturned` retains no invocation capability. Recording is the next machine
+step: it retains the raw reply and its admitted report slot without charging
+work, allocating an Ash result, or performing a fallible check. No disposal,
+reporting or continuation failure can precede this recording step.
+
+Reporting consumes the allowance already deducted before invocation; it does
+not charge the caller's ledger again. Unsigned 64-bit replies preserve their
+full mathematical value. A `void` call reads no native result and reports
+`Foreign.Returned(())`. Integer construction retains the runtime's existing
+internal allocation limitations; a reserved constructor slot does not reserve
+all physical storage inside mathematical integers.
+
+A detectable internal failure after recording terminates evaluation without
+returning to readiness, publishing a final result or retrying the external call.
+This applies to report construction and later ordinary continuation work.
+Already performed native side effects remain performed. A new evaluation has
+fresh machine state and may make its own calls. Internal work/storage failures
+are not `Foreign.ConversionFailed` outcomes.
+
+An ordinary library may map an explicit bounded-copy `ConversionFailed` to a
+diagnostic-unavailable result while retaining the captured native status. In
+particular, absence of NUL within an admitted `copy_nul` bound does not require
+truncation or an empty diagnostic. This source policy cannot catch internal
+work/storage exhaustion or terminal post-call extraction failure, undo ownership
+disposition, retry the native call or retain its owner in an ordinary result.
+
+## Common scalar preflight
+
+The pure common scalar checks invoke no native symbol. On a supported GNU64
+host, a successful check reports `Foreign.Returned` containing the original
+mathematical integer; only an out-of-range input reports
+`Foreign.ConversionFailed` with the canonical opaque error. Work or storage
+exhaustion and an unsupported host are terminal evaluator failures. The machine
+prices the check and reserves its complete report before publishing any
+constructor cell. A terminal refusal publishes no partial result. These checks
+create no resource activation, state token, native readiness or destructor
+obligation.
+
+`Foreign.checked_nul` prepays a scan of the input's full UTF-8 byte length and
+its complete ordinary reply. No NUL byte, including for the empty string,
+produces `Returned(())`; any NUL produces `ConversionFailed` with the opaque
+error. Work or storage exhaustion is terminal and publishes no partial result.
+The pure scan performs no C call, prepares no pointer or owner, and leaves every
+later native-call conversion mandatory.
+
+A fixed non-callable sentinel is admitted from its original checked member and
+representation before native invocation. The GNU64 bridge passes all-one
+function-address bits as data in the declared ABI position, never forming or
+invoking a Rust function value. This target ABI is a foreign assumption; the
+declaration does not prove
+external C behavior. Work, operand storage and the
+complete ordinary reply remain admitted before C. Admission refusal publishes no sentinel
+value, grants no callable permission and makes no native call. Scalar reply and
+owner-disposition rules are unchanged.
+
+## Source resource execution with native owners
+
+The admitted product source resource scope combines an Ash initializer, acquire
+and finish functions, private data `D`, and an associated ordinary effect handler.
+This checkpoint supports opaque and initialized byte foreign owners with declared
+dependencies and complete ordered Type/Row owner formals, with a Type-kind owned
+identity. Acquisition admits scalar and exact
+declared enclosing-State operands with one pointer result. Finish and host
+destruction contracts use the exact Current State and declared Enclosing pointer
+operands, with checked original scalar constants at declared scalar ABI positions
+and fixed non-callable sentinels at their exact function-address ABI positions.
+The machine narrows these fixed operands and admits the complete call before
+entering C. A `void` result has one unconditional disposition; a scalar result
+selects consumed or retained from the original total status alternatives. Each
+foreign symbol still retains its complete ordered Type and EffectRow arguments;
+the native Type-only projection does not replace them. Source-projected scalar
+teardown operands use the producer's explicit mappings to that owner's original
+destructor ABI positions.
+Exact borrowed scalar queries and lexical access/copy windows use the source
+provider's authenticated phase and owner.
+
+Ordinary pure module-global helpers transform only independent payloads inside
+these lifecycle computations. Same-module and imported calls use the ordinary
+function application rules and their complete Type/Row instances. Calling a
+helper neither transfers native State nor changes the selected source phase,
+owner or guard, and supplies no native-call permission.
+
+Before any Ash expression runs, program admission checks both acquisition and
+teardown bindings for every source resource scope against their exact original
+checked symbols. Reconstructed executable images must independently admit the
+original headers and defining acquire, finish and handler forests, then validate
+each final scope's copied occurrences, substitutions and fresh identities.
+Ordinary `NativeInterpret` grants no owner-call permission. An owner request
+requires the matching validated source scope, its current acquire or finish
+phase, exact copied request membership, and the complete effect instance under
+that scope's saved lexical instantiation.
+
+For an initialized byte owner, preflight projects the exact source leaf selected
+by its original `initialized_bytes` fact and checks the mathematical value in
+the GNU64 nonnegative `size_t` range. The path need not select a native ABI
+operand. A negative or unrepresentable extent returns `Foreign.ConversionFailed`
+before acquisition; work or storage refusal remains terminal. Readiness retains
+the checked extent without creating memory access or an owner. Infallible
+recording attaches that extent to the unique non-null guard under the declared
+initialization and writability assumption. A null return establishes no region.
+The resource's private payload cannot replace or enlarge this recorded extent.
+
+The initializer evaluates once in the preceding environment. Before native
+acquisition, the machine authenticates the original destructor and its total
+outcome contract, specializes its complete source domain using the full Type/Row
+owner and symbol mappings, and reserves
+scope and guard storage, checks each scalar conversion, and reserves the native
+report slots and recording/report work. A representable operand supplies its
+stable ABI scalar; a conversion refusal produces canonical
+`Foreign.ConversionFailed(error)` without invoking the native function. Missing
+bindings, malformed authority, unsupported representations and internal work or
+storage refusal cannot invoke acquisition.
+Full domain specialization precedes operand selection even for an address-only
+or fixed-operand destructor. Enclosing dependency selection compares complete
+State applications, including inherited phantom Rows.
+
+For acquisition, `d` retains the exact symbol, complete instance and sealed
+destructor. `p` retains the admitted inline guard and prepaid report storage.
+`g` is a unique guarded native address or the absence of an owner for a null
+reply. The generated typed bridge arms `g` immediately when the native call
+returns, before constructing an Ash result. The pointer remains inside that
+guard and is never an ordinary Ash value. The following steps consume readiness,
+record ownership, and publish the prepared report:
+
+```sequent
+family native-owner-native-call-steps:
+  E-Native-Owner-Call :=
+    native(d, operands) = raw
+    arm(p, raw) = g
+    ===>
+    CONFIG(heap, environment, CallReady(d, operands, p), continuation) -> CONFIG(heap, environment, CallReturned(d, g, p), continuation)
+
+  E-Native-Owner-Record :=
+    ===>
+    CONFIG(heap, environment, CallReturned(d, g, p), continuation) -> CONFIG(heap, environment, CallRecorded(d, g, p), continuation)
+
+  E-Native-Owner-Report :=
+    report_and_place(heap, continuation, d, g, p) = heap_1, continuation_1, value
+    ===>
+    CONFIG(heap, environment, CallRecorded(d, g, p), continuation) -> CONFIG(heap_1, environment, CallReported(value), continuation_1)
+```
+
+Only `CallReady` invokes the native function. Its return retains no invocation
+capability. Recording is infallible, allocates no Ash result, and charges no
+additional work; it precedes disposal, reporting and continuation failure.
+Reporting uses the prepaid allowance and reserved constructor slots. For this
+owner-address result it produces the checked roles corresponding to
+`Foreign.Returned(Foreign.Readable(Foreign.Null))` or
+`Foreign.Returned(Foreign.Readable(Foreign.NonNull(state)))`. A non-null state
+contains the scope's activation key, not its address. The scope receives the
+unique guard before the state report becomes available to Ash evaluation.
+
+Ash acquisition policy then selects the resource codec's `Acquired(state, data)`
+or `Refused(error)` role. Publication requires the recorded owner of this exact
+activation; ordinary constructor creation cannot create ownership authority.
+A successful publication binds a non-owning access handle for the body and
+retains `D` in the scope. The body receives neither an owning value nor direct
+access to `D`; the admitted Ash handler uses its saved state and private data.
+Private `D` contains no native State token or view. A local enclosing State used
+by admitted acquisition or finish is separate from ordinary stored payloads;
+the runtime's sealed dependency and destruction operands also remain separate.
+Ordinary declared-dependency access handles in `D` retain their original
+identity, liveness and revocation obligations.
+Acquisition refusal executes no body. If native acquisition already returned a
+non-null owner, refusal destroys that unpublished owner once before delivering
+`NotAcquired(error)` under `scope` or `Failure(error)` under `acquired_only`.
+Null acquisition creates no destructor obligation.
+
+Associated ordinary operations preserve the nearest exact handler rule. A nearer
+ordinary source handler takes precedence over the resource handler. The resource
+publishes checked lexical forwarding for all associated methods; ordinary calls
+and constrained helpers request the corresponding operation with its unchanged
+operand and complete effect arguments.
+
+After selecting a source resource handler and before entering its clause, the
+machine authenticates the exact activation, unique live guard and original owner.
+It instantiates the request's value domain under the caller and traverses every
+typed position containing this resource's access family, including tuple and
+nominal constructor payloads. Each such value must be the non-owning access key of
+that selected activation; a state view, stale or donor key cannot replace it.
+The recorded private data does not authorize access. Work or storage refusal
+enters no resource clause. This check does not add an outer resource requirement
+to a nearer ordinary handler.
+
+Quarantine denies ordinary resource operations. An already running admitted
+dependent finish can obtain the exact local native State of its declared direct
+dependency while that owner is physically live. The selected source handler,
+typed State result, finishing guard and dependency slot must all agree. This
+exception cannot recover an ordinary scalar read, create another owner or grant
+a transitive native operand merely from membership in the lifetime closure.
+
+The admitted resource clause uses its lexical state/data and ordinary
+clause-owned `resume`; resumption continues the same activation without repeating
+acquisition. Repeated executions allocate distinct activation keys. Nested source
+resource scopes complete their own finish before their enclosing scope finishes.
+Outward capture moves the source boundary and its same unique owner into the
+continuation; resume restores that activation without acquisition or byte
+reinitialization. Ordinary outward rows survive exact native interpretation.
+
+A lexical copy window retains the exact selected provider, owner guard, family
+and fresh window key. Its sealed native interpretation covers only the original
+family's preserving operations with complete ordered actuals. A produced view
+retains its exact originating call and scalar keys. Before an extent query
+enters C, evaluated keys must equal the producing keys; a mismatch returns
+ordinary `ConversionFailed` and invokes no extent callback. Missing, stale or
+donor view/window/owner authority remains an admission failure. No window can
+survive suspension, owner completion or escape.
+
+`copy_bytes` prepays the exact matching initialized extent and complete reply
+before reading. `copy_nul` admits both replies before scanning and pays before
+each address read, examining at most the nonnegative bound plus one terminator
+byte. It admits exact observed copy storage before publishing independent
+`Bytes`. Missing termination returns `ConversionFailed`, never truncation.
+Work/storage exhaustion is terminal and publishes no partial fallback. Null,
+unreadable and non-null empty views remain distinct. UTF-8 decoding is separate.
+Each native address read still relies on its original foreign validity contract.
+
+Output slots start at zero/null before C. Raw outcomes are recorded and any
+readable non-null owner enters its pending guard before fallible extraction,
+diagnostics or result publication. Invalid post-call `offset_into` extraction
+preserves that native outcome, disposes the unpublished partial owner and
+terminates; it cannot become ordinary pre-call `ConversionFailed` or replay C.
+A retained finish permits its listed completing diagnostics; a blocked owner
+permits no native access, including ordinary scalar Borrow. Consumed owners
+invalidate all same-owner aliases/views. A still-live enclosing owner remains
+available under its own exact permission.
+
+Before native acquisition, complete declared dependency arguments select exact
+preceding activation slots. All dependency metadata, destruction operands,
+counters and result storage are admitted before the callback. Consuming a child
+removes its lifetime edges once and restores its enclosing owners' close
+readiness. A live retained child blocks a consuming enclosing call before C
+entry, independently of aliases or report values. Retention quarantines the same
+owner and its transitive dependency closure, revoking ordinary source access.
+
+After ordinary producer-input validation and before entering C, mapped scalar
+inputs are projected and narrowed in original destructor ABI order. The complete
+native destruction vector and invocation/report storage are reserved before the
+call. An out-of-range capture returns ordinary `Foreign.ConversionFailed` with
+no native call or fallback owner; work or storage exhaustion remains terminal.
+Cleanup-only input leaves need not be operands of the producer's C ABI.
+
+The guard retains immutable native scalar copies, separately from `D`, source
+handlers and ordinary Finish arguments. A readable non-null direct result or
+typed output owner is guarded immediately on return, including an error outcome.
+Every host fallback uses the same reserved vector without Ash evaluation,
+scalar conversion, allocation or admission work. Ordinary Finish uses its own
+explicit arguments and latest `D`; it cannot replace the fallback snapshot.
+A consumed Finish prevents an additional host destructor call.
+
+Owned discard replaces abandoned source-body frames with their admitted finish
+computations, from inner to outer, retaining required outer resource handlers and
+live guards. It saves no abandoned body value and builds no `Scope` or `Success`
+wrapper for it. Source finish can request an ordinary outside interpreter and
+resume its own running computation; neither that running finish nor its required
+outside interpreter may be skipped by discard. Internal admission and storage
+refusals precede capture consumption and ownership transfer.
+
+An acquisition discarded before publication revokes its pending guard once; it
+does not manufacture `D` or invoke source finish. If capture preceded native
+allocation, there is no destructor obligation. Normal acquisition refusal keeps
+its existing independent report.
+
+Normal body return saves its value and invokes the admitted Ash finish once.
+Before the Current teardown, the machine authenticates the state token's exact
+live activation and reserves its report storage while the scope still owns the
+guard. Only successful preflight can detach that guard for consumption. The
+consuming unconditional native `void` call destroys the address once and produces
+a non-owning consumed receipt with the original authority, before Ash report
+construction. Its returned-to-recorded transition is infallible. The prepaid
+report supplies `Foreign.Returned(Foreign.Consumed(()))`; source finish maps it
+to the resource codec's consumed completion. The scope records consumption
+before publishing its report. Under `scope`, the source result remains
+`Completed(body_value, completion)`. Under `acquired_only`, normal consumed
+completion produces `Success(body_value)`; neither codec flattens a nested body
+result. A witnessed consumed completion mapped to `ConsumedFailure(error)` is
+terminal under `acquired_only`, reported as `runtime.resource-completion`, and
+publishes no success or acquisition failure. Recorded consumption still prevents
+a second native release. On owned discard, a consumed finish returning
+`ConsumedFailure(error)` is terminal `runtime.resource-completion` under either
+codec and publishes no abandoned scope report. Normal `scope` completion instead
+retains `ConsumedError(error)` alongside the saved body result. An admitted
+native retained disposition records the same owner before report
+construction and revokes its ordinary source access. Normal `scope` completion
+reports `Completed(body_value, RetainedError(error))`. On owned discard, witnessed
+`Retained(state, error)` is terminal `runtime.resource-completion`; it publishes
+no abandoned body or scope report and does not continue the discarding clause.
+The owner's separately admitted host destructor may later consume that same
+owner once. That host release cannot turn failed source completion into success.
+Host destruction attempts dependents before their enclosing owners. A successful
+host consumption removes the same recorded edges; a retained host disposition
+keeps those edges and blocks enclosing destruction. That incomplete destruction
+is terminal, is not retried and supplies no successful source cleanup report.
+Unresolved native objects remain protected until process termination.
+
+For scalar-status teardown, readiness prepays the complete raw-status
+traversal, reply conversion and recording/report work, and reserves both the
+successful report cells before C. The typed
+callback returns a raw scalar; only the original finite alternatives select
+consumed or retained. The machine records that disposition and dependency-edge
+changes before converting or reporting the result. A readable result produces
+`Foreign.Returned(Foreign.Consumed(status))` or
+`Foreign.Returned(Foreign.Retained(status))`. Raw scalar results must always be
+readable; a contract declaring an unreadable scalar rejects before execution.
+A post-call extraction failure preserves the witnessed disposition and
+terminates without a raw reply, `ConversionFailed`, or source continuation.
+It cannot restore consumed State or replay teardown. The same retained owner
+remains subject to its separately admitted safe host destruction. Pre-call
+conversion refusal remains an ordinary `Foreign.ConversionFailed` with no C
+entry. Complete reply storage is admitted before entry;
+converting the admitted GNU64 scalar to mathematical `Int` requires no later
+allocation. Work or storage exhaustion remains terminal.
+
+A retained dependent blocks any Current teardown before C. Its report is
+`Foreign.Returned(Foreign.BlockedDependent)` with no scalar payload or
+fabricated native status. Host destruction selects its disposition from the
+same original contract, records it without an Ash result, and preserves the
+existing one-attempt dependency order and incomplete-destruction protection.
+Successful later host consumption cannot change an earlier source
+`RetainedError` or failed discard.
+
+An internal failure after a native return never retries the call or recreates
+readiness. A live guard, including one not yet published to the body, invokes its
+sealed original destructor once during host destruction. A consumed receipt
+has no destructor callback, so failure during finish reporting cannot repeat
+teardown. Host destruction allocates no Ash result and runs no source finish or
+handler. Foreign side effects remain performed; internal exhaustion is not a
+source conversion or completion outcome. A fresh evaluation has fresh machine
+state and may perform its own acquisition. These rules assume the authored
+foreign contract holds; linking and checked Core do not prove external binary
+validity, and divergence or external process termination provides no eventual
+release guarantee.
+
+## Common initialized byte access
+
+`Foreign.byte_read<S>` and `Foreign.byte_write<S>` borrow an initialized live
+state from the admitted source acquire, handler or finish phase. The call retains
+its selected original canonical occurrence and complete ordered caller and
+defining declaration Type/Row instances. Runtime admission authenticates that
+correspondence, the exact activation and original owner, and the unique live
+guard. A compatible state type, stale or donor token, consumed state, or private
+data cannot replace any of these facts. Borrowing does not consume the guard or
+change ordinary handler selection and precedence.
+
+The original guard supplies the initialized writable extent. After ordinary
+strict argument evaluation, admission checks the index in the GNU64 `size_t`
+range and against that extent before inspecting or charging conversion of a
+write's byte value. A valid byte is an integer in `[0, 255]`. An invalid index or
+byte returns canonical `Foreign.ConversionFailed(error)` without reading or
+writing native memory. A zero extent remains owned and refuses every index.
+Internal work or storage exhaustion is terminal and supplies no conversion
+result. A valid index with insufficient byte-conversion work therefore differs
+from an invalid index whose complete refusal report is affordable.
+
+Before a read or write callback, the machine disposes owned call-specialization
+metadata, charges bounded operation and result work, and fallibly reserves and
+initializes the complete reply cell. Readiness retains only that unpublished
+cell and a borrowed guard with the checked index. A read returns an unsigned byte;
+converting `[0, 255]` to the mathematical `Int` uses existing inline integer
+storage and cannot allocate or refuse. A write has an already checked byte and
+an initialized Unit reply. Both callbacks fill or preserve the prepared payload
+and publish its location without further charging, reservation or allocation.
+Rejected write admission leaves native memory unchanged.
+
+In the following steps, `ready(g, index, slot)` already authenticates the original
+call and live guard and prepays the complete reply. `slot` belongs exclusively to
+readiness; these steps have no fallible admission premise after native access.
+
+```sequent
+family initialized-byte-access-steps:
+  E-Byte-Read :=
+    read_byte(g, index) = byte
+    fill_returned(slot, Int(byte)) = heap_1, value
+    ===>
+    CONFIG(heap, environment, ByteReadReady(g, index, slot), continuation) -> CONFIG(heap_1, environment, value, continuation)
+
+  E-Byte-Write :=
+    write_byte(g, index, byte) = ()
+    publish_returned_unit(slot) = value
+    ===>
+    CONFIG(heap, environment, ByteWriteReady(g, index, byte, slot), continuation) -> CONFIG(heap, environment, value, continuation)
+```
+
+The returned value is ordinary `Foreign.Returned(Int)` or
+`Foreign.Returned(())`; neither reply owns or exposes the state. Later continuation
+failure cannot replay the callback. The scope still owns exactly one release
+obligation until teardown consumes it. External initialization and writability
+remain foreign-contract assumptions; checked source, binding and image admission
+do not prove the external binary's memory validity. These byte primitives do
+not grant separate copy-window, dependency or outward-control permission.
+
 ## Effect handlers and completion
 
 `HANDLER(handler, instance, clauses, environment)` is an ordered lexical
@@ -509,8 +982,8 @@ The static handler identity determines `handler`. Its clauses are exhaustive
 for `instance`, so ordinary body return and operation selection are the only
 reachable ways to leave the boundary.
 
-A request first evaluates its one operand. Once that operand is a value,
-`select_nearest` searches outward for the innermost accepting source-handler
+A request first evaluates its one operand. For a non-source-native operation,
+once that operand is a value, `select_nearest` searches outward for the innermost accepting source-handler
 or cell boundary. The source-handler branch below requires its exact effect
 identity and instantiated type arguments to equal the operation's instance,
 with no nearer accepting cell boundary. The request saves its lexical instantiation
@@ -526,6 +999,7 @@ family request-steps:
     CONFIG(heap, environment, perform operation operand, continuation) -> CONFIG(heap, environment, operand, REQUEST(operation, instantiation(environment)) :: continuation)
 
   E-Request-Select :=
+    operation is not a source-native symbol
     requested = instantiate(instance(operation), request_instantiation)
     select_nearest(continuation, requested) = clause, handler_environment, handler, owner, captured, outer
     no nearer cell boundary accepts requested
@@ -707,69 +1181,58 @@ resource frame or live cell.
 
 ## Scoped native-buffer execution
 
-`resource native_buffer<R> b = length { body }` evaluates `length` exactly once
-before introducing the scope. The length must be positive and representable
-within both the host size type and valid pointer-offset bound. Invalid lengths
-produce `Failure(InvalidLength)` without calling the native allocator.
+The passive Ash library `libraries/native_buffer.ash` supplies buffer policy.
+`resource Buffer.Buffer<R> b = length { body }` uses the common declared-source
+resource machine and the checked `acquired_only` codec, not a fixed evaluator
+adapter. The current generated bridge profile is `x86_64-unknown-linux-gnu`.
+Native execution requires the generated linked host; ordinary interpreted
+execution refuses the missing binding before running Ash.
 
-For a valid length, the machine charges proportional initialization work and
-fixed release work, checks shared live-owner capacity, and reserves fallible
-scope, activation and outcome storage before the private C `calloc` call.
-A null allocation returns the prepared `Failure(AllocationFailed)` only when
-delivery requires no further allocation, observable Ash state change, body
-execution or published handle, activation or provider authority. Otherwise
-delivery fails terminally. Earlier initializer effects remain committed; the
-condition applies to the allocation attempt, not the enclosing effect row.
-Internal exhaustion is not an allocation-error constructor. There is no
-implicit allocation retry.
+The initializer runs once before acquisition. Length must be positive and at
+most `2^63 - 1`, within the selected host size/pointer-offset bounds. The
+library's checked conversions and native operand preflight return
+`Failure(InvalidLength)` without entering C for an invalid length. For a valid
+initialized extent `n`, common readiness charges its proportional `n + 2`
+initialization/fixed-release work before calling C, in addition to ordinary
+extent validation and complete guard/report/publication admission. Arithmetic
+overflow or insufficient internal work/storage is terminal, with no native
+entry, publication, retry or limit increase. Earlier initializer effects remain
+committed.
 
-A successful allocation is zero-initialized. An unpublished guard owns it until
-the prepared scope and handle are installed together. Failure during publication
-releases the guard once and remains an internal failure. The existing resource
-activation key distinguishes every successful execution, including reentrant
-executions at one source site. A handle contains that key, not a native address;
-address reuse cannot restore a retired activation.
+`calloc(n, 1)` returning null yields `Failure(AllocationFailed)` without a body
+or access activation. Its checked successful outcome promises initialized,
+writable zeroed bytes; this is a foreign assumption tested with real libc, not
+an allocator guarantee inferred by the compiler. The admitted guard owns the
+same native allocation through acquisition, body and finish until consumption.
+Original source header, copied call/Type/Row correspondence, live activation and
+the selected exact guard remain separate authorities. Address reuse or a
+same-shaped donor never revives access.
 
-Request selection retains ordinary exact source-handler precedence. Only the
-selected authenticated builtin interpreter can use the native owner, and the
-operand handle must match its activation before access. `length` copies the
-length as `Int`. `read (b, index)` returns `Success(byte)` for a zero-based valid
-index, otherwise `Failure(InvalidIndex)`. `write (b, index, byte)` first checks
-the index, then the byte range `[0, 255]`; failure returns `InvalidIndex` or
-`InvalidByte` respectively inside `Failure`. Rejected writes leave bytes
-unchanged. Successful writes return `Success(())`. Validation, conversions,
-work admission and result preparation precede mutation. Malformed Core or
-activation disagreement is an internal failure, never one of these errors.
+Ordinary exact operation overrides retain precedence. The selected associated
+source handler obtains local authenticated State; common byte primitives check
+extent, initialization and write permission. `length` returns the stored `Int`.
+`read` returns `Success(byte)` in `[0, 255]` or `Failure(InvalidIndex)`.
+`write` checks the index before byte conversion, returning `InvalidIndex` or
+`InvalidByte` inside `Failure` as appropriate. It prepares the ordinary success
+value and the common complete reply before mutation. Refusal leaves bytes
+unchanged; success returns `Success(())`. Invalid Core/activation authority and
+internal exhaustion are terminal, never ordinary library errors.
 
-Normal completion runs structurally inner cleanup while the buffer remains
-live, frees the native block once, and publishes `Success(body_value)` using
-reserved result storage. A body returning an error or another `Outcome` remains
-nested inside that `Success`; there is no flattening or automatic report.
-Capture and resume move the same owner. Owned discard releases it at its
-structural closing position, skips abandoned body suffixes and result wrapping,
-and continues the discarding clause. Acquisitions inside a running cleanup
-still complete normally and produce their own wrappers. Native ownership
-does not permit skipping an outside owner or running cleanup obligation.
+Normal completion runs inner cleanup with required outer resources live, then
+calls the checked `free` finish once and returns `Success(body_value)`. A body
+error or nested `Outcome` remains inside that success. Capture/resume moves the
+same owner. Owned discard skips the abandoned suffix and wrapper, runs admitted
+finish in structural order, then continues the discarding clause. An acquisition
+inside running cleanup completes normally with its own wrapper. Neither running
+cleanup nor required outside completion may be abandoned.
 
-Native owners share the existing resource capacity, including captured owners;
-release makes capacity reusable but not activation keys. Fixed native `free`
-has no source failure result, source callback or retry. Internal host teardown
-uses safe host destruction without invoking source cleanup or rolling back
-earlier writes. Detectable runtime capacity, allocator and work-budget failures
-terminate evaluation without retries, limit increases or recovery. Diagnostics
-identify the cause and phase; a teardown failure preserves the original failure
-and does not claim cleanup completed. The fixed native deallocator requires no
-allocation; preallocation of traversal storage is a mitigation, not an
-unconditional teardown guarantee. Divergence and external process
-termination carry no eventual-release guarantee. Pure and provider-free
-execution create no native-owner state.
-
-The foreign boundary is one private safe-owning adapter over C `calloc`/`free`;
-pointers stay inside it. The bridge supports eight-bit-byte Linux x86-64 and
-ARM64 builds; unsupported targets fail compilation rather than substituting a
-simulated provider. Compile support does not itself establish native target
-conformance. These rules define no general ABI, library acquisition, manual
-release, filesystem policy or fallible file-close semantics.
+Internal failure uses the common safe host-destruction/dependency rules without
+replaying source finish or undoing earlier writes. A destruction failure
+preserves the primary error and reports incomplete cleanup. Fixed release
+reservation does not promise eventual release under divergence, process death
+or a dishonest foreign contract. Common runtime guards remain; the former
+handwritten native-buffer adapter and special dispatch are absent. Cell behavior
+is unchanged.
 
 ## Synchronous hook execution
 

@@ -101,6 +101,7 @@ fn main_body(module: &ResolvedModule) -> &ResolvedExpr {
         .iter()
         .find_map(|definition| match &definition.kind {
             ResolvedDefinitionKind::Equational(definition)
+            | ResolvedDefinitionKind::ForeignConstant(definition)
                 if definition.interface.name.spelling == "main" =>
             {
                 Some(
@@ -112,6 +113,7 @@ fn main_body(module: &ResolvedModule) -> &ResolvedExpr {
                 )
             }
             ResolvedDefinitionKind::Equational(_)
+            | ResolvedDefinitionKind::ForeignConstant(_)
             | ResolvedDefinitionKind::InlineOperational(_) => None,
         })
         .expect("fixture should declare equational main")
@@ -481,7 +483,8 @@ fn a_mid_module_type_failure_prevents_checked_module_and_core_completion() {
     ));
     let module = fixture.resolve();
     let second_body_span = match &module.definitions()[1].kind {
-        ResolvedDefinitionKind::Equational(definition) => definition.equations[0].body.span,
+        ResolvedDefinitionKind::Equational(definition)
+        | ResolvedDefinitionKind::ForeignConstant(definition) => definition.equations[0].body.span,
         ResolvedDefinitionKind::InlineOperational(_) => {
             panic!("second should be equational")
         }

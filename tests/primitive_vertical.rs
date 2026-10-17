@@ -54,6 +54,7 @@ fn resolved(text: &str) -> (SourceFile, ResolvedExpr) {
             matches!(
                 &definition.kind,
                 ResolvedDefinitionKind::Equational(global)
+            | ResolvedDefinitionKind::ForeignConstant(global)
                     if global.interface.name.spelling == "main"
             )
         })

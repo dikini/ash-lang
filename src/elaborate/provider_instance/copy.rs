@@ -485,6 +485,146 @@ pub(in crate::elaborate) struct ProviderScopeCopyRows<'a> {
 }
 
 impl<F: CoreLoweringFamily> CoreElaborator<F> {
+    /// Allocates source-resource copies from their original programs and full
+    /// Type/Row vectors, without experimental provider declaration authority.
+    pub(in crate::elaborate) fn prepare_source_resource_copies(
+        &mut self,
+        template: &crate::core::source_resource::CheckedSourceResourceTemplate,
+        arguments: &[crate::types::KindedArgument],
+        body: &ComputationType,
+        rows: ProviderScopeCopyRows<'_>,
+        module: crate::module::ModuleId,
+        origin: Span,
+    ) -> Result<[PreparedPhaseCopy; 3], TypeError> {
+        let header = &template.header().original;
+        if header.parameters.len() != arguments.len() {
+            return Err(invalid_state());
+        }
+        let mut inputs = Vec::new();
+        self.type_work.charge(3).map_err(|_| type_resource())?;
+        inputs.try_reserve_exact(3).map_err(|_| type_resource())?;
+        for index in 0..3 {
+            let mut phase = PreparedPhaseCopy::empty();
+            for (formal, argument) in header.parameters.iter().zip(arguments) {
+                phase
+                    .sigma
+                    .insert_cloned(formal.id, argument, &mut self.type_work)?;
+            }
+            if index == 2 {
+                phase.sigma.insert_borrowed(
+                    header.answer.id,
+                    crate::elaborate::BorrowedOwnerArgument::TypeArg(body.value()),
+                    &mut self.type_work,
+                )?;
+                self.type_work
+                    .charge(
+                        rows.pending
+                            .len()
+                            .checked_add(rows.nodes.len())
+                            .ok_or_else(type_resource)?,
+                    )
+                    .map_err(|_| type_resource())?;
+                phase
+                    .pending
+                    .try_reserve(rows.pending.len())
+                    .map_err(|_| type_resource())?;
+                phase
+                    .node_rows
+                    .try_reserve(rows.nodes.len())
+                    .map_err(|_| type_resource())?;
+                for (id, row) in rows.pending {
+                    phase.pending.insert(
+                        *id,
+                        clone_effect_row_with_budget(row, &mut self.type_work)
+                            .map_err(|_| type_resource())?,
+                    );
+                }
+                for (id, row) in rows.nodes {
+                    phase.node_rows.insert(
+                        *id,
+                        clone_effect_row_with_budget(row, &mut self.type_work)
+                            .map_err(|_| type_resource())?,
+                    );
+                }
+                let residual = clone_effect_row_with_budget(rows.residual, &mut self.type_work)
+                    .map_err(|_| type_resource())?;
+                phase.sigma.insert_borrowed(
+                    template.handler_continuation(),
+                    crate::elaborate::BorrowedOwnerArgument::RowArg(&residual),
+                    &mut self.type_work,
+                )?;
+            }
+            let original_handler = template.original_handler_node();
+            let mut roots = Vec::new();
+            self.type_work
+                .charge(if index == 2 {
+                    original_handler.clauses().len()
+                } else {
+                    1
+                })
+                .map_err(|_| type_resource())?;
+            roots
+                .try_reserve_exact(if index == 2 {
+                    original_handler.clauses().len()
+                } else {
+                    1
+                })
+                .map_err(|_| type_resource())?;
+            let (program, parameter) = match index {
+                0 => {
+                    roots.push(template.acquire_entry().1);
+                    (template.original_acquire(), template.acquire_entry().0)
+                }
+                1 => {
+                    roots.push(template.finish_entry().1);
+                    (template.original_finish(), template.finish_entry().0)
+                }
+                _ => {
+                    roots.extend(original_handler.clauses().iter().map(EffectClause::body));
+                    (template.original_handler(), template.handler_entry().0)
+                }
+            };
+            let patterns: &[&crate::core::CorePattern] = if index == 2 {
+                &[template.handler_pattern()]
+            } else {
+                &[]
+            };
+            let inventory = crate::core::provider::source_resource_local_identities(
+                program,
+                &roots,
+                &[parameter],
+                patterns,
+                (index == 2).then_some(original_handler),
+                &phase.substitution(),
+                &mut self.type_work,
+            )
+            .map_err(validation)?;
+            inputs.push(PreparedPhaseAllocation {
+                phase,
+                binders: inventory.binders,
+                types: inventory.types,
+                handlers: inventory.handlers,
+                resumes: inventory.resumes,
+                nominals: inventory.nominals,
+                lexicals: inventory.lexicals,
+            });
+        }
+        let mut forbidden = ScopeCopyForbidden::default();
+        for input in &inputs {
+            forbidden.retain(input, &mut self.type_work)?;
+            forbidden.retain_payloads(&input.phase, &mut self.type_work)?;
+        }
+        retain_original_copy_payload_variables(
+            arguments,
+            body,
+            body.effects(),
+            &HashMap::new(),
+            &mut forbidden.types,
+            &mut self.type_work,
+        )?;
+        self.allocate_primary_copy_phases(inputs, &forbidden, module, origin)
+    }
+
     pub(in crate::elaborate) fn prepare_scope_copy_plan(
         &mut self,
         source: &super::super::provider::ProviderTemplateSource<'_>,

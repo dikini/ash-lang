@@ -43,7 +43,7 @@ and exclusions remain at their linked owners.
 | DN-0033–0034: direct effects and verification | The [one-shot formalization](direct-effects/one-shot/README.md#current-proof-status) establishes stated annotated-model admission, preservation, progress, and bounded execution results. | It is not a complete Ash compiler-correctness proof. Core alignment evidence remains branch-local and incomplete. |
 | DN-0035: regions and verified providers | Current dependency rules and scalar Arena experiments supply limited evidence. | General region interfaces, borrowing, ordinary storage policy, and provider verification remain open. |
 | DN-0036: foreign/provider experiments | [Main delivery](provider-experiments/main-delivery-2026-10-08/README.md) retains verified Rust-authored SQLite and scalar Arena experiments. | Product adoption, general borrowing, and wider Arena payload/graph work remain incomplete. |
-| DN-0037: Ash-authored foreign interfaces | The [readiness brief](foreign-authoring/dn-0036-readiness.md) selects copying SQLite and a minimal Arena lifecycle comparison. | Source-authored foreign contracts, generic ABI bridges, temporary access, and native build/link support are not established on `main`. |
+| DN-0037: Ash-authored foreign interfaces | The [specified foreign-interface profile](../../spec/static-semantics.md#source-foreign-declarations), [Ash-authored libraries](../../libraries/README.md) and [generated-host builds](../tools/ash.md#generated-host-linkage-checks) implement the selected source contracts and native lifecycle. The [readiness brief](foreign-authoring/dn-0036-readiness.md) preserves the bounded comparison. | The specification defines the exact profile and exclusions; source `given` providers and privileged lifecycle wrappers remain unsupported. This note does not authorize wider FFI or borrowing. |
 | DN-0038: resource properties and mutation | Scoped cells already distinguish reusable access from scope-owned release. | General linear/unique usage, borrowing, disposal permissions, and mutable syntax remain candidates. |
 | DN-0039–0041: files, Float, serialization | Existing effects/interfaces and retained native experiments provide foundations and comparison cases. | Filesystem contracts, Float semantics, and serialization APIs are delivery sketches, not implemented capabilities. |
 | DN-0042–0043: native/data direction and shorter syntax | Synthesis and syntax comparisons reuse existing checked forms. | The summaries add no implementation; shorter forms need parsing, elaboration, and equivalence evidence. |
@@ -125,6 +125,9 @@ and exclusions remain at their linked owners.
 
 ### Compiler transformations and backends
 
+- [DN-0050: Native program gas estimates](DN-0050-native-program-gas-estimates.md)
+  — calibration and prediction errors for the input-derived gas policies adopted
+  in AD-0013; predecessor diagnostics remain scoped evidence, not full-port verification.
 - [DN-0048: Pure Core Kernels and Parallel Lowering](DN-0048-pure-core-kernels-and-parallel-lowering.md)
   — Pure Core first, a typed Ash-owned kernel IR with strict completion,
   optional interaction-net dependencies and sharing, and SIMD/GPU lowering;

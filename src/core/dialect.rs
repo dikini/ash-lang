@@ -10,6 +10,8 @@ use std::{
     },
 };
 
+mod zonk;
+
 fn empty_registry() -> &'static Arc<ResolvedRegistry> {
     static EMPTY: OnceLock<Arc<ResolvedRegistry>> = OnceLock::new();
     EMPTY.get_or_init(|| Arc::new(ResolvedRegistry::new(Vec::new(), Vec::new())))
@@ -55,6 +57,7 @@ use crate::{
 #[cfg_attr(test, derive(Clone))]
 pub(crate) struct MethodEvidenceMethod {
     pub(crate) id: MethodId,
+    pub(crate) spelling: Box<str>,
     pub(crate) interface_parameters: Box<[TypeVariableId]>,
     pub(crate) inherited_parameters: Box<[crate::resolved::InheritedOwnerParameter]>,
     pub(crate) parameters: Box<[(TypeVariableId, Kind)]>,
@@ -637,11 +640,14 @@ pub(crate) fn same_imported_method_evidence_catalog(
     }
     for (a, b) in left.methods.iter().zip(&right.methods) {
         work.charge(
-            a.inherited_parameters
+            a.spelling
                 .len()
+                .saturating_add(b.spelling.len())
+                .saturating_add(a.inherited_parameters.len())
                 .saturating_add(b.inherited_parameters.len()),
         )?;
         if a.id != b.id
+            || a.spelling != b.spelling
             || a.inherited_parameters != b.inherited_parameters
             || !ids(&a.interface_parameters, &b.interface_parameters, work)?
             || !parameters(&a.parameters, &b.parameters, work)?
@@ -2230,7 +2236,35 @@ impl UnvalidatedProgram {
     }
 }
 
+/// Passive fields borrowed for encoding one recorded Core node.
+type ImageNodeView<'a, F> = (
+    &'a Type,
+    &'a <F as CoreOperationFamily>::Effects,
+    &'a Option<Origin>,
+    &'a <F as CoreOperationFamily>::Kind,
+);
+
 impl<F: CoreOperationFamily> UnvalidatedCoreProgram<F> {
+    /// Passive borrowed records for image encoding. These do not admit execution.
+    pub(crate) fn image_root(&self) -> NodeId {
+        self.root
+    }
+    pub(crate) fn image_node_count(&self) -> usize {
+        self.nodes.len()
+    }
+    pub(crate) fn image_node_index(&self, id: NodeId) -> Option<usize> {
+        if id.arena != self.arena {
+            return None;
+        }
+        let index = id.index().ok()?;
+        (index < self.nodes.len()).then_some(index)
+    }
+    pub(crate) fn image_node(&self, index: usize) -> Option<ImageNodeView<'_, F>> {
+        self.nodes
+            .get(index)
+            .map(|node| (&node.ty, &node.effects, &node.origin, &node.kind))
+    }
+
     pub(crate) fn method_evidence(&self) -> &Arc<MethodEvidenceCatalog> {
         &self.method_evidence
     }
@@ -2416,6 +2450,11 @@ impl<F: CoreOperationFamily> ValidatedCoreProgram<F> {
         self.0.node_count()
     }
 
+    /// Borrows every independently validated node for paid admission scans.
+    pub(crate) fn nodes(&self) -> &[CoreTypedExpr<F>] {
+        &self.0.nodes
+    }
+
     /// Returns the immutable nominal and constructor registry.
     #[must_use]
     pub fn registry(&self) -> &Arc<ResolvedRegistry> {
@@ -2593,6 +2632,8 @@ pub struct CoreBuilder<F: CoreOperationFamily = PureOperationFamily> {
     pub(super) type_work: TypeWorkBudget,
     rewrite_type_work: TypeWorkBudget,
     requires_type_rewrite: bool,
+    pub(super) settled_zonk_nodes: Vec<bool>,
+    pub(super) source_resource_finalization_start: Option<usize>,
     deferred_cleanup_rows: HashSet<crate::types::InferenceVariableId>,
 }
 
@@ -2619,7 +2660,12 @@ impl CoreBuilder<PureOperationFamily> {
         method_evidence: Arc<MethodEvidenceCatalog>,
         type_work: TypeWorkBudget,
     ) -> Result<Self, BuildError> {
-        Self::with_catalogs_and_type_work(registry, method_evidence, type_work)
+        Self::with_catalogs_and_type_work(
+            registry,
+            method_evidence,
+            type_work,
+            TypeWorkBudget::default(),
+        )
     }
 }
 
@@ -2634,6 +2680,7 @@ pub(crate) struct CoreBuilderCheckpoint {
     next_binder: u32,
     binder_phase_started: bool,
     requires_type_rewrite: bool,
+    pub(super) source_resource_finalization_start: Option<usize>,
 }
 
 impl<F: CoreOperationFamily> CoreBuilder<F> {
@@ -2643,6 +2690,7 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         method_evidence_anchors: Vec<MethodEvidenceAnchor>,
         consumed_method_evidence: Vec<bool>,
         type_work: TypeWorkBudget,
+        rewrite_type_work: TypeWorkBudget,
     ) -> Self {
         Self {
             registry,
@@ -2660,8 +2708,10 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             inference_binders: HashSet::new(),
             binder_phase_started: false,
             type_work,
-            rewrite_type_work: TypeWorkBudget::default(),
+            rewrite_type_work,
             requires_type_rewrite: false,
+            settled_zonk_nodes: Vec::new(),
+            source_resource_finalization_start: None,
             deferred_cleanup_rows: HashSet::new(),
         }
     }
@@ -2674,31 +2724,105 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             Vec::new(),
             Vec::new(),
             TypeWorkBudget::default(),
+            TypeWorkBudget::default(),
         )
     }
 
     /// Starts an empty arena carrying an immutable resolved data registry.
     pub(crate) fn with_registry_for_family(registry: Arc<ResolvedRegistry>) -> Self {
+        Self::with_registry_and_rewrite_work(registry, TypeWorkBudget::default())
+    }
+
+    /// Starts an empty compiler arena with its separate cumulative rewrite meter.
+    pub(crate) fn with_registry_and_rewrite_work(
+        registry: Arc<ResolvedRegistry>,
+        rewrite_type_work: TypeWorkBudget,
+    ) -> Self {
         Self::from_catalogs(
             registry,
             Arc::clone(empty_method_evidence()),
             Vec::new(),
             Vec::new(),
             TypeWorkBudget::default(),
+            rewrite_type_work,
         )
+    }
+
+    /// Fresh compiler arenas inherit capacity, never another arena's spending.
+    pub(crate) const fn rewrite_work_limit(&self) -> usize {
+        self.rewrite_type_work.limit()
+    }
+
+    /// Runs one payload-construction operation on the caller's actual ledger.
+    ///
+    /// Private image reconstruction uses this seam between its own admission
+    /// steps. The meter returns to the caller after both success and failure;
+    /// no separate allowance or replayed charge is introduced.
+    pub(crate) fn with_caller_type_work<T>(
+        &mut self,
+        work: &mut TypeWorkBudget,
+        operation: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        std::mem::swap(&mut self.type_work, work);
+        let result = operation(self);
+        std::mem::swap(&mut self.type_work, work);
+        result
+    }
+
+    /// Admits backing storage for a private reconstruction before payloads move.
+    ///
+    /// The image supplies complete node and binder counts. Ordinary public
+    /// builders keep their existing allocation behavior.
+    pub(crate) fn reserve_image_reconstruction_storage(
+        &mut self,
+        nodes: usize,
+        binders: usize,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), BuildError> {
+        work.charge(
+            nodes
+                .checked_add(binders)
+                .ok_or(BuildError::TypeWorkExceeded)?,
+        )
+        .map_err(|()| BuildError::TypeWorkExceeded)?;
+        self.nodes
+            .try_reserve_exact(nodes)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        self.materialized_resolved
+            .try_reserve(binders)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        Ok(())
     }
 
     pub(crate) fn with_registry_and_method_evidence(
         registry: Arc<ResolvedRegistry>,
         method_evidence: Arc<MethodEvidenceCatalog>,
     ) -> Result<Self, BuildError> {
-        Self::with_catalogs_and_type_work(registry, method_evidence, TypeWorkBudget::default())
+        Self::with_registry_method_evidence_and_rewrite_work(
+            registry,
+            method_evidence,
+            TypeWorkBudget::default(),
+        )
+    }
+
+    pub(crate) fn with_registry_method_evidence_and_rewrite_work(
+        registry: Arc<ResolvedRegistry>,
+        method_evidence: Arc<MethodEvidenceCatalog>,
+        rewrite_type_work: TypeWorkBudget,
+    ) -> Result<Self, BuildError> {
+        Self::with_catalogs_and_type_work(
+            registry,
+            method_evidence,
+            TypeWorkBudget::default(),
+            rewrite_type_work,
+        )
     }
 
     fn with_catalogs_and_type_work(
         registry: Arc<ResolvedRegistry>,
         method_evidence: Arc<MethodEvidenceCatalog>,
         mut type_work: TypeWorkBudget,
+        rewrite_type_work: TypeWorkBudget,
     ) -> Result<Self, BuildError> {
         let expectation_count = method_evidence.expectations().len();
         type_work
@@ -2743,6 +2867,7 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             method_evidence_anchors,
             consumed_method_evidence,
             type_work,
+            rewrite_type_work,
         );
         builder.method_evidence_anchor_keys = method_evidence_anchor_keys;
         builder.method_evidence_expectation_positions = method_evidence_expectation_positions;
@@ -2760,6 +2885,10 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             .method_evidence
             .implementation_owner(implementation)
             .is_some())
+    }
+
+    pub(crate) fn method_evidence_anchors(&self) -> &[MethodEvidenceAnchor] {
+        &self.method_evidence_anchors
     }
 
     #[allow(
@@ -4072,11 +4201,13 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             next_binder: self.next_binder,
             binder_phase_started: self.binder_phase_started,
             requires_type_rewrite: self.requires_type_rewrite,
+            source_resource_finalization_start: self.source_resource_finalization_start,
         }
     }
 
     /// Discards every node and generated binder appended after `checkpoint`.
     pub(crate) fn rollback(&mut self, checkpoint: CoreBuilderCheckpoint) {
+        self.settled_zonk_nodes.clear();
         debug_assert!(checkpoint.nodes <= self.nodes.len());
         while self.nodes.len() > checkpoint.nodes {
             let stored = self
@@ -4099,6 +4230,7 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         self.next_binder = checkpoint.next_binder;
         self.binder_phase_started = checkpoint.binder_phase_started;
         self.requires_type_rewrite = checkpoint.requires_type_rewrite;
+        self.source_resource_finalization_start = checkpoint.source_resource_finalization_start;
     }
 
     pub(crate) fn rewrite_types_and_rows<R, Q>(
@@ -4129,7 +4261,85 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         &mut self,
         checkpoint: TypeRewriteCheckpoint,
         rewrite: &mut R,
+        rewrite_row: Option<&mut dyn FnMut(&EffectRow) -> Result<EffectRow, BuildError>>,
+    ) -> Result<bool, BuildError>
+    where
+        R: FnMut(&Type) -> Result<Type, BuildError>,
+    {
+        // General callbacks may change even closed types. Their full traversal
+        // and invalidation are separate from the private nonstrict zonk seam.
+        self.settled_zonk_nodes.clear();
+        self.rewrite_types_from_inner(checkpoint, rewrite, rewrite_row, None)
+    }
+
+    /// Retains only fully inference-free owned metadata within this builder.
+    /// The caller still performs a full strict rewrite and independent Core checks.
+    pub(crate) fn zonk_types_and_rows<R, Q>(
+        &mut self,
+        work: &std::cell::RefCell<&mut TypeWorkBudget>,
+        mut rewrite: R,
+        mut rewrite_row: Q,
+    ) -> Result<(), BuildError>
+    where
+        R: FnMut(&Type) -> Result<Type, BuildError>,
+        Q: FnMut(&EffectRow) -> Result<EffectRow, BuildError>,
+    {
+        if !self.deferred_cleanup_rows.is_empty() {
+            return self.rewrite_types_and_rows(None, rewrite, rewrite_row);
+        }
+        let growth = self
+            .nodes
+            .len()
+            .saturating_sub(self.settled_zonk_nodes.len());
+        if growth != 0 {
+            work.borrow_mut()
+                .charge(growth.checked_add(1).ok_or(BuildError::TypeWorkExceeded)?)
+                .map_err(|_| BuildError::TypeWorkExceeded)?;
+            self.settled_zonk_nodes
+                .try_reserve_exact(growth)
+                .map_err(|_| BuildError::TypeWorkExceeded)?;
+            self.settled_zonk_nodes.resize(self.nodes.len(), false);
+        }
+        match self.rewrite_types_from_inner(
+            TypeRewriteCheckpoint(0),
+            &mut rewrite,
+            Some(&mut rewrite_row),
+            Some(work),
+        ) {
+            Ok(requires_rewrite) => self.requires_type_rewrite = requires_rewrite,
+            Err(failure) => {
+                self.settled_zonk_nodes.clear();
+                return Err(failure);
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn invalidate_settled_zonk_range(
+        &mut self,
+        range: std::ops::Range<usize>,
+    ) -> Result<(), BuildError> {
+        let end = range.end.min(self.settled_zonk_nodes.len());
+        let start = range.start.min(end);
+        if start != end {
+            self.type_work
+                .charge(end - start)
+                .map_err(|_| BuildError::TypeWorkExceeded)?;
+            self.settled_zonk_nodes[start..end].fill(false);
+        }
+        Ok(())
+    }
+
+    #[allow(
+        clippy::type_complexity,
+        reason = "private zonking shares the full generic rewrite traversal"
+    )]
+    fn rewrite_types_from_inner<R>(
+        &mut self,
+        checkpoint: TypeRewriteCheckpoint,
+        rewrite: &mut R,
         mut rewrite_row: Option<&mut dyn FnMut(&EffectRow) -> Result<EffectRow, BuildError>>,
+        settled: Option<&std::cell::RefCell<&mut TypeWorkBudget>>,
     ) -> Result<bool, BuildError>
     where
         R: FnMut(&Type) -> Result<Type, BuildError>,
@@ -4149,7 +4359,20 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
                 Ok::<Type, BuildError>(rewritten)
             }};
         }
-        for node in nodes {
+        for (ordinal, node) in nodes.iter_mut().enumerate() {
+            let index = checkpoint.0 + ordinal;
+            if let Some(work) = settled {
+                work.borrow_mut()
+                    .charge(1)
+                    .map_err(|_| BuildError::TypeWorkExceeded)?;
+                if *self
+                    .settled_zonk_nodes
+                    .get(index)
+                    .ok_or(BuildError::InvalidPayload)?
+                {
+                    continue;
+                }
+            }
             let rewritten = rewrite_admitted!(&node.ty)?;
             replace_type_iteratively(&mut node.ty, rewritten);
             if let Some(rewrite_row) = rewrite_row.as_deref_mut()
@@ -4182,6 +4405,13 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
                 )?;
             }
             let Some(kind) = F::pure_mut(&mut node.kind) else {
+                if let Some(work) = settled {
+                    // Every dialect operation remains unknown, including deferred
+                    // source-resource/window claims finalized by the strict seam.
+                    work.borrow_mut()
+                        .charge(1)
+                        .map_err(|_| BuildError::TypeWorkExceeded)?;
+                }
                 continue;
             };
             match kind {
@@ -4236,6 +4466,13 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
                     | PureComputation::LocalNominalScope(_)
                     | PureComputation::TypeAbstraction(_),
                 ) => {}
+            }
+            if let Some(work) = settled {
+                let closed = zonk::fully_closed(node, &mut work.borrow_mut())?;
+                work.borrow_mut()
+                    .charge(1)
+                    .map_err(|_| BuildError::TypeWorkExceeded)?;
+                self.settled_zonk_nodes[index] = closed;
             }
         }
         Ok(rewritten_requires_type_rewrite)
@@ -4360,6 +4597,13 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         self.type_work
             .charge(work)
             .map_err(|()| BuildError::TypeWorkExceeded)
+    }
+
+    pub(crate) fn with_rebuild_type_work<T>(
+        &mut self,
+        operation: impl FnOnce(&mut TypeWorkBudget) -> T,
+    ) -> T {
+        operation(&mut self.type_work)
     }
 
     fn push(&mut self, ty: Type, origin: Origin, kind: PureExprKind) -> Result<NodeId, BuildError> {
@@ -4503,6 +4747,7 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
     /// A committed row solution must rewrite effect metadata even when the
     /// previous type rewrite found no remaining type inference.
     pub(crate) fn complete_cleanup_row(&mut self, id: crate::types::InferenceVariableId) {
+        self.settled_zonk_nodes.clear();
         self.deferred_cleanup_rows.remove(&id);
         self.requires_type_rewrite = true;
     }
@@ -5324,7 +5569,7 @@ fn scan_type_admission<'a>(
                     }
                     work.push(TypeAdmissionTask::Visit(body, child_depth));
                 }
-                Type::ResourceApply(_, arguments) => {
+                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                     let child_depth = depth.saturating_add(1);
                     exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
                     work.push(TypeAdmissionTask::Owner(arguments, child_depth));
@@ -5505,6 +5750,130 @@ mod tests {
 
     fn resolved_id(local: u32) -> BinderId {
         BinderId::resolved(ModuleId::new(0), local)
+    }
+
+    #[test]
+    fn rewrite_gas_is_cumulative_exact_and_separate_from_construction() {
+        fn builder(work: TypeWorkBudget) -> CoreBuilder {
+            let source = SourceFile::new("rewrite-meter.ash", "()").unwrap();
+            let variable = TypeVariableId::resolved(ModuleId::new(0), 0);
+            let ty = Type::Forall(
+                vec![(variable, crate::types::Kind::Type)].into_boxed_slice(),
+                Box::new(Type::Variable(variable)),
+            );
+            let mut builder =
+                CoreBuilder::with_registry_and_rewrite_work(Arc::clone(empty_registry()), work);
+            builder.unit(ty, generated_origin(&source, 0)).unwrap();
+            builder
+        }
+        fn rewrite(builder: &mut CoreBuilder) -> Result<(), BuildError> {
+            builder.rewrite_types(|ty| Ok(ty.clone()))
+        }
+        let mut measured = builder(TypeWorkBudget::with_limit(1_000));
+        let primary = measured.type_work.clone();
+        rewrite(&mut measured).unwrap();
+        let first = measured.rewrite_type_work.used();
+        assert!(first > 0);
+        rewrite(&mut measured).unwrap();
+        let cost = measured.rewrite_type_work.used();
+        assert_eq!(cost, 2 * first);
+        assert_eq!(measured.type_work, primary);
+        assert_eq!(
+            CoreBuilder::new().rewrite_work_limit(),
+            TypeWorkBudget::default().limit()
+        );
+        for prefix in [0, 13] {
+            for _ in 0..2 {
+                let mut work = TypeWorkBudget::with_limit(prefix + cost);
+                work.charge(prefix).unwrap();
+                let mut exact = builder(work);
+                let primary = exact.type_work.clone();
+                rewrite(&mut exact).unwrap();
+                rewrite(&mut exact).unwrap();
+                assert_eq!(exact.rewrite_type_work.used(), prefix + cost);
+                assert_eq!(rewrite(&mut exact), Err(BuildError::TypeWorkExceeded));
+                assert_eq!(exact.rewrite_type_work.used(), prefix + cost);
+                assert_eq!(exact.type_work, primary);
+                let fresh = CoreBuilder::<PureOperationFamily>::with_registry_and_rewrite_work(
+                    Arc::clone(empty_registry()),
+                    TypeWorkBudget::with_limit(exact.rewrite_work_limit()),
+                );
+                assert_eq!(fresh.rewrite_type_work.used(), 0);
+                assert_eq!(fresh.rewrite_work_limit(), prefix + cost);
+                assert_eq!(exact.rewrite_type_work.used(), prefix + cost);
+                let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+                short.charge(prefix).unwrap();
+                let mut short = builder(short);
+                let primary = short.type_work.clone();
+                rewrite(&mut short).unwrap();
+                assert_eq!(rewrite(&mut short), Err(BuildError::TypeWorkExceeded));
+                assert!(short.rewrite_type_work.used() <= short.rewrite_work_limit());
+                assert_eq!(short.type_work, primary);
+            }
+        }
+    }
+
+    #[test]
+    fn caller_rebuild_work_carries_prefix_and_restores_builder_on_both_exits() {
+        fn payload(builder: &mut CoreBuilder) -> Result<NodeId, BuildError> {
+            builder.charge_rebuild_work(7)?;
+            let source = SourceFile::new("caller-rebuild.ash", "()").unwrap();
+            let node = builder.unit(Type::Unit, generated_origin(&source, 0))?;
+            builder
+                .with_rebuild_type_work(|work| {
+                    crate::types::clone_type_with_budget(&Type::Int, work)
+                })
+                .map_err(|()| BuildError::TypeWorkExceeded)?;
+            builder.charge_rebuild_work(11)?;
+            Ok(node)
+        }
+        fn builder() -> CoreBuilder {
+            let mut builder = CoreBuilder::new();
+            builder.type_work = TypeWorkBudget::with_limit(1_000);
+            builder.type_work.charge(13).unwrap();
+            builder
+        }
+        let mut measured_builder = builder();
+        let prior = measured_builder.type_work.clone();
+        let mut measured = TypeWorkBudget::default();
+        measured_builder
+            .with_caller_type_work(&mut measured, payload)
+            .unwrap();
+        assert_eq!(measured_builder.type_work, prior);
+        let cost = measured.used();
+        assert!(cost > 18);
+        for prefix in [0, 11, 150] {
+            for _ in 0..2 {
+                let mut exact_builder = builder();
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                exact_builder
+                    .with_caller_type_work(&mut exact, payload)
+                    .unwrap();
+                assert_eq!(exact.used(), prefix + cost);
+                assert_eq!(exact_builder.type_work, prior);
+
+                let mut short_builder = builder();
+                let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+                short.charge(prefix).unwrap();
+                assert_eq!(
+                    short_builder.with_caller_type_work(&mut short, payload),
+                    Err(BuildError::TypeWorkExceeded),
+                );
+                assert_eq!(short.used(), prefix + cost - 11);
+                assert_eq!(short_builder.type_work, prior);
+            }
+            let mut failed_builder = builder();
+            let mut failed = TypeWorkBudget::with_limit(prefix + cost);
+            failed.charge(prefix).unwrap();
+            let result = failed_builder.with_caller_type_work(&mut failed, |builder| {
+                builder.charge_rebuild_work(7)?;
+                Err::<(), _>(BuildError::InvalidPayload)
+            });
+            assert_eq!(result, Err(BuildError::InvalidPayload));
+            assert_eq!(failed.used(), prefix + 7);
+            assert_eq!(failed_builder.type_work, prior);
+        }
     }
 
     #[test]
@@ -5935,6 +6304,7 @@ mod tests {
         };
         let mut catalog = MethodEvidenceCatalog::new(
             vec![MethodEvidenceMethod {
+                spelling: "method".into(),
                 id: method,
                 interface_parameters: Box::new([parameter]),
                 inherited_parameters: Box::new([crate::resolved::InheritedOwnerParameter {

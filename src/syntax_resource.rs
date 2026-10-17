@@ -49,6 +49,25 @@ impl Default for SyntaxBudget {
 }
 
 impl SyntaxBudget {
+    /// Lends syntax work from an existing cumulative owner without increasing
+    /// the parser's own capacity. Lexer and parser must share this same loan.
+    pub(crate) const fn loan(remaining: usize) -> Self {
+        let limit = if remaining < SYNTAX_WORK_LIMIT {
+            remaining
+        } else {
+            SYNTAX_WORK_LIMIT
+        };
+        Self {
+            remaining: limit,
+            limit,
+        }
+    }
+
+    /// Work to return to the owner on every successful or failed syntax path.
+    pub(crate) const fn consumed(&self) -> usize {
+        self.limit - self.remaining
+    }
+
     pub(crate) fn charge(&mut self) -> Result<(), ResourceFailure> {
         let Some(remaining) = self.remaining.checked_sub(1) else {
             return Err(ResourceFailure::SyntaxWork { limit: self.limit });
@@ -84,5 +103,29 @@ mod tests {
             budget.charge(),
             Err(ResourceFailure::SyntaxWork { limit: 2 })
         );
+    }
+
+    #[test]
+    fn loans_preserve_both_capacities_and_report_only_consumed_work() {
+        let mut short = SyntaxBudget::loan(2);
+        assert_eq!(short.consumed(), 0);
+        short.charge().unwrap();
+        short.charge().unwrap();
+        assert_eq!(
+            short.charge(),
+            Err(ResourceFailure::SyntaxWork { limit: 2 })
+        );
+        assert_eq!(short.consumed(), 2);
+
+        let mut capped = SyntaxBudget::loan(usize::MAX);
+        assert_eq!(capped.limit, SYNTAX_WORK_LIMIT);
+        capped.charge().unwrap();
+        assert_eq!(capped.consumed(), 1);
+        let mut empty = SyntaxBudget::loan(0);
+        assert_eq!(
+            empty.charge(),
+            Err(ResourceFailure::SyntaxWork { limit: 0 })
+        );
+        assert_eq!(empty.consumed(), 0);
     }
 }

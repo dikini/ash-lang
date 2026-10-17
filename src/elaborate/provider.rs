@@ -47,6 +47,46 @@ pub(super) struct CheckingContext {
     phase: Phase,
     operations: Box<[OperationId]>,
     state_associations: Vec<HeaderStateAssociation>,
+    source: Option<Arc<crate::core::source_resource::CheckedSourceResourceHeader>>,
+    pub(super) windows: Vec<super::source_window::CheckingWindow>,
+}
+
+impl CheckingContext {
+    pub(super) fn source(
+        header: Arc<crate::core::source_resource::CheckedSourceResourceHeader>,
+        phase: Phase,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, TypeError> {
+        let operation = match phase {
+            Phase::Acquire => header.acquire.operation(),
+            Phase::Finish => header.teardown.operation(),
+            Phase::Handler => header.acquire.operation(),
+        };
+        let native = header
+            .original
+            .interpreted
+            .iter()
+            .find(|effect| effect.instance.effect() == operation.owner())
+            .ok_or_else(invalid_state)?;
+        work.charge(header.original.interpreted.len().saturating_add(1))
+            .map_err(|()| type_resource())?;
+        let mut operations = Vec::new();
+        operations
+            .try_reserve_exact(1)
+            .map_err(|_| type_resource())?;
+        if phase != Phase::Handler {
+            operations.push(operation);
+        }
+        Ok(Self {
+            native: clone_effect_instance_with_budget(&native.instance, work)
+                .map_err(|_| type_resource())?,
+            phase,
+            operations: operations.into_boxed_slice(),
+            state_associations: Vec::new(),
+            source: Some(header),
+            windows: Vec::new(),
+        })
+    }
 }
 
 /// Header association for unpublished local drafts only. It cannot authorize
@@ -227,15 +267,42 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         })
     }
 
+    pub(super) fn source_window_context(&self) -> bool {
+        self.provider_context
+            .as_ref()
+            .is_some_and(|context| context.source.is_some())
+    }
+
     pub(super) fn contains_provider_state(&mut self, root: &Type) -> Result<bool, TypeError> {
-        if self.registry.foreign_modules().next().is_none() {
+        if self.registry.foreign_modules().next().is_none()
+            && self.registry.source_foreign_nominal_count() == 0
+        {
             return Ok(false);
         }
-        crate::types::visit_type_structure_with_budget(root, &mut self.type_work, |node, _| {
-            Ok(
-                matches!(node, crate::types::TypeStructureNode::Type(Type::Nominal(id))
-                if self.registry.foreign_state(*id).is_some()),
-            )
+        // Both category lookups scan retained tables. Price the upper bound
+        // once per nominal visit, including foreign modules with no states.
+        let mut foreign_scan_work = 0usize;
+        for module in self.registry.foreign_modules() {
+            self.type_work.charge(1).map_err(|()| type_resource())?;
+            foreign_scan_work = foreign_scan_work
+                .checked_add(1)
+                .and_then(|count| count.checked_add(module.states.len()))
+                .ok_or_else(type_resource)?;
+        }
+        let source_scan_work = self.registry.source_foreign_nominal_count();
+        crate::types::visit_type_structure_with_budget(root, &mut self.type_work, |node, work| {
+            let crate::types::TypeStructureNode::Type(
+                Type::Nominal(id) | Type::ForeignOwnerApply(id, _),
+            ) = node
+            else {
+                return Ok(false);
+            };
+            work.charge(foreign_scan_work)?;
+            if self.registry.foreign_state(*id).is_some() {
+                return Ok(true);
+            }
+            work.charge(source_scan_work)?;
+            Ok(self.registry.source_foreign_nominal(*id))
         })
         .map_err(|()| type_resource())
     }
@@ -243,10 +310,165 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     pub(super) fn check_provider_source_application(
         &mut self,
         function: NodeId,
+        function_type: &Type,
         argument: &Type,
         span: Span,
     ) -> Result<(), TypeError> {
         if !self.contains_provider_state(argument)? {
+            return Ok(());
+        }
+        if let Some(window) = self
+            .provider_context
+            .as_ref()
+            .and_then(|context| context.windows.last())
+        {
+            let matches_view = |ty: &Type, work: &mut TypeWorkBudget| {
+                crate::core::source_window::matches_view_type(
+                    &window.family,
+                    &window.arguments.0,
+                    ty,
+                    work,
+                )
+            };
+            let extent_id = self
+                .provider_context
+                .as_ref()
+                .and_then(|context| context.source.as_ref())
+                .map(|header| {
+                    crate::types::NominalTypeId::new(header.acquire.call_codec().module(), 5)
+                })
+                .ok_or_else(invalid_state)?;
+            let matches_extent = |ty: &Type, work: &mut TypeWorkBudget| {
+                if let Type::Application(head, view) = ty
+                    && **head == Type::Nominal(extent_id)
+                {
+                    return matches_view(view, work);
+                }
+                Ok(false)
+            };
+            if let Some(signature) = function_type.function_view() {
+                if *signature.value() == Type::Int
+                    && matches_extent(argument, &mut self.type_work)
+                        .map_err(|()| type_resource())?
+                {
+                    return Ok(());
+                }
+                if let (Type::Tuple(fields), Type::Application(call, result)) =
+                    (argument, signature.value())
+                {
+                    let header = self
+                        .provider_context
+                        .as_ref()
+                        .and_then(|context| context.source.as_ref())
+                        .ok_or_else(invalid_state)?;
+                    if fields.len() == 2
+                        && **call == Type::Nominal(header.acquire.call_codec().ids().call)
+                        && **result == Type::Bytes
+                        && matches_view(&fields[0], &mut self.type_work)
+                            .map_err(|()| type_resource())?
+                        && (fields[1] == Type::Int
+                            || matches_extent(&fields[1], &mut self.type_work)
+                                .map_err(|()| type_resource())?)
+                    {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        // This source frontier checks the candidate's complete value types.
+        // Independent lifecycle flow must still authenticate the selected
+        // canonical callable and its exact original TypeApplication; compatible
+        // ordinary callables receive no execution authority from this check.
+        let source_data = self.provider_context.as_ref().and_then(|context| {
+            context
+                .source
+                .as_ref()
+                .map(|header| (context.phase, Arc::clone(header)))
+        });
+        if let Some((phase, header)) = source_data
+            && phase != Phase::Acquire
+            && let Some(function) = function_type.function_view()
+        {
+            let result = IterativeTypeOwner::new(self.zonk(function.value())?);
+            let state = crate::types::same_type_with_budget(
+                argument,
+                &header.original.state.ty,
+                &mut self.type_work,
+            )
+            .map_err(|()| type_resource())?;
+            let read = if state && matches!(&*result, Type::Inference(_)) {
+                // D may occur only in the result and still be unsolved here.
+                // The selected descriptor supplies its candidate relation;
+                // canonical-call identity is independently checked in flow.
+                self.refine_pattern_expected(&result, &header.original.data.ty, span)?;
+                true
+            } else {
+                state
+                    && crate::types::same_type_with_budget(
+                        &result,
+                        &header.original.data.ty,
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| type_resource())?
+            };
+            let replace = if let Type::Tuple(fields) = argument {
+                fields.len() == 2
+                    && *result == Type::Unit
+                    && crate::types::same_type_with_budget(
+                        &fields[0],
+                        &header.original.state.ty,
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| type_resource())?
+                    && crate::types::same_type_with_budget(
+                        &fields[1],
+                        &header.original.data.ty,
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| type_resource())?
+            } else {
+                false
+            };
+            if read || replace {
+                return Ok(());
+            }
+        }
+        if let Some(header) = self
+            .provider_context
+            .as_ref()
+            .and_then(|context| context.source.as_ref())
+            && header.owner.owner().representation()
+                == crate::foreign::source_contract::PreparedAddressRepresentation::Bytes
+            && matches!(
+                header.acquire.owner_role(),
+                Some(
+                    crate::foreign::source_contract::PreparedOwnerCall::Acquire {
+                        initialized_bytes: Some(_),
+                        ..
+                    }
+                )
+            )
+            && let Type::Tuple(fields) = argument
+            && (fields.len() == 2 || fields.len() == 3)
+            && fields[1..].iter().all(|field| *field == Type::Int)
+            && let Some(result) = function_type
+                .function_view()
+                .map(|function| function.value())
+            && let Type::Application(call, output) = result
+            && matches!(call.as_ref(),Type::Nominal(id) if *id == header.acquire.call_codec().ids().call)
+            && **output
+                == if fields.len() == 2 {
+                    Type::Int
+                } else {
+                    Type::Unit
+                }
+            && crate::types::same_type_with_budget(
+                &fields[0],
+                &header.original.state.ty,
+                &mut self.type_work,
+            )
+            .map_err(|()| type_resource())?
+        {
             return Ok(());
         }
         let constructor = self.builder.direct_constructor(function)?.ok_or_else(|| {
@@ -262,17 +484,25 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         self.type_work
             .charge(context.operations.len())
             .map_err(|()| type_resource())?;
-        let allowed = context.operations.iter().any(|operation| {
-            self.registry
-                .foreign_operation(*operation)
-                .is_some_and(|fact| match (&context.phase, &fact.result) {
-                    (Phase::Acquire, ForeignResultFact::Acquire { constructors, .. })
-                    | (Phase::Finish, ForeignResultFact::Finish { constructors, .. }) => {
-                        constructors.contains(&constructor)
-                    }
-                    _ => false,
-                })
-        });
+        let allowed = if let Some(header) = &context.source {
+            match context.phase {
+                Phase::Acquire => header.codec.acquire.contains(&constructor),
+                Phase::Finish => header.codec.finish.contains(&constructor),
+                Phase::Handler => false,
+            }
+        } else {
+            context.operations.iter().any(|operation| {
+                self.registry
+                    .foreign_operation(*operation)
+                    .is_some_and(|fact| match (&context.phase, &fact.result) {
+                        (Phase::Acquire, ForeignResultFact::Acquire { constructors, .. })
+                        | (Phase::Finish, ForeignResultFact::Finish { constructors, .. }) => {
+                            constructors.contains(&constructor)
+                        }
+                        _ => false,
+                    })
+            })
+        };
         if !allowed {
             return Err(contract_error(
                 span,
@@ -288,10 +518,114 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         &mut self,
         request: &crate::resolved::ResolvedPerformExpr,
     ) -> Result<(), TypeError> {
-        let context = self
-            .provider_context
-            .as_ref()
-            .ok_or_else(foreign_privilege_unavailable)?;
+        let context = self.provider_context.as_ref().ok_or_else(|| {
+            if self
+                .registry
+                .native_symbol(request.operation)
+                .is_some_and(|symbol| symbol.owner().is_some())
+            {
+                contract_error(
+                    request.effect.span,
+                    "source owner operation requires its exact checked lifecycle phase",
+                )
+            } else {
+                foreign_privilege_unavailable()
+            }
+        })?;
+        if let Some(header) = &context.source {
+            if !context.windows.is_empty() {
+                let symbol = self
+                    .registry
+                    .native_symbol(request.operation)
+                    .ok_or_else(invalid_state)?;
+                let interpretation = crate::core::NativeInterpretation::new(
+                    clone_effect_instance_with_budget(
+                        &request.effect.instance,
+                        &mut self.type_work,
+                    )?,
+                    Arc::clone(symbol),
+                );
+                for window in &context.windows {
+                    if !crate::foreign::source_access::window_interpretation_matches(
+                        &window.family,
+                        &window.arguments.0,
+                        &interpretation,
+                        &self.registry,
+                        &mut self.type_work,
+                    )
+                    .map_err(|failure| {
+                        if failure.is_resource_exhaustion() {
+                            type_resource()
+                        } else {
+                            invalid_state()
+                        }
+                    })? {
+                        return Err(contract_error(
+                            request.effect.span,
+                            "native operation does not preserve every exact open copy window",
+                        ));
+                    }
+                }
+                return Ok(());
+            }
+            let symbol = self
+                .registry
+                .native_symbol(request.operation)
+                .ok_or_else(invalid_state)?;
+            if symbol.symbol().access_result().is_some() {
+                return Err(contract_error(
+                    request.effect.span,
+                    "view and extent queries require their exact lexical copy window",
+                ));
+            }
+            let borrow = matches!(
+                symbol.owner_role(),
+                Some(crate::foreign::source_contract::PreparedOwnerCall::Borrow { .. })
+            ) && symbol
+                .owner()
+                .is_some_and(|owner| Arc::ptr_eq(owner, &header.owner));
+            let exact = borrow
+                || match context.phase {
+                    Phase::Acquire => Arc::ptr_eq(symbol, &header.acquire),
+                    Phase::Finish => Arc::ptr_eq(symbol, &header.teardown),
+                    Phase::Handler => false,
+                };
+            if !exact
+                || !header
+                    .original
+                    .interpreted
+                    .iter()
+                    .any(|effect| effect.instance.effect() == request.operation.owner())
+            {
+                return Err(contract_error(
+                    request.effect.span,
+                    "source owner operation requires its exact checked lifecycle phase",
+                ));
+            }
+            self.type_work
+                .charge(header.original.interpreted.len())
+                .map_err(|_| type_resource())?;
+            let selected = header
+                .original
+                .interpreted
+                .iter()
+                .find(|effect| effect.instance.effect() == request.operation.owner())
+                .ok_or_else(invalid_state)?;
+            if compare_effect_instances_with_budget(
+                &selected.instance,
+                &request.effect.instance,
+                &mut self.type_work,
+            )
+            .map_err(|_| type_resource())?
+                != std::cmp::Ordering::Equal
+            {
+                return Err(contract_error(
+                    request.effect.span,
+                    "source owner operation requires its exact checked lifecycle phase",
+                ));
+            }
+            return Ok(());
+        }
         let fact = self
             .registry
             .foreign_operation(request.operation)
@@ -983,6 +1317,60 @@ pub(super) struct PreparedLocalProviderCode {
     code: Option<Arc<ProviderGroupPreparation>>,
     originals: Vec<Arc<ProviderOriginalPreparation>>,
 }
+
+/// Borrows one defining transaction during Source-original admission only.
+/// Every consumer authenticates the exact code, completed facts and still
+/// private publication together; this context cannot publish or enter an image.
+pub(crate) struct SourceOriginalProviderContext<'a> {
+    code: &'a Arc<CheckedProviderGroup>,
+    imported: &'a crate::resolved::ImportedFacts,
+    defining: &'a Arc<crate::resolved::ProviderDefiningFacts>,
+    publication: &'a PendingEvidencePublication,
+}
+
+impl SourceOriginalProviderContext<'_> {
+    pub(crate) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        crate::resolved::ProviderExternalFacts {
+            imported: self.imported,
+            defining: Some(self.defining),
+        }
+        .visit_semantic_type_variables(uses)
+    }
+    pub(crate) fn module(&self) -> crate::module::ModuleId {
+        self.code.module()
+    }
+    pub(crate) fn code(&self) -> &Arc<CheckedProviderGroup> {
+        self.code
+    }
+    pub(crate) fn authenticate(
+        &self,
+        certificate: &Arc<CheckedProviderContracts>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), crate::resolved::ResolvedBuildFailure> {
+        self.code
+            .local_template_view(
+                certificate,
+                crate::resolved::ProviderExternalFacts {
+                    imported: self.imported,
+                    defining: Some(self.defining),
+                },
+                self.publication,
+                work,
+            )
+            .map_err(|failure| match failure {
+                TypeError::Internal(super::ElaborationFailure::TypeResourceExhausted) => {
+                    crate::resolved::ResolvedBuildFailure::TypeResource
+                }
+                TypeError::Internal(super::ElaborationFailure::ConstraintResourceExhausted) => {
+                    crate::resolved::ResolvedBuildFailure::ConstraintResource
+                }
+                _ => crate::resolved::ResolvedBuildFailure::InvalidState,
+            })
+    }
+}
 impl std::fmt::Debug for PreparedLocalProviderCode {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -1031,6 +1419,19 @@ impl PreparedLocalProviderCode {
             .as_ref()
             .map(|code| &code.code)
             .ok_or_else(invalid_state)
+    }
+    pub(super) fn source_original_context<'a>(
+        &'a self,
+        imported: &'a crate::resolved::ImportedFacts,
+        defining: &'a Arc<crate::resolved::ProviderDefiningFacts>,
+        publication: &'a PendingEvidencePublication,
+    ) -> Result<SourceOriginalProviderContext<'a>, TypeError> {
+        Ok(SourceOriginalProviderContext {
+            code: self.code()?,
+            imported,
+            defining,
+            publication,
+        })
     }
     pub(super) fn contains(&self, definition: crate::resolved::ResourceDefinitionId) -> bool {
         self.code.as_ref().is_some_and(|code| {
@@ -1366,6 +1767,39 @@ fn authenticate_primary_provider_application(
 }
 
 impl CheckedProviderContracts {
+    pub(crate) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        uses.charge(self.declarations.len())?;
+        for declaration in &self.declarations {
+            uses.ordinary_header(&declaration.fact)?;
+            uses.application(&declaration.provider_application)?;
+            for lifecycle in [&declaration.acquire, &declaration.finish] {
+                uses.id(lifecycle.hidden_answer)?;
+                if let EffectRowVariable::Rigid(id) = lifecycle.hidden_row {
+                    uses.id(id)?;
+                }
+                uses.charge(lifecycle.formals.len())?;
+                for (source, target) in &lifecycle.formals {
+                    uses.id(*source)?;
+                    uses.id(*target)?;
+                }
+                lifecycle.externals.visit_semantic_type_variables(uses)?;
+            }
+            declaration.handlers.visit_semantic_type_variables(uses)?;
+            if let Some(family) = &declaration.family {
+                uses.id(family.identity.parameter)?;
+                uses.application(&family.application)?;
+                uses.charge(family.requirements.len())?;
+                for requirement in family.requirements.iter() {
+                    uses.application(&requirement.application)?;
+                }
+                family.handlers.visit_semantic_type_variables(uses)?;
+            }
+        }
+        Ok(())
+    }
     /// Original local carrier retained through publication. Callers charge
     /// resource_count before lookup and compare the returned Arc by identity.
     pub(super) fn family_original_authority(
@@ -1445,6 +1879,54 @@ impl CheckedProviderContracts {
     }
     pub(crate) fn resource_count(&self) -> usize {
         self.declarations.len()
+    }
+    /// Borrows the defining provider-interface and provided-effect rows from
+    /// the same canonical registry that authenticates this declaration.
+    pub(crate) fn provider_declaration_formals(
+        &self,
+        definition: crate::resolved::ResourceDefinitionId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<
+        [(
+            crate::resolved::OwnerId,
+            &[crate::resolved::ResolvedTypeVariable],
+        ); 2],
+        crate::resolved::ResolvedBuildFailure,
+    > {
+        use crate::resolved::ResolvedBuildFailure as Failure;
+        work.charge(
+            self.declarations
+                .len()
+                .checked_add(1)
+                .ok_or(Failure::TypeResource)?,
+        )
+        .map_err(|()| Failure::TypeResource)?;
+        let declaration = self
+            .declarations
+            .iter()
+            .find(|declaration| declaration.fact.id == definition)
+            .ok_or(Failure::InvalidState)?;
+        let canonical = &declaration.acquire.canonical;
+        let mut rows: [(
+            crate::resolved::OwnerId,
+            &[crate::resolved::ResolvedTypeVariable],
+        ); 2] = [
+            (
+                crate::resolved::OwnerId::Interface(declaration.provider_application.interface()),
+                &[],
+            ),
+            (
+                crate::resolved::OwnerId::Effect(declaration.fact.provided.instance.effect()),
+                &[],
+            ),
+        ];
+        for (owner, parameters) in &mut rows {
+            *parameters = canonical
+                .defining_owner_parameters(*owner)
+                .ok_or(Failure::InvalidState)?;
+            canonical.authenticate_owner_signature(*owner, None, parameters, work)?;
+        }
+        Ok(rows)
     }
     pub(crate) fn defining_sources(
         &self,
@@ -2399,6 +2881,7 @@ pub(super) fn check_module_provider_group(
     type_work: &mut TypeWorkBudget,
     coverage_work: &mut super::UsefulnessBudget,
     constraint_work: &mut super::InterfaceConstraintBudget,
+    rewrite_work_limit: usize,
 ) -> Result<Option<std::sync::Arc<CheckedProviderGroup>>, TypeError> {
     if module.resources().is_empty() {
         return Ok(None);
@@ -2409,6 +2892,7 @@ pub(super) fn check_module_provider_group(
         type_work,
         coverage_work,
         constraint_work,
+        rewrite_work_limit,
     )?;
     let mut components = Vec::new();
     type_work
@@ -2427,6 +2911,7 @@ pub(super) fn check_module_provider_group(
             type_work,
             coverage_work,
             constraint_work,
+            rewrite_work_limit,
         )?);
     }
     finish_module_provider_originals(module, &components, type_work).map(Some)
@@ -2445,6 +2930,7 @@ pub(super) fn prepare_module_provider_originals(
     type_work: &mut TypeWorkBudget,
     coverage_work: &mut super::UsefulnessBudget,
     constraint_work: &mut super::InterfaceConstraintBudget,
+    rewrite_work_limit: usize,
 ) -> Result<ModuleProviderOriginals, TypeError> {
     // Every declaration in this group borrows the same immutable module. Share
     // its authenticated source inventory and template registry; each compiler
@@ -2473,6 +2959,7 @@ pub(super) fn prepare_module_provider_originals(
             type_work,
             coverage_work,
             constraint_work,
+            rewrite_work_limit,
             |compiler| compiler.check_provider_header(module, definition),
         )?);
     }
@@ -2500,6 +2987,7 @@ pub(super) fn check_module_provider_original(
     type_work: &mut TypeWorkBudget,
     coverage_work: &mut super::UsefulnessBudget,
     constraint_work: &mut super::InterfaceConstraintBudget,
+    rewrite_work_limit: usize,
 ) -> Result<Arc<PreparedProviderOriginal>, TypeError> {
     let definition = module.resources().get(index).ok_or_else(invalid_state)?;
     let header = preparation.headers.get(index).ok_or_else(invalid_state)?;
@@ -2510,6 +2998,7 @@ pub(super) fn check_module_provider_original(
         type_work,
         coverage_work,
         constraint_work,
+        rewrite_work_limit,
         |compiler| {
             compiler
                 .type_work
@@ -2549,6 +3038,7 @@ pub(super) fn check_module_provider_original(
         type_work,
         coverage_work,
         constraint_work,
+        rewrite_work_limit,
         |compiler| {
             compiler
                 .type_work
@@ -2588,6 +3078,7 @@ pub(super) fn check_module_provider_original(
         type_work,
         coverage_work,
         constraint_work,
+        rewrite_work_limit,
         |compiler| compiler.compile_provider_handler(definition, header, module.imported_facts()),
     )?;
     type_work
@@ -2634,6 +3125,7 @@ pub(super) fn check_module_provider_original(
             type_work,
             coverage_work,
             constraint_work,
+            rewrite_work_limit,
             |compiler| {
                 let (application, methods) =
                     compiler.check_provider_family_header(module, definition, family)?;
@@ -2911,6 +3403,10 @@ fn module_provider_failure(failure: LifecycleDraftCheckError) -> TypeError {
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the two work owners stay separate from defining facts and publication"
+)]
 fn with_module_provider_compiler<T>(
     module: &crate::resolved::ResolvedModule,
     registry: &Arc<crate::resolved::ResolvedRegistry>,
@@ -2918,6 +3414,7 @@ fn with_module_provider_compiler<T>(
     type_work: &mut TypeWorkBudget,
     coverage_work: &mut super::UsefulnessBudget,
     constraint_work: &mut super::InterfaceConstraintBudget,
+    rewrite_work_limit: usize,
     check: impl FnOnce(&mut CoreElaborator<EffectOperationFamily>) -> Result<T, TypeError>,
 ) -> Result<T, TypeError> {
     let compiler_result =
@@ -2926,6 +3423,7 @@ fn with_module_provider_compiler<T>(
             Arc::clone(registry),
             type_work,
             coverage_work.clone(),
+            Some(TypeWorkBudget::with_limit(rewrite_work_limit)),
         );
 
     let mut compiler = compiler_result?;
@@ -3461,6 +3959,8 @@ impl CoreElaborator<EffectOperationFamily> {
             phase: Phase::Handler,
             operations: operations.into_boxed_slice(),
             state_associations: associations,
+            source: None,
+            windows: Vec::new(),
         });
         let marker = self.evidence_marker()?;
         let mut context = self.base_context.clone();
@@ -3788,6 +4288,8 @@ impl CoreElaborator<EffectOperationFamily> {
             phase,
             operations: operations.into_boxed_slice(),
             state_associations,
+            source: None,
+            windows: Vec::new(),
         });
         let evidence_marker = imported.map(|_| self.evidence_marker()).transpose()?;
         let mut context = self.base_context.clone();
@@ -3982,8 +4484,9 @@ impl CoreElaborator<EffectOperationFamily> {
                 &substitutions,
             )?
         } else {
-            let placeholder = CoreBuilder::<EffectOperationFamily>::with_registry_for_family(
+            let placeholder = CoreBuilder::<EffectOperationFamily>::with_registry_and_rewrite_work(
                 Arc::clone(&self.registry),
+                TypeWorkBudget::with_limit(self.builder.rewrite_work_limit()),
             );
             (
                 std::mem::replace(&mut self.builder, placeholder).finish(root)?,
@@ -4206,7 +4709,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     | ResolvedExprKind::Discard(_)
                     | ResolvedExprKind::Cleanup(_)
                     | ResolvedExprKind::Resource(_)
-                    | ResolvedExprKind::ProviderResource(_) => {
+                    | ResolvedExprKind::ProviderResource(_)
+                    | ResolvedExprKind::CopyWindow(_) => {
                         return Err(contract_error(
                             expression.span,
                             "lifecycle templates cannot contain source handlers, continuations, cleanup or nested resources",

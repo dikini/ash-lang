@@ -1,7 +1,7 @@
 use ash::{
     driver::{PipelineFailure, RunConfiguration, run_path},
     elaborate::check_module,
-    foreign::{ForeignRegistrations, provider_manifest, sqlite_manifest},
+    foreign::{ForeignRegistrations, provider_manifest},
     lexer::lex,
     module::{ForeignRegistrationId, ModuleRoots, load_module_graph},
     parser::{ProjectionError, ResourceFailure, STRUCTURAL_DEPTH_LIMIT, parse, project_module},
@@ -9,6 +9,7 @@ use ash::{
     resolved::{CheckedModule, ResolvedDefinitionKind, ResolvedExprKind},
     source::SourceFile,
 };
+use ash_foreign_adapter::sqlite_manifest;
 use std::{fs, path::PathBuf};
 
 fn fixture(name: &str) -> PathBuf {

@@ -54,6 +54,8 @@ pub enum TokenKind {
     Resume,
     /// Scoped acquisition of the builtin cell resource.
     Resource,
+    /// A lexical finite foreign-copy window.
+    CopyWindow,
     /// The `hook` reserved word.
     Hook,
     /// The `register` reserved word.
@@ -106,6 +108,8 @@ pub enum TokenKind {
     EqualEqual,
     /// `+`.
     Plus,
+    /// `-`, admitted only as a foreign literal sign by the parser.
+    Minus,
     /// `*`.
     Star,
     /// `->`.

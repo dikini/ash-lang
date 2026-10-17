@@ -1,13 +1,14 @@
-mod support;
+#[path = "support/source_buffer.rs"]
+mod source_buffer;
 
-use support::run_module;
+use source_buffer::run_module;
 
 #[test]
 fn exact_proposal_source_retains_constructor_identity_and_rendering() {
-    let source = r#"import @builtin.native_buffer as Buffer
+    let source = r#"import @ffi.native_buffer as Buffer
 
 main : Unit -> Buffer.Outcome<Buffer.Outcome<Int>>
-main () = resource native_buffer<R> b = 4 {
+main () = resource Buffer.Buffer<R> b = 4 {
 match Buffer.write (b, 0, 42) {
 Buffer.Success(()) => Buffer.read (b, 0)
 Buffer.Failure(error) => Buffer.Failure error
@@ -22,7 +23,7 @@ Buffer.Failure(error) => Buffer.Failure error
 
 fn run_body(body: &str) -> String {
     let source = format!(
-        "import @builtin.native_buffer as Buffer\nmain : Unit -> Int\nmain () = match (resource native_buffer<R> b = 2 {{\n{body}\n}}) {{\nBuffer.Success(value) => value\nBuffer.Failure(error) => 999\n}}\n"
+        "import @ffi.native_buffer as Buffer\nmain : Unit -> Int\nmain () = match (resource Buffer.Buffer<R> b = 2 {{\n{body}\n}}) {{\nBuffer.Success(value) => value\nBuffer.Failure(error) => 999\n}}\n"
     );
     run_module("buffer.ash", &source).unwrap().value_display()
 }
@@ -49,13 +50,13 @@ fn aliases_access_the_same_owned_allocation() {
 
 #[test]
 fn reentrant_same_site_keeps_a_captured_outer_handles_activation() {
-    let source = r#"import @builtin.native_buffer as Buffer
+    let source = r#"import @ffi.native_buffer as Buffer
 effect Pause {
 ask : Unit -> Unit
 }
 visit : Int -> Int ! {Pause}
-visit depth = match (resource native_buffer<R> b = (depth + 1) {
-let observe : Unit -> Int ! {Buffer.Ops<R>} = fn(ignored) {
+visit depth = match (resource Buffer.Buffer<R> b = (depth + 1) {
+let observe : Unit -> Int ! {Buffer.Ops<Buffer.Buffer<R>>} = fn(ignored) {
 Buffer.length b
 }
 match depth == 0 {
@@ -88,7 +89,7 @@ ask ignored => resume ()
 
 #[test]
 fn invalid_index_precedes_invalid_byte_and_leaves_storage_unchanged() {
-    for index in ["2", "184467440737095516160"] {
+    for index in ["2", "(1844674407370955161 * 100 + 60)"] {
         let body = format!(
             "let _ = Buffer.write (b, 0, 42)\nmatch Buffer.write (b, {index}, 256) {{\nBuffer.Failure(Buffer.InvalidIndex) => match Buffer.read (b, 0) {{\nBuffer.Success(value) => value\nBuffer.Failure(error) => 888\n}}\n_ => 777\n}}"
         );
@@ -98,7 +99,7 @@ fn invalid_index_precedes_invalid_byte_and_leaves_storage_unchanged() {
 
 #[test]
 fn invalid_byte_leaves_the_previous_byte_unchanged() {
-    for byte in ["256", "184467440737095516160"] {
+    for byte in ["256", "(1844674407370955161 * 100 + 60)"] {
         let body = format!(
             "let _ = Buffer.write (b, 0, 42)\nmatch Buffer.write (b, 0, {byte}) {{\nBuffer.Failure(Buffer.InvalidByte) => match Buffer.read (b, 0) {{\nBuffer.Success(value) => value\nBuffer.Failure(error) => 888\n}}\n_ => 777\n}}"
         );
@@ -108,9 +109,9 @@ fn invalid_byte_leaves_the_previous_byte_unchanged() {
 
 #[test]
 fn allocation_wraps_the_body_outcome_without_flattening() {
-    let source = r#"import @builtin.native_buffer as Buffer
+    let source = r#"import @ffi.native_buffer as Buffer
 main : Unit -> Int
-main () = match (resource native_buffer<R> b = 4 {
+main () = match (resource Buffer.Buffer<R> b = 4 {
 match Buffer.write (b, 0, 42) {
 Buffer.Success(()) => Buffer.read (b, 0)
 Buffer.Failure(error) => Buffer.Failure error
@@ -131,11 +132,11 @@ Buffer.Failure(error) => 2
 
 #[test]
 fn invalid_length_skips_the_body_and_introduces_no_authority() {
-    let source = r#"import @builtin.native_buffer as Buffer
+    let source = r#"import @ffi.native_buffer as Buffer
 import @builtin.cell as Cell
 main : Unit -> Int
 main () = resource cell<S> c = 0 {
-let outcome = resource native_buffer<R> b = 0 {
+let outcome = resource Buffer.Buffer<R> b = 0 {
 let _ = Cell.write (c, 99)
 Buffer.length b
 }
@@ -150,7 +151,7 @@ Buffer.InvalidByte => 4
 }
 }
 "#;
-    for length in ["0", "184467440737095516160"] {
+    for length in ["0", "(1844674407370955161 * 100 + 60)"] {
         let source = source.replace("b = 0", &format!("b = {length}"));
         assert_eq!(
             run_module("buffer.ash", &source).unwrap().value_display(),
@@ -162,9 +163,9 @@ Buffer.InvalidByte => 4
 
 #[test]
 fn body_failure_is_a_successfully_acquired_body_value() {
-    let source = r#"import @builtin.native_buffer as Buffer
+    let source = r#"import @ffi.native_buffer as Buffer
 main : Unit -> Int
-main () = match (resource native_buffer<R> b = 1 {
+main () = match (resource Buffer.Buffer<R> b = 1 {
 Buffer.read (b, 1)
 }) {
 Buffer.Success(result) => match result {

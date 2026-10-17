@@ -2,9 +2,10 @@
 //! These programs exercise the selected experiment; they do not define Ash.
 use ash::{
     driver::{FileFailure, PipelineFailure, RunConfiguration, run_path_with_foreign_runtime},
-    foreign::{ForeignRegistrations, provider_manifest, runtime::ForeignRuntime, sqlite_manifest},
+    foreign::{ForeignRegistrations, provider_manifest, runtime::ForeignRuntime},
     module::{ForeignRegistrationId, ModuleRoots},
 };
+use ash_foreign_adapter::sqlite_manifest;
 use ash_foreign_adapter::{
     Event, Observations, SqliteFinishFaults, sqlite_binding_with_finish_faults,
 };
@@ -87,7 +88,7 @@ fn formal_open_delta_callback_executes_before_resume_under_surviving_handlers() 
     let source = fs::read_to_string(fixture("callback_library.ash")).unwrap();
     assert!(source.contains("! {H | Delta}"));
     assert!(source.contains("resource Connection<C, {| Delta}>"));
-    assert!(source.contains("let ignored = callback ()\nresume MissingRow"));
+    assert!(source.contains("let ignored = callback ()\n            resume MissingRow"));
 }
 
 #[test]
@@ -361,10 +362,10 @@ fn nested_lexical_method_resource_actuals_use_the_authenticated_open_owner_row()
         let tree = FixtureCopy::new();
         tree.replace("callback_library.ash",
             "pub client<Delta : EffectRow>",
-            "pub interface Run<Key : Type, Rows : EffectRow> {\nrun : (Key, Unit -> Unit ! {| Rows}) -> Provider.Scope<Native.OpenError, Native.CloseError, Error> ! {H | Rows}\n}\n\npub client<Delta : EffectRow>");
+            "pub interface Run<Key : Type, Rows : EffectRow> {\n    run : (Key, Unit -> Unit ! {| Rows}) -> Provider.Scope<Native.OpenError, Native.CloseError, Error> ! {H | Rows}\n}\n\npub client<Delta : EffectRow>");
         tree.replace("callback_library.ash",
-            "client callback = resource Connection<C, {| Delta}> db = Native.InMemory {\nlet ignored = perform H.op ()\ndiagnostic (db, callback)\n}\n",
-            "client callback = {\nnewtype Token = Token(Unit)\nwith Run<Token, {| Delta}> {\nrun (token, callback) = resource Connection<C, {| Delta}> db = Native.InMemory {\nlet ignored = perform H.op ()\ndiagnostic (db, callback)\n}\n}\nrun (Token(()), callback)\n}\n");
+            "client callback = resource Connection<C, {| Delta}> db = Native.InMemory {\n    let ignored = perform H.op ()\n    diagnostic (db, callback)\n}\n",
+            "client callback = {\n    newtype Token = Token(Unit)\n    with Run<Token, {| Delta}> {\n        run (token, callback) = resource Connection<C, {| Delta}> db = Native.InMemory {\n            let ignored = perform H.op ()\n            diagnostic (db, callback)\n        }\n    }\n    run (Token(()), callback)\n}\n");
         if missing_lacks {
             // Remove the existing written H exclusion from both authenticated
             // rows. No surrounding scheme may supply that absent fact.

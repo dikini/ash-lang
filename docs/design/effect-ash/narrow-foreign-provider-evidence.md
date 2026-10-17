@@ -11,6 +11,10 @@ and conformance tests. Unsigned local merge `c0f230f` passed full merged
 verification. The clean feature worktree and branch were removed; their history
 remains in the integration branch. No main merge, push or tag was performed.
 
+The fixed adapter described below is historical evidence at the linked retained
+commit. The current [source buffer library](../../../libraries/native_buffer.ash)
+replaces it on the product path.
+
 ## Evidence coverage
 
 The FOREIGN identifiers retain the accepted proposal's evidence obligations.
@@ -21,7 +25,7 @@ passed. Full verification and clean local integration close FOREIGN-10.
 | ID | Established evidence | Review and closure |
 | --- | --- | --- |
 | FOREIGN-01 | [Syntax](../../../tests/native_buffer_syntax.rs), [modules](../../../tests/native_buffer_modules.rs), [imports](../../../tests/native_buffer_imports.rs), [typing](../../../tests/native_buffer_typing.rs), and [Core transforms](../../../tests/native_buffer_core.rs): closed builtin selection, targeted/renamed imports, facade-only and copied-API rejection, sealed provider, exact types and unchanged cells. | Contract approved. |
-| FOREIGN-02 | [Native owner](../../../native-buffer/src/lib.rs), [runtime](../../../tests/native_buffer_runtime.rs), and [private boundaries](../../../src/eval/native_buffer_tests.rs): real zeroed allocation, length/access, conversions, index-before-byte checks and unchanged rejected writes. | Contract and resource reviews approved. |
+| FOREIGN-02 | [Native owner](https://github.com/dikini/ash-lang/blob/ea93b8701649806ab22b916fa0a5a9a91ebc5fd4/native-buffer/src/lib.rs), [runtime](../../../tests/native_buffer_runtime.rs), and [private boundaries](https://github.com/dikini/ash-lang/blob/ea93b8701649806ab22b916fa0a5a9a91ebc5fd4/src/eval/native_buffer_tests.rs): real zeroed allocation, length/access, conversions, index-before-byte checks and unchanged rejected writes. | Contract and resource reviews approved. |
 | FOREIGN-03 | Private boundary tests cover injected null, pre-call work exhaustion, no body authority and release of a real unpublished owner after injected publication failure. Refusal-delivery tests cover committed initializer effects and no further allocation. | Contract and reporting reviews approved. |
 | FOREIGN-04 | Runtime/private tests cover aliases, reentrant activations, retired-key rejection, active/captured capacity reuse and escaping closures. Imports cover generic value and selected-method captures versus copied values. | Ownership/provenance review approved. |
 | FOREIGN-05 | [Interactions](../../../tests/native_buffer_interactions.rs) cover mixed structural order, inner cleanup access, resume/discard, recursive owner discard, skipped suffixes, action-local result wrapping and outside-owner/running-action rejection. | Contract review accepts these separate witnesses; retain the combined stress limitation below. |
@@ -33,7 +37,7 @@ passed. Full verification and clean local integration close FOREIGN-10.
 
 ## Native and injected observations
 
-The first-party [adapter](../../../native-buffer/README.md) owns the private
+The first-party [adapter](https://github.com/dikini/ash-lang/blob/ea93b8701649806ab22b916fa0a5a9a91ebc5fd4/native-buffer/README.md) owns the private
 pointer and calls C `calloc`/`free`. Its six tests include real successful
 allocation, zeroed bytes, checked access and one release after moving ownership.
 Root evaluator tests observe calls into that safe adapter and ownership drops.

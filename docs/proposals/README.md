@@ -19,8 +19,9 @@ Use [the template](template.md) and allocate the next `CP-NNNN` ID.
 
 ## Proposed changes
 
-No proposed semantic transition is awaiting acceptance.
+No proposed semantic transition is under review.
 
 ## Accepted changes
 
-No accepted semantic transition awaits its product checkpoint.
+No accepted proposals remain in this product tree. Completed transition
+evidence remains in Git; artifact retirement does not integrate it into Main.

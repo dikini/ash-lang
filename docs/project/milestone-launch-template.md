@@ -14,6 +14,8 @@ Launch an Ash delivery team to achieve this milestone.
 - Governing artifacts and tasks: [links]
 - Retaining branch: [milestone integration branch]
 - Merge/signing policy: [method and requirements]
+- Full-gate checkpoints: [shared-runtime and dependent-library completion
+  boundaries, conditions and owners; final integrated candidate before Main]
 - Role overrides: [model and reasoning effort for orchestrator, developer and
   reviewer; otherwise use `.agents/ash-workflow.yaml`]
 
@@ -49,6 +51,13 @@ Use existing issues, PRs and tasks for records. Keep handoffs compact. Continue
 through the agreed milestone outcome and required gates. Return concrete
 semantic decisions to this chat; incorporate accepted refinements through updated
 artifacts and a short delta.
+
+Use [checkpoint gating](agent-workflow.md#verification-cadence): focused
+verification and independent review for each delivery, full workspace gates at
+the named boundaries and on the final integration candidate before Main. Carry
+the last full-gate receipt, intervening deliveries and next checkpoint through
+handoffs. Keep milestone-wide regression verification pending between gates;
+criterion-specific evidence and Main's separate human merge gate still apply.
 
 Finish with a compact table: issue/criterion, initial and final status,
 contributing PRs, retained commit/evidence, confirmed acceptance update, and any

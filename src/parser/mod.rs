@@ -12,6 +12,7 @@ use std::ops::Deref;
 pub use crate::syntax_resource::{ResourceFailure, SYNTAX_WORK_LIMIT};
 pub use cst::{ConcreteElement, ConcreteNode, ConcreteTree, InternalReason};
 pub use event::Event;
+pub(crate) use project::structural_weight as source_structural_weight;
 pub use project::{ProjectionError, project_module};
 
 use crate::{
@@ -44,6 +45,38 @@ pub enum NodeKind {
     ModulePath,
     /// One selected public spelling and its optional local alias.
     ImportItem,
+    /// One passive source-authored foreign library.
+    ForeignLibrary,
+    /// One structured foreign member.
+    ForeignMember,
+    /// One admitted representation spelling before semantic checking.
+    ForeignRepresentation,
+    /// One local or module-qualified foreign member reference.
+    ForeignReference,
+    /// An optionally signed arbitrary-precision foreign literal.
+    ForeignInteger,
+    /// One dotted source operand path.
+    ForeignSourcePosition,
+    /// An ABI argument position or result.
+    ForeignNativePosition,
+    /// One native operand, including a private output slot.
+    ForeignAbiOperand,
+    /// A member, void result, or pointer representation.
+    ForeignAbiRepresentation,
+    /// One explicit call-contract clause.
+    ForeignCallContract,
+    /// One source-to-ABI operand role.
+    ForeignOperandRole,
+    /// One native output role.
+    ForeignOutputRole,
+    /// One total-outcome alternative test.
+    ForeignOutcomeTest,
+    /// One raw status or nullness predicate.
+    ForeignOutcomeAtom,
+    /// One initialization or ownership outcome fact.
+    ForeignOutcomeFact,
+    /// One temporary input discipline.
+    ForeignInputDiscipline,
     /// A nominal type declaration.
     TypeDeclaration,
     /// A representation-preserving nominal declaration.
@@ -100,10 +133,14 @@ pub enum NodeKind {
     ResumeExpression,
     /// One builtin cell acquisition with an identity binder and scoped body.
     ResourceExpression,
-    /// Experimental module-owned resource assembly.
+    /// A lexical foreign-copy window and its direct body.
+    CopyWindowExpression,
+    /// A module-owned experimental assembly or explicit source resource declaration.
     ResourceDefinition,
     /// Experimental assembly field or clause block.
     ResourceField,
+    /// Product resource field; kept distinct from experimental field syntax.
+    SourceResourceField,
     /// One optional declaration-level resource family template.
     ResourceFamily,
     /// Source-defined resource family instance.
@@ -913,6 +950,7 @@ fn retained_token(kind: &TokenKind) -> FoundToken {
         TokenKind::With => FoundToken::Spelling("with"),
         TokenKind::Resume => FoundToken::Spelling("resume"),
         TokenKind::Resource => FoundToken::Spelling("resource"),
+        TokenKind::CopyWindow => FoundToken::Spelling("copy_window"),
         TokenKind::Hook => FoundToken::Spelling("hook"),
         TokenKind::Register => FoundToken::Spelling("register"),
         TokenKind::Cleanup => FoundToken::Spelling("cleanup"),
@@ -937,6 +975,7 @@ fn retained_token(kind: &TokenKind) -> FoundToken {
         TokenKind::Equal => FoundToken::Spelling("="),
         TokenKind::EqualEqual => FoundToken::Spelling("=="),
         TokenKind::Plus => FoundToken::Spelling("+"),
+        TokenKind::Minus => FoundToken::Spelling("-"),
         TokenKind::Star => FoundToken::Spelling("*"),
         TokenKind::Arrow => FoundToken::Spelling("->"),
         TokenKind::FatArrow => FoundToken::Spelling("=>"),

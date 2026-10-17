@@ -1,4 +1,5 @@
 use ash::module::{ModuleRoots, load_module_graph};
+use ash_foreign_adapter::sqlite_manifest;
 use std::{
     fs,
     path::PathBuf,
@@ -308,16 +309,16 @@ fn sqlite_and_provider_passive_imports_check_and_construct_canonical_configurati
 fn ordinary_clients_cannot_call_or_interpret_registered_native_effects() {
     for (body, effects) in [
         (
-            "perform Native.Requests<Int>.begin 42",
+            "{\n    let ignored = perform Native.Requests<Int>.begin 42\n    ()\n}",
             " ! {Native.Requests<Int>}",
         ),
         (
-            "handle (Native.Denied Native.Oops) with Native.Requests<Int> {\nbegin ignored => resume (Native.Denied Native.Oops)\nread ignored => resume 0\nend ignored => resume Native.Stopped\n}",
+            "handle () with Native.Requests<Int> {\n    begin ignored => resume (Native.Denied Native.Oops)\n    read ignored => resume 0\n    end ignored => resume Native.Stopped\n}",
             "",
         ),
     ] {
         let tree = Tree::new();
-        let entry=tree.write("entry.ash",&format!("import @foreign.mock.renamed as Native\nmain : Unit -> Native.Start<Native.Token<Int>, Native.Fault>{effects}\nmain () = {body}\n"));
+        let entry=tree.write("entry.ash",&format!("import @foreign.mock.renamed as Native\nmain : Unit -> Unit{effects}\nmain () = {body}\n"));
         let failure = ash::driver::run_path(ash::driver::RunConfiguration {
             entry,
             roots: roots(mock()),

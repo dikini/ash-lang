@@ -5,33 +5,35 @@ lessons from historical Ash while rebuilding the language from a small,
 coherent base. Historical Ash is evidence for design work, not authority for
 this project.
 
-Ash is currently a rank-1 language with nominal data, interfaces, effects,
-lexical handlers, and scoped resources. Programs are acyclic graphs of passive
-source modules. Each `.ash` file contains imports and declarations. The entry
-module supplies a local `main` function with an empty outward effect row:
+Ash is a rank-1 language with nominal data, interfaces, effects, lexical
+handlers and scoped resources. Programs are acyclic graphs of passive source
+modules. Each `.ash` file contains imports and declarations. Function signatures
+may state interface constraints and effect rows. The entry module supplies a
+local `main` function with an empty outward effect row:
 
 ```ash
 main : Unit -> Int
 main () = 42
 ```
 
-The [canonical specification](spec/README.md) defines the current language.
+The [canonical specification](spec/README.md) defines the implemented language
+and runtime behavior.
 The [`ash` tool guide](docs/tools/ash.md) explains module roots, invocation,
-output, and failures. The earlier single-file Mini-Ash milestone remains
-available at the annotated `mini-ash` Git tag. The annotated `modular-ash` Git
-tag retains the earlier passive-module and method-only interface milestone.
-The completed library and effect increments add explicit implementation
-selection, higher-kinded parameters, relational interfaces, module and local
-`newtype`, scoped evidence, checked one-shot resume/discard, cells, native
-buffers, synchronous hooks, and cleanup. Current source contains no
-dialect selector; the tags retain historical milestone states rather than
-selectable compiler modes.
+output and failures, including [explicit native link inputs](docs/tools/ash.md#native-link-inputs)
+and [generated-host linkage checks](docs/tools/ash.md#generated-host-linkage-checks).
 
-The [feature inventory](docs/project/implemented-features.md) separates
-specified capabilities from bounded foreign-provider experiments retained on
-`main`. Those experiments include SQLite and scalar Arena storage through
-Rust-authored native adapters; they do not establish general FFI or
-Ash-authored bindings. The
+The annotated `mini-ash` and `modular-ash` Git tags retain the earlier single-file
+and passive-module/interface milestones. The completed library and effect
+increments add explicit implementation selection, higher-kinded parameters,
+relational interfaces, module and local `newtype`, scoped evidence, checked
+one-shot resume/discard, cells, native buffers, synchronous hooks and cleanup.
+Current source contains no dialect selector; the tags retain historical
+milestone states rather than selectable compiler modes.
+
+The [earlier Main feature inventory](docs/project/implemented-features.md)
+records the specified capabilities and bounded Rust-authored provider experiments
+of its named historical snapshot. Those experiments remain separate evidence
+from the bounded Ash-authored foreign-interface profile in the specification. The
 [design-note scope summary](docs/design/README.md#implementation-and-evidence-boundaries)
 identifies implemented slices, experimental evidence, and open directions.
 

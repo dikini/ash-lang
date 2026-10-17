@@ -1017,11 +1017,13 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
         .iter()
         .find_map(|definition| match &definition.kind {
             ResolvedDefinitionKind::Equational(global)
+            | ResolvedDefinitionKind::ForeignConstant(global)
                 if global.interface.name.spelling == "relay" =>
             {
                 Some(&global.interface)
             }
             ResolvedDefinitionKind::Equational(_)
+            | ResolvedDefinitionKind::ForeignConstant(_)
             | ResolvedDefinitionKind::InlineOperational(_) => None,
         })
         .expect("relay should retain its resolved global identity");
@@ -1142,11 +1144,13 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
         .iter()
         .find_map(|definition| match definition.kind() {
             ResolvedDefinitionKind::Equational(global)
+            | ResolvedDefinitionKind::ForeignConstant(global)
                 if global.interface.name.spelling == "main" =>
             {
                 Some(global)
             }
             ResolvedDefinitionKind::Equational(_)
+            | ResolvedDefinitionKind::ForeignConstant(_)
             | ResolvedDefinitionKind::InlineOperational(_) => None,
         })
         .expect("the checked entry should retain main");
@@ -1451,11 +1455,13 @@ fn linked_relational_program_crosses_facade_diamond_transforms_and_runtime() {
                 .iter()
                 .find_map(|definition| match definition.kind() {
                     ResolvedDefinitionKind::Equational(global)
+                    | ResolvedDefinitionKind::ForeignConstant(global)
                         if global.interface.name.spelling == "relay" =>
                     {
                         Some(global)
                     }
                     ResolvedDefinitionKind::Equational(_)
+                    | ResolvedDefinitionKind::ForeignConstant(_)
                     | ResolvedDefinitionKind::InlineOperational(_) => None,
                 })
                 .expect("the checked base should retain relay");
@@ -1499,11 +1505,13 @@ fn linked_relational_program_crosses_facade_diamond_transforms_and_runtime() {
                 .iter()
                 .find_map(|definition| match definition.kind() {
                     ResolvedDefinitionKind::Equational(global)
+                    | ResolvedDefinitionKind::ForeignConstant(global)
                         if global.interface.name.spelling == "main" =>
                     {
                         Some(global)
                     }
                     ResolvedDefinitionKind::Equational(_)
+                    | ResolvedDefinitionKind::ForeignConstant(_)
                     | ResolvedDefinitionKind::InlineOperational(_) => None,
                 })
                 .expect("the checked entry should retain main");

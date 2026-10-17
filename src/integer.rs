@@ -31,11 +31,22 @@ impl Integer {
         Self(num_bigint::BigInt::from(value))
     }
 
+    /// Constructs an exact mathematical value from a native unsigned 64-bit reply.
+    pub(crate) fn from_u64(value: u64) -> Self {
+        Self(num_bigint::BigInt::from(value))
+    }
+
+    /// Narrows a nonnegative mathematical value without using the host pointer width.
+    pub(crate) fn to_u64(&self) -> Option<u64> {
+        u64::try_from(&self.0).ok()
+    }
+
     pub(crate) fn to_usize(&self) -> Option<usize> {
         usize::try_from(&self.0).ok()
     }
 
-    pub(crate) fn to_u8(&self) -> Option<u8> {
+    #[cfg(test)]
+    fn to_u8(&self) -> Option<u8> {
         u8::try_from(&self.0).ok()
     }
 

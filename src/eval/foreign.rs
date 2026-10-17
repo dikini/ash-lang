@@ -153,6 +153,21 @@ pub(super) fn encode_input(
                     work,
                     phase,
                 )?,
+                Value::BytePrefix(value) => {
+                    let bytes = value.as_bytes();
+                    charge_effect_work(work, bytes.len(), phase)?;
+                    let mut copied = Vec::new();
+                    copied.try_reserve_exact(bytes.len()).map_err(|_| {
+                        foreign_failure(ForeignExecutionError::STORAGE_REFUSED, phase)
+                    })?;
+                    copied.extend_from_slice(bytes);
+                    push_node(
+                        &mut nodes,
+                        ForeignDataNode::Bytes(Arc::from(copied)),
+                        work,
+                        phase,
+                    )?
+                }
                 Value::String(value) => push_node(
                     &mut nodes,
                     ForeignDataNode::String(Arc::clone(value)),
@@ -735,7 +750,7 @@ impl<'runtime> Machine<'runtime> {
     ) -> Option<&'a crate::foreign::runtime::NativeOwnerGuard> {
         provider_owner(self.foreign_runtime.as_deref(), boundary, finish_only)
     }
-    fn foreign_constructor(
+    pub(super) fn foreign_constructor(
         &mut self,
         id: ConstructorId,
         payload: Option<Value>,
@@ -750,7 +765,7 @@ impl<'runtime> Machine<'runtime> {
             HeapCell::Constructor(id, payload),
         )?))
     }
-    fn foreign_tuple(
+    pub(super) fn foreign_tuple(
         &mut self,
         values: &[Value],
         phase: RuntimePhase,
@@ -769,7 +784,7 @@ impl<'runtime> Machine<'runtime> {
             HeapCell::Tuple(fields.into_boxed_slice()),
         )?))
     }
-    fn foreign_report(
+    pub(super) fn foreign_report(
         &mut self,
         value: &Value,
         phase: RuntimePhase,

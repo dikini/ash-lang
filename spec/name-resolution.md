@@ -40,8 +40,9 @@ select the first reported failure deterministically.
 `@builtin.cell` denotes one compiler-owned module, without a configured root
 or filesystem source. `builtin` is a reserved root name: configuring it as a
 filesystem root fails with `invocation.reserved-root` before filesystem
-inspection. The only modules beneath that root are `@builtin.cell` and
-`@builtin.native_buffer`. Other paths, including `@builtin.cell.extra`, fail
+inspection. The modules specified beneath that root are `@builtin.cell`,
+`@builtin.bytes`, `@builtin.string` and `@builtin.foreign`. Unknown paths, including
+`@builtin.cell.extra`, fail
 with `module.unknown-builtin`.
 
 The module exports exactly `Handle`, `Provider`, `Ops`, `read` and `write`.
@@ -61,25 +62,125 @@ local `with` declarations cannot introduce the exact builtin `Provider`
 relation. Acquisition introduces its authenticated lexical evidence; ordinary
 name resolution or copied signatures cannot grant that authority.
 
-### Compiler-owned native-buffer module
+### Ordinary native-buffer library
 
-`@builtin.native_buffer` follows the same defining-identity, alias, facade and
-sealed-authority rules. It exports `Handle`, `Provider`, `Ops`, `length`, `read`,
-`write`, `Outcome`, `Error`, and the ordinary constructors `Success`, `Failure`,
-`InvalidLength`, `AllocationFailed`, `InvalidIndex` and `InvalidByte`.
-Only the opaque `Handle` constructor remains unavailable to source expressions
-and patterns. `Outcome` and `Error` are ordinary data families.
+`libraries/native_buffer.ash` is an ordinary passive source module. A configured
+root may expose it as `@ffi.native_buffer`; the root name and file basename grant
+no compiler authority. Imports, renaming and public re-exports preserve its
+original resource family, sealed provider and ordinary result identities.
+`resource Buffer.Buffer<R> b = length { body }` resolves that declared family
+through the imported alias. A facade may re-export the original declaration;
+no direct builtin import is required. Copied API names or equal function shapes
+do not supply the original resource header or provider.
 
-A `resource native_buffer` expression requires a direct complete or targeted
-import of this module. A cell import, facade-only import, source file or copied
-API cannot authorize native acquisition. Helpers may forward the exact API
-through ordinary imports without themselves acquiring a buffer.
+The former `@builtin.native_buffer` path is unknown. The lowercase
+`resource native_buffer` designator is no longer a builtin resource form.
+
+### Independent byte and string modules
+
+`String` and `Bytes` are primitive value types. `String` contains validated UTF-8;
+`Bytes` contains independent immutable bytes. Neither is a foreign address,
+view or State token. They have no source constructor or byte-array literal.
+Ordinary string literals use the shared quoted-string syntax.
+
+`@builtin.bytes` and `@builtin.string` are passive canonical modules. Imports,
+aliases and re-exports preserve their original builtin function and result
+identities. Same-spelled client functions do not select builtin execution.
+Their ordinary functions have empty effect rows:
+
+| Module | Function | Result |
+| --- | --- | --- |
+| `@builtin.bytes` | `empty : Unit -> Bytes` | Empty independent bytes. |
+| `@builtin.bytes` | `length : Bytes -> Int` | Byte length. |
+| `@builtin.bytes` | `equal : (Bytes, Bytes) -> Bool` | Byte-for-byte equality. |
+| `@builtin.bytes` | `append_byte : (Bytes, Int) -> AppendResult` | `BytesAppended(Bytes)` or `InvalidByte`. |
+| `@builtin.bytes` | `at : (Bytes, Int) -> ReadResult` | `ByteAt(Int)` or `InvalidIndex`. |
+| `@builtin.string` | `to_utf8 : String -> Bytes` | Independent UTF-8 bytes. |
+| `@builtin.string` | `from_utf8 : Bytes -> DecodeResult` | `Decoded(String)` or `InvalidUtf8`. |
+| `@builtin.string` | `byte_length : String -> Int` | UTF-8 byte length. |
+| `@builtin.string` | `equal : (String, String) -> Bool` | Exact UTF-8 value equality. |
+
+The result types are ordinary transparent ADTs in their defining builtin module.
+`append_byte` accepts only integers in `[0, 255]`. `at` copies an integer in that
+range; negative, unrepresentable or out-of-range indices return `InvalidIndex`,
+and every index into empty bytes is invalid. Invalid UTF-8 returns `InvalidUtf8`
+without replacement decoding. Lookup, traversal and complete result storage
+are paid before publication; work/storage exhaustion is terminal. These APIs
+grant no native call, State, ownership or access permission.
+
+### Compiler-owned foreign result module
+
+`@builtin.foreign` is admitted once per compilation graph and has no runtime
+initialization. Its public `ConversionError` is an opaque ordinary nominal
+type with no source-accessible constructors. Its other public declarations
+are ordinary transparent data types with one kind-`Type` parameter each:
+
+| Type | Constructors |
+| --- | --- |
+| `Call<T>` | `Returned(T)` and `ConversionFailed(ConversionError)` |
+| `Output<T>` | `Unreadable` and `Readable(T)` |
+| `Nullable<T>` | `Null` and `NonNull(T)` |
+| `Disposition<T>` | `Consumed(T)`, `Retained(T)` and `BlockedDependent` |
+
+Complete and targeted imports, aliases and re-exports preserve those nominal
+and constructor identities. Ordinary same-spelled declarations do not supply
+the canonical native result codec. Constructing an ordinary result grants no
+native interpreter, ownership or access permission.
+
+`Extent<V>` is a separate opaque builtin type with no accessible constructor.
+Its exact descriptor-witnessed view parameter and runtime origin are checked by
+the [copy primitives](static-semantics.md#source-foreign-declarations); its
+ordinary spelling or a compatible type cannot create extent evidence.
+
+### Source foreign-library identities
+
+A foreign library introduces a defining native-library identity without a
+nested source namespace. Each admitted symbol introduces a module-owned native
+effect with one `call` operation. Symbols share the ordinary effect spelling
+namespace and inherit the library's publication mode. Foreign representations
+occupy an ABI namespace and introduce no ordinary Ash type. An owner member
+introduces a constructor-free nominal state family in the ordinary type
+namespace. Its original ordered formal records, explicit owned position,
+representation and teardown reference remain associated with the defining
+library. Libraries in one module require disjoint member spellings.
+
+Imports and re-exports preserve the original effect, operation, library and
+contract identities. Summaries retain descriptors only with selected or
+signature-referenced effect facts. A private native effect referenced by a
+public signature remains a hidden checking fact; it does not become an
+exported source spelling. Display aliases do not replace defining provenance
+or result-codec authority.
+
+### Source resource families
+
+A source resource declaration introduces a family in the type namespace. Its
+identity is distinct from every instance identity and from a foreign owner
+state family. The complete written parameter vector scopes over the header,
+acquire and finish clauses, and handler clauses. `owned` must select one of
+those parameters with kind `Type`; its position need not be first. The single
+parameter introduced by `result ... for <Answer>` scopes over that result type
+only. Lifecycle and handler patterns retain their ordinary binding behavior.
+
+Public imports and targeted re-exports retain the original family identity,
+complete parameter vector and body-free header, including all exact native
+interpretations and defining provenance. A display alias cannot change the
+owned position, argument tags or native symbol identity. Source resource code
+travels as the original checked defining code through compiler preparation;
+an export summary neither contains that code nor grants execution permission.
+Private header dependencies retain checking identity without becoming public
+source names.
+
+The current publication checkpoint requires a provider interface declared
+beside a public source resource to be public. Its shared-interface closure can
+retain imported hidden interface facts, but cannot yet retain a same-module
+private provider interface. This is an implementation limitation, not a new
+visibility rule for resource declarations.
 
 ## Imports and namespaces
 
 A complete import binds the dependency's public namespaces under its uppercase
 alias. It does not copy declarations or change their identities. Public globals,
-nominal types, interfaces, effects, methods, operations, and constructors are
+nominal types, resource families, interfaces, effects, methods, operations, and constructors are
 available through qualified occurrences such as `List.map`, `List.Option`,
 `List.Equal`, `List.State`, `List.State.get`, `List.equal`, and `List.Some`. A
 qualified occurrence must use an alias bound by an import in the same module. A
@@ -366,11 +467,18 @@ type-variable sequence after resolving its initializer. The binder has kind
 `Type` and scopes over the resource body only. It is distinct from enclosing
 type parameters and other acquisition binders, regardless of spelling.
 
-Nominal and effect parameters use their written set and order and may be
+Nominal and ordinary effect parameters use their written set and order and may be
 phantom. Effect parameters scope over all operation signatures in their
 declaration and cannot have kind `EffectRow`. An interface has a nonempty
 ordered written parameter vector. A kind annotation fixes its binder's kind;
 an omitted annotation fixes it at `Type`.
+
+Native symbol and source resource parameters retain their complete written
+Type/Row vector, including parameters with no ABI operand. An owner state
+family retains its own ordered `Type`/`EffectRow` parameters and their original
+binding coordinates. Its explicit owned selector names a `Type` formal; inherited
+Rows remain Rows. These distinct inventories are not
+collapsed into a Type-only vector for source effect identity.
 
 For an interface declaration, binder encounter order starts with the interface
 parameters in written order, then visits methods in declaration order and each
@@ -702,6 +810,10 @@ acquisition's identity and handle binders then enter scope together for its
 body block and may shadow earlier names. Neither binder is visible in its own
 initializer or after the resource expression. Closing the body restores the
 preceding scopes. The handle is an ordinary term binder, not a release owner.
+For a source family, resolution checks the complete written argument vector
+against the retained header and identifies the fresh binder at the explicit
+owned position. Every other Type or Row actual resolves in the preceding type
+scope. The fresh identity cannot occur in those actuals or in its initializer.
 
 The target of `hook` or `register` resolves as an exact effect instance in the
 preceding type scope. A registration's transformer resolves in the preceding

@@ -128,6 +128,7 @@ fn main_body(module: &ResolvedModule) -> &ResolvedExpr {
         .iter()
         .find_map(|definition| match &definition.kind {
             ResolvedDefinitionKind::Equational(definition)
+            | ResolvedDefinitionKind::ForeignConstant(definition)
                 if definition.interface.name.spelling == "main" =>
             {
                 Some(
@@ -139,6 +140,7 @@ fn main_body(module: &ResolvedModule) -> &ResolvedExpr {
                 )
             }
             ResolvedDefinitionKind::Equational(_)
+            | ResolvedDefinitionKind::ForeignConstant(_)
             | ResolvedDefinitionKind::InlineOperational(_) => None,
         })
         .expect("fixture should declare equational main")
@@ -656,13 +658,6 @@ fn resolver_effect_restrictions_render_the_actual_operation_and_import() {
             "resource_acquisition",
             Some(("required_builtin", "@builtin.cell")),
             "This resource acquisition requires a direct import of `@builtin.cell`.",
-        ),
-        (
-            "main : Unit -> Int\nmain () = resource native_buffer<R> b = 4 {\n42\n}\n",
-            ResolveReason::ResourceBuiltinRequired,
-            "resource_acquisition",
-            Some(("required_builtin", "@builtin.native_buffer")),
-            "This resource acquisition requires a direct import of `@builtin.native_buffer`.",
         ),
         (
             "import @builtin.cell as Cell\nimpl Cell.Provider<Int> {\nread value = 1\nwrite value = ()\n}\n",

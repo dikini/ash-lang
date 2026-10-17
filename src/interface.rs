@@ -144,7 +144,8 @@ impl InterfaceConstraintBudget {
                             pending.push(Task::Type(right));
                             pending.push(Task::Type(left));
                         }
-                        Type::ResourceApply(_, arguments) => {
+                        Type::ResourceApply(_, arguments)
+                        | Type::ForeignOwnerApply(_, arguments) => {
                             self.charge(arguments.len())?;
                             pending.try_reserve(arguments.len()).map_err(|_| ())?;
                             pending.extend(arguments.iter().map(Task::Argument));
@@ -335,6 +336,18 @@ impl InterfaceConstraintBudget {
                 (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
                 (Type::Variable(left), Type::Variable(right)) if left == right => {}
                 (Type::Inference(left), Type::Inference(right)) if left == right => {}
+                (
+                    Type::ForeignOwnerApply(left_id, left),
+                    Type::ForeignOwnerApply(right_id, right),
+                ) if left_id == right_id && left.len() == right.len() => {
+                    self.charge(left.len())?;
+                    pending.try_reserve(left.len()).map_err(|_| ())?;
+                    pending.extend(
+                        left.iter()
+                            .zip(right)
+                            .map(|(left, right)| Task::Arguments(left, right)),
+                    );
+                }
                 (Type::ResourceApply(left_id, left), Type::ResourceApply(right_id, right))
                     if left_id == right_id && left.len() == right.len() =>
                 {
@@ -518,7 +531,7 @@ fn type_contains_any_variable(
                 pending.try_reserve(elements.len()).map_err(|_| ())?;
                 pending.extend(elements.iter().rev());
             }
-            Type::ResourceApply(_, arguments) => {
+            Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                 if extend_owner_type_children_with_charge(arguments, &mut pending, &mut |cells| {
                     budget.charge(cells)
                 })? {
@@ -584,7 +597,7 @@ fn schedule_type_children<'a>(
             pending.try_reserve(elements.len()).map_err(|_| ())?;
             pending.extend(elements.iter().rev());
         }
-        Type::ResourceApply(_, arguments) => {
+        Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
             extend_owner_type_children_with_charge(arguments, pending, &mut |cells| {
                 budget.charge(cells)
             })?;
@@ -684,7 +697,10 @@ pub(crate) fn collect_type_nominal_identities_with_constraint_budget(
     while let Some(ty) = pending.pop() {
         match ty {
             Type::Nominal(id) => nominal_identities.observe(*id, budget)?,
-            Type::ResourceApply(_, arguments) => {
+            Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
+                if let Type::ForeignOwnerApply(id, _) = ty {
+                    nominal_identities.observe(*id, budget)?;
+                }
                 extend_owner_type_children_with_charge(arguments, &mut pending, &mut |cells| {
                     budget.charge(cells)
                 })?;
@@ -950,6 +966,18 @@ fn same_type_with_constraint_budget_inner(
             }
             (Type::Variable(left), Type::Variable(right)) if left == right => {}
             (Type::Inference(left), Type::Inference(right)) if left == right => {}
+            (Type::ForeignOwnerApply(left_id, left), Type::ForeignOwnerApply(right_id, right))
+                if left_id == right_id && left.len() == right.len() =>
+            {
+                budget.charge(left.len())?;
+                pending.try_reserve(left.len()).map_err(|_| ())?;
+                pending.extend(
+                    left.iter()
+                        .zip(right)
+                        .rev()
+                        .map(|(left, right)| Task::Arguments(left, right)),
+                );
+            }
             (Type::ResourceApply(left_id, left), Type::ResourceApply(right_id, right))
                 if left_id == right_id && left.len() == right.len() =>
             {
@@ -1524,6 +1552,21 @@ where
             | (Type::Bool, Type::Bool)
             | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(candidate), Type::Nominal(goal)) if candidate == goal => {}
+            (
+                Type::ForeignOwnerApply(candidate_id, candidate),
+                Type::ForeignOwnerApply(goal_id, goal),
+            ) if candidate_id == goal_id => {
+                if !extend_owner_type_pairs_with_charge(
+                    candidate,
+                    goal,
+                    &mut pending,
+                    &mut |cells| constraint_budget.charge(cells),
+                )
+                .map_err(|()| HeadMatchFailure::ConstraintResource)?
+                {
+                    return Ok(None);
+                }
+            }
             (Type::ResourceApply(candidate_id, candidate), Type::ResourceApply(goal_id, goal))
                 if candidate_id == goal_id =>
             {
@@ -1630,7 +1673,7 @@ fn validate_match_type(
             continue;
         }
         match ty {
-            Type::ResourceApply(_, arguments) => {
+            Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                 if extend_owner_type_children_with_charge(arguments, &mut pending, &mut |cells| {
                     budget.charge(cells)
                 })
@@ -1769,6 +1812,17 @@ fn match_types_equal(
             | (Type::Bool, Type::Bool)
             | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
+            (Type::ForeignOwnerApply(left_id, left), Type::ForeignOwnerApply(right_id, right))
+                if left_id == right_id =>
+            {
+                if !extend_owner_type_pairs_with_charge(left, right, &mut pending, &mut |cells| {
+                    budget.charge(cells)
+                })
+                .map_err(|()| HeadMatchFailure::ConstraintResource)?
+                {
+                    return Ok(false);
+                }
+            }
             (Type::ResourceApply(left_id, left), Type::ResourceApply(right_id, right))
                 if left_id == right_id =>
             {
@@ -2222,6 +2276,21 @@ where
             | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
             (
+                Type::ForeignOwnerApply(left_id, left_arguments),
+                Type::ForeignOwnerApply(right_id, right_arguments),
+            ) if left_id == right_id => {
+                if !schedule_overlap_owner_pairs(
+                    left_arguments,
+                    left.side,
+                    right_arguments,
+                    right.side,
+                    &mut pending,
+                    budget,
+                )? {
+                    return Ok(false);
+                }
+            }
+            (
                 Type::ResourceApply(left_id, left_arguments),
                 Type::ResourceApply(right_id, right_arguments),
             ) if left_id == right_id => {
@@ -2481,7 +2550,7 @@ fn overlap_occurs<'a>(
             continue;
         }
         match head.ty {
-            Type::ResourceApply(_, arguments) => {
+            Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                 if schedule_overlap_owner_children(arguments, head.side, &mut pending, budget)? {
                     return Err(OverlapFailure::InvalidState);
                 }
@@ -3704,6 +3773,43 @@ struct OriginalEvidenceOwner {
 }
 
 impl EvidenceSelection {
+    pub(crate) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        for plan in std::iter::once(self.plan.as_ref()).chain(
+            self.original
+                .as_ref()
+                .filter(|original| !Arc::ptr_eq(&original.plan, &self.plan))
+                .map(|original| original.plan.as_ref()),
+        ) {
+            uses.application(&plan.application)?;
+            uses.charge(plan.nodes.len())?;
+            for node in &plan.nodes {
+                match node {
+                    EvidenceNodeData::ProviderFamily {
+                        parameter,
+                        application,
+                        ..
+                    } => {
+                        uses.id(*parameter)?;
+                        uses.application(application)?;
+                    }
+                    EvidenceNodeData::Implementation { substitution, .. } => {
+                        uses.charge(substitution.len())?;
+                        for substitution in substitution {
+                            uses.id(substitution.parameter)?;
+                            uses.ty(&substitution.argument)?;
+                        }
+                    }
+                    EvidenceNodeData::NativeLayout { .. }
+                    | EvidenceNodeData::Lexical { .. }
+                    | EvidenceNodeData::Abstract { .. } => {}
+                }
+            }
+        }
+        Ok(())
+    }
     fn canonical_original(&self) -> (&Arc<EvidencePlan>, EvidenceNodeId) {
         self.original
             .as_ref()
@@ -4173,6 +4279,24 @@ pub struct EvidenceSlot {
 }
 
 impl EvidenceSlot {
+    pub(crate) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        uses.charge(1)?;
+        if let Some(filled) = self.filled.get() {
+            uses.application(&filled.checked_application)?;
+            uses.selection(&filled.selection)?;
+            uses.charge(filled.method_arguments.len())?;
+            for argument in &filled.method_arguments {
+                uses.ty(argument)?;
+            }
+            if let Some(ty) = &filled.checked_value_type {
+                uses.ty(ty)?;
+            }
+        }
+        Ok(())
+    }
     /// Creates one independently fillable empty evidence slot.
     #[must_use]
     pub fn empty() -> Self {
@@ -5404,9 +5528,9 @@ mod tests {
         // slot), and 8 cells authenticate the first binding (one canonical
         // binder lookup plus seven nominal Kind synthesis/comparison cells).
         const CONSTRAINT_WORK: usize = 4 + 12 + 8;
-        // Type work: one XI record plus its three derived Kind nodes, and one
-        // cloned nominal substitution argument.
-        const TYPE_WORK: usize = 4 + 1;
+        // Type work: one XI record, its three derived Kind nodes, one
+        // formal-kind scan, and one cloned nominal substitution argument.
+        const TYPE_WORK: usize = 5 + 1;
 
         let module = ModuleId::new(62);
         let interface_parameter = TypeVariableId::resolved(module, 0);
@@ -6724,8 +6848,9 @@ mod tests {
         // solution. Complete heads are not redundantly synthesized here.
         const CONSTRAINT_WORK: usize = 2 + 16 + 26;
         // Type work: one left DELTA record and one right XI record retaining
-        // the three nodes of Option's derived Type -> Type Kind.
-        const TYPE_WORK: usize = 1 + 4;
+        // the three nodes of Option's derived Type -> Type Kind, plus its
+        // one-formal owner-kind scan.
+        const TYPE_WORK: usize = 1 + 5;
 
         let module = ModuleId::new(64);
         let interface_parameter = TypeVariableId::resolved(module, 0);

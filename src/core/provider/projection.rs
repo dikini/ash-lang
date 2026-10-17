@@ -23,7 +23,7 @@ use crate::{
 /// Typed scalar identities keep nominal, term, control, and authority spaces
 /// distinct. Tags also retain empty lists and pattern/operation boundaries.
 #[derive(Debug, Eq, PartialEq)]
-pub(super) enum Atom {
+pub(in crate::core) enum Atom {
     Tag(u8),
     Count(usize),
     Boolean(bool),
@@ -53,6 +53,24 @@ pub(super) enum Metadata {
     Row(EffectRow),
     Kind(Kind),
 }
+#[derive(Clone, Copy)]
+pub(in crate::core) enum MetadataView<'a> {
+    Type(&'a Type),
+    Argument(&'a KindedArgument),
+    Row(&'a EffectRow),
+    Kind(&'a Kind),
+}
+impl Metadata {
+    pub(in crate::core) fn view(&self) -> MetadataView<'_> {
+        match self {
+            Self::Type(value) => MetadataView::Type(value),
+            Self::Argument(value) => MetadataView::Argument(value),
+            Self::Row(value) => MetadataView::Row(value),
+            Self::Kind(value) => MetadataView::Kind(value),
+        }
+    }
+}
+
 impl std::fmt::Debug for Metadata {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -78,6 +96,39 @@ fn invalid() -> ValidationError {
 }
 
 impl NodeProjection {
+    pub(in crate::core) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        uses.charge(self.atoms.len() + self.metadata.len())?;
+        for atom in &self.atoms {
+            match atom {
+                Atom::Variable(id) => uses.id(*id)?,
+                Atom::Acquisition(acquisition) => uses.id(acquisition.identity)?,
+                _ => {}
+            }
+        }
+        for metadata in &self.metadata {
+            match metadata.view() {
+                MetadataView::Type(ty) => uses.ty(ty)?,
+                MetadataView::Argument(argument) => uses.argument(argument)?,
+                MetadataView::Row(row) => uses.row(row)?,
+                MetadataView::Kind(_) => {}
+            }
+        }
+        Ok(())
+    }
+    pub(in crate::core) fn replace_effects(
+        &mut self,
+        row: EffectRow,
+    ) -> Result<(), ValidationError> {
+        let Some(Metadata::Row(effects)) = self.metadata.get_mut(1) else {
+            return Err(invalid());
+        };
+        *effects = row;
+        Ok(())
+    }
+
     pub(in crate::core) fn node(&self) -> NodeId {
         self.node
     }
@@ -135,9 +186,33 @@ impl NodeProjection {
         self.origins.push(value);
         Ok(())
     }
+}
+
+/// Both owned evidence and borrowed comparison views use this one emitter.
+/// Borrowing removes allocation/copy work only; it never skips a field or check.
+trait ProjectionSink<'a> {
+    fn atom(&mut self, atom: Atom, work: &mut TypeWorkBudget) -> Result<(), ValidationError>;
+    fn ty(&mut self, value: &'a Type, work: &mut TypeWorkBudget) -> Result<(), ValidationError>;
+    fn row(
+        &mut self,
+        value: &'a EffectRow,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError>;
+    fn argument(
+        &mut self,
+        value: &'a KindedArgument,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError>;
+    fn kind(&mut self, value: &'a Kind, work: &mut TypeWorkBudget) -> Result<(), ValidationError>;
+    fn origin(
+        &mut self,
+        value: &'a Origin,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError>;
+    fn children(&mut self) -> &mut Vec<NodeId>;
     fn binder(
         &mut self,
-        binder: &TypedBinder,
+        binder: &'a TypedBinder,
         work: &mut TypeWorkBudget,
     ) -> Result<(), ValidationError> {
         self.atom(Atom::Binder(binder.id()), work)?;
@@ -146,7 +221,7 @@ impl NodeProjection {
     }
     fn pattern(
         &mut self,
-        root: &CorePattern,
+        root: &'a CorePattern,
         work: &mut TypeWorkBudget,
     ) -> Result<(), ValidationError> {
         charge(work, 1)?;
@@ -196,7 +271,7 @@ impl NodeProjection {
     }
     fn instance(
         &mut self,
-        instance: &crate::types::EffectInstance,
+        instance: &'a crate::types::EffectInstance,
         work: &mut TypeWorkBudget,
     ) -> Result<(), ValidationError> {
         self.atom(Atom::Effect(instance.effect()), work)?;
@@ -205,6 +280,151 @@ impl NodeProjection {
             self.argument(argument, work)?;
         }
         Ok(())
+    }
+}
+impl<'a> ProjectionSink<'a> for NodeProjection {
+    fn atom(&mut self, value: Atom, work: &mut TypeWorkBudget) -> Result<(), ValidationError> {
+        NodeProjection::atom(self, value, work)
+    }
+    fn ty(&mut self, value: &'a Type, work: &mut TypeWorkBudget) -> Result<(), ValidationError> {
+        NodeProjection::ty(self, value, work)
+    }
+    fn row(
+        &mut self,
+        value: &'a EffectRow,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
+        NodeProjection::row(self, value, work)
+    }
+    fn argument(
+        &mut self,
+        value: &'a KindedArgument,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
+        NodeProjection::argument(self, value, work)
+    }
+    fn kind(&mut self, value: &'a Kind, work: &mut TypeWorkBudget) -> Result<(), ValidationError> {
+        self.metadata(
+            Metadata::Kind(
+                crate::types::clone_kind_with_budget(value, work).map_err(|()| resource())?,
+            ),
+            work,
+        )
+    }
+    fn origin(
+        &mut self,
+        value: &'a Origin,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
+        NodeProjection::origin(self, value, work)
+    }
+    fn children(&mut self) -> &mut Vec<NodeId> {
+        &mut self.children
+    }
+}
+
+/// An invocation-local representation of exact immutable original/target
+/// nodes. It cannot escape the arena borrow or stand for a checked result.
+pub(in crate::core) struct BorrowedNodeProjection<'a> {
+    pub(super) node: NodeId,
+    pub(super) children: Vec<NodeId>,
+    pub(super) atoms: Vec<Atom>,
+    pub(super) metadata: Vec<MetadataView<'a>>,
+    pub(super) origins: Vec<&'a Origin>,
+}
+impl<'a> ProjectionSink<'a> for BorrowedNodeProjection<'a> {
+    fn atom(&mut self, atom: Atom, work: &mut TypeWorkBudget) -> Result<(), ValidationError> {
+        charge(work, 1)?;
+        self.atoms.try_reserve(1).map_err(|_| resource())?;
+        self.atoms.push(atom);
+        Ok(())
+    }
+    fn ty(&mut self, value: &'a Type, work: &mut TypeWorkBudget) -> Result<(), ValidationError> {
+        self.metadata(MetadataView::Type(value), work)
+    }
+    fn row(
+        &mut self,
+        value: &'a EffectRow,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
+        self.metadata(MetadataView::Row(value), work)
+    }
+    fn argument(
+        &mut self,
+        value: &'a KindedArgument,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
+        self.metadata(MetadataView::Argument(value), work)
+    }
+    fn kind(&mut self, value: &'a Kind, work: &mut TypeWorkBudget) -> Result<(), ValidationError> {
+        self.metadata(MetadataView::Kind(value), work)
+    }
+    fn origin(
+        &mut self,
+        value: &'a Origin,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
+        charge(work, 1)?;
+        self.origins.try_reserve(1).map_err(|_| resource())?;
+        self.origins.push(value);
+        Ok(())
+    }
+    fn children(&mut self) -> &mut Vec<NodeId> {
+        &mut self.children
+    }
+}
+impl<'a> BorrowedNodeProjection<'a> {
+    fn metadata(
+        &mut self,
+        value: MetadataView<'a>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
+        charge(work, 1)?;
+        self.metadata.try_reserve(1).map_err(|_| resource())?;
+        self.metadata.push(value);
+        Ok(())
+    }
+}
+
+pub(in crate::core) trait ProjectionView {
+    fn node(&self) -> NodeId;
+    fn children(&self) -> &[NodeId];
+    fn atoms(&self) -> &[Atom];
+    fn metadata(&self) -> impl ExactSizeIterator<Item = MetadataView<'_>>;
+    fn origins(&self) -> impl ExactSizeIterator<Item = &Origin>;
+}
+impl ProjectionView for NodeProjection {
+    fn node(&self) -> NodeId {
+        self.node
+    }
+    fn children(&self) -> &[NodeId] {
+        &self.children
+    }
+    fn atoms(&self) -> &[Atom] {
+        &self.atoms
+    }
+    fn metadata(&self) -> impl ExactSizeIterator<Item = MetadataView<'_>> {
+        self.metadata.iter().map(Metadata::view)
+    }
+    fn origins(&self) -> impl ExactSizeIterator<Item = &Origin> {
+        self.origins.iter().map(RetainedHandlerOrigin::as_origin)
+    }
+}
+impl ProjectionView for BorrowedNodeProjection<'_> {
+    fn node(&self) -> NodeId {
+        self.node
+    }
+    fn children(&self) -> &[NodeId] {
+        &self.children
+    }
+    fn atoms(&self) -> &[Atom] {
+        &self.atoms
+    }
+    fn metadata(&self) -> impl ExactSizeIterator<Item = MetadataView<'_>> {
+        self.metadata.iter().copied()
+    }
+    fn origins(&self) -> impl ExactSizeIterator<Item = &Origin> {
+        self.origins.iter().copied()
     }
 }
 
@@ -226,7 +446,7 @@ pub(in crate::core) fn project_clause(
     Ok(result)
 }
 
-pub(super) fn project_binder(
+pub(in crate::core) fn project_binder(
     node: NodeId,
     binder: &TypedBinder,
     work: &mut TypeWorkBudget,
@@ -239,6 +459,22 @@ pub(super) fn project_binder(
         origins: Vec::new(),
     };
     result.binder(binder, work)?;
+    Ok(result)
+}
+
+pub(in crate::core) fn project_pattern(
+    node: NodeId,
+    pattern: &CorePattern,
+    work: &mut TypeWorkBudget,
+) -> Result<NodeProjection, ValidationError> {
+    let mut result = NodeProjection {
+        node,
+        children: Vec::new(),
+        atoms: Vec::new(),
+        metadata: Vec::new(),
+        origins: Vec::new(),
+    };
+    result.pattern(pattern, work)?;
     Ok(result)
 }
 
@@ -307,17 +543,51 @@ pub(in crate::core) fn project_with<F: crate::core::dialect::CoreOperationFamily
         metadata: Vec::new(),
         origins: Vec::new(),
     };
+    emit_projection::<F, _>(&mut result, stored, operation, work)?;
+    Ok(result)
+}
+
+pub(in crate::core) fn project_borrowed<'a>(
+    node: NodeId,
+    stored: &'a StoredNode<EffectOperationFamily>,
+    work: &mut TypeWorkBudget,
+) -> Result<BorrowedNodeProjection<'a>, ValidationError> {
+    let mut result = BorrowedNodeProjection {
+        node,
+        children: Vec::new(),
+        atoms: Vec::new(),
+        metadata: Vec::new(),
+        origins: Vec::new(),
+    };
+    emit_projection::<EffectOperationFamily, _>(
+        &mut result,
+        stored,
+        |kind| match kind {
+            EffectExprKind::Operation(operation) => Some(operation),
+            EffectExprKind::Pure(_) => None,
+        },
+        work,
+    )?;
+    Ok(result)
+}
+
+fn emit_projection<'a, F: crate::core::dialect::CoreOperationFamily, S: ProjectionSink<'a>>(
+    result: &mut S,
+    stored: &'a StoredNode<F>,
+    operation: for<'b> fn(&'b F::Kind) -> Option<&'b EffectOperation>,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ValidationError> {
     result.ty(&stored.ty, work)?;
     result.row(F::effect_row(&stored.effects), work)?;
     result.origin(stored.origin.as_ref().ok_or_else(invalid)?, work)?;
     charge(work, F::child_count(&stored.kind))?;
     result
-        .children
+        .children()
         .try_reserve_exact(F::child_count(&stored.kind))
         .map_err(|_| resource())?;
     for ordinal in 0..F::child_count(&stored.kind) {
         result
-            .children
+            .children()
             .push(F::child_at(&stored.kind, ordinal).ok_or_else(invalid)?);
     }
     let kind = match (F::pure(&stored.kind), operation(&stored.kind)) {
@@ -402,9 +672,7 @@ pub(in crate::core) fn project_with<F: crate::core::dialect::CoreOperationFamily
                 result.atom(Atom::Count(abstraction.parameters().len()), work)?;
                 for (identity, kind) in abstraction.parameters() {
                     result.atom(Atom::Variable(*identity), work)?;
-                    let kind = crate::types::clone_kind_with_budget(kind, work)
-                        .map_err(|()| resource())?;
-                    result.metadata(Metadata::Kind(kind), work)?;
+                    result.kind(kind, work)?;
                 }
             }
             PureComputation::TypeApplication(application) => {
@@ -480,12 +748,30 @@ pub(in crate::core) fn project_with<F: crate::core::dialect::CoreOperationFamily
                 result.atom(Atom::Acquisition(resource.acquisition), work)?;
                 result.binder(&resource.handle, work)?;
             }
+            EffectOperation::SourceCopyWindow(scope) => {
+                result.atom(Atom::Tag(24), work)?;
+                result.atom(Atom::Nominal(scope.family().nominal()), work)?;
+                result.atom(Atom::Variable(scope.identity()), work)?;
+                result.atom(Atom::Count(scope.arguments().len()), work)?;
+                for argument in scope.arguments() {
+                    result.argument(argument, work)?;
+                }
+                result.atom(Atom::Count(scope.interpretations().len()), work)?;
+                for interpretation in scope.interpretations() {
+                    result.atom(Atom::Operation(interpretation.symbol().operation()), work)?;
+                    result.instance(interpretation.effect(), work)?;
+                }
+            }
             // Nested scopes carry independently admitted proof projections.
             // They cannot enter an original-template certificate implicitly.
-            EffectOperation::ProviderScope(_) => return Err(invalid()),
+            EffectOperation::ProviderScope(_)
+            | EffectOperation::SourceResourceScope(_)
+            | EffectOperation::NativeInterpret(_) => {
+                return Err(invalid());
+            }
         },
     }
-    Ok(result)
+    Ok(())
 }
 
 impl NodeProjection {
@@ -494,61 +780,73 @@ impl NodeProjection {
         other: &Self,
         work: &mut TypeWorkBudget,
     ) -> Result<bool, ValidationError> {
-        charge(
-            work,
-            self.children
-                .len()
-                .checked_add(self.atoms.len())
-                .and_then(|n| n.checked_add(self.metadata.len()))
-                .and_then(|n| n.checked_add(self.origins.len()))
-                .ok_or_else(resource)?,
-        )?;
-        if self.node != other.node
-            || self.children != other.children
-            || self.atoms.len() != other.atoms.len()
-            || self.metadata.len() != other.metadata.len()
-            || self.origins.len() != other.origins.len()
-        {
+        same_projection(self, other, work)
+    }
+    pub(in crate::core) fn same_borrowed(
+        &self,
+        other: &BorrowedNodeProjection<'_>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ValidationError> {
+        same_projection(self, other, work)
+    }
+}
+fn same_projection(
+    left: &impl ProjectionView,
+    right: &impl ProjectionView,
+    work: &mut TypeWorkBudget,
+) -> Result<bool, ValidationError> {
+    charge(
+        work,
+        left.children()
+            .len()
+            .checked_add(left.atoms().len())
+            .and_then(|n| n.checked_add(left.metadata().len()))
+            .and_then(|n| n.checked_add(left.origins().len()))
+            .ok_or_else(resource)?,
+    )?;
+    if left.node() != right.node()
+        || left.children() != right.children()
+        || left.atoms().len() != right.atoms().len()
+        || left.metadata().len() != right.metadata().len()
+        || left.origins().len() != right.origins().len()
+    {
+        return Ok(false);
+    }
+    for (left, right) in left.atoms().iter().zip(right.atoms()) {
+        if let (Atom::Literal(left), Atom::Literal(right)) = (left, right) {
+            charge(work, left.len().max(right.len()))?;
+        }
+        if let (Atom::Packed(left), Atom::Packed(right)) = (left, right) {
+            charge(work, left.len().max(right.len()))?;
+        }
+        if left != right {
             return Ok(false);
         }
-        for (left, right) in self.atoms.iter().zip(&other.atoms) {
-            if let (Atom::Literal(left), Atom::Literal(right)) = (left, right) {
-                charge(work, left.len().max(right.len()))?;
-            }
-            if let (Atom::Packed(left), Atom::Packed(right)) = (left, right) {
-                charge(work, left.len().max(right.len()))?;
-            }
-            if left != right {
-                return Ok(false);
-            }
-        }
-        for (left, right) in self.metadata.iter().zip(&other.metadata) {
-            let same = match (left, right) {
-                (Metadata::Type(left), Metadata::Type(right)) => {
-                    same_type_with_budget(left, right, work).map_err(|()| resource())?
-                }
-                (Metadata::Row(left), Metadata::Row(right)) => {
-                    same_effect_rows_with_budget(left, right, work).map_err(|()| resource())?
-                }
-                (Metadata::Argument(left), Metadata::Argument(right)) => {
-                    same_kinded_argument_with_budget(left, right, work).map_err(|()| resource())?
-                }
-                (Metadata::Kind(left), Metadata::Kind(right)) => {
-                    same_kind_with_budget(left, right, work).map_err(|()| resource())?
-                }
-                _ => false,
-            };
-            if !same {
-                return Ok(false);
-            }
-        }
-        for (left, right) in self.origins.iter().zip(&other.origins) {
-            if !crate::resolved::same_origin_with_budget(left.as_origin(), right.as_origin(), work)
-                .map_err(|()| resource())?
-            {
-                return Ok(false);
-            }
-        }
-        Ok(true)
     }
+    for (left, right) in left.metadata().zip(right.metadata()) {
+        let same = match (left, right) {
+            (MetadataView::Type(left), MetadataView::Type(right)) => {
+                same_type_with_budget(left, right, work).map_err(|()| resource())?
+            }
+            (MetadataView::Row(left), MetadataView::Row(right)) => {
+                same_effect_rows_with_budget(left, right, work).map_err(|()| resource())?
+            }
+            (MetadataView::Argument(left), MetadataView::Argument(right)) => {
+                same_kinded_argument_with_budget(left, right, work).map_err(|()| resource())?
+            }
+            (MetadataView::Kind(left), MetadataView::Kind(right)) => {
+                same_kind_with_budget(left, right, work).map_err(|()| resource())?
+            }
+            _ => false,
+        };
+        if !same {
+            return Ok(false);
+        }
+    }
+    for (left, right) in left.origins().zip(right.origins()) {
+        if !crate::resolved::same_origin_with_budget(left, right, work).map_err(|()| resource())? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }

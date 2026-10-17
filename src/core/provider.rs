@@ -41,7 +41,7 @@ pub(crate) use specialization::{
     ProviderFreshening, ProviderOccurrenceRelocation, ProviderOriginalTemplate,
     ProviderPreparedFamilyOriginal, ProviderScopeAdmission, ProviderSpecializationDictionaryEntry,
     ProviderSpecializationEntries, ProviderSpecializationFamilyEntries,
-    ProviderTemplateSubstitution,
+    ProviderTemplateSubstitution, source_resource_local_identities,
 };
 pub(in crate::core) use specialization::{
     AuthenticatedProviderSourceCapture, authenticate_admitted_provider_capture,
@@ -82,17 +82,20 @@ pub(in crate::core) use external::{
 };
 pub(crate) use handler::HandlerFragmentDraft;
 pub(in crate::core) use handler::RetainedHandlerStateAssociation;
-pub(in crate::core) use handler::{HandlerAssociations, HandlerFragmentEntry};
+pub(in crate::core) use handler::{
+    HandlerAssociations, HandlerFragmentEntry, HandlerGraphDraft, HandlerGraphView,
+};
 #[cfg(test)]
 pub(crate) use handler::{HandlerMutation, mutate_handler_for_test};
+pub(crate) use row::CaptureInputId;
 pub(in crate::core) use row::effect_operation as row_effect_operation;
 #[cfg(test)]
 pub(in crate::core) use row::owned_contract_links_for_test;
-pub(in crate::core) use row::{CaptureInputId, HandlerRowContract, HandlerRowRecipeDraft};
 pub(crate) use row::{
     HandlerPendingRows, PendingRowEquality, PendingRowEquation, PendingRowRecomputation,
     PendingRowRecord,
 };
+pub(in crate::core) use row::{HandlerRowContract, HandlerRowRecipeDraft};
 #[cfg(test)]
 pub(crate) use row::{
     add_unused_pending_equality_for_test, drop_native_from_pending_demands_for_test,
@@ -1413,7 +1416,7 @@ pub(in crate::core) fn check_handler_native_storage_relations(
                 let Some(recipe) = entry.row_recipe else {
                     return Err(invalid(id));
                 };
-                if !recipe.discard_port(entry, id, work)? {
+                if !recipe.discard_port(&entry.handler_graph(), id, work)? {
                     return Err(invalid(id));
                 }
                 controlled
@@ -1780,7 +1783,7 @@ fn execute_flow_paths(
                         let Some(recipe) = entry.row_recipe else {
                             return Err(invalid(id));
                         };
-                        if !recipe.discard_port(entry, id, work)? {
+                        if !recipe.discard_port(&entry.handler_graph(), id, work)? {
                             return Err(invalid(id));
                         }
                         // Unit is a data-flow fact only. The actual completion

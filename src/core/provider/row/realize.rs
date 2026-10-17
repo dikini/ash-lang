@@ -144,6 +144,7 @@ impl HandlerRowRecipeDraft {
                     RowEquationOperation::Empty
                         | RowEquationOperation::Handler { .. }
                         | RowEquationOperation::ProviderScope { .. }
+                        | RowEquationOperation::CopyWindow
                 ) {
                     for input in &self.edges[equation.inputs.clone()] {
                         row = union(&row, &values[input.0], work)?;
@@ -177,6 +178,54 @@ impl HandlerRowRecipeDraft {
                         )
                         .map_err(|()| resource())?;
                         row = union(&row, &requested, work)?;
+                    }
+                    RowEquationOperation::CopyWindow => {
+                        let EffectExprKind::Operation(EffectOperation::SourceCopyWindow(scope)) =
+                            &stored.kind
+                        else {
+                            return Err(invalid(equation.node));
+                        };
+                        charge(
+                            work,
+                            scope
+                                .interpretations()
+                                .len()
+                                .checked_add(2)
+                                .ok_or_else(resource)?,
+                        )?;
+                        let body = self
+                            .node_equations
+                            .get(scope.body().index().map_err(|_| invalid(equation.node))?)
+                            .copied()
+                            .flatten()
+                            .ok_or_else(|| invalid(equation.node))?;
+                        let mut body = copy(&values[body.0], work)?;
+                        for interpretation in scope.interpretations() {
+                            let actual = instance(interpretation.effect(), work)?;
+                            body = remove(&body, &actual, true, work)?;
+                        }
+                        if !body.is_empty() {
+                            return Err(invalid(equation.node));
+                        }
+                        let state = self
+                            .node_equations
+                            .get(scope.state().index().map_err(|_| invalid(equation.node))?)
+                            .copied()
+                            .flatten()
+                            .ok_or_else(|| invalid(equation.node))?;
+                        row = copy(&values[state.0], work)?;
+                    }
+                    RowEquationOperation::NativeInterpret => {
+                        let EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) =
+                            &stored.kind
+                        else {
+                            return Err(invalid(equation.node));
+                        };
+                        charge(work, boundary.interpretations().len())?;
+                        for interpretation in boundary.interpretations() {
+                            let actual = instance(interpretation.effect(), work)?;
+                            row = remove(&row, &actual, true, work)?;
+                        }
                     }
                     RowEquationOperation::Handler { output } => {
                         row = copy(&outputs[output.0], work)?;
@@ -317,5 +366,220 @@ impl HandlerRowRecipeDraft {
             }
         }
         Ok(RealizedHandlerRows { nodes, handlers })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::{
+        ResumeUse, ValidationReason,
+        dialect::StoredNode,
+        effect::DiscardNode,
+        provider::row::{NodeRowEquation, RowEquationId},
+    };
+    use std::{fs, path::PathBuf, sync::Arc};
+
+    struct Fixture(PathBuf);
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn source_control_copy_window_rows_keep_state_and_refuse_unhandled_body() {
+        let fixture = Fixture(
+            std::env::temp_dir().join(format!("ash-copy-window-row-{}", std::process::id())),
+        );
+        fs::create_dir(&fixture.0).unwrap();
+        fs::write(
+            fixture.0.join("owner.ash"),
+            include_str!("../../../../libraries/sqlite.ash"),
+        )
+        .unwrap();
+        fs::write(fixture.0.join("entry.ash"), "import owner as Sqlite\nmain : Unit -> Sqlite.Scope<Sqlite.OpenError, Sqlite.CloseError, Bool> ! {Sqlite.Initialize}\nmain () = resource Sqlite.Connection<C> connection = Sqlite.InMemory {\n    true\n}\n").unwrap();
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry: fixture.0.join("entry.ash"),
+            roots: crate::module::ModuleRoots::empty(),
+        })
+        .unwrap();
+        let (checked, _) = compiled.effect_build_input().unwrap();
+        let original = checked
+            .nodes()
+            .iter()
+            .find_map(|node| match &node.kind {
+                EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
+                    Some(scope.original())
+                }
+                _ => None,
+            })
+            .unwrap();
+        let source = original.original_handler();
+        let (stored, window) = source
+            .nodes
+            .iter()
+            .find_map(|node| match &node.kind {
+                EffectExprKind::Operation(EffectOperation::SourceCopyWindow(window))
+                    if !window.interpretations().is_empty() =>
+                {
+                    Some((node, window))
+                }
+                _ => None,
+            })
+            .unwrap();
+        let native = window.interpretations()[0].effect();
+        let mut work = TypeWorkBudget::default();
+        let body = EffectRow::singleton(
+            crate::types::clone_effect_instance_with_budget(native, &mut work).unwrap(),
+        );
+        let state = EffectRow::with_tail(
+            Box::new([crate::types::clone_effect_instance_with_budget(native, &mut work).unwrap()]),
+            crate::types::EffectRowVariable::rigid(original.handler_continuation()),
+            Box::new([]),
+        );
+        let state_id = NodeId::new(source.arena, 0);
+        let body_id = NodeId::new(source.arena, 1);
+        let window_id = NodeId::new(source.arena, 2);
+        let handler = original.original_handler_node();
+        let leaf = || StoredNode {
+            dialect: stored.dialect,
+            ty: Type::Unit,
+            effects: EffectRow::empty(),
+            origin: stored.origin.clone(),
+            kind: EffectExprKind::Operation(EffectOperation::Discard(DiscardNode::new(
+                handler.id(),
+                handler.clauses()[0].resume(),
+                ResumeUse::Available,
+            ))),
+        };
+        let mut window = window.clone();
+        window.state = state_id;
+        window.body = body_id;
+        let program = crate::core::UnvalidatedEffectProgram {
+            registry: Arc::clone(&source.registry),
+            method_evidence: Arc::clone(&source.method_evidence),
+            method_evidence_anchors: Box::new([]),
+            arena: source.arena,
+            nodes: vec![
+                leaf(),
+                leaf(),
+                StoredNode {
+                    dialect: stored.dialect,
+                    ty: Type::Unit,
+                    effects: EffectRow::empty(),
+                    origin: stored.origin.clone(),
+                    kind: EffectExprKind::Operation(EffectOperation::SourceCopyWindow(window)),
+                },
+            ],
+            root: window_id,
+        };
+        // Isolate the row engine using two explicit actual capture inputs and
+        // the descriptor from the admitted original. This arena is not offered
+        // as executable Core or as a new source-window authority.
+        let recipe = HandlerRowRecipeDraft {
+            template: crate::resolved::ProviderTemplateId::new(original.header().original.id, 2),
+            nodes: vec![
+                NodeRowEquation {
+                    node: state_id,
+                    operation: RowEquationOperation::Discard {
+                        capture: CaptureInputId(0),
+                    },
+                    inputs: 0..0,
+                },
+                NodeRowEquation {
+                    node: body_id,
+                    operation: RowEquationOperation::Discard {
+                        capture: CaptureInputId(1),
+                    },
+                    inputs: 0..0,
+                },
+                NodeRowEquation {
+                    node: window_id,
+                    operation: RowEquationOperation::CopyWindow,
+                    inputs: 0..2,
+                },
+            ],
+            edges: vec![RowEquationId(0), RowEquationId(1)],
+            outputs: Vec::new(),
+            discards: Vec::new(),
+            node_equations: vec![
+                Some(RowEquationId(0)),
+                Some(RowEquationId(1)),
+                Some(RowEquationId(2)),
+            ],
+            positions: Vec::new(),
+            callable_bodies: vec![Vec::new(), Vec::new(), Vec::new()],
+            latent_bodies: vec![Vec::new(), Vec::new(), Vec::new()],
+            direct: None,
+        };
+        let realize = |body: &EffectRow, work: &mut TypeWorkBudget| {
+            let captures = HashMap::from([
+                (
+                    CaptureInputId(0),
+                    copy(&state, &mut TypeWorkBudget::default()).unwrap(),
+                ),
+                (
+                    CaptureInputId(1),
+                    copy(body, &mut TypeWorkBudget::default()).unwrap(),
+                ),
+            ]);
+            recipe.realize_nodes(
+                &program,
+                &HashMap::new(),
+                &HashMap::new(),
+                &HashMap::new(),
+                &captures,
+                &EffectRow::empty(),
+                work,
+            )
+        };
+        let realized = realize(&body, &mut work).unwrap();
+        assert!(
+            same_effect_rows_with_budget(&realized.nodes[&window_id], &state, &mut work).unwrap()
+        );
+        // A different native instance, an ordinary request and a rigid tail
+        // cannot be hidden by the descriptor's one exact interpretation.
+        let other_native = EffectRow::singleton(
+            crate::types::clone_effect_instance_with_budget(
+                &original.header().original.interpreted[0].instance,
+                &mut work,
+            )
+            .unwrap(),
+        );
+        let ordinary = EffectRow::singleton(
+            crate::types::clone_effect_instance_with_budget(
+                &original.header().original.provided.instance,
+                &mut work,
+            )
+            .unwrap(),
+        );
+        let open = EffectRow::with_tail(
+            Box::new([crate::types::clone_effect_instance_with_budget(native, &mut work).unwrap()]),
+            crate::types::EffectRowVariable::rigid(original.handler_continuation()),
+            Box::new([]),
+        );
+        for invalid in [&other_native, &ordinary, &open] {
+            let error = realize(invalid, &mut TypeWorkBudget::default())
+                .err()
+                .unwrap();
+            assert_eq!(error.reason(), ValidationReason::ResourceEscape);
+            assert_eq!(error.node(), Some(window_id));
+        }
+        let mut measured = TypeWorkBudget::default();
+        realize(&body, &mut measured).unwrap();
+        let cost = measured.used();
+        for prefix in [0, 13] {
+            let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+            exact.charge(prefix).unwrap();
+            realize(&body, &mut exact).unwrap();
+            assert_eq!(exact.used(), prefix + cost);
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            assert_eq!(
+                realize(&body, &mut short).err().unwrap().reason(),
+                ValidationReason::Resource
+            );
+        }
     }
 }

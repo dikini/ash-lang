@@ -154,7 +154,15 @@ pub(in crate::core) struct RowEquationId(usize);
 pub(in crate::core) struct HandlerOutputId(usize);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub(in crate::core) struct CaptureInputId(usize);
+pub(crate) struct CaptureInputId(usize);
+impl CaptureInputId {
+    pub(crate) const fn from_image_claim(value: usize) -> Self {
+        Self(value)
+    }
+    pub(crate) const fn value(self) -> usize {
+        self.0
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::core) enum HandlerOutputOwner {
@@ -175,6 +183,8 @@ pub(in crate::core) enum RowEquationOperation {
     Empty,
     Union { callable: Option<NodeId> },
     Request,
+    NativeInterpret,
+    CopyWindow,
     StateAccess,
     Handler { output: HandlerOutputId },
     Resume { output: HandlerOutputId },
@@ -247,6 +257,17 @@ fn primary_span_with_work(origin: &Origin, work: &mut TypeWorkBudget) -> Result<
 }
 
 impl HandlerRowRecipeDraft {
+    pub(in crate::core) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        // Equation/port coordinates are graph and inference identities. Only
+        // the retained direct demand has Type/Row payloads of its own.
+        if let Some(direct) = &self.direct {
+            direct.visit_semantic_type_variables(uses)?;
+        }
+        Ok(())
+    }
     /// Scalar original equation domains; this supplies no row solution.
     pub(in crate::core) fn deferred_copy_counts(&self) -> (usize, usize) {
         (self.nodes.len(), self.outputs.len())
@@ -310,24 +331,48 @@ impl HandlerRowRecipeDraft {
         }
     }
     pub(in crate::core) fn reconstruct(
-        entry: &super::HandlerFragmentEntry<'_>,
+        entry: &super::HandlerGraphView<'_>,
         work: &mut TypeWorkBudget,
     ) -> Result<Self, super::ValidationError> {
+        let entry = &entry.handler_graph();
         use super::{PureComputation, PureExprKind, charge, invalid, node, resource};
         use std::collections::{HashMap, HashSet};
         let program = &entry.draft.program;
-        let order = super::super::transform::provider_fragment_order(
-            program,
-            entry.roots(),
-            &HashSet::new(),
-            work,
-        )
-        .map_err(|failure| match failure {
+        let failure = |failure| match failure {
             super::super::transform::TransformError::Build(BuildError::TypeWorkExceeded) => {
                 resource()
             }
             _ => invalid(program.root),
-        })?;
+        };
+        let order = if let Some(root) = entry.wrapper_root {
+            if root != program.root {
+                return Err(invalid(program.root));
+            }
+            // Projecting clause equations never makes the retained wrappers or
+            // unrelated nodes disappear from complete original validation.
+            super::super::transform::provider_fragment_order(
+                program,
+                &[root],
+                &HashSet::new(),
+                work,
+            )
+            .map_err(failure)?;
+            super::super::transform::provider_entry_forest_order(
+                program,
+                entry.roots(),
+                &HashSet::new(),
+                work,
+            )
+            .map_err(failure)?
+        } else {
+            super::super::transform::provider_fragment_order(
+                program,
+                entry.roots(),
+                &HashSet::new(),
+                work,
+            )
+            .map_err(failure)?
+        };
         charge(
             work,
             program.nodes.len().checked_mul(3).ok_or_else(resource)?,
@@ -378,7 +423,7 @@ impl HandlerRowRecipeDraft {
         clauses
             .try_reserve(entry.draft.clauses.len())
             .map_err(|_| resource())?;
-        for clause in &entry.draft.clauses {
+        for clause in entry.draft.clauses {
             if clauses
                 .insert(
                     (entry.draft.handler, clause.resume()),
@@ -469,6 +514,12 @@ impl HandlerRowRecipeDraft {
                 recipe.edges.push(equation);
             }
             let operation = match &stored.kind {
+                EffectExprKind::Operation(EffectOperation::SourceCopyWindow(_)) => {
+                    RowEquationOperation::CopyWindow
+                }
+                EffectExprKind::Operation(EffectOperation::SourceResourceScope(_)) => {
+                    return Err(invalid(id));
+                }
                 EffectExprKind::Pure(PureExprKind::Value(_) | PureExprKind::Variable(_)) => {
                     RowEquationOperation::Empty
                 }
@@ -479,6 +530,9 @@ impl HandlerRowRecipeDraft {
                             _ => None,
                         },
                     }
+                }
+                EffectExprKind::Operation(EffectOperation::NativeInterpret(_)) => {
+                    RowEquationOperation::NativeInterpret
                 }
                 EffectExprKind::Operation(EffectOperation::Request(_)) => {
                     RowEquationOperation::Request
@@ -559,7 +613,7 @@ impl HandlerRowRecipeDraft {
         }
         for output in &mut recipe.outputs {
             let roots: &[super::super::effect::EffectClause] = match output.owner {
-                HandlerOutputOwner::ProviderEntry { .. } => &entry.draft.clauses,
+                HandlerOutputOwner::ProviderEntry { .. } => entry.draft.clauses,
                 HandlerOutputOwner::Nested { node: id, .. } => {
                     let handler = match &node(program, id)?.kind {
                         EffectExprKind::Operation(EffectOperation::Handler(handler)) => handler,
@@ -598,9 +652,10 @@ impl HandlerRowRecipeDraft {
 
     fn equation_for(
         &self,
-        entry: &super::HandlerFragmentEntry<'_>,
+        entry: &super::HandlerGraphView<'_>,
         id: NodeId,
     ) -> Option<RowEquationId> {
+        let entry = &entry.handler_graph();
         if self.template != entry.draft.template || id.arena() != entry.draft.program.arena {
             return None;
         }
@@ -609,10 +664,11 @@ impl HandlerRowRecipeDraft {
 
     pub(in crate::core) fn deferred_node(
         &self,
-        entry: &super::HandlerFragmentEntry<'_>,
+        entry: &super::HandlerGraphView<'_>,
         id: NodeId,
         work: &mut TypeWorkBudget,
     ) -> Result<bool, super::ValidationError> {
+        let entry = &entry.handler_graph();
         super::charge(work, 1)?;
         Ok(self
             .equation_for(entry, id)
@@ -622,10 +678,11 @@ impl HandlerRowRecipeDraft {
 
     pub(in crate::core) fn deferred_function(
         &self,
-        entry: &super::HandlerFragmentEntry<'_>,
+        entry: &super::HandlerGraphView<'_>,
         id: NodeId,
         work: &mut TypeWorkBudget,
     ) -> Result<bool, super::ValidationError> {
+        let entry = &entry.handler_graph();
         super::charge(work, 1)?;
         Ok(self
             .equation_for(entry, id)
@@ -635,11 +692,12 @@ impl HandlerRowRecipeDraft {
 
     pub(in crate::core) fn permits_row_position(
         &self,
-        entry: &super::HandlerFragmentEntry<'_>,
+        entry: &super::HandlerGraphView<'_>,
         id: NodeId,
         row: &EffectRow,
         work: &mut TypeWorkBudget,
     ) -> Result<bool, super::ValidationError> {
+        let entry = &entry.handler_graph();
         use super::{PureComputation, PureExprKind, charge, node};
         charge(work, 1)?;
         let Some(equation) = self.equation_for(entry, id) else {
@@ -648,7 +706,7 @@ impl HandlerRowRecipeDraft {
         let Some(proof) = self.direct.as_ref() else {
             return Ok(false);
         };
-        let stored = node(&entry.draft.program, id)?;
+        let stored = node(entry.draft.program, id)?;
         if std::ptr::eq(row, &stored.effects) {
             return Ok(proof.node_projection(equation));
         }
@@ -693,10 +751,11 @@ impl HandlerRowRecipeDraft {
 
     pub(in crate::core) fn discard_port(
         &self,
-        entry: &super::HandlerFragmentEntry<'_>,
+        entry: &super::HandlerGraphView<'_>,
         id: NodeId,
         work: &mut TypeWorkBudget,
     ) -> Result<bool, super::ValidationError> {
+        let entry = &entry.handler_graph();
         super::charge(work, 1)?;
         let Some(equation) = self.equation_for(entry, id) else {
             return Ok(false);
@@ -713,9 +772,10 @@ impl HandlerRowRecipeDraft {
 
     fn reconstruct_callable_bodies(
         &mut self,
-        entry: &super::HandlerFragmentEntry<'_>,
+        entry: &super::HandlerGraphView<'_>,
         work: &mut TypeWorkBudget,
     ) -> Result<(), super::ValidationError> {
+        let entry = &entry.handler_graph();
         use super::{PureComputation, PureExprKind, charge, invalid, node, resource};
         use std::collections::HashMap;
         let program = &entry.draft.program;
@@ -851,9 +911,10 @@ impl HandlerRowRecipeDraft {
 
     fn reconstruct_pending_positions(
         &mut self,
-        entry: &super::HandlerFragmentEntry<'_>,
+        entry: &super::HandlerGraphView<'_>,
         work: &mut TypeWorkBudget,
     ) -> Result<(), super::ValidationError> {
+        let entry = &entry.handler_graph();
         use super::{charge, invalid, resource};
         use crate::types::EffectRowVariable;
         use std::collections::{HashMap, HashSet};
@@ -1025,7 +1086,7 @@ impl HandlerRowRecipeDraft {
             .try_reserve(pending.equations.len())
             .map_err(|_| resource())?;
         for equation in &self.nodes {
-            let stored = super::node(&entry.draft.program, equation.node)?;
+            let stored = super::node(entry.draft.program, equation.node)?;
             charge(work, 1)?;
             if let Some(tail) = stored.effects.tail()
                 && let EffectRowVariable::Inference(identity) = tail.variable()
@@ -1059,7 +1120,7 @@ impl HandlerRowRecipeDraft {
         // absence of an invocation does not erase the retained equation.
         for equation in &self.nodes {
             charge(work, 1)?;
-            let stored = super::node(&entry.draft.program, equation.node)?;
+            let stored = super::node(entry.draft.program, equation.node)?;
             if let Some(tail) = stored
                 .ty
                 .function_view()
@@ -1128,7 +1189,7 @@ pub(crate) fn reconstructed_row_inventory_for_test(
 ) -> Result<(usize, usize, usize), super::ValidationError> {
     let entry = super::HandlerFragmentEntry::reconstruct(draft, module, work)
         .inspect_err(|error| eprintln!("row inventory entry boundary: {error:?}"))?;
-    let recipe = HandlerRowRecipeDraft::reconstruct(&entry, work)
+    let recipe = HandlerRowRecipeDraft::reconstruct(&entry.handler_graph(), work)
         .inspect_err(|error| eprintln!("row inventory recipe boundary: {error:?}"))?;
     for port in &recipe.discards {
         let stored = super::node(&draft.program, port.node)?;
@@ -1156,7 +1217,7 @@ pub(crate) fn row_recipe_links_for_test(
     work: &mut TypeWorkBudget,
 ) -> Result<Vec<(NodeId, HandlerId, bool)>, super::ValidationError> {
     let entry = super::HandlerFragmentEntry::reconstruct(draft, module, work)?;
-    let recipe = HandlerRowRecipeDraft::reconstruct(&entry, work)?;
+    let recipe = HandlerRowRecipeDraft::reconstruct(&entry.handler_graph(), work)?;
     let mut result = Vec::new();
     for equation in &recipe.nodes {
         if let RowEquationOperation::Resume { output } = equation.operation {
@@ -1238,7 +1299,7 @@ pub(crate) fn has_actual_open_equation_for_test(
     work: &mut TypeWorkBudget,
 ) -> Result<bool, super::ValidationError> {
     let entry = super::HandlerFragmentEntry::reconstruct(draft, module, work)?;
-    let recipe = HandlerRowRecipeDraft::reconstruct(&entry, work)?;
+    let recipe = HandlerRowRecipeDraft::reconstruct(&entry.handler_graph(), work)?;
     Ok(recipe.direct.as_ref().unwrap().has_open_leaf())
 }
 
@@ -1275,6 +1336,23 @@ struct HandlerClauseRowContract {
 }
 
 impl HandlerRowContract {
+    pub(in crate::core) fn visit_semantic_type_variables(
+        &self,
+        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
+    ) -> Result<(), ()> {
+        uses.id(self.shared.residual)?;
+        uses.charge(self.hidden.len() + self.formals.len())?;
+        for (id, _) in self.hidden.iter().chain(self.formals.iter()) {
+            uses.id(*id)?;
+        }
+        if let Some(family) = self.family {
+            uses.id(family.parameter)?;
+        }
+        uses.instance(&self.provided)?;
+        uses.instance(&self.interpreted)?;
+        uses.ty(&self.state)?;
+        self.demands.visit_semantic_type_variables(uses)
+    }
     pub(in crate::core) fn realize_direct(
         &self,
         types: &std::collections::HashMap<crate::types::TypeVariableId, crate::types::Type>,

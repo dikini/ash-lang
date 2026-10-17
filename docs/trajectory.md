@@ -5,6 +5,21 @@ uses: `idea → speculative → outlined → designed → specified →
 implementation`. A completed row records `complete / implementation` to
 distinguish its result from its maturity.
 
+The bounded
+[`ffi-ash`](design/DN-0037-ash-authored-foreign-library-interfaces.md#agreed-ffi-ash-milestone)
+delivery contains Ash-authored foreign contracts and library policy, generated
+Rust native-call bridges and runnable evaluator hosts. Its durable scope and sequence live in
+DN-0037; [DN-0042](design/DN-0042-native-interaction-and-efficient-data.md) supplies
+the broader context. [GitHub](https://github.com/dikini/ash-lang/milestone/1)
+owns live progress and PR status. The bounded transition's implementation,
+specification, tests, reviews and verification are retained on
+`integration/ffi-ash`. [AD-0013](decisions/AD-0013-generated-native-bridges-and-program-builds.md)
+records the build boundary. The existing [closure handoff](https://github.com/dikini/ash-lang/issues/7#issuecomment-6234064548)
+tracks final Main verification, acceptance and checkpoint lifecycle. It supersedes
+TASK-0041 for coordination; the [exact task history](https://github.com/dikini/ash-lang/blob/7471200efb1bd90782fcad81be54b992fbd92982/docs/tasks/TASK-0041-ffi-ash-milestone-closure.md)
+preserves its work and findings. Supersession does not satisfy the separate Main
+gate or the remaining original acceptance clauses.
+
 The Mini-Ash milestone is retained historically at the `mini-ash` tag, whose
 peeled commit is `d62d3ba`. Its
 [closure report](design/mini-ash/closure.md) records the complete dialect

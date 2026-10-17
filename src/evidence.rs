@@ -4634,7 +4634,7 @@ impl EvidenceSelector {
                     pending.push(codomain.value());
                     pending.push(domain);
                 }
-                Type::ResourceApply(_, arguments) => {
+                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                     extend_owner_type_children_with_charge(
                         arguments.iter(),
                         &mut pending,
@@ -4824,7 +4824,7 @@ fn validate_candidate_scope(
                 pending.push(argument);
                 pending.push(function);
             }
-            Type::ResourceApply(_, arguments) => {
+            Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                 visit_owner_components_with_charge(
                     arguments.iter(),
                     &mut |cells| constraint_work.charge(cells),
@@ -5206,7 +5206,7 @@ fn type_is_inference_free(
             .map_err(|()| SelectionFailure::ConstraintResource)?;
         match ty {
             Type::Inference(_) => return Ok(false),
-            Type::ResourceApply(_, arguments) => {
+            Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
                 visit_owner_components_with_charge(
                     arguments.iter(),
                     &mut |cells| constraint_work.charge(cells),
@@ -5477,6 +5477,7 @@ enum GoalCell {
     TypeArgument,
     RowArgument,
     Resource(crate::types::ResourceDefinitionId, usize),
+    ForeignOwner(NominalTypeId, usize),
     Tail(EffectRowVariable, usize),
     EffectInstance(crate::types::EffectId, usize),
     Variable(TypeVariableId),
@@ -5612,6 +5613,16 @@ fn goal_key(
                 }
                 Type::ResourceApply(id, arguments) => {
                     cells.push(GoalCell::Resource(*id, arguments.len()));
+                    constraint_work
+                        .charge(arguments.len())
+                        .map_err(|()| SelectionFailure::ConstraintResource)?;
+                    pending
+                        .try_reserve(arguments.len())
+                        .map_err(|_| SelectionFailure::ConstraintResource)?;
+                    pending.extend(arguments.iter().rev().map(Task::Argument));
+                }
+                Type::ForeignOwnerApply(id, arguments) => {
+                    cells.push(GoalCell::ForeignOwner(*id, arguments.len()));
                     constraint_work
                         .charge(arguments.len())
                         .map_err(|()| SelectionFailure::ConstraintResource)?;
@@ -9265,7 +9276,8 @@ mod tests {
         // replacement index/value, the instantiated prerequisite, and the
         // final selection argument.
         const INITIAL_GOAL_CLONE_WORK: usize = 1 + 3;
-        const GOAL_ENVIRONMENT_TYPE_WORK: usize = 2 * 4;
+        // Each one-formal XI costs four retained cells and one owner-kind scan.
+        const GOAL_ENVIRONMENT_TYPE_WORK: usize = 2 * 5;
         const MATCHED_SUBSTITUTION_TYPE_WORK: usize = 1;
         const REPLACEMENT_INDEX_AND_VALUE_WORK: usize = 2;
         // Replacement retention plus the retained three-cell prerequisite result.
