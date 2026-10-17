@@ -552,16 +552,7 @@ fn plan_target_bridge(
                 TargetOperand::Scalar(target_scalar(representation, span)?)
             }
 
-            (PreparedOperandSource::Source(_), PreparedRepresentation::Scalar(_))
-                if call == TargetBridgeCall::OwnerTeardown =>
-            {
-                // The source contract is valid, but this target's infallible
-                // host destructor has only pre-admitted guarded addresses.
-                return Err(fail(ForeignBridgeReason::UnsupportedRepresentation, span));
-            }
-            (PreparedOperandSource::Source(_), PreparedRepresentation::Scalar(representation))
-                if call != TargetBridgeCall::OwnerTeardown =>
-            {
+            (PreparedOperandSource::Source(_), PreparedRepresentation::Scalar(representation)) => {
                 TargetOperand::Scalar(target_scalar(representation, span)?)
             }
             (PreparedOperandSource::Enclosing(_), PreparedRepresentation::Address(_))
@@ -1124,7 +1115,7 @@ main () = 42
     }
 
     #[test]
-    fn opaque_teardown_with_extra_scalar_native_operands_refuses_target_planning() {
+    fn opaque_teardown_scalar_operands_require_capture_before_typed_bridge_planning() {
         let source = OWNER_SOURCE
             .replace(
                 "State<T, R> -> Foreign.Call<Foreign.Disposition<Unit>>",
@@ -1142,17 +1133,35 @@ main () = 42
                 "outcome otherwise { consumed 0 }",
                 "outcome otherwise { consumed 1 }",
             );
-        let fixture = Fixture::with_source(&source);
-        let failure = plan_target_bridge(
-            fixture.symbol("Free"),
-            &mut TypeWorkBudget::default(),
-            fixture.common_span,
+        let file = crate::source::SourceFile::new("missing-capture.ash", &source).unwrap();
+        let tree = crate::parser::parse(crate::lexer::lex(&file).unwrap());
+        let surface = crate::parser::project_module(&file, &tree).unwrap();
+        let failure = crate::foreign::source_contract::prepare_foreign_library(
+            ModuleId::from(file.id()),
+            &surface.foreign_libraries[0],
         )
         .unwrap_err();
         assert_eq!(
             failure.reason(),
-            ForeignBridgeReason::UnsupportedRepresentation
+            crate::foreign::source_contract::ForeignContractReason::OperandCoverage
         );
+
+        let source = source.replace(
+            "operand 0 from 0 scalar\n        output result as owner",
+            "operand 0 from 0 scalar\n        destruction_operand 0 from 0 scalar\n        output result as owner",
+        );
+        let fixture = Fixture::with_source(&source);
+        let plan = plan_target_bridge(
+            fixture.symbol("Free"),
+            &mut TypeWorkBudget::default(),
+            fixture.common_span,
+        )
+        .unwrap();
+        assert_eq!(plan.call(), TargetBridgeCall::OwnerTeardown);
+        let emitted = emit_rust_bridge(&plan, &mut TypeWorkBudget::default()).unwrap();
+        assert!(emitted.contains("NativeScalarValue::USize(arg0)"));
+        assert!(emitted.contains("arg0: usize, arg1: *mut core::ffi::c_void"));
+        assert!(!emitted.contains("narrow_gnu_scalar"));
     }
 
     #[test]

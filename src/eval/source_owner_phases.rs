@@ -1400,12 +1400,21 @@ impl<'runtime> super::Machine<'runtime> {
                         .instantiation
                         .ty(scope.handle.ty(), &mut self.instantiation_work)?,
                 );
-                let destruction = prepare_destruction_operands(
+                let Some(destruction) = prepare_destruction_operands(
                     invocation.destructor(),
                     &state,
                     &boundary.dependencies,
+                    Some((invocation.symbol(), &self.heap, &value)),
                     &mut self.instantiation_work,
-                )?;
+                )?
+                else {
+                    self.control = Some(super::Control::Return(prepare_conversion_refusal(
+                        &mut self.heap,
+                        &invocation,
+                        &mut self.instantiation_work,
+                    )?));
+                    return Ok(());
+                };
                 let super::Frame::SourceResourceBoundary(boundary) = &mut self.frames[index] else {
                     return Err(super::RuntimeFailure::InvalidControlState);
                 };
@@ -1495,6 +1504,45 @@ impl<'runtime> super::Machine<'runtime> {
                         }
                         PreparedOperandSource::Enclosing(path) => {
                             self.enclosing_owner_operand(index, request, &value, path, true)?
+                        }
+                        PreparedOperandSource::Source(path) => {
+                            let integer = super::source_scalar_phases::source_integer_leaf(
+                                &self.heap,
+                                &value,
+                                path,
+                                &mut self.instantiation_work,
+                            )?;
+                            let PreparedRepresentation::Scalar(representation) =
+                                operand.representation()
+                            else {
+                                return Err(super::RuntimeFailure::ForeignBinding);
+                            };
+                            match narrow_gnu_scalar(
+                                integer,
+                                representation,
+                                &mut self.instantiation_work,
+                            ) {
+                                Ok(value) => NativeOwnerOperand::Scalar(value),
+                                Err(NativeScalarConversionError::OutOfRange) => {
+                                    self.control = Some(super::Control::Return(
+                                        prepare_conversion_refusal_cells(
+                                            &mut self.heap,
+                                            invocation.hidden_error_constructor(),
+                                            invocation.conversion_failed_constructor(),
+                                            &mut self.instantiation_work,
+                                        )?,
+                                    ));
+                                    return Ok(());
+                                }
+                                Err(NativeScalarConversionError::WorkExhausted) => {
+                                    return Err(super::effect_work_failure(
+                                        &self.instantiation_work,
+                                        None,
+                                        super::RuntimePhase::Access,
+                                    ));
+                                }
+                                Err(_) => return Err(super::RuntimeFailure::ForeignBinding),
+                            }
                         }
                         _ => return Err(super::RuntimeFailure::ForeignBinding),
                     };
@@ -1927,11 +1975,35 @@ fn prepare_destruction_operands(
     destructor: &crate::foreign::checked_source::CheckedForeignSymbol,
     state: &crate::types::Type,
     dependencies: &[crate::foreign::source_runtime::NativeOwnerDependency],
+    capture_input: Option<(
+        &crate::foreign::checked_source::CheckedForeignSymbol,
+        &[HeapCell],
+        &Value,
+    )>,
     work: &mut TypeWorkBudget,
-) -> Result<Vec<NativeOwnerOperand>, super::RuntimeFailure> {
-    use crate::foreign::source_contract::PreparedOperandSource;
+) -> Result<Option<Vec<NativeOwnerOperand>>, super::RuntimeFailure> {
+    use crate::foreign::source_contract::{
+        PreparedOperandSource, PreparedOwnerCall, PreparedRepresentation,
+    };
 
     let (current_operand, domain) = specialize_destruction_domain(destructor, state, work)?;
+    if let Some((producer, _, _)) = capture_input {
+        super::charge_effect_work(work, 1, super::RuntimePhase::Acquisition)?;
+        let owner = producer
+            .owner()
+            .ok_or(super::RuntimeFailure::ForeignBinding)?;
+        if !matches!(
+            producer.owner_role(),
+            Some(PreparedOwnerCall::Acquire { .. } | PreparedOwnerCall::OutputAcquire { .. })
+        ) || !std::sync::Arc::ptr_eq(producer.prepared(), destructor.prepared())
+            || destructor
+                .owner()
+                .is_none_or(|original| !std::sync::Arc::ptr_eq(owner, original))
+            || destructor.symbol().member_index() != owner.owner().teardown_member()
+        {
+            return Err(super::RuntimeFailure::ForeignBinding);
+        }
+    }
     let mut operands = Vec::new();
     super::charge_effect_work(
         work,
@@ -1941,8 +2013,47 @@ fn prepare_destruction_operands(
     operands
         .try_reserve_exact(destructor.symbol().operands().len())
         .map_err(|_| operand_storage(destructor.symbol().operands().len()))?;
+    let mut capture_index = 0;
     for (position, operand) in destructor.symbol().operands().iter().enumerate() {
         let native = match operand.source() {
+            PreparedOperandSource::Source(_) => {
+                let (producer, heap, input) =
+                    capture_input.ok_or(super::RuntimeFailure::ForeignBinding)?;
+                let capture = producer
+                    .symbol()
+                    .destruction_operands()
+                    .get(capture_index)
+                    .filter(|capture| capture.position() == position)
+                    .ok_or(super::RuntimeFailure::ForeignBinding)?;
+                let PreparedRepresentation::Scalar(representation) = operand.representation()
+                else {
+                    return Err(super::RuntimeFailure::ForeignBinding);
+                };
+                let integer = super::source_scalar_phases::source_integer_leaf(
+                    heap,
+                    input,
+                    capture.source(),
+                    work,
+                )?;
+                let scalar = match crate::foreign::source_runtime::narrow_gnu_scalar(
+                    integer,
+                    representation,
+                    work,
+                ) {
+                    Ok(value) => value,
+                    Err(NativeScalarConversionError::OutOfRange) => return Ok(None),
+                    Err(NativeScalarConversionError::WorkExhausted) => {
+                        return Err(super::effect_work_failure(
+                            work,
+                            None,
+                            super::RuntimePhase::Acquisition,
+                        ));
+                    }
+                    Err(_) => return Err(super::RuntimeFailure::ForeignBinding),
+                };
+                capture_index += 1;
+                NativeOwnerOperand::Scalar(scalar)
+            }
             PreparedOperandSource::Sentinel(index) => {
                 NativeOwnerOperand::Scalar(admit_sentinel_operand(
                     destructor,
@@ -1999,7 +2110,12 @@ fn prepare_destruction_operands(
         };
         operands.push(native);
     }
-    Ok(operands)
+    if capture_input.is_some_and(|(producer, _, _)| {
+        capture_index != producer.symbol().destruction_operands().len()
+    }) {
+        return Err(super::RuntimeFailure::ForeignBinding);
+    }
+    Ok(Some(operands))
 }
 
 fn admit_sentinel_operand(
@@ -2258,7 +2374,8 @@ mod inherited_row_tests {
             let check = |work: &mut TypeWorkBudget| {
                 if operands {
                     let prepared =
-                        super::prepare_destruction_operands(destructor, state, &[], work)?;
+                        super::prepare_destruction_operands(destructor, state, &[], None, work)?
+                            .ok_or(RuntimeFailure::ForeignBinding)?;
                     assert!(
                         matches!(prepared.as_slice(), [NativeOwnerOperand::Address(address)] if address.is_null())
                     );
@@ -2341,6 +2458,7 @@ mod inherited_row_tests {
                     destructor,
                     &forged,
                     &[],
+                    None,
                     &mut TypeWorkBudget::default()
                 ),
                 Err(RuntimeFailure::ForeignBinding)

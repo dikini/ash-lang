@@ -458,7 +458,8 @@ impl SourceNativeBindings {
                                         PreparedOperandSource::Enclosing(_),
                                         PreparedRepresentation::Address(_)
                                     ) | (
-                                        PreparedOperandSource::Constant(_),
+                                        PreparedOperandSource::Source(_)
+                                            | PreparedOperandSource::Constant(_),
                                         PreparedRepresentation::Scalar(_)
                                     ) | (
                                         PreparedOperandSource::Sentinel(_),
@@ -673,13 +674,17 @@ impl SourceNativeBindings {
                 SourceOwnerPhase::Finish,
                 SourceOwnerCallback::Teardown(_) | SourceOwnerCallback::StatusTeardown(_),
                 SourceOwnerCallback::Teardown(_) | SourceOwnerCallback::StatusTeardown(_),
-            ) => Ok(AdmittedSourceOwnerInvocation::Teardown(
-                AdmittedSourceOwnerTeardownInvocation {
-                    symbol: &binding.symbol,
-                    plan: binding.callback.teardown_plan(&binding.symbol, work)?,
-                    receipt,
-                },
-            )),
+            ) => {
+                let hidden_error = authenticate_hidden_error(program.registry(), symbol, work)?;
+                Ok(AdmittedSourceOwnerInvocation::Teardown(
+                    AdmittedSourceOwnerTeardownInvocation {
+                        symbol: &binding.symbol,
+                        plan: binding.callback.teardown_plan(&binding.symbol, work)?,
+                        receipt,
+                        hidden_error,
+                    },
+                ))
+            }
             _ => Err(RuntimeFailure::ForeignBinding),
         }
     }
@@ -1020,6 +1025,7 @@ pub(crate) struct AdmittedSourceOwnerTeardownInvocation<'bindings> {
     symbol: &'bindings Arc<CheckedForeignSymbol>,
     plan: super::source_runtime::NativeOwnerDestruction,
     receipt: SourceOwnerScopeRequest,
+    hidden_error: ConstructorId,
 }
 
 /// Ownership returned from native code has no acquisition or teardown callback
@@ -1156,6 +1162,12 @@ impl<'bindings> AdmittedSourceOwnerTeardownInvocation<'bindings> {
     }
     pub(crate) fn returned_constructor(&self) -> ConstructorId {
         self.symbol.call_codec().ids().returned
+    }
+    pub(crate) fn conversion_failed_constructor(&self) -> ConstructorId {
+        self.symbol.call_codec().ids().conversion_failed
+    }
+    pub(crate) fn hidden_error_constructor(&self) -> ConstructorId {
+        self.hidden_error
     }
     pub(crate) fn disposition_constructors(&self) -> [ConstructorId; 3] {
         *self

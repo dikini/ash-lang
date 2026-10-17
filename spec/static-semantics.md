@@ -1318,8 +1318,7 @@ native State or its view; a compatible function type grants no descriptor or
 native-effect permission. Original and copied calls remain independently checked
 against the same defining global.
 
-Privileged lifecycle wrappers, source `given` forwarding and source-projected scalar
-teardown operands remain unsupported. These
+Privileged lifecycle wrappers and source `given` forwarding remain unsupported. These
 are checkpoint restrictions, not additional language rules for all resources;
 the broader obligations remain in
 [CP-0022](../docs/proposals/CP-0022-ash-authored-foreign-interfaces.md).

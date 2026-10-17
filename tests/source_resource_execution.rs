@@ -112,7 +112,7 @@ fn owner_with_scalar_destruction_captures() -> String {
         .replace("operand 0 from 0 current", "operand 0 from 2 scalar\n        operand 1 from 1 current\n        operand 2 from 0 scalar")
         .replace("consumed 0", "consumed 1")
         .replace("input Int", "input (Int, (Int, Int))")
-        .replace("acquire size => match perform Allocate<{| Before}, R, {| After}>.call size", "acquire (size, cleanup) => match perform Allocate<{| Before}, R, {| After}>.call (size, cleanup)")
+        .replace("acquire size => match perform Allocate<{| Before}, R, {| After}>.call size", "acquire (size, destruction_inputs) => match perform Allocate<{| Before}, R, {| After}>.call (size, destruction_inputs)")
         .replace("perform Free<{| Before}, R, {| After}>.call state", "perform Free<{| Before}, R, {| After}>.call (999, state, 5)")
 }
 

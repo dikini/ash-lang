@@ -81,9 +81,20 @@ original-facts comparison retain distinct obligations.
 
 The initial focused slice verifies passive public admission and refusal,
 normalization/restoration/original correspondence, exact and one-short work,
-spent prefixes and fresh retries. Runtime capture into the reserved guard vector,
-typed teardown bridges, actual native fallback, copied/image forgery controls
-and affected final gates remain pending. It grants no new State/view transport,
+spent prefixes and fresh retries. The connected runtime now captures and narrows
+producer inputs into the reserved native guard vector before C; the typed
+teardown bridge accepts those native scalar variants. Ordinary Finish separately
+converts its explicit inputs before moving the guard.
+
+Focused run 975 executes the generated host through imported full Row Owner
+instances, copying and a private image. Normal Finish destroys owner `42` with
+explicit scalar operands `5` and `999`. Refusal destroys unpublished owner `9`
+once with captured operands `-7` and `18446744073709551615`, in original ABI
+order. The existing harness removes Ash sources before preparation and image
+and facts files before child execution. This is one real native lifecycle
+discriminator, not the remaining delivery matrix. Runtime range/work refusal,
+copied/image forgery, typed-output, retained/dependency/terminal fallback and
+affected final gates remain pending. It grants no new State/view transport,
 private-data permission or ABI role. Ordinary Finish remains separate from the
 acquisition-time native snapshot.
 

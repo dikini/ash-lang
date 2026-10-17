@@ -633,7 +633,8 @@ entering C. A `void` result has one unconditional disposition; a scalar result
 selects consumed or retained from the original total status alternatives. Each
 foreign symbol still retains its complete ordered Type and EffectRow arguments;
 the native Type-only projection does not replace them. Source-projected scalar
-teardown operands remain unsupported executable shapes in this checkpoint.
+teardown operands use the producer's explicit mappings to that owner's original
+destructor ABI positions.
 Exact borrowed scalar queries and lexical access/copy windows use the source
 provider's authenticated phase and owner.
 
@@ -795,6 +796,21 @@ removes its lifetime edges once and restores its enclosing owners' close
 readiness. A live retained child blocks a consuming enclosing call before C
 entry, independently of aliases or report values. Retention quarantines the same
 owner and its transitive dependency closure, revoking ordinary source access.
+
+After ordinary producer-input validation and before entering C, mapped scalar
+inputs are projected and narrowed in original destructor ABI order. The complete
+native destruction vector and invocation/report storage are reserved before the
+call. An out-of-range capture returns ordinary `Foreign.ConversionFailed` with
+no native call or fallback owner; work or storage exhaustion remains terminal.
+Cleanup-only input leaves need not be operands of the producer's C ABI.
+
+The guard retains immutable native scalar copies, separately from `D`, source
+handlers and ordinary Finish arguments. A readable non-null direct result or
+typed output owner is guarded immediately on return, including an error outcome.
+Every host fallback uses the same reserved vector without Ash evaluation,
+scalar conversion, allocation or admission work. Ordinary Finish uses its own
+explicit arguments and latest `D`; it cannot replace the fallback snapshot.
+A consumed Finish prevents an additional host destructor call.
 
 Owned discard replaces abandoned source-body frames with their admitted finish
 computations, from inner to outer, retaining required outer resource handlers and
