@@ -4704,6 +4704,173 @@ main () = match perform Measure.call 42 {
         status_owner_image_case(true);
     }
 
+    #[test]
+    fn destruction_capture_image_requires_exact_original_facts_before_provider_selection() {
+        let tree = SourceTree::new();
+        let owner = include_str!("../../tests/fixtures/source-owner/owner.ash")
+            .replace("repr Size = size_t", "repr Size = size_t\n    repr Signed = signed(32)\n    repr Unsigned = unsigned(64)\n    const Negative : Signed = -7")
+            .replace("owner State<R>", "owner State<Before : EffectRow, R, After : EffectRow>")
+            .replace("State<R>", "State<{| Before}, R, {| After}>")
+            .replace("After : EffectRow> : Int ->", "After : EffectRow> : (Int, (Int, Int)) ->")
+            .replace("operand 0 from 0 scalar", "operand 0 from 0 scalar\n        destruction_operand 2 from 1.0 scalar\n        destruction_operand 0 from 1.1 scalar")
+            .replace("After : EffectRow> : State<{| Before}, R, {| After}> ->", "After : EffectRow> : (Int, State<{| Before}, R, {| After}>, Int) ->")
+            .replace("abi (pointer(Address)) -> void", "abi (Signed, pointer(Address), Unsigned) -> void")
+            .replace("operand 0 from 0 current", "operand 0 from 2 scalar\n        operand 1 from 1 current\n        operand 2 from 0 scalar")
+            .replace("consumed 0", "consumed 1")
+            .replace("input Int", "input (Int, (Int, Int))")
+            .replace("acquire size => match perform Allocate<{| Before}, R, {| After}>.call size", "acquire (size, destruction_inputs) => match perform Allocate<{| Before}, R, {| After}>.call (size, destruction_inputs)")
+            .replace("perform Free<{| Before}, R, {| After}>.call state", "perform Free<{| Before}, R, {| After}>.call (999, state, 5)");
+        tree.write("owner.ash", &owner);
+        tree.write("entry.ash", "import owner as Owner\neffect First {\n    first : Unit -> Unit\n}\neffect Last {\n    last : Unit -> Unit\n}\nmain : Unit -> Owner.Scope<Unit, Unit, Int>\nmain () = resource Owner.Probe<{First}, Fresh, {Last}> owner = (42, (18446744073709551615, Owner.Negative)) {\n    Owner.read owner\n}\n");
+        let compiled = compile_path(tree.configuration()).unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let mut work = TypeWorkBudget::default();
+        let build =
+            encode_effect_for_build(program, provenance, "x86_64-unknown-linux-gnu", &mut work)
+                .unwrap();
+        let bytes = build.image.encode_bytes(&mut work).unwrap();
+        let expected = build.image.encode_native_expectations(&mut work).unwrap();
+        let library = &build.libraries[0];
+        fn forbidden_provider() -> super::super::PrivateNativeBridge {
+            panic!("changed destruction mapping must refuse before provider selection");
+        }
+        let members = build
+            .bridges
+            .iter()
+            .map(|bridge| super::super::PrivateNativeMember {
+                coordinates: super::super::PrivateNativeCoordinates {
+                    image_library: library.image_library,
+                    library_module: library.module,
+                    library_ordinal: library.ordinal,
+                    image_symbol: bridge.image_symbol,
+                    symbol_index: bridge.symbol_index,
+                    operation_module: bridge.operation_module,
+                    operation_effect: bridge.operation_effect,
+                    operation_local: bridge.operation_local,
+                },
+                provider: forbidden_provider,
+            })
+            .collect::<Vec<_>>();
+        let metadata = (library.image_library, library.module, library.ordinal);
+        drop(build);
+        drop(compiled);
+        drop(tree);
+        let restore = |work: &mut TypeWorkBudget| {
+            let image = PureImage::decode_bytes(&bytes, work)?;
+            image.compare_native_expectations(&expected, work)?;
+            image.restore_effect(work)
+        };
+        let mut normal = TypeWorkBudget::default();
+        let restored = restore(&mut normal).unwrap();
+        let producer = restored
+            .symbols
+            .iter()
+            .find(|symbol| !symbol.symbol().destruction_operands().is_empty())
+            .unwrap();
+        let captures = producer.symbol().destruction_operands();
+        assert_eq!(
+            (captures[0].position(), captures[0].source()),
+            (0, &[1, 1][..])
+        );
+        assert_eq!(
+            (captures[1].position(), captures[1].source()),
+            (2, &[1, 0][..])
+        );
+        assert_eq!(producer.owner().unwrap().parameters().len(), 3);
+        let cost = normal.used();
+        for prefix in [0, 11] {
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            assert!(matches!(restore(&mut short), Err(ImageFailure::Resource)));
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                restore(&mut exact).unwrap();
+                assert_eq!(exact.used(), prefix + cost);
+            }
+        }
+        let expected: &'static [u8] = Box::leak(expected.into_boxed_slice());
+        let libraries = [super::super::PrivateNativeLibrary {
+            image_library: metadata.0,
+            module: metadata.1,
+            ordinal: metadata.2,
+            members: &members,
+        }];
+        for mutation in 0..6 {
+            let mut image =
+                PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+            let symbol = image
+                .prepared_symbols
+                .iter()
+                .position(|symbol| symbol.destruction_operands.len == 2)
+                .unwrap();
+            let start = image.prepared_symbols[symbol].destruction_operands.start as usize;
+            match mutation {
+                0 => image.prepared_symbols[symbol].destruction_operands.len = 1,
+                1 => image.prepared_destruction_operands[start].position = 1,
+                2 => image.prepared_destruction_operands[start + 1].position = 0,
+                3 => {
+                    let source = image.prepared_destruction_operands[start].source;
+                    let index = source.start as usize + source.len as usize - 1;
+                    assert_eq!(image.prepared_paths[index], 1);
+                    image.prepared_paths[index] = 0;
+                }
+                4 => {
+                    image.prepared_destruction_operands[start].span =
+                        image.prepared_destruction_operands[start + 1].span
+                }
+                _ => {
+                    let source = image.prepared_symbols[symbol]
+                        .operands
+                        .get(&image.prepared_operands)
+                        .unwrap()
+                        .iter()
+                        .find_map(|operand| match operand.source {
+                            PreparedOperandRecordSource::Source(source) => Some(source),
+                            _ => None,
+                        })
+                        .unwrap();
+                    assert_ne!(source, image.prepared_destruction_operands[start].source);
+                    image.prepared_destruction_operands[start].source = source;
+                }
+            }
+            assert!(
+                matches!(
+                    image.compare_native_expectations(expected, &mut TypeWorkBudget::default()),
+                    Err(ImageFailure::InvalidRecord)
+                ),
+                "original mapping mutation {mutation}"
+            );
+            if mutation < 3 {
+                assert!(
+                    matches!(
+                        image.restore_effect(&mut TypeWorkBudget::default()),
+                        Err(ImageFailure::RegistryAdmission)
+                    ),
+                    "missing/wrong-role/duplicate target mutation {mutation}"
+                );
+            }
+            let forged = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
+            assert!(
+                matches!(
+                    super::super::__run_private_effect_image(
+                        &super::super::runtime_fingerprint(),
+                        &forged,
+                        expected,
+                        &libraries
+                    ),
+                    Err(super::super::PrivateProgramFailure(
+                        super::super::PrivateFailure::Image(ImageFailure::InvalidRecord)
+                    ))
+                ),
+                "startup must refuse before provider selection: mutation {mutation}"
+            );
+        }
+        println!(
+            "destruction capture image: full restore cost={cost}; exact/one-short/prefix11/retry, six original-facts/startup refusals and three semantic target refusals"
+        );
+    }
+
     fn status_owner_image_case(inherited_rows: bool) {
         let tree = SourceTree::new();
         let owner = include_str!("../../tests/fixtures/source-owner/status_owner.ash");

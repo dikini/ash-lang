@@ -154,6 +154,130 @@ fn generated_scalar_destruction_captures_keep_cleanup_only_inputs_and_separate_f
 }
 
 #[test]
+fn generated_scalar_destruction_captures_guard_readable_typed_output_on_error() {
+    let owner = owner_with_scalar_destruction_captures()
+        .replace("Foreign.Call<Foreign.Output<Foreign.Nullable<State<{| Before}, R, {| After}>>>>", "Foreign.Call<(Int, Foreign.Output<Foreign.Nullable<State<{| Before}, R, {| After}>>>)>")
+        .replace("abi (Size) -> pointer(Address)", "abi (Size, out(pointer(Address))) -> Signed")
+        .replace("output result as owner(State<{| Before}, R, {| After}>)", "output result as scalar\n        output 1 as owner(State<{| Before}, R, {| After}>)")
+        .replace("outcome result nonnull { readable result }\n        outcome otherwise { readable result }", "outcome otherwise { readable result, readable 1 }")
+        .replace("Foreign.Returned(Foreign.Readable(Foreign.NonNull(state))) => match size == 9", "Foreign.Returned((status, Foreign.Readable(Foreign.NonNull(state)))) => match status == 7")
+        .replace("Foreign.Returned(Foreign.Readable(Foreign.Null))", "Foreign.Returned((_, Foreign.Readable(Foreign.Null)))")
+        .replace("Foreign.Returned(Foreign.Unreadable)", "Foreign.Returned((_, Foreign.Unreadable))");
+    let native = native_with_scalar_destruction_captures()
+        .replace(
+            "void *ash_owner_acquire(size_t size)",
+            "int32_t ash_owner_acquire(size_t size, void **output)",
+        )
+        .replace(
+            "    if (size == 0) {\n        return NULL;",
+            "    *output = NULL;\n    if (size == 0) {\n        return 7;",
+        )
+        .replace(
+            "    return owner;",
+            "    *output = owner;\n    return size == 9 ? 7 : 0;",
+        );
+    generated_owner_program_with_native(
+        &owner,
+        "import owner as Owner\nmain : Unit -> (Owner.Scope<Unit, Unit, Int>, Owner.Scope<Unit, Unit, Int>)\nmain () = (resource Owner.Probe<{}, Accepted, {}> owner = (42, (18446744073709551615, Owner.Negative)) {\n    Owner.read owner\n}, resource Owner.Probe<{}, ErrorOwner, {}> owner = (9, (18446744073709551615, Owner.Negative)) {\n    Owner.read owner\n})\n",
+        None,
+        "(Completed(42, Closed), NotAcquired(()))",
+        "acquire:42\ncaptures:5:999\nrelease:42\nacquire:9\ncaptures:-7:18446744073709551615\nrelease:9\n",
+        &native,
+    );
+}
+
+#[test]
+fn generated_scalar_destruction_captures_refuse_range_before_c_and_retry_fresh() {
+    generated_owner_program_with_native(
+        &owner_with_scalar_destruction_captures(),
+        "import owner as Owner\nmain : Unit -> (Owner.Scope<Unit, Unit, Int>, Owner.Scope<Unit, Unit, Int>, Owner.Scope<Unit, Unit, Int>)\nmain () = (resource Owner.Probe<{}, SignedRefusal, {}> owner = (42, (999, 2147483648)) {\n    Owner.read owner\n}, resource Owner.Probe<{}, UnsignedRefusal, {}> owner = (42, ((9223372036854775807 + 1) * 2, Owner.Negative)) {\n    Owner.read owner\n}, resource Owner.Probe<{}, FreshRetry, {}> owner = (42, (18446744073709551614 + 1, Owner.Negative)) {\n    Owner.read owner\n})\n",
+        None,
+        "(NotAcquired(()), NotAcquired(()), Completed(42, Closed))",
+        "acquire:42\ncaptures:5:999\nrelease:42\n",
+        &native_with_scalar_destruction_captures(),
+    );
+}
+
+#[test]
+fn generated_scalar_destruction_snapshot_survives_retained_finish_and_replaced_data() {
+    let owner = owner_with_scalar_destruction_captures()
+        .replace("const Negative : Signed = -7", "const Negative : Signed = -7\n    const Held : Signed = 7")
+        .replace("Foreign.Disposition<Unit>", "Foreign.Disposition<Int>")
+        .replace("abi (Signed, pointer(Address), Unsigned) -> void", "abi (Signed, pointer(Address), Unsigned) -> Signed")
+        .replace("outcome otherwise { consumed 1 }", "output result as scalar\n        outcome result == Held { readable result, retained 1 }\n        outcome otherwise { readable result, consumed 1 }")
+        .replace("Foreign.Consumed(())", "Foreign.Consumed(_)")
+        .replace("Foreign.Retained(())", "Foreign.Retained(_)")
+        .replace(".call (999, state, 5)", ".call (data, state, 5)")
+        .replace("read access => resume data", "read access => {\n            let replaced = Foreign.replace_data (state, 123)\n            resume data\n        }");
+    let native = native_with_scalar_destruction_captures()
+        .replace(
+            "void ash_owner_release(int32_t first, void *raw, uint64_t last)",
+            "int32_t ash_owner_release(int32_t first, void *raw, uint64_t last)",
+        )
+        .replace(
+            "    free(owner);",
+            "    if (first == 5) return 7;\n    free(owner);\n    return 0;",
+        );
+    generated_owner_program_with_native(
+        &owner,
+        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Unit, Int>\nmain () = resource Owner.Probe<{}, Fresh, {}> owner = (42, (18446744073709551615, Owner.Negative)) {\n    Owner.read owner\n}\n",
+        None,
+        "Completed(42, RetainedError(()))",
+        "acquire:42\ncaptures:5:123\nrelease:42\ncaptures:-7:18446744073709551615\nrelease:42\n",
+        &native,
+    );
+}
+
+#[test]
+fn generated_scalar_destruction_snapshot_keeps_enclosing_dependency_alive_until_child_release() {
+    let owner = include_str!("fixtures/source-owner/dependent_owner.ash")
+        .replace(
+            "(ParentState<P>, Int) ->",
+            "(ParentState<P>, (Int, Int)) ->",
+        )
+        .replace(
+            "operand 1 from 1 scalar",
+            "operand 1 from 1.0 scalar\n        destruction_operand 2 from 1.1 scalar",
+        )
+        .replace("input (Parent<P>, Int)", "input (Parent<P>, (Int, Int))")
+        .replace(
+            "acquire (parent, label) =>",
+            "acquire (parent, (label, destruction_input)) =>",
+        )
+        .replace(
+            ".call (dependency, label)",
+            ".call (dependency, (label, destruction_input))",
+        );
+    let start = owner.find("    symbol ChildFree<P, R>").unwrap();
+    let end = start + owner[start..].find("    symbol ChildHold<P, R>").unwrap();
+    let destructor = owner[start..end]
+        .replace(
+            "(ChildState<P, R>, ParentState<P>) ->",
+            "(ChildState<P, R>, ParentState<P>, Int) ->",
+        )
+        .replace(
+            "abi (pointer(Address), pointer(ParentBytes)) -> void",
+            "abi (pointer(Address), pointer(ParentBytes), Size) -> void",
+        )
+        .replace(
+            "operand 1 from 1 enclosing",
+            "operand 1 from 1 enclosing\n        operand 2 from 2 scalar",
+        );
+    let owner = format!("{}{destructor}{}", &owner[..start], &owner[end..]);
+    let native = include_str!("fixtures/source-owner/native_dependent_owner.c")
+        .replace("void ash_child_release(struct ash_child *child, struct ash_parent *parent)", "void ash_child_release(struct ash_child *child, struct ash_parent *parent, size_t destruction_input)")
+        .replace("    record(\"child-release\", child->identity);", "    assert(destruction_input == 77);\n    record(\"child-capture\", destruction_input);\n    record(\"child-release\", child->identity);");
+    generated_owner_program_with_native(
+        &owner,
+        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Unit, Owner.Scope<Unit, Unit, Int>>\nmain () = resource Owner.Parent<ParentFresh> parent = 64 {\n    resource Owner.Child<ParentFresh, ChildFresh> child = (parent, (4, 77)) {\n        Owner.child_read child\n    }\n}\n",
+        None,
+        "Completed(Completed(4, RetainedError(())), RetainedError(()))",
+        "parent-acquire:64\nchild-acquire:4\nchild-retain:4\nchild-capture:77\nchild-release:4\nparent-final-byte:99\nparent-release:64\n",
+        &native,
+    );
+}
+
+#[test]
 fn source_control_open_delta_executes_with_type_only_native_owner() {
     generated_owner_program_with_helpers(
         include_str!("fixtures/source-owner/owner.ash"),

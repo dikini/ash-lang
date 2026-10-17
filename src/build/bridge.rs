@@ -1115,7 +1115,7 @@ main () = 42
     }
 
     #[test]
-    fn opaque_teardown_scalar_operands_require_capture_before_typed_bridge_planning() {
+    fn destruction_capture_teardown_operands_require_mapping_before_typed_bridge() {
         let source = OWNER_SOURCE
             .replace(
                 "State<T, R> -> Foreign.Call<Foreign.Disposition<Unit>>",

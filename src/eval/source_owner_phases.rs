@@ -1400,6 +1400,8 @@ impl<'runtime> super::Machine<'runtime> {
                         .instantiation
                         .ty(scope.handle.ty(), &mut self.instantiation_work)?,
                 );
+                #[cfg(test)]
+                post_record_test::destruction_preflight(&mut self.instantiation_work);
                 let Some(destruction) = prepare_destruction_operands(
                     invocation.destructor(),
                     &state,
@@ -2317,6 +2319,181 @@ mod inherited_row_tests {
     }
 
     #[test]
+    fn destruction_capture_preflight_keeps_original_abi_order_and_cumulative_work() {
+        use super::{HeapCell, Value};
+        use crate::integer::Integer;
+        static IDS: AtomicU64 = AtomicU64::new(0);
+        let fixture = Fixture(std::env::temp_dir().join(format!(
+            "ash-destruction-capture-{}-{}",
+            std::process::id(),
+            IDS.fetch_add(1, Ordering::Relaxed)
+        )));
+        fs::create_dir(&fixture.0).unwrap();
+        let owner = include_str!("../../tests/fixtures/source-owner/owner.ash")
+            .replace("repr Size = size_t", "repr Size = size_t\n    repr Signed = signed(32)\n    repr Unsigned = unsigned(64)\n    const Negative : Signed = -7")
+            .replace("owner State<R>", "owner State<Before : EffectRow, R, After : EffectRow>")
+            .replace("State<R>", "State<{| Before}, R, {| After}>")
+            .replace("After : EffectRow> : Int ->", "After : EffectRow> : (Int, (Int, Int)) ->")
+            .replace("operand 0 from 0 scalar", "operand 0 from 0 scalar\n        destruction_operand 2 from 1.0 scalar\n        destruction_operand 0 from 1.1 scalar")
+            .replace("After : EffectRow> : State<{| Before}, R, {| After}> ->", "After : EffectRow> : (Int, State<{| Before}, R, {| After}>, Int) ->")
+            .replace("abi (pointer(Address)) -> void", "abi (Signed, pointer(Address), Unsigned) -> void")
+            .replace("operand 0 from 0 current", "operand 0 from 2 scalar\n        operand 1 from 1 current\n        operand 2 from 0 scalar")
+            .replace("consumed 0", "consumed 1")
+            .replace("input Int", "input (Int, (Int, Int))")
+            .replace("acquire size => match perform Allocate<{| Before}, R, {| After}>.call size", "acquire (size, destruction_inputs) => match perform Allocate<{| Before}, R, {| After}>.call (size, destruction_inputs)")
+            .replace("perform Free<{| Before}, R, {| After}>.call state", "perform Free<{| Before}, R, {| After}>.call (999, state, 5)");
+        fs::write(fixture.0.join("owner.ash"), owner).unwrap();
+        fs::write(fixture.0.join("entry.ash"), "import owner as Owner\neffect First {\n    first : Unit -> Unit\n}\neffect Last {\n    last : Unit -> Unit\n}\nmain : Unit -> Owner.Scope<Unit, Unit, Int>\nmain () = resource Owner.Probe<{First}, Fresh, {Last}> owner = (42, (18446744073709551615, Owner.Negative)) {\n    Owner.read owner\n}\n").unwrap();
+        let compiled = compile_path(RunConfiguration {
+            entry: fixture.0.join("entry.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap();
+        let (program, _) = compiled.effect_build_input().unwrap();
+        let scope = program
+            .nodes()
+            .iter()
+            .find_map(|node| match &node.kind {
+                EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
+                    Some(scope)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let Type::Tuple(state_data) = scope.finish.parameter.ty() else {
+            panic!("finish domain")
+        };
+        let state = &state_data[0];
+        let producer = &scope.header().acquire;
+        let destructor = &scope.header().teardown;
+        let heap = [
+            HeapCell::Tuple(
+                vec![
+                    Value::Integer(Integer::from_u64(u64::MAX)),
+                    Value::Integer(Integer::from_i64(-7)),
+                ]
+                .into_boxed_slice(),
+            ),
+            HeapCell::Tuple(
+                vec![Value::Integer(Integer::from_i64(42)), Value::Location(0)].into_boxed_slice(),
+            ),
+        ];
+        let input = Value::Location(1);
+        let check = |work: &mut TypeWorkBudget| {
+            let operands = super::prepare_destruction_operands(
+                destructor,
+                state,
+                &[],
+                Some((producer, &heap, &input)),
+                work,
+            )?
+            .ok_or(RuntimeFailure::ForeignBinding)?;
+            assert!(
+                matches!(operands.as_slice(), [NativeOwnerOperand::Scalar(crate::foreign::source_runtime::NativeScalarValue::I32(-7)), NativeOwnerOperand::Address(address), NativeOwnerOperand::Scalar(crate::foreign::source_runtime::NativeScalarValue::U64(u64::MAX))] if address.is_null())
+            );
+            Ok::<_, RuntimeFailure>(())
+        };
+        let mut measured = TypeWorkBudget::default();
+        check(&mut measured).unwrap();
+        let cost = measured.used();
+        for prefix in [0, 13] {
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            let RuntimeFailure::Report(report) = check(&mut short).unwrap_err() else {
+                panic!("paid pre-C refusal")
+            };
+            let resource = report.primary.resource().unwrap();
+            assert_eq!(
+                (resource.cause, resource.phase, resource.resource),
+                (
+                    crate::eval::ResourceFailureCause::WorkBudgetExhausted,
+                    crate::eval::RuntimePhase::Acquisition,
+                    crate::eval::RuntimeResource::WorkUnits
+                )
+            );
+            assert_eq!(resource.available, Some(short.remaining()));
+            assert_eq!(
+                resource.requested, None,
+                "the existing scalar conversion error carries no denied-count field"
+            );
+            assert_eq!(
+                short.used(),
+                prefix + cost - 8,
+                "the final U64 magnitude charge must refuse before conversion"
+            );
+            assert_eq!(short.remaining(), 7);
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                check(&mut exact).unwrap();
+                assert_eq!(exact.used(), prefix + cost);
+            }
+        }
+        assert!(matches!(
+            super::prepare_destruction_operands(
+                destructor,
+                state,
+                &[],
+                None,
+                &mut TypeWorkBudget::default()
+            ),
+            Err(RuntimeFailure::ForeignBinding)
+        ));
+        assert!(matches!(
+            super::prepare_destruction_operands(
+                destructor,
+                state,
+                &[],
+                Some((destructor, &heap, &input)),
+                &mut TypeWorkBudget::default()
+            ),
+            Err(RuntimeFailure::ForeignBinding)
+        ));
+        for (first, last) in [
+            (Integer::from_i64(2147483648), Integer::from_u64(u64::MAX)),
+            (Integer::from_i64(-7), Integer::from_i64(-1)),
+        ] {
+            let invalid = [
+                HeapCell::Tuple(
+                    vec![Value::Integer(last), Value::Integer(first)].into_boxed_slice(),
+                ),
+                heap[1].clone(),
+            ];
+            assert!(
+                super::prepare_destruction_operands(
+                    destructor,
+                    state,
+                    &[],
+                    Some((producer, &invalid, &input)),
+                    &mut TypeWorkBudget::default()
+                )
+                .unwrap()
+                .is_none()
+            );
+        }
+        let invalid = [
+            HeapCell::Tuple(
+                vec![Value::Integer(Integer::from_u64(u64::MAX)), Value::Unit].into_boxed_slice(),
+            ),
+            heap[1].clone(),
+        ];
+        assert!(matches!(
+            super::prepare_destruction_operands(
+                destructor,
+                state,
+                &[],
+                Some((producer, &invalid, &input)),
+                &mut TypeWorkBudget::default()
+            ),
+            Err(RuntimeFailure::ForeignBinding)
+        ));
+        check(&mut TypeWorkBudget::default()).unwrap();
+        println!(
+            "destruction capture pre-C cost={cost}; exact/one-short/prefix13/retry and role/range checks complete"
+        );
+    }
+
+    #[test]
     fn inherited_row_destructor_specializes_full_domain_before_operands_and_work_refusal() {
         static IDS: AtomicU64 = AtomicU64::new(0);
         let fixture = Fixture(std::env::temp_dir().join(format!(
@@ -2574,6 +2751,7 @@ pub(crate) mod post_record_test {
         TeardownReturn,
         TeardownExtraction,
         InitializedExtentPreflight,
+        DestructionPreflight,
         InitializedBytesAdmission { prefix: usize, allowance: usize },
         TeardownPreflight { prefix: usize, allowance: usize },
     }
@@ -2618,6 +2796,19 @@ pub(crate) mod post_record_test {
 
     pub(crate) fn observe_extent_preflight<T>(run: impl FnOnce() -> T) -> (T, Observation) {
         observe_phase(true, Phase::InitializedExtentPreflight, run)
+    }
+
+    pub(crate) fn observe_destruction_preflight<T>(run: impl FnOnce() -> T) -> (T, Observation) {
+        observe_phase(true, Phase::DestructionPreflight, run)
+    }
+
+    pub(super) fn destruction_preflight(work: &mut TypeWorkBudget) {
+        if STATE
+            .get()
+            .is_some_and(|state| state.inject && state.phase == Phase::DestructionPreflight)
+        {
+            *work = TypeWorkBudget::with_limit(0);
+        }
     }
 
     pub(crate) fn observe_initialized_bytes_admission<T>(

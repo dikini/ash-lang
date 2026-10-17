@@ -7940,6 +7940,226 @@ main () = resource Owner.Probe<{}, Outer, {}> outer = 64 {
     }
 
     #[test]
+    fn destruction_capture_copied_scope_keeps_exact_producer_and_full_row_originals() {
+        let fixture = Fixture::new();
+        let owner = include_str!("../../tests/fixtures/source-owner/owner.ash")
+            .replace(
+                "owner State<R>",
+                "owner State<Before : EffectRow, R, After : EffectRow>",
+            )
+            .replace("State<R>", "State<{| Before}, R, {| After}>")
+            .replace(
+                "After : EffectRow> : Int ->",
+                "After : EffectRow> : (Int, Int) ->",
+            )
+            .replace(
+                "operand 0 from 0 scalar",
+                "operand 0 from 0 scalar\n        destruction_operand 0 from 1 scalar",
+            )
+            .replace(
+                "After : EffectRow> : State<{| Before}, R, {| After}> ->",
+                "After : EffectRow> : (Int, State<{| Before}, R, {| After}>) ->",
+            )
+            .replace(
+                "abi (pointer(Address)) -> void",
+                "abi (Size, pointer(Address)) -> void",
+            )
+            .replace(
+                "operand 0 from 0 current",
+                "operand 0 from 0 scalar\n        operand 1 from 1 current",
+            )
+            .replace("consumed 0", "consumed 1")
+            .replace(".call size {", ".call (size, 99) {")
+            .replace(".call state {", ".call (data, state) {");
+        let start = owner.find("    symbol Allocate<").unwrap();
+        let end = owner.find("    symbol Free<").unwrap();
+        let donor = owner[start..end]
+            .replace("symbol Allocate<", "symbol AlternateAllocate<")
+            .replace("ash_owner_acquire", "ash_owner_alternate_acquire")
+            .replace(
+                "destruction_operand 0 from 1 scalar",
+                "destruction_operand 0 from 0 scalar",
+            );
+        let owner = format!("{}{donor}{}", &owner[..end], &owner[end..]);
+        fs::write(fixture.0.join("owner.ash"), owner).unwrap();
+        fs::write(fixture.0.join("entry.ash"), "import owner as Owner\neffect First {\n    first : Unit -> Unit\n}\neffect Last {\n    last : Unit -> Unit\n}\nmain : Unit -> Owner.Scope<Unit, Unit, Int>\nmain () = resource Owner.Probe<{First}, Fresh, {Last}> owner = 42 {\n    Owner.read owner\n}\n").unwrap();
+        let compiled = fixture.compile();
+        let (checked, provenance) = compiled.effect_build_input().unwrap();
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref())
+            .collect::<Vec<_>>();
+        let module_sources = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let donor = checked
+            .registry()
+            .effects()
+            .iter()
+            .find(|effect| effect.spelling == "AlternateAllocate")
+            .unwrap()
+            .native_contract
+            .as_ref()
+            .unwrap();
+        let first = checked
+            .registry()
+            .effects()
+            .iter()
+            .find(|effect| effect.spelling == "First")
+            .unwrap()
+            .id;
+        let last = checked
+            .registry()
+            .effects()
+            .iter()
+            .find(|effect| effect.spelling == "Last")
+            .unwrap()
+            .id;
+        let transformed = super::super::transform::identity_effect_traversal(checked).unwrap();
+        let index = transformed
+            .nodes
+            .iter()
+            .position(|stored| {
+                matches!(
+                    stored.kind,
+                    EffectExprKind::Operation(EffectOperation::SourceResourceScope(_))
+                )
+            })
+            .unwrap();
+        let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+            &transformed.nodes[index].kind
+        else {
+            unreachable!()
+        };
+        let producer = scope.header().acquire.operation();
+        assert_eq!(
+            scope.header().acquire.symbol().destruction_operands()[0].source(),
+            &[1]
+        );
+        assert_eq!(donor.symbol().destruction_operands()[0].source(), &[0]);
+        assert_ne!(producer, donor.operation());
+        assert_eq!(
+            scope.header().acquire.symbol().parameters().len(),
+            donor.symbol().parameters().len()
+        );
+        assert!(
+            scope
+                .header()
+                .acquire
+                .symbol()
+                .parameters()
+                .iter()
+                .zip(donor.symbol().parameters())
+                .all(|(left, right)| left.kind() == right.kind())
+        );
+        super::super::validate::validate_effect_modules_family(
+            transformed,
+            &sources,
+            &module_sources,
+        )
+        .unwrap();
+        for mutation in 0..3 {
+            let mut transformed =
+                super::super::transform::identity_effect_traversal(checked).unwrap();
+            let id = NodeId::new(transformed.arena, index as u32);
+            if mutation == 0 {
+                let request = transformed
+                    .nodes
+                    .iter_mut()
+                    .find_map(|node| match &mut node.kind {
+                        EffectExprKind::Operation(EffectOperation::Request(request))
+                            if request.operation() == producer =>
+                        {
+                            Some(request)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                let arguments = request
+                    .effect
+                    .arguments()
+                    .iter()
+                    .map(|argument| {
+                        crate::types::clone_kinded_argument_with_budget(
+                            argument,
+                            &mut TypeWorkBudget::default(),
+                        )
+                        .unwrap()
+                    })
+                    .collect::<Vec<_>>();
+                request.effect = crate::types::EffectInstance::new_kinded(
+                    donor.effect(),
+                    arguments.into_boxed_slice(),
+                );
+                request.operation = donor.operation();
+            } else {
+                let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+                    &mut transformed.nodes[index].kind
+                else {
+                    unreachable!()
+                };
+                let descriptor = Arc::get_mut(&mut scope.descriptor).unwrap();
+                let copy = &mut descriptor.copies[0];
+                if mutation == 1 {
+                    assert!(copy.nodes.len() > 1);
+                    copy.nodes[1].1 = copy.nodes[0].1;
+                } else {
+                    let before = *copy
+                        .rows
+                        .iter()
+                        .find(|(_, row)| row.known().iter().any(|effect| effect.effect() == first))
+                        .unwrap()
+                        .0;
+                    let after = copy
+                        .rows
+                        .iter()
+                        .find(|(_, row)| row.known().iter().any(|effect| effect.effect() == last))
+                        .unwrap()
+                        .1;
+                    let changed = crate::types::clone_effect_row_with_budget(
+                        after,
+                        &mut TypeWorkBudget::default(),
+                    )
+                    .unwrap();
+                    assert_ne!(&copy.rows[&before], &changed);
+                    copy.rows.insert(before, changed);
+                }
+            }
+            let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+                &transformed.nodes[index].kind
+            else {
+                unreachable!()
+            };
+            let failure = scope
+                .authenticate(id, &transformed, &mut TypeWorkBudget::default())
+                .unwrap_err();
+            assert_eq!(
+                failure.reason(),
+                ValidationReason::Registry,
+                "copy/original mutation {mutation}"
+            );
+            let failure = super::super::validate::validate_effect_modules_family(
+                transformed,
+                &sources,
+                &module_sources,
+            )
+            .unwrap_err();
+            assert_eq!(
+                failure.reason(),
+                if mutation == 0 {
+                    // The changed request retains the original stored row;
+                    // ordinary whole-Core row checking rejects it first.
+                    ValidationReason::EffectRow
+                } else {
+                    ValidationReason::Registry
+                },
+                "whole-Core copy/original mutation {mutation}"
+            );
+        }
+    }
+
+    #[test]
     fn final_source_scope_rejects_reordered_duplicate_or_missing_native_interpretations() {
         let fixture = Fixture::new();
         let compiled = fixture.compile();

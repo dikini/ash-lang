@@ -92,9 +92,37 @@ explicit scalar operands `5` and `999`. Refusal destroys unpublished owner `9`
 once with captured operands `-7` and `18446744073709551615`, in original ABI
 order. The existing harness removes Ash sources before preparation and image
 and facts files before child execution. This is one real native lifecycle
-discriminator, not the remaining delivery matrix. Runtime range/work refusal,
-copied/image forgery, typed-output, retained/dependency/terminal fallback and
-affected final gates remain pending. It grants no new State/view transport,
+discriminator, not the remaining delivery matrix.
+
+Focused run 982 passes six metadata, bridge, pre-call, copied-Core, image and
+injected-callback controls. Complete pre-call work is 67 units, with exact,
+one-short, spent-prefix and fresh-retry checks. A scalar converter's work error
+retains its existing absent requested-count field. Complete image restoration
+uses 142,150 units with matching boundary checks. Six changed mapping claims
+fail independent original-facts and startup gates before provider selection;
+three missing, duplicate or wrong-role targets also fail semantic restoration.
+The copied-scope donor, node map and phantom Row claims fail direct scope
+authentication. Whole-Core checking rejects the altered request's stored row
+before scope checking and rejects the two metadata-only claims at the registry
+boundary. Counted opaque callbacks separately establish zero native calls on
+injected pre-call exhaustion and one snapshot cleanup after post-return work
+exhaustion. These injected callbacks are not real C execution.
+
+Focused run 983 passes five generated-host controls. Signed and unsigned range
+refusals execute zero C calls before a fresh computed-`Int` retry. A readable
+nonnull typed output owner is guarded and destroyed on a native error result.
+Retained Finish observes replaced `D` through explicit operands `5/123`, while
+host fallback retains captured `-7/U64MAX`. A dependent child's captured `77`
+is delivered beside its Current and exact live Enclosing pointer; C assertions
+and the trace establish child-before-parent destruction after retained-dependent
+blocking. The earlier direct-result/explicit-Finish discriminator also passes.
+The same source/image-removal harness applies throughout.
+
+The initial setup and assertion failures remain recorded at their own pins;
+they did not justify changing product guards, image literal limits or errors.
+Delivery verification also requires current affected caller, architecture and
+strict/fmt gates.
+These changes grant no new State/view transport,
 private-data permission or ABI role. Ordinary Finish remains separate from the
 acquisition-time native snapshot.
 
@@ -203,8 +231,9 @@ The same selection works in owner acquisition, source finish and separate host
 destruction. Static/shared scalar hosts observe signed values and full unsigned
 64-bit values after sources and image/facts files are removed. An owner witness
 separately observes normal finish and partial-owner host destruction with fixed
-original operands; this does not generalize source-projected scalar teardown
-inputs or lifecycle callable privilege.
+original operands. That fixed-operand delivery did not generalize
+source-projected scalar teardown inputs or lifecycle callable privilege;
+the Mapping A increment above supplies the separately approved scalar mapping.
 
 The private image keeps signed i64 literal encoding and adds a canonical u64
 payload only above `i64::MAX`, retaining the full range of admitted scalar
@@ -248,10 +277,10 @@ discard. Injected readiness witnesses distinguish the I32 reply's ten-unit
 exact allowance from one-short atomic refusal (six units spent), prefixed
 allowances and two fresh retries. That status delivery required only checked
 passive status literals; ordinary exports and fixed native operands have their
-separate declaration and admission evidence above. Source-projected scalar
-teardown inputs and privileged lifecycle wrappers remain outside
-the current executable profile, so the shared-runtime checkpoint is not yet
-ready.
+separate declaration and admission evidence above. That status-only delivery
+left source-projected scalar teardown inputs outside its executable profile;
+the Mapping A increment above addresses those inputs. Privileged lifecycle
+wrappers and the remaining shared-runtime checkpoint keep their separate scope.
 
 Source control moves the same guard/activation through capture and resume.
 Owned discard runs acquired scopes' original finish once in structural order,

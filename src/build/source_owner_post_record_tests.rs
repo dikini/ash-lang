@@ -31,6 +31,9 @@ thread_local! {
     static NEGATIVE_PROVIDER:Cell<Option<(PrivateNativeCoordinates, &'static [u8])>>=const { Cell::new(None) };
     static ACQUIRES:Cell<usize>=const {Cell::new(0)};
     static RELEASES:Cell<usize>=const {Cell::new(0)};
+    static CAPTURE_OWNER: Cell<bool> = const { Cell::new(false) };
+    static CAPTURE_FALLBACKS: Cell<usize> = const { Cell::new(0) };
+    static CAPTURE_FINISHES: Cell<usize> = const { Cell::new(0) };
 }
 fn injected_acquire(
     arguments: &[NativeOwnerOperand],
@@ -45,8 +48,26 @@ fn injected_acquire(
     Ok(readiness.returned(std::ptr::NonNull::<u8>::dangling().as_ptr().cast()))
 }
 fn injected_release(arguments: &[NativeOwnerOperand]) {
-    let [NativeOwnerOperand::Address(address)] = arguments else {
-        panic!("admitted sentinel address");
+    let address = if CAPTURE_OWNER.get() {
+        let [
+            NativeOwnerOperand::Scalar(NativeScalarValue::I32(first)),
+            NativeOwnerOperand::Address(address),
+            NativeOwnerOperand::Scalar(NativeScalarValue::U64(last)),
+        ] = arguments
+        else {
+            panic!("preadmitted complete scalar destruction vector")
+        };
+        match (*first, *last) {
+            (-7, u64::MAX) => CAPTURE_FALLBACKS.set(CAPTURE_FALLBACKS.get() + 1),
+            (5, 999) => CAPTURE_FINISHES.set(CAPTURE_FINISHES.get() + 1),
+            other => panic!("snapshot or explicit Finish changed: {other:?}"),
+        }
+        address
+    } else {
+        let [NativeOwnerOperand::Address(address)] = arguments else {
+            panic!("admitted sentinel address")
+        };
+        address
     };
     assert!(!address.is_null());
     RELEASES.set(RELEASES.get() + 1);
@@ -167,6 +188,23 @@ fn injected_owner_post_record_refusal_destroys_once_and_fresh_activation_does_no
     );
 }
 
+#[test]
+fn destruction_capture_recording_and_terminal_cleanup_keep_only_native_snapshot() {
+    let owner = include_str!("../../tests/fixtures/source-owner/owner.ash")
+        .replace("repr Size = size_t", "repr Size = size_t\n    repr Signed = signed(32)\n    repr Unsigned = unsigned(64)\n    const Negative : Signed = -7")
+        .replace(": Int -> Foreign.Call<Foreign.Output<Foreign.Nullable<State<R>>>>", ": (Int, (Int, Int)) -> Foreign.Call<Foreign.Output<Foreign.Nullable<State<R>>>>")
+        .replace("operand 0 from 0 scalar", "operand 0 from 0 scalar\n        destruction_operand 2 from 1.0 scalar\n        destruction_operand 0 from 1.1 scalar")
+        .replace(": State<R> -> Foreign.Call<Foreign.Disposition<Unit>>", ": (Int, State<R>, Int) -> Foreign.Call<Foreign.Disposition<Unit>>")
+        .replace("abi (pointer(Address)) -> void", "abi (Signed, pointer(Address), Unsigned) -> void")
+        .replace("operand 0 from 0 current", "operand 0 from 2 scalar\n        operand 1 from 1 current\n        operand 2 from 0 scalar")
+        .replace("consumed 0", "consumed 1")
+        .replace(".call size {", ".call (size, (18446744073709551615, Negative)) {")
+        .replace(".call state {", ".call (999, state, 5) {");
+    // These are injected, counted opaque callbacks, separate from actual C.
+    owner_post_record_case(&owner, None, ExtentOutcome::DestructionWorkRefused);
+    owner_post_record_case(&owner, None, ExtentOutcome::Ready);
+}
+
 fn byte_owner_source(extent: &str) -> String {
     include_str!("../../tests/fixtures/source-owner/owner.ash")
         .replace("repr Address = opaque", "repr Address = bytes")
@@ -235,6 +273,7 @@ enum ExtentOutcome {
     Ready,
     ConversionRefused,
     WorkRefused,
+    DestructionWorkRefused,
     ProportionalReservation,
     ExtractionRefused { retained: bool },
 }
@@ -345,6 +384,9 @@ fn owner_post_record_case_with_entry(
     PROVIDERS.set(Some((coordinates, facts)));
     BYTE_OWNER.set(byte_owner);
     STATUS_OWNER.set(status_owner);
+    CAPTURE_OWNER.set(owner.contains("destruction_operand"));
+    CAPTURE_FALLBACKS.set(0);
+    CAPTURE_FINISHES.set(0);
     RETAIN_FIRST.set(matches!(
         outcome,
         ExtentOutcome::ExtractionRefused { retained: true }
@@ -358,6 +400,7 @@ fn owner_post_record_case_with_entry(
             PROVIDERS.set(None);
             BYTE_OWNER.set(false);
             STATUS_OWNER.set(false);
+            CAPTURE_OWNER.set(false);
             RETAIN_FIRST.set(false);
             NEGATIVE_PROVIDER.set(None);
         }
@@ -498,14 +541,22 @@ fn owner_post_record_case_with_entry(
         drop(providers);
         return;
     }
-    if matches!(outcome, ExtentOutcome::WorkRefused) {
-        let (refused, observed) = source_owner_post_record_test::observe_extent_preflight(|| {
-            __run_private_effect_image(&runtime_fingerprint(), &bytes, facts, &libraries)
-        });
+    if matches!(
+        outcome,
+        ExtentOutcome::WorkRefused | ExtentOutcome::DestructionWorkRefused
+    ) {
+        let run = || __run_private_effect_image(&runtime_fingerprint(), &bytes, facts, &libraries);
+        let (refused, observed) = if matches!(outcome, ExtentOutcome::DestructionWorkRefused) {
+            source_owner_post_record_test::observe_destruction_preflight(run)
+        } else {
+            source_owner_post_record_test::observe_extent_preflight(run)
+        };
         let Err(PrivateProgramFailure(PrivateFailure::Evaluation(RuntimeFailure::Report(report)))) =
             refused
         else {
-            panic!("expected work refusal before initialized extent admission; got {refused:?}");
+            panic!(
+                "expected work refusal before selected owner pre-call admission; got {refused:?}"
+            );
         };
         assert_eq!(report.primary.reason_code(), "runtime.environment-capacity");
         let resource = report.primary.resource().unwrap();
@@ -515,6 +566,10 @@ fn owner_post_record_case_with_entry(
         );
         assert_eq!(resource.resource, crate::eval::RuntimeResource::WorkUnits);
         assert_eq!(resource.available, Some(0));
+        if matches!(outcome, ExtentOutcome::DestructionWorkRefused) {
+            assert_eq!(resource.phase, crate::eval::RuntimePhase::Acquisition);
+            assert_eq!((CAPTURE_FALLBACKS.get(), CAPTURE_FINISHES.get()), (0, 0));
+        }
         assert_eq!(observed.returned, 0);
         assert_eq!(observed.recorded, 0);
         assert_eq!(ACQUIRES.get(), 0);
@@ -526,6 +581,9 @@ fn owner_post_record_case_with_entry(
         assert_eq!(fresh.unwrap().to_string(), "Completed(42, Closed)");
         assert_eq!(ACQUIRES.get(), 1);
         assert_eq!(RELEASES.get(), 1);
+        if CAPTURE_OWNER.get() {
+            assert_eq!((CAPTURE_FALLBACKS.get(), CAPTURE_FINISHES.get()), (0, 1));
+        }
         drop(providers);
         return;
     }
@@ -569,6 +627,9 @@ fn owner_post_record_case_with_entry(
         1,
         "terminal disposal destroys the unique live owner once"
     );
+    if CAPTURE_OWNER.get() {
+        assert_eq!((CAPTURE_FALLBACKS.get(), CAPTURE_FINISHES.get()), (1, 0));
+    }
     let (fresh, observed) = source_owner_post_record_test::observe(false, || {
         __run_private_effect_image(&runtime_fingerprint(), &bytes, facts, &libraries)
     });
@@ -588,6 +649,9 @@ fn owner_post_record_case_with_entry(
         2,
         "fresh finish consumes once; Drop cannot repeat its destructor"
     );
+    if CAPTURE_OWNER.get() {
+        assert_eq!((CAPTURE_FALLBACKS.get(), CAPTURE_FINISHES.get()), (1, 1));
+    }
     // Reuse the same image and providers. This refusal occurs after the native
     // destructor returned, rather than after acquisition or before teardown.
     let (refused, observed) = source_owner_post_record_test::observe_teardown(true, || {
@@ -639,6 +703,9 @@ fn owner_post_record_case_with_entry(
         "fresh evaluation owns its own acquisition"
     );
     assert_eq!(RELEASES.get(), 4, "fresh activation consumes exactly once");
+    if CAPTURE_OWNER.get() {
+        assert_eq!((CAPTURE_FALLBACKS.get(), CAPTURE_FINISHES.get()), (1, 3));
+    }
     if status_owner {
         // Ten units: one live-dependent check, five reply units for I32,
         // and two cells plus two fixed recording/authority units.
