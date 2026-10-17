@@ -12370,6 +12370,34 @@ impl ExportSummary {
         type_work: &mut TypeWorkBudget,
         constraint_work: &mut crate::interface::InterfaceConstraintBudget,
     ) -> Result<Self, ResolvedBuildFailure> {
+        let summary = Self::collect_with_providers(
+            resolved,
+            checked_globals,
+            checked_interfaces,
+            admitted_implementations,
+            checked_implementations,
+            providers,
+            type_work,
+            constraint_work,
+        )?;
+        summary.authenticate_with_provider_commit(false, type_work, constraint_work)?;
+        Ok(summary)
+    }
+
+    // Independent admission must not retain the collection phase's stack
+    // storage. Both phases still consume the caller's cumulative budgets.
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    fn collect_with_providers(
+        resolved: &ResolvedModule,
+        checked_globals: &[CheckedGlobalScheme],
+        checked_interfaces: &[SharedCheckedInterfaceFact],
+        admitted_implementations: &[CheckedImplementation],
+        checked_implementations: &[CheckedImplementationFact],
+        providers: Option<&Arc<crate::elaborate::provider::CheckedProviderGroup>>,
+        type_work: &mut TypeWorkBudget,
+        constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+    ) -> Result<Self, ResolvedBuildFailure> {
         type_work
             .charge(checked_globals.len())
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
@@ -14487,7 +14515,6 @@ impl ExportSummary {
                 retain_shared_source_nominal(&mut summary.source_owners, owner.clone(), type_work)?;
             }
         }
-        summary.authenticate_with_provider_commit(false, type_work, constraint_work)?;
         Ok(summary)
     }
 
