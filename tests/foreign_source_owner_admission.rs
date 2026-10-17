@@ -75,6 +75,82 @@ fn type_only_source_owner_admission_keeps_mixed_symbol_vectors_and_nonfirst_owne
     assert_eq!(result.value_display(), "42");
 }
 
+fn scalar_destruction_source() -> String {
+    SOURCE
+        .replace("repr Size = size_t", "repr Size = size_t\n    repr Signed = signed(32)")
+        .replace(
+            "After : EffectRow> : Int ->",
+            "After : EffectRow> : (Int, (Int, Int)) ->",
+        )
+        .replace(
+            "operand 0 from 0 scalar\n        output result as owner",
+            "operand 0 from 0 scalar\n        destruction_operand 0 from 1.1 scalar\n        destruction_operand 2 from 1.0 scalar\n        output result as owner",
+        )
+        .replace("(Int, State<T, R>) ->", "(Int, State<T, R>, Int) ->")
+        .replace(
+            "abi (pointer(Address)) -> void\n        operand 0 from 1 current",
+            "abi (Signed, pointer(Address), Size) -> void\n        operand 0 from 2 scalar\n        operand 1 from 1 current\n        operand 2 from 0 scalar",
+        )
+}
+
+#[test]
+fn source_owner_destruction_capture_maps_original_abi_order_and_cleanup_only_inputs() {
+    let source = scalar_destruction_source();
+    let fixture = Fixture::new(&source);
+    let compiled = compile_path(fixture.configuration()).expect(
+        "producer inputs map to the original destructor's ABI order, including inputs unused by the producer ABI",
+    );
+    assert_eq!(execute(&compiled).unwrap().value_display(), "42");
+}
+
+#[test]
+fn source_owner_destruction_capture_requires_exact_original_scalar_targets_and_input_leaves() {
+    let source = scalar_destruction_source();
+    for invalid in [
+        source.replace("        destruction_operand 2 from 1.0 scalar\n", ""),
+        source.replace(
+            "destruction_operand 2 from 1.0 scalar",
+            "destruction_operand 0 from 1.0 scalar",
+        ),
+        source.replace(
+            "destruction_operand 0 from",
+            "destruction_operand result from",
+        ),
+        source.replace("destruction_operand 0 from", "destruction_operand 1 from"),
+        source.replace("destruction_operand 2 from", "destruction_operand 8 from"),
+        source.replace(
+            "destruction_operand 0 from 1.1",
+            "destruction_operand 0 from 1.2",
+        ),
+        source.replace(
+            "destruction_operand 0 from 1.1",
+            "destruction_operand 0 from -1",
+        ),
+        source.replace("(Int, (Int, Int)) ->", "(Int, (Int, Bool)) ->"),
+        source.replace(
+            "destruction_operand 0 from 1.1 scalar",
+            "destruction_operand 0 from 1.1 current",
+        ),
+        source.replace(
+            "retained_dependents block",
+            "destruction_operand 0 from 0 scalar\n        retained_dependents block",
+        ),
+        source.replace("operand 0 from 2 scalar", "operand 0 from 0 scalar"),
+    ] {
+        let fixture = Fixture::new(&invalid);
+        assert!(compile_path(fixture.configuration()).is_err(), "{invalid}");
+    }
+    let same_leaf = source
+        .replace("operand 0 from 2 scalar", "operand 0 from 0 scalar")
+        .replace(
+            "destruction_operand 2 from 1.0 scalar",
+            "destruction_operand 2 from 1.1 scalar",
+        );
+    compile_path(Fixture::new(&same_leaf).configuration()).expect(
+        "repeated destructor source leaves require one producer leaf with separate ABI narrowing",
+    );
+}
+
 #[test]
 fn source_byte_owner_admission_checks_initialized_extent_against_source_signature() {
     let source = SOURCE

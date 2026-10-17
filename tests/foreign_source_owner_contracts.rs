@@ -295,7 +295,7 @@ fn malformed_owner_applications_teardowns_and_outcomes_publish_no_preparation() 
 }
 
 #[test]
-fn public_source_resolution_refuses_row_bearing_owners_and_unowned_addresses() {
+fn public_source_resolution_preserves_owner_rows_and_refuses_invalid_ordinary_types() {
     let with_scalar = BYTES.replace(
         "    owner State",
         &format!("{SCALAR_SYMBOL}    owner State"),
@@ -307,11 +307,15 @@ fn public_source_resolution_refuses_row_bearing_owners_and_unowned_addresses() {
     ));
     assert_eq!(prepared.owners().len(), 1);
     assert!(prepare(ADDRESS_ONLY).unwrap().symbols().is_empty());
+    let ordinary_row = format!(
+        "{BYTES}\ntype Ordinary<T> = Payload(T)\n\ninvalid : Ordinary<{{}}> -> Unit\ninvalid ignored = ()\n"
+    );
 
     for (text, expected) in [
-        (BYTES, ResolveReason::TypeKind),
-        (ADDRESS_ONLY, ResolveReason::ForeignContract),
-        (with_scalar.as_str(), ResolveReason::TypeKind),
+        (BYTES, None),
+        (with_scalar.as_str(), None),
+        (ADDRESS_ONLY, Some(ResolveReason::ForeignContract)),
+        (ordinary_row.as_str(), Some(ResolveReason::TypeKind)),
     ] {
         let source_text = format!("import @builtin.foreign as Foreign\n{text}");
         let source = Source::new(&source_text);
@@ -352,11 +356,13 @@ fn public_source_resolution_refuses_row_bearing_owners_and_unowned_addresses() {
                 .unwrap()
             })
             .collect::<Vec<_>>();
-        // Passive preparation admits these written facts; source resolution
-        // still rejects rows in ordinary State applications and unowned bytes.
-        let Err(ResolveModuleError::Resolution(failure)) = resolve_module(loaded, &dependencies)
-        else {
-            panic!("unsupported owner/address facts must fail at source resolution");
+        let resolved = resolve_module(loaded, &dependencies);
+        let Some(expected) = expected else {
+            ash::elaborate::check_module(resolved.unwrap()).unwrap();
+            continue;
+        };
+        let Err(ResolveModuleError::Resolution(failure)) = resolved else {
+            panic!("invalid ordinary Type or unowned address must fail at source resolution");
         };
         assert_eq!(failure.reason, expected, "{text}: {failure:?}");
         assert_eq!(
@@ -364,7 +370,7 @@ fn public_source_resolution_refuses_row_bearing_owners_and_unowned_addresses() {
             loaded.surface().foreign_libraries[0].span.source()
         );
         if expected == ResolveReason::TypeKind {
-            assert_eq!(written(&source_text, failure.primary.span()), "{| Before}");
+            assert_eq!(written(&source_text, failure.primary.span()), "{}");
         }
     }
 }

@@ -100,6 +100,199 @@ main () = (resource Renamed.Probe<{}, Empty, {}> owner = 42 {
     );
 }
 
+fn owner_with_scalar_destruction_captures() -> String {
+    include_str!("fixtures/source-owner/owner.ash")
+        .replace("repr Size = size_t", "repr Size = size_t\n    repr Signed = signed(32)\n    repr Unsigned = unsigned(64)\n    const Negative : Signed = -7")
+        .replace("owner State<R>", "owner State<Before : EffectRow, R, After : EffectRow>")
+        .replace("State<R>", "State<{| Before}, R, {| After}>")
+        .replace("After : EffectRow> : Int ->", "After : EffectRow> : (Int, (Int, Int)) ->")
+        .replace("operand 0 from 0 scalar", "operand 0 from 0 scalar\n        destruction_operand 2 from 1.0 scalar\n        destruction_operand 0 from 1.1 scalar")
+        .replace("After : EffectRow> : State<{| Before}, R, {| After}> ->", "After : EffectRow> : (Int, State<{| Before}, R, {| After}>, Int) ->")
+        .replace("abi (pointer(Address)) -> void", "abi (Signed, pointer(Address), Unsigned) -> void")
+        .replace("operand 0 from 0 current", "operand 0 from 2 scalar\n        operand 1 from 1 current\n        operand 2 from 0 scalar")
+        .replace("consumed 0", "consumed 1")
+        .replace("input Int", "input (Int, (Int, Int))")
+        .replace("acquire size => match perform Allocate<{| Before}, R, {| After}>.call size", "acquire (size, destruction_inputs) => match perform Allocate<{| Before}, R, {| After}>.call (size, destruction_inputs)")
+        .replace("perform Free<{| Before}, R, {| After}>.call state", "perform Free<{| Before}, R, {| After}>.call (999, state, 5)")
+}
+
+fn native_with_scalar_destruction_captures() -> String {
+    let captures = r#"static void record_captures(int32_t first, uint64_t last) {
+    const char *path = getenv("ASH_OWNER_TRACE");
+    FILE *file = path == NULL ? NULL : fopen(path, "a");
+    if (file == NULL || fprintf(file, "captures:%d:%llu\n", first, (unsigned long long)last) < 0 || fclose(file) != 0) {
+        abort();
+    }
+}
+
+"#;
+    include_str!("fixtures/source-owner/native_owner.c")
+        .replace(
+            "struct ash_owner {",
+            &format!("{captures}struct ash_owner {{"),
+        )
+        .replace(
+            "void ash_owner_release(void *raw)",
+            "void ash_owner_release(int32_t first, void *raw, uint64_t last)",
+        )
+        .replace(
+            "record(\"release\", owner->size);",
+            "record_captures(first, last);\n    record(\"release\", owner->size);",
+        )
+}
+
+#[derive(Clone, Copy)]
+enum OwnerLink {
+    Static,
+    Shared,
+}
+
+#[test]
+fn generated_scalar_destruction_captures_keep_cleanup_only_inputs_and_separate_finish_arguments() {
+    scalar_destruction_capture_case(OwnerLink::Static);
+}
+
+#[test]
+fn generated_scalar_destruction_captures_shared_library_keeps_original_snapshot() {
+    scalar_destruction_capture_case(OwnerLink::Shared);
+}
+
+fn scalar_destruction_capture_case(link: OwnerLink) {
+    generated_owner_execution_with_native_link(
+        &owner_with_scalar_destruction_captures(),
+        "import owner as Owner\neffect BeforeNoise {\n    before : Unit -> Unit\n}\neffect AfterNoise {\n    after : Unit -> Unit\n}\nmain : Unit -> (Owner.Scope<Unit, Unit, Int>, Owner.Scope<Unit, Unit, Int>)\nmain () = (resource Owner.Probe<{BeforeNoise}, Accepted, {AfterNoise}> owner = (42, (18446744073709551615, Owner.Negative)) {\n    Owner.read owner\n}, resource Owner.Probe<{AfterNoise}, Refused, {BeforeNoise}> owner = (9, (18446744073709551615, Owner.Negative)) {\n    Owner.read owner\n})\n",
+        None,
+        Ok("(Completed(42, Closed), NotAcquired(()))"),
+        "acquire:42\ncaptures:5:999\nrelease:42\nacquire:9\ncaptures:-7:18446744073709551615\nrelease:9\n",
+        &native_with_scalar_destruction_captures(),
+        link,
+    );
+}
+
+#[test]
+fn generated_scalar_destruction_captures_guard_readable_typed_output_on_error() {
+    let owner = owner_with_scalar_destruction_captures()
+        .replace("Foreign.Call<Foreign.Output<Foreign.Nullable<State<{| Before}, R, {| After}>>>>", "Foreign.Call<(Int, Foreign.Output<Foreign.Nullable<State<{| Before}, R, {| After}>>>)>")
+        .replace("abi (Size) -> pointer(Address)", "abi (Size, out(pointer(Address))) -> Signed")
+        .replace("output result as owner(State<{| Before}, R, {| After}>)", "output result as scalar\n        output 1 as owner(State<{| Before}, R, {| After}>)")
+        .replace("outcome result nonnull { readable result }\n        outcome otherwise { readable result }", "outcome otherwise { readable result, readable 1 }")
+        .replace("Foreign.Returned(Foreign.Readable(Foreign.NonNull(state))) => match size == 9", "Foreign.Returned((status, Foreign.Readable(Foreign.NonNull(state)))) => match status == 7")
+        .replace("Foreign.Returned(Foreign.Readable(Foreign.Null))", "Foreign.Returned((_, Foreign.Readable(Foreign.Null)))")
+        .replace("Foreign.Returned(Foreign.Unreadable)", "Foreign.Returned((_, Foreign.Unreadable))");
+    let native = native_with_scalar_destruction_captures()
+        .replace(
+            "void *ash_owner_acquire(size_t size)",
+            "int32_t ash_owner_acquire(size_t size, void **output)",
+        )
+        .replace(
+            "    if (size == 0) {\n        return NULL;",
+            "    *output = NULL;\n    if (size == 0) {\n        return 7;",
+        )
+        .replace(
+            "    return owner;",
+            "    *output = owner;\n    return size == 9 ? 7 : 0;",
+        );
+    generated_owner_program_with_native(
+        &owner,
+        "import owner as Owner\nmain : Unit -> (Owner.Scope<Unit, Unit, Int>, Owner.Scope<Unit, Unit, Int>)\nmain () = (resource Owner.Probe<{}, Accepted, {}> owner = (42, (18446744073709551615, Owner.Negative)) {\n    Owner.read owner\n}, resource Owner.Probe<{}, ErrorOwner, {}> owner = (9, (18446744073709551615, Owner.Negative)) {\n    Owner.read owner\n})\n",
+        None,
+        "(Completed(42, Closed), NotAcquired(()))",
+        "acquire:42\ncaptures:5:999\nrelease:42\nacquire:9\ncaptures:-7:18446744073709551615\nrelease:9\n",
+        &native,
+    );
+}
+
+#[test]
+fn generated_scalar_destruction_captures_refuse_range_before_c_and_retry_fresh() {
+    generated_owner_program_with_native(
+        &owner_with_scalar_destruction_captures(),
+        "import owner as Owner\nmain : Unit -> (Owner.Scope<Unit, Unit, Int>, Owner.Scope<Unit, Unit, Int>, Owner.Scope<Unit, Unit, Int>)\nmain () = (resource Owner.Probe<{}, SignedRefusal, {}> owner = (42, (999, 2147483648)) {\n    Owner.read owner\n}, resource Owner.Probe<{}, UnsignedRefusal, {}> owner = (42, ((9223372036854775807 + 1) * 2, Owner.Negative)) {\n    Owner.read owner\n}, resource Owner.Probe<{}, FreshRetry, {}> owner = (42, (18446744073709551614 + 1, Owner.Negative)) {\n    Owner.read owner\n})\n",
+        None,
+        "(NotAcquired(()), NotAcquired(()), Completed(42, Closed))",
+        "acquire:42\ncaptures:5:999\nrelease:42\n",
+        &native_with_scalar_destruction_captures(),
+    );
+}
+
+#[test]
+fn generated_scalar_destruction_snapshot_survives_retained_finish_and_replaced_data() {
+    let owner = owner_with_scalar_destruction_captures()
+        .replace("const Negative : Signed = -7", "const Negative : Signed = -7\n    const Held : Signed = 7")
+        .replace("Foreign.Disposition<Unit>", "Foreign.Disposition<Int>")
+        .replace("abi (Signed, pointer(Address), Unsigned) -> void", "abi (Signed, pointer(Address), Unsigned) -> Signed")
+        .replace("outcome otherwise { consumed 1 }", "output result as scalar\n        outcome result == Held { readable result, retained 1 }\n        outcome otherwise { readable result, consumed 1 }")
+        .replace("Foreign.Consumed(())", "Foreign.Consumed(_)")
+        .replace("Foreign.Retained(())", "Foreign.Retained(_)")
+        .replace(".call (999, state, 5)", ".call (data, state, 5)")
+        .replace("read access => resume data", "read access => {\n            let replaced = Foreign.replace_data (state, 123)\n            resume data\n        }");
+    let native = native_with_scalar_destruction_captures()
+        .replace(
+            "void ash_owner_release(int32_t first, void *raw, uint64_t last)",
+            "int32_t ash_owner_release(int32_t first, void *raw, uint64_t last)",
+        )
+        .replace(
+            "    free(owner);",
+            "    if (first == 5) return 7;\n    free(owner);\n    return 0;",
+        );
+    generated_owner_program_with_native(
+        &owner,
+        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Unit, Int>\nmain () = resource Owner.Probe<{}, Fresh, {}> owner = (42, (18446744073709551615, Owner.Negative)) {\n    Owner.read owner\n}\n",
+        None,
+        "Completed(42, RetainedError(()))",
+        "acquire:42\ncaptures:5:123\nrelease:42\ncaptures:-7:18446744073709551615\nrelease:42\n",
+        &native,
+    );
+}
+
+#[test]
+fn generated_scalar_destruction_snapshot_keeps_enclosing_dependency_alive_until_child_release() {
+    let owner = include_str!("fixtures/source-owner/dependent_owner.ash")
+        .replace(
+            "(ParentState<P>, Int) ->",
+            "(ParentState<P>, (Int, Int)) ->",
+        )
+        .replace(
+            "operand 1 from 1 scalar",
+            "operand 1 from 1.0 scalar\n        destruction_operand 2 from 1.1 scalar",
+        )
+        .replace("input (Parent<P>, Int)", "input (Parent<P>, (Int, Int))")
+        .replace(
+            "acquire (parent, label) =>",
+            "acquire (parent, (label, destruction_input)) =>",
+        )
+        .replace(
+            ".call (dependency, label)",
+            ".call (dependency, (label, destruction_input))",
+        );
+    let start = owner.find("    symbol ChildFree<P, R>").unwrap();
+    let end = start + owner[start..].find("    symbol ChildHold<P, R>").unwrap();
+    let destructor = owner[start..end]
+        .replace(
+            "(ChildState<P, R>, ParentState<P>) ->",
+            "(ChildState<P, R>, ParentState<P>, Int) ->",
+        )
+        .replace(
+            "abi (pointer(Address), pointer(ParentBytes)) -> void",
+            "abi (pointer(Address), pointer(ParentBytes), Size) -> void",
+        )
+        .replace(
+            "operand 1 from 1 enclosing",
+            "operand 1 from 1 enclosing\n        operand 2 from 2 scalar",
+        );
+    let owner = format!("{}{destructor}{}", &owner[..start], &owner[end..]);
+    let native = include_str!("fixtures/source-owner/native_dependent_owner.c")
+        .replace("void ash_child_release(struct ash_child *child, struct ash_parent *parent)", "void ash_child_release(struct ash_child *child, struct ash_parent *parent, size_t destruction_input)")
+        .replace("    record(\"child-release\", child->identity);", "    assert(destruction_input == 77);\n    record(\"child-capture\", destruction_input);\n    record(\"child-release\", child->identity);");
+    generated_owner_program_with_native(
+        &owner,
+        "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Unit, Owner.Scope<Unit, Unit, Int>>\nmain () = resource Owner.Parent<ParentFresh> parent = 64 {\n    resource Owner.Child<ParentFresh, ChildFresh> child = (parent, (4, 77)) {\n        Owner.child_read child\n    }\n}\n",
+        None,
+        "Completed(Completed(4, RetainedError(())), RetainedError(()))",
+        "parent-acquire:64\nchild-acquire:4\nchild-retain:4\nchild-capture:77\nchild-release:4\nparent-final-byte:99\nparent-release:64\n",
+        &native,
+    );
+}
+
 #[test]
 fn source_control_open_delta_executes_with_type_only_native_owner() {
     generated_owner_program_with_helpers(
@@ -1666,6 +1859,26 @@ fn generated_owner_execution_with_native(
     expected_trace: &str,
     native_source: &str,
 ) {
+    generated_owner_execution_with_native_link(
+        owner,
+        entry,
+        helpers,
+        expected_result,
+        expected_trace,
+        native_source,
+        OwnerLink::Static,
+    );
+}
+
+fn generated_owner_execution_with_native_link(
+    owner: &str,
+    entry: &str,
+    helpers: Option<&str>,
+    expected_result: Result<&str, &str>,
+    expected_trace: &str,
+    native_source: &str,
+    link: OwnerLink,
+) {
     let fixture = Fixture::new(entry);
     fs::write(fixture.0.join("owner.ash"), owner).unwrap();
     if let Some(helpers) = helpers {
@@ -1678,22 +1891,40 @@ fn generated_owner_execution_with_native(
     );
     let native = fixture.0.join("native_owner.c");
     let object = fixture.0.join("native_owner.o");
-    let archive = fixture.0.join("libash_owner.a");
+    let library = fixture.0.join(match link {
+        OwnerLink::Static => "libash_owner.a",
+        OwnerLink::Shared => "libash_owner.so",
+    });
     fs::write(&native, native_source).unwrap();
+    let mut compile = Command::new("cc");
+    compile.args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-c"]);
+    if matches!(link, OwnerLink::Shared) {
+        compile.arg("-fPIC");
+    }
+    let mut linker = match link {
+        OwnerLink::Static => {
+            let mut command = Command::new("ar");
+            command.arg("crs").arg(&library).arg(&object);
+            command
+        }
+        OwnerLink::Shared => {
+            let mut command = Command::new("cc");
+            command
+                .args(["-shared", "-Wl,-soname,libash_owner.so"])
+                .arg(&object)
+                .arg("-o")
+                .arg(&library);
+            command
+        }
+    };
     for output in [
-        Command::new("cc")
-            .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-c"])
+        compile
             .arg(&native)
             .arg("-o")
             .arg(&object)
             .output()
             .unwrap(),
-        Command::new("ar")
-            .arg("crs")
-            .arg(&archive)
-            .arg(&object)
-            .output()
-            .unwrap(),
+        linker.output().unwrap(),
     ] {
         assert!(
             output.status.success(),
@@ -1709,7 +1940,17 @@ fn generated_owner_execution_with_native(
     }
     let executable = fixture.0.join("program");
     let mut configuration = BuildConfiguration::new(executable.clone());
-    configuration.native_inputs = vec![NativeLinkInput::StaticArchive(archive)];
+    configuration.native_inputs = vec![match link {
+        OwnerLink::Static => NativeLinkInput::StaticArchive(library),
+        OwnerLink::Shared => NativeLinkInput::SharedLibrary(library),
+    }];
+    println!(
+        "owner/native link mode: {}",
+        match link {
+            OwnerLink::Static => "static",
+            OwnerLink::Shared => "shared",
+        }
+    );
     let cache = std::env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
@@ -1732,12 +1973,15 @@ fn generated_owner_execution_with_native(
     fs::remove_file(image).unwrap();
     fs::remove_file(facts).unwrap();
     let trace = fixture.0.join("native-trace");
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    command
         .env("ASH_OWNER_TRACE", &trace)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+        .stderr(Stdio::piped());
+    if matches!(link, OwnerLink::Shared) {
+        command.env("LD_LIBRARY_PATH", &fixture.0);
+    }
+    let mut child = command.spawn().unwrap();
     let started = Instant::now();
     while child.try_wait().unwrap().is_none() {
         if started.elapsed() > Duration::from_secs(30) {

@@ -46,7 +46,7 @@ through TASK-0037 bindings. Retain the open-Delta case and separate
 captured-control witness. Run connected compiler/Core/evaluator regressions
 with one Cargo job; keep milestone-wide regression pending between the named
 checkpoint gates in the [agent workflow](../project/agent-workflow.md). The
-last full gate was run at `868d0b43` and transferred by authenticated equality
+historical full gate was run at `868d0b43` and transferred by authenticated equality
 to retained `9fae971`. PR21's focused ownership delivery is retained at
 `d44138f`, PR22's focused scalar teardown delivery at `3435d62`, and PR23's
 checked scalar constants at `d09b99f`, and PR24's non-callable sentinels at
@@ -70,6 +70,85 @@ Typed State transport and hidden native requests remain refused. These focused
 checks do not complete the shared-runtime regression checkpoint.
 
 ## Discoveries
+
+Scalar destruction-input mapping A binds a producer's original `Int` input path
+to an ABI slot of that owner's exact original host destructor. Producer ABI
+input coverage is independent, so cleanup-only inputs need no native producer
+operand. Normalization orders targets, requires complete scalar coverage and
+preserves same-destructor-leaf consistency, source origins and full Type/Row
+contexts. Private claims carry the same relation; structural restoration and
+original-facts comparison retain distinct obligations.
+
+The initial focused slice verifies passive public admission and refusal,
+normalization/restoration/original correspondence, exact and one-short work,
+spent prefixes and fresh retries. The connected runtime now captures and narrows
+producer inputs into the reserved native guard vector before C; the typed
+teardown bridge accepts those native scalar variants. Ordinary Finish separately
+converts its explicit inputs before moving the guard.
+
+Focused run 975 executes the generated host through imported full Row Owner
+instances, copying and a private image. Normal Finish destroys owner `42` with
+explicit scalar operands `5` and `999`. Refusal destroys unpublished owner `9`
+once with captured operands `-7` and `18446744073709551615`, in original ABI
+order. The existing harness removes Ash sources before preparation and image
+and facts files before child execution. This is one real native lifecycle
+discriminator, not the remaining delivery matrix.
+
+Focused run 982 passes six metadata, bridge, pre-call, copied-Core, image and
+injected-callback controls. Complete pre-call work is 67 units, with exact,
+one-short, spent-prefix and fresh-retry checks. A scalar converter's work error
+retains its existing absent requested-count field. Complete image restoration
+uses 142,150 units with matching boundary checks. Six changed mapping claims
+fail independent original-facts and startup gates before provider selection;
+three missing, duplicate or wrong-role targets also fail semantic restoration.
+The copied-scope donor, node map and phantom Row claims fail direct scope
+authentication. Whole-Core checking rejects the altered request's stored row
+before scope checking and rejects the two metadata-only claims at the registry
+boundary. Counted opaque callbacks separately establish zero native calls on
+injected pre-call exhaustion and one snapshot cleanup after post-return work
+exhaustion. These injected callbacks are not real C execution.
+
+Focused run 983 passes five generated-host controls. Signed and unsigned range
+refusals execute zero C calls before a fresh computed-`Int` retry. A readable
+nonnull typed output owner is guarded and destroyed on a native error result.
+Retained Finish observes replaced `D` through explicit operands `5/123`, while
+host fallback retains captured `-7/U64MAX`. A dependent child's captured `77`
+is delivered beside its Current and exact live Enclosing pointer; C assertions
+and the trace establish child-before-parent destruction after retained-dependent
+blocking. The earlier direct-result/explicit-Finish discriminator also passes.
+The same source/image-removal harness applies throughout.
+
+Normal runs 992–998 at `9533ddd0` pass the complete owner target (77 tests),
+Buffer target (13), SQLite library (34), copying target (26), architecture
+target (47), expanded strict linting and formatting. All 1,737 source records
+and the recorded configuration remain equal throughout. The named set of 99
+native/header/tool files and four Rust tools matches before and after; this is
+not an environment-wide attestation or a full workspace checkpoint.
+
+Focused run 1000 additionally executes the reordered, cleanup-only capture
+witness through an actual shared library. Its source, native generator and
+result/trace oracle match the static case exactly: explicit Finish uses
+`5/999`, while unpublished fallback uses `-7/U64MAX`. Run 999 had completed
+Source, Final, Core, preparation and host building but failed before C because
+the test library was absent from the loader search path. The correction uses
+the existing Buffer harness's child-only shared-library search path; static
+callers keep their previous setup. Production code and budgets do not change.
+
+The initial setup and assertion failures remain recorded at their own pins;
+they did not justify changing product guards, image literal limits or errors.
+Delivery verification also requires current affected caller, architecture and
+strict/fmt gates.
+These changes grant no new State/view transport,
+private-data permission or ABI role. Ordinary Finish remains separate from the
+acquisition-time native snapshot.
+
+The current baseline for this increment is retained PR #35 at `5893a546`, after
+the complete ordered Owner Type/Row delivery. The last full checkpoint 748 at
+`63197b6` is historical, with PRs #34–#35 intervening; this initial slice claims
+no new full gate. Source `800*S`, Final `800*S`, separate compiler-arena rewrite
+`16*S`, independent Core `345*S`, preparation `125*P`, startup `22*B`, generic
+defaults and all depth/stack/checks remain unchanged. PM owns the next checkpoint;
+Main's signed human gate remains separate.
 
 The inherited-owner Row implementation retains a nominal Owner application with
 complete tagged actuals. Its exact prepared Owner declaration selects that form
@@ -168,8 +247,9 @@ The same selection works in owner acquisition, source finish and separate host
 destruction. Static/shared scalar hosts observe signed values and full unsigned
 64-bit values after sources and image/facts files are removed. An owner witness
 separately observes normal finish and partial-owner host destruction with fixed
-original operands; this does not generalize source-projected scalar teardown
-inputs or lifecycle callable privilege.
+original operands. That fixed-operand delivery did not generalize
+source-projected scalar teardown inputs or lifecycle callable privilege;
+the Mapping A increment above supplies the separately approved scalar mapping.
 
 The private image keeps signed i64 literal encoding and adds a canonical u64
 payload only above `i64::MAX`, retaining the full range of admitted scalar
@@ -213,10 +293,10 @@ discard. Injected readiness witnesses distinguish the I32 reply's ten-unit
 exact allowance from one-short atomic refusal (six units spent), prefixed
 allowances and two fresh retries. That status delivery required only checked
 passive status literals; ordinary exports and fixed native operands have their
-separate declaration and admission evidence above. Source-projected scalar
-teardown inputs and privileged lifecycle wrappers remain outside
-the current executable profile, so the shared-runtime checkpoint is not yet
-ready.
+separate declaration and admission evidence above. That status-only delivery
+left source-projected scalar teardown inputs outside its executable profile;
+the Mapping A increment above addresses those inputs. Privileged lifecycle
+wrappers and the remaining shared-runtime checkpoint keep their separate scope.
 
 Source control moves the same guard/activation through capture and resume.
 Owned discard runs acquired scopes' original finish once in structural order,

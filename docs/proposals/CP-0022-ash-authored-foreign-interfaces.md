@@ -126,6 +126,7 @@ abi_representation ::= member_reference | "void" | "pointer" "(" member_referenc
 call_contract ::= "operand" native_position "from" source_position operand_role
   | "operand" native_position "from" "constant" member_reference
   | "operand" native_position "from" "null"
+  | "destruction_operand" native_position "from" source_position "scalar"
   | "output" native_position "as" output_role
   | "outcome" outcome_test "{" [ outcome_fact { "," outcome_fact } ] "}"
   | "retained_dependents" "block" ;
@@ -239,6 +240,40 @@ Its outcome cases must describe consumed versus retained for every result.
 `retained_dependents block` forbids the native call when any transitive dependent
 guard remains retained; its sealed result is retention. This rule is mandatory
 on all consuming finish/destruction symbols in this profile.
+
+An owner-producing symbol may map an independent scalar input to an argument of
+its owner's exact original declared teardown symbol. In
+`destruction_operand q from p scalar`, `q` selects that destructor's zero-based
+ABI argument, while `p` selects a leaf of this producer's original source input
+product. The producer's checked owner result or typed output role selects the
+owner and destructor. Matching positions, names, types or values cannot replace
+that original relation.
+
+The target must already be a source-projected scalar operand of the original
+destructor. Reject Result, address, Current/Enclosing, output, constant, sentinel
+and incompatible-representation targets. Capture paths select canonical
+independent `Int` leaves, including cleanup-only inputs unused by the producer's
+C ABI. They select no arbitrary expression, mutable `D`, source Finish argument,
+State/view transport or future output. An ordinary legal computation may supply
+the producer's integer argument; this rule adds no origin restriction on that
+ordinary value.
+
+Every dynamic scalar destructor argument requires exactly one mapping on each
+producer of that owner. Extra, missing and duplicate targets reject. Arguments
+projecting the same original destructor source leaf must select the same producer
+input leaf, with separate narrowing for each original ABI representation.
+Existing constants, sentinels and guarded Current/Enclosing operands keep their
+rules and require no capture clause.
+
+Before the owner-producing C call, authenticate both original member/signature
+contexts and the owner result/output role, preserving complete ordered Type/Row
+actuals, original/copy correspondence and the Type-only native projection at
+full-vector indices. After ordinary native-input validation, project and narrow
+captures in destructor ABI order. Charge and reserve the complete destruction
+vector and invocation/report storage before C. Out-of-range capture produces
+the ordinary pre-call `ConversionFailed`; work/storage exhaustion is terminal.
+Both execute zero native calls and create no fallback owner. Existing refusal
+report limits and error precedence remain.
 
 These predicates and access promises are **foreign assumptions**, supplied by
 the author. Checking establishes their consistency and subsequent Ash use, not
@@ -669,6 +704,29 @@ scalar/address operands; it allocates no Ash result and runs no source handler
 or finish template. This permits safe destruction even after a terminal Ash
 allocation/conversion failure. Library authors supply the declaration in Ash;
 generated bridges apply it without Rust per-library policy.
+
+Dynamic scalar teardown operands are immutable native copies of the explicitly
+mapped producer inputs, captured before C. Sealed guard storage retains them
+independently of `D`, source handlers and ordinary Finish. A readable nonnull
+owner is guarded immediately on return, before fallible reporting/publication,
+whether a direct result or typed output and whether success or an error outcome.
+Existing unreadable/null rules remain.
+
+Every fallback uses the same reserved vector, including partial initialization,
+refusal/publication failure, terminal reporting/allocation/conversion failure,
+retained quarantine and dependency-ordered destruction. Current denotes the
+exact guarded owner and Enclosing an authenticated live dependency. Fallback
+performs no Ash evaluation, new scalar narrowing, result allocation or admission
+work. Retained-dependent blocking, consumed/retained disposition, once-only
+destruction, unresolved quarantine and incomplete reporting remain unchanged.
+
+Ordinary Finish keeps its explicit arguments and latest-payload behavior; it
+cannot rewrite the acquisition-time fallback snapshot. A consumed Finish prevents
+an extra destructor call. Replacing `D` changes neither guard identity nor the
+captured native operands. The complete mapping relation and original source
+origins belong to checked/prepared claims, independent Core, original/copied
+forests, canonical images/EXPECTED_FACTS and typed native bindings. Structural
+validation and original-facts authentication remain separate refusal boundaries.
 
 An unpublished owner is destroyed once on refusal/publication failure before
 failure delivery. A retained owner is inaccessible to source and destroyed in

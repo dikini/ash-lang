@@ -155,10 +155,11 @@ Resource and native instances retain all ordered Type/EffectRow arguments,
 including an owned slot that is not first. The resource handle's value type
 uses a saturated nominal application for a Type-only family and the resource
 application carrier for a row-bearing family; the scope retains the same
-complete tagged instance in either case. Higher-kinded resource formals,
-privileged lifecycle wrappers and source-projected scalar teardown operands
-remain unsupported
-by this profile. Exact native interpretation preserves ordinary outward handler
+complete tagged instance in either case. Higher-kinded resource formals and
+privileged lifecycle wrappers remain unsupported by this profile. Scalar
+teardown operands retain each producer's explicit mapping to the original
+destructor ABI, independently of the producer's own native operands. Exact
+native interpretation preserves ordinary outward handler
 rows and ordinary override precedence. Passive foreign-owner declarations have
 a separate admission boundary and supply no execution permission.
 

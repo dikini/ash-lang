@@ -112,6 +112,7 @@ foreign_call_contract ::=
     "operand" native_position "from" source_position foreign_operand_role
   | "operand" native_position "from" "constant" foreign_reference
   | "operand" native_position "from" "null"
+  | "destruction_operand" native_position "from" source_position "scalar"
   | "output" native_position "as" foreign_output_role
   | "outcome" outcome_test "{" [ outcome_fact { "," outcome_fact } ] "}"
   | "retained_dependents" "block" ;

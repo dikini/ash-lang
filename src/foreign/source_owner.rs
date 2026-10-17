@@ -884,6 +884,15 @@ pub(super) fn validate_owner_symbol(
             Some(*current_operand)
         }
     };
+    charge(work, symbol.destruction_operands().len(), span)?;
+    for capture in symbol.destruction_operands() {
+        check_source_path(
+            domain,
+            capture.source(),
+            work,
+            capture.origin().primary_span(),
+        )?;
+    }
     charge(work, symbol.operands().len(), span)?;
     for (index, operand) in symbol.operands().iter().enumerate() {
         match (operand.source(), operand.representation()) {
