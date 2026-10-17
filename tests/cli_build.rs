@@ -34,6 +34,26 @@ fn checked_tool(command: &mut Command) {
     );
 }
 
+fn native_host_cache(directory: Option<PathBuf>) -> PathBuf {
+    directory
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"))
+        .join("ffi-native-hosts")
+}
+
+#[test]
+fn native_host_cache_uses_the_override_or_repository_default() {
+    assert_eq!(
+        native_host_cache(None),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("ffi-native-hosts")
+    );
+    assert_eq!(
+        native_host_cache(Some(PathBuf::from("cache with spaces"))),
+        PathBuf::from("cache with spaces").join("ffi-native-hosts")
+    );
+}
+
 #[test]
 fn cli_links_distinct_static_shared_dependencies_and_preserves_output_on_link_refusal() {
     let fixture = Fixture::new(
@@ -95,8 +115,7 @@ main () = match perform Entry.call 40 {
     );
     let executable = fixture.0.join("linked program");
     fs::write(&executable, "existing program").unwrap();
-    let cache =
-        PathBuf::from(std::env::var_os("CARGO_TARGET_DIR").unwrap()).join("ffi-native-hosts");
+    let cache = native_host_cache(std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from));
     // First -> middle -> last is a real dependency chain with unique symbols.
     // Omitting last must fail at linkage without publishing over the old file.
     for complete in [false, true] {

@@ -36,14 +36,23 @@ ownership and the public CLI's native-file diagnostic.
 [PR #47](https://github.com/dikini/ash-lang/pull/47) publishes this standalone
 CLI repair on `codex/issue-45-native-library-inputs` against Main `354c76b`.
 
-The candidate passes all 20 binary tests, 41 diagnostic/ordinary/module CLI
-tests, five build-CLI tests and four existing builder controls. The real CLI
+The original candidate passed all 20 binary tests and 41 diagnostic/ordinary/module
+CLI tests, five build-CLI tests and four existing builder controls. The real CLI
 fixture requires distinct static-first, shared-middle and static-last symbols;
 it returns `42` after source removal. Omitting the last archive refuses linkage
 and preserves the existing destination. No Rust build driver supplies this
 observation. Formatting and strict focused all-feature Clippy pass. Markdown,
 links and authority checks add no finding; two pre-existing tool-documentation
 line-length findings remain.
+
+[Independent review](https://github.com/dikini/ash-lang/pull/47#discussion_r4304184287)
+requested a fallback for the fixture's optional `CARGO_TARGET_DIR`. The original
+test binary reproduces the unset-variable panic before child Cargo. The fixture
+now follows neighboring tests: use the override, or the repository's `target`,
+then `ffi-native-hosts`. Direct default/override checks avoid global environment
+mutation. That new test and the native fixture pass in the assigned shared cache,
+with formatting and strict affected Clippy. No additional native cache was built.
+The repair's pins, red/green logs and timings are retained with the other receipts.
 
 Focused commands, timings, hashes and equal source/configuration pins remain in
 `.worktrees/semantics-alignment-context-20261017/issue-45-native-inputs`.
