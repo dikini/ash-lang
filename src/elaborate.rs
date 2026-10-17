@@ -14907,6 +14907,17 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         result_span,
                     )?);
                 }
+                ElaborationTask::Check {
+                    expression,
+                    expected,
+                    kind,
+                } => self.step_check_expression(
+                    expression,
+                    expected,
+                    kind,
+                    &mut tasks,
+                    &declarations,
+                )?,
                 // Application argument inference may traverse solved types and rows.
                 // Keep the generic task dispatcher off that call chain.
                 ElaborationTask::AfterApplicationFunction {
@@ -15743,6 +15754,86 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(())
     }
 
+    // Handler clauses reenter checking through this worklist. Keep unrelated
+    // expression-task scratch outside the checking call chain.
+    #[inline(never)]
+    fn step_check_expression<'a>(
+        &mut self,
+        expression: &'a ResolvedExpr,
+        expected: ProvenancedType,
+        kind: CheckKind,
+        tasks: &mut ElaborationTaskBuffer<'a>,
+        declarations: &ElaboratedDeclarationBuffer,
+    ) -> Result<(), TypeError> {
+        match &expression.kind {
+            ResolvedExprKind::Function(function) => {
+                let expected = ProvenancedTypeOwner::new(expected);
+                let mut expected = self.expose_expected_function(expected, expression.span)?;
+                let ambient_rows = self.qualify_checking_type(&mut expected, false)?;
+                let (domain_ty, codomain_ty) =
+                    clone_function_parts_with_budget(&expected.ty, &mut self.type_work).map_err(
+                        |()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted),
+                    )?;
+                let domain_ty = IterativeTypeOwner::new(domain_ty);
+                let codomain_ty = IterativeTypeOwner::new(codomain_ty);
+                let (domain_provenance, codomain_provenance) =
+                    expected.provenance.function_parts(&expected.ty)?;
+                let domain = ProvenancedType {
+                    ty: domain_ty.into_inner(),
+                    provenance: domain_provenance,
+                };
+                let codomain = ProvenancedType {
+                    ty: codomain_ty.into_inner(),
+                    provenance: codomain_provenance,
+                };
+                tasks.push(ElaborationTask::CheckFunction {
+                    ambient_rows,
+                    parameter: &function.pattern,
+                    domain,
+                    codomain,
+                    body: FunctionBody::Block(&function.body),
+                    presentation: anonymous_function_origin(expression.span, function),
+                    function_type: expected.into_inner(),
+                    body_check: kind,
+                    infer_effects: false,
+                });
+            }
+            ResolvedExprKind::Block(block) => {
+                schedule_block(
+                    block,
+                    Some((expected, kind)),
+                    None,
+                    tasks,
+                    declarations.len(),
+                    &mut self.type_work,
+                )?;
+            }
+            ResolvedExprKind::Match(match_expression) => {
+                tasks.push(ElaborationTask::AfterMatchScrutinee {
+                    expression: match_expression,
+                    span: expression.span,
+                    expected: Some((expected, kind)),
+                });
+                tasks.push(ElaborationTask::Synthesize {
+                    expression: &match_expression.scrutinee,
+                    cause: None,
+                });
+            }
+            _ => {
+                tasks.push(ElaborationTask::FinishCheck {
+                    span: expression.span,
+                    expected,
+                    kind,
+                });
+                tasks.push(ElaborationTask::Synthesize {
+                    expression,
+                    cause: None,
+                });
+            }
+        }
+        Ok(())
+    }
+
     // Handler completion can check a clause using this same worklist. Keep
     // that reentry outside the large ordinary expression-dispatch frame.
     fn step_expression_task<'a>(
@@ -15790,77 +15881,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 declarations.push(ElaboratedDeclaration::Newtype(owner));
             }
             ElaborationTask::Synthesize { .. } => return Err(invalid_state()),
-            ElaborationTask::Check {
-                expression,
-                expected,
-                kind,
-            } => match &expression.kind {
-                ResolvedExprKind::Function(function) => {
-                    let expected = ProvenancedTypeOwner::new(expected);
-                    let mut expected = self.expose_expected_function(expected, expression.span)?;
-                    let ambient_rows = self.qualify_checking_type(&mut expected, false)?;
-                    let (domain_ty, codomain_ty) =
-                        clone_function_parts_with_budget(&expected.ty, &mut self.type_work)
-                            .map_err(|()| {
-                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                            })?;
-                    let domain_ty = IterativeTypeOwner::new(domain_ty);
-                    let codomain_ty = IterativeTypeOwner::new(codomain_ty);
-                    let (domain_provenance, codomain_provenance) =
-                        expected.provenance.function_parts(&expected.ty)?;
-                    let domain = ProvenancedType {
-                        ty: domain_ty.into_inner(),
-                        provenance: domain_provenance,
-                    };
-                    let codomain = ProvenancedType {
-                        ty: codomain_ty.into_inner(),
-                        provenance: codomain_provenance,
-                    };
-                    tasks.push(ElaborationTask::CheckFunction {
-                        ambient_rows,
-                        parameter: &function.pattern,
-                        domain,
-                        codomain,
-                        body: FunctionBody::Block(&function.body),
-                        presentation: anonymous_function_origin(expression.span, function),
-                        function_type: expected.into_inner(),
-                        body_check: kind,
-                        infer_effects: false,
-                    });
-                }
-                ResolvedExprKind::Block(block) => {
-                    schedule_block(
-                        block,
-                        Some((expected, kind)),
-                        None,
-                        tasks,
-                        declarations.len(),
-                        &mut self.type_work,
-                    )?;
-                }
-                ResolvedExprKind::Match(match_expression) => {
-                    tasks.push(ElaborationTask::AfterMatchScrutinee {
-                        expression: match_expression,
-                        span: expression.span,
-                        expected: Some((expected, kind)),
-                    });
-                    tasks.push(ElaborationTask::Synthesize {
-                        expression: &match_expression.scrutinee,
-                        cause: None,
-                    });
-                }
-                _ => {
-                    tasks.push(ElaborationTask::FinishCheck {
-                        span: expression.span,
-                        expected,
-                        kind,
-                    });
-                    tasks.push(ElaborationTask::Synthesize {
-                        expression,
-                        cause: None,
-                    });
-                }
-            },
+            ElaborationTask::Check { .. } => return Err(invalid_state()),
             ElaborationTask::CheckBlock {
                 block,
                 expected,
