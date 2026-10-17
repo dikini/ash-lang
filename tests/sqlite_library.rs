@@ -445,6 +445,32 @@ fn retained_product_simultaneous_statements_run_through_generated_host() {
 
 #[test]
 fn retained_product_copying_workload_runs_through_generated_host() {
+    product_copying_workload(NativeLinkInput::SharedLibrary(PathBuf::from(
+        "/usr/lib/x86_64-linux-gnu/libsqlite3.so.0",
+    )));
+}
+
+#[test]
+fn retained_product_copying_workload_links_genuine_static_sqlite() {
+    let archive = std::env::var_os("ASH_SQLITE_STATIC_ARCHIVE")
+        .map(PathBuf::from)
+        .expect("set ASH_SQLITE_STATIC_ARCHIVE to the genuine SQLite archive built by docs/tools/ash.md");
+    assert!(
+        archive.is_file(),
+        "static SQLite input: {}",
+        archive.display()
+    );
+    assert_sqlite_implementation_symbols(&archive);
+    println!(
+        "static SQLite implementation archive: bytes={} sha256={} path={}",
+        fs::metadata(&archive).unwrap().len(),
+        artifact_digest(&archive),
+        archive.display()
+    );
+    product_copying_workload(NativeLinkInput::StaticArchive(archive));
+}
+
+fn product_copying_workload(native_input: NativeLinkInput) {
     let fixture = Fixture::new();
     fs::write(
         fixture.0.join("sqlite.ash"),
@@ -456,9 +482,11 @@ fn retained_product_copying_workload_runs_through_generated_host() {
         include_str!("fixtures/sqlite-product/copying.ash"),
     )
     .unwrap();
-    execute_product_fixture(
+    execute_product_fixture_with_native_input(
         &fixture,
         "CopySession(Completed(Completed(Ok(Copied(42, TextValue(\"héllo 世界\"), BlobBytes([0, 255]), TextValue(\"\"), BlobBytes([]), NullText, NullBytes, TextValue(\"世界\\0tail\"))), Closed), Closed))",
+        None,
+        native_input,
     );
 }
 
@@ -969,11 +997,72 @@ fn artifact_digest(path: &Path) -> String {
     format!("{:x}", hash.finalize())
 }
 
+fn assert_sqlite_implementation_symbols(path: &Path) {
+    let output = Command::new("nm")
+        .args(["-g", "--defined-only"])
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "SQLite implementation symbols: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let symbols = String::from_utf8(output.stdout).unwrap();
+    for name in [
+        "sqlite3_initialize",
+        "sqlite3_open_v2",
+        "sqlite3_prepare_v2",
+        "sqlite3_step",
+        "sqlite3_column_text",
+        "sqlite3_column_blob",
+        "sqlite3_finalize",
+        "sqlite3_close",
+    ] {
+        let definitions = symbols
+            .lines()
+            .filter(|line| {
+                let mut fields = line.split_whitespace();
+                fields.next().is_some()
+                    && fields.next() == Some("T")
+                    && fields.next() == Some(name)
+                    && fields.next().is_none()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            definitions.len(),
+            1,
+            "SQLite implementation {name}: {path:?}"
+        );
+        println!(
+            "SQLite implementation {}: {}",
+            path.display(),
+            definitions[0]
+        );
+    }
+}
+
 fn execute_product_fixture_with_trace(
     fixture: &Fixture,
     expected: &str,
     counted: Option<(&str, bool)>,
 ) {
+    execute_product_fixture_with_native_input(
+        fixture,
+        expected,
+        counted,
+        NativeLinkInput::SharedLibrary(PathBuf::from("/usr/lib/x86_64-linux-gnu/libsqlite3.so.0")),
+    );
+}
+
+fn execute_product_fixture_with_native_input(
+    fixture: &Fixture,
+    expected: &str,
+    counted: Option<(&str, bool)>,
+    native_input: NativeLinkInput,
+) {
+    let static_sqlite = matches!(&native_input, NativeLinkInput::StaticArchive(_));
+    assert!(!static_sqlite || counted.is_none());
     let compiled = compile_path(RunConfiguration {
         entry: fixture.0.join("entry.ash"),
         roots: ModuleRoots::new([("ffi", &fixture.0)]).unwrap(),
@@ -985,9 +1074,7 @@ fn execute_product_fixture_with_trace(
     );
     let executable = fixture.0.join("program");
     let mut configuration = BuildConfiguration::new(executable.clone());
-    configuration.native_inputs = vec![NativeLinkInput::SharedLibrary(PathBuf::from(
-        "/usr/lib/x86_64-linux-gnu/libsqlite3.so.0",
-    ))];
+    configuration.native_inputs = vec![native_input];
     if counted.is_some() {
         let source = fixture.0.join("trace.c");
         let object = fixture.0.join("trace.o");
@@ -1046,6 +1133,27 @@ fn execute_product_fixture_with_trace(
     }
     let built = build_prepared(prepared)
         .unwrap_or_else(|failure| panic!("product SQLite native build: {failure:?}"));
+    if static_sqlite {
+        assert_sqlite_implementation_symbols(&executable);
+        let dynamic = Command::new("readelf")
+            .arg("-d")
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(
+            dynamic.status.success(),
+            "static SQLite host dependency witness: {}",
+            String::from_utf8_lossy(&dynamic.stderr)
+        );
+        let dynamic = String::from_utf8(dynamic.stdout).unwrap();
+        for needed in dynamic.lines().filter(|line| line.contains("(NEEDED)")) {
+            assert!(
+                !needed.to_ascii_lowercase().contains("sqlite"),
+                "static SQLite host retained a SQLite shared dependency: {needed}"
+            );
+            println!("static SQLite host dependency: {needed}");
+        }
+    }
     let generated = built.generated_source().parent().unwrap();
     let manifest = fs::read_to_string(generated.parent().unwrap().join("Cargo.toml")).unwrap();
     assert!(

@@ -6,6 +6,7 @@ use ash::{
     elaborate::{TypeError, TypeReason},
     module::ModuleRoots,
 };
+use sha2::{Digest, Sha256};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -23,6 +24,12 @@ main () = resource Memory.Arena<Fresh> arena = (Memory.ArenaConfig (64, 4)) {
     Memory.usage arena
 }
 ";
+
+#[derive(Clone, Copy, Debug)]
+enum Link {
+    Static,
+    Shared,
+}
 
 struct Fixture(PathBuf);
 
@@ -106,18 +113,26 @@ main () = resource Memory.Arena<Fresh> arena = (Memory.ArenaConfig (64, 4)) {
     );
 }
 
-fn run_scenario(executable: &Path, fixture: &Fixture, inject: bool) -> (String, String) {
+fn run_scenario(
+    executable: &Path,
+    fixture: &Fixture,
+    link: Link,
+    inject: bool,
+) -> (String, String) {
     let scenario = if inject { "injected" } else { "real" };
     let allocator_trace = fixture.0.join(format!("allocator-{scenario}"));
     let input_trace = fixture.0.join(format!("inputs-{scenario}"));
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    command
         .env("ASH_ARENA_TRACE", &allocator_trace)
         .env("ASH_ARENA_INPUT_TRACE", &input_trace)
         .env("ASH_ARENA_REFUSE_FIRST", if inject { "1" } else { "0" })
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+        .stderr(Stdio::piped());
+    if matches!(link, Link::Shared) {
+        command.env("LD_LIBRARY_PATH", &fixture.0);
+    }
+    let mut child = command.spawn().unwrap();
     let started = Instant::now();
     while child.try_wait().unwrap().is_none() {
         if started.elapsed() > Duration::from_secs(30) {
@@ -145,6 +160,15 @@ fn run_scenario(executable: &Path, fixture: &Fixture, inject: bool) -> (String, 
 
 #[test]
 fn generated_arena_host_checks_preflight_real_backing_and_exact_release() {
+    generated_arena_host(Link::Static);
+}
+
+#[test]
+fn generated_shared_arena_host_checks_preflight_real_backing_and_exact_release() {
+    generated_arena_host(Link::Shared);
+}
+
+fn generated_arena_host(link: Link) {
     // Change the checked original source before compilation, never its receipts.
     assert_eq!(LIBRARY.matches("name \"calloc\"").count(), 1);
     assert_eq!(LIBRARY.matches("name \"free\"").count(), 1);
@@ -156,27 +180,46 @@ fn generated_arena_host_checks_preflight_real_backing_and_exact_release() {
 
     let native = fixture.0.join("native_arena.c");
     let object = fixture.0.join("native_arena.o");
-    let archive = fixture.0.join("libash_arena_trace.a");
     fs::write(
         &native,
         include_str!("fixtures/source-arena/native_arena.c"),
     )
     .unwrap();
-    for output in [
-        Command::new("cc")
-            .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-c"])
-            .arg(&native)
-            .arg("-o")
-            .arg(&object)
-            .output()
-            .unwrap(),
-        Command::new("ar")
-            .arg("crs")
-            .arg(&archive)
-            .arg(&object)
-            .output()
-            .unwrap(),
-    ] {
+    let mut compiler = Command::new("cc");
+    compiler.args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-c"]);
+    if matches!(link, Link::Shared) {
+        compiler.arg("-fPIC");
+    }
+    let compiled_native = compiler
+        .arg(&native)
+        .arg("-o")
+        .arg(&object)
+        .output()
+        .unwrap();
+    let (native_library, linked_native) = match link {
+        Link::Static => {
+            let archive = fixture.0.join("libash_arena_trace.a");
+            let output = Command::new("ar")
+                .arg("crs")
+                .arg(&archive)
+                .arg(&object)
+                .output()
+                .unwrap();
+            (archive, output)
+        }
+        Link::Shared => {
+            let shared = fixture.0.join("libash_arena_trace.so");
+            let output = Command::new("cc")
+                .args(["-shared", "-Wl,-soname,libash_arena_trace.so"])
+                .arg(&object)
+                .arg("-o")
+                .arg(&shared)
+                .output()
+                .unwrap();
+            (shared, output)
+        }
+    };
+    for output in [compiled_native, linked_native] {
         assert!(
             output.status.success(),
             "{}",
@@ -189,10 +232,43 @@ fn generated_arena_host_checks_preflight_real_backing_and_exact_release() {
     fs::remove_file(fixture.0.join("arena.ash")).unwrap();
     let executable = fixture.0.join("arena-program");
     let mut configuration = build_configuration(executable.clone());
-    configuration.native_inputs = vec![NativeLinkInput::StaticArchive(archive)];
+    configuration.native_inputs = vec![match link {
+        Link::Static => NativeLinkInput::StaticArchive(native_library.clone()),
+        Link::Shared => NativeLinkInput::SharedLibrary(native_library.clone()),
+    }];
     let prepared = prepare_program(&compiled, configuration).unwrap();
     assert!(!prepared.generated_rust().contains("compile_path"));
-    build_prepared(prepared).unwrap();
+    let built = build_prepared(prepared).unwrap();
+    let generated = built.generated_source().parent().unwrap();
+    let retained = std::env::var_os("ASH_ARENA_EVIDENCE_DIR").map(|directory| {
+        let directory = PathBuf::from(directory).join(match link {
+            Link::Static => "static",
+            Link::Shared => "shared",
+        });
+        fs::create_dir_all(&directory).unwrap();
+        directory
+    });
+    for (role, path) in [
+        ("native_source", native),
+        ("native_object", object),
+        ("native_library", native_library),
+        ("executed_host", executable.clone()),
+        ("generated_source", built.generated_source().to_path_buf()),
+        ("private_image", generated.join("program-image.bin")),
+        ("expected_facts", generated.join("expected-facts.bin")),
+    ] {
+        let bytes = fs::read(&path).unwrap();
+        println!(
+            "arena {link:?} artifact {role}: bytes={} sha256={:x}",
+            bytes.len(),
+            Sha256::digest(&bytes)
+        );
+        if let Some(directory) = &retained {
+            fs::copy(&path, directory.join(role)).unwrap();
+        }
+    }
+    fs::remove_file(generated.join("program-image.bin")).unwrap();
+    fs::remove_file(generated.join("expected-facts.bin")).unwrap();
 
     let observations_after_first = concat!(
         "Observed(0, 0, 0, 0), ",
@@ -209,7 +285,7 @@ fn generated_arena_host_checks_preflight_real_backing_and_exact_release() {
         "calloc:6:4:1\nallocated:6\nfree:6\nfree:5\n"
     );
     for inject in [false, true] {
-        let (observations, trace) = run_scenario(&executable, &fixture, inject);
+        let (observations, trace) = run_scenario(&executable, &fixture, link, inject);
         let (first_observation, first_trace) = if inject {
             ("AllocationRefused", "injected-refusal:1:64:1\n")
         } else {
@@ -223,6 +299,10 @@ fn generated_arena_host_checks_preflight_real_backing_and_exact_release() {
             format!("({first_observation}, {observations_after_first}")
         );
         assert_eq!(trace, format!("{first_trace}{trace_after_first}"));
+        println!(
+            "arena {link:?} scenario {}: {observations}\n{trace}",
+            if inject { "injected" } else { "real" }
+        );
     }
 }
 

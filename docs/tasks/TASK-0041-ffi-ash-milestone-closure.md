@@ -51,6 +51,38 @@ reproducible instructions; no Main integration before that gate.
 
 ## Discoveries
 
+### Completing the generated-host linkage matrix
+
+The remaining cells were shared Arena and genuine static SQLite. The existing
+Arena harness now selects static or shared fixture linkage while keeping the
+same complete Ash scenario, negative-input probes, observations and exact
+release identities/order. Its shared child receives a local loader path. Real
+allocation and first-allocation injection remain separately labelled; injection
+does not demonstrate physical allocation exhaustion.
+
+The SQLite harness keeps shared linkage as its default and runs the entire
+unchanged copying fixture through an explicitly supplied implementation archive.
+The official 3.46.1 ZIP and header match the existing provenance pins; extracted
+`sqlite3.c` has SHA-256
+`6c35bc5f7f85eac9c49928bacbb02bb694b547aabf69197e058cca245ad80e83`.
+The recorded native build uses `cc -O2 -fPIC` and `ar`, with no SQLite macro
+overrides. Archive and executable define the checked `sqlite3_*` implementation
+symbols; the generated host has no SQLite `DT_NEEDED` entry. The full copying
+result retains integer, Unicode, bytes, empty/NULL and embedded-NUL distinctions.
+Static SQLite leaves the executable's platform Rust/libc dependencies intact.
+
+The first focused observation passes both new cells under unchanged work,
+stack, depth and admission policies. Each host is built after Ash source removal
+and executes after its external image/facts files are removed. Acquisition/build
+inputs and generated artifacts have separate roles and pins; the 108 explicitly
+named external files include the genuine archive bytes, source/header/object/ZIP
+and the added symbol-inspection tools. Before/after effective input records are
+equal. Missing `ASH_SQLITE_STATIC_ARCHIVE` is an explicit test failure.
+[Reproducible commands](../tools/ash.md#generated-host-linkage-checks) describe the
+native input and standalone execution boundary. Full affected owning-target and
+quality results, independent candidate review, retention and the next final
+checkpoint remain required; this finding does not close issue #7 or Main.
+
 Prepared declarations and historical experiment passes do not establish product
 completion. A receipt pins exact source/configuration and distinguishes executed
 properties, foreign assumptions, calibration deficits and unproved properties.

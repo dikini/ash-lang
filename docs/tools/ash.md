@@ -158,6 +158,72 @@ The source [copying SQLite library](../../libraries/README.md#copying-sqlite)
 uses explicit native inputs, source protocol and guarded temporary copy windows.
 These milestone additions have not yet integrated into Main.
 
+### Generated-host linkage checks
+
+The source Arena target runs its complete real-allocation and separately labelled
+injected-refusal scenarios with both static and shared fixture libraries. Shared
+execution sets its loader path only on the generated child process. The SQLite
+target runs the unchanged complete copying workload with the installed shared
+library and with a genuine implementation archive. The static case requires
+`ASH_SQLITE_STATIC_ARCHIVE`; a missing input fails the test.
+
+Build that archive once from the pinned official SQLite 3.46.1 amalgamation.
+Run these commands from the repository root, keeping the resulting inputs while
+the verification receipts depend on them:
+
+```sh
+task41_sqlite_dir=$(mktemp -d)
+python3 - "$task41_sqlite_dir" <<'PY'
+import hashlib, pathlib, sys, urllib.request, zipfile
+directory = pathlib.Path(sys.argv[1])
+archive = directory / 'sqlite-amalgamation-3460100.zip'
+with urllib.request.urlopen('https://www.sqlite.org/2024/sqlite-amalgamation-3460100.zip') as response:
+    contents = response.read()
+assert hashlib.sha256(contents).hexdigest() == '77823cb110929c2bcb0f5d48e4833b5c59a8a6e40cdea3936b99e199dbbe5784'
+archive.write_bytes(contents)
+with zipfile.ZipFile(archive) as source:
+    for name in ('sqlite3.c', 'sqlite3.h'):
+        (directory / name).write_bytes(source.read('sqlite-amalgamation-3460100/' + name))
+assert hashlib.sha256((directory / 'sqlite3.c').read_bytes()).hexdigest() == '6c35bc5f7f85eac9c49928bacbb02bb694b547aabf69197e058cca245ad80e83'
+assert hashlib.sha256((directory / 'sqlite3.h').read_bytes()).hexdigest() == '89b62c671c5964e137409ce034941b7b05a3af2c9875aba41f47f9483d0c2515'
+assert (directory / 'sqlite3.h').read_bytes() == pathlib.Path('foreign-adapter/vendor/sqlite3.h').read_bytes()
+PY
+cc -O2 -fPIC -c "$task41_sqlite_dir/sqlite3.c" -o "$task41_sqlite_dir/sqlite3.o"
+ar crs "$task41_sqlite_dir/libsqlite3.a" "$task41_sqlite_dir/sqlite3.o"
+export ASH_SQLITE_STATIC_ARCHIVE="$task41_sqlite_dir/libsqlite3.a"
+CARGO_BUILD_JOBS=1 cargo +1.97.1 test --all-features \
+  --test source_arena_execution --test sqlite_library -- --test-threads=1
+```
+
+This preserves SQLite's default compile-time options. Record the selected
+compiler/archive tools, options, source/header hashes and resulting archive
+hash for the actual build. The test checks defined `sqlite3_*` implementation
+symbols in the archive and executable, and rejects a SQLite `DT_NEEDED`
+dependency. Platform Rust/libc shared dependencies remain permitted. It removes
+Ash inputs before host construction and external image/facts before execution,
+then checks the complete copying result. The optional test-only
+`ASH_ARENA_EVIDENCE_DIR` and `ASH_SQLITE_DIAGNOSTIC_DIR` retain generated artifacts
+while the normal harness removes their execution-side source/image/facts files.
+
+For checkpoint or explicit receipt reuse, name the archive **bytes** as an
+external input; the environment variable alone pins only its path. Use the same
+declared source/header/archive/tool inputs for the before/after observations:
+
+```sh
+CARGO_BUILD_JOBS=1 cargo +1.97.1 xtask verify \
+  --input "$ASH_SQLITE_STATIC_ARCHIVE" \
+  --input "$task41_sqlite_dir/sqlite-amalgamation-3460100.zip" \
+  --input "$task41_sqlite_dir/sqlite3.c" \
+  --input "$task41_sqlite_dir/sqlite3.h" \
+  --input "$task41_sqlite_dir/sqlite3.o" \
+  --input /usr/bin/cc --input /usr/bin/ar --input /usr/bin/nm --input /usr/bin/readelf
+```
+
+Keep the other native/header/tool inputs required by the current checkpoint in
+that invocation. The [verification guide](../project/verification.md) defines
+the complete input and reuse boundary. These linkage tests do not close the
+milestone or authorize Main integration.
+
 ## Optional C header checking
 
 `check-ffi` checks authored foreign declarations against explicitly supplied C
