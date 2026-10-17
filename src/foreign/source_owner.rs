@@ -760,7 +760,7 @@ pub(super) fn validate_owner_symbol(
             )?;
             Some(*current_operand)
         }
-        PreparedOwnerCall::OutputAcquire {
+        role @ PreparedOwnerCall::OutputAcquire {
             application,
             output_operand,
             offset,
@@ -783,11 +783,14 @@ pub(super) fn validate_owner_symbol(
             {
                 return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
             }
-            let output = unary_payload(&fields[1], codec.output, span, work)?;
+            let (owner_field, offset_field) = role
+                .output_field_positions()
+                .ok_or_else(|| failure(ForeignAdmissionReason::InvalidSignature, span))?;
+            let output = unary_payload(&fields[owner_field], codec.output, span, work)?;
             let state = unary_payload(output, codec.nullable, span, work)?;
             check_state_application(state, owner, application, effect, work)?;
-            if offset.is_some() {
-                let output = unary_payload(&fields[2], codec.output, span, work)?;
+            if let Some(offset_field) = offset_field {
+                let output = unary_payload(&fields[offset_field], codec.output, span, work)?;
                 if unary_payload(output, codec.nullable, span, work)? != &Type::Int {
                     return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
                 }

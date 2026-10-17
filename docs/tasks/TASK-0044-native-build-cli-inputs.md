@@ -34,8 +34,10 @@ unchanged by this delivery.
 [Independent retained verification](https://github.com/dikini/ash-lang/pull/47#issuecomment-6240781721)
 confirms that result. [Issue #45 acceptance](https://github.com/dikini/ash-lang/issues/45#issuecomment-6240835155)
 is closed with its original body preserved. This completion record and active-index
-cleanup are carried by [PR #44](https://github.com/dikini/ash-lang/pull/44);
-their documentation retention remains pending there.
+cleanup are retained through [PR #44](https://github.com/dikini/ash-lang/pull/44)
+on `integration/semantics-alignment` at `b8fe5b3`, with
+[independent retained verification](https://github.com/dikini/ash-lang/pull/44#issuecomment-6241329442).
+Their final Main retention follows the combined semantics integration.
 
 [Independent re-review](https://github.com/dikini/ash-lang/pull/47#pullrequestreview-5559860887)
 found no actionable issue. The fresh `cargo xtask verify` passed all seven
@@ -82,7 +84,8 @@ production change.
 
 Required red/green, review, gate and retained receipts remain available. The
 compatible cache and live row/ABI branches are preserved. PM owns continuing
-TASK-0043. Retention of this completion record remains pending in PR #44.
+TASK-0043. This completion record is retained on the integration branch through
+PR #44; final Main documentation retention remains pending.
 
 ## Deviations
 

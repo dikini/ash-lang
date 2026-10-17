@@ -43,7 +43,7 @@ hand off its exact head before starting the next stacked branch.
 
 ## Progress
 
-The first delivery uses `codex/row-unification-backtracking` from `354c76b`.
+The original row delivery used `codex/row-unification-backtracking` from `354c76b`.
 Baseline source probes are retained at
 `.worktrees/semantics-alignment-context-20261017/baseline-review`; they identify
 the failing generic row, passing concrete/single-member controls and compiler
@@ -51,18 +51,25 @@ SHA-256 `8621279869c3c87f297c80406a0bad182651eb382fccec35be60a244d4ea0ebb`.
 [PR #44](https://github.com/dikini/ash-lang/pull/44) originally published the row
 repair at `f077fd4`, with
 [clear independent review](https://github.com/dikini/ash-lang/pull/44#pullrequestreview-5559465031).
-Its refresh targets `integration/semantics-alignment` at Main `1573ae8`, preserving
-the original elaborator and source-regression bytes. Main’s elaborator still
-equals the failing `354c76b` baseline, so the recorded red remains applicable.
-Current composition checks, re-review and row retention are separate obligations.
+The refresh at `c64f321` has
+[clear current re-review](https://github.com/dikini/ash-lang/pull/44#pullrequestreview-5560128656).
+Unsigned merge `b8fe5b32886cd0869a63e1e196218f5643118bc1` retains that exact tree
+on `integration/semantics-alignment`, preserving the original row implementation
+and test bytes.
+[Independent retained verification](https://github.com/dikini/ash-lang/pull/44#issuecomment-6241329442)
+confirms that result. Canonical source, configuration, tool, environment, external-input
+and selected artifact equality connects the current focused evidence to that
+retained result. Main remains `1573ae8`; its elaborator still equals the original
+failing baseline. The final combined gate and Main row retention remain pending.
 
 The refreshed composition passes 235 elaborator tests, 260 cases across the 13
 affected caller targets, 47 architecture tests, three concurrent native-image
 controls and the real mixed static/shared CLI fixture. All four retained CLI row
 probes return `() : Unit`. Formatting, strict all-target/all-feature Clippy and
 changed Markdown checks pass. Canonical source/configuration/tool/environment
-pins agree before and after those focused checks. Current re-review and row
-retention remain pending.
+pins agree before and after those focused checks. The subsequent task-results
+prose has separate metadata/manual-check evidence. These results support bounded
+row retention; the final combined gate and Main retention remain pending.
 
 The original frozen candidate passed 235 elaborator tests, 260 tests across 13
 affected caller targets, and all 47 architecture tests. The four new private row-choice
@@ -86,26 +93,59 @@ workspace gate. Exact model runtime remains unavailable.
 The refresh also carries TASK-0044 completion and active-index cleanup. Its CLI
 code is already retained on Main `1573ae8`, and
 [issue #45 acceptance is closed](https://github.com/dikini/ash-lang/issues/45#issuecomment-6240835155).
-That task-documentation retention remains pending in PR #44. The last fresh
-seven-stage gate is the issue #45 gate at Main `1573ae8`; it establishes no fresh
-workspace gate for the added row repair. Current refresh receipts belong in
+That task completion record and active-index cleanup are now retained on the
+integration branch through PR #44. Their final Main retention follows the combined
+semantics integration. The last fresh seven-stage gate is the issue #45 gate at
+Main `1573ae8`; it establishes no fresh workspace gate for the added row repair.
+Current refresh and retained receipts belong in
 `.worktrees/semantics-alignment-context-20261017/row-refresh-on-main1573`.
 
-The local ABI checkpoint `f52fac2` remains recoverable, based on the original row
-candidate. After row retention, refresh that separate package onto the integration
-branch and link issue #46 for the stale copy-window overview wording. Existing
-`ffi-base` detailed rules and implementation already admit bounded direct-provider
-sealed copy windows; this correction adds no capability or tag rewrite.
+The local ABI checkpoint `f52fac2` preserves the package paused for issue #45.
+It is now composed with integration `b8fe5b3` on
+`codex/foreign-output-abi-order`. The source regression passed owner-before-offset
+admission and rejected a consistently reordered offset-before-owner declaration
+before implementation. The saved package passed 68 focused unit tests, 14 source
+caller/output tests, five native tests and all 47 architecture tests. Its six
+statement hosts exercised both ABI orders, normal and invalid-tail returns,
+scalar refusal and private-data mutation.
+The refreshed composition passes those 68 affected unit tests, four row-choice
+controls, 14 source caller/output tests, five native tests and 47 architecture
+checks. The six current native hosts retain all twelve normal/injected
+executions across both output orders. Formatting and strict all-target/all-feature
+Clippy pass. Source, configuration, tool, environment and explicit external-input
+pins agree before and after all 14 focused commands. Changed Markdown has no new
+finding or broken link; the same 84 existing line-length findings remain.
+Independent review and verified retention of this package remain pending.
+The original receipts and explicit setup failures remain in
+`.worktrees/semantics-alignment-context-20261017/foreign-output-order`.
+
+This delivery prioritizes issue #46's overview, detailed-rule and tool-guide
+alignment. At `ffi-base`, the detailed rules and implementation already admitted
+bounded sealed copy windows in permitted direct provider phases. The overview
+and tool guide need correction; this adds no capability or tag rewrite. The
+privileged lifecycle-wrapper exclusion remains. Current composition receipts
+belong in
+`.worktrees/semantics-alignment-context-20261017/foreign-output-refresh-on-b8`.
 
 Acceptance remains separate for each original scope:
 
-- [ ] Row unification: regression, negative and resource evidence; independent
+- [x] Row unification: regression, negative and resource evidence; independent
   review; verified retention.
 - [ ] ABI-order outputs and connected documentation: focused and real-wrapper
   native evidence; independent review; verified retention.
 - [ ] Diagnostic precedence and primitive wording: focused evidence;
   independent review; verified retention.
 - [ ] Final combined verification and acceptance on the intended retaining ref.
+
+Delivered: the row repair, current focused/native evidence and independent
+review are retained on `integration/semantics-alignment` at `b8fe5b3` through
+PR #44. The record is
+`.worktrees/semantics-alignment-context-20261017/row-refresh-on-main1573/integration/retained-handoff.json`.
+
+Remaining: ABI/output repair and issue #46 documentation, diagnostic precedence,
+primitive wording, the final combined fresh workspace gate and verified Main
+retention. These original combined obligations remain unchecked above.
+Owner: the developer under PM's checkpoint and review assignment.
 
 ## Verification
 
@@ -116,6 +156,17 @@ refusal, rollback and exact-budget fresh retries on a 256 KiB stack. Run the
 affected elaborator/row/source callers and architecture tests, formatting and
 strict focused Clippy. Check changed Markdown links, artifact structure and
 authority manually.
+
+For ABI-order outputs, preserve distinct owner/offset slots, exact input,
+representation, status, ownership and lifetime checks. Test both orders through
+source, independent Core/image validation and a real native wrapper. Verify
+initially null output storage, an independent copied offset, child-before-parent
+completion and terminal invalid-tail extraction with no ordinary fallback,
+no C replay and exactly one unpublished-owner cleanup. Use the existing
+input-derived native preparation/startup meters for the product-library image
+fixture. Run affected owner contract/admission, Core, post-record and native
+callers, formatting, strict focused Clippy, architecture and manual specification
+checks. No production work coefficient or limit changes are part of this repair.
 
 These PR checks are partial verification. The next fresh full workspace gate
 belongs to the developer at the connected output/checking completion boundary,
@@ -148,7 +199,18 @@ owned-discard execution; an inconsistent expected row retains its original
 binding-initializer diagnostic obligation. The specification, rather than that
 old assertion, governs admission.
 
+Output acquisition already retains its owner's ABI operand and the offset's
+separate ABI operand. Passive preparation incorrectly orders those roles, while
+signature admission, Core lineage and runtime reporting assume owner field one
+and offset field two. Deriving report positions from the retained coordinates
+implements the current ABI-order rule. The guard still records a readable
+non-null owner before fallible offset extraction; output order supplies no new
+ownership or native-call authority. Reversed native execution uses a dedicated
+reversed-signature wrapper that forwards to SQLite in its actual argument order;
+the reversed declaration naming SQLite directly remains admission-only.
+
 ## Deviations
 
-None. The first repair implements the current row rule without changing the
-language specification. Later packages remain separate.
+None. The row and output repairs implement current rules. The connected
+acquisition and copy-window wording corrections add no semantic mechanism.
+The diagnostic package remains separate.
