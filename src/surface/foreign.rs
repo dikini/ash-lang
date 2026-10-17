@@ -158,6 +158,11 @@ pub enum SurfaceForeignNativePosition {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfaceForeignContract {
+    DestructionOperand {
+        position: SurfaceForeignNativePosition,
+        source: SurfaceForeignSourcePosition,
+        span: Span,
+    },
     Operand {
         position: SurfaceForeignNativePosition,
         source: SurfaceForeignOperandSource,

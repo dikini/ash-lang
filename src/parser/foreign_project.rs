@@ -241,6 +241,12 @@ pub(super) fn validate_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<()
             let role = head_word(node, tokens)?;
             word(&mut shape, role)?;
             match role {
+                "destruction_operand" => {
+                    shape.node(NodeKind::ForeignNativePosition)?;
+                    word(&mut shape, "from")?;
+                    shape.node(NodeKind::ForeignSourcePosition)?;
+                    word(&mut shape, "scalar")?;
+                }
                 "operand" => {
                     shape.node(NodeKind::ForeignNativePosition)?;
                     word(&mut shape, "from")?;
@@ -861,6 +867,19 @@ fn contract(
 ) -> Result<SurfaceForeignContract, ProjectionError> {
     let span = node_span(source, node, tokens)?;
     Ok(match head_word(node, tokens)? {
+        "destruction_operand" => SurfaceForeignContract::DestructionOperand {
+            position: native_position(
+                source,
+                only_child_of_kind(node, NodeKind::ForeignNativePosition)?,
+                tokens,
+            )?,
+            source: position(
+                source,
+                only_child_of_kind(node, NodeKind::ForeignSourcePosition)?,
+                tokens,
+            )?,
+            span,
+        },
         "operand" => {
             let operand_source =
                 if let Some(ref_node) = optional_child_of_kind(node, NodeKind::ForeignReference)? {

@@ -698,6 +698,29 @@ impl PreparedForeignCall {
     }
 }
 
+/// An immutable producer input mapped to the original destructor's ABI slot.
+#[derive(Debug)]
+pub struct PreparedDestructionOperand {
+    position: usize,
+    source: Vec<usize>,
+    origin: Origin,
+}
+
+impl PreparedDestructionOperand {
+    #[must_use]
+    pub const fn position(&self) -> usize {
+        self.position
+    }
+    #[must_use]
+    pub fn source(&self) -> &[usize] {
+        &self.source
+    }
+    #[must_use]
+    pub const fn origin(&self) -> &Origin {
+        &self.origin
+    }
+}
+
 /// Prepared ABI facts for one symbol, before resolved type checking.
 #[derive(Debug)]
 pub struct PreparedForeignSymbol {
@@ -707,6 +730,7 @@ pub struct PreparedForeignSymbol {
     parameters: Vec<PreparedForeignParameter>,
     native_type_projection: Vec<usize>,
     operands: Vec<PreparedForeignOperand>,
+    destruction_operands: Vec<PreparedDestructionOperand>,
     result: PreparedAbiResult,
     call: PreparedForeignCall,
     access_result: Option<PreparedAccessResult>,
@@ -737,6 +761,10 @@ impl PreparedForeignSymbol {
     #[must_use]
     pub fn operands(&self) -> &[PreparedForeignOperand] {
         &self.operands
+    }
+    #[must_use]
+    pub fn destruction_operands(&self) -> &[PreparedDestructionOperand] {
+        &self.destruction_operands
     }
     #[must_use]
     pub const fn result(&self) -> PreparedAbiResult {
@@ -1077,6 +1105,7 @@ pub(crate) fn prepare_foreign_library_with_budget(
         }
     }
     validate_owner_teardowns(&prepared, work)?;
+    validate_destruction_operands(&prepared, work)?;
     access_contract::validate_preserving_symbols(&prepared, work)?;
     Ok(prepared)
 }
@@ -1322,6 +1351,7 @@ fn prepare_symbol(
         parameters: Vec::new(),
         native_type_projection: Vec::new(),
         operands: Vec::new(),
+        destruction_operands: Vec::new(),
         result: abi_result(library, &source.abi_result, work)?,
         call: PreparedForeignCall::Scalar {
             outcomes: Vec::new(),
@@ -1374,6 +1404,49 @@ fn prepare_symbol(
             kind,
             origin: Origin::Source(parameter.span),
         });
+    }
+    charge(work, source.contracts.len(), source.span)?;
+    let capture_count = source
+        .contracts
+        .iter()
+        .filter(|contract| matches!(contract, SurfaceForeignContract::DestructionOperand { .. }))
+        .count();
+    reserve(&mut symbol.destruction_operands, capture_count, source.span)?;
+    for contract in &source.contracts {
+        charge(work, 1, source.span)?;
+        if let SurfaceForeignContract::DestructionOperand {
+            position,
+            source,
+            span,
+        } = contract
+        {
+            let PreparedNativePosition::Argument(position) = native_position(position, work)?
+            else {
+                return Err(failure(ForeignContractReason::OperandCoverage, *span));
+            };
+            let path = source_path(source, &function.domain, work)?;
+            // Pay both the search and shift before canonical target insertion.
+            charge(
+                work,
+                symbol.destruction_operands.len().saturating_mul(2),
+                *span,
+            )?;
+            let index = match symbol
+                .destruction_operands
+                .binary_search_by_key(&position, |value| value.position)
+            {
+                Ok(_) => return Err(failure(ForeignContractReason::OperandCoverage, *span)),
+                Err(index) => index,
+            };
+            symbol.destruction_operands.insert(
+                index,
+                PreparedDestructionOperand {
+                    position,
+                    source: path,
+                    origin: Origin::Source(*span),
+                },
+            );
+        }
     }
     if !library.owners.is_empty() {
         charge(work, source.contracts.len(), source.span)?;
@@ -1494,7 +1567,8 @@ fn prepare_symbol(
     for contract in &source.contracts {
         charge(work, 1, source.span)?;
         match contract {
-            SurfaceForeignContract::Operand { .. } => {}
+            SurfaceForeignContract::Operand { .. }
+            | SurfaceForeignContract::DestructionOperand { .. } => {}
             SurfaceForeignContract::Output {
                 position,
                 role,
@@ -1905,6 +1979,7 @@ fn prepare_owner_symbol_body(
     for contract in &source.contracts {
         charge(work, 1, source.span)?;
         match contract {
+            SurfaceForeignContract::DestructionOperand { .. } => {}
             SurfaceForeignContract::Operand {
                 position,
                 source: input,
@@ -2486,6 +2561,91 @@ fn validate_owner_teardowns(
     Ok(())
 }
 
+fn validate_destruction_operands(
+    library: &PreparedForeignLibrary,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ForeignContractError> {
+    charge(work, library.symbols.len(), library.origin.primary_span())?;
+    for producer in &library.symbols {
+        let span = producer.origin.primary_span();
+        let application = match producer.owner_call() {
+            Some(
+                PreparedOwnerCall::Acquire { application, .. }
+                | PreparedOwnerCall::OutputAcquire { application, .. },
+            ) => application,
+            _ if producer.destruction_operands.is_empty() => continue,
+            _ => return Err(failure(ForeignContractReason::OperandRole, span)),
+        };
+        charge(work, library.symbols.len().saturating_add(1), span)?;
+        let owner = library
+            .owners
+            .get(application.owner)
+            .ok_or_else(|| failure(ForeignContractReason::OperandRole, span))?;
+        let destructor = library
+            .symbols
+            .iter()
+            .find(|symbol| symbol.member_index == owner.teardown_member)
+            .ok_or_else(|| failure(ForeignContractReason::UnknownMember, span))?;
+        if !matches!(destructor.owner_call(), Some(PreparedOwnerCall::Teardown { application: actual, .. } | PreparedOwnerCall::StatusTeardown { application: actual, .. }) if actual.owner == application.owner)
+        {
+            return Err(failure(ForeignContractReason::OperandRole, span));
+        }
+        charge(
+            work,
+            destructor
+                .operands
+                .len()
+                .saturating_add(producer.destruction_operands.len()),
+            span,
+        )?;
+        let mut next = 0;
+        for (position, operand) in destructor.operands.iter().enumerate() {
+            let PreparedOperandSource::Source(original_path) = &operand.source else {
+                continue;
+            };
+            if !matches!(operand.representation, PreparedRepresentation::Scalar(_)) {
+                return Err(failure(ForeignContractReason::OperandRole, span));
+            }
+            let capture = producer
+                .destruction_operands
+                .get(next)
+                .filter(|capture| capture.position == position)
+                .ok_or_else(|| failure(ForeignContractReason::OperandCoverage, span))?;
+            let capture_span = capture.origin.primary_span();
+            if capture.source.is_empty() || !private_span_within(span, capture_span) {
+                return Err(failure(ForeignContractReason::SourcePosition, capture_span));
+            }
+            for previous in &producer.destruction_operands[..next] {
+                charge(work, 1, capture_span)?;
+                let previous_operand = destructor
+                    .operands
+                    .get(previous.position)
+                    .ok_or_else(|| failure(ForeignContractReason::OperandCoverage, capture_span))?;
+                let PreparedOperandSource::Source(previous_path) = &previous_operand.source else {
+                    return Err(failure(ForeignContractReason::OperandRole, capture_span));
+                };
+                charge(
+                    work,
+                    original_path
+                        .len()
+                        .saturating_add(previous_path.len())
+                        .saturating_add(capture.source.len())
+                        .saturating_add(previous.source.len()),
+                    capture_span,
+                )?;
+                if original_path == previous_path && capture.source != previous.source {
+                    return Err(failure(ForeignContractReason::SourcePosition, capture_span));
+                }
+            }
+            next += 1;
+        }
+        if next != producer.destruction_operands.len() {
+            return Err(failure(ForeignContractReason::OperandCoverage, span));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2703,6 +2863,12 @@ pub(crate) struct PrivatePreparedOperandParts {
     pub(crate) span: Span,
 }
 
+pub(crate) struct PrivatePreparedDestructionOperandParts {
+    pub(crate) position: usize,
+    pub(crate) source: Vec<usize>,
+    pub(crate) span: Span,
+}
+
 pub(crate) struct PrivatePreparedOutcomeParts {
     pub(crate) predicates: Vec<PreparedOutcomePredicate>,
     pub(crate) span: Span,
@@ -2734,6 +2900,7 @@ pub(crate) struct PrivatePreparedSymbolParts {
     pub(crate) parameters: Vec<PrivatePreparedParameterParts>,
     pub(crate) native_type_projection: Vec<usize>,
     pub(crate) operands: Vec<PrivatePreparedOperandParts>,
+    pub(crate) destruction_operands: Vec<PrivatePreparedDestructionOperandParts>,
     pub(crate) result: PreparedAbiResult,
     pub(crate) call: PrivatePreparedCall,
     pub(crate) access_result: Option<PreparedAccessResult>,
@@ -3624,6 +3791,18 @@ pub(crate) fn restore_prepared_library(
                 symbol.span,
             ));
         }
+        charge(work, symbol.destruction_operands.len(), symbol.span)?;
+        let mut previous_capture = None;
+        for capture in &symbol.destruction_operands {
+            charge(work, capture.source.len().saturating_add(1), capture.span)?;
+            if !private_span_within(symbol.span, capture.span)
+                || capture.source.is_empty()
+                || previous_capture.is_some_and(|previous| previous >= capture.position)
+            {
+                return Err(failure(ForeignContractReason::SourcePosition, capture.span));
+            }
+            previous_capture = Some(capture.position);
+        }
         charge(
             work,
             symbol
@@ -4001,14 +4180,21 @@ pub(crate) fn restore_prepared_library(
             .parameters
             .len()
             .checked_add(value.operands.len())
+            .and_then(|count| count.checked_add(value.destruction_operands.len()))
             .and_then(|count| count.checked_add(value.call.outcomes().len()))
             .ok_or_else(|| failure(ForeignContractReason::WorkExhausted, value.span))?;
         charge(work, count, value.span)?;
         let mut parameters = Vec::new();
         let mut operands = Vec::new();
+        let mut destruction_operands = Vec::new();
         let mut outcomes = Vec::new();
         reserve(&mut parameters, value.parameters.len(), value.span)?;
         reserve(&mut operands, value.operands.len(), value.span)?;
+        reserve(
+            &mut destruction_operands,
+            value.destruction_operands.len(),
+            value.span,
+        )?;
         reserve(&mut outcomes, value.call.outcomes().len(), value.span)?;
         for parameter in value.parameters {
             parameters.push(PreparedForeignParameter {
@@ -4025,6 +4211,13 @@ pub(crate) fn restore_prepared_library(
                 representation: operand.representation,
                 source: operand.source,
                 origin: Origin::Source(operand.span),
+            });
+        }
+        for capture in value.destruction_operands {
+            destruction_operands.push(PreparedDestructionOperand {
+                position: capture.position,
+                source: capture.source,
+                origin: Origin::Source(capture.span),
             });
         }
         let call = match value.call {
@@ -4048,12 +4241,14 @@ pub(crate) fn restore_prepared_library(
             parameters,
             native_type_projection: value.native_type_projection,
             operands,
+            destruction_operands,
             result: value.result,
             call,
             access_result: value.access_result,
             origin: Origin::Source(value.span),
         });
     }
+    validate_destruction_operands(&result, work)?;
     Ok(result)
 }
 
@@ -4171,6 +4366,7 @@ pub(crate) fn same_prepared_library_parts(
             || left.parameters.len() != right.parameters.len()
             || left.native_type_projection.len() != right.native_type_projection.len()
             || left.operands.len() != right.operands.len()
+            || left.destruction_operands.len() != right.destruction_operands.len()
             || left.outcomes().len() != right.call.outcomes().len()
             || !names_equal(&left.name, &right.name, right.span, work)?
             || !names_equal(&left.native_name, &right.native_name, right.span, work)?
@@ -4200,6 +4396,26 @@ pub(crate) fn same_prepared_library_parts(
         charge(work, right.native_type_projection.len(), right.span)?;
         if left.native_type_projection != right.native_type_projection {
             return Ok(false);
+        }
+        for (left, right) in left
+            .destruction_operands
+            .iter()
+            .zip(&right.destruction_operands)
+        {
+            charge(
+                work,
+                left.source
+                    .len()
+                    .saturating_add(right.source.len())
+                    .saturating_add(1),
+                right.span,
+            )?;
+            if left.position != right.position
+                || left.source != right.source
+                || !private_same_source_origin(&left.origin, right.span, work)?
+            {
+                return Ok(false);
+            }
         }
         for (left, right) in left.parameters.iter().zip(&right.parameters) {
             charge(work, 1, right.span)?;
@@ -4328,6 +4544,145 @@ mod owner_normalization_tests {
             ModuleId::from(source.id()),
             crate::parser::project_module(&source, &tree).unwrap(),
         )
+    }
+
+    fn destruction_capture_source() -> String {
+        OWNED_BYTES
+            .replace("Allocate<R> : Int ->", "Allocate<R> : (Int, (Int, Int)) ->")
+            .replace("operand 1 from constant One", "operand 1 from constant One\n        destruction_operand 2 from 1.0 scalar\n        destruction_operand 0 from 1.1 scalar")
+            .replace("Free<R> : State<R> ->", "Free<R> : (Int, State<R>, Int) ->")
+            .replace("abi (pointer(Address)) -> void", "abi (Size, pointer(Address), Size) -> void")
+            .replace("operand 0 from 0 current", "operand 0 from 2 scalar\n        operand 1 from 1 current\n        operand 2 from 0 scalar")
+            .replace("consumed 0", "consumed 1")
+    }
+
+    #[test]
+    fn destruction_capture_preparation_and_original_facts_keep_complete_paid_correspondence() {
+        let text = destruction_capture_source();
+        let (module, surface) = source(&text);
+        let authored = &surface.foreign_libraries[0];
+        let mut work = TypeWorkBudget::default();
+        let prepared = prepare_foreign_library_with_budget(module, authored, &mut work).unwrap();
+        let exact = work.used();
+        let captures = prepared.symbols()[0].destruction_operands();
+        assert_eq!(captures.len(), 2);
+        assert_eq!(
+            (captures[0].position(), captures[0].source()),
+            (0, &[1, 1][..])
+        );
+        assert_eq!(
+            (captures[1].position(), captures[1].source()),
+            (2, &[1, 0][..])
+        );
+        for prefix in [0, 13] {
+            let mut short = TypeWorkBudget::with_limit(prefix + exact - 1);
+            short.charge(prefix).unwrap();
+            assert_eq!(
+                prepare_foreign_library_with_budget(module, authored, &mut short)
+                    .unwrap_err()
+                    .reason(),
+                ForeignContractReason::WorkExhausted
+            );
+            for _ in 0..2 {
+                let mut retry = TypeWorkBudget::with_limit(prefix + exact);
+                retry.charge(prefix).unwrap();
+                prepare_foreign_library_with_budget(module, authored, &mut retry).unwrap();
+                assert_eq!(retry.used(), prefix + exact);
+            }
+        }
+        let mut restore = TypeWorkBudget::default();
+        restore_prepared_library(parts(&prepared), &mut restore).unwrap();
+        let mut compare = TypeWorkBudget::default();
+        assert!(same_prepared_library_parts(&prepared, &parts(&prepared), &mut compare).unwrap());
+        for (is_restore, required) in [(true, restore.used()), (false, compare.used())] {
+            for prefix in [0, 13] {
+                let mut short = TypeWorkBudget::with_limit(prefix + required - 1);
+                short.charge(prefix).unwrap();
+                let reason = if is_restore {
+                    restore_prepared_library(parts(&prepared), &mut short)
+                        .unwrap_err()
+                        .reason()
+                } else {
+                    same_prepared_library_parts(&prepared, &parts(&prepared), &mut short)
+                        .unwrap_err()
+                        .reason()
+                };
+                assert_eq!(reason, ForeignContractReason::WorkExhausted);
+                let mut exact = TypeWorkBudget::with_limit(prefix + required);
+                exact.charge(prefix).unwrap();
+                if is_restore {
+                    restore_prepared_library(parts(&prepared), &mut exact).unwrap();
+                } else {
+                    assert!(
+                        same_prepared_library_parts(&prepared, &parts(&prepared), &mut exact)
+                            .unwrap()
+                    );
+                }
+                assert_eq!(exact.used(), prefix + required);
+            }
+        }
+        for change in 0..5 {
+            let mut forged = parts(&prepared);
+            match change {
+                0 => forged.symbols[0].destruction_operands[0].source = vec![1, 0],
+                1 => forged.symbols[0].destruction_operands[0].position = 1,
+                2 => {
+                    forged.symbols[0].destruction_operands[0].span =
+                        forged.symbols[0].destruction_operands[1].span
+                }
+                3 => forged.symbols[0].destruction_operands[0].source.clear(),
+                _ => forged.symbols[0].destruction_operands[1].position = 0,
+            }
+            assert!(
+                !same_prepared_library_parts(&prepared, &forged, &mut TypeWorkBudget::default())
+                    .unwrap(),
+                "original record mutation {change}"
+            );
+            if matches!(change, 1 | 3 | 4) {
+                assert!(restore_prepared_library(forged, &mut TypeWorkBudget::default()).is_err());
+            }
+        }
+        for (invalid, expected) in [
+            (
+                text.replace("        destruction_operand 2 from 1.0 scalar\n", ""),
+                ForeignContractReason::OperandCoverage,
+            ),
+            (
+                text.replace("destruction_operand 2 from", "destruction_operand 0 from"),
+                ForeignContractReason::OperandCoverage,
+            ),
+            (
+                text.replace(
+                    "destruction_operand 0 from",
+                    "destruction_operand result from",
+                ),
+                ForeignContractReason::OperandCoverage,
+            ),
+            (
+                text.replace("destruction_operand 0 from", "destruction_operand 1 from"),
+                ForeignContractReason::OperandCoverage,
+            ),
+            (
+                text.replace("(Int, (Int, Int)) ->", "(Int, (Int, Bool)) ->"),
+                ForeignContractReason::SourcePosition,
+            ),
+            (
+                text.replace("operand 0 from 2 scalar", "operand 0 from 0 scalar"),
+                ForeignContractReason::SourcePosition,
+            ),
+        ] {
+            let (module, surface) = source(&invalid);
+            assert_eq!(
+                prepare_foreign_library_with_budget(
+                    module,
+                    &surface.foreign_libraries[0],
+                    &mut TypeWorkBudget::default()
+                )
+                .unwrap_err()
+                .reason(),
+                expected
+            );
+        }
     }
 
     #[test]
@@ -4623,6 +4978,15 @@ mod owner_normalization_tests {
                     native_name: value.native_name.clone(),
                     parameters: parameters(&value.parameters),
                     native_type_projection: value.native_type_projection.clone(),
+                    destruction_operands: value
+                        .destruction_operands
+                        .iter()
+                        .map(|capture| PrivatePreparedDestructionOperandParts {
+                            position: capture.position,
+                            source: capture.source.clone(),
+                            span: capture.origin.primary_span(),
+                        })
+                        .collect(),
                     result: value.result,
                     span: value.origin.primary_span(),
                     operands: value

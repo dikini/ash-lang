@@ -526,6 +526,7 @@ pub(crate) struct PureImage {
     prepared_access_keys: Vec<Slice>,
     prepared_owner_arguments: Vec<PreparedOwnerArgumentRecord>,
     prepared_operands: Vec<PreparedOperandRecord>,
+    prepared_destruction_operands: Vec<PreparedDestructionOperandRecord>,
     prepared_paths: Vec<u32>,
     prepared_projections: Vec<u32>,
     prepared_predicates: Vec<PreparedPredicateRecord>,
@@ -1565,7 +1566,7 @@ struct DecodedType {
 
 // A private layout marker for the matching compiler/runtime only. Neither the
 // embedded byte sequence nor its numeric tags promise compatibility.
-const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x10";
+const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x11";
 
 enum WireOutput<'a> {
     Encoded(Vec<u8>),
@@ -2509,6 +2510,7 @@ impl PureImage {
         writer.table(&self.prepared_access_keys)?;
         writer.table(&self.prepared_owner_arguments)?;
         writer.table(&self.prepared_operands)?;
+        writer.table(&self.prepared_destruction_operands)?;
         writer.table(&self.prepared_paths)?;
         writer.table(&self.prepared_projections)?;
         writer.table(&self.prepared_predicates)?;
@@ -2735,6 +2737,7 @@ impl PureImage {
             prepared_access_keys: reader.table()?,
             prepared_owner_arguments: reader.table()?,
             prepared_operands: reader.table()?,
+            prepared_destruction_operands: reader.table()?,
             prepared_paths: reader.table()?,
             prepared_projections: reader.table()?,
             prepared_predicates: reader.table()?,
@@ -2821,6 +2824,7 @@ impl PureImage {
             || !self.prepared_access_keys.is_empty()
             || !self.prepared_owner_arguments.is_empty()
             || !self.prepared_operands.is_empty()
+            || !self.prepared_destruction_operands.is_empty()
             || !self.prepared_paths.is_empty()
             || !self.prepared_projections.is_empty()
             || !self.prepared_predicates.is_empty()
@@ -6768,6 +6772,13 @@ struct PreparedOperandRecord {
 }
 
 #[derive(Clone, Copy, Debug)]
+struct PreparedDestructionOperandRecord {
+    position: u32,
+    source: Slice,
+    span: SpanRecord,
+}
+
+#[derive(Clone, Copy, Debug)]
 struct PreparedPredicateRecord {
     // Initial supported predicates all select Result. Encoding must explicitly
     // refuse Argument instead of flattening it to this record.
@@ -6798,6 +6809,7 @@ struct PreparedSymbolRecord {
     parameters: Slice,
     native_type_projection: Slice,
     operands: Slice,
+    destruction_operands: Slice,
     result: Option<RepresentationRecord>,
     outcomes: Slice,
     owner_call: Option<PreparedOwnerCallRecord>,
@@ -7010,6 +7022,7 @@ wire_struct!(
     span
 );
 wire_struct!(PreparedOperandRecord, representation, source, span);
+wire_struct!(PreparedDestructionOperandRecord, position, source, span);
 wire_struct!(PreparedPredicateRecord, value);
 wire_struct!(PreparedOutcomeRecord, predicates, span);
 wire_struct!(
@@ -7029,6 +7042,7 @@ wire_struct!(
     parameters,
     native_type_projection,
     operands,
+    destruction_operands,
     result,
     outcomes,
     owner_call,
@@ -9101,6 +9115,31 @@ impl Encoder<'_> {
                 )?;
             }
             let operands = Slice::of(&self.image.prepared_operands, operand_start)?;
+            let capture_start = self.image.prepared_destruction_operands.len();
+            for capture in symbol.destruction_operands() {
+                charge(self.work, 1)?;
+                let path_start = self.image.prepared_paths.len();
+                for component in capture.source() {
+                    push(
+                        &mut self.image.prepared_paths,
+                        index(*component)?,
+                        self.work,
+                    )?;
+                }
+                let source = Slice::of(&self.image.prepared_paths, path_start)?;
+                let span = self.prepared_span(capture.origin())?;
+                push(
+                    &mut self.image.prepared_destruction_operands,
+                    PreparedDestructionOperandRecord {
+                        position: index(capture.position())?,
+                        source,
+                        span,
+                    },
+                    self.work,
+                )?;
+            }
+            let destruction_operands =
+                Slice::of(&self.image.prepared_destruction_operands, capture_start)?;
             let outcome_start = self.image.prepared_outcomes.len();
             for outcome in symbol.outcomes() {
                 charge(self.work, 1)?;
@@ -9158,6 +9197,7 @@ impl Encoder<'_> {
                     parameters,
                     native_type_projection,
                     operands,
+                    destruction_operands,
                     result,
                     outcomes,
                     owner_call,
@@ -10612,6 +10652,32 @@ impl Decoder<'_> {
                     self.work,
                 )?;
             }
+            let mut destruction_operands = Vec::new();
+            for capture in record
+                .destruction_operands
+                .get(&self.image.prepared_destruction_operands)?
+            {
+                charge(self.work, 1)?;
+                let mut source = Vec::new();
+                for component in capture.source.get(&self.image.prepared_paths)? {
+                    push(
+                        &mut source,
+                        usize::try_from(*component).map_err(|_| ImageFailure::InvalidRecord)?,
+                        self.work,
+                    )?;
+                }
+                let span = self.span(capture.span)?;
+                push(
+                    &mut destruction_operands,
+                    PrivatePreparedDestructionOperandParts {
+                        position: usize::try_from(capture.position)
+                            .map_err(|_| ImageFailure::InvalidRecord)?,
+                        source,
+                        span,
+                    },
+                    self.work,
+                )?;
+            }
             let result = match record.result {
                 Some(result) => match Self::representation(result)? {
                     PreparedRepresentation::Scalar(value) => PreparedAbiResult::Scalar(value),
@@ -10659,6 +10725,7 @@ impl Decoder<'_> {
                     parameters,
                     native_type_projection,
                     operands,
+                    destruction_operands,
                     result,
                     call: match record.owner_call {
                         Some(call) => {

@@ -100,6 +100,59 @@ main () = (resource Renamed.Probe<{}, Empty, {}> owner = 42 {
     );
 }
 
+fn owner_with_scalar_destruction_captures() -> String {
+    include_str!("fixtures/source-owner/owner.ash")
+        .replace("repr Size = size_t", "repr Size = size_t\n    repr Signed = signed(32)\n    repr Unsigned = unsigned(64)\n    const Negative : Signed = -7")
+        .replace("owner State<R>", "owner State<Before : EffectRow, R, After : EffectRow>")
+        .replace("State<R>", "State<{| Before}, R, {| After}>")
+        .replace("After : EffectRow> : Int ->", "After : EffectRow> : (Int, (Int, Int)) ->")
+        .replace("operand 0 from 0 scalar", "operand 0 from 0 scalar\n        destruction_operand 2 from 1.0 scalar\n        destruction_operand 0 from 1.1 scalar")
+        .replace("After : EffectRow> : State<{| Before}, R, {| After}> ->", "After : EffectRow> : (Int, State<{| Before}, R, {| After}>, Int) ->")
+        .replace("abi (pointer(Address)) -> void", "abi (Signed, pointer(Address), Unsigned) -> void")
+        .replace("operand 0 from 0 current", "operand 0 from 2 scalar\n        operand 1 from 1 current\n        operand 2 from 0 scalar")
+        .replace("consumed 0", "consumed 1")
+        .replace("input Int", "input (Int, (Int, Int))")
+        .replace("acquire size => match perform Allocate<{| Before}, R, {| After}>.call size", "acquire (size, cleanup) => match perform Allocate<{| Before}, R, {| After}>.call (size, cleanup)")
+        .replace("perform Free<{| Before}, R, {| After}>.call state", "perform Free<{| Before}, R, {| After}>.call (999, state, 5)")
+}
+
+fn native_with_scalar_destruction_captures() -> String {
+    let captures = r#"static void record_captures(int32_t first, uint64_t last) {
+    const char *path = getenv("ASH_OWNER_TRACE");
+    FILE *file = path == NULL ? NULL : fopen(path, "a");
+    if (file == NULL || fprintf(file, "captures:%d:%llu\n", first, (unsigned long long)last) < 0 || fclose(file) != 0) {
+        abort();
+    }
+}
+
+"#;
+    include_str!("fixtures/source-owner/native_owner.c")
+        .replace(
+            "struct ash_owner {",
+            &format!("{captures}struct ash_owner {{"),
+        )
+        .replace(
+            "void ash_owner_release(void *raw)",
+            "void ash_owner_release(int32_t first, void *raw, uint64_t last)",
+        )
+        .replace(
+            "record(\"release\", owner->size);",
+            "record_captures(first, last);\n    record(\"release\", owner->size);",
+        )
+}
+
+#[test]
+fn generated_scalar_destruction_captures_keep_cleanup_only_inputs_and_separate_finish_arguments() {
+    generated_owner_program_with_native(
+        &owner_with_scalar_destruction_captures(),
+        "import owner as Owner\neffect BeforeNoise {\n    before : Unit -> Unit\n}\neffect AfterNoise {\n    after : Unit -> Unit\n}\nmain : Unit -> (Owner.Scope<Unit, Unit, Int>, Owner.Scope<Unit, Unit, Int>)\nmain () = (resource Owner.Probe<{BeforeNoise}, Accepted, {AfterNoise}> owner = (42, (18446744073709551615, Owner.Negative)) {\n    Owner.read owner\n}, resource Owner.Probe<{AfterNoise}, Refused, {BeforeNoise}> owner = (9, (18446744073709551615, Owner.Negative)) {\n    Owner.read owner\n})\n",
+        None,
+        "(Completed(42, Closed), NotAcquired(()))",
+        "acquire:42\ncaptures:5:999\nrelease:42\nacquire:9\ncaptures:-7:18446744073709551615\nrelease:9\n",
+        &native_with_scalar_destruction_captures(),
+    );
+}
+
 #[test]
 fn source_control_open_delta_executes_with_type_only_native_owner() {
     generated_owner_program_with_helpers(

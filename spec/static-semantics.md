@@ -1047,7 +1047,7 @@ pointer ABI role does not accept an `Int` substitute. A teardown returns the
 canonical `Foreign.Call<Foreign.Disposition<T>>` for its independent result and
 records consumption or retention of the selected state. The executable resource
 checkpoint below admits `void` teardown with `T = Unit` and scalar-status
-teardown with `T = Int`. Scalar teardown requires `output result as scalar`,
+teardown with `T = Int`. Scalar-status teardown requires `output result as scalar`,
 exactly one Current operand, and `retained_dependents block`. Its total finite
 alternatives test the raw Result against original same-representation declared
 literals, with one final `otherwise`. Each alternative gives exactly one
@@ -1057,6 +1057,26 @@ selectors, missing coverage and
 mismatched positions reject. Owner libraries retain these original checked
 literal facts separately from ordinary constant binders and native operand
 selection. A result predicate grants neither source value nor operand authority.
+
+An owner-producing symbol may declare `destruction_operand q from p scalar`.
+The producer's exact owner result or typed output selects its original owner's
+declared host destructor. Here `q` is a zero-based ABI argument of that destructor;
+`p` selects an independent `Int` leaf of this producer's original source input
+product. These coordinates belong to different original signatures. The clause
+does not supply an ordinary operand of the producer's C ABI, so cleanup-only
+source inputs remain admissible. An ordinary legal computation may supply the
+integer; no additional origin restriction applies to that value.
+
+The target must already be a source-projected scalar operand of the original
+destructor. Result, output, Current/Enclosing, address, constant and sentinel
+targets reject, as do non-integer or invalid source paths. Each dynamic scalar
+destructor argument requires exactly one mapping on every producer of that owner.
+Missing, extra and duplicate targets reject. If several destructor ABI arguments
+project the same original destructor source leaf, their mappings must select the
+same producer leaf; each ABI representation retains its separate narrowing rule.
+Admission preserves the complete ordered Type/Row contexts, original member
+identities and clause origins through imports, copying and private facts.
+
 Header evaluation remains outside this checkpoint. Byte-owner
 preparation also checks its initialized extent against the selected
 mathematical `Int` source leaf. This passive check supplies no byte access or

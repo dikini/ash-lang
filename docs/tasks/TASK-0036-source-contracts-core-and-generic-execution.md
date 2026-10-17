@@ -46,7 +46,7 @@ through TASK-0037 bindings. Retain the open-Delta case and separate
 captured-control witness. Run connected compiler/Core/evaluator regressions
 with one Cargo job; keep milestone-wide regression pending between the named
 checkpoint gates in the [agent workflow](../project/agent-workflow.md). The
-last full gate was run at `868d0b43` and transferred by authenticated equality
+historical full gate was run at `868d0b43` and transferred by authenticated equality
 to retained `9fae971`. PR21's focused ownership delivery is retained at
 `d44138f`, PR22's focused scalar teardown delivery at `3435d62`, and PR23's
 checked scalar constants at `d09b99f`, and PR24's non-callable sentinels at
@@ -70,6 +70,30 @@ Typed State transport and hidden native requests remain refused. These focused
 checks do not complete the shared-runtime regression checkpoint.
 
 ## Discoveries
+
+Scalar destruction-input mapping A binds a producer's original `Int` input path
+to an ABI slot of that owner's exact original host destructor. Producer ABI
+input coverage is independent, so cleanup-only inputs need no native producer
+operand. Normalization orders targets, requires complete scalar coverage and
+preserves same-destructor-leaf consistency, source origins and full Type/Row
+contexts. Private claims carry the same relation; structural restoration and
+original-facts comparison retain distinct obligations.
+
+The initial focused slice verifies passive public admission and refusal,
+normalization/restoration/original correspondence, exact and one-short work,
+spent prefixes and fresh retries. Runtime capture into the reserved guard vector,
+typed teardown bridges, actual native fallback, copied/image forgery controls
+and affected final gates remain pending. It grants no new State/view transport,
+private-data permission or ABI role. Ordinary Finish remains separate from the
+acquisition-time native snapshot.
+
+The current baseline for this increment is retained PR #35 at `5893a546`, after
+the complete ordered Owner Type/Row delivery. The last full checkpoint 748 at
+`63197b6` is historical, with PRs #34–#35 intervening; this initial slice claims
+no new full gate. Source `800*S`, Final `800*S`, separate compiler-arena rewrite
+`16*S`, independent Core `345*S`, preparation `125*P`, startup `22*B`, generic
+defaults and all depth/stack/checks remain unchanged. PM owns the next checkpoint;
+Main's signed human gate remains separate.
 
 The inherited-owner Row implementation retains a nominal Owner application with
 complete tagged actuals. Its exact prepared Owner declaration selects that form

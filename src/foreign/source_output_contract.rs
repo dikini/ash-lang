@@ -34,6 +34,7 @@ pub(super) fn prepare(
     for contract in &source.contracts {
         charge(work, 1, source.span)?;
         match contract {
+            SurfaceForeignContract::DestructionOperand { .. } => {}
             SurfaceForeignContract::Operand {
                 position,
                 source: input,

@@ -305,7 +305,14 @@ fn symbol(parser: &mut Parser<'_>) {
 
 fn contract(parser: &mut Parser<'_>) -> bool {
     parser.start(NodeKind::ForeignCallContract);
-    let result = if at_word(parser, "operand") {
+    let result = if at_word(parser, "destruction_operand") {
+        let _ = parser.bump();
+        native_position(parser);
+        let _ = word(parser, "from");
+        source_position(parser);
+        let _ = word(parser, "scalar");
+        true
+    } else if at_word(parser, "operand") {
         let _ = parser.bump();
         native_position(parser);
         let _ = word(parser, "from");
