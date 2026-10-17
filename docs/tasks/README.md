@@ -10,7 +10,6 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 ## Active tasks
 
 - [TASK-0042: Rust verification performance](TASK-0042-rust-verification-performance.md)
-- [TASK-0043: Post-ffi semantics alignment](TASK-0043-post-ffi-semantics-alignment.md)
 
 ## ffi-ash closure coordination
 
