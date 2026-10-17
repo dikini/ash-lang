@@ -61,6 +61,72 @@ fn latent_effects<'a>(checked: &'a ash::resolved::CheckedModule, spelling: &str)
 }
 
 #[test]
+fn row_unification_retries_coalescing_matches_in_any_written_order() {
+    for domain in ["Unit", "A"] {
+        for actual in ["Tag<A>, Tag<Int>", "Tag<Int>, Tag<A>"] {
+            for expected in ["Tag<Int>, Tag<Bool>", "Tag<Bool>, Tag<Int>"] {
+                let expected_domain = if domain == "A" { "Bool" } else { "Unit" };
+                let source = format!(
+                    "effect Tag<A> {{\n    emit : Unit -> Unit\n}}\n\
+                     choose<A> : {domain} -> Unit ! {{{actual}}}\n\
+                     choose value = ()\n\
+                     accept : ({expected_domain} -> Unit ! {{{expected}}}) -> Unit\n\
+                     accept f = ()\n\
+                     main : Unit -> Unit\n\
+                     main () = accept(choose)\n"
+                );
+                let fixture = TempModule::write(&source);
+                let observation = ash::driver::run_path(ash::driver::RunConfiguration {
+                    entry: fixture.0.clone(),
+                    roots: ModuleRoots::empty(),
+                })
+                .unwrap_or_else(|error| {
+                    panic!("the substitution A=Bool must check:\n{source}\n{error:?}")
+                });
+                assert_eq!(observation.value_display(), "()");
+            }
+        }
+    }
+}
+
+#[test]
+fn row_unification_retains_concrete_single_member_and_idempotent_controls() {
+    for (parameters, domain, actual, expected) in [
+        ("", "Bool", "Tag<Int>, Tag<Bool>", "Tag<Bool>, Tag<Int>"),
+        ("<A>", "A", "Tag<A>", "Tag<Bool>"),
+        ("<A>", "A", "Tag<A>, Tag<Bool>", "Tag<Bool>"),
+    ] {
+        check_source(&format!(
+            "effect Tag<A> {{\n    emit : Unit -> Unit\n}}\n\
+             choose{parameters} : {domain} -> Unit ! {{{actual}}}\n\
+             choose value = ()\n\
+             accept : (Bool -> Unit ! {{{expected}}}) -> Unit\n\
+             accept f = ()\n\
+             main : Unit -> Unit\n\
+             main () = accept(choose)\n"
+        ));
+    }
+}
+
+#[test]
+fn row_unification_rejects_inconsistent_domain_and_row_arguments() {
+    let error = try_check_source(
+        "effect Tag<A> {\n    emit : Unit -> Unit\n}\n\
+         choose<A> : A -> Unit ! {Tag<A>, Tag<Int>}\n\
+         choose value = ()\n\
+         accept : (Bool -> Unit ! {Tag<Int>, Tag<String>}) -> Unit\n\
+         accept f = ()\n\
+         main : Unit -> Unit\n\
+         main () = accept(choose)\n",
+    )
+    .expect_err("no substitution satisfies the domain and the exact effect row");
+    assert!(
+        matches!(error, ash::elaborate::TypeError::Source(diagnostic)
+        if diagnostic.reason == ash::elaborate::TypeReason::Argument)
+    );
+}
+
+#[test]
 fn cyclic_opaque_resumption_consumes_or_owns_the_visible_clause_capture() {
     for clause in [
         "let _ = resume ()\nperform B.ask ()",
