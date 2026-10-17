@@ -5,23 +5,28 @@ lessons from historical Ash while rebuilding the language from a small,
 coherent base. Historical Ash is evidence for design work, not authority for
 this project.
 
-Ash is currently a pure, rank-1 language whose programs are acyclic graphs of
-passive source modules. Each `.ash` file contains imports and declarations. The
-entry module supplies a local `main` function:
+Ash is a rank-1 language whose programs are acyclic graphs of passive source
+modules. Each `.ash` file contains imports and declarations. Function signatures
+may state interface constraints and effect rows. The entry module supplies a
+local `main` function:
 
 ```ash
 main : Unit -> Int
 main () = 42
 ```
 
-The [canonical specification](spec/README.md) defines the current language.
+The [canonical specification](spec/README.md) defines the implemented language
+and runtime behavior.
 The [`ash` tool guide](docs/tools/ash.md) explains module roots, invocation,
-output, and failures. The earlier single-file Mini-Ash milestone remains
-available at the annotated `mini-ash` Git tag. The annotated `modular-ash` Git
-tag on the final closure commit retains the completed current milestone with
-passive source modules and method-only interfaces. Current source contains no
-dialect selector; the tags retain historical milestone states rather than
-selectable compiler modes.
+output and failures, including [explicit native link inputs](docs/tools/ash.md#native-link-inputs)
+and [generated-host linkage checks](docs/tools/ash.md#generated-host-linkage-checks).
+The ffi-ash implementation is retained on `integration/ffi-ash`; its final
+checkpoint and separate Main integration gate remain pending.
+
+The annotated `mini-ash` and `modular-ash` Git tags retain the earlier single-file
+and passive-module/interface milestones. Current source contains no dialect
+selector; the tags retain historical milestone states rather than selectable
+compiler modes.
 
 Project artifacts answer different questions:
 

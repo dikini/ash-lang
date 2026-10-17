@@ -13,8 +13,8 @@ The user authorized implementation and coordination with the ffi-ash team.
 Continue PR #18 on its existing `codex/verification-reuse` branch in the assigned
 product checkout. The milestone PM assigns one heavy-build operator. Reuse the
 same compatible target cache and its generated-host child; reviewers inspect
-that operator's frozen inputs and evidence. Preserve the active CP-0022
-checkpoint, unrelated worktrees and Main drafts.
+that operator's frozen inputs and evidence. Preserve the retained ffi-ash
+checkpoint and transition evidence, unrelated worktrees and Main drafts.
 
 ## Work
 
@@ -159,8 +159,8 @@ operation receipts; timing collection adds no verification runs.
 At closure, consolidate lasting conclusions here and in tool documentation.
 Retire obsolete working history and superseded output only after proving that
 no live PR/checkpoint needs them. Preserve compatible dependencies, current
-tests, published executables and CP-0022 evidence. The developer supplies a
-cleanup **Result** and **Next owner**; PM confirms them before starting the next
+tests, published executables and retained transition evidence. The developer
+supplies a cleanup **Result** and **Next owner**; PM confirms them before starting the next
 PR. Current **Result**: the twelve-path transition preserved all owned source;
 the candidate's fresh gate, exact reuse and zero generated-root residue are
 independently authenticated. Shared caches and live PR/checkpoint evidence

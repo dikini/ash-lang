@@ -23,7 +23,5 @@ No proposed semantic transition is under review.
 
 ## Accepted changes
 
-- [CP-0022: Ash-authored foreign interfaces](CP-0022-ash-authored-foreign-interfaces.md)
-  authorizes the bounded `ffi-ash` transition and its
-  [implementation tasks](../tasks/README.md). It remains prospective until the
-  complete product checkpoint is integrated into Main.
+No accepted proposals remain in this product tree. Completed transition
+evidence remains in Git; artifact retirement does not integrate it into Main.

@@ -11,11 +11,11 @@ Ash-authored foreign contracts and library policy, generated Rust native-call
 bridges and runnable evaluator hosts. Its durable scope and sequence live in
 DN-0037; [DN-0042](design/DN-0042-native-interaction-and-efficient-data.md) supplies
 the broader context. [GitHub](https://github.com/dikini/ash-lang/milestone/1)
-owns live progress and PR status. [CP-0022](proposals/CP-0022-ash-authored-foreign-interfaces.md)
-is accepted; [AD-0013](decisions/AD-0013-generated-native-bridges-and-program-builds.md)
-records the agreed build boundary. The [implementation tasks](tasks/README.md)
-carry the authorized scope; the separate milestone gate controls integration
-into Main.
+owns live progress and PR status. The bounded transition's implementation,
+specification, tests, reviews and verification are retained on
+`integration/ffi-ash`. [AD-0013](decisions/AD-0013-generated-native-bridges-and-program-builds.md)
+records the build boundary. [TASK-0041](tasks/TASK-0041-ffi-ash-milestone-closure.md)
+owns remaining transition cleanup and the separate Main integration gate.
 
 The Mini-Ash milestone is retained historically at the `mini-ash` tag, whose
 peeled commit is `d62d3ba`. Its

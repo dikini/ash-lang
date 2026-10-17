@@ -9,7 +9,7 @@
   [AD-0007](../decisions/AD-0007-typed-core-dialects.md),
   [AD-0008](../decisions/AD-0008-explicit-evaluator-machine.md),
   [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md),
-  [CP-0022](../proposals/CP-0022-ash-authored-foreign-interfaces.md)
+  [CP-0022 transition history](https://github.com/dikini/ash-lang/blob/adddeffe5d135bd03bf5fc30051965e5da70ed24/docs/proposals/CP-0022-ash-authored-foreign-interfaces.md)
 
 > This design note records a separate foreign-library authoring program. It
 > selects no new syntax and defines
@@ -18,8 +18,10 @@
 > governing contract and the product workflow in the
 > [artifact guide](../project/artifacts.md).
 
-The selected build boundary is recorded separately in AD-0013. CP-0022 is the
-accepted semantic transition. This informative note does not define current Ash.
+The selected build boundary is recorded separately in AD-0013. The retained
+CP-0022 transition records the semantic change; the
+[product-branch specification](../../spec/static-semantics.md#source-foreign-declarations)
+contains the implemented profile. This informative note does not define current Ash.
 
 ## Agreed ffi-ash milestone
 
@@ -60,17 +62,17 @@ the final delivery PR targets Main. Preserve checkpoint histories with explicit
 merges. Milestone commits and intermediate merges are unsigned; the final
 merge into Main is signed, following the updated execution instruction.
 
-Issues #2–#6 are connected stages of one CP-0022 product checkpoint. Keep its
-accepted proposal and active worktree until the complete semantic transition,
-three library migrations, tests, specification, review and verification close.
-An intermediate verified merge can retain an issue's complete outcome; it does
-not close the overall checkpoint, authorize proposal/worktree cleanup or make
-partial milestone behavior current on Main. Final checkpoint cleanup follows
-AD-0011 and the artifact policy.
+Issues #2–#6 delivered connected stages of the CP-0022 transition. Their
+implementation, library migrations, tests, specification, review and verification
+are retained in milestone history. Completed proposals, tasks and plans leave
+the current tree under the artifact policy. [TASK-0041](../tasks/TASK-0041-ffi-ash-milestone-closure.md)
+owns remaining closure and the separate Main gate. Keep the active product
+checkout and compatible cache until that work closes under AD-0011. Artifact
+retirement alone does not authorize worktree removal or Main integration.
 
-The accepted contract authorizes one active repository TASK per implementation
-issue, allocated as TASK-0036 through TASK-0041 in the
-[task index](../tasks/README.md).
+The original contract used TASK-0036 through TASK-0041 for its implementation
+issues. Their delivering commits and PRs retain completed work; the
+[task index](../tasks/README.md) lists the work that remains active.
 Tasks link their governing proposal/decision and issue, and contain bounded work,
 dependencies, required verification and durable discoveries/deviations. Ordered
 steps go in the existing Work section; add a task-owned plan only when needed.
@@ -145,10 +147,10 @@ The [DN-0036 readiness review](foreign-authoring/dn-0036-readiness.md) records
 the verified Main capabilities, outstanding and worktree evidence, and the
 selected first authoring target: a copying SQLite binding on one host ABI.
 The selected execution direction generates Rust bridges and links a host using
-the existing evaluator; AD-0013 records that non-language boundary. CP-0022
-records the accepted source and operational transition. SQLite remains the first
-complete foreign-library authoring case; native buffer and minimal arena acquisition,
-usage and release test the same mechanism before its final SQLite delivery.
+the existing evaluator; AD-0013 records that non-language boundary. The retained
+CP-0022 history records the source and operational transition. SQLite, native
+buffer and minimal arena provide the implemented profile's contrasting authoring
+and lifecycle evidence.
 Unfinished general borrowing and wider Arena work are not prerequisites.
 Native storage interfaces and region validity contracts remain distinct.
 
