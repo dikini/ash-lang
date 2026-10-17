@@ -725,6 +725,55 @@ pub fn compile_kind_diagnostic<'a>(
     error: &'a crate::kind::KindError,
     sources: &[&'a SourceFile],
 ) -> Result<CompileDiagnostic<'a>, PresentationError> {
+    if let Some((expected, supplied)) = error.argument_counts() {
+        let label = |span: Span, message, relationship| {
+            let source = sources
+                .iter()
+                .copied()
+                .find(|source| source.id() == span.source())
+                .ok_or(PresentationError::MissingSource)?;
+            source
+                .location(span)
+                .map_err(|_| PresentationError::MissingSource)?;
+            Ok(Label {
+                source,
+                span,
+                message,
+                relationship,
+                facts: Vec::new(),
+            })
+        };
+        let [declaration] = error.related.as_slice() else {
+            return Err(PresentationError::MissingFact);
+        };
+        return Ok(CompileDiagnostic {
+            reason: error.reason.to_string(),
+            responsibility: "source",
+            message: Message::effect_argument_count(expected, supplied),
+            primary: Some(label(
+                error.primary.span(),
+                Message::effect_application(),
+                "effect_application",
+            )?),
+            related: vec![label(
+                declaration.span(),
+                Message::effect_parameters(),
+                "effect_parameters",
+            )?],
+            facts: vec![
+                Fact {
+                    name: "expected_count",
+                    kind: "count",
+                    value: FactValue::Integer(expected),
+                },
+                Fact {
+                    name: "supplied_count",
+                    kind: "count",
+                    value: FactValue::Integer(supplied),
+                },
+            ],
+        });
+    }
     let expected = error
         .diagnostic()
         .expected
@@ -738,6 +787,9 @@ pub fn compile_kind_diagnostic<'a>(
     let (shape, expected_format) = match error.expectation() {
         crate::kind::KindExpectation::Exact(_) => ("exact", "kind"),
         crate::kind::KindExpectation::Function { .. } => ("function", "kind-pattern"),
+        crate::kind::KindExpectation::EffectArguments { .. } => {
+            return Err(PresentationError::MissingFact);
+        }
     };
     let expected_fact = Fact {
         name: "expected_kind",

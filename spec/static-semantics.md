@@ -2795,6 +2795,10 @@ failures, stable identity assignment, row-tail scope, and `resume` or `discard`
 outside a clause.
 Effect instance arity precedes positional kind checking. Kind checking owns
 an invalid effect argument, row tail, or forbidden use of `EffectRow`.
+Within a written type, an arity-invalid effect instance reports
+`effect.argument-count` with expected and supplied counts, its complete
+application and its original effect parameter declaration. A malformed
+authenticated retained carrier remains a compiler failure.
 Row formation owns a duplicate written member and an unsatisfied lacks fact.
 Ordinary expression typing owns operation operand and latent-row failures.
 Handler checking owns target membership, clause coverage and patterns,

@@ -112,6 +112,11 @@ fn expect_resolution_error(error: ResolveModuleError) -> ResolveError {
         ResolveModuleError::Kind(error) => {
             panic!("resolution diagnostic fixture unexpectedly reached kind checking: {error:?}")
         }
+        ResolveModuleError::Representation(error) => {
+            panic!(
+                "resolution diagnostic fixture unexpectedly reached representation checking: {error:?}"
+            )
+        }
     }
 }
 
@@ -1148,7 +1153,12 @@ fn recursive_and_cleanup_messages_retain_every_causal_label() {
         ),
     ] {
         let fixture = ModuleFixture::load("causal-message.ash", text);
-        let TypeError::Source(error) = check_module(fixture.resolve()).unwrap_err() else {
+        let failure = match resolve_module(fixture.loaded(), &[]) {
+            Ok(resolved) => check_module(resolved).unwrap_err(),
+            Err(ResolveModuleError::Representation(error)) => error,
+            Err(error) => panic!("expected a source typing failure, found {error:?}"),
+        };
+        let TypeError::Source(error) = failure else {
             panic!("expected source failure");
         };
         assert_eq!(error.reason, reason);
@@ -2286,6 +2296,7 @@ fn assert_public_kind_diagnostic(case: &KindDiagnosticCase) {
                 KindReason::Argument => {
                     format!("This argument needs kind `{expected}`, but has kind `{found}`.")
                 }
+                KindReason::EffectArgumentCount => unreachable!("kind-only diagnostic fixture"),
             };
             assert!(output.contains(&title), "{output}");
         }

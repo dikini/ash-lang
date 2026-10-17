@@ -172,6 +172,11 @@ fn resolve_with(
         ResolveModuleError::Kind(error) => {
             panic!("module resolution fixture unexpectedly reached kind failure: {error:?}")
         }
+        ResolveModuleError::Representation(error) => {
+            panic!(
+                "module resolution fixture unexpectedly reached representation failure: {error:?}"
+            )
+        }
     })
 }
 
