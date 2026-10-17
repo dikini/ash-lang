@@ -34069,9 +34069,9 @@ mod tests {
             + OVERLAP_UNIFICATION_WORK
             + DIAGNOSTIC_RETENTION_WORK;
         // One declared-binder DELTA record plus Option's XI record, retained
-        // result Kind, parameter Kind, and derived Arrow Kind.
+        // result Kind, parameter Kind, derived Arrow Kind, and formal-kind scan.
         const DECLARED_ENVIRONMENT_TYPE_WORK: usize = 1;
-        const NOMINAL_ENVIRONMENT_TYPE_WORK: usize = 4;
+        const NOMINAL_ENVIRONMENT_TYPE_WORK: usize = 5;
         const EXACT_TYPE_WORK: usize =
             DECLARED_ENVIRONMENT_TYPE_WORK + NOMINAL_ENVIRONMENT_TYPE_WORK;
 

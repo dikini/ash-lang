@@ -5528,9 +5528,9 @@ mod tests {
         // slot), and 8 cells authenticate the first binding (one canonical
         // binder lookup plus seven nominal Kind synthesis/comparison cells).
         const CONSTRAINT_WORK: usize = 4 + 12 + 8;
-        // Type work: one XI record plus its three derived Kind nodes, and one
-        // cloned nominal substitution argument.
-        const TYPE_WORK: usize = 4 + 1;
+        // Type work: one XI record, its three derived Kind nodes, one
+        // formal-kind scan, and one cloned nominal substitution argument.
+        const TYPE_WORK: usize = 5 + 1;
 
         let module = ModuleId::new(62);
         let interface_parameter = TypeVariableId::resolved(module, 0);
@@ -6848,8 +6848,9 @@ mod tests {
         // solution. Complete heads are not redundantly synthesized here.
         const CONSTRAINT_WORK: usize = 2 + 16 + 26;
         // Type work: one left DELTA record and one right XI record retaining
-        // the three nodes of Option's derived Type -> Type Kind.
-        const TYPE_WORK: usize = 1 + 4;
+        // the three nodes of Option's derived Type -> Type Kind, plus its
+        // one-formal owner-kind scan.
+        const TYPE_WORK: usize = 1 + 5;
 
         let module = ModuleId::new(64);
         let interface_parameter = TypeVariableId::resolved(module, 0);

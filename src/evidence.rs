@@ -9276,7 +9276,8 @@ mod tests {
         // replacement index/value, the instantiated prerequisite, and the
         // final selection argument.
         const INITIAL_GOAL_CLONE_WORK: usize = 1 + 3;
-        const GOAL_ENVIRONMENT_TYPE_WORK: usize = 2 * 4;
+        // Each one-formal XI costs four retained cells and one owner-kind scan.
+        const GOAL_ENVIRONMENT_TYPE_WORK: usize = 2 * 5;
         const MATCHED_SUBSTITUTION_TYPE_WORK: usize = 1;
         const REPLACEMENT_INDEX_AND_VALUE_WORK: usize = 2;
         // Replacement retention plus the retained three-cell prerequisite result.

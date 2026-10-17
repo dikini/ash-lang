@@ -106,6 +106,23 @@ Finish regression. Original stacks, assertions and work, depth and authority
 policies remain unchanged. Checkpoint 1014 remains a historical failure; a fresh
 integrated full checkpoint is still required.
 
+Shared-runtime checkpoint 1043 at `f21c5865` completed the owning library with
+1,868 passes and eleven failures after its first five verification stages
+passed. The Finish, 64 KiB captured-control and 256 KiB owned-deep-drain
+regressions all passed in that library run; later test targets and documentation
+were unrun. The eleven failures used predecessor exact-work expectations that
+omitted paid nominal formal-kind scans or owner-head lookups introduced by
+complete Type/Row owner admission.
+
+The tests now account for those actual scans and lookups. The wide nominal
+fixture funds its root and owner-head lookup before testing the same first
+argument's refusal span. Type and Constraint shortages remain distinct, and
+semantic, one-short, atomic publication, spent-prefix and exact-retry assertions
+remain intact. Focused run 1044 passes all eleven corrected tests and eleven
+directly affected boundary controls. Production code, cumulative charges,
+allowances, defaults, stacks and checks are unchanged. Checkpoint 1043 remains
+failed; a fresh integrated full checkpoint is still required.
+
 Scalar destruction-input mapping A binds a producer's original `Int` input path
 to an ABI slot of that owner's exact original host destructor. Producer ABI
 input coverage is independent, so cleanup-only inputs need no native producer
