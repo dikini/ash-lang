@@ -71,6 +71,21 @@ checks do not complete the shared-runtime regression checkpoint.
 
 ## Discoveries
 
+Export-summary collection now finishes before independent admission begins. A
+private helper retains the existing collection checks, charges and fallible
+storage; the existing freeze entry then authenticates the owned candidate once
+with the same cumulative budgets. Collection scratch no longer remains on the
+stack through certificate and kind admission. Partial collection and rejected
+candidates retain their existing disposal paths.
+
+Shared-runtime checkpoint 1004 at `3d6d00ba` passed formatting, metadata,
+workspace checking, building and strict lint, then aborted in the library test
+process during builtin Cell export freezing. The intended deep-result finish
+checks had not begun; later test targets and documentation were unrun. The
+unchanged 256 KiB regression passes in focused run 1008, including its exact
+row-work refusal and fresh retries. Stack, depth, work and authority policies
+are unchanged; a fresh integrated full checkpoint remains required.
+
 Scalar destruction-input mapping A binds a producer's original `Int` input path
 to an ABI slot of that owner's exact original host destructor. Producer ABI
 input coverage is independent, so cleanup-only inputs need no native producer
