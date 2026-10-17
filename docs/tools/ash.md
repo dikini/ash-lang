@@ -20,7 +20,8 @@ and generates a Rust host containing private Core construction data, the
 existing evaluator and any required typed native bridges:
 
 ```text
-ash build --output ./program [--target TARGET] [--cargo-target-dir PATH] entry.ash
+ash build --output ./program [--target TARGET] [--cargo-target-dir PATH] \
+    [--native-static PATH]... [--native-shared PATH]... entry.ash
 ./program
 ```
 
@@ -63,14 +64,25 @@ The generator does not infer PR closure or delete published executables.
 
 ### Native link inputs
 
-Configuring explicit native link inputs currently requires the Rust build API. Set
-`build::BuildConfiguration::native_inputs` to an ordered list of
+Use `--native-static PATH` for a regular static archive and `--native-shared PATH`
+for a shared library. Both build-only options may repeat before the entry path.
+Mixed occurrence order and duplicates are preserved in the native linker inputs.
+Paths retain operating-system bytes, including spaces and non-UTF-8 names.
+
+```sh
+ash build --output ./program --native-static ./libcounter.a \
+    --native-shared ./libhelper.so entry.ash
+LD_LIBRARY_PATH="$PWD${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ./program
+```
+
+Rust callers configure the same ordered inputs with
+`build::BuildConfiguration::native_inputs`, using
 `build::NativeLinkInput::StaticArchive(PathBuf)` and
-`build::NativeLinkInput::SharedLibrary(PathBuf)` values before calling
-`build::prepare_program`. The command-line build path has no native-input
-options yet. Ordinary `ash entry.ash`, `driver::execute` and `driver::run_path`
-refuse required source-native bindings before Ash execution; they do not compile
-or link a host implicitly.
+`build::NativeLinkInput::SharedLibrary(PathBuf)` before `build::prepare_program`.
+Ordinary `ash entry.ash`, `driver::execute` and `driver::run_path` refuse required
+source-native bindings before Ash execution; they do not compile or link a host
+implicitly. The native-input options are unsupported by ordinary execution and
+`check-ffi`.
 
 For an existing authored `entry.ash` and regular static archive
 `libcounter.a`, a Rust caller can build the linked program with:
@@ -156,7 +168,11 @@ minimal allocation/usage/release lifecycle. The ordinary source buffer library
 supplies checked zeroed bytes and scoped access through the same generated path.
 The source [copying SQLite library](../../libraries/README.md#copying-sqlite)
 uses explicit native inputs, source protocol and guarded temporary copy windows.
-These milestone additions have not yet integrated into Main.
+The admitted windows run only in permitted direct provider phases, retain exact
+live owner/view authority and publish independent copied bytes. They cannot
+suspend, complete their owner or escape; the detailed
+[source foreign rules](../../spec/static-semantics.md#source-foreign-declarations)
+define these bounds.
 
 ### Generated-host linkage checks
 

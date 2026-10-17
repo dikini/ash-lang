@@ -7,7 +7,7 @@ use std::{
 };
 
 use ash::{
-    build::{BuildConfiguration, build_path},
+    build::{BuildConfiguration, NativeLinkInput, build_path},
     check_ffi::{CheckConfiguration, check_path},
     driver::{FileFailure, Observation, PipelineFailure, RunConfiguration, run_path},
     module::{LoadGraphError, ModuleRoots},
@@ -304,6 +304,7 @@ fn invocation(arguments: Vec<OsString>) -> Result<Invocation, ConfigurationFailu
     let mut output = None;
     let mut target = None;
     let mut cache = None;
+    let mut native_inputs = Vec::new();
     let mut entry_seen = false;
     while let Some(argument) = arguments.next() {
         if entry_seen {
@@ -331,6 +332,14 @@ fn invocation(arguments: Vec<OsString>) -> Result<Invocation, ConfigurationFailu
                     return Err(ConfigurationFailure::Usage);
                 }
             }
+            Some("--native-static" | "--native-shared") => {
+                let path = PathBuf::from(arguments.next().ok_or(ConfigurationFailure::Usage)?);
+                native_inputs.push(if argument == "--native-static" {
+                    NativeLinkInput::StaticArchive(path)
+                } else {
+                    NativeLinkInput::SharedLibrary(path)
+                });
+            }
             Some("--root") => {
                 source_arguments.push(argument);
                 source_arguments.push(arguments.next().ok_or(ConfigurationFailure::Usage)?);
@@ -350,6 +359,7 @@ fn invocation(arguments: Vec<OsString>) -> Result<Invocation, ConfigurationFailu
         build.target = target;
     }
     build.cargo_target_directory = cache;
+    build.native_inputs = native_inputs;
     Ok(Invocation::Build(source, build))
 }
 
@@ -489,6 +499,77 @@ fn parse_root_specification(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_build_inputs_preserve_mixed_order_duplicates_and_paths() {
+        let arguments = [
+            "build",
+            "--output",
+            "program with spaces",
+            "--native-shared",
+            "shared library.so",
+            "--native-static",
+            "first archive.a",
+            "--native-shared",
+            "shared library.so",
+            "--native-static",
+            "last archive.a",
+            "entry.ash",
+        ];
+        let Invocation::Build(_, build) =
+            invocation(arguments.map(OsString::from).to_vec()).expect("repeatable native inputs")
+        else {
+            panic!("build invocation")
+        };
+        let inputs: Vec<_> = build
+            .native_inputs
+            .iter()
+            .map(|input| match input {
+                ash::build::NativeLinkInput::StaticArchive(path) => ("static", path.as_path()),
+                ash::build::NativeLinkInput::SharedLibrary(path) => ("shared", path.as_path()),
+            })
+            .collect();
+        assert_eq!(
+            inputs,
+            [
+                ("shared", std::path::Path::new("shared library.so")),
+                ("static", std::path::Path::new("first archive.a")),
+                ("shared", std::path::Path::new("shared library.so")),
+                ("static", std::path::Path::new("last archive.a"))
+            ]
+        );
+        assert_eq!(build.output, PathBuf::from("program with spaces"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_build_inputs_preserve_non_utf8_operating_system_paths() {
+        use std::os::unix::ffi::OsStringExt;
+        for flag in ["--native-static", "--native-shared"] {
+            let path = OsString::from_vec(b"native inputs/lib-\xff".to_vec());
+            let Invocation::Build(_, build) = invocation(vec![
+                "build".into(),
+                "--output".into(),
+                "program".into(),
+                flag.into(),
+                path.clone(),
+                "entry.ash".into(),
+            ])
+            .expect("OS path") else {
+                panic!("build invocation")
+            };
+            match &build.native_inputs[0] {
+                ash::build::NativeLinkInput::StaticArchive(actual) => {
+                    assert_eq!(flag, "--native-static");
+                    assert_eq!(actual.as_os_str(), path);
+                }
+                ash::build::NativeLinkInput::SharedLibrary(actual) => {
+                    assert_eq!(flag, "--native-shared");
+                    assert_eq!(actual.as_os_str(), path);
+                }
+            }
+        }
+    }
+
     #[test]
     fn explicit_runtime_formats_use_the_separate_reporter() {
         for format in ["human", "short", "json"] {
