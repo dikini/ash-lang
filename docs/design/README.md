@@ -50,6 +50,8 @@ and exclusions remain at their linked owners.
 | DN-0044–0046: runtime services, native execution, agent tooling | Existing Core, evaluator, and diagnostics provide foundations; native execution and agent tooling are outlined in the trajectory. | Selectable runtime services, a native backend, interactive native execution, LSP, and the agent semantic interface remain design work. |
 | DN-0047: ECS and heterogeneous stores | [Checked source fragments](DN-0047-ecs-and-open-heterogeneous-stores.md#evidence-and-experiments) validate limited current-language encodings. | No ECS implementation or measured performance follows; open stores and existential packaging remain candidates. |
 | DN-0048: parallel kernels | Current Pure Core and strict evaluation supply reference obligations. | Kernel extraction, a kernel IR, interaction-net translation, and SIMD/GPU lowering are not implemented by this note. |
+| DN-0053: scoped generic cells | The ash-ffi checkpoint supplies integer cells and native-resource private data. | The agreed generic Cell candidate needs no native owner, keeps resource-scope lifetime, and rejects resource dependency cycles; it is not implemented. |
+| DN-0054: base lexical regions | Existing ownership/dependency rules and scalar Arena evidence supply limited foundations. | Explicit region access, value validity, graph publication, and completion are proposed base contracts; ordinary construction lowering and richer reclamation remain open. |
 
 ## Current notes
 
@@ -223,6 +225,12 @@ and exclusions remain at their linked owners.
 
 ### Downstream type-system and resource exploration
 
+- [DN-0053: Scoped Generic Cells Without Native Owners](DN-0053-scoped-generic-cells-without-native-owners.md)
+  — the agreed ash-ffi candidate for typed shared state, explicit resource-scope
+  lifetime, cycle rejection, snapshots, and closure dependencies.
+- [DN-0054: Base Lexical Region Memory Contracts](DN-0054-base-lexical-region-memory-contracts.md)
+  — proposed explicit allocation, storage and value validity, immutable sharing,
+  graph publication, and completion rules compatible with scoped cells.
 - [DN-0047: ECS and Open Heterogeneous Stores](DN-0047-ecs-and-open-heterogeneous-stores.md)
   — ECS as a stress case for typed immutable worlds, generic queries, static
   heterogeneous schemas, authenticated type-key composition, checked lookup
