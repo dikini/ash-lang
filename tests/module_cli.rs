@@ -20,10 +20,11 @@ static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 const USAGE_DIAGNOSTIC: &[u8] = concat!(
     "Expected: ash [--message-format human|short|json] [--locale NAME] ",
     "[--root name=path]... <entry-file>, or ash build --output FILE ",
-    "[--target TARGET] [--cargo-target-dir PATH] [--root name=path]... <entry-file>, ",
+    "[--target TARGET] [--cargo-target-dir PATH] [--native-static PATH]... ",
+    "[--native-shared PATH]... [--root name=path]... <entry-file>, ",
     "or ash check-ffi --header FILE... --mapping FILE --compiler FILE --output DIR ",
     "[--target TARGET] [--root name=path]... <entry-file>. ",
-    "Options must precede the entry file and may be supplied only once, except roots and check-ffi headers.\n",
+    "Options must precede the entry file and may be supplied only once, except roots, native inputs and check-ffi headers.\n",
     "reason: invocation.usage\n",
 )
 .as_bytes();

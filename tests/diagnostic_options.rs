@@ -150,6 +150,40 @@ fn roots_and_entry_arguments_are_preserved_and_option_operands_are_not_reparsed(
 }
 
 #[test]
+fn native_build_operands_belong_to_the_build_parser_even_when_they_look_like_options() {
+    let selected = options(
+        &[
+            "build",
+            "--native-static",
+            "--locale",
+            "--native-shared",
+            "--message-format",
+            "--locale",
+            "bg",
+            "--message-format",
+            "json",
+            "entry.ash",
+        ],
+        [None; 3],
+    );
+    assert!(!selected.invalid_options);
+    assert_eq!(selected.locale, Locale::Bulgarian);
+    assert_eq!(selected.format, MessageFormat::Json);
+    assert_eq!(
+        selected.program_arguments,
+        [
+            "build",
+            "--native-static",
+            "--locale",
+            "--native-shared",
+            "--message-format",
+            "entry.ash"
+        ]
+        .map(OsString::from)
+    );
+}
+
+#[test]
 fn missing_or_misplaced_options_do_not_hide_an_independent_valid_selection() {
     for arguments in [
         vec!["--locale", "--message-format", "json", "entry.ash"],
