@@ -44,7 +44,28 @@ Baseline source probes are retained at
 `.worktrees/semantics-alignment-context-20261017/baseline-review`; they identify
 the failing generic row, passing concrete/single-member controls and compiler
 SHA-256 `8621279869c3c87f297c80406a0bad182651eb382fccec35be60a244d4ea0ebb`.
-Candidate review, publication and retained verification remain pending.
+[PR #44](https://github.com/dikini/ash-lang/pull/44) publishes row repair code
+commit `2a4091479f22335dd48343a610765f753703066f` against Main `354c76b`.
+Independent review and retained verification remain pending.
+
+The frozen candidate passed 235 elaborator tests, 260 tests across 13 affected
+caller targets, and all 47 architecture tests. The four new private row-choice
+tests are included in the elaborator total. Formatting, selected all-feature
+Clippy with warnings denied, and changed Markdown lint, links and authority
+checks passed. All four original CLI row probes return `() : Unit` under
+compiler SHA-256
+`2804af5e51759ce27cfde0e1af88f7147eacaf4f96cb0d84c567d7b7d0f030fb`.
+
+Receipts are retained in
+`.worktrees/semantics-alignment-context-20261017/row-unification`:
+`focused-summary.json` records commands, timings and equal source/configuration
+pins before/after; `baseline-row-choices.log` records three failed baseline
+regressions; `baseline-source-equality.json` authenticates the corrected source
+fixture against the recorded baseline compiler's `type.argument` refusal;
+`candidate-cli-results.json` records the four successful CLI probes. Initial
+failed sweeps and the independent budget measurement remain available for
+review. These checks establish focused candidate evidence, not a fresh full
+workspace gate. Exact model runtime remains unavailable.
 
 Acceptance remains separate for each original scope:
 
