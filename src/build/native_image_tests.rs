@@ -3,6 +3,7 @@
 //! data comes from canonical compilation and the actual private build encoder.
 
 use std::{
+    cell::Cell,
     fs,
     path::PathBuf,
     sync::{
@@ -86,7 +87,11 @@ struct EmittedFixture {
     plus_two: PrivateNativeCoordinates,
 }
 static FIXTURE: OnceLock<EmittedFixture> = OnceLock::new();
-static CALLBACKS: AtomicUsize = AtomicUsize::new(0);
+// Image execution invokes these callbacks synchronously. Keep each parallel
+// test's observations on its calling thread, independent of the shared fixture.
+thread_local! {
+    static CALLBACKS: Cell<usize> = const { Cell::new(0) };
+}
 
 fn emitted_fixture() -> &'static EmittedFixture {
     FIXTURE.get_or_init(|| {
@@ -167,7 +172,7 @@ fn emitted_fixture() -> &'static EmittedFixture {
 fn plus_one_callback(
     arguments: &[NativeScalarValue],
 ) -> Result<NativeScalarReply, NativeScalarCallError> {
-    CALLBACKS.fetch_add(1, Ordering::SeqCst);
+    CALLBACKS.set(CALLBACKS.get() + 1);
     let [NativeScalarValue::I32(value)] = arguments else {
         return Err(NativeScalarCallError::ArgumentContract);
     };
@@ -176,7 +181,7 @@ fn plus_one_callback(
 fn plus_two_callback(
     arguments: &[NativeScalarValue],
 ) -> Result<NativeScalarReply, NativeScalarCallError> {
-    CALLBACKS.fetch_add(1, Ordering::SeqCst);
+    CALLBACKS.set(CALLBACKS.get() + 1);
     let [NativeScalarValue::I32(value)] = arguments else {
         return Err(NativeScalarCallError::ArgumentContract);
     };
@@ -193,7 +198,7 @@ fn wrong_owner_role_callback(
     _arguments: &[crate::foreign::source_runtime::NativeOwnerOperand],
     _readiness: crate::foreign::source_runtime::NativeOwnerGuardReady,
 ) -> Result<crate::foreign::source_runtime::NativeOwnerCallReturned, NativeScalarCallError> {
-    CALLBACKS.fetch_add(1, Ordering::SeqCst);
+    CALLBACKS.set(CALLBACKS.get() + 1);
     Err(NativeScalarCallError::ArgumentContract)
 }
 fn wrong_owner_role_provider() -> PrivateNativeBridge {
@@ -240,15 +245,15 @@ fn native_image_startup_rejects_swapped_providers_stale_facts_and_missing_bindin
  {
     let emitted = emitted_fixture();
     let mut selected = members();
-    CALLBACKS.store(0, Ordering::SeqCst);
+    CALLBACKS.set(0);
     assert_eq!(run(emitted.expected, &selected).unwrap().to_string(), "43");
-    assert_eq!(CALLBACKS.load(Ordering::SeqCst), 2);
+    assert_eq!(CALLBACKS.get(), 2);
 
     // Keep ALL separately selected coordinates/original image/ABI facts intact;
     // swap only the providers, which continue to return their OWN expectations.
     let [first, second] = &mut selected;
     std::mem::swap(&mut first.provider, &mut second.provider);
-    CALLBACKS.store(0, Ordering::SeqCst);
+    CALLBACKS.set(0);
     let error = run(emitted.expected, &selected).unwrap_err();
     assert!(
         matches!(
@@ -257,13 +262,13 @@ fn native_image_startup_rejects_swapped_providers_stale_facts_and_missing_bindin
         ),
         "wrong swapped-provider refusal: {error}"
     );
-    assert_eq!(CALLBACKS.load(Ordering::SeqCst), 0);
+    assert_eq!(CALLBACKS.get(), 0);
 
     // Exact original coordinates and ABI facts cannot grant a different
     // generated callback role. This fails before readiness or native entry.
     let mut wrong_role = members();
     wrong_role[0].provider = wrong_owner_role_provider;
-    CALLBACKS.store(0, Ordering::SeqCst);
+    CALLBACKS.set(0);
     let error = run(emitted.expected, &wrong_role).unwrap_err();
     assert!(
         matches!(
@@ -272,7 +277,7 @@ fn native_image_startup_rejects_swapped_providers_stale_facts_and_missing_bindin
         ),
         "wrong callback-role refusal: {error}"
     );
-    assert_eq!(CALLBACKS.load(Ordering::SeqCst), 0);
+    assert_eq!(CALLBACKS.get(), 0);
 
     // Alter a real native-name fact, not magic/framing, in the INDEPENDENT payload.
     // The executable IMAGE and original source graph remain untouched. Same-size
@@ -288,7 +293,7 @@ fn native_image_startup_rejects_swapped_providers_stale_facts_and_missing_bindin
     let altered: &'static [u8] = Box::leak(altered.into_boxed_slice());
     image::PureImage::decode_bytes(altered, &mut TypeWorkBudget::default()).unwrap();
     let selected = members();
-    CALLBACKS.store(0, Ordering::SeqCst);
+    CALLBACKS.set(0);
     let error = run(altered, &selected).unwrap_err();
     assert!(
         matches!(
@@ -297,11 +302,11 @@ fn native_image_startup_rejects_swapped_providers_stale_facts_and_missing_bindin
         ),
         "wrong independent-fact refusal: {error}"
     );
-    assert_eq!(CALLBACKS.load(Ordering::SeqCst), 0);
+    assert_eq!(CALLBACKS.get(), 0);
 
     // The first supplied member is valid and WOULD run first. Whole-program
     // required-member admission must detect the absent second binding BEFORE it.
-    CALLBACKS.store(0, Ordering::SeqCst);
+    CALLBACKS.set(0);
     let error = run(emitted.expected, &selected[..1]).unwrap_err();
     assert!(
         matches!(
@@ -310,11 +315,11 @@ fn native_image_startup_rejects_swapped_providers_stale_facts_and_missing_bindin
         ),
         "wrong missing-binding refusal: {error}"
     );
-    assert_eq!(CALLBACKS.load(Ordering::SeqCst), 0);
+    assert_eq!(CALLBACKS.get(), 0);
 
     // The refused attempts do not poison a subsequent fresh admitted execution.
     assert_eq!(run(emitted.expected, &selected).unwrap().to_string(), "43");
-    assert_eq!(CALLBACKS.load(Ordering::SeqCst), 2);
+    assert_eq!(CALLBACKS.get(), 2);
 }
 
 #[test]
@@ -332,7 +337,7 @@ fn native_constant_image_correspondence_rejects_value_sign_representation_and_eq
         let mut image = image::PureImage::decode_bytes(&emitted.image, &mut work).unwrap();
         assert!(image.corrupt_declared_constant_for_test(mutation));
         let bytes = image.encode_bytes(&mut work).unwrap();
-        CALLBACKS.store(0, Ordering::SeqCst);
+        CALLBACKS.set(0);
         let refusal = __run_private_effect_image(
             &runtime_fingerprint(),
             &bytes,
@@ -347,11 +352,11 @@ fn native_constant_image_correspondence_rejects_value_sign_representation_and_eq
             ),
             "{refusal}"
         );
-        assert_eq!(CALLBACKS.load(Ordering::SeqCst), 0);
+        assert_eq!(CALLBACKS.get(), 0);
     }
-    CALLBACKS.store(0, Ordering::SeqCst);
+    CALLBACKS.set(0);
     assert_eq!(run(emitted.expected, &selected).unwrap().to_string(), "43");
-    assert_eq!(CALLBACKS.load(Ordering::SeqCst), 2);
+    assert_eq!(CALLBACKS.get(), 2);
 }
 
 struct SentinelFixture {

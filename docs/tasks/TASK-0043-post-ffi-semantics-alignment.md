@@ -4,6 +4,7 @@
 - Status: active
 - Related: [AD-0006](../decisions/AD-0006-front-end-semantic-boundaries.md),
   [AD-0011](../decisions/AD-0011-milestone-worktree-lifecycle.md),
+  [issue #46](https://github.com/dikini/ash-lang/issues/46),
   [current static semantics](../../spec/static-semantics.md),
   [current dynamic semantics](../../spec/dynamic-semantics.md)
 
@@ -13,9 +14,12 @@
 
 The user authorized row-unification repair first, then reconciliation of the
 remaining specification/implementation mismatches, with focused regressions,
-independent review and separate PRs. Start from Main `354c76b` and the immutable
-`ffi-base` tag at that commit. The completed ffi milestone remains complete.
-Main integration requires separate human approval.
+independent review and separate PRs. The original baseline and immutable
+`ffi-base` remain `354c76b`; the completed ffi milestone remains complete. The
+user subsequently prioritized issue #45, now retained on Main `1573ae8`. Refresh
+the semantics stack onto `integration/semantics-alignment` from that Main. The
+user authorizes autonomous unsigned commits and merges through PRs. PM assigns
+verification, independent review and integration; no new human approval is needed.
 
 Use the existing `.worktree/ffi-ash-contract` checkout and compatible
 `.worktrees/pr11-rereview-target-97287b0` cache. The developer is the sole product
@@ -44,12 +48,24 @@ Baseline source probes are retained at
 `.worktrees/semantics-alignment-context-20261017/baseline-review`; they identify
 the failing generic row, passing concrete/single-member controls and compiler
 SHA-256 `8621279869c3c87f297c80406a0bad182651eb382fccec35be60a244d4ea0ebb`.
-[PR #44](https://github.com/dikini/ash-lang/pull/44) publishes row repair code
-commit `2a4091479f22335dd48343a610765f753703066f` against Main `354c76b`.
-Independent review and retained verification remain pending.
+[PR #44](https://github.com/dikini/ash-lang/pull/44) originally published the row
+repair at `f077fd4`, with
+[clear independent review](https://github.com/dikini/ash-lang/pull/44#pullrequestreview-5559465031).
+Its refresh targets `integration/semantics-alignment` at Main `1573ae8`, preserving
+the original elaborator and source-regression bytes. Main’s elaborator still
+equals the failing `354c76b` baseline, so the recorded red remains applicable.
+Current composition checks, re-review and row retention are separate obligations.
 
-The frozen candidate passed 235 elaborator tests, 260 tests across 13 affected
-caller targets, and all 47 architecture tests. The four new private row-choice
+The refreshed composition passes 235 elaborator tests, 260 cases across the 13
+affected caller targets, 47 architecture tests, three concurrent native-image
+controls and the real mixed static/shared CLI fixture. All four retained CLI row
+probes return `() : Unit`. Formatting, strict all-target/all-feature Clippy and
+changed Markdown checks pass. Canonical source/configuration/tool/environment
+pins agree before and after those focused checks. Current re-review and row
+retention remain pending.
+
+The original frozen candidate passed 235 elaborator tests, 260 tests across 13
+affected caller targets, and all 47 architecture tests. The four new private row-choice
 tests are included in the elaborator total. Formatting, selected all-feature
 Clippy with warnings denied, and changed Markdown lint, links and authority
 checks passed. All four original CLI row probes return `() : Unit` under
@@ -66,6 +82,20 @@ fixture against the recorded baseline compiler's `type.argument` refusal;
 failed sweeps and the independent budget measurement remain available for
 review. These checks establish focused candidate evidence, not a fresh full
 workspace gate. Exact model runtime remains unavailable.
+
+The refresh also carries TASK-0044 completion and active-index cleanup. Its CLI
+code is already retained on Main `1573ae8`, and
+[issue #45 acceptance is closed](https://github.com/dikini/ash-lang/issues/45#issuecomment-6240835155).
+That task-documentation retention remains pending in PR #44. The last fresh
+seven-stage gate is the issue #45 gate at Main `1573ae8`; it establishes no fresh
+workspace gate for the added row repair. Current refresh receipts belong in
+`.worktrees/semantics-alignment-context-20261017/row-refresh-on-main1573`.
+
+The local ABI checkpoint `f52fac2` remains recoverable, based on the original row
+candidate. After row retention, refresh that separate package onto the integration
+branch and link issue #46 for the stale copy-window overview wording. Existing
+`ffi-base` detailed rules and implementation already admit bounded direct-provider
+sealed copy windows; this correction adds no capability or tag rewrite.
 
 Acceptance remains separate for each original scope:
 
@@ -89,8 +119,9 @@ authority manually.
 
 These PR checks are partial verification. The next fresh full workspace gate
 belongs to the developer at the connected output/checking completion boundary,
-on the final combined candidate before Main. The root orchestrator owns that
-checkpoint assignment and independent review; no per-PR full gate is required.
+on the final combined candidate before Main, after ABI and diagnostic deliveries.
+PM owns that checkpoint assignment and independent review; no per-PR semantic
+full gate is required.
 Record exact source/configuration pins, commands, results, log paths and timings
 in the PR handoff. Exact model runtime is unavailable; requested developer
 settings are GPT-6.1-sol/MAX.
