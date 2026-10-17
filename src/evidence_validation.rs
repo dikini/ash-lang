@@ -11590,15 +11590,15 @@ Memory.AllocationRefused(error) => 0
     fn linked_nominal_kinds_are_retained_once_for_all_value_schemes() {
         // XI is retained once for the graph. For each nominal, the exact type
         // work is one environment record, one Type result, and for every
-        // parameter its Kind nodes plus one Arrow node:
+        // parameter its Kind nodes, one Arrow node, and one owner-kind scan:
         //
-        //   Σ_nominal [2 + Σ_parameter (|K| + 1)]
+        //   Σ_nominal [2 + Σ_parameter (|K| + 2)]
         //
-        // Option<A> therefore costs 2 + (1 + 1) = 4 and
-        // Higher<F : Type -> Type> costs 2 + (3 + 1) = 6, for 10 total.
+        // Option<A> therefore costs 2 + (1 + 2) = 5 and
+        // Higher<F : Type -> Type> costs 2 + (3 + 2) = 7, for 12 total.
         // Validating two schemes that share both constructors must not rebuild
         // XI or spend further type work.
-        const XI_WORK: usize = 10;
+        const XI_WORK: usize = 12;
         let program = entry_program(concat!(
             "type Option<A> =\nNone\n| Some(A)\n\n",
             "type Higher<F : Type -> Type> = Higher(F<Int>)\n\n",
@@ -16385,9 +16385,10 @@ Memory.AllocationRefused(error) => 0
         // its duplicate one-node Kind comparison.
         const PUBLIC_WORK_OUTSIDE_RELATIONSHIP: usize = 371 + 29 - 4 - 1;
         const EXACT_CONSTRAINT_WORK: usize = PUBLIC_WORK_OUTSIDE_RELATIONSHIP + RELATIONSHIP_WORK;
-        // Defining-group scan plus one precharged original `relate` spelling.
+        // Defining-group scan, one List<A> formal-kind scan, and one
+        // precharged original `relate` spelling.
         const METHOD_SPELLING_WORK: usize = "relate".len();
-        const EXACT_TYPE_WORK: usize = 22 + 1 + 2 * 2 + METHOD_SPELLING_WORK;
+        const EXACT_TYPE_WORK: usize = 22 + 1 + 1 + 2 * 2 + METHOD_SPELLING_WORK;
 
         let relationship_program = linked_determined_generic_decrease_program();
         let group = &relationship_program.groups()[0];

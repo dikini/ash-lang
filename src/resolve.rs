@@ -20697,8 +20697,8 @@ mod tests {
         resolver.nominal_parameter_counts.insert(owner, WIDTH);
         resolver
             .type_work
-            .charge(TYPE_WORK_LIMIT - 1)
-            .expect("the fixture leaves one unit for the application root");
+            .charge(TYPE_WORK_LIMIT - 2)
+            .expect("the fixture funds the application root and owner-head lookup");
 
         let error = resolver
             .resolve_type(&annotation)
@@ -20794,7 +20794,8 @@ mod tests {
     #[test]
     fn nominal_application_retention_is_exact_and_transactional_per_source_argument() {
         const ARGUMENTS: usize = 3;
-        const EXACT_WORK: usize = 1 + 2 * ARGUMENTS;
+        // Root and owner-head lookup, then argument visits and retained folds.
+        const EXACT_WORK: usize = 2 + 2 * ARGUMENTS;
 
         let source = SourceFile::new("application-retention.ash", "Triple<Int, Bool, Unit>")
             .expect("the retention fixture should fit");
@@ -20847,7 +20848,7 @@ mod tests {
             failure.primary.message(),
             "source type resolution exceeded its work budget"
         );
-        assert_eq!(short.type_work.used(), 1 + ARGUMENTS);
+        assert_eq!(short.type_work.used(), 2 + ARGUMENTS);
 
         let mut exact = resolver(EXACT_WORK);
         let resolved = exact

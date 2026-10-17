@@ -1179,7 +1179,8 @@ fn determined_summary_relationship_authentication_has_an_exact_retry_boundary() 
     // Canonical and inherited-role authentication retains every visit while
     // sharing four kind-table records and borrowing the two-ID method domain.
     // Complete function synthesis supplies its intrinsic Type without a pair walk.
-    const EXACT_TYPE_WORK: usize = 104;
+    // List<X>'s XI installation also scans its one formal's owner kind.
+    const EXACT_TYPE_WORK: usize = 104 + 1;
     assert_eq!(
         (measured_constraint.used(), measured_type.used()),
         (EXACT_CONSTRAINT_WORK, EXACT_TYPE_WORK),

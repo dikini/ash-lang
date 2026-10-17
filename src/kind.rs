@@ -10087,8 +10087,9 @@ mod tests {
             )
             .expect("the fixed inference entry should install");
         // XI retains one environment record, one result Type root, the copied
-        // parameter Kind, and one Arrow: 1 + 1 + 1 + 1 = 4.
-        let mut xi_exact = TypeWorkBudget::with_limit(4);
+        // parameter Kind, and one Arrow, then scans the formal's owner kind:
+        // 1 + 1 + 1 + 1 + 1 = 5.
+        let mut xi_exact = TypeWorkBudget::with_limit(5);
         environments
             .insert_nominal(
                 nominal,
@@ -10097,7 +10098,7 @@ mod tests {
                 &mut xi_exact,
             )
             .expect("the exact XI retention budget should fit");
-        assert_eq!(xi_exact.used(), 4);
+        assert_eq!(xi_exact.used(), 5);
         let interface_parameter = ResolvedTypeVariable {
             id: TypeVariableId::resolved(interface.module(), 0),
             spelling: "F".into(),
@@ -11144,10 +11145,11 @@ mod tests {
             ResolvedDeclarationIndex::Type(1),
         ];
         // Declaration order owns two entries, one final partition fact and
-        // one provenance cardinality. XI retains one environment record and
-        // one Type root per nominal. The source contains no possible interface
-        // applications, so its arity preflight needs no declaration scan.
-        const EXACT_WORK: usize = 2 + 1 + 1 + 2 * (1 + 1);
+        // one provenance cardinality. In addition to XI's environment record
+        // and Type root per nominal, declaration consumption pays one owner-kind
+        // lookup. The source contains no possible interface applications, so
+        // its arity preflight needs no declaration scan.
+        const EXACT_WORK: usize = 2 + 1 + 1 + 2 * (1 + 1 + 1);
         let mut short = TypeWorkBudget::with_limit(EXACT_WORK - 1);
         assert!(matches!(
             check_resolved_module_with_budget(&valid, &provenance, &mut short),
