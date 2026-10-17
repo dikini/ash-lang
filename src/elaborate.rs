@@ -14907,6 +14907,20 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         result_span,
                     )?);
                 }
+                // Block scheduling constructs further checking tasks. Keep
+                // unrelated expression-task scratch off that call chain.
+                ElaborationTask::CheckBlock {
+                    block,
+                    expected,
+                    kind,
+                } => schedule_block(
+                    block,
+                    Some((expected, kind)),
+                    None,
+                    &mut tasks,
+                    declarations.len(),
+                    &mut self.type_work,
+                )?,
                 ElaborationTask::Check {
                     expression,
                     expected,
@@ -15882,18 +15896,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             }
             ElaborationTask::Synthesize { .. } => return Err(invalid_state()),
             ElaborationTask::Check { .. } => return Err(invalid_state()),
-            ElaborationTask::CheckBlock {
-                block,
-                expected,
-                kind,
-            } => schedule_block(
-                block,
-                Some((expected, kind)),
-                None,
-                tasks,
-                declarations.len(),
-                &mut self.type_work,
-            )?,
+            ElaborationTask::CheckBlock { .. } => return Err(invalid_state()),
             ElaborationTask::FinishCheck { .. } => return Err(invalid_state()),
             ElaborationTask::CheckFunction {
                 ambient_rows,
