@@ -14907,6 +14907,24 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         result_span,
                     )?);
                 }
+                // Application argument inference may traverse solved types and rows.
+                // Keep the generic task dispatcher off that call chain.
+                ElaborationTask::AfterApplicationFunction {
+                    whole_span,
+                    function_span,
+                    argument,
+                    recursive_call,
+                } => {
+                    let function = values.pop().ok_or_else(invalid_state)?;
+                    self.schedule_application_argument(
+                        whole_span,
+                        function_span,
+                        argument,
+                        recursive_call,
+                        function.into_inner(),
+                        &mut tasks,
+                    )?;
+                }
                 // Cleanup inference may traverse the complete solution graph.
                 // Keep the ordinary expression dispatcher off that call chain.
                 ElaborationTask::FinishCleanupAction(progress) => {
@@ -15887,21 +15905,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             task @ ElaborationTask::FinishFunction { .. } => {
                 self.step_function_completion(task, context, values, tasks)?;
             }
-            ElaborationTask::AfterApplicationFunction {
-                whole_span,
-                function_span,
-                argument,
-                recursive_call,
-            } => {
-                let function = values.pop().ok_or_else(invalid_state)?;
-                self.schedule_application_argument(
-                    whole_span,
-                    function_span,
-                    argument,
-                    recursive_call,
-                    function.into_inner(),
-                    tasks,
-                )?;
+            ElaborationTask::AfterApplicationFunction { .. } => {
+                unreachable!("application argument work uses its direct dispatch path")
             }
             ElaborationTask::FinishProviderStateAccess { method, span } => {
                 let operand = values.pop().ok_or_else(invalid_state)?;

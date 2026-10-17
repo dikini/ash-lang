@@ -12324,6 +12324,777 @@ impl Resolver {
         result
     }
 
+    // Keep task-construction scratch off the expression driver stack, which
+    // handler and match bodies reenter while the same buffers remain owned.
+    #[inline(never)]
+    fn resolve_work_step<'a>(
+        &mut self,
+        task: ResolveTask<'a>,
+        tasks: &mut ResolveTaskBuffer<'a>,
+        expressions: &mut ResolvedExpressionBuffer,
+        declarations: &mut ResolvedDeclarationBuffer,
+    ) -> Result<(), ResolveError> {
+        match task {
+            ResolveTask::VisitExpr(_) => {
+                unreachable!("expression visits use the resolver driver's reentry path")
+            }
+            ResolveTask::FinishPerform {
+                effect,
+                operation,
+                spelling,
+                operation_span,
+                span,
+            } => {
+                Self::finish_perform(
+                    effect,
+                    operation,
+                    spelling,
+                    operation_span,
+                    span,
+                    expressions,
+                )?;
+            }
+            ResolveTask::FinishResume { owner, span } => {
+                let value = expressions.pop_owned().ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "resume value resolution produced no expression",
+                    )
+                })?;
+                expressions.push(ResolvedExpr {
+                    kind: ResolvedExprKind::Resume(ResolvedResumeExpr {
+                        owner: Some(owner),
+                        value: Box::new(value.into_inner()),
+                    }),
+                    span,
+                });
+            }
+            ResolveTask::FinishHook { effect, span } => {
+                let body = expressions.pop_owned().ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "hook body resolution produced no expression",
+                    )
+                    .with_context(ResolveContext::WorkState {
+                        part: "hook-body",
+                        problem: "missing",
+                    })
+                })?;
+                expressions.push(self.finish_hook(effect, span, body)?);
+            }
+            ResolveTask::FinishRegistration { effect, span } => {
+                let body = expressions.pop_owned().ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "missing registration body",
+                    )
+                    .with_context(ResolveContext::WorkState {
+                        part: "registration-body",
+                        problem: "missing",
+                    })
+                })?;
+                let initializer = expressions.pop_owned().ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "missing registration initializer",
+                    )
+                    .with_context(ResolveContext::WorkState {
+                        part: "registration-initializer",
+                        problem: "missing",
+                    })
+                })?;
+                expressions.push(self.finish_registration(effect, span, initializer, body)?);
+            }
+            ResolveTask::FinishCleanup { span } => {
+                let body = expressions.pop_owned().ok_or_else(|| {
+                    error(ResolveReason::InternalState, span, "missing cleanup body").with_context(
+                        ResolveContext::WorkState {
+                            part: "cleanup-body",
+                            problem: "missing",
+                        },
+                    )
+                })?;
+                let initializer = expressions.pop_owned().ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "missing cleanup initializer",
+                    )
+                    .with_context(ResolveContext::WorkState {
+                        part: "cleanup-initializer",
+                        problem: "missing",
+                    })
+                })?;
+                expressions.push(self.finish_cleanup(span, initializer, body)?);
+            }
+            ResolveTask::VisitBlock(block) => {
+                let scope_checkpoint = self.scopes.len();
+                let nominal_scope_checkpoint = self.lexical_nominal_scopes.len();
+                let constructor_scope_checkpoint = self.lexical_constructor_scopes.len();
+                self.scopes.push(HashMap::new());
+                self.lexical_nominal_scopes.push(HashMap::new());
+                self.lexical_constructor_scopes.push(HashMap::new());
+                let declaration_start = declarations.len();
+                tasks.push(ResolveTask::FinishBlock {
+                    declaration_start,
+                    scope_checkpoint,
+                    nominal_scope_checkpoint,
+                    constructor_scope_checkpoint,
+                    span: block.span,
+                });
+                tasks.push(ResolveTask::VisitExpr(&block.result));
+                for declaration in block.declarations.iter().rev() {
+                    match declaration {
+                        SurfaceLocalDeclaration::Evidence(source) => {
+                            tasks.push(ResolveTask::VisitLexicalEvidence(source));
+                        }
+                        SurfaceLocalDeclaration::Binding(binding) => {
+                            tasks.push(ResolveTask::FinishBinding(binding));
+                            tasks.push(ResolveTask::VisitExpr(&binding.initializer));
+                        }
+                        SurfaceLocalDeclaration::Recursive(group) => {
+                            tasks.push(ResolveTask::VisitRecursiveGroup(group));
+                        }
+                        SurfaceLocalDeclaration::Newtype(declaration) => {
+                            tasks.push(ResolveTask::FinishLocalNewtype(declaration));
+                        }
+                    }
+                }
+            }
+            ResolveTask::ProviderResourceInitializer {
+                source,
+                definition,
+                family,
+                span,
+            } => {
+                self.start_provider_resource(source, definition, family, span, tasks, expressions)?;
+            }
+            ResolveTask::CopyWindowState {
+                source,
+                family,
+                position,
+                span,
+            } => {
+                self.start_copy_window(source, family, position, span, tasks, expressions)?;
+            }
+            ResolveTask::FinishCopyWindow(pending) => {
+                self.finish_copy_window(pending, expressions)?;
+            }
+            ResolveTask::FinishProviderResource(pending) => {
+                self.finish_provider_resource(*pending, expressions)?;
+            }
+            ResolveTask::ResourceInitializer { source, span } => {
+                let initializer = expressions.pop_owned().ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "resource initializer is missing",
+                    )
+                    .with_context(ResolveContext::WorkState {
+                        part: "resource-initializer",
+                        problem: "missing",
+                    })
+                })?;
+                let identity = self.allocate_type_variable(&source.identity, None, Kind::Type)?;
+                let handle = self.allocate_binder(&source.handle.text, source.handle.span)?;
+                self.type_work.charge(4).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "resource scope retention exceeded its budget",
+                    )
+                })?;
+                self.lexical_method_parameters
+                    .0
+                    .try_reserve(1)
+                    .map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            span,
+                            "resource identity retention could not be reserved",
+                        )
+                    })?;
+                let retained = self.clone_type_variable_for_retention(
+                    &identity,
+                    span,
+                    "resource identity retention exceeded its budget",
+                )?;
+                self.lexical_method_parameters.push(retained);
+                let scope_checkpoint = self.scopes.len();
+                let type_scope_checkpoint = self.type_scopes.len();
+                let mut terms = HashMap::new();
+                terms.try_reserve(1).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "resource handle scope could not be reserved",
+                    )
+                })?;
+                terms.insert(
+                    handle.spelling.clone(),
+                    ResolvedTermBinding::local(ResolvedTermName::Global(handle.id)),
+                );
+                let mut types = HashMap::new();
+                types.try_reserve(1).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "resource type scope could not be reserved",
+                    )
+                })?;
+                types.insert(identity.spelling.clone(), identity.id);
+                self.scopes.try_reserve(1).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "resource scope could not be reserved",
+                    )
+                })?;
+                self.type_scopes.try_reserve(1).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "resource type scope could not be reserved",
+                    )
+                })?;
+                self.scopes.push(terms);
+                self.type_scopes.push(types);
+                tasks.0.try_reserve(2).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "resource body scheduling could not be reserved",
+                    )
+                })?;
+                self.type_work.charge(1).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "resource initializer ownership exceeded its type-work budget",
+                    )
+                })?;
+                tasks.push(ResolveTask::FinishResource {
+                    kind: source.kind,
+                    identity,
+                    handle,
+                    initializer: Box::new(initializer),
+                    scope_checkpoint,
+                    type_scope_checkpoint,
+                    span,
+                });
+                tasks.push(ResolveTask::VisitBlock(&source.body));
+            }
+            ResolveTask::FinishResource {
+                kind,
+                identity,
+                handle,
+                initializer,
+                scope_checkpoint,
+                type_scope_checkpoint,
+                span,
+            } => {
+                let body = expressions.pop_owned().ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "resource body is missing",
+                    )
+                    .with_context(ResolveContext::WorkState {
+                        part: "resource-body",
+                        problem: "missing",
+                    })
+                })?;
+                self.scopes.truncate(scope_checkpoint);
+                self.type_scopes.truncate(type_scope_checkpoint);
+                expressions.push(self.finish_resource_expression(
+                    kind,
+                    identity,
+                    handle,
+                    *initializer,
+                    body,
+                    span,
+                )?);
+            }
+            ResolveTask::VisitRecursiveGroup(group) => {
+                let mut first_members = HashMap::with_capacity(group.members.len());
+                let mut binders = ResolvedBinderBuffer(Vec::with_capacity(group.members.len()));
+                for member in &group.members {
+                    if let Some(first_span) =
+                        first_members.get(member.binder.name.text.as_str()).copied()
+                    {
+                        let mut diagnostic = Diagnostic::new(
+                            ResolveReason::DuplicateRecursiveMember,
+                            SourceLabel::new(
+                                member.binder.name.span,
+                                "this recursive member name is already defined",
+                            ),
+                        );
+                        diagnostic.related.push(SourceLabel::new(
+                            first_span,
+                            "the first recursive member is here",
+                        ));
+                        diagnostic.found = Some(member.binder.name.text.clone());
+                        return Err(diagnostic.into());
+                    }
+                    first_members.insert(member.binder.name.text.as_str(), member.binder.name.span);
+                    binders.push(
+                        self.allocate_binder(&member.binder.name.text, member.binder.name.span)?,
+                    );
+                }
+                let Some(scope) = self.scopes.last_mut() else {
+                    return Err(error(
+                        ResolveReason::InternalState,
+                        group.span,
+                        "the resolver lost the current lexical scope",
+                    )
+                    .with_context(ResolveContext::MissingLexicalScope));
+                };
+                for binder in binders.iter() {
+                    scope.insert(
+                        binder.spelling.clone(),
+                        ResolvedTermBinding::local(ResolvedTermName::Global(binder.id)),
+                    );
+                }
+                tasks.push(ResolveTask::FinishRecursiveGroup { group, binders });
+                for member in group.members.iter().rev() {
+                    tasks.push(ResolveTask::VisitExpr(&member.initializer));
+                }
+            }
+            ResolveTask::FinishApplication { span } => {
+                let (function, argument) = take_expression_pair(expressions, span)?;
+                expressions.push(ResolvedExpr {
+                    kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
+                        function: Box::new(function),
+                        argument: Box::new(argument),
+                    }),
+                    span,
+                });
+            }
+            ResolveTask::FinishBinary {
+                kind,
+                operator_span,
+                span,
+            } => {
+                let (left, right) = take_expression_pair(expressions, span)?;
+                let binary = ResolvedBinaryExpr {
+                    left: Box::new(left),
+                    right: Box::new(right),
+                    operator_span,
+                };
+                expressions.push(ResolvedExpr {
+                    kind: kind.finish(binary),
+                    span,
+                });
+            }
+            ResolveTask::FinishBinding(binding) => {
+                let (patterns, binders) =
+                    self.resolve_pattern_vector(std::slice::from_ref(&binding.pattern))?;
+                let mut patterns = ResolvedPatternBuffer(patterns);
+                let pattern = patterns.pop().ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        binding.pattern.span,
+                        "the resolver produced no binding pattern",
+                    )
+                    .with_context(ResolveContext::WorkState {
+                        part: "binding-pattern",
+                        problem: "missing",
+                    })
+                })?;
+                let pattern = ResolvedPatternOwner::new(pattern);
+                let annotation = binding
+                    .annotation
+                    .as_ref()
+                    .map(|annotation| self.resolve_type(annotation))
+                    .transpose()?
+                    .map(ResolvedTypeOccurrenceOwner::new);
+                let initializer = expressions.pop_owned().ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        binding.span,
+                        "the resolver lost a binding initializer",
+                    )
+                    .with_context(ResolveContext::WorkState {
+                        part: "binding-initializer",
+                        problem: "missing",
+                    })
+                })?;
+                let Some(scope) = self.scopes.last_mut() else {
+                    return Err(error(
+                        ResolveReason::InternalState,
+                        binding.span,
+                        "the resolver lost the current lexical scope",
+                    )
+                    .with_context(ResolveContext::MissingLexicalScope));
+                };
+                for binder in binders {
+                    scope.insert(
+                        binder.spelling.clone(),
+                        ResolvedTermBinding::local(ResolvedTermName::Global(binder.id)),
+                    );
+                }
+                declarations.push(ResolvedLocalDeclaration::Binding(Box::new(
+                    ResolvedBinding {
+                        pattern: pattern.into_inner(),
+                        annotation: annotation.map(ResolvedTypeOccurrenceOwner::into_inner),
+                        initializer: initializer.into_inner(),
+                        span: binding.span,
+                    },
+                )));
+            }
+            ResolveTask::FinishLocalNewtype(declaration) => {
+                let owner = self.resolve_local_newtype(declaration)?;
+                declarations.push(ResolvedLocalDeclaration::Newtype(owner));
+            }
+            ResolveTask::VisitLexicalEvidence(source) => {
+                let id = crate::interface::LexicalEvidenceId::new(
+                    self.module,
+                    self.next_lexical_evidence,
+                );
+                self.next_lexical_evidence =
+                    self.next_lexical_evidence.checked_add(1).ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            source.span,
+                            "lexical evidence identity space is exhausted",
+                        )
+                        .with_context(ResolveContext::IdentityExhaustion(
+                            ResolveIdentitySpace::LexicalEvidence,
+                        ))
+                    })?;
+                self.constraint_work.charge(1).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        source.span,
+                        "lexical evidence storage exceeded its budget",
+                    )
+                })?;
+                let application = self.resolve_interface_application(&source.application)?;
+                if self
+                    .resource_provider_interfaces
+                    .iter()
+                    .any(|(family, interface)| {
+                        *interface == application.interface.id
+                            && self.source_resource_owned_positions.contains_key(family)
+                    })
+                    || application.interface.id.module().is_builtin_resource()
+                    || self
+                        .imported
+                        .foreign_state_access_interface(application.interface.id)
+                    || self
+                        .imported
+                        .foreign_layout_interface(application.interface.id)
+                {
+                    return Err(error(
+                        ResolveReason::SealedProvider,
+                        source.span,
+                        "only resource acquisition may introduce a sealed provider",
+                    ));
+                }
+                let mut state = Box::new(PendingLexicalResolution {
+                    source,
+                    id,
+                    application: Some(application),
+                    groups: ResolvedImplementationMethodGroupBuffer(Vec::new()),
+                    equations: ResolvedEquationBuffer(Vec::new()),
+                    next: 0,
+                    group_end: 0,
+                });
+                self.constraint_work
+                    .charge(source.equations.len())
+                    .map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            source.span,
+                            "lexical evidence storage exceeded its budget",
+                        )
+                    })?;
+                state
+                    .groups
+                    .0
+                    .try_reserve(source.equations.len())
+                    .map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            source.span,
+                            "lexical evidence storage could not be reserved",
+                        )
+                    })?;
+                tasks.push(ResolveTask::ContinueLexicalEvidence(state));
+            }
+            ResolveTask::ContinueLexicalEvidence(mut state) => {
+                if state.next == state.group_end {
+                    if let Some(group) = state.groups.0.last_mut() {
+                        group.equations = std::mem::replace(
+                            &mut state.equations,
+                            ResolvedEquationBuffer(Vec::new()),
+                        )
+                        .into_boxed_slice();
+                    }
+                    if state.next == state.source.equations.len() {
+                        let evidence = crate::resolved::ResolvedLexicalEvidence {
+                            acquisition: None,
+                            checked: crate::interface::LexicalEvidenceSlot::default(),
+                            id: state.id,
+                            application: state.application.take().ok_or_else(|| {
+                                error(
+                                    ResolveReason::InternalState,
+                                    state.source.span,
+                                    "lexical evidence application is missing",
+                                )
+                                .with_context(
+                                    ResolveContext::WorkState {
+                                        part: "lexical-evidence-application",
+                                        problem: "missing",
+                                    },
+                                )
+                            })?,
+                            method_groups: std::mem::replace(
+                                &mut state.groups,
+                                ResolvedImplementationMethodGroupBuffer(Vec::new()),
+                            )
+                            .into_boxed_slice(),
+                            span: state.source.span,
+                        };
+                        declarations.push(ResolvedLocalDeclaration::Evidence(Box::new(evidence)));
+                        return Ok(());
+                    }
+                    let (group, end) =
+                        self.resolve_lexical_method_group(state.source, state.next)?;
+                    state.groups.0.push(group);
+                    state.group_end = end;
+                    state
+                        .equations
+                        .0
+                        .try_reserve(end - state.next)
+                        .map_err(|_| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                state.source.span,
+                                "lexical method equation storage could not be reserved",
+                            )
+                        })?;
+                }
+                let equation = &state.source.equations[state.next];
+                let scope_checkpoint = self.scopes.len();
+                let (patterns, binders) = self.resolve_pattern_vector(&equation.patterns)?;
+                let patterns = ResolvedPatternBuffer(patterns);
+                self.push_binder_scope_many(&binders);
+                tasks.push(ResolveTask::FinishLexicalEquation {
+                    state,
+                    patterns,
+                    scope_checkpoint,
+                });
+                tasks.push(ResolveTask::VisitExpr(&equation.body));
+            }
+            ResolveTask::FinishLexicalEquation {
+                mut state,
+                patterns,
+                scope_checkpoint,
+            } => {
+                self.scopes.truncate(scope_checkpoint);
+                let equation = &state.source.equations[state.next];
+                let body = expressions.pop_owned().ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        equation.span,
+                        "lexical method body is missing",
+                    )
+                    .with_context(ResolveContext::WorkState {
+                        part: "lexical-method-body",
+                        problem: "missing",
+                    })
+                })?;
+                let binder = state
+                    .groups
+                    .0
+                    .last()
+                    .ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            equation.span,
+                            "lexical method group is missing",
+                        )
+                        .with_context(ResolveContext::WorkState {
+                            part: "lexical-method-group",
+                            problem: "missing",
+                        })
+                    })?
+                    .binder
+                    .id;
+                state.equations.0.push(ResolvedEquation {
+                    name: crate::resolved::ResolvedEquationHead {
+                        binder,
+                        spelling: equation.name.text.clone(),
+                        origin: Origin::Source(equation.name.span),
+                    },
+                    patterns: patterns.into_vec(),
+                    body: body.into_inner(),
+                    span: equation.span,
+                });
+                state.next += 1;
+                tasks.push(ResolveTask::ContinueLexicalEvidence(state));
+            }
+            ResolveTask::FinishRecursiveGroup { group, binders } => {
+                if binders.len() != group.members.len() || expressions.len() < group.members.len() {
+                    return Err(error(
+                        ResolveReason::InternalState,
+                        group.span,
+                        "the resolver lost a recursive group member",
+                    )
+                    .with_context(ResolveContext::WorkState {
+                        part: "recursive-member",
+                        problem: "missing",
+                    }));
+                }
+                let mut annotations = ResolvedTypeOccurrenceBuffer(Vec::new());
+                annotations
+                    .0
+                    .try_reserve(group.members.len())
+                    .map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            group.span,
+                            "recursive annotation storage exceeded its work budget",
+                        )
+                    })?;
+                for member in &group.members {
+                    annotations.0.push(self.resolve_type(&member.annotation)?);
+                }
+                let expression_start = expressions.len() - group.members.len();
+                let initializers = expressions.split_off(expression_start).into_vec();
+                let members = group
+                    .members
+                    .iter()
+                    .zip(binders.into_vec())
+                    .zip(annotations.into_vec())
+                    .zip(initializers)
+                    .map(
+                        |(((member, binder), annotation), initializer)| ResolvedRecursiveMember {
+                            introducer_span: member.introducer_span,
+                            binder,
+                            annotation,
+                            initializer,
+                            span: member.span,
+                        },
+                    )
+                    .collect::<Vec<_>>();
+                declarations.push(ResolvedLocalDeclaration::Recursive(
+                    ResolvedRecursiveGroup {
+                        members,
+                        span: group.span,
+                    },
+                ));
+            }
+            ResolveTask::FinishBlock {
+                declaration_start,
+                scope_checkpoint,
+                nominal_scope_checkpoint,
+                constructor_scope_checkpoint,
+                span,
+            } => {
+                let result = expressions.pop_owned().ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "the resolver lost a block result",
+                    )
+                    .with_context(ResolveContext::WorkState {
+                        part: "block-result",
+                        problem: "missing",
+                    })
+                })?;
+                if declaration_start > declarations.len() {
+                    return Err(error(
+                        ResolveReason::InternalState,
+                        span,
+                        "the resolver lost a block binding",
+                    )
+                    .with_context(ResolveContext::WorkState {
+                        part: "block-binding",
+                        problem: "missing",
+                    }));
+                }
+                let block_declarations = declarations.split_off(declaration_start).into_vec();
+                self.scopes.truncate(scope_checkpoint);
+                self.lexical_nominal_scopes
+                    .truncate(nominal_scope_checkpoint);
+                self.lexical_constructor_scopes
+                    .truncate(constructor_scope_checkpoint);
+                expressions.push(ResolvedExpr {
+                    kind: ResolvedExprKind::Block(ResolvedBlock {
+                        declarations: block_declarations,
+                        result: Box::new(result.into_inner()),
+                        span,
+                    }),
+                    span,
+                });
+            }
+            ResolveTask::FinishFunction {
+                parameter: pattern,
+                scope_checkpoint,
+                span,
+            } => {
+                let body_expression = expressions.pop_owned().ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "the resolver lost a function body",
+                    )
+                    .with_context(ResolveContext::WorkState {
+                        part: "function-body",
+                        problem: "missing",
+                    })
+                })?;
+                if !matches!(body_expression.kind, ResolvedExprKind::Block(_)) {
+                    return Err(error(
+                        ResolveReason::InternalState,
+                        span,
+                        "the resolver produced the wrong function body payload",
+                    )
+                    .with_context(ResolveContext::WorkState {
+                        part: "function-body",
+                        problem: "wrong",
+                    }));
+                }
+                let ResolvedExprKind::Block(body) = body_expression.into_inner().kind else {
+                    unreachable!("the function body shape was checked")
+                };
+                self.scopes.truncate(scope_checkpoint);
+                expressions.push(ResolvedExpr {
+                    kind: ResolvedExprKind::Function(ResolvedFunctionExpr {
+                        pattern: pattern.into_inner(),
+                        body,
+                    }),
+                    span,
+                });
+            }
+            ResolveTask::FinishTuple { count, span } => {
+                let split = expressions.len().checked_sub(count).ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "the resolver lost a tuple element",
+                    )
+                    .with_context(ResolveContext::WorkState {
+                        part: "tuple-element",
+                        problem: "missing",
+                    })
+                })?;
+                let elements = expressions.split_off(split).into_vec();
+                expressions.push(ResolvedExpr {
+                    kind: ResolvedExprKind::Tuple(elements),
+                    span,
+                });
+            }
+        }
+        Ok(())
+    }
+
     fn resolve_work_inner<'a>(
         &mut self,
         initial: ResolveTask<'a>,
@@ -12348,781 +13119,8 @@ impl Resolver {
                         self.visit_expression(expression, &mut tasks, &mut expressions)?;
                     }
                 }
-                ResolveTask::FinishPerform {
-                    effect,
-                    operation,
-                    spelling,
-                    operation_span,
-                    span,
-                } => {
-                    Self::finish_perform(
-                        effect,
-                        operation,
-                        spelling,
-                        operation_span,
-                        span,
-                        &mut expressions,
-                    )?;
-                }
-                ResolveTask::FinishResume { owner, span } => {
-                    let value = expressions.pop_owned().ok_or_else(|| {
-                        error(
-                            ResolveReason::InternalState,
-                            span,
-                            "resume value resolution produced no expression",
-                        )
-                    })?;
-                    expressions.push(ResolvedExpr {
-                        kind: ResolvedExprKind::Resume(ResolvedResumeExpr {
-                            owner: Some(owner),
-                            value: Box::new(value.into_inner()),
-                        }),
-                        span,
-                    });
-                }
-                ResolveTask::FinishHook { effect, span } => {
-                    let body = expressions.pop_owned().ok_or_else(|| {
-                        error(
-                            ResolveReason::InternalState,
-                            span,
-                            "hook body resolution produced no expression",
-                        )
-                        .with_context(ResolveContext::WorkState {
-                            part: "hook-body",
-                            problem: "missing",
-                        })
-                    })?;
-                    expressions.push(self.finish_hook(effect, span, body)?);
-                }
-                ResolveTask::FinishRegistration { effect, span } => {
-                    let body = expressions.pop_owned().ok_or_else(|| {
-                        error(
-                            ResolveReason::InternalState,
-                            span,
-                            "missing registration body",
-                        )
-                        .with_context(ResolveContext::WorkState {
-                            part: "registration-body",
-                            problem: "missing",
-                        })
-                    })?;
-                    let initializer = expressions.pop_owned().ok_or_else(|| {
-                        error(
-                            ResolveReason::InternalState,
-                            span,
-                            "missing registration initializer",
-                        )
-                        .with_context(ResolveContext::WorkState {
-                            part: "registration-initializer",
-                            problem: "missing",
-                        })
-                    })?;
-                    expressions.push(self.finish_registration(effect, span, initializer, body)?);
-                }
-                ResolveTask::FinishCleanup { span } => {
-                    let body = expressions.pop_owned().ok_or_else(|| {
-                        error(ResolveReason::InternalState, span, "missing cleanup body")
-                            .with_context(ResolveContext::WorkState {
-                                part: "cleanup-body",
-                                problem: "missing",
-                            })
-                    })?;
-                    let initializer = expressions.pop_owned().ok_or_else(|| {
-                        error(
-                            ResolveReason::InternalState,
-                            span,
-                            "missing cleanup initializer",
-                        )
-                        .with_context(ResolveContext::WorkState {
-                            part: "cleanup-initializer",
-                            problem: "missing",
-                        })
-                    })?;
-                    expressions.push(self.finish_cleanup(span, initializer, body)?);
-                }
-                ResolveTask::VisitBlock(block) => {
-                    let scope_checkpoint = self.scopes.len();
-                    let nominal_scope_checkpoint = self.lexical_nominal_scopes.len();
-                    let constructor_scope_checkpoint = self.lexical_constructor_scopes.len();
-                    self.scopes.push(HashMap::new());
-                    self.lexical_nominal_scopes.push(HashMap::new());
-                    self.lexical_constructor_scopes.push(HashMap::new());
-                    let declaration_start = declarations.len();
-                    tasks.push(ResolveTask::FinishBlock {
-                        declaration_start,
-                        scope_checkpoint,
-                        nominal_scope_checkpoint,
-                        constructor_scope_checkpoint,
-                        span: block.span,
-                    });
-                    tasks.push(ResolveTask::VisitExpr(&block.result));
-                    for declaration in block.declarations.iter().rev() {
-                        match declaration {
-                            SurfaceLocalDeclaration::Evidence(source) => {
-                                tasks.push(ResolveTask::VisitLexicalEvidence(source));
-                            }
-                            SurfaceLocalDeclaration::Binding(binding) => {
-                                tasks.push(ResolveTask::FinishBinding(binding));
-                                tasks.push(ResolveTask::VisitExpr(&binding.initializer));
-                            }
-                            SurfaceLocalDeclaration::Recursive(group) => {
-                                tasks.push(ResolveTask::VisitRecursiveGroup(group));
-                            }
-                            SurfaceLocalDeclaration::Newtype(declaration) => {
-                                tasks.push(ResolveTask::FinishLocalNewtype(declaration));
-                            }
-                        }
-                    }
-                }
-                ResolveTask::ProviderResourceInitializer {
-                    source,
-                    definition,
-                    family,
-                    span,
-                } => {
-                    self.start_provider_resource(
-                        source,
-                        definition,
-                        family,
-                        span,
-                        &mut tasks,
-                        &mut expressions,
-                    )?;
-                }
-                ResolveTask::CopyWindowState {
-                    source,
-                    family,
-                    position,
-                    span,
-                } => {
-                    self.start_copy_window(
-                        source,
-                        family,
-                        position,
-                        span,
-                        &mut tasks,
-                        &mut expressions,
-                    )?;
-                }
-                ResolveTask::FinishCopyWindow(pending) => {
-                    self.finish_copy_window(pending, &mut expressions)?;
-                }
-                ResolveTask::FinishProviderResource(pending) => {
-                    self.finish_provider_resource(*pending, &mut expressions)?;
-                }
-                ResolveTask::ResourceInitializer { source, span } => {
-                    let initializer = expressions.pop_owned().ok_or_else(|| {
-                        error(
-                            ResolveReason::InternalState,
-                            span,
-                            "resource initializer is missing",
-                        )
-                        .with_context(ResolveContext::WorkState {
-                            part: "resource-initializer",
-                            problem: "missing",
-                        })
-                    })?;
-                    let identity =
-                        self.allocate_type_variable(&source.identity, None, Kind::Type)?;
-                    let handle = self.allocate_binder(&source.handle.text, source.handle.span)?;
-                    self.type_work.charge(4).map_err(|()| {
-                        error(
-                            ResolveReason::TypeResourceExhausted,
-                            span,
-                            "resource scope retention exceeded its budget",
-                        )
-                    })?;
-                    self.lexical_method_parameters
-                        .0
-                        .try_reserve(1)
-                        .map_err(|_| {
-                            error(
-                                ResolveReason::TypeResourceExhausted,
-                                span,
-                                "resource identity retention could not be reserved",
-                            )
-                        })?;
-                    let retained = self.clone_type_variable_for_retention(
-                        &identity,
-                        span,
-                        "resource identity retention exceeded its budget",
-                    )?;
-                    self.lexical_method_parameters.push(retained);
-                    let scope_checkpoint = self.scopes.len();
-                    let type_scope_checkpoint = self.type_scopes.len();
-                    let mut terms = HashMap::new();
-                    terms.try_reserve(1).map_err(|_| {
-                        error(
-                            ResolveReason::TypeResourceExhausted,
-                            span,
-                            "resource handle scope could not be reserved",
-                        )
-                    })?;
-                    terms.insert(
-                        handle.spelling.clone(),
-                        ResolvedTermBinding::local(ResolvedTermName::Global(handle.id)),
-                    );
-                    let mut types = HashMap::new();
-                    types.try_reserve(1).map_err(|_| {
-                        error(
-                            ResolveReason::TypeResourceExhausted,
-                            span,
-                            "resource type scope could not be reserved",
-                        )
-                    })?;
-                    types.insert(identity.spelling.clone(), identity.id);
-                    self.scopes.try_reserve(1).map_err(|_| {
-                        error(
-                            ResolveReason::TypeResourceExhausted,
-                            span,
-                            "resource scope could not be reserved",
-                        )
-                    })?;
-                    self.type_scopes.try_reserve(1).map_err(|_| {
-                        error(
-                            ResolveReason::TypeResourceExhausted,
-                            span,
-                            "resource type scope could not be reserved",
-                        )
-                    })?;
-                    self.scopes.push(terms);
-                    self.type_scopes.push(types);
-                    tasks.0.try_reserve(2).map_err(|_| {
-                        error(
-                            ResolveReason::TypeResourceExhausted,
-                            span,
-                            "resource body scheduling could not be reserved",
-                        )
-                    })?;
-                    self.type_work.charge(1).map_err(|()| {
-                        error(
-                            ResolveReason::TypeResourceExhausted,
-                            span,
-                            "resource initializer ownership exceeded its type-work budget",
-                        )
-                    })?;
-                    tasks.push(ResolveTask::FinishResource {
-                        kind: source.kind,
-                        identity,
-                        handle,
-                        initializer: Box::new(initializer),
-                        scope_checkpoint,
-                        type_scope_checkpoint,
-                        span,
-                    });
-                    tasks.push(ResolveTask::VisitBlock(&source.body));
-                }
-                ResolveTask::FinishResource {
-                    kind,
-                    identity,
-                    handle,
-                    initializer,
-                    scope_checkpoint,
-                    type_scope_checkpoint,
-                    span,
-                } => {
-                    let body = expressions.pop_owned().ok_or_else(|| {
-                        error(
-                            ResolveReason::InternalState,
-                            span,
-                            "resource body is missing",
-                        )
-                        .with_context(ResolveContext::WorkState {
-                            part: "resource-body",
-                            problem: "missing",
-                        })
-                    })?;
-                    self.scopes.truncate(scope_checkpoint);
-                    self.type_scopes.truncate(type_scope_checkpoint);
-                    expressions.push(self.finish_resource_expression(
-                        kind,
-                        identity,
-                        handle,
-                        *initializer,
-                        body,
-                        span,
-                    )?);
-                }
-                ResolveTask::VisitRecursiveGroup(group) => {
-                    let mut first_members = HashMap::with_capacity(group.members.len());
-                    let mut binders = ResolvedBinderBuffer(Vec::with_capacity(group.members.len()));
-                    for member in &group.members {
-                        if let Some(first_span) =
-                            first_members.get(member.binder.name.text.as_str()).copied()
-                        {
-                            let mut diagnostic = Diagnostic::new(
-                                ResolveReason::DuplicateRecursiveMember,
-                                SourceLabel::new(
-                                    member.binder.name.span,
-                                    "this recursive member name is already defined",
-                                ),
-                            );
-                            diagnostic.related.push(SourceLabel::new(
-                                first_span,
-                                "the first recursive member is here",
-                            ));
-                            diagnostic.found = Some(member.binder.name.text.clone());
-                            return Err(diagnostic.into());
-                        }
-                        first_members
-                            .insert(member.binder.name.text.as_str(), member.binder.name.span);
-                        binders.push(
-                            self.allocate_binder(
-                                &member.binder.name.text,
-                                member.binder.name.span,
-                            )?,
-                        );
-                    }
-                    let Some(scope) = self.scopes.last_mut() else {
-                        return Err(error(
-                            ResolveReason::InternalState,
-                            group.span,
-                            "the resolver lost the current lexical scope",
-                        )
-                        .with_context(ResolveContext::MissingLexicalScope));
-                    };
-                    for binder in binders.iter() {
-                        scope.insert(
-                            binder.spelling.clone(),
-                            ResolvedTermBinding::local(ResolvedTermName::Global(binder.id)),
-                        );
-                    }
-                    tasks.push(ResolveTask::FinishRecursiveGroup { group, binders });
-                    for member in group.members.iter().rev() {
-                        tasks.push(ResolveTask::VisitExpr(&member.initializer));
-                    }
-                }
-                ResolveTask::FinishApplication { span } => {
-                    let (function, argument) = take_expression_pair(&mut expressions, span)?;
-                    expressions.push(ResolvedExpr {
-                        kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
-                            function: Box::new(function),
-                            argument: Box::new(argument),
-                        }),
-                        span,
-                    });
-                }
-                ResolveTask::FinishBinary {
-                    kind,
-                    operator_span,
-                    span,
-                } => {
-                    let (left, right) = take_expression_pair(&mut expressions, span)?;
-                    let binary = ResolvedBinaryExpr {
-                        left: Box::new(left),
-                        right: Box::new(right),
-                        operator_span,
-                    };
-                    expressions.push(ResolvedExpr {
-                        kind: kind.finish(binary),
-                        span,
-                    });
-                }
-                ResolveTask::FinishBinding(binding) => {
-                    let (patterns, binders) =
-                        self.resolve_pattern_vector(std::slice::from_ref(&binding.pattern))?;
-                    let mut patterns = ResolvedPatternBuffer(patterns);
-                    let pattern = patterns.pop().ok_or_else(|| {
-                        error(
-                            ResolveReason::InternalState,
-                            binding.pattern.span,
-                            "the resolver produced no binding pattern",
-                        )
-                        .with_context(ResolveContext::WorkState {
-                            part: "binding-pattern",
-                            problem: "missing",
-                        })
-                    })?;
-                    let pattern = ResolvedPatternOwner::new(pattern);
-                    let annotation = binding
-                        .annotation
-                        .as_ref()
-                        .map(|annotation| self.resolve_type(annotation))
-                        .transpose()?
-                        .map(ResolvedTypeOccurrenceOwner::new);
-                    let initializer = expressions.pop_owned().ok_or_else(|| {
-                        error(
-                            ResolveReason::InternalState,
-                            binding.span,
-                            "the resolver lost a binding initializer",
-                        )
-                        .with_context(ResolveContext::WorkState {
-                            part: "binding-initializer",
-                            problem: "missing",
-                        })
-                    })?;
-                    let Some(scope) = self.scopes.last_mut() else {
-                        return Err(error(
-                            ResolveReason::InternalState,
-                            binding.span,
-                            "the resolver lost the current lexical scope",
-                        )
-                        .with_context(ResolveContext::MissingLexicalScope));
-                    };
-                    for binder in binders {
-                        scope.insert(
-                            binder.spelling.clone(),
-                            ResolvedTermBinding::local(ResolvedTermName::Global(binder.id)),
-                        );
-                    }
-                    declarations.push(ResolvedLocalDeclaration::Binding(Box::new(
-                        ResolvedBinding {
-                            pattern: pattern.into_inner(),
-                            annotation: annotation.map(ResolvedTypeOccurrenceOwner::into_inner),
-                            initializer: initializer.into_inner(),
-                            span: binding.span,
-                        },
-                    )));
-                }
-                ResolveTask::FinishLocalNewtype(declaration) => {
-                    let owner = self.resolve_local_newtype(declaration)?;
-                    declarations.push(ResolvedLocalDeclaration::Newtype(owner));
-                }
-                ResolveTask::VisitLexicalEvidence(source) => {
-                    let id = crate::interface::LexicalEvidenceId::new(
-                        self.module,
-                        self.next_lexical_evidence,
-                    );
-                    self.next_lexical_evidence =
-                        self.next_lexical_evidence.checked_add(1).ok_or_else(|| {
-                            error(
-                                ResolveReason::InternalState,
-                                source.span,
-                                "lexical evidence identity space is exhausted",
-                            )
-                            .with_context(
-                                ResolveContext::IdentityExhaustion(
-                                    ResolveIdentitySpace::LexicalEvidence,
-                                ),
-                            )
-                        })?;
-                    self.constraint_work.charge(1).map_err(|()| {
-                        error(
-                            ResolveReason::TypeResourceExhausted,
-                            source.span,
-                            "lexical evidence storage exceeded its budget",
-                        )
-                    })?;
-                    let application = self.resolve_interface_application(&source.application)?;
-                    if self
-                        .resource_provider_interfaces
-                        .iter()
-                        .any(|(family, interface)| {
-                            *interface == application.interface.id
-                                && self.source_resource_owned_positions.contains_key(family)
-                        })
-                        || application.interface.id.module().is_builtin_resource()
-                        || self
-                            .imported
-                            .foreign_state_access_interface(application.interface.id)
-                        || self
-                            .imported
-                            .foreign_layout_interface(application.interface.id)
-                    {
-                        return Err(error(
-                            ResolveReason::SealedProvider,
-                            source.span,
-                            "only resource acquisition may introduce a sealed provider",
-                        ));
-                    }
-                    let mut state = Box::new(PendingLexicalResolution {
-                        source,
-                        id,
-                        application: Some(application),
-                        groups: ResolvedImplementationMethodGroupBuffer(Vec::new()),
-                        equations: ResolvedEquationBuffer(Vec::new()),
-                        next: 0,
-                        group_end: 0,
-                    });
-                    self.constraint_work
-                        .charge(source.equations.len())
-                        .map_err(|()| {
-                            error(
-                                ResolveReason::TypeResourceExhausted,
-                                source.span,
-                                "lexical evidence storage exceeded its budget",
-                            )
-                        })?;
-                    state
-                        .groups
-                        .0
-                        .try_reserve(source.equations.len())
-                        .map_err(|_| {
-                            error(
-                                ResolveReason::TypeResourceExhausted,
-                                source.span,
-                                "lexical evidence storage could not be reserved",
-                            )
-                        })?;
-                    tasks.push(ResolveTask::ContinueLexicalEvidence(state));
-                }
-                ResolveTask::ContinueLexicalEvidence(mut state) => {
-                    if state.next == state.group_end {
-                        if let Some(group) = state.groups.0.last_mut() {
-                            group.equations = std::mem::replace(
-                                &mut state.equations,
-                                ResolvedEquationBuffer(Vec::new()),
-                            )
-                            .into_boxed_slice();
-                        }
-                        if state.next == state.source.equations.len() {
-                            let evidence = crate::resolved::ResolvedLexicalEvidence {
-                                acquisition: None,
-                                checked: crate::interface::LexicalEvidenceSlot::default(),
-                                id: state.id,
-                                application: state.application.take().ok_or_else(|| {
-                                    error(
-                                        ResolveReason::InternalState,
-                                        state.source.span,
-                                        "lexical evidence application is missing",
-                                    )
-                                    .with_context(
-                                        ResolveContext::WorkState {
-                                            part: "lexical-evidence-application",
-                                            problem: "missing",
-                                        },
-                                    )
-                                })?,
-                                method_groups: std::mem::replace(
-                                    &mut state.groups,
-                                    ResolvedImplementationMethodGroupBuffer(Vec::new()),
-                                )
-                                .into_boxed_slice(),
-                                span: state.source.span,
-                            };
-                            declarations
-                                .push(ResolvedLocalDeclaration::Evidence(Box::new(evidence)));
-                            continue;
-                        }
-                        let (group, end) =
-                            self.resolve_lexical_method_group(state.source, state.next)?;
-                        state.groups.0.push(group);
-                        state.group_end = end;
-                        state
-                            .equations
-                            .0
-                            .try_reserve(end - state.next)
-                            .map_err(|_| {
-                                error(
-                                    ResolveReason::TypeResourceExhausted,
-                                    state.source.span,
-                                    "lexical method equation storage could not be reserved",
-                                )
-                            })?;
-                    }
-                    let equation = &state.source.equations[state.next];
-                    let scope_checkpoint = self.scopes.len();
-                    let (patterns, binders) = self.resolve_pattern_vector(&equation.patterns)?;
-                    let patterns = ResolvedPatternBuffer(patterns);
-                    self.push_binder_scope_many(&binders);
-                    tasks.push(ResolveTask::FinishLexicalEquation {
-                        state,
-                        patterns,
-                        scope_checkpoint,
-                    });
-                    tasks.push(ResolveTask::VisitExpr(&equation.body));
-                }
-                ResolveTask::FinishLexicalEquation {
-                    mut state,
-                    patterns,
-                    scope_checkpoint,
-                } => {
-                    self.scopes.truncate(scope_checkpoint);
-                    let equation = &state.source.equations[state.next];
-                    let body = expressions.pop_owned().ok_or_else(|| {
-                        error(
-                            ResolveReason::InternalState,
-                            equation.span,
-                            "lexical method body is missing",
-                        )
-                        .with_context(ResolveContext::WorkState {
-                            part: "lexical-method-body",
-                            problem: "missing",
-                        })
-                    })?;
-                    let binder = state
-                        .groups
-                        .0
-                        .last()
-                        .ok_or_else(|| {
-                            error(
-                                ResolveReason::InternalState,
-                                equation.span,
-                                "lexical method group is missing",
-                            )
-                            .with_context(ResolveContext::WorkState {
-                                part: "lexical-method-group",
-                                problem: "missing",
-                            })
-                        })?
-                        .binder
-                        .id;
-                    state.equations.0.push(ResolvedEquation {
-                        name: crate::resolved::ResolvedEquationHead {
-                            binder,
-                            spelling: equation.name.text.clone(),
-                            origin: Origin::Source(equation.name.span),
-                        },
-                        patterns: patterns.into_vec(),
-                        body: body.into_inner(),
-                        span: equation.span,
-                    });
-                    state.next += 1;
-                    tasks.push(ResolveTask::ContinueLexicalEvidence(state));
-                }
-                ResolveTask::FinishRecursiveGroup { group, binders } => {
-                    if binders.len() != group.members.len()
-                        || expressions.len() < group.members.len()
-                    {
-                        return Err(error(
-                            ResolveReason::InternalState,
-                            group.span,
-                            "the resolver lost a recursive group member",
-                        )
-                        .with_context(ResolveContext::WorkState {
-                            part: "recursive-member",
-                            problem: "missing",
-                        }));
-                    }
-                    let mut annotations = ResolvedTypeOccurrenceBuffer(Vec::new());
-                    annotations
-                        .0
-                        .try_reserve(group.members.len())
-                        .map_err(|_| {
-                            error(
-                                ResolveReason::TypeResourceExhausted,
-                                group.span,
-                                "recursive annotation storage exceeded its work budget",
-                            )
-                        })?;
-                    for member in &group.members {
-                        annotations.0.push(self.resolve_type(&member.annotation)?);
-                    }
-                    let expression_start = expressions.len() - group.members.len();
-                    let initializers = expressions.split_off(expression_start).into_vec();
-                    let members = group
-                        .members
-                        .iter()
-                        .zip(binders.into_vec())
-                        .zip(annotations.into_vec())
-                        .zip(initializers)
-                        .map(|(((member, binder), annotation), initializer)| {
-                            ResolvedRecursiveMember {
-                                introducer_span: member.introducer_span,
-                                binder,
-                                annotation,
-                                initializer,
-                                span: member.span,
-                            }
-                        })
-                        .collect::<Vec<_>>();
-                    declarations.push(ResolvedLocalDeclaration::Recursive(
-                        ResolvedRecursiveGroup {
-                            members,
-                            span: group.span,
-                        },
-                    ));
-                }
-                ResolveTask::FinishBlock {
-                    declaration_start,
-                    scope_checkpoint,
-                    nominal_scope_checkpoint,
-                    constructor_scope_checkpoint,
-                    span,
-                } => {
-                    let result = expressions.pop_owned().ok_or_else(|| {
-                        error(
-                            ResolveReason::InternalState,
-                            span,
-                            "the resolver lost a block result",
-                        )
-                        .with_context(ResolveContext::WorkState {
-                            part: "block-result",
-                            problem: "missing",
-                        })
-                    })?;
-                    if declaration_start > declarations.len() {
-                        return Err(error(
-                            ResolveReason::InternalState,
-                            span,
-                            "the resolver lost a block binding",
-                        )
-                        .with_context(ResolveContext::WorkState {
-                            part: "block-binding",
-                            problem: "missing",
-                        }));
-                    }
-                    let block_declarations = declarations.split_off(declaration_start).into_vec();
-                    self.scopes.truncate(scope_checkpoint);
-                    self.lexical_nominal_scopes
-                        .truncate(nominal_scope_checkpoint);
-                    self.lexical_constructor_scopes
-                        .truncate(constructor_scope_checkpoint);
-                    expressions.push(ResolvedExpr {
-                        kind: ResolvedExprKind::Block(ResolvedBlock {
-                            declarations: block_declarations,
-                            result: Box::new(result.into_inner()),
-                            span,
-                        }),
-                        span,
-                    });
-                }
-                ResolveTask::FinishFunction {
-                    parameter: pattern,
-                    scope_checkpoint,
-                    span,
-                } => {
-                    let body_expression = expressions.pop_owned().ok_or_else(|| {
-                        error(
-                            ResolveReason::InternalState,
-                            span,
-                            "the resolver lost a function body",
-                        )
-                        .with_context(ResolveContext::WorkState {
-                            part: "function-body",
-                            problem: "missing",
-                        })
-                    })?;
-                    if !matches!(body_expression.kind, ResolvedExprKind::Block(_)) {
-                        return Err(error(
-                            ResolveReason::InternalState,
-                            span,
-                            "the resolver produced the wrong function body payload",
-                        )
-                        .with_context(ResolveContext::WorkState {
-                            part: "function-body",
-                            problem: "wrong",
-                        }));
-                    }
-                    let ResolvedExprKind::Block(body) = body_expression.into_inner().kind else {
-                        unreachable!("the function body shape was checked")
-                    };
-                    self.scopes.truncate(scope_checkpoint);
-                    expressions.push(ResolvedExpr {
-                        kind: ResolvedExprKind::Function(ResolvedFunctionExpr {
-                            pattern: pattern.into_inner(),
-                            body,
-                        }),
-                        span,
-                    });
-                }
-                ResolveTask::FinishTuple { count, span } => {
-                    let split = expressions.len().checked_sub(count).ok_or_else(|| {
-                        error(
-                            ResolveReason::InternalState,
-                            span,
-                            "the resolver lost a tuple element",
-                        )
-                        .with_context(ResolveContext::WorkState {
-                            part: "tuple-element",
-                            problem: "missing",
-                        })
-                    })?;
-                    let elements = expressions.split_off(split).into_vec();
-                    expressions.push(ResolvedExpr {
-                        kind: ResolvedExprKind::Tuple(elements),
-                        span,
-                    });
+                task => {
+                    self.resolve_work_step(task, &mut tasks, &mut expressions, &mut declarations)?;
                 }
             }
         }

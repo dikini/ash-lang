@@ -324,6 +324,21 @@ enum MonotypeVariableKinds<'scope, 'kind> {
     },
 }
 
+enum OwnerKindTask<'a> {
+    Visit(&'a Type),
+    Argument(&'a crate::types::KindedArgument),
+    Instance(&'a EffectInstance),
+    Row(&'a EffectRow),
+    TypeRows(&'a Type),
+    CheckArgument(&'a Kind),
+    FinishResource,
+    FinishRowArgument,
+    Sequence(std::slice::Iter<'a, Type>),
+    FinishTuple(usize),
+    FinishApplication,
+    FinishFunction,
+}
+
 enum OwnerValidationRoot<'a> {
     Type(&'a Type),
     Argument(&'a crate::types::KindedArgument),
@@ -10812,48 +10827,463 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         }
     }
 
+    // Keep row-only admission scratch off the primitive-kind validation stack.
+    #[inline(never)]
+    fn validate_owner_row_header(
+        &self,
+        row: &EffectRow,
+        variable_kinds: MonotypeVariableKinds<'_, '_>,
+        role: OwnerValidationRole,
+        node: Option<NodeId>,
+    ) -> Result<(), ValidationError> {
+        let resource = || ValidationError::new(ValidationReason::Resource, None);
+        self.charge_type_work(row.known().len())?;
+        if let Some(tail) = row.tail() {
+            self.charge_type_work(tail.lacks().len().checked_add(1).ok_or_else(resource)?)?;
+            match tail.variable() {
+                crate::types::EffectRowVariable::Inference(_) => match role {
+                    OwnerValidationRole::KindOnly => {
+                        // No-node kind output confers no final row authority.
+                        if !matches!(variable_kinds, MonotypeVariableKinds::Core(_)) {
+                            return Err(ValidationError::new(ValidationReason::Registry, None));
+                        }
+                    }
+                    OwnerValidationRole::FinalRows(node) => {
+                        if !self.conditional_row_position(row, node)? {
+                            return Err(ValidationError::with_cause(
+                                ValidationCause::UnresolvedCoreRow,
+                                Some(node),
+                            ));
+                        }
+                    }
+                },
+                crate::types::EffectRowVariable::Rigid(identity) => {
+                    // An exclusion cannot depend on its own row through
+                    // a nested exact-owner argument: that would introduce
+                    // a recursive lacks constraint in final Core.
+                    for excluded in tail.lacks() {
+                        let mut dependencies = HashSet::new();
+                        for argument in excluded.arguments() {
+                            self.collect_owner_argument_type_variables(
+                                argument,
+                                &mut dependencies,
+                            )?;
+                        }
+                        if dependencies.contains(&identity) {
+                            return Err(ValidationError::with_cause(
+                                ValidationCause::UnprovedRowLacks,
+                                node,
+                            ));
+                        }
+                    }
+                    let kind = match variable_kinds {
+                        MonotypeVariableKinds::Core(type_binders) => match identity {
+                            crate::types::TypeVariableId::Resolved { .. } => {
+                                if let Some(parameter) =
+                                    self.program.registry.type_variable(identity)
+                                {
+                                    Some(&parameter.kind)
+                                } else {
+                                    self.provider_external_parameter_kind(identity)?
+                                }
+                            }
+                            crate::types::TypeVariableId::Generated(_) => {
+                                type_binders.get(&identity).map(|(kind, _)| *kind)
+                            }
+                        },
+                        MonotypeVariableKinds::CatalogOwner(parameters) => {
+                            self.charge_type_work(parameters.len())?;
+                            let mut found = None;
+                            for (parameter, kind) in parameters {
+                                if *parameter == identity {
+                                    if found.is_some() {
+                                        return Err(ValidationError::new(
+                                            ValidationReason::Registry,
+                                            node,
+                                        ));
+                                    }
+                                    found = Some(kind);
+                                }
+                            }
+                            found
+                        }
+                        MonotypeVariableKinds::Registry {
+                            owner,
+                            parameter_owners,
+                        } => {
+                            if parameter_owners.get(&identity)
+                                != Some(&RegistryParameterOwner::Nominal(owner))
+                                && !owner.is_lexical()
+                            {
+                                return Err(ValidationError::new(ValidationReason::Registry, node));
+                            }
+                            self.program
+                                .registry
+                                .type_variable(identity)
+                                .map(|parameter| &parameter.kind)
+                        }
+                    };
+                    let kind = kind.ok_or_else(|| {
+                        ValidationError::with_cause(ValidationCause::UnknownCoreRowBinder, node)
+                    })?;
+                    if !matches!(kind, Kind::EffectRow) {
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::NonRowTailKind,
+                            node,
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn admitted_owner_kind(&self, kind: &Kind) -> Result<bool, ValidationError> {
+        let resource = || ValidationError::new(ValidationReason::Resource, None);
+        let mut pending = Vec::new();
+        self.charge_type_work(1)?;
+        pending.try_reserve(1).map_err(|_| resource())?;
+        pending.push((kind, true));
+        while let Some((kind, complete)) = pending.pop() {
+            match kind {
+                Kind::Type => {}
+                Kind::EffectRow if complete => {}
+                Kind::EffectRow => return Ok(false),
+                Kind::Arrow(domain, codomain) => {
+                    self.charge_type_work(2)?;
+                    pending.try_reserve(2).map_err(|_| resource())?;
+                    pending.push((codomain.as_ref(), false));
+                    pending.push((domain.as_ref(), false));
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    // Type visits share the existing worklists without retaining their scratch
+    // through row and completed-result validation.
+    #[inline(never)]
+    fn visit_owner_kind_type<'task>(
+        &'task self,
+        ty: &'task Type,
+        variable_kinds: MonotypeVariableKinds<'_, '_>,
+        node: Option<NodeId>,
+        work: &mut Vec<OwnerKindTask<'task>>,
+        completed: &mut Vec<Kind>,
+    ) -> Result<bool, ValidationError> {
+        use OwnerKindTask as Task;
+        let resource = || ValidationError::new(ValidationReason::Resource, None);
+        match ty {
+            Type::Bytes | Type::String | Type::Int | Type::Bool | Type::Unit => {
+                self.charge_type_work(1)?;
+                completed.try_reserve(1).map_err(|_| resource())?;
+                completed.push(Kind::Type);
+            }
+            Type::Nominal(identity) => {
+                self.charge_type_work(1)?;
+                let result = match self.program.registry.nominal_kind(*identity) {
+                    Some(crate::resolved::CanonicalNominalKind::Parameters {
+                        parameters, ..
+                    }) => {
+                        let mut result = Kind::Type;
+                        for parameter in parameters.iter().rev() {
+                            let domain = self.clone_kind_charged(&parameter.kind)?;
+                            self.charge_type_work(1)?;
+                            result = Kind::Arrow(Box::new(domain), Box::new(result));
+                        }
+                        result
+                    }
+                    Some(crate::resolved::CanonicalNominalKind::Frozen { kind, .. })
+                        if self.contextual_registry.is_some()
+                            || self.program.registry.has_provider_contracts()
+                            || self.authenticated_abstract_nominal(*identity)? =>
+                    {
+                        self.clone_kind_charged(kind)?
+                    }
+                    _ => {
+                        return Err(ValidationError::new(ValidationReason::Registry, None));
+                    }
+                };
+                completed.try_reserve(1).map_err(|_| resource())?;
+                completed.push(result);
+            }
+            Type::Variable(identity) => {
+                let kind = match variable_kinds {
+                    MonotypeVariableKinds::Registry {
+                        owner,
+                        parameter_owners,
+                    } => {
+                        if parameter_owners.get(identity)
+                            != Some(&RegistryParameterOwner::Nominal(owner))
+                            && !owner.is_lexical()
+                        {
+                            self.charge_type_work(1)?;
+
+                            return Err(ValidationError::new(ValidationReason::Registry, None));
+                        }
+                        let Some(parameter) = self.program.registry.type_variable(*identity) else {
+                            self.charge_type_work(1)?;
+
+                            return Err(ValidationError::new(ValidationReason::Registry, None));
+                        };
+                        &parameter.kind
+                    }
+                    MonotypeVariableKinds::CatalogOwner(parameters) => {
+                        self.charge_type_work(parameters.len())?;
+                        let mut found = None;
+                        for (parameter, kind) in parameters {
+                            if parameter == identity {
+                                if found.is_some() {
+                                    return Err(ValidationError::new(
+                                        ValidationReason::Registry,
+                                        None,
+                                    ));
+                                }
+                                found = Some(kind);
+                            }
+                        }
+                        found
+                            .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?
+                    }
+                    MonotypeVariableKinds::Core(type_binders) => match identity {
+                        crate::types::TypeVariableId::Resolved { .. } => {
+                            if let Some(parameter) = self.program.registry.type_variable(*identity)
+                            {
+                                &parameter.kind
+                            } else if let Some(kind) =
+                                self.provider_external_parameter_kind(*identity)?
+                            {
+                                kind
+                            } else {
+                                self.charge_type_work(1)?;
+
+                                return Err(ValidationError::new(ValidationReason::Registry, None));
+                            }
+                        }
+                        crate::types::TypeVariableId::Generated(_) => {
+                            if let Some((kind, _)) = type_binders.get(identity) {
+                                *kind
+                            } else if let Some(kind) =
+                                self.provider_external_parameter_kind(*identity)?
+                            {
+                                kind
+                            } else {
+                                self.charge_type_work(1)?;
+                                return Err(ValidationError::with_cause(
+                                    ValidationCause::MissingGeneratedTypeBinder,
+                                    None,
+                                ));
+                            }
+                        }
+                    },
+                };
+                let retained = self.clone_kind_charged(kind)?;
+                completed.try_reserve(1).map_err(|_| resource())?;
+                completed.push(retained);
+            }
+            Type::Inference(_) => {
+                self.charge_type_work(1)?;
+                return Err(match variable_kinds {
+                    MonotypeVariableKinds::Core(_) => {
+                        ValidationError::with_cause(ValidationCause::UnresolvedCoreInference, None)
+                    }
+                    MonotypeVariableKinds::Registry { .. }
+                    | MonotypeVariableKinds::CatalogOwner(_) => {
+                        ValidationError::new(ValidationReason::Registry, None)
+                    }
+                });
+            }
+            Type::Forall(_, _) => {
+                self.charge_type_work(1)?;
+                return Ok(false);
+            }
+            Type::Tuple(elements) => {
+                self.charge_type_work(1)?;
+                work.try_reserve(2).map_err(|_| resource())?;
+                work.push(Task::FinishTuple(elements.len()));
+                work.push(Task::Sequence(elements.iter()));
+            }
+            Type::Application(function, argument) => {
+                self.charge_type_work(1)?;
+                work.try_reserve(3).map_err(|_| resource())?;
+                work.push(Task::FinishApplication);
+                work.push(Task::Visit(argument));
+                work.push(Task::Visit(function));
+            }
+            Type::Function(domain, codomain) => {
+                self.charge_type_work(1)?;
+                work.try_reserve(3).map_err(|_| resource())?;
+                work.push(Task::FinishFunction);
+                work.push(Task::Visit(codomain));
+                work.push(Task::Visit(domain));
+            }
+            Type::EffectfulFunction(domain, codomain) => {
+                if !F::ALLOWS_EFFECTFUL_TYPES {
+                    return Ok(false);
+                }
+                self.charge_type_work(1)?;
+                self.charge_type_work(1)?;
+                work.try_reserve(4).map_err(|_| resource())?;
+                work.push(Task::FinishFunction);
+                work.push(Task::Row(codomain.effects()));
+                work.push(Task::Visit(codomain.value()));
+                work.push(Task::Visit(domain));
+            }
+            Type::ResourceApply(resource_id, arguments) => {
+                self.charge_type_work(1)?;
+                let registry = &self.program.registry;
+                let signature = registry
+                    .owner_signature(crate::resolved::OwnerId::Resource(*resource_id))
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, node))?;
+                let family = registry
+                    .resource_signature_family(*resource_id)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, node))?;
+                if !matches!(registry.nominal_kind(family), Some(crate::resolved::CanonicalNominalKind::RowBearingResource { resource: canonical, .. }) if canonical == *resource_id)
+                    || signature.parameters.len() != arguments.len()
+                {
+                    return Ok(false);
+                }
+                let owned_position =
+                    if let Some(original) = registry.source_resource_fact(*resource_id) {
+                        self.charge_type_work(original.parameters.len())?;
+                        if original.family != family
+                            || original.parameters.len() != signature.parameters.len()
+                            || !original
+                                .parameters
+                                .iter()
+                                .zip(signature.parameters.iter())
+                                .all(|(formal, canonical)| formal.id == *canonical)
+                        {
+                            return Err(ValidationError::new(ValidationReason::Registry, node));
+                        }
+                        original.owned_position
+                    } else {
+                        // Experimental provider certificates retain their
+                        // existing first-owned formal convention.
+                        0
+                    };
+                let owned = signature
+                    .parameters
+                    .get(owned_position)
+                    .and_then(|id| registry.type_variable(*id))
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, node))?;
+                if owned.kind != Kind::Type {
+                    return Ok(false);
+                }
+                self.charge_type_work(arguments.len())?;
+                let mut has_row = false;
+                for identity in signature.parameters.iter() {
+                    let parameter = registry
+                        .type_variable(*identity)
+                        .ok_or_else(|| ValidationError::new(ValidationReason::Registry, node))?;
+                    if !self.admitted_owner_kind(&parameter.kind)? {
+                        return Ok(false);
+                    }
+                    has_row |= parameter.kind == Kind::EffectRow;
+                }
+                if !has_row {
+                    return Ok(false);
+                }
+                self.charge_type_work(
+                    arguments
+                        .len()
+                        .checked_mul(2)
+                        .and_then(|n| n.checked_add(1))
+                        .ok_or_else(resource)?,
+                )?;
+                work.try_reserve(
+                    arguments
+                        .len()
+                        .checked_mul(2)
+                        .and_then(|n| n.checked_add(1))
+                        .ok_or_else(resource)?,
+                )
+                .map_err(|_| resource())?;
+                work.push(Task::FinishResource);
+                for (argument, identity) in arguments.iter().zip(signature.parameters.iter()).rev()
+                {
+                    let parameter = registry
+                        .type_variable(*identity)
+                        .ok_or_else(|| ValidationError::new(ValidationReason::Registry, node))?;
+                    if matches!(argument, crate::types::KindedArgument::RowArg(_))
+                        != matches!(parameter.kind, Kind::EffectRow)
+                    {
+                        return Ok(false);
+                    }
+                    work.push(Task::CheckArgument(&parameter.kind));
+                    work.push(Task::Argument(argument));
+                }
+            }
+            Type::ForeignOwnerApply(nominal, arguments) => {
+                if !F::ALLOWS_EFFECTFUL_TYPES {
+                    return Ok(false);
+                }
+                let registry = &self.program.registry;
+                let span = match registry
+                    .nominal_kind(*nominal)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, node))?
+                {
+                    crate::resolved::CanonicalNominalKind::Parameters { origin, .. }
+                    | crate::resolved::CanonicalNominalKind::Frozen { origin, .. }
+                    | crate::resolved::CanonicalNominalKind::RowBearingResource {
+                        origin, ..
+                    } => origin,
+                };
+                let mut owner_work = TypeWorkBudget::with_limit(
+                    self.type_work_limit.saturating_sub(self.type_work.get()),
+                );
+                let result = crate::foreign::source_owner::row_owner_parameters(
+                    *nominal,
+                    registry,
+                    span,
+                    &mut owner_work,
+                );
+                self.charge_type_work(owner_work.used())?;
+                let parameters = result.map_err(|error| {
+                    ValidationError::new(
+                        if error.is_resource_exhaustion() {
+                            ValidationReason::Resource
+                        } else {
+                            ValidationReason::Registry
+                        },
+                        node,
+                    )
+                })?;
+                if parameters.len() != arguments.len() {
+                    return Ok(false);
+                }
+                let count = arguments
+                    .len()
+                    .checked_mul(2)
+                    .and_then(|n| n.checked_add(1))
+                    .ok_or_else(resource)?;
+                self.charge_type_work(count)?;
+                work.try_reserve(count).map_err(|_| resource())?;
+                work.push(Task::FinishResource);
+                for (argument, parameter) in arguments.iter().zip(parameters.iter()).rev() {
+                    if matches!(argument, crate::types::KindedArgument::RowArg(_))
+                        != (parameter.kind == Kind::EffectRow)
+                    {
+                        return Ok(false);
+                    }
+                    work.push(Task::CheckArgument(&parameter.kind));
+                    work.push(Task::Argument(argument));
+                }
+            }
+        }
+        Ok(true)
+    }
+
     fn validate_owner_kind_engine(
         &self,
         root: OwnerValidationRoot<'_>,
         variable_kinds: MonotypeVariableKinds<'_, '_>,
         role: OwnerValidationRole,
     ) -> Result<OwnerValidationOutput, ValidationError> {
-        enum Task<'a> {
-            Visit(&'a Type),
-            Argument(&'a crate::types::KindedArgument),
-            Instance(&'a EffectInstance),
-            Row(&'a EffectRow),
-            TypeRows(&'a Type),
-            CheckArgument(&'a Kind),
-            FinishResource,
-            FinishRowArgument,
-            Sequence(std::slice::Iter<'a, Type>),
-            FinishTuple(usize),
-            FinishApplication,
-            FinishFunction,
-        }
+        use OwnerKindTask as Task;
 
         let resource = || ValidationError::new(ValidationReason::Resource, None);
-        let admitted_owner_kind = |kind: &Kind| -> Result<bool, ValidationError> {
-            let mut pending = Vec::new();
-            self.charge_type_work(1)?;
-            pending.try_reserve(1).map_err(|_| resource())?;
-            pending.push((kind, true));
-            while let Some((kind, complete)) = pending.pop() {
-                match kind {
-                    Kind::Type => {}
-                    Kind::EffectRow if complete => {}
-                    Kind::EffectRow => return Ok(false),
-                    Kind::Arrow(domain, codomain) => {
-                        self.charge_type_work(2)?;
-                        pending.try_reserve(2).map_err(|_| resource())?;
-                        pending.push((codomain.as_ref(), false));
-                        pending.push((domain.as_ref(), false));
-                    }
-                }
-            }
-            Ok(true)
-        };
         let mut work = Vec::new();
         if matches!(root, OwnerValidationRoot::TypeRows(_)) {
             self.charge_type_work(1)?;
@@ -10877,310 +11307,15 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let mut completed = Vec::new();
         while let Some(task) = work.pop() {
             match task {
-                Task::Visit(Type::Bytes | Type::String | Type::Int | Type::Bool | Type::Unit) => {
-                    self.charge_type_work(1)?;
-                    completed.try_reserve(1).map_err(|_| resource())?;
-                    completed.push(Kind::Type);
-                }
-                Task::Visit(Type::Nominal(identity)) => {
-                    self.charge_type_work(1)?;
-                    let result = match self.program.registry.nominal_kind(*identity) {
-                        Some(crate::resolved::CanonicalNominalKind::Parameters {
-                            parameters,
-                            ..
-                        }) => {
-                            let mut result = Kind::Type;
-                            for parameter in parameters.iter().rev() {
-                                let domain = self.clone_kind_charged(&parameter.kind)?;
-                                self.charge_type_work(1)?;
-                                result = Kind::Arrow(Box::new(domain), Box::new(result));
-                            }
-                            result
-                        }
-                        Some(crate::resolved::CanonicalNominalKind::Frozen { kind, .. })
-                            if self.contextual_registry.is_some()
-                                || self.program.registry.has_provider_contracts()
-                                || self.authenticated_abstract_nominal(*identity)? =>
-                        {
-                            self.clone_kind_charged(kind)?
-                        }
-                        _ => {
-                            return Err(ValidationError::new(ValidationReason::Registry, None));
-                        }
-                    };
-                    completed.try_reserve(1).map_err(|_| resource())?;
-                    completed.push(result);
-                }
-                Task::Visit(Type::Variable(identity)) => {
-                    let kind = match variable_kinds {
-                        MonotypeVariableKinds::Registry {
-                            owner,
-                            parameter_owners,
-                        } => {
-                            if parameter_owners.get(identity)
-                                != Some(&RegistryParameterOwner::Nominal(owner))
-                                && !owner.is_lexical()
-                            {
-                                self.charge_type_work(1)?;
-
-                                return Err(ValidationError::new(ValidationReason::Registry, None));
-                            }
-                            let Some(parameter) = self.program.registry.type_variable(*identity)
-                            else {
-                                self.charge_type_work(1)?;
-
-                                return Err(ValidationError::new(ValidationReason::Registry, None));
-                            };
-                            &parameter.kind
-                        }
-                        MonotypeVariableKinds::CatalogOwner(parameters) => {
-                            self.charge_type_work(parameters.len())?;
-                            let mut found = None;
-                            for (parameter, kind) in parameters {
-                                if parameter == identity {
-                                    if found.is_some() {
-                                        return Err(ValidationError::new(
-                                            ValidationReason::Registry,
-                                            None,
-                                        ));
-                                    }
-                                    found = Some(kind);
-                                }
-                            }
-                            found.ok_or_else(|| {
-                                ValidationError::new(ValidationReason::Registry, None)
-                            })?
-                        }
-                        MonotypeVariableKinds::Core(type_binders) => match identity {
-                            crate::types::TypeVariableId::Resolved { .. } => {
-                                if let Some(parameter) =
-                                    self.program.registry.type_variable(*identity)
-                                {
-                                    &parameter.kind
-                                } else if let Some(kind) =
-                                    self.provider_external_parameter_kind(*identity)?
-                                {
-                                    kind
-                                } else {
-                                    self.charge_type_work(1)?;
-
-                                    return Err(ValidationError::new(
-                                        ValidationReason::Registry,
-                                        None,
-                                    ));
-                                }
-                            }
-                            crate::types::TypeVariableId::Generated(_) => {
-                                if let Some((kind, _)) = type_binders.get(identity) {
-                                    *kind
-                                } else if let Some(kind) =
-                                    self.provider_external_parameter_kind(*identity)?
-                                {
-                                    kind
-                                } else {
-                                    self.charge_type_work(1)?;
-                                    return Err(ValidationError::with_cause(
-                                        ValidationCause::MissingGeneratedTypeBinder,
-                                        None,
-                                    ));
-                                }
-                            }
-                        },
-                    };
-                    let retained = self.clone_kind_charged(kind)?;
-                    completed.try_reserve(1).map_err(|_| resource())?;
-                    completed.push(retained);
-                }
-                Task::Visit(Type::Inference(_)) => {
-                    self.charge_type_work(1)?;
-                    return Err(match variable_kinds {
-                        MonotypeVariableKinds::Core(_) => ValidationError::with_cause(
-                            ValidationCause::UnresolvedCoreInference,
-                            None,
-                        ),
-                        MonotypeVariableKinds::Registry { .. }
-                        | MonotypeVariableKinds::CatalogOwner(_) => {
-                            ValidationError::new(ValidationReason::Registry, None)
-                        }
-                    });
-                }
-                Task::Visit(Type::Forall(_, _)) => {
-                    self.charge_type_work(1)?;
-                    return Ok(OwnerValidationOutput::Kind(None));
-                }
-                Task::Visit(Type::Tuple(elements)) => {
-                    self.charge_type_work(1)?;
-                    work.try_reserve(2).map_err(|_| resource())?;
-                    work.push(Task::FinishTuple(elements.len()));
-                    work.push(Task::Sequence(elements.iter()));
-                }
-                Task::Visit(Type::Application(function, argument)) => {
-                    self.charge_type_work(1)?;
-                    work.try_reserve(3).map_err(|_| resource())?;
-                    work.push(Task::FinishApplication);
-                    work.push(Task::Visit(argument));
-                    work.push(Task::Visit(function));
-                }
-                Task::Visit(Type::Function(domain, codomain)) => {
-                    self.charge_type_work(1)?;
-                    work.try_reserve(3).map_err(|_| resource())?;
-                    work.push(Task::FinishFunction);
-                    work.push(Task::Visit(codomain));
-                    work.push(Task::Visit(domain));
-                }
-                Task::Visit(Type::EffectfulFunction(domain, codomain)) => {
-                    if !F::ALLOWS_EFFECTFUL_TYPES {
+                Task::Visit(ty) => {
+                    if !self.visit_owner_kind_type(
+                        ty,
+                        variable_kinds,
+                        node,
+                        &mut work,
+                        &mut completed,
+                    )? {
                         return Ok(OwnerValidationOutput::Kind(None));
-                    }
-                    self.charge_type_work(1)?;
-                    self.charge_type_work(1)?;
-                    work.try_reserve(4).map_err(|_| resource())?;
-                    work.push(Task::FinishFunction);
-                    work.push(Task::Row(codomain.effects()));
-                    work.push(Task::Visit(codomain.value()));
-                    work.push(Task::Visit(domain));
-                }
-                Task::Visit(Type::ResourceApply(resource_id, arguments)) => {
-                    self.charge_type_work(1)?;
-                    let registry = &self.program.registry;
-                    let signature = registry
-                        .owner_signature(crate::resolved::OwnerId::Resource(*resource_id))
-                        .ok_or_else(|| ValidationError::new(ValidationReason::Registry, node))?;
-                    let family = registry
-                        .resource_signature_family(*resource_id)
-                        .ok_or_else(|| ValidationError::new(ValidationReason::Registry, node))?;
-                    if !matches!(registry.nominal_kind(family), Some(crate::resolved::CanonicalNominalKind::RowBearingResource { resource: canonical, .. }) if canonical == *resource_id)
-                        || signature.parameters.len() != arguments.len()
-                    {
-                        return Ok(OwnerValidationOutput::Kind(None));
-                    }
-                    let owned_position =
-                        if let Some(original) = registry.source_resource_fact(*resource_id) {
-                            self.charge_type_work(original.parameters.len())?;
-                            if original.family != family
-                                || original.parameters.len() != signature.parameters.len()
-                                || !original
-                                    .parameters
-                                    .iter()
-                                    .zip(signature.parameters.iter())
-                                    .all(|(formal, canonical)| formal.id == *canonical)
-                            {
-                                return Err(ValidationError::new(ValidationReason::Registry, node));
-                            }
-                            original.owned_position
-                        } else {
-                            // Experimental provider certificates retain their
-                            // existing first-owned formal convention.
-                            0
-                        };
-                    let owned = signature
-                        .parameters
-                        .get(owned_position)
-                        .and_then(|id| registry.type_variable(*id))
-                        .ok_or_else(|| ValidationError::new(ValidationReason::Registry, node))?;
-                    if owned.kind != Kind::Type {
-                        return Ok(OwnerValidationOutput::Kind(None));
-                    }
-                    self.charge_type_work(arguments.len())?;
-                    let mut has_row = false;
-                    for identity in signature.parameters.iter() {
-                        let parameter = registry.type_variable(*identity).ok_or_else(|| {
-                            ValidationError::new(ValidationReason::Registry, node)
-                        })?;
-                        if !admitted_owner_kind(&parameter.kind)? {
-                            return Ok(OwnerValidationOutput::Kind(None));
-                        }
-                        has_row |= parameter.kind == Kind::EffectRow;
-                    }
-                    if !has_row {
-                        return Ok(OwnerValidationOutput::Kind(None));
-                    }
-                    self.charge_type_work(
-                        arguments
-                            .len()
-                            .checked_mul(2)
-                            .and_then(|n| n.checked_add(1))
-                            .ok_or_else(resource)?,
-                    )?;
-                    work.try_reserve(
-                        arguments
-                            .len()
-                            .checked_mul(2)
-                            .and_then(|n| n.checked_add(1))
-                            .ok_or_else(resource)?,
-                    )
-                    .map_err(|_| resource())?;
-                    work.push(Task::FinishResource);
-                    for (argument, identity) in
-                        arguments.iter().zip(signature.parameters.iter()).rev()
-                    {
-                        let parameter = registry.type_variable(*identity).ok_or_else(|| {
-                            ValidationError::new(ValidationReason::Registry, node)
-                        })?;
-                        if matches!(argument, crate::types::KindedArgument::RowArg(_))
-                            != matches!(parameter.kind, Kind::EffectRow)
-                        {
-                            return Ok(OwnerValidationOutput::Kind(None));
-                        }
-                        work.push(Task::CheckArgument(&parameter.kind));
-                        work.push(Task::Argument(argument));
-                    }
-                }
-                Task::Visit(Type::ForeignOwnerApply(nominal, arguments)) => {
-                    if !F::ALLOWS_EFFECTFUL_TYPES {
-                        return Ok(OwnerValidationOutput::Kind(None));
-                    }
-                    let registry = &self.program.registry;
-                    let span = match registry
-                        .nominal_kind(*nominal)
-                        .ok_or_else(|| ValidationError::new(ValidationReason::Registry, node))?
-                    {
-                        crate::resolved::CanonicalNominalKind::Parameters { origin, .. }
-                        | crate::resolved::CanonicalNominalKind::Frozen { origin, .. }
-                        | crate::resolved::CanonicalNominalKind::RowBearingResource {
-                            origin,
-                            ..
-                        } => origin,
-                    };
-                    let mut owner_work = TypeWorkBudget::with_limit(
-                        self.type_work_limit.saturating_sub(self.type_work.get()),
-                    );
-                    let result = crate::foreign::source_owner::row_owner_parameters(
-                        *nominal,
-                        registry,
-                        span,
-                        &mut owner_work,
-                    );
-                    self.charge_type_work(owner_work.used())?;
-                    let parameters = result.map_err(|error| {
-                        ValidationError::new(
-                            if error.is_resource_exhaustion() {
-                                ValidationReason::Resource
-                            } else {
-                                ValidationReason::Registry
-                            },
-                            node,
-                        )
-                    })?;
-                    if parameters.len() != arguments.len() {
-                        return Ok(OwnerValidationOutput::Kind(None));
-                    }
-                    let count = arguments
-                        .len()
-                        .checked_mul(2)
-                        .and_then(|n| n.checked_add(1))
-                        .ok_or_else(resource)?;
-                    self.charge_type_work(count)?;
-                    work.try_reserve(count).map_err(|_| resource())?;
-                    work.push(Task::FinishResource);
-                    for (argument, parameter) in arguments.iter().zip(parameters.iter()).rev() {
-                        if matches!(argument, crate::types::KindedArgument::RowArg(_))
-                            != (parameter.kind == Kind::EffectRow)
-                        {
-                            return Ok(OwnerValidationOutput::Kind(None));
-                        }
-                        work.push(Task::CheckArgument(&parameter.kind));
-                        work.push(Task::Argument(argument));
                     }
                 }
                 Task::FinishResource => {
@@ -11267,7 +11402,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             .ok_or_else(|| {
                                 ValidationError::new(ValidationReason::Registry, node)
                             })?;
-                        if !admitted_owner_kind(&parameter.kind)?
+                        if !self.admitted_owner_kind(&parameter.kind)?
                             || !self.same_kind_charged(&canonical.kind, &parameter.kind)?
                         {
                             return Err(ValidationError::new(ValidationReason::Registry, node));
@@ -11285,115 +11420,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     }
                 }
                 Task::Row(row) => {
-                    self.charge_type_work(row.known().len())?;
-                    if let Some(tail) = row.tail() {
-                        self.charge_type_work(
-                            tail.lacks().len().checked_add(1).ok_or_else(resource)?,
-                        )?;
-                        match tail.variable() {
-                            crate::types::EffectRowVariable::Inference(_) => match role {
-                                OwnerValidationRole::KindOnly => {
-                                    // No-node kind output confers no final row authority.
-                                    if !matches!(variable_kinds, MonotypeVariableKinds::Core(_)) {
-                                        return Err(ValidationError::new(
-                                            ValidationReason::Registry,
-                                            None,
-                                        ));
-                                    }
-                                }
-                                OwnerValidationRole::FinalRows(node) => {
-                                    if !self.conditional_row_position(row, node)? {
-                                        return Err(ValidationError::with_cause(
-                                            ValidationCause::UnresolvedCoreRow,
-                                            Some(node),
-                                        ));
-                                    }
-                                }
-                            },
-                            crate::types::EffectRowVariable::Rigid(identity) => {
-                                // An exclusion cannot depend on its own row through
-                                // a nested exact-owner argument: that would introduce
-                                // a recursive lacks constraint in final Core.
-                                for excluded in tail.lacks() {
-                                    let mut dependencies = HashSet::new();
-                                    for argument in excluded.arguments() {
-                                        self.collect_owner_argument_type_variables(
-                                            argument,
-                                            &mut dependencies,
-                                        )?;
-                                    }
-                                    if dependencies.contains(&identity) {
-                                        return Err(ValidationError::with_cause(
-                                            ValidationCause::UnprovedRowLacks,
-                                            node,
-                                        ));
-                                    }
-                                }
-                                let kind = match variable_kinds {
-                                    MonotypeVariableKinds::Core(type_binders) => match identity {
-                                        crate::types::TypeVariableId::Resolved { .. } => {
-                                            if let Some(parameter) =
-                                                self.program.registry.type_variable(identity)
-                                            {
-                                                Some(&parameter.kind)
-                                            } else {
-                                                self.provider_external_parameter_kind(identity)?
-                                            }
-                                        }
-                                        crate::types::TypeVariableId::Generated(_) => {
-                                            type_binders.get(&identity).map(|(kind, _)| *kind)
-                                        }
-                                    },
-                                    MonotypeVariableKinds::CatalogOwner(parameters) => {
-                                        self.charge_type_work(parameters.len())?;
-                                        let mut found = None;
-                                        for (parameter, kind) in parameters {
-                                            if *parameter == identity {
-                                                if found.is_some() {
-                                                    return Err(ValidationError::new(
-                                                        ValidationReason::Registry,
-                                                        node,
-                                                    ));
-                                                }
-                                                found = Some(kind);
-                                            }
-                                        }
-                                        found
-                                    }
-                                    MonotypeVariableKinds::Registry {
-                                        owner,
-                                        parameter_owners,
-                                    } => {
-                                        if parameter_owners.get(&identity)
-                                            != Some(&RegistryParameterOwner::Nominal(owner))
-                                            && !owner.is_lexical()
-                                        {
-                                            return Err(ValidationError::new(
-                                                ValidationReason::Registry,
-                                                node,
-                                            ));
-                                        }
-                                        self.program
-                                            .registry
-                                            .type_variable(identity)
-                                            .map(|parameter| &parameter.kind)
-                                    }
-                                };
-                                let kind = kind.ok_or_else(|| {
-                                    ValidationError::with_cause(
-                                        ValidationCause::UnknownCoreRowBinder,
-                                        node,
-                                    )
-                                })?;
-                                if !matches!(kind, Kind::EffectRow) {
-                                    return Err(ValidationError::with_cause(
-                                        ValidationCause::NonRowTailKind,
-                                        node,
-                                    ));
-                                }
-                            }
-                        }
-                    }
+                    self.validate_owner_row_header(row, variable_kinds, role, node)?;
                     let count = row
                         .known()
                         .len()
