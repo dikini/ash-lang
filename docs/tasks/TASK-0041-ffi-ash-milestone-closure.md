@@ -2,7 +2,7 @@
 
 - ID: `TASK-0041`
 - Status: active
-- Related: [CP-0022](../proposals/CP-0022-ash-authored-foreign-interfaces.md),
+- Related: [CP-0022 transition history](https://github.com/dikini/ash-lang/blob/adddeffe5d135bd03bf5fc30051965e5da70ed24/docs/proposals/CP-0022-ash-authored-foreign-interfaces.md),
   [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md),
   [AD-0011](../decisions/AD-0011-milestone-worktree-lifecycle.md),
   [DN-0037](../design/DN-0037-ash-authored-foreign-library-interfaces.md),
@@ -19,7 +19,8 @@ explicit merges and receipts. The final Main integration gate remains separate.
 ## Work
 
 1. Review complete implementation/specification correspondence, generic boundaries,
-   library migrations and unsupported feature documentation against CP-0022.
+   library migrations and unsupported feature documentation against the
+   [implemented profile](../../spec/static-semantics.md#source-foreign-declarations).
 2. Consolidate reproducible native build/run instructions and reusable exact-pinned
    positive/negative/lifecycle/control evidence without duplicate fixture corpora.
 3. Run the full architecture/workspace gate on the integrated milestone branch;
@@ -80,17 +81,48 @@ and the added symbol-inspection tools. Before/after effective input records are
 equal. Missing `ASH_SQLITE_STATIC_ARCHIVE` is an explicit test failure.
 [Reproducible commands](../tools/ash.md#generated-host-linkage-checks) describe the
 native input and standalone execution boundary. Full affected owning-target and
-quality results, independent candidate review, retention and the next final
-checkpoint remain required; this finding does not close issue #7 or Main.
+quality results, independent review and retention have separate scopes; the
+completed PR #41 contribution is recorded below. The next final checkpoint,
+issue #7 and Main remain pending.
 
 Prepared declarations and historical experiment passes do not establish product
 completion. A receipt pins exact source/configuration and distinguishes executed
 properties, foreign assumptions, calibration deficits and unproved properties.
+
+### Transition artifacts and the final closure checkpoint
+
+[PR #41's retained verification](https://github.com/dikini/ash-lang/pull/41#issuecomment-6231289556)
+closes the two generated-host linkage cells on `integration/ffi-ash`. The
+completed source/Core, program-build/verifier, native-buffer and SQLite tasks
+leave the current tree with CP-0022. Their exact historical records remain:
+[TASK-0036](https://github.com/dikini/ash-lang/blob/adddeffe5d135bd03bf5fc30051965e5da70ed24/docs/tasks/TASK-0036-source-contracts-core-and-generic-execution.md),
+[TASK-0037](https://github.com/dikini/ash-lang/blob/adddeffe5d135bd03bf5fc30051965e5da70ed24/docs/tasks/TASK-0037-program-build-and-interface-verification.md),
+[TASK-0038](https://github.com/dikini/ash-lang/blob/adddeffe5d135bd03bf5fc30051965e5da70ed24/docs/tasks/TASK-0038-ash-native-buffer-library.md)
+and [TASK-0040](https://github.com/dikini/ash-lang/blob/adddeffe5d135bd03bf5fc30051965e5da70ed24/docs/tasks/TASK-0040-ash-copying-sqlite-library.md).
+The specification, accepted decisions, libraries and tool guide retain the
+implemented profile; historical partial findings keep their original scope.
+
+This task remains active. [TASK-0042](TASK-0042-rust-verification-performance.md)
+and its [execution plan](rust-verification-performance-plan.md) also remain
+active and partial. Their controlled old/revised timing comparison is unassigned
+and unproved; artifact retirement supplies no benchmark or speedup evidence.
+Keep the active product checkout, compatible cache and live verification inputs
+until their owners release them under AD-0011.
+
+The next named checkpoint is the final ffi-ash closure and pre-Main preparation
+gate. After this cleanup candidate is coherent and receives targeted review, the
+sole author runs all seven normal `cargo +1.97.1 xtask verify` stages with no
+receipt reuse and one Cargo job. Supply `ASH_SQLITE_STATIC_ARCHIVE`, name all
+108 native/source/tool inputs explicitly, and retain the four Rust tool file
+pins. Preserve the current work, stack, depth and admission policies. The actual
+full-gate receipt and candidate review precede preserving integration and
+retained acceptance of this package. Issue #7 and the signed Main integration
+gate remain separate.
 
 ## Deviations
 
 The execution instruction requires unsigned milestone commits/merges and a
 signed final merge into Main. This changes Git signing policy only.
 
-Return concrete semantic gaps to CP-0022 instead of resolving
-them locally. Keep excluded features outside this task.
+Return concrete semantic gaps to the proposal/design workflow instead of
+resolving them locally. Keep excluded features outside this task.

@@ -4,7 +4,6 @@
 - Status: accepted
 - Related: [DN-0037](../design/DN-0037-ash-authored-foreign-library-interfaces.md),
   [DN-0042](../design/DN-0042-native-interaction-and-efficient-data.md),
-  [CP-0022](../proposals/CP-0022-ash-authored-foreign-interfaces.md),
   [AD-0007](AD-0007-typed-core-dialects.md),
   [AD-0008](AD-0008-explicit-evaluator-machine.md),
   [AD-0011](AD-0011-milestone-worktree-lifecycle.md)
@@ -14,9 +13,11 @@
 Build whole Ash programs as native executables containing compiler-private
 checked-Core construction data/code, the existing evaluator and generated Rust
 bridges for the program's checked foreign declarations. Libraries remain passive
-Ash source dependencies. This records the converged build boundary. The separately
-accepted CP-0022 authorizes the semantic transition; neither artifact claims
-implemented tools.
+Ash source dependencies. This records the converged build boundary. The retained
+CP-0022 transition supplied the semantic change; the
+[specification](../../spec/static-semantics.md#source-foreign-declarations) and
+[tool guide](../tools/ash.md) describe the implemented product profile. Main
+adoption remains subject to the separate integration gate.
 
 The initial target is `x86_64-unknown-linux-gnu`. Link static archives and ordinary
 shared dependencies through the native linker. Generate typed Rust call sites
@@ -240,11 +241,11 @@ would broaden this milestone beyond its authoring objective.
 
 ## Verification
 
-Before adoption, review CP-0022's semantic account and complete member/access
-forms against SQLite, native buffer and minimal arena. Then require a generated
-executable for each library, static/shared link evidence, reproducible commands
-and actual native ownership/access observations. Existing realistic copying and
-persistence programs are comparison cases.
+Before Main adoption, review the specification's implemented semantic account
+and complete member/access forms against SQLite, native buffer and minimal
+arena. Require a generated executable for each library, static/shared link
+evidence, reproducible commands and actual native ownership/access observations.
+Existing realistic copying and persistence programs are comparison cases.
 
 Inspect generated Rust to establish exact signature/origin mapping and absence
 of library-specific policy or a C runtime shim. Reject malformed contracts, target

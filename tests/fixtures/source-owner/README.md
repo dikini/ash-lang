@@ -74,9 +74,9 @@ They model ownership edges without allocating or reading native memory. The
 declared initialization and writability remain foreign assumptions; these tests
 do not establish byte read/write, copy windows or a native-buffer library port.
 
-This fixture covers the bounded executable checkpoint under
-[CP-0022](../../../docs/proposals/CP-0022-ash-authored-foreign-interfaces.md) and
-[TASK-0036](../../../docs/tasks/TASK-0036-source-contracts-core-and-generic-execution.md).
+This fixture retains scoped evidence from the
+[CP-0022 transition](https://github.com/dikini/ash-lang/blob/adddeffe5d135bd03bf5fc30051965e5da70ed24/docs/proposals/CP-0022-ash-authored-foreign-interfaces.md) and
+[TASK-0036 history](https://github.com/dikini/ash-lang/blob/adddeffe5d135bd03bf5fc30051965e5da70ed24/docs/tasks/TASK-0036-source-contracts-core-and-generic-execution.md).
 The control cases establish only their stated source, capture and cleanup
 contrasts. This fixture does not establish byte access, retained-owner
 quarantine, library ports or the complete milestone outcome.

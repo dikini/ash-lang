@@ -2,9 +2,9 @@
 
 - ID: `DN-0050`
 - Status: calibration record; `800S` source, `800S` final elaboration, `16S` compiler-arena rewrite, `345S` Core, `125P` preparation and `22B` startup accepted
-- Related: [TASK-0040](../tasks/TASK-0040-ash-copying-sqlite-library.md),
+- Related: [TASK-0040 transition history](https://github.com/dikini/ash-lang/blob/adddeffe5d135bd03bf5fc30051965e5da70ed24/docs/tasks/TASK-0040-ash-copying-sqlite-library.md),
   [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md),
-  [CP-0022](../proposals/CP-0022-ash-authored-foreign-interfaces.md)
+  [CP-0022 transition history](https://github.com/dikini/ash-lang/blob/adddeffe5d135bd03bf5fc30051965e5da70ed24/docs/proposals/CP-0022-ash-authored-foreign-interfaces.md)
 
 This note records the initial native gas calibration and subsequent larger
 SQLite observations. The user approved preparation `24P` and initially startup
@@ -536,10 +536,11 @@ and zero for buffer. It is already inside baseline whole preparation; sizing is
 the only added cost. Adoption must retain that prefix in the same meter.
 
 No row underpredicted. The holdout chose neither coefficients nor reserve. Its
-assembled fixture is not the final product library. Full-library text/blob/null
-binding, diagnostics, tail policy, persistence and simultaneous identities remain
-unfinished and uncalibrated under TASK-0040. Do not report these errors as full
-SQLite accuracy.
+assembled pilot fixture was not the final product library. At that observation,
+full-library text/blob/null binding, diagnostics, tail policy, persistence and
+simultaneous identities remained unfinished and uncalibrated under TASK-0040.
+These pilot errors do not establish full SQLite accuracy; later full-workload
+observations and their separately scoped verification remain distinct.
 
 The five-method product's unchanged normal 327,680 allowance was exceeded by
 57,765 preparation units and 233,893 startup units before sizing. Diagnostic

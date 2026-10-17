@@ -16,9 +16,10 @@ The later [ffi-ash milestone scope](../DN-0037-ash-authored-foreign-library-inte
 selects `x86_64-unknown-linux-gnu`, generated Rust runtime bridges, optional
 separate C/header checks, whole-program checked-Core embedding, and native-buffer
 and minimal-arena source libraries alongside SQLite. [AD-0013](../../decisions/AD-0013-generated-native-bridges-and-program-builds.md)
-records the converged build boundary. [CP-0022](../../proposals/CP-0022-ash-authored-foreign-interfaces.md)
-records the accepted semantic transition, still awaiting product delivery. The historical evidence
-below keeps its original pins and limitations.
+records the converged build boundary. The
+[retained CP-0022 transition](https://github.com/dikini/ash-lang/blob/adddeffe5d135bd03bf5fc30051965e5da70ed24/docs/proposals/CP-0022-ash-authored-foreign-interfaces.md)
+is implemented on the milestone branch; Main integration remains separate. The
+historical evidence below keeps its original pins and limitations.
 
 ## Two library cases, one common boundary
 
