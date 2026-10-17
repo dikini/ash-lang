@@ -33,6 +33,9 @@ The existing Rust build API already admits ordered static/shared files. Four
 new regressions fail on Main `354c76b`: two parser cases, diagnostic operand
 ownership and the public CLI's native-file diagnostic.
 
+[PR #47](https://github.com/dikini/ash-lang/pull/47) publishes this standalone
+CLI repair on `codex/issue-45-native-library-inputs` against Main `354c76b`.
+
 The candidate passes all 20 binary tests, 41 diagnostic/ordinary/module CLI
 tests, five build-CLI tests and four existing builder controls. The real CLI
 fixture requires distinct static-first, shared-middle and static-last symbols;
