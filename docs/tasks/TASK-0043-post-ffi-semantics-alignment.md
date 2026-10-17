@@ -138,8 +138,9 @@ Current composition receipts
 belong in
 `.worktrees/semantics-alignment-context-20261017/foreign-output-refresh-on-b8`.
 
-The final package starts from retained integration `55f3071` on
-`codex/diagnostic-precedence-alignment`. The affected kind and resolver sources
+[PR #49](https://github.com/dikini/ash-lang/pull/49) starts from retained
+integration `55f3071` on `codex/diagnostic-precedence-alignment`. The affected
+kind and resolver sources
 and representation-cycle pass still equal `ffi-base`. The corrected baseline
 regressions pass two controls and fail seven precedence/source-classification
 cases. An earlier global and a representation can both report
