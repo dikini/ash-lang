@@ -169,7 +169,8 @@ CARGO_BUILD_JOBS=1 RUSTC_WRAPPER= cargo test \
 
 The resource typing suite also passed its one-test child process. Compilation
 for the library, resource and affected-caller commands took 45.51 s, 9.47 s and
-15.36 s respectively. The library run covers every Core validation test,
+15.36 s respectively. Exact model runtime is unavailable; these tool timings
+do not measure model runtime. The library run covers every Core validation test,
 module/publication exact-budget probe and the new deep-copy, Pure admission and
 nested-instance scanner regressions. Native caller results are regression
 evidence; they do not close the connected generic/native cases in TASK-0048.
