@@ -23,5 +23,7 @@ No proposed semantic transition is under review.
 
 ## Accepted changes
 
-No accepted proposals remain in this product tree. Completed transition
-evidence remains in Git; artifact retirement does not integrate it into Main.
+- [CP-0023: Scoped Generic Cells](CP-0023-scoped-generic-cells.md) authorizes
+  the generic Cell implementation coordinated by
+  [TASK-0049](../tasks/TASK-0049-close-generic-cell-checkpoint.md). It is not
+  current Ash before complete product integration.

@@ -262,3 +262,10 @@ and exclusions remain at their linked owners.
 - [DN-0018: Runtime-Established Static Evidence](DN-0018-runtime-established-static-evidence.md) — generative evidence for checked values and relationships, with possible place decomposition.
 
 `DN-0005` through `DN-0014` adapt user-supplied explorations preserved in Git history at commit `abd793c`. Their placement here records useful design context; it does not add them to the development trajectory.
+
+## Generic Cell follow-up
+
+- [DN-0053: Scoped Generic Cells Without Native Owners](DN-0053-scoped-generic-cells-without-native-owners.md)
+  records the rationale for accepted CP-0023.
+- [DN-0054: Base Lexical Region Memory Contracts](DN-0054-base-lexical-region-memory-contracts.md)
+  remains separate design work and is outside the generic Cell implementation.
