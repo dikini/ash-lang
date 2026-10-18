@@ -439,7 +439,10 @@ Primitive operands evaluate from left to right. Addition and multiplication
 operate on mathematical integers and cannot overflow. Integer equality is
 `true` exactly when its operands denote the same integer. The rules below use
 `expression -> expression'` as shorthand for the corresponding control and
-continuation transition within one unchanged heap configuration.
+continuation transition. An operand step threads its resulting heap into the
+enclosing primitive evaluation; operand allocation and effects follow their
+ordinary rules. A primitive reduction on integer values leaves its incoming
+heap unchanged.
 
 ```sequent
 family primitive-operation-steps:
@@ -623,8 +626,10 @@ The admitted product source resource scope combines an Ash initializer, acquire
 and finish functions, private data `D`, and an associated ordinary effect handler.
 This checkpoint supports opaque and initialized byte foreign owners with declared
 dependencies and complete ordered Type/Row owner formals, with a Type-kind owned
-identity. Acquisition admits scalar and exact
-declared enclosing-State operands with one pointer result. Finish and host
+identity. Acquisition admits scalar and NUL `String` inputs and exact declared
+enclosing-State operands. Its owner comes from a direct pointer result or an
+initialized opaque output slot alongside a scalar status and optional
+input-relative offset. Canonical report fields retain ABI order. Finish and host
 destruction contracts use the exact Current State and declared Enclosing pointer
 operands, with checked original scalar constants at declared scalar ABI positions
 and fixed non-callable sentinels at their exact function-address ABI positions.

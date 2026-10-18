@@ -10,7 +10,6 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 ## Active tasks
 
 - [TASK-0042: Rust verification performance](TASK-0042-rust-verification-performance.md)
-- [TASK-0044: Native build CLI inputs](TASK-0044-native-build-cli-inputs.md)
 
 ## ffi-ash closure coordination
 

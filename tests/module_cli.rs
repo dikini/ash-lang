@@ -761,7 +761,7 @@ fn cli_renders_each_structured_kind_reason_without_reclassifying_it() {
                             Box::new(Kind::Type),
                         ),
                     ),
-                    KindReason::NotApplicable => {
+                    KindReason::NotApplicable | KindReason::EffectArgumentCount => {
                         unreachable!("the imported fixtures cover argument and expected-type")
                     }
                 };

@@ -160,7 +160,7 @@ fn discard_instantiates_a_polymorphic_helpers_owned_clause() {
 }
 
 #[test]
-fn ordinary_typing_rejects_ambiguous_row_only_specialization_before_capture() {
+fn row_only_specialization_reaches_capture_and_rejects_inconsistent_rows() {
     let source = concat!(
         "effect A {\nask : Unit -> Unit\n}\neffect B<T : Type> {\nask : Unit -> Unit\n}\n",
         "ask<T : Type> : Unit -> Unit ! {B<T>, B<Int>}\nask () = handle (perform A.ask ()) with A {\n",
@@ -168,7 +168,9 @@ fn ordinary_typing_rejects_ambiguous_row_only_specialization_before_capture() {
         "main : Unit -> Unit\nmain () = {\nlet action : Unit -> Unit ! {B<Bool>, B<Int>} = ask\n",
         "handle (handle (action ()) with B<Bool> {\nask ignored => discard\n}) with B<Int> {\nask ignored => resume ()\n}\n}\n",
     );
-    assert_eq!(typing_reason(source), TypeReason::BindingInitializer);
+    assert_owned_discard_runs(source);
+    let inconsistent = source.replace("{B<Bool>, B<Int>} = ask", "{B<Bool>, B<String>} = ask");
+    assert_eq!(typing_reason(&inconsistent), TypeReason::BindingInitializer);
 }
 
 #[test]

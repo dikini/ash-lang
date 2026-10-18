@@ -409,6 +409,9 @@ define_kind_site_profiles! {
     FieldTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeTransientWork => (Field, Owned, Transient, CarrierRetention, PreservedCarrier, CoreValidation, CoreType, TransientWork),
     FieldTransientCarrierRetentionPreservedCarrierElaborationCoreTypeTransientWork => (Field, Owned, Transient, CarrierRetention, PreservedCarrier, Elaboration, CoreType, TransientWork),
     FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork => (Field, Owned, Transient, CarrierRetention, PreservedCarrier, Elaboration, InferenceType, TransientWork),
+    // Speculative row choices share immutable tasks and rows; their final owners
+    // retain the existing iterative argument/Type/row disposal boundaries.
+    FieldSharedUnificationWork => (Field, Shared, Transient, CarrierRetention, PreservedCarrier, Elaboration, InferenceType, TransientWork),
     FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState => (Field, Owned, Transient, CarrierRetention, PreservedCarrier, Evaluation, Evaluation, EvaluatorState),
     FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationTransientWork => (Field, Owned, Transient, CarrierRetention, PreservedCarrier, Evaluation, Evaluation, TransientWork),
     FieldTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTransientWork => (Field, Owned, Transient, CarrierRetention, PreservedCarrier, EvidenceSelection, EvidenceType, TransientWork),
@@ -782,9 +785,9 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/foreign/source_runtime.rs::NativeOwnerGuard.$alias", FieldSourceRuntimeOwnerShared),
     kind_site!("src/foreign/source_runtime.rs::NativeByteAccess.$alias", FieldSourceRuntimeOwnerShared, Borrowed),
     kind_site!("src/foreign/source_runtime.rs::NativeOwnerGuardReady.$alias", FieldSourceRuntimeOwnerShared),
-    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_source_resource_definitions::$block_162_0_3::$block_162_0_3_6::Effects.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
-    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_source_resource_definitions::$block_162_0_3::$block_162_0_3_6::Handlers.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
-    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_source_resource_definitions::$block_162_0_3::$block_162_0_3_6::Provider.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
+    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_source_resource_definitions::$block_163_0_3::$block_163_0_3_6::Effects.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
+    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_source_resource_definitions::$block_163_0_3::$block_163_0_3_6::Handlers.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
+    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_source_resource_definitions::$block_163_0_3::$block_163_0_3_6::Provider.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolve.rs::ResolvedDeclarations.source_resources", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolve.rs::ResolvedSourceResourceBuffer.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolve.rs::Resolver.source_foreign_libraries", FieldForeignPreparedKinds, Shared),
@@ -1276,16 +1279,18 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/elaborate.rs::$fn_zonk_owned_root_with_rows::Value.Argument.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::$fn_zonk_owned_root_with_rows::Value.Row.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::$fn_zonk_owned_root_with_rows::Value.Type.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
-    kind_site!("src/elaborate.rs::$impl_CoreElaborator::$fn_unify_owned_arguments_recorded::Candidates.rows", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
-    kind_site!("src/elaborate.rs::$impl_CoreElaborator::$fn_unify_owned_arguments_recorded::FinalRows.rows", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::$impl_CoreElaborator::$fn_unify_owned_arguments_recorded::Candidates.rows", FieldSharedUnificationWork),
+    kind_site!("src/elaborate.rs::$impl_CoreElaborator::$fn_unify_owned_arguments_recorded::FinalRows.rows", FieldSharedUnificationWork),
+    kind_site!("src/elaborate.rs::$impl_CoreElaborator::$fn_unify_owned_arguments_recorded::Choice.remaining", FieldSharedUnificationWork),
+    kind_site!("src/elaborate.rs::$impl_CoreElaborator::$fn_unify_owned_arguments_recorded::Choice.continuation", FieldSharedUnificationWork),
     kind_site!("src/elaborate.rs::$impl_CoreElaborator::$fn_unify_owned_arguments_recorded::Rows.left", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::$impl_CoreElaborator::$fn_unify_owned_arguments_recorded::Rows.right", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::$impl_CoreElaborator::$fn_unify_owned_arguments_recorded::Task.Argument.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::$impl_CoreElaborator::$fn_unify_owned_arguments_recorded::Task.Argument.1", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
-    kind_site!("src/elaborate.rs::$impl_CoreElaborator::$fn_unify_owned_arguments_recorded::Task.CandidateResult.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
-    kind_site!("src/elaborate.rs::$impl_CoreElaborator::$fn_unify_owned_arguments_recorded::Task.Candidates.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
-    kind_site!("src/elaborate.rs::$impl_CoreElaborator::$fn_unify_owned_arguments_recorded::Task.FinishRows.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
-    kind_site!("src/elaborate.rs::$impl_CoreElaborator::$fn_unify_owned_arguments_recorded::Task.Rows.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::$impl_CoreElaborator::$fn_unify_owned_arguments_recorded::Task.CandidateResult.0", FieldSharedUnificationWork),
+    kind_site!("src/elaborate.rs::$impl_CoreElaborator::$fn_unify_owned_arguments_recorded::Task.Candidates.0", FieldSharedUnificationWork),
+    kind_site!("src/elaborate.rs::$impl_CoreElaborator::$fn_unify_owned_arguments_recorded::Task.FinishRows.0", FieldSharedUnificationWork),
+    kind_site!("src/elaborate.rs::$impl_CoreElaborator::$fn_unify_owned_arguments_recorded::Task.Rows.0", FieldSharedUnificationWork),
     kind_site!("src/elaborate.rs::$impl_CoreElaborator::$fn_unify_owned_arguments_recorded::Task.Type.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::$impl_CoreElaborator::$fn_unify_owned_arguments_recorded::Task.Type.1", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::$impl_TypeProvenance::$fn_aligns_inner::Value.Argument.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
@@ -1300,6 +1305,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/elaborate.rs::OwnedArgumentBuffer.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::OwnedUnificationEntry.Arguments.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::OwnedUnificationEntry.Arguments.1", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::OwnedUnificationEntry.ArgumentPairs.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::OwnedUnificationEntry.ComparedTypes.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::OwnedUnificationEntry.ComparedTypes.1", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::OwnedZonkRoot.Argument.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
@@ -2170,6 +2176,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/kind.rs::RetainedKindMirrors.Two.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
     kind_site!("src/kind.rs::RetainedKindMirrors.Two.1", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
     kind_site!("src/resolve.rs::ResolveModuleError.Kind.0", FieldTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
+    kind_site!("src/resolve.rs::ResolveModuleError.Representation.0", FieldTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeResolvedTree),
     kind_site!("src/resolve.rs::ResolvedModuleAdmission.parts", FieldTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeResolvedTree, Mixed),
     kind_site!("src/core/binding.rs::BindingNode.binder", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/data.rs::$impl_CorePattern::$fn_discard_iteratively::Task.Sequence.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
@@ -8328,9 +8335,13 @@ fn current_source_exposes_only_one_source_pipeline() {
 }
 
 #[test]
-fn resolved_modules_have_one_production_kind_gate_before_construction() {
+fn resolved_modules_have_one_ordered_representation_and_kind_gate_before_construction() {
     const CONSTRUCTION: [&str; 5] = ["ResolvedModule", ":", ":", "new", "("];
-    const KIND_GATE: [&str; 2] = ["check_resolved_module_with_budget", "("];
+    const GATES: [[&str; 2]; 3] = [
+        ["prepare_module_representation_kinds", "("],
+        ["check_newtype_representation_cycles", "("],
+        ["check_remaining_module_kinds", "("],
+    ];
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut paths = Vec::new();
     collect_production_rust_sources(&root, &mut paths);
@@ -8361,23 +8372,26 @@ fn resolved_modules_have_one_production_kind_gate_before_construction() {
     );
     assert_eq!(constructors[0].0, "src/resolve.rs");
     let tokens = resolve_tokens.expect("resolution production source should be scanned");
-    let kind_gates = tokens
-        .windows(KIND_GATE.len())
-        .enumerate()
-        .filter_map(|(index, window)| (window == KIND_GATE).then_some(index))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        kind_gates.len(),
-        1,
-        "resolution must invoke total resolved kind checking exactly once: {kind_gates:?}",
-    );
+    let gates = GATES.map(|gate| {
+        let calls = tokens
+            .windows(gate.len())
+            .enumerate()
+            .filter_map(|(index, window)| (window == gate).then_some(index))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            calls.len(),
+            1,
+            "resolution must invoke each admission stage exactly once: {gate:?}: {calls:?}"
+        );
+        calls[0]
+    });
     let construction = tokens
         .windows(CONSTRUCTION.len())
         .position(|window| window == CONSTRUCTION)
         .expect("resolution must publish the checked module once");
     assert!(
-        kind_gates[0] < construction,
-        "resolved kind checking must complete before ResolvedModule construction",
+        gates[0] < gates[1] && gates[1] < gates[2] && gates[2] < construction,
+        "representation kinds, cycles and remaining kinds must complete in order before construction",
     );
 }
 

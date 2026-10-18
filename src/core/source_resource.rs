@@ -2819,20 +2819,15 @@ fn eval_flow<'a>(
                         work,
                     )?;
                     let readable = facts.wrapped(codec.output_constructors()[1], null, work)?;
-                    let output = if matches!(
-                        expected.owner_role(),
-                        Some(PreparedOwnerCall::OutputAcquire { .. })
-                    ) {
+                    let output = if let Some(role @ PreparedOwnerCall::OutputAcquire { .. }) =
+                        expected.owner_role()
+                    {
+                        let (owner_field, offset_field) =
+                            role.output_field_positions().ok_or_else(invalid)?;
                         let mut fields = Vec::new();
                         push(&mut fields, 0, work)?;
                         push(&mut fields, readable, work)?;
-                        if matches!(
-                            expected.owner_role(),
-                            Some(PreparedOwnerCall::OutputAcquire {
-                                offset: Some(_),
-                                ..
-                            })
-                        ) {
+                        if let Some(offset_field) = offset_field {
                             let Type::Application(_, payload) = &stored.ty else {
                                 return Err(invalid());
                             };
@@ -2840,11 +2835,12 @@ fn eval_flow<'a>(
                                 return Err(invalid());
                             };
                             let tail = facts.input(
-                                types.get(2).ok_or_else(invalid)?,
+                                types.get(offset_field).ok_or_else(invalid)?,
                                 &program.registry,
                                 work,
                             )?;
                             push(&mut fields, tail, work)?;
+                            fields.swap(1, owner_field);
                         }
                         facts.add(FlowFact::Tuple(fields.into_boxed_slice()), work)?
                     } else {
@@ -2855,20 +2851,15 @@ fn eval_flow<'a>(
                     path.acquired = true;
                     let nonnull = facts.wrapped(codec.nullable_constructors()[1], 1, work)?;
                     let readable = facts.wrapped(codec.output_constructors()[1], nonnull, work)?;
-                    let output = if matches!(
-                        expected.owner_role(),
-                        Some(PreparedOwnerCall::OutputAcquire { .. })
-                    ) {
+                    let output = if let Some(role @ PreparedOwnerCall::OutputAcquire { .. }) =
+                        expected.owner_role()
+                    {
+                        let (owner_field, offset_field) =
+                            role.output_field_positions().ok_or_else(invalid)?;
                         let mut fields = Vec::new();
                         push(&mut fields, 0, work)?;
                         push(&mut fields, readable, work)?;
-                        if matches!(
-                            expected.owner_role(),
-                            Some(PreparedOwnerCall::OutputAcquire {
-                                offset: Some(_),
-                                ..
-                            })
-                        ) {
+                        if let Some(offset_field) = offset_field {
                             let Type::Application(_, payload) = &stored.ty else {
                                 return Err(invalid());
                             };
@@ -2876,11 +2867,12 @@ fn eval_flow<'a>(
                                 return Err(invalid());
                             };
                             let tail = facts.input(
-                                types.get(2).ok_or_else(invalid)?,
+                                types.get(offset_field).ok_or_else(invalid)?,
                                 &program.registry,
                                 work,
                             )?;
                             push(&mut fields, tail, work)?;
+                            fields.swap(1, owner_field);
                         }
                         facts.add(FlowFact::Tuple(fields.into_boxed_slice()), work)?
                     } else {

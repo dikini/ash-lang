@@ -115,7 +115,7 @@ pub(super) fn prepare(
         let Some(abi) = source.abi_operands.get(operand) else {
             return Err(failure(ForeignContractReason::OutputCoverage, output_span));
         };
-        if operand <= output_operand
+        if operand == output_operand
             || !abi.output
             || abi_result(library, &abi.representation, work)?
                 != PreparedAbiResult::Address(PreparedAddressRepresentation::Bytes)
@@ -363,33 +363,41 @@ mod tests {
         module::ModuleId,
         parser::{parse, project_module},
         source::SourceFile,
+        sqlite_output_order,
     };
 
     #[test]
     fn opaque_output_preparation_has_exact_short_prefix_and_fresh_retries() {
-        let source =
-            SourceFile::new("sqlite.ash", include_str!("../../libraries/sqlite.ash")).unwrap();
-        let surface = project_module(&source, &parse(lex(&source).unwrap())).unwrap();
-        let authored = &surface.foreign_libraries[0];
-        let module = ModuleId::from(source.id());
-        let mut measured = TypeWorkBudget::default();
-        prepare_foreign_library_with_budget(module, authored, &mut measured).unwrap();
-        let exact = measured.used();
-        for prefix in [0, 23] {
-            for _ in 0..2 {
-                let mut short = TypeWorkBudget::with_limit(prefix + exact - 1);
-                short.charge(prefix).unwrap();
-                assert_eq!(
-                    prepare_foreign_library_with_budget(module, authored, &mut short)
-                        .unwrap_err()
-                        .reason(),
-                    ForeignContractReason::WorkExhausted
-                );
-                assert!(short.used() >= prefix && short.used() < prefix + exact);
-                let mut work = TypeWorkBudget::with_limit(prefix + exact);
-                work.charge(prefix).unwrap();
-                prepare_foreign_library_with_budget(module, authored, &mut work).unwrap();
-                assert_eq!(work.used(), prefix + exact);
+        for offset_first in [false, true] {
+            let library = include_str!("../../libraries/sqlite.ash");
+            let text = if offset_first {
+                sqlite_output_order::offset_first(library)
+            } else {
+                library.to_owned()
+            };
+            let source = SourceFile::new("sqlite.ash", text).unwrap();
+            let surface = project_module(&source, &parse(lex(&source).unwrap())).unwrap();
+            let authored = &surface.foreign_libraries[0];
+            let module = ModuleId::from(source.id());
+            let mut measured = TypeWorkBudget::default();
+            prepare_foreign_library_with_budget(module, authored, &mut measured).unwrap();
+            let exact = measured.used();
+            for prefix in [0, 23] {
+                for _ in 0..2 {
+                    let mut short = TypeWorkBudget::with_limit(prefix + exact - 1);
+                    short.charge(prefix).unwrap();
+                    assert_eq!(
+                        prepare_foreign_library_with_budget(module, authored, &mut short)
+                            .unwrap_err()
+                            .reason(),
+                        ForeignContractReason::WorkExhausted
+                    );
+                    assert!(short.used() >= prefix && short.used() < prefix + exact);
+                    let mut work = TypeWorkBudget::with_limit(prefix + exact);
+                    work.charge(prefix).unwrap();
+                    prepare_foreign_library_with_budget(module, authored, &mut work).unwrap();
+                    assert_eq!(work.used(), prefix + exact);
+                }
             }
         }
     }

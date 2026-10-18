@@ -1443,6 +1443,9 @@ fn resolve_error(text: &str) -> ash::resolve::ResolveError {
             ash::resolve::ResolveModuleError::Kind(error) => {
                 panic!("resolution fixture unexpectedly reached kind checking: {error:?}")
             }
+            ash::resolve::ResolveModuleError::Representation(error) => {
+                panic!("fixture unexpectedly reached representation checking: {error:?}")
+            }
         }
     })
 }

@@ -1299,6 +1299,7 @@ where
         .map_err(|error| match error {
             ResolveModuleError::Resolution(error) => PipelineFailure::Resolution(error),
             ResolveModuleError::Kind(error) => PipelineFailure::Kind(error),
+            ResolveModuleError::Representation(error) => PipelineFailure::Typing(error),
         })
         .map_err(FileFailure::from)?;
         if let Some(catalogue) = foreign_catalogue.as_deref_mut() {

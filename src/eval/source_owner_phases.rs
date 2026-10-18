@@ -131,6 +131,8 @@ struct AcquireStatusStorage {
     prepaid: crate::foreign::source_runtime::PrepaidScalarReport,
     location: Location,
     fields: Box<[Value]>,
+    owner_field: usize,
+    offset_field: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -306,10 +308,11 @@ impl<'binding> OwnerAcquireReady<'binding> {
             }) => *offset,
             _ => None,
         };
-        let status = if matches!(
-            invocation.symbol().owner_role(),
-            Some(crate::foreign::source_contract::PreparedOwnerCall::OutputAcquire { .. })
-        ) {
+        let status = if let Some(positions) = invocation
+            .symbol()
+            .owner_role()
+            .and_then(crate::foreign::source_contract::PreparedOwnerCall::output_field_positions)
+        {
             let prepaid = crate::foreign::source_runtime::PrepaidScalarReport::admit(
                 invocation.symbol().symbol().result(),
                 work,
@@ -328,7 +331,7 @@ impl<'binding> OwnerAcquireReady<'binding> {
             for _ in 0..count {
                 fields.push(Value::Unit);
             }
-            Some((prepaid, fields.into_boxed_slice()))
+            Some((prepaid, fields.into_boxed_slice(), positions))
         } else {
             None
         };
@@ -352,11 +355,16 @@ impl<'binding> OwnerAcquireReady<'binding> {
             work,
             3 + usize::from(status.is_some()) + 2 * usize::from(offset.is_some()),
         )?;
-        let status = status.map(|(prepaid, fields)| AcquireStatusStorage {
-            prepaid,
-            fields,
-            location: first + 3,
-        });
+        let status =
+            status.map(
+                |(prepaid, fields, (owner_field, offset_field))| AcquireStatusStorage {
+                    prepaid,
+                    fields,
+                    location: first + 3,
+                    owner_field,
+                    offset_field,
+                },
+            );
         let offset = offset.map(|(descriptor, prepaid)| AcquireOffsetStorage {
             location: first + 5,
             nullable: first + 4,
@@ -583,9 +591,11 @@ impl OwnerAcquireRecorded<'_> {
                         .map_err(|_| OwnerPhaseFailure::Authority)?
                         .ok_or(OwnerPhaseFailure::Authority)?;
                 status.fields[0] = Value::Integer(integer);
-                status.fields[1] = Value::Location(self.slots.output);
-                if let Some(offset) = offset_value {
-                    status.fields[2] = offset;
+                status.fields[status.owner_field] = Value::Location(self.slots.output);
+                match (status.offset_field, offset_value) {
+                    (Some(field), Some(offset)) => status.fields[field] = offset,
+                    (None, None) => {}
+                    _ => return Err(OwnerPhaseFailure::Authority),
                 }
                 heap[status.location] = HeapCell::Tuple(status.fields);
                 Value::Location(status.location)

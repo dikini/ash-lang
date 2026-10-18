@@ -134,6 +134,9 @@ fn resolve_entry_error(graph: &ModuleGraph) -> ash::resolve::ResolveError {
                 ResolveModuleError::Kind(error) => {
                     panic!("resolution fixture unexpectedly reached kind checking: {error:?}")
                 }
+                ResolveModuleError::Representation(error) => {
+                    panic!("fixture unexpectedly reached representation checking: {error:?}")
+                }
             };
         }
         checked.push(

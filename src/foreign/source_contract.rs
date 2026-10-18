@@ -550,8 +550,8 @@ pub enum PreparedOwnerCall {
         readable_spans: [Span; 2],
         initialized_bytes: Option<PreparedInitializedBytes>,
     },
-    /// A readable scalar result followed by one readable nullable opaque owner
-    /// output. The private slot is initialized to null before native entry.
+    /// A readable scalar result followed by the nullable opaque owner and any
+    /// offset output in ABI order. Private slots start null before entry.
     OutputAcquire {
         application: PreparedOwnerApplication,
         output_operand: usize,
@@ -579,6 +579,24 @@ pub enum PreparedOwnerCall {
 }
 
 impl PreparedOwnerCall {
+    /// Scalar status occupies field zero; the original output ABI coordinates
+    /// determine the owner and optional offset fields that follow it.
+    pub(crate) fn output_field_positions(&self) -> Option<(usize, Option<usize>)> {
+        let Self::OutputAcquire {
+            output_operand,
+            offset,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        let offset_first = offset.is_some_and(|offset| offset.operand < *output_operand);
+        Some((
+            1 + usize::from(offset_first),
+            offset.map(|_| if offset_first { 1 } else { 2 }),
+        ))
+    }
+
     pub(crate) fn application(&self) -> &PreparedOwnerApplication {
         match self {
             Self::Acquire { application, .. }

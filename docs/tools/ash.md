@@ -168,7 +168,11 @@ minimal allocation/usage/release lifecycle. The ordinary source buffer library
 supplies checked zeroed bytes and scoped access through the same generated path.
 The source [copying SQLite library](../../libraries/README.md#copying-sqlite)
 uses explicit native inputs, source protocol and guarded temporary copy windows.
-These milestone additions have not yet integrated into Main.
+The admitted windows run only in permitted direct provider phases, retain exact
+live owner/view authority and publish independent copied bytes. They cannot
+suspend, complete their owner or escape; the detailed
+[source foreign rules](../../spec/static-semantics.md#source-foreign-declarations)
+define these bounds.
 
 ### Generated-host linkage checks
 

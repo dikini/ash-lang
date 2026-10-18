@@ -3552,6 +3552,7 @@ impl Decoder<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sqlite_output_order;
 
     #[test]
     fn prospective_preparation_source_and_node_sizing_is_paid_and_carried() {
@@ -4598,6 +4599,7 @@ foreign library Memory {
         owned R
         teardown Free
     }
+
     symbol Allocate<Delta : EffectRow, R, T> : Int -> Foreign.Call<Foreign.Output<Foreign.Nullable<State<T, R>>>> {
         name "malloc"
         abi (Size) -> pointer(Address)
@@ -4692,6 +4694,101 @@ main () = match perform Measure.call 42 {
                 .restore_effect(&mut TypeWorkBudget::default())
                 .is_err()
         );
+    }
+
+    #[test]
+    fn owner_offset_abi_orders_restore_source_core_and_reject_changed_coordinates() {
+        for offset_first in [false, true] {
+            let tree = SourceTree::new();
+            let library = include_str!("../../libraries/sqlite.ash");
+            tree.write(
+                "owner.ash",
+                &if offset_first {
+                    sqlite_output_order::offset_first(library)
+                } else {
+                    library.to_owned()
+                },
+            );
+            tree.write("entry.ash", "import owner as Sqlite\nmain : Unit -> Sqlite.Scope<Sqlite.OpenError, Sqlite.CloseError, Sqlite.Scope<Sqlite.PrepareError, Sqlite.FinalizeError, Int>> ! {Sqlite.Initialize}\nmain () = resource Sqlite.Connection<C> connection = Sqlite.InMemory {\n    resource Sqlite.Statement<S, C> statement = (connection, \"SELECT 42\") {\n        42\n    }\n}\n");
+            let compiled = compile_path(tree.configuration())
+                .unwrap_or_else(|failure| panic!("output order={offset_first}: {failure:?}"));
+            let (program, provenance) = compiled.effect_build_input().unwrap();
+            let mut work =
+                super::super::gas::preparation(provenance, program.node_count()).unwrap();
+            let build =
+                encode_effect_for_build(program, provenance, "x86_64-unknown-linux-gnu", &mut work)
+                    .unwrap();
+            let bytes = build.image.encode_bytes(&mut work).unwrap();
+            let expected = build.image.encode_native_expectations(&mut work).unwrap();
+            drop(build);
+            drop(compiled);
+            drop(tree);
+            let mut work = super::super::gas::startup(bytes.len(), expected.len()).unwrap();
+            let image = PureImage::decode_bytes(&bytes, &mut work).unwrap();
+            image
+                .admit_expected_native_facts(&expected, &mut work)
+                .unwrap();
+            let restored = image.restore_effect(&mut work).unwrap();
+            let prepare = restored
+                .symbols
+                .iter()
+                .find(|symbol| symbol.symbol().name() == "Prepare")
+                .unwrap();
+            let Some(crate::foreign::source_contract::PreparedOwnerCall::OutputAcquire {
+                output_operand,
+                offset: Some(offset),
+                ..
+            }) = prepare.owner_role()
+            else {
+                panic!("original prepared output roles")
+            };
+            assert_eq!(
+                (*output_operand, offset.operand, offset.input_operand),
+                if offset_first { (4, 3, 1) } else { (3, 4, 1) }
+            );
+            for mutation in 0..4 {
+                let mut work = super::super::gas::startup(bytes.len(), expected.len()).unwrap();
+                let mut image = PureImage::decode_bytes(&bytes, &mut work).unwrap();
+                let (owner, offset) = image
+                    .prepared_symbols
+                    .iter_mut()
+                    .find_map(|symbol| match &mut symbol.owner_call {
+                        Some(PreparedOwnerCallRecord::OutputAcquire {
+                            output_operand,
+                            offset: Some(offset),
+                            ..
+                        }) => Some((output_operand, offset)),
+                        _ => None,
+                    })
+                    .unwrap();
+                match mutation {
+                    0 => offset.operand = *owner,
+                    1 => offset.input_operand = 2,
+                    2 => offset.status.magnitude = 77,
+                    _ => std::mem::swap(owner, &mut offset.operand),
+                }
+                assert!(
+                    matches!(
+                        image.admit_expected_native_facts(&expected, &mut work),
+                        Err(ImageFailure::InvalidRecord)
+                    ),
+                    "order={offset_first}, mutation={mutation}"
+                );
+                // A representable replacement status is still valid normalized
+                // metadata; the independent original facts above reject it.
+                // Invalid coordinates must also fail structural restoration.
+                if mutation != 2 {
+                    let failure = image
+                        .restore_effect(&mut work)
+                        .err()
+                        .expect("invalid output coordinates must not restore");
+                    assert!(
+                        !matches!(failure, ImageFailure::Resource),
+                        "coordinate refusal must not be work exhaustion: order={offset_first}, mutation={mutation}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

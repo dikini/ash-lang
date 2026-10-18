@@ -107,11 +107,10 @@ no executable binding; default execution refuses missing bindings before Ash
 runs. Checked scalar literal constants publish ordinary mathematical `Int`
 values and supply exact declared native operands. A declared `function_address`
 sentinel supplies only a fixed all-bits-one native operand; it publishes no
-ordinary value and grants no call permission. Copy windows remain outside
-the admitted subset. Source resource declarations admit opaque and
-initialized byte owners with declared dependencies, private data and checked
-`scope` or `acquired_only` reports. Their owner families retain complete ordered
-Type/Row arguments with a Type-kind owned identity and support one
+ordinary value and grants no call permission. Source resource declarations admit
+opaque and initialized byte owners with declared dependencies, private data and
+checked `scope` or `acquired_only` reports. Their owner families retain complete
+ordered Type/Row arguments with a Type-kind owned identity and support one
 acquisition and `void` or scalar-status finish and host-destruction contracts
 with total consumed or retained dispositions. Scalar status predicates use
 checked literal facts from the original owner library; the predicate itself
@@ -121,9 +120,12 @@ owner and dependency closure; safe host destruction preserves dependency order.
 Ordinary pure module-global helpers may transform independent lifecycle payloads,
 including through same-module and imported polymorphic definitions. Their complete
 Type/Row instances and original copied calls remain checked; they cannot carry
-native State or acquire native permission. Privileged lifecycle wrappers and
-library migrations remain unsupported. Checked
-lexical forwarding supports the associated interface methods and ordinary
+native State or acquire native permission. Privileged lifecycle wrappers remain
+unsupported. In permitted direct provider phases, sealed lexical copy windows
+produce independent bytes from exact live owner/view families under the bounded
+[copy rules](static-semantics.md#source-foreign-declarations). Windows cannot
+suspend, complete their owner or escape. Checked lexical forwarding supports
+the associated interface methods and ordinary
 constrained helpers, preserving exact operation types, effect rows and typed
 access operands. Sealed common byte reads and writes borrow the exact
 initialized live state in acquire, handler and finish phases. Original call

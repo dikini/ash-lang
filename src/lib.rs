@@ -40,6 +40,9 @@ pub mod render;
 pub mod resolve;
 pub mod resolved;
 pub mod source;
+#[cfg(test)]
+#[path = "../tests/support/sqlite_output_order.rs"]
+mod sqlite_output_order;
 pub mod surface;
 mod syntax_resource;
 pub mod types;

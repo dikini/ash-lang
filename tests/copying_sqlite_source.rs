@@ -13,6 +13,9 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+#[path = "support/sqlite_output_order.rs"]
+mod sqlite_output_order;
+
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
@@ -93,22 +96,70 @@ fn sqlite_private_protocol_payload_changes_without_reacquiring_the_owner() {
 
 #[test]
 fn imported_sqlite_prepare_contract_retains_connection_and_extracts_input_tail() {
+    for offset_first in [false, true] {
+        statement_admission_probe(offset_first, None);
+    }
+}
+
+#[test]
+fn sqlite_prepare_output_orders_preserve_signature_and_contract_refusals() {
+    for offset_first in [false, true] {
+        for (before, after) in [
+            (
+                "output result as scalar",
+                "output result as owner(StatementState<C, S>)",
+            ),
+            ("offset_into(1)", "offset_into(2)"),
+            ("String, Int)", "Bytes, Int)"),
+            (
+                "readable result, readable 3, readable 4",
+                "readable result, readable 3",
+            ),
+            ("out(pointer(InputAddress))", "out(pointer(Address))"),
+            ("Foreign.Nullable<Int>", "Foreign.Nullable<Bool>"),
+        ] {
+            statement_admission_probe(offset_first, Some((before, after)));
+        }
+    }
+}
+
+fn statement_admission_probe(offset_first: bool, invalid: Option<(&str, &str)>) {
     let fixture = Fixture::new();
+    let declarations = match invalid {
+        Some((before, after)) => {
+            assert!(STATEMENT_DECLARATIONS.contains(before));
+            STATEMENT_DECLARATIONS.replacen(before, after, 1)
+        }
+        None => STATEMENT_DECLARATIONS.to_owned(),
+    };
     let library = CONNECTION.replace(
         "    symbol Initialize",
-        &format!("{STATEMENT_DECLARATIONS}    symbol Initialize"),
+        &format!("{declarations}    symbol Initialize"),
     );
+    let library = if offset_first {
+        sqlite_output_order::offset_first(&library)
+    } else {
+        library
+    };
     fs::write(fixture.0.join("sqlite.ash"), library).unwrap();
     fs::write(
         fixture.0.join("entry.ash"),
         "import @ffi.sqlite as Sqlite\nmain : Unit -> Int\nmain () = 42\n",
     )
     .unwrap();
-    compile_path(RunConfiguration {
+    let result = compile_path(RunConfiguration {
         entry: fixture.0.join("entry.ash"),
         roots: ModuleRoots::new([("ffi", &fixture.0)]).unwrap(),
-    })
-    .unwrap_or_else(|failure| panic!("checked SQLite statement/tail contract: {failure:?}"));
+    });
+    match invalid {
+        None => {
+            result.unwrap_or_else(|failure| panic!("checked SQLite statement/tail contract (offset first={offset_first}): {failure:?}"));
+        }
+        Some(case) => assert!(
+            result.is_err(),
+            "offset first={offset_first}, invalid={case:?}"
+        ),
+    }
 }
 
 #[test]
@@ -1057,17 +1108,26 @@ fn canonical_string_operations_restore_from_embedded_image_after_source_erasure(
 
 #[test]
 fn imported_nested_statement_prepares_and_finalizes_before_connection_close() {
-    nested_statement_probe(false, false);
+    nested_statement_probe(false, false, false);
+}
+
+#[test]
+fn offset_first_statement_preserves_native_reports_and_terminal_partial_owner_cleanup() {
+    nested_statement_probe(false, false, true);
 }
 
 #[test]
 fn statement_scalar_operand_refusal_does_not_enter_sqlite_or_consume_the_owner() {
-    nested_statement_probe(true, false);
+    for offset_first in [false, true] {
+        nested_statement_probe(true, false, offset_first);
+    }
 }
 
 #[test]
 fn statement_protocol_payload_update_preserves_the_parent_dependency() {
-    nested_statement_probe(false, true);
+    for offset_first in [false, true] {
+        nested_statement_probe(false, true, offset_first);
+    }
 }
 
 #[test]
@@ -1107,18 +1167,25 @@ fn private_payload_capture_keeps_only_the_declared_outer_dependency() {
     });
 }
 
-fn nested_statement_probe(dynamic_index: bool, protocol: bool) {
+fn nested_statement_probe(dynamic_index: bool, protocol: bool, offset_first: bool) {
     let fixture = Fixture::new();
+    let start = STATEMENT_RESOURCE.find("select_value access => ").unwrap();
+    let end = STATEMENT_RESOURCE[start..]
+        .find("        prepared access")
+        .unwrap()
+        + start;
+    let body = &STATEMENT_RESOURCE[start + "select_value access => ".len()..end];
+    let body = body.replace("resume value", "resume (value + bias)");
     let resource = if protocol {
-        let start = STATEMENT_RESOURCE.find("select_value access => ").unwrap();
-        let end = STATEMENT_RESOURCE[start..]
-            .find("        prepared access")
-            .unwrap()
-            + start;
-        let body = &STATEMENT_RESOURCE[start + "select_value access => ".len()..end];
-        let body = body.replace("resume value", "resume (value + bias)");
         let replacement = format!(
             "select_value access => {{\n            let before : (Connection<C>, Int) = Foreign.data_of state\n            let ready = match before {{\n                (connection, tail) => {{\n                    let _ = Foreign.replace_data (state, (connection, tail + 1))\n                    let after : (Connection<C>, Int) = Foreign.data_of state\n                    match after {{\n                        (_, updated) => updated == tail + 1\n                    }}\n                }}\n            }}\n            let bias = match ready {{\n                true => 0\n                false => 1000\n            }}\n            {body}\n        }}\n"
+        );
+        STATEMENT_RESOURCE.replacen(&STATEMENT_RESOURCE[start..end], &replacement, 1)
+    } else if !dynamic_index {
+        // Read the copied Int before the deep native-result branch. This keeps
+        // the fixture within the unchanged parser structural-depth limit.
+        let replacement = format!(
+            "select_value access => {{\n            let before : (Connection<C>, Int) = Foreign.data_of state\n            let bias = match before {{\n                (_, tail) => match tail == 9 {{\n                    true => 0\n                    false => 1000\n                }}\n            }}\n            {body}\n        }}\n"
         );
         STATEMENT_RESOURCE.replacen(&STATEMENT_RESOURCE[start..end], &replacement, 1)
     } else {
@@ -1162,6 +1229,14 @@ fn nested_statement_probe(dynamic_index: bool, protocol: bool) {
             .replace("ColumnZero<C, S>", "Column<C, S>")
             .replace("perform Column<C, S>.call state", "perform Column<C, S>.call (state, 0)")
             .replace("Foreign.Returned(value) => resume value", "Foreign.Returned(value) => match perform Column<C, S>.call (state, 2147483648) {\n                    Foreign.ConversionFailed(_) => resume value\n                    Foreign.Returned(_) => resume 997\n                }")
+    } else {
+        library
+    };
+    let library = if offset_first {
+        sqlite_output_order::offset_first(&library).replace(
+            "\"probe_statement_prepare\"",
+            "\"probe_statement_prepare_reversed\"",
+        )
     } else {
         library
     };
@@ -1226,6 +1301,21 @@ fn nested_statement_probe(dynamic_index: bool, protocol: bool) {
         panic!("nested SQLite generated host: {failure:?}\n{log}")
     });
     let generated = built.generated_source().parent().unwrap();
+    for (role, file) in [
+        ("generated_source", built.generated_source().to_path_buf()),
+        ("private_image", generated.join("program-image.bin")),
+        ("expected_facts", generated.join("expected-facts.bin")),
+        ("executed_host", executable.clone()),
+        ("native_wrapper", c_source),
+        ("native_archive", fixture.0.join("libcounted.a")),
+    ] {
+        let bytes = fs::read(&file).unwrap();
+        println!(
+            "SQLite statement artifact (offset first={offset_first}): {role}, bytes={}, sha256={:x}",
+            bytes.len(),
+            Sha256::digest(&bytes)
+        );
+    }
     fs::remove_file(generated.join("program-image.bin")).unwrap();
     fs::remove_file(generated.join("expected-facts.bin")).unwrap();
     for invalid_tail in [false, true] {
@@ -1241,7 +1331,9 @@ fn nested_statement_probe(dynamic_index: bool, protocol: bool) {
         }
         let output = command.output().unwrap();
         let trace = fs::read_to_string(trace_path).unwrap();
-        println!("SQLite statement native trace (injected invalid tail={invalid_tail}):\n{trace}");
+        println!(
+            "SQLite statement native trace (offset first={offset_first}, injected invalid tail={invalid_tail}):\n{trace}"
+        );
         if invalid_tail {
             assert!(!output.status.success());
             assert!(
@@ -1564,6 +1656,10 @@ int probe_statement_prepare(void *connection, const char *sql, int length, void 
     trace("prepare", status, *statement != NULL);
     if (getenv("ASH_SQLITE_INVALID_TAIL")) *tail = (const char *)(uintptr_t)1;
     return status;
+}
+// This is a real reversed C signature. Forward to SQLite in its actual order.
+int probe_statement_prepare_reversed(void *connection, const char *sql, int length, const char **tail, void **statement) {
+    return probe_statement_prepare(connection, sql, length, statement, tail);
 }
 int probe_statement_finalize(void *statement) {
     int status = sqlite3_finalize(statement);

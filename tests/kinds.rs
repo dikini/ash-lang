@@ -93,6 +93,9 @@ fn kind_error(fixture: &KindFixture) -> KindError {
         ResolveModuleError::Kind(error) => {
             panic!("expected a source kind rejection, found {error:?}")
         }
+        ResolveModuleError::Representation(error) => {
+            panic!("fixture unexpectedly reached representation checking: {error:?}")
+        }
         ResolveModuleError::Resolution(error) => {
             panic!("name resolution stole kind-error ownership: {error:?}")
         }

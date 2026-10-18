@@ -6425,7 +6425,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             let key = OwnedArgumentBuffer::from_box(key, &mut self.type_work)?;
             let expected = OwnedArgumentBuffer::from_box(expected, &mut self.type_work)?;
             let actual = OwnedArgumentBuffer::from_box(actual, &mut self.type_work)?;
-            match self.unify_owner_arguments(&expected.0, &actual.0) {
+            match self.unify_owner_arguments(
+                expected.0.iter().map(|argument| argument.as_ref()),
+                actual.0.iter().map(|argument| argument.as_ref()),
+            ) {
                 Ok(()) => {}
                 Err(UnificationFailure::RowExclusion) => {
                     return Err(row_exclusion_error(obligation_span, Some(source_span)));
@@ -8202,7 +8205,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             if next_key.next().is_some() || expected.len() != dependent_count {
                 return Err(invalid_state());
             }
-            match self.unify_owner_arguments(&expected, &found) {
+            match self.unify_owner_arguments(
+                expected.iter().map(|argument| argument.as_ref()),
+                found.iter().map(|argument| argument.as_ref()),
+            ) {
                 Ok(()) => {}
                 Err(
                     UnificationFailure::Mismatch
@@ -8239,28 +8245,26 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         {
             return Err(invalid_state());
         }
-        for (expected, actual) in expected.arguments().iter().zip(actual.arguments()) {
-            match self.unify_owner_argument(expected, actual) {
-                Ok(()) => {}
-                Err(UnificationFailure::RowExclusion) => {
-                    return Err(row_exclusion_error(span, None));
-                }
-                Err(UnificationFailure::Mismatch | UnificationFailure::Infinite) => {
-                    return Err(invalid_state());
-                }
-                Err(UnificationFailure::Kind { context, span }) => {
-                    return Err(TypeError::Internal(ElaborationFailure::Kind {
-                        context,
-                        span,
-                    }));
-                }
-                Err(UnificationFailure::Resource) => {
-                    return Err(TypeError::Internal(
-                        ElaborationFailure::TypeResourceExhausted,
-                    ));
-                }
-                Err(UnificationFailure::Invariant) => return Err(invalid_state()),
+        match self.unify_owner_arguments(expected.arguments().iter(), actual.arguments().iter()) {
+            Ok(()) => {}
+            Err(UnificationFailure::RowExclusion) => {
+                return Err(row_exclusion_error(span, None));
             }
+            Err(UnificationFailure::Mismatch | UnificationFailure::Infinite) => {
+                return Err(invalid_state());
+            }
+            Err(UnificationFailure::Kind { context, span }) => {
+                return Err(TypeError::Internal(ElaborationFailure::Kind {
+                    context,
+                    span,
+                }));
+            }
+            Err(UnificationFailure::Resource) => {
+                return Err(TypeError::Internal(
+                    ElaborationFailure::TypeResourceExhausted,
+                ));
+            }
+            Err(UnificationFailure::Invariant) => return Err(invalid_state()),
         }
         Ok(())
     }
@@ -9840,10 +9844,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         )
     }
 
-    fn unify_owner_arguments(
+    fn unify_owner_arguments<'a>(
         &mut self,
-        left: &[crate::types::IterativeArgumentOwner],
-        right: &[crate::types::IterativeArgumentOwner],
+        left: impl ExactSizeIterator<Item = &'a crate::types::KindedArgument>,
+        right: impl ExactSizeIterator<Item = &'a crate::types::KindedArgument>,
     ) -> Result<(), UnificationFailure> {
         if left.len() != right.len() {
             return Err(UnificationFailure::Mismatch);
@@ -9853,9 +9857,31 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let inference_marker = self.inference_variables.len();
         let next_inference = self.next_inference;
         let cleanup_marker = self.cleanup_rows.checkpoint();
-        let result = left.iter().zip(right).try_for_each(|(left, right)| {
-            self.unify_owner_argument_recorded(left, right, &mut inserted_types, &mut inserted_rows)
-        });
+        let result = (|| {
+            self.type_work
+                .charge(left.len())
+                .map_err(|()| UnificationFailure::Resource)?;
+            let mut pairs = Vec::new();
+            pairs
+                .try_reserve_exact(left.len())
+                .map_err(|_| UnificationFailure::Resource)?;
+            for (left, right) in left.zip(right) {
+                let left = crate::types::IterativeArgumentOwner::new(
+                    crate::types::clone_kinded_argument_with_budget(left, &mut self.type_work)
+                        .map_err(|()| UnificationFailure::Resource)?,
+                );
+                let right = crate::types::IterativeArgumentOwner::new(
+                    crate::types::clone_kinded_argument_with_budget(right, &mut self.type_work)
+                        .map_err(|()| UnificationFailure::Resource)?,
+                );
+                pairs.push((left, right));
+            }
+            self.unify_owned_arguments_recorded(
+                OwnedUnificationEntry::ArgumentPairs(pairs),
+                &mut inserted_types,
+                &mut inserted_rows,
+            )
+        })();
         if result.is_err() {
             self.rollback_cleanup_rows(cleanup_marker);
             self.rollback_unification_to(
@@ -9868,65 +9894,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             );
         }
         result
-    }
-    fn unify_owner_argument(
-        &mut self,
-        left: &crate::types::KindedArgument,
-        right: &crate::types::KindedArgument,
-    ) -> Result<(), UnificationFailure> {
-        match (left, right) {
-            (
-                crate::types::KindedArgument::TypeArg(left),
-                crate::types::KindedArgument::TypeArg(right),
-            ) => self.unify(left, right),
-            (
-                crate::types::KindedArgument::RowArg(left),
-                crate::types::KindedArgument::RowArg(right),
-            ) => self.unify_effect_rows(left, right),
-            _ => Err(UnificationFailure::Mismatch),
-        }
-    }
-
-    fn unify_owner_argument_recorded(
-        &mut self,
-        left: &crate::types::KindedArgument,
-        right: &crate::types::KindedArgument,
-        inserted_types: &mut Vec<InferenceVariableId>,
-        inserted_rows: &mut Vec<InferenceVariableId>,
-    ) -> Result<(), UnificationFailure> {
-        match (left, right) {
-            (
-                crate::types::KindedArgument::TypeArg(left),
-                crate::types::KindedArgument::TypeArg(right),
-            ) => {
-                // Admit both actual owner tags, then use the same borrowed Type
-                // entry that also traverses nested resource and row arguments.
-                self.type_work
-                    .charge(2)
-                    .map_err(|()| UnificationFailure::Resource)?;
-                return self.unify_recorded(left, right, inserted_types, inserted_rows);
-            }
-            (crate::types::KindedArgument::RowArg(_), crate::types::KindedArgument::RowArg(_)) => {}
-            _ => {
-                self.type_work
-                    .charge(2)
-                    .map_err(|()| UnificationFailure::Resource)?;
-                return Err(UnificationFailure::Mismatch);
-            }
-        }
-        let left = crate::types::IterativeArgumentOwner::new(
-            crate::types::clone_kinded_argument_with_budget(left, &mut self.type_work)
-                .map_err(|()| UnificationFailure::Resource)?,
-        );
-        let right = crate::types::IterativeArgumentOwner::new(
-            crate::types::clone_kinded_argument_with_budget(right, &mut self.type_work)
-                .map_err(|()| UnificationFailure::Resource)?,
-        );
-        self.unify_owned_arguments_recorded(
-            OwnedUnificationEntry::Arguments(left, right),
-            inserted_types,
-            inserted_rows,
-        )
     }
     fn unify(&mut self, left: &Type, right: &Type) -> Result<(), UnificationFailure> {
         let mut inserted = Vec::new();
@@ -10062,7 +10029,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     }
 
     /// Unifies the alternating Type/owner-argument/row graph on one work stack.
-    /// Candidate frames retain the exact rollback boundary of speculative row matching.
+    /// Row choices retain their continuation until the entire unification succeeds.
     fn unify_owned_arguments_recorded(
         &mut self,
         entry: OwnedUnificationEntry,
@@ -10070,6 +10037,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         inserted_rows: &mut Vec<InferenceVariableId>,
     ) -> Result<(), UnificationFailure> {
         use crate::types::{IterativeArgumentOwner as ArgumentOwner, KindedArgument};
+        use std::rc::Rc;
         struct Rows {
             left: EffectRow,
             right: EffectRow,
@@ -10085,16 +10053,18 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             }
         }
         struct Candidates {
-            rows: Rows,
+            rows: Rc<Rows>,
             exact_left: Vec<bool>,
+            exact_right: Vec<bool>,
             next_left: usize,
             next_right: usize,
         }
         struct FinalRows {
-            rows: Rows,
+            rows: Rc<Rows>,
             left_matched: Vec<bool>,
             right_matched: Vec<bool>,
         }
+        #[derive(Clone, Copy)]
         struct Checkpoint {
             types: usize,
             rows: usize,
@@ -10111,13 +10081,18 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         enum Task {
             Argument(ArgumentOwner, ArgumentOwner),
             Type(IterativeTypeOwner, IterativeTypeOwner, TypeStage),
-            Rows(Rows),
+            Rows(Rc<Rows>),
             Candidates(Candidates),
-            CandidateResult(Candidates, Checkpoint),
+            CandidateResult(Rc<Rows>, Checkpoint),
             FinishRows(FinalRows),
         }
+        struct Choice {
+            remaining: Candidates,
+            checkpoint: Checkpoint,
+            continuation: Vec<Rc<Task>>,
+        }
         fn reserve(
-            work: &mut Vec<Task>,
+            work: &mut Vec<Rc<Task>>,
             count: usize,
             budget: &mut TypeWorkBudget,
         ) -> Result<(), UnificationFailure> {
@@ -10126,6 +10101,49 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 .map_err(|()| UnificationFailure::Resource)?;
             work.try_reserve(count)
                 .map_err(|_| UnificationFailure::Resource)
+        }
+        fn copy_flags(flags: &[bool], budget: &mut TypeWorkBudget) -> Result<Vec<bool>, ()> {
+            budget.charge(flags.len())?;
+            let mut copy = Vec::new();
+            copy.try_reserve_exact(flags.len()).map_err(|_| ())?;
+            copy.extend_from_slice(flags);
+            Ok(copy)
+        }
+        // A choice shares immutable pending tasks. Visiting a shared task
+        // rebuilds its owned roots through the bounded iterative copiers.
+        fn replay(task: &Task, budget: &mut TypeWorkBudget) -> Result<Task, ()> {
+            Ok(match task {
+                Task::Argument(left, right) => {
+                    let left = ArgumentOwner::new(crate::types::clone_kinded_argument_with_budget(
+                        left, budget,
+                    )?);
+                    let right = ArgumentOwner::new(
+                        crate::types::clone_kinded_argument_with_budget(right, budget)?,
+                    );
+                    Task::Argument(left, right)
+                }
+                Task::Type(left, right, stage) => {
+                    let left = IterativeTypeOwner::new(clone_type_with_budget(left, budget)?);
+                    let right = IterativeTypeOwner::new(clone_type_with_budget(right, budget)?);
+                    Task::Type(left, right, *stage)
+                }
+                Task::Rows(rows) => Task::Rows(Rc::clone(rows)),
+                Task::Candidates(state) => Task::Candidates(Candidates {
+                    rows: Rc::clone(&state.rows),
+                    exact_left: copy_flags(&state.exact_left, budget)?,
+                    exact_right: copy_flags(&state.exact_right, budget)?,
+                    next_left: state.next_left,
+                    next_right: state.next_right,
+                }),
+                Task::CandidateResult(rows, checkpoint) => {
+                    Task::CandidateResult(Rc::clone(rows), *checkpoint)
+                }
+                Task::FinishRows(state) => Task::FinishRows(FinalRows {
+                    rows: Rc::clone(&state.rows),
+                    left_matched: copy_flags(&state.left_matched, budget)?,
+                    right_matched: copy_flags(&state.right_matched, budget)?,
+                }),
+            })
         }
         fn argument_pairs(
             left: &[KindedArgument],
@@ -10156,15 +10174,32 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             Ok(pairs)
         }
         let mut work = Vec::new();
+        let mut choices = Vec::new();
         reserve(&mut work, 1, &mut self.type_work)?;
-        work.push(match entry {
-            OwnedUnificationEntry::Arguments(left, right) => Task::Argument(left, right),
-            OwnedUnificationEntry::ComparedTypes(left, right) => {
-                Task::Type(left, right, TypeStage::Zonked)
+        match entry {
+            OwnedUnificationEntry::Arguments(left, right) => {
+                work.push(Rc::new(Task::Argument(left, right)))
             }
-        });
+            OwnedUnificationEntry::ComparedTypes(left, right) => {
+                work.push(Rc::new(Task::Type(left, right, TypeStage::Zonked)));
+            }
+            OwnedUnificationEntry::ArgumentPairs(pairs) => {
+                reserve(&mut work, pairs.len(), &mut self.type_work)?;
+                work.extend(
+                    pairs
+                        .into_iter()
+                        .rev()
+                        .map(|(left, right)| Rc::new(Task::Argument(left, right))),
+                );
+            }
+        }
         while let Some(task) = work.pop() {
             let result = (|| -> Result<(), UnificationFailure> {
+                let task = match Rc::try_unwrap(task) {
+                    Ok(task) => task,
+                    Err(task) => replay(&task, &mut self.type_work)
+                        .map_err(|()| UnificationFailure::Resource)?,
+                };
                 match task {
                     Task::Argument(left, right) => {
                         reserve(&mut work, 1, &mut self.type_work)?;
@@ -10192,11 +10227,11 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                 let KindedArgument::TypeArg(right) = right.into_inner() else {
                                     unreachable!()
                                 };
-                                work.push(Task::Type(
+                                work.push(Rc::new(Task::Type(
                                     IterativeTypeOwner::new(left),
                                     IterativeTypeOwner::new(right),
                                     TypeStage::Compared,
-                                ));
+                                )));
                             }
                             (KindedArgument::RowArg(_), KindedArgument::RowArg(_)) => {
                                 let KindedArgument::RowArg(left) = left.into_inner() else {
@@ -10205,7 +10240,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                 let KindedArgument::RowArg(right) = right.into_inner() else {
                                     unreachable!()
                                 };
-                                work.push(Task::Rows(Rows { left, right }));
+                                work.push(Rc::new(Task::Rows(Rc::new(Rows { left, right }))));
                             }
                             _ => return Err(UnificationFailure::Mismatch),
                         }
@@ -10280,16 +10315,16 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
                             (Type::Variable(left), Type::Variable(right)) if left == right => {}
                             (Type::Application(lf, la), Type::Application(rf, ra)) => {
-                                work.push(Task::Type(
+                                work.push(Rc::new(Task::Type(
                                     IterativeTypeOwner::new(*la),
                                     IterativeTypeOwner::new(*ra),
                                     TypeStage::Unchecked,
-                                ));
-                                work.push(Task::Type(
+                                )));
+                                work.push(Rc::new(Task::Type(
                                     IterativeTypeOwner::new(*lf),
                                     IterativeTypeOwner::new(*rf),
                                     TypeStage::Unchecked,
-                                ));
+                                )));
                             }
                             (
                                 Type::ResourceApply(left_id, left),
@@ -10299,10 +10334,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                 for (left, right) in
                                     left.into_vec().into_iter().zip(right.into_vec()).rev()
                                 {
-                                    work.push(Task::Argument(
+                                    work.push(Rc::new(Task::Argument(
                                         ArgumentOwner::new(left),
                                         ArgumentOwner::new(right),
-                                    ));
+                                    )));
                                 }
                             }
                             (
@@ -10313,10 +10348,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                 for (left, right) in
                                     left.into_vec().into_iter().zip(right.into_vec()).rev()
                                 {
-                                    work.push(Task::Argument(
+                                    work.push(Rc::new(Task::Argument(
                                         ArgumentOwner::new(left),
                                         ArgumentOwner::new(right),
-                                    ));
+                                    )));
                                 }
                             }
                             (Type::Tuple(left), Type::Tuple(right))
@@ -10325,24 +10360,24 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                 for (left, right) in
                                     left.into_vec().into_iter().zip(right.into_vec()).rev()
                                 {
-                                    work.push(Task::Type(
+                                    work.push(Rc::new(Task::Type(
                                         IterativeTypeOwner::new(left),
                                         IterativeTypeOwner::new(right),
                                         TypeStage::Unchecked,
-                                    ));
+                                    )));
                                 }
                             }
                             (Type::Function(ld, lv), Type::Function(rd, rv)) => {
-                                work.push(Task::Type(
+                                work.push(Rc::new(Task::Type(
                                     IterativeTypeOwner::new(*lv),
                                     IterativeTypeOwner::new(*rv),
                                     TypeStage::Unchecked,
-                                ));
-                                work.push(Task::Type(
+                                )));
+                                work.push(Rc::new(Task::Type(
                                     IterativeTypeOwner::new(*ld),
                                     IterativeTypeOwner::new(*rd),
                                     TypeStage::Unchecked,
-                                ));
+                                )));
                             }
                             (Type::EffectfulFunction(ld, lc), Type::EffectfulFunction(rd, rc)) => {
                                 let crate::types::ComputationType {
@@ -10353,60 +10388,60 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                     value: rv,
                                     effects: re,
                                 } = *rc;
-                                work.push(Task::Type(
+                                work.push(Rc::new(Task::Type(
                                     IterativeTypeOwner::new(lv),
                                     IterativeTypeOwner::new(rv),
                                     TypeStage::Unchecked,
-                                ));
-                                work.push(Task::Type(
+                                )));
+                                work.push(Rc::new(Task::Type(
                                     IterativeTypeOwner::new(*ld),
                                     IterativeTypeOwner::new(*rd),
                                     TypeStage::Unchecked,
-                                ));
-                                work.push(Task::Rows(Rows {
+                                )));
+                                work.push(Rc::new(Task::Rows(Rc::new(Rows {
                                     left: le,
                                     right: re,
-                                }));
+                                }))));
                             }
                             (Type::Function(ld, lv), Type::EffectfulFunction(rd, rc)) => {
                                 let crate::types::ComputationType {
                                     value: rv,
                                     effects: re,
                                 } = *rc;
-                                work.push(Task::Type(
+                                work.push(Rc::new(Task::Type(
                                     IterativeTypeOwner::new(*lv),
                                     IterativeTypeOwner::new(rv),
                                     TypeStage::Unchecked,
-                                ));
-                                work.push(Task::Type(
+                                )));
+                                work.push(Rc::new(Task::Type(
                                     IterativeTypeOwner::new(*ld),
                                     IterativeTypeOwner::new(*rd),
                                     TypeStage::Unchecked,
-                                ));
-                                work.push(Task::Rows(Rows {
+                                )));
+                                work.push(Rc::new(Task::Rows(Rc::new(Rows {
                                     left: EffectRow::empty(),
                                     right: re,
-                                }));
+                                }))));
                             }
                             (Type::EffectfulFunction(ld, lc), Type::Function(rd, rv)) => {
                                 let crate::types::ComputationType {
                                     value: lv,
                                     effects: le,
                                 } = *lc;
-                                work.push(Task::Type(
+                                work.push(Rc::new(Task::Type(
                                     IterativeTypeOwner::new(lv),
                                     IterativeTypeOwner::new(*rv),
                                     TypeStage::Unchecked,
-                                ));
-                                work.push(Task::Type(
+                                )));
+                                work.push(Rc::new(Task::Type(
                                     IterativeTypeOwner::new(*ld),
                                     IterativeTypeOwner::new(*rd),
                                     TypeStage::Unchecked,
-                                ));
-                                work.push(Task::Rows(Rows {
+                                )));
+                                work.push(Rc::new(Task::Rows(Rc::new(Rows {
                                     left: le,
                                     right: EffectRow::empty(),
-                                }));
+                                }))));
                             }
                             (left, right) => {
                                 discard_type_iteratively(left);
@@ -10426,7 +10461,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         let KindedArgument::RowArg(left) = left.into_inner() else {
                             unreachable!()
                         };
-                        let rows = Rows { left, right };
+                        let rows = Rc::new(Rows { left, right });
                         if self.cleanup_row_pending(&rows.left)
                             || self.cleanup_row_pending(&rows.right)
                         {
@@ -10473,22 +10508,18 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             }
                         }
                         reserve(&mut work, 1, &mut self.type_work)?;
-                        work.push(Task::Candidates(Candidates {
+                        work.push(Rc::new(Task::Candidates(Candidates {
                             rows,
                             exact_left,
+                            exact_right,
                             next_left: 0,
                             next_right: 0,
-                        }));
+                        })));
                     }
                     Task::Candidates(mut state) => {
                         let mut attempt = None;
                         while state.next_left < state.rows.left.known().len() {
                             let li = state.next_left;
-                            if state.exact_left[li] {
-                                state.next_left += 1;
-                                state.next_right = 0;
-                                continue;
-                            }
                             if state.next_right >= state.rows.right.known().len() {
                                 state.next_left += 1;
                                 state.next_right = 0;
@@ -10496,6 +10527,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             }
                             let ri = state.next_right;
                             state.next_right += 1;
+                            if state.exact_left[li] && state.exact_right[ri] {
+                                continue;
+                            }
                             let left = &state.rows.left.known()[li];
                             let right = &state.rows.right.known()[ri];
                             compare_effect_instances_with_budget(left, right, &mut self.type_work)
@@ -10528,8 +10562,29 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                     .ok_or(UnificationFailure::Resource)?,
                                 &mut self.type_work,
                             )?;
-                            work.push(Task::CandidateResult(state, checkpoint));
-                            work.extend(pairs.into_iter().rev());
+                            self.type_work
+                                .charge(
+                                    work.len()
+                                        .checked_add(1)
+                                        .ok_or(UnificationFailure::Resource)?,
+                                )
+                                .map_err(|()| UnificationFailure::Resource)?;
+                            let mut continuation = Vec::new();
+                            continuation
+                                .try_reserve_exact(work.len())
+                                .map_err(|_| UnificationFailure::Resource)?;
+                            continuation.extend(work.iter().map(Rc::clone));
+                            choices
+                                .try_reserve(1)
+                                .map_err(|_| UnificationFailure::Resource)?;
+                            let rows = Rc::clone(&state.rows);
+                            choices.push(Choice {
+                                remaining: state,
+                                checkpoint,
+                                continuation,
+                            });
+                            work.push(Rc::new(Task::CandidateResult(rows, checkpoint)));
+                            work.extend(pairs.into_iter().rev().map(Rc::new));
                         } else {
                             // The final pass retains the original deterministic family/arity pairing.
                             let rows = state.rows;
@@ -10595,32 +10650,22 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                     .ok_or(UnificationFailure::Resource)?,
                                 &mut self.type_work,
                             )?;
-                            work.push(Task::FinishRows(FinalRows {
+                            work.push(Rc::new(Task::FinishRows(FinalRows {
                                 rows,
                                 left_matched: lm,
                                 right_matched: rm,
-                            }));
-                            work.extend(pairs.into_iter().rev());
+                            })));
+                            work.extend(pairs.into_iter().rev().map(Rc::new));
                         }
                     }
-                    Task::CandidateResult(state, checkpoint) => {
+                    Task::CandidateResult(rows, checkpoint) => {
                         if inserted.len() > checkpoint.types
                             || inserted_rows.len() > checkpoint.rows
                         {
                             reserve(&mut work, 1, &mut self.type_work)?;
-                            work.push(Task::Rows(state.rows));
+                            work.push(Rc::new(Task::Rows(rows)));
                         } else {
-                            self.rollback_cleanup_rows(checkpoint.cleanup);
-                            self.rollback_unification_to(
-                                inserted,
-                                inserted_rows,
-                                checkpoint.types,
-                                checkpoint.rows,
-                                checkpoint.inferences,
-                                checkpoint.next,
-                            );
-                            reserve(&mut work, 1, &mut self.type_work)?;
-                            work.push(Task::Candidates(state));
+                            return Err(UnificationFailure::Mismatch);
                         }
                     }
                     Task::FinishRows(state) => {
@@ -10806,28 +10851,25 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     UnificationFailure::Mismatch
                         | UnificationFailure::Infinite
                         | UnificationFailure::RowExclusion
-                ) {
-                    let mut recovered = None;
-                    while let Some(task) = work.pop() {
-                        if let Task::CandidateResult(state, checkpoint) = task {
-                            recovered = Some((state, checkpoint));
-                            break;
-                        }
-                    }
-                    if let Some((state, checkpoint)) = recovered {
-                        self.rollback_cleanup_rows(checkpoint.cleanup);
-                        self.rollback_unification_to(
-                            inserted,
-                            inserted_rows,
-                            checkpoint.types,
-                            checkpoint.rows,
-                            checkpoint.inferences,
-                            checkpoint.next,
-                        );
-                        reserve(&mut work, 1, &mut self.type_work)?;
-                        work.push(Task::Candidates(state));
-                        continue;
-                    }
+                ) && let Some(Choice {
+                    remaining,
+                    checkpoint,
+                    continuation,
+                }) = choices.pop()
+                {
+                    self.rollback_cleanup_rows(checkpoint.cleanup);
+                    self.rollback_unification_to(
+                        inserted,
+                        inserted_rows,
+                        checkpoint.types,
+                        checkpoint.rows,
+                        checkpoint.inferences,
+                        checkpoint.next,
+                    );
+                    work = continuation;
+                    reserve(&mut work, 1, &mut self.type_work)?;
+                    work.push(Rc::new(Task::Candidates(remaining)));
+                    continue;
                 }
                 return Err(error);
             }
@@ -21871,20 +21913,11 @@ struct NewtypeRepresentationEdge {
     occurrence: Span,
 }
 
-/// Checks every local definition and publishes an immutable dependency summary.
-///
-/// No Core program escapes this phase. A summary is created only after all
-/// bodies have checked against their declared interfaces.
-///
-/// # Errors
-///
-/// Returns the first source typing error or bounded internal elaboration
-/// failure. Failed modules do not produce a [`CheckedModule`].
-fn check_newtype_representation_cycles(
-    resolved: &ResolvedModule,
+/// Rejects module-level representation cycles after their kinds have checked.
+pub(crate) fn check_newtype_representation_cycles(
+    registry: &ResolvedRegistry,
     type_work: &mut TypeWorkBudget,
 ) -> Result<(), TypeError> {
-    let registry = resolved.registry();
     let vertex_count = registry
         .nominals()
         .iter()
@@ -22259,6 +22292,15 @@ fn check_newtype_representation_cycles(
     Ok(())
 }
 
+/// Checks every local definition and publishes an immutable dependency summary.
+///
+/// No Core program escapes this phase. A summary is created only after all
+/// bodies have checked against their declared interfaces.
+///
+/// # Errors
+///
+/// Returns the first source typing error or bounded internal elaboration
+/// failure. Failed modules do not produce a [`CheckedModule`].
 pub fn check_module(resolved: ResolvedModule) -> Result<CheckedModule, TypeError> {
     let mut type_work = TypeWorkBudget::default();
     let mut coverage_work = UsefulnessBudget::default();
@@ -22412,7 +22454,6 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
     resolved
         .authenticate_owner_definitions(type_work)
         .map_err(resolved_build_error)?;
-    check_newtype_representation_cycles(&resolved, type_work)?;
     let checked_interfaces = check_interface_declarations(&resolved, constraint_work)?;
     check_global_requirements(&resolved, &checked_interfaces, constraint_work)?;
     let registry = Arc::new(
@@ -26502,6 +26543,12 @@ enum OwnedUnificationEntry {
     Arguments(
         crate::types::IterativeArgumentOwner,
         crate::types::IterativeArgumentOwner,
+    ),
+    ArgumentPairs(
+        Vec<(
+            crate::types::IterativeArgumentOwner,
+            crate::types::IterativeArgumentOwner,
+        )>,
     ),
     ComparedTypes(IterativeTypeOwner, IterativeTypeOwner),
 }
@@ -31334,7 +31381,7 @@ mod tests {
 
         let resolved = fixture();
         let mut measured_type_work = TypeWorkBudget::unbounded();
-        check_newtype_representation_cycles(&resolved, &mut measured_type_work)
+        check_newtype_representation_cycles(resolved.registry(), &mut measured_type_work)
             .expect("the isolated newtype representation graph should check");
         const VERTEX_INDEX_WORK: usize = 2; // declaration row + identity map row
         const ADJACENCY_WORK: usize = 2; // outer row + one outgoing-row carrier
@@ -31345,15 +31392,16 @@ mod tests {
         assert_eq!(exact_work, EXACT_WORK);
 
         let mut short_type_work = TypeWorkBudget::with_limit(exact_work - 1);
-        let failure = check_newtype_representation_cycles(&resolved, &mut short_type_work)
-            .expect_err("one graph work cell short must not admit a graph");
+        let failure =
+            check_newtype_representation_cycles(resolved.registry(), &mut short_type_work)
+                .expect_err("one graph work cell short must not admit a graph");
         let TypeError::Internal(failure) = failure else {
             panic!("graph budget exhaustion must remain an internal resource failure");
         };
         assert_eq!(failure.reason_code(), "internal.resource.type-work");
 
         let mut exact_type_work = TypeWorkBudget::with_limit(exact_work);
-        check_newtype_representation_cycles(&resolved, &mut exact_type_work)
+        check_newtype_representation_cycles(resolved.registry(), &mut exact_type_work)
             .expect("the exact isolated graph budget should be retryable");
         assert_eq!(exact_type_work.used(), exact_work);
 
@@ -31364,7 +31412,7 @@ mod tests {
             "()",
         );
         let mut ordinary_work = TypeWorkBudget::with_limit(0);
-        check_newtype_representation_cycles(&ordinary, &mut ordinary_work)
+        check_newtype_representation_cycles(ordinary.registry(), &mut ordinary_work)
             .expect("ordinary data must not allocate a newtype representation graph");
         assert_eq!(ordinary_work.used(), 0);
     }
@@ -31397,25 +31445,25 @@ mod tests {
                     "Unit",
                     "()",
                 );
-                check_newtype_representation_cycles(&accepted, &mut TypeWorkBudget::unbounded())
+                check_newtype_representation_cycles(accepted.registry(), &mut TypeWorkBudget::unbounded())
                     .expect("the wide acyclic newtype graph should check");
                 drop(accepted);
 
-                let rejected = resolved_module_fixture(
-                    "wide-newtype-graph-rejected.ash",
-                    &declarations(true),
-                    "Unit",
-                    "()",
+                let rejected_source = format!(
+                    "{}main : Unit -> Unit\nmain () = ()\n",
+                    declarations(true),
                 );
+                let file = ModuleFixtureFile::write(
+                    "wide-newtype-graph-rejected.ash", &rejected_source,
+                );
+                let graph = load_module_graph(&file.0, &ModuleRoots::empty())
+                    .expect("the wide cyclic module should load");
+                let loaded = graph.module(graph.entry()).expect("entry module");
                 assert!(matches!(
-                    check_newtype_representation_cycles(
-                        &rejected,
-                        &mut TypeWorkBudget::unbounded(),
-                    ),
-                    Err(TypeError::Source(error))
+                    resolve_module(loaded, &[]),
+                    Err(crate::resolve::ResolveModuleError::Representation(TypeError::Source(error)))
                         if error.reason == TypeReason::NewtypeRecursiveRepresentation
                 ));
-                drop(rejected);
             })
             .expect("wide graph thread should start")
             .join()
@@ -35172,11 +35220,14 @@ mod tests {
     #[test]
     fn determination_conflict_rolls_back_the_complete_dependent_tuple() {
         // The complete rejected tuple transaction and charged rebuild of its
-        // key, expected, and actual diagnostic types consume 38 Type units. Three
-        // rendered fields and one retained source label cost four constraint
-        // units.
+        // key, expected, and actual diagnostic types consume 44 Type units.
+        // The ordered transaction retains two pair slots, copies four scalar
+        // roots, and charges three entry slots plus two Argument frames: 11
+        // units replace four owner-tag units and one single-pair entry (5).
+        // This adds six units to the former 38-unit boundary. Three rendered
+        // fields and one retained source label cost four constraint units.
         const CONSTRAINT_WORK: usize = 4;
-        const TYPE_WORK: usize = 38;
+        const TYPE_WORK: usize = 44;
         let run = |constraint_limit, type_limit| {
             let source = SourceFile::new("determination-transaction.ash", "source goal")
                 .expect("the fixture source should fit");
@@ -40750,6 +40801,182 @@ mod tests {
             elaborator.inference_solutions.get(&variable),
             Some(&Type::Bool)
         );
+    }
+
+    fn row_choice_fixture(first: Type, second: Type) -> (Elaborator, Type, Type) {
+        let span = row_test_span("row-choice-continuation.ash");
+        let mut elaborator = Elaborator::new();
+        let a = elaborator.fresh_inference(&Kind::Type, span).unwrap();
+        let b = elaborator.fresh_inference(&Kind::Type, span).unwrap();
+        let owner = crate::types::EffectId::new(ModuleId::new(0), 0);
+        let row = |arguments: Vec<Type>| {
+            EffectRow::closed(
+                arguments
+                    .into_iter()
+                    .map(|argument| EffectInstance::new(owner, Box::new([argument])))
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            )
+        };
+        let function = |effects| {
+            Type::function_computation(Type::Unit, ComputationType::new(Type::Unit, effects))
+        };
+        let left = Type::Tuple(Box::new([function(row(vec![a.clone(), b.clone()])), a, b]));
+        let right = Type::Tuple(Box::new([
+            function(row(vec![Type::Int, Type::Bool])),
+            first,
+            second,
+        ]));
+        elaborator.type_work = TypeWorkBudget::unbounded();
+        (elaborator, left, right)
+    }
+
+    #[test]
+    fn row_choices_retry_after_later_enclosing_type_constraints() {
+        for (first, second) in [(Type::Bool, Type::Int), (Type::Int, Type::Bool)] {
+            let (mut elaborator, left, right) = row_choice_fixture(first.clone(), second.clone());
+            assert_eq!(elaborator.unify(&left, &right), Ok(()));
+            assert_eq!(elaborator.zonk(&left).unwrap(), right);
+            assert_eq!(
+                elaborator
+                    .inference_solutions
+                    .get(&InferenceVariableId::new(0)),
+                Some(&first)
+            );
+            assert_eq!(
+                elaborator
+                    .inference_solutions
+                    .get(&InferenceVariableId::new(1)),
+                Some(&second)
+            );
+
+            let (mut elaborator, left, right) = row_choice_fixture(first, second);
+            let arguments = |ty| {
+                let Type::Tuple(elements) = ty else {
+                    panic!("tuple fixture")
+                };
+                elements
+                    .into_vec()
+                    .into_iter()
+                    .map(crate::types::KindedArgument::TypeArg)
+                    .collect::<Vec<_>>()
+            };
+            let left = arguments(left);
+            let right = arguments(right);
+            assert_eq!(
+                elaborator.unify_owner_arguments(left.iter(), right.iter()),
+                Ok(())
+            );
+        }
+    }
+
+    #[test]
+    fn row_choices_preserve_occurs_checks_and_retained_lacks_obligations() {
+        let span = row_test_span("row-choice-occurs-lacks.ash");
+        let owner = crate::types::EffectId::new(ModuleId::new(0), 0);
+        let member = |argument| EffectInstance::new(owner, Box::new([argument]));
+        let mut occurs = Elaborator::new();
+        let a = occurs.fresh_inference(&Kind::Type, span).unwrap();
+        let left = EffectRow::singleton(member(a.clone()));
+        let right = EffectRow::singleton(member(Type::Tuple(Box::new([a]))));
+        assert_eq!(
+            occurs.unify_effect_rows(&left, &right),
+            Err(UnificationFailure::Infinite)
+        );
+        assert!(occurs.inference_solutions.is_empty());
+        assert!(occurs.authenticated_inference_solutions.is_empty());
+        assert_eq!(
+            occurs.unify_effect_rows(&left, &EffectRow::singleton(member(Type::Bool))),
+            Ok(())
+        );
+
+        let mut lacks = Elaborator::new();
+        let a = lacks.fresh_inference(&Kind::Type, span).unwrap();
+        let open = lacks.fresh_effect_row(span).unwrap();
+        let constrained = EffectRow::with_tail(
+            Box::new([]),
+            open.tail().unwrap().variable(),
+            Box::new([member(Type::Int)]),
+        );
+        lacks
+            .unify_effect_rows(&constrained, &EffectRow::singleton(member(a.clone())))
+            .unwrap();
+        let left = EffectRow::closed(Box::new([member(a.clone()), member(Type::Int)]));
+        let right = EffectRow::closed(Box::new([member(Type::Int), member(Type::Bool)]));
+        assert_eq!(lacks.unify_effect_rows(&left, &right), Ok(()));
+        assert_eq!(lacks.zonk(&a).unwrap(), Type::Bool);
+        assert_eq!(
+            lacks.zonk_effect_row(&constrained).unwrap(),
+            EffectRow::singleton(member(Type::Bool))
+        );
+        assert_eq!(lacks.row_inference_solutions.len(), 1);
+        assert_eq!(lacks.row_inference_obligations.len(), 1);
+    }
+
+    #[test]
+    fn row_choices_coalesce_in_both_operand_directions() {
+        for reverse in [false, true] {
+            let mut elaborator = Elaborator::new();
+            let a = elaborator
+                .fresh_inference(&Kind::Type, row_test_span("row-choice-coalescence.ash"))
+                .unwrap();
+            let owner = crate::types::EffectId::new(ModuleId::new(0), 0);
+            let member = |argument| EffectInstance::new(owner, Box::new([argument]));
+            let left = EffectRow::closed(Box::new([member(a), member(Type::Int)]));
+            let right = EffectRow::singleton(member(Type::Int));
+            let (left, right) = if reverse {
+                (&right, &left)
+            } else {
+                (&left, &right)
+            };
+            assert_eq!(elaborator.unify_effect_rows(left, right), Ok(()));
+            assert_eq!(
+                elaborator.zonk_effect_row(left).unwrap(),
+                elaborator.zonk_effect_row(right).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn row_choices_are_bounded_atomic_and_fresh_retryable() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let (mut measured, left, right) = row_choice_fixture(Type::Bool, Type::Int);
+                assert_eq!(measured.unify(&left, &right), Ok(()));
+                let exact = measured.type_work.used();
+                for limit in [0, exact / 2, exact - 1] {
+                    let (mut retry, left, right) = row_choice_fixture(Type::Bool, Type::Int);
+                    let variables = retry.inference_variables.len();
+                    let next = retry.next_inference;
+                    let cleanup = retry.cleanup_rows.checkpoint();
+                    retry.type_work = TypeWorkBudget::with_limit(limit);
+                    assert_eq!(
+                        retry.unify(&left, &right),
+                        Err(UnificationFailure::Resource)
+                    );
+                    assert!(retry.inference_solutions.is_empty());
+                    assert!(retry.row_inference_solutions.is_empty());
+                    assert!(retry.row_inference_obligations.is_empty());
+                    assert!(retry.authenticated_inference_solutions.is_empty());
+                    assert_eq!(retry.inference_variables.len(), variables);
+                    assert_eq!(retry.next_inference, next);
+                    assert_eq!(retry.cleanup_rows.checkpoint(), cleanup);
+                    retry.type_work = TypeWorkBudget::with_limit(exact);
+                    assert_eq!(retry.unify(&left, &right), Ok(()));
+                    assert_eq!(retry.type_work.used(), exact);
+                }
+                let (mut rejected, left, right) = row_choice_fixture(Type::Bool, Type::Bool);
+                assert_eq!(
+                    rejected.unify(&left, &right),
+                    Err(UnificationFailure::Mismatch)
+                );
+                assert!(rejected.inference_solutions.is_empty());
+                assert!(rejected.authenticated_inference_solutions.is_empty());
+            })
+            .unwrap()
+            .join()
+            .expect("row search, retries and rollback fit the existing small stack");
     }
 
     #[test]
