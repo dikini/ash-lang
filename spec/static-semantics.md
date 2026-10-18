@@ -1669,6 +1669,31 @@ and its operation payloads. An action may access an enclosing cell while that
 cell remains live, but cleanup does not authorize exporting its dependencies.
 An escaping dependency remains `type.resource-escape`.
 
+## Generic cell foundation
+
+`@builtin.generic_cell` supplies the separate opaque `Cell<R,T>` family, sealed
+`Provider<R,T>` relation and exact `Ops<R,T>` effect. Its methods have rank-1
+schemes `Cell<R,T> -> T ! {Ops<R,T>}` and
+`(Cell<R,T>, T) -> Unit ! {Ops<R,T>}`, both requiring `Provider<R,T>`.
+The legacy integer API below retains its independent identities and behavior.
+
+Named acquisition checks its initializer against the fixed monomorphic `T` in
+the preceding scope. The body receives a fresh rigid kind-`Type` owner, access
+`Cell<R,T>` and exact provider evidence. Ordinary checking computes the union
+of initializer effects with body effects minus exactly `Ops<R,T>`. Other
+instances remain outward. Reads are applications and do not generalize their
+results. Existing ordinary kind, type, row, sealed-evidence, State/view transport
+and continuation restrictions apply before dependency admission. In particular,
+restricted native State and views cannot become cell payloads through wrappers.
+
+The foundation currently refuses publication of every generic-cell acquisition
+and computational signatures or bodies retaining its access types, indexed
+operations or methods with `type.resource-escape`.
+Ordinary errors retain precedence. No checked helper summary or executable
+permission can claim contents dependency safety. Imports and facade reexports
+of canonical metadata are admitted. Generic contents dependency checking and
+execution remain pending; the accepted transition in CP-0023 has not completed.
+
 ## Scoped cells and resource dependencies
 
 The compiler-owned `@builtin.cell` module supplies one sealed API. The import

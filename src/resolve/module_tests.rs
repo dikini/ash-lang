@@ -28,6 +28,37 @@ use super::{
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
 #[test]
+fn generic_cell_summary_authenticates_complete_facade_facts() {
+    use crate::resolved::BuiltinCellSummaryMutationForTest::*;
+    for mutation in [
+        OperationResult,
+        ProviderResult,
+        MissingHandle,
+        MissingOps,
+        HandleKind,
+    ] {
+        let tree = TempTree::create();
+        tree.write("facade.ash", "pub import @builtin.generic_cell (read)\n");
+        let graph = load(&tree, "import facade (read)\n", &[]);
+        let builtin = &graph.modules()[0];
+        let checked = check_module(resolve_module(builtin, &[]).unwrap()).unwrap();
+        let facade = &graph.modules()[1];
+        let dependency =
+            DependencyExports::new(&facade.dependencies()[0], checked.exports()).unwrap();
+        let mut summary = check_module(resolve_module(facade, &[dependency]).unwrap())
+            .unwrap()
+            .into_exports();
+        summary.corrupt_builtin_fact_for_test(mutation);
+        let entry = graph.module(graph.entry()).unwrap();
+        let dependency = DependencyExports::new(&entry.dependencies()[0], &summary).unwrap();
+        assert!(
+            resolve_module(entry, &[dependency]).is_err(),
+            "generic summary forgery admitted"
+        );
+    }
+}
+
+#[test]
 fn builtin_cell_summary_rejects_well_kinded_operation_tampering() {
     use crate::resolved::BuiltinCellSummaryMutationForTest;
     let tree = TempTree::create();

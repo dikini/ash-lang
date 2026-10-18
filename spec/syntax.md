@@ -523,6 +523,12 @@ The value binder is not a pattern or wildcard. A non-primary initializer, such
 as `40 + 1` or `make ()`, must be parenthesized. The initializer precedes the
 identity and value binders' scope; both binders are visible only in the body.
 The builtin designator remains an ordinary identifier outside this position.
+The compiler-owned generic cell also uses the named form:
+`resource Cell.Cell<R, T> c = initializer { body }`, with owned position zero.
+It requires the complete two-argument application and no new grammar production.
+Its foundation admission restriction is described in
+[static semantics](static-semantics.md#generic-cell-foundation).
+
 The ordinary buffer library uses the source form, for example
 `resource Buffer.Buffer<R> b = length { body }` after an explicit import.
 

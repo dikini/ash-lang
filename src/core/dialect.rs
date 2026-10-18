@@ -2471,12 +2471,14 @@ impl<F: CoreOperationFamily> ValidatedCoreProgram<F> {
 }
 
 #[cfg(test)]
-pub(crate) fn forge_validated_for_test(program: UnvalidatedProgram) -> ValidatedProgram {
+pub(crate) fn forge_validated_for_test<F: CoreOperationFamily>(
+    program: UnvalidatedCoreProgram<F>,
+) -> ValidatedCoreProgram<F> {
     let (registry, method_evidence, method_evidence_anchors, arena, stored_nodes, root) =
         program.into_parts();
     let nodes = stored_nodes
         .into_iter()
-        .map(|stored| TypedExpr {
+        .map(|stored| CoreTypedExpr {
             ty: stored.ty,
             effects: stored.effects,
             origin: stored
@@ -2485,7 +2487,7 @@ pub(crate) fn forge_validated_for_test(program: UnvalidatedProgram) -> Validated
             kind: stored.kind,
         })
         .collect();
-    ValidatedProgram::new(PureProgram::new(
+    ValidatedCoreProgram::new(CoreProgram::new(
         registry,
         method_evidence,
         method_evidence_anchors,
@@ -2684,6 +2686,19 @@ pub(crate) struct CoreBuilderCheckpoint {
 }
 
 impl<F: CoreOperationFamily> CoreBuilder<F> {
+    pub(crate) fn generic_cell_dependency_origin(
+        &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Option<Span>, ()> {
+        for node in &self.nodes {
+            work.charge(1)?;
+            if crate::resolved::generic_cell_dependency_type(&node.ty, work)? {
+                return Ok(node.origin.as_ref().map(Origin::primary_span));
+            }
+        }
+        Ok(None)
+    }
+
     fn from_catalogs(
         registry: Arc<ResolvedRegistry>,
         method_evidence: Arc<MethodEvidenceCatalog>,

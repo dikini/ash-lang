@@ -412,3 +412,69 @@ main () = (Pipeline.run (true, true), Pipeline.run (false, true), Pipeline.run (
         "((Delivered(Request(1)), End), (Rejected, End), (Delivered(Request(1)), End))"
     );
 }
+
+#[test]
+fn generic_cell_metadata_imports_and_facades_preserve_the_separate_family() {
+    let tree = Tree::new();
+    tree.write("facade.ash", "pub import @builtin.generic_cell (Cell as Access, Provider as Supply, Ops as Requests, read as get, write as put)\n");
+    let entry = tree.write("entry.ash", "import facade as Wrapped\nimport @builtin.generic_cell as Direct\nimport @builtin.cell as Legacy\nmain : Unit -> Int\nmain () = 42\n");
+    let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+    assert_eq!(graph.modules().len(), 4);
+    let generic = graph.modules()[0].id();
+    assert_eq!(graph.modules()[1].dependencies()[0].target(), generic);
+    assert_eq!(
+        graph.module(graph.entry()).unwrap().dependencies()[1].target(),
+        generic
+    );
+    assert_ne!(
+        graph.module(graph.entry()).unwrap().dependencies()[2].target(),
+        generic
+    );
+    check(&graph);
+}
+
+#[test]
+fn cell_n09_generic_provider_is_sealed_through_direct_and_facade_imports() {
+    let tree = Tree::new();
+    tree.write(
+        "facade.ash",
+        "pub import @builtin.generic_cell (Cell, Provider, Ops, read, write)\n",
+    );
+    for import in ["@builtin.generic_cell", "facade"] {
+        for declaration in [
+            "impl Cell.Provider<Int, Int> {\nread value = 1\nwrite value = ()\n}\n",
+            "main : Unit -> Int\nmain () = {\nnewtype Local = Local(Int)\nwith Cell.Provider<Local, Int> {\nread value = 1\nwrite value = ()\n}\n42\n}\n",
+        ] {
+            let entry = tree.write(
+                "entry.ash",
+                &format!("import {import} as Cell\n{declaration}"),
+            );
+            let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+            let mut checked: Vec<CheckedModule> = Vec::new();
+            for module in graph.modules() {
+                let dependencies = module
+                    .dependencies()
+                    .iter()
+                    .map(|edge| {
+                        DependencyExports::new(
+                            edge,
+                            checked
+                                .iter()
+                                .find(|owner| owner.module() == edge.target())
+                                .unwrap()
+                                .exports(),
+                        )
+                        .unwrap()
+                    })
+                    .collect::<Vec<_>>();
+                let result = resolve_module(module, &dependencies);
+                if module.id() == graph.entry() {
+                    let error = result.unwrap_err();
+                    assert!(format!("{error:?}").contains("SealedProvider"), "{error:?}");
+                } else {
+                    checked.push(check_module(result.unwrap()).unwrap());
+                }
+            }
+        }
+    }
+}

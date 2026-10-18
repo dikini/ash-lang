@@ -5635,7 +5635,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     || acquisition.methods.get(ordinal) != Some(&owner.binder)
                     || !owner.source_parameters.is_empty()
                     || !owner.captures.is_empty()
-                    || !matches!(owner.application.arguments(), [crate::types::KindedArgument::TypeArg(Type::Variable(identity))] if *identity == acquisition.identity)
+                    || owner.application.arguments().len() != api.argument_count()
+                    || !matches!(owner.application.arguments().first(), Some(crate::types::KindedArgument::TypeArg(Type::Variable(identity))) if *identity == acquisition.identity)
                 {
                     return Err(ValidationError::new(ValidationReason::NodeType, None));
                 }
@@ -16026,6 +16027,38 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         self.validate_effect_abstraction_shapes(&authenticated_method_evidence)?;
         self.validate_scopes()?;
         self.validate_type_scopes()?;
+        // TASK-0045 retains ordinary generic-cell facts but grants no contents
+        // dependency authority. This applies to direct, copied and restored Core.
+        for (index, node) in self.program.nodes.iter().enumerate() {
+            self.charge_type_work(1)?;
+            let mut work = TypeWorkBudget::with_limit(
+                self.type_work_limit.saturating_sub(self.type_work.get()),
+            );
+            let typed = crate::resolved::generic_cell_dependency_type(&node.ty, &mut work);
+            self.charge_type_work(work.used())?;
+            let typed =
+                typed.map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
+            let pending = matches!(&node.kind,
+                super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Resource(scope)) if scope.acquisition.builtin.is_builtin_generic_cell())
+                || matches!(&node.kind,
+                    super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Request(request)) if request.effect().effect().module().is_builtin_generic_cell());
+            if pending || typed {
+                return Err(ValidationError::new(
+                    ValidationReason::ResourceEscape,
+                    Some(node_id(self.program.arena, index)?),
+                ));
+            }
+        }
+        for anchor in &self.program.method_evidence_anchors {
+            self.charge_type_work(1)?;
+            if anchor.method.interface().module().is_builtin_generic_cell() {
+                return Err(ValidationError::new(
+                    ValidationReason::ResourceEscape,
+                    Some(anchor.node),
+                ));
+            }
+        }
+
         let mut has_resource = false;
         for node in &self.program.nodes {
             self.charge_type_work(1)?;
@@ -16493,16 +16526,40 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         Ok(api)
     }
 
+    fn same_resource_arguments(
+        &self,
+        left: &[crate::types::KindedArgument],
+        right: &[crate::types::KindedArgument],
+    ) -> Result<bool, ValidationError> {
+        if left.len() != right.len() {
+            return Ok(false);
+        }
+        for (left, right) in left.iter().zip(right) {
+            if !self.same_owner_argument_charged(left, right)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     fn resource_outward_row(
         &self,
         body: &EffectRow,
-        acquisition: crate::resolved::ResourceAcquisition,
+        resource: &super::effect::ResourceScopeNode,
         id: NodeId,
     ) -> Result<EffectRow, ValidationError> {
-        let api = self.resource_api(acquisition, id)?;
-        self.charge_type_work(2)?;
-        let instance =
-            EffectInstance::new(api.ops(), Box::new([Type::Variable(acquisition.identity)]));
+        let mut budget =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let instance = resource
+            .instance_with_budget(&mut budget)
+            .map_err(|error| match error {
+                super::BuildError::TypeWorkExceeded => {
+                    ValidationError::new(ValidationReason::Resource, Some(id))
+                }
+                _ => ValidationError::new(ValidationReason::NodeType, Some(id)),
+            });
+        self.charge_type_work(budget.used())?;
+        let instance = instance?;
         let mut budget =
             TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let result = body.remove_exact_with_budget(&instance, &mut budget);
@@ -16524,19 +16581,72 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
     ) -> Result<(), ValidationError> {
         let authority = resource.acquisition;
         let api = self.resource_api(authority, id)?;
+        let mut budget =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let instance = resource.instance_with_budget(&mut budget);
+        self.charge_type_work(budget.used())?;
+        let instance = instance.map_err(|error| match error {
+            super::BuildError::TypeWorkExceeded => {
+                ValidationError::new(ValidationReason::Resource, Some(id))
+            }
+            _ => ValidationError::new(ValidationReason::NodeType, Some(id)),
+        })?;
+        let payload = if api.generic() {
+            let crate::types::KindedArgument::TypeArg(payload) = &instance.arguments()[1] else {
+                return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+            };
+            payload
+        } else {
+            &Type::Int
+        };
+        if api.generic() {
+            if self.function_contains_source_owner_state(payload)? {
+                return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+            }
+            let mut foreign_work = 0usize;
+            for module in self.program.registry.foreign_modules() {
+                self.charge_type_work(1)?;
+                foreign_work = foreign_work
+                    .checked_add(1)
+                    .and_then(|count| count.checked_add(module.states.len()))
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+            }
+            if foreign_work != 0 {
+                let mut work = TypeWorkBudget::with_limit(
+                    self.type_work_limit.saturating_sub(self.type_work.get()),
+                );
+                let restricted = crate::types::visit_type_structure_with_budget(
+                    payload,
+                    &mut work,
+                    |node, work| {
+                        if let crate::types::TypeStructureNode::Type(Type::Nominal(nominal)) = node
+                        {
+                            work.charge(foreign_work)?;
+                            return Ok(self.program.registry.foreign_state(*nominal).is_some());
+                        }
+                        Ok(false)
+                    },
+                );
+                self.charge_type_work(work.used())?;
+                if restricted
+                    .map_err(|()| ValidationError::new(ValidationReason::Resource, Some(id)))?
+                {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                }
+            }
+        }
         let initializer = self.node(resource.initializer)?;
         let body = self.node(resource.body)?;
         if authority.handle != resource.handle.id()
             || authority.handle.module() != Some(authority.provider.module())
             || authority.identity.module() != Some(authority.provider.module())
             || Some(authority.span) != node.origin.as_ref().map(Origin::primary_span)
-            || !matches!(resource.handle.ty(), Type::Application(head, argument) if **head == Type::Nominal(api.handle()) && **argument == Type::Variable(authority.identity))
-            || !self.same_type_charged(&initializer.ty, &Type::Int)?
+            || !self.same_type_charged(&initializer.ty, payload)?
             || !self.same_type_charged(&body.ty, &node.ty)?
         {
             return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
         }
-        let outward = self.resource_outward_row(&body.effects, authority, id)?;
+        let outward = self.resource_outward_row(&body.effects, resource, id)?;
         let expected = self.union_effect_rows_charged(&initializer.effects, &outward, id)?;
         if !self.same_effect_row_charged(&node.effects, &expected, id)? {
             return Err(ValidationError::with_cause(
@@ -16561,6 +16671,11 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     .as_ref()
                     .and_then(super::dialect::MethodEvidenceResourceOwner::builtin)
                     == Some(authority)
+                    && owner.application.interface() == api.provider()
+                    && self.same_resource_arguments(
+                        owner.application.arguments(),
+                        instance.arguments(),
+                    )?
                     && owner.binder == *binder
                     && owner.method
                         == crate::interface::MethodId::new(api.provider(), ordinal as u32)
@@ -16603,7 +16718,10 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 };
                 if request.operation() != OperationId::new(api.ops(), ordinal as u32)
                     || request.effect().effect() != api.ops()
-                    || !matches!(request.effect().arguments(), [crate::types::KindedArgument::TypeArg(Type::Variable(identity))] if *identity == authority.identity)
+                    || !self.same_resource_arguments(
+                        request.effect().arguments(),
+                        instance.arguments(),
+                    )?
                     || operand.binder() != function.parameter().id()
                     || binding.binder().origin().primary_span() != authority.span
                 {
@@ -17868,11 +17986,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                             self.union_effect_rows_charged(child_row(scope.initializer)?, &row, id)?
                         }
                         EffectExprKind::Operation(EffectOperation::Resource(resource)) => {
-                            let outward = self.resource_outward_row(
-                                child_row(resource.body)?,
-                                resource.acquisition,
-                                id,
-                            )?;
+                            let outward =
+                                self.resource_outward_row(child_row(resource.body)?, resource, id)?;
                             self.union_effect_rows_charged(
                                 child_row(resource.initializer)?,
                                 &outward,
@@ -18526,6 +18641,12 @@ fn node_id(arena: super::dialect::ArenaId, index: usize) -> Result<NodeId, Valid
     u32::try_from(index)
         .map(|index| NodeId::new(arena, index))
         .map_err(|_| ValidationError::with_cause(ValidationCause::NodeIdentityRange, None))
+}
+
+#[cfg(test)]
+pub(crate) fn generic_cell_core_fixture_for_test()
+-> (super::effect::UnvalidatedEffectProgram, Vec<SourceFile>) {
+    tests::cell_core_fixture_with_generic(true)
 }
 
 #[cfg(test)]
@@ -22749,20 +22870,35 @@ mod tests {
         super::super::effect::UnvalidatedEffectProgram,
         Vec<crate::source::SourceFile>,
     ) {
+        cell_core_fixture_with_generic(false)
+    }
+
+    pub(crate) fn cell_core_fixture_with_generic(
+        generic: bool,
+    ) -> (
+        super::super::effect::UnvalidatedEffectProgram,
+        Vec<crate::source::SourceFile>,
+    ) {
         use super::super::dialect::{
             MethodEvidenceAnchor, MethodEvidenceAnchorRole, MethodEvidenceCatalog,
             MethodEvidenceExpectation, MethodEvidenceExpectedRole, MethodEvidenceLexicalOwner,
             MethodEvidenceMethod,
         };
         use super::super::effect::{EffectExprKind, EffectOperation};
-        let (mut core, module, sources, registry) =
-            crate::elaborate::cell_resource_core_fixture_for_test();
+        let (mut core, module, sources, registry) = if generic {
+            crate::elaborate::generic_cell_resource_core_fixture_for_test()
+        } else {
+            crate::elaborate::cell_resource_core_fixture_for_test()
+        };
         core.registry = registry;
         let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
             &core.nodes[core.root.index().unwrap()].kind
         else {
             panic!("resource root")
         };
+        let instance = resource
+            .instance_with_budget(&mut crate::types::TypeWorkBudget::default())
+            .unwrap();
         let authority = resource.acquisition;
         let interface = module
             .imported_facts()
@@ -22802,9 +22938,7 @@ mod tests {
                 binder: *binder,
                 application: crate::interface::InterfaceApplication::new_kinded(
                     interface.id,
-                    Box::new([crate::types::KindedArgument::TypeArg(
-                        crate::types::Type::Variable(authority.identity),
-                    )]),
+                    instance.arguments().to_vec().into_boxed_slice(),
                 ),
                 captures: Box::new([]),
             })
@@ -22836,6 +22970,129 @@ mod tests {
         core.method_evidence = std::sync::Arc::new(catalog);
         core.method_evidence_anchors = anchors;
         (core, sources)
+    }
+
+    #[test]
+    fn generic_cell_indexed_callable_core_without_requests_cannot_admit() {
+        use super::super::dialect::MethodEvidenceCatalog;
+        let (donor, sources) = cell_core_fixture_with_generic(true);
+        let super::super::effect::EffectExprKind::Operation(
+            super::super::effect::EffectOperation::Resource(scope),
+        ) = &donor.nodes[donor.root.index().unwrap()].kind
+        else {
+            panic!("resource donor");
+        };
+        let api = scope.acquisition.api().unwrap();
+        let callback = Type::function_computation(
+            Type::Unit,
+            crate::types::ComputationType::new(
+                Type::Int,
+                EffectRow::singleton(EffectInstance::new(
+                    api.ops(),
+                    Box::new([Type::Int, Type::Int]),
+                )),
+            ),
+        );
+        let catalog = MethodEvidenceCatalog::new(
+            donor.method_evidence.methods().to_vec(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        let mut builder = super::super::EffectCoreBuilder::with_registry_and_method_evidence(
+            std::sync::Arc::clone(&donor.registry),
+            std::sync::Arc::new(catalog),
+        )
+        .unwrap();
+        let origin = donor.nodes[donor.root.index().unwrap()]
+            .origin
+            .clone()
+            .unwrap();
+        let parameter = builder.binder(callback.clone(), origin.clone()).unwrap();
+        let body = builder
+            .variable(parameter.id(), callback.clone(), origin.clone())
+            .unwrap();
+        let root = builder
+            .function(
+                parameter,
+                body,
+                Type::Function(Box::new(callback.clone()), Box::new(callback)),
+                origin,
+            )
+            .unwrap();
+        let core = builder.finish(root).unwrap();
+        // There is no acquisition, request or selected-method anchor here.
+        assert!(core.method_evidence_anchors.is_empty());
+        assert_eq!(
+            cell_core_reason(&core, &sources, 0).0,
+            Some(ValidationReason::ResourceEscape)
+        );
+    }
+
+    #[test]
+    fn generic_cell_copied_and_transformed_core_retains_pending_admission() {
+        let (core, sources) = cell_core_fixture_with_generic(true);
+        // Test-only donor permits testing transforms before TASK-0046 admission.
+        // It is never evaluated or returned through a public checking path.
+        let donor = super::super::dialect::forge_validated_for_test(core);
+        for transform in [
+            crate::core::transform::identity_effect_traversal,
+            crate::core::transform::fold_effect_literal_primitives,
+        ] {
+            let copied = transform(&donor).unwrap();
+            assert_eq!(
+                cell_core_reason(&copied, &sources, 0).0,
+                Some(ValidationReason::ResourceEscape)
+            );
+        }
+    }
+
+    #[test]
+    fn generic_cell_core_checks_ordinary_facts_before_pending_dependency_proof() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let (core, sources) = cell_core_fixture_with_generic(true);
+        assert_eq!(
+            cell_core_reason(&core, &sources, 0).0,
+            Some(ValidationReason::ResourceEscape)
+        );
+        for mutation in 0..5 {
+            let (mut core, sources) = cell_core_fixture_with_generic(true);
+            let root = core.root.index().unwrap();
+            let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
+                &mut core.nodes[root].kind
+            else {
+                panic!("resource");
+            };
+            match mutation {
+                0 => {
+                    let initial = resource.initializer.index().unwrap();
+                    core.nodes[initial].ty = Type::Int;
+                }
+                1 => resource.acquisition.identity = crate::types::TypeVariableId::new(u32::MAX),
+                2 => {
+                    resource.acquisition.provider = crate::interface::LexicalEvidenceId::new(
+                        resource.acquisition.provider.module(),
+                        u32::MAX,
+                    )
+                }
+                3 => resource.acquisition.methods.swap(0, 1),
+                4 => {
+                    core.nodes[root].effects = EffectRow::singleton(EffectInstance::new(
+                        resource.acquisition.api().unwrap().ops(),
+                        Box::new([Type::Int, Type::Bool]),
+                    ));
+                }
+                _ => unreachable!(),
+            }
+            let reason = cell_core_reason(&core, &sources, 0).0;
+            assert!(
+                reason.is_some() && reason != Some(ValidationReason::ResourceEscape),
+                "mutation={mutation}: {reason:?}"
+            );
+        }
     }
 
     #[test]

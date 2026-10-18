@@ -356,7 +356,7 @@ pub struct CleanupScopeNode {
     pub(crate) action_span: crate::source::Span,
 }
 
-/// An acquisition owns its rigid identity and body-local handle. Its integer
+/// An acquisition owns its rigid identity and body-local handle. Its fixed-type
 /// initializer is a preceding-scope child, not an ordinary constructor payload.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResourceScopeNode {
@@ -367,6 +367,44 @@ pub struct ResourceScopeNode {
 }
 
 impl ResourceScopeNode {
+    /// Reconstruct the complete exact instance from the carrier's handle type.
+    /// This checks shape only; linked validation authenticates defining facts.
+    pub(crate) fn instance_with_budget(
+        &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<EffectInstance, super::BuildError> {
+        let api = self
+            .acquisition
+            .api()
+            .ok_or(super::BuildError::InvalidPayload)?;
+        work.charge(api.argument_count() + 4)
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+        let (owner, payload) = if api.generic() {
+            let Type::Application(owner, payload) = self.handle.ty() else {
+                return Err(super::BuildError::InvalidPayload);
+            };
+            (&**owner, Some(&**payload))
+        } else {
+            (self.handle.ty(), None)
+        };
+        if !matches!(owner, Type::Application(head, argument) if **head == Type::Nominal(api.handle()) && **argument == Type::Variable(self.acquisition.identity))
+        {
+            return Err(super::BuildError::InvalidPayload);
+        }
+        let mut arguments = Vec::new();
+        arguments
+            .try_reserve_exact(api.argument_count())
+            .map_err(|_| super::BuildError::TypeWorkExceeded)?;
+        arguments.push(Type::Variable(self.acquisition.identity));
+        if let Some(payload) = payload {
+            arguments.push(
+                crate::types::clone_type_with_budget(payload, work)
+                    .map_err(|()| super::BuildError::TypeWorkExceeded)?,
+            );
+        }
+        Ok(EffectInstance::new(api.ops(), arguments.into_boxed_slice()))
+    }
+
     pub(crate) fn handle(&self) -> &super::TypedBinder {
         &self.handle
     }
@@ -1375,7 +1413,7 @@ impl CoreBuilder<EffectOperationFamily> {
             NativeInterpret(NodeId, Box<[NativeInterpretation]>),
             CopyWindow(NodeId, NodeId, Box<[NativeInterpretation]>),
             Handler(EffectInstance, usize, bool),
-            Resource(crate::resolved::ResourceAcquisition, NodeId, NodeId),
+            Resource(EffectInstance, NodeId, NodeId),
             ProviderGroup,
             ProviderScope(
                 NodeId,
@@ -1424,7 +1462,7 @@ impl CoreBuilder<EffectOperationFamily> {
                     }
                     EffectExprKind::Operation(EffectOperation::Resource(resource)) => {
                         Equation::Resource(
-                            resource.acquisition,
+                            resource.instance_with_budget(&mut self.type_work)?,
                             resource.initializer,
                             resource.body,
                         )
@@ -1536,13 +1574,7 @@ impl CoreBuilder<EffectOperationFamily> {
                         &mut self.type_work,
                     )
                     .map_err(|()| super::BuildError::TypeWorkExceeded)?,
-                    Equation::Resource(acquisition, initializer, body) => {
-                        self.charge_effect_metadata(2)?;
-                        let api = acquisition.api().ok_or(super::BuildError::InvalidPayload)?;
-                        let instance = EffectInstance::new(
-                            api.ops(),
-                            Box::new([Type::Variable(acquisition.identity)]),
-                        );
+                    Equation::Resource(instance, initializer, body) => {
                         let body = &self
                             .nodes
                             .get(body.index()?)

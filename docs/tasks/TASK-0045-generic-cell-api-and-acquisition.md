@@ -57,7 +57,27 @@ commitment.
 
 ## Progress
 
-Implementation has not started. All acceptance remains pending.
+Implementation is in progress on `codex/generic-cells` from bootstrap
+`e605a9453fa1106da3f28a036a50a8909a519929` and product base
+`67ba281d4e93dbfad65e5fd1e6a34c3dfb132686`. The task-owned
+[execution plan](task-0045-execution-plan.md) records the bounded sequence.
+All acceptance remains pending until its complete original observations exist.
+
+The candidate adds canonical metadata, named acquisition and ordinary checking
+on the existing Effect Resource carrier. Its handle type and generated evidence
+retain complete arguments. Generic acquisitions, operations, method bodies and computational signatures
+that retain generic access or indexed operations fail closed before source
+helper-summary publication and after independent
+ordinary Core validation. Import-only metadata and facades can publish. Copies,
+transforms and restored images must pass the same gate. This restriction is the
+TASK-0049 staging boundary, not a substitute for the required positive cases.
+
+CELL-P01/P06/P11 source-shape tests expect pending dependency rejection. Their
+replacement, sharing, initializer-count, imported-helper and repeated runtime
+observations remain assigned to TASK-0046/0047. CELL-N01/N08/N09/N10 tests cover
+ordinary diagnostic precedence, fresh scope, valid preceding shadowing, sealing,
+exact evidence and monomorphic reads. Restricted-value and native compatibility
+acceptance remains open for connected evidence.
 
 - [ ] Reviewed foundation receipt names the retained commit, ordinary
   authentication checks, publication restrictions and remaining dependencies.
@@ -92,6 +112,26 @@ CARGO_BUILD_JOBS=1 cargo test \
     --test resource_scope_syntax --test resource_scope_modules \
     --test resource_scope_typing --test resource_scope_core
 ```
+
+### Candidate verification record
+
+The initial focused invocation observed 1 Core, 12 module, 4 syntax and 63 typing
+tests passing, with one additional child filtered typing run. It is an initial
+regression observation rather than an immutable baseline receipt: editing began
+while compilation was running. The first expanded run preserved those regressions
+and exposed fixture errors and a function-initializer provenance defect. The first
+complete generic unit run exposed the remaining unary lexical-owner check. These
+findings are repaired in the candidate; fresh verification and independent review
+are pending. No passing final gate is claimed by the candidate commit.
+
+Commands use `CARGO_BUILD_JOBS=1 RUSTC_WRAPPER=`, the product checkout's `target`
+cache, and Rust 1.97.1 (`8bab26f4f68e0e26f0bb7960be334d5b520ea452`,
+`x86_64-unknown-linux-gnu`, LLVM 22.1.6). The configured sccache wrapper could not
+start in the sandbox; that wrapper failure is not a product test failure.
+
+Fresh required focused checks, generic/legacy/resource unit probes, formatting
+and affected-target lint remain pending on this candidate. TASK-0049 still owns
+the later connected full gate. Acceptance remains unchecked.
 
 Run added unit tests for builtin metadata and summary authentication as well.
 After TASK-0046/0047 connect, obtain the runtime observations for the positive

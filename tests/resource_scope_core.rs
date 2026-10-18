@@ -30,3 +30,19 @@ fn resource_programs_execute_after_independent_ownership_validation() {
     }
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn generic_cell_public_path_refuses_unproved_execution_permission() {
+    let path = std::env::temp_dir().join(format!(
+        "ash-generic-cell-admission-{}.ash",
+        SourceFile::new("identity", "").unwrap().id().value()
+    ));
+    std::fs::write(&path, "import @builtin.generic_cell as Cell\nmain : Unit -> Int\nmain () = resource Cell.Cell<R, Int> c = 41 {\nlet _ = Cell.write (c, 42)\nCell.read c\n}\n").unwrap();
+    let failure = run_path(RunConfiguration {
+        entry: path.clone(),
+        roots: ModuleRoots::empty(),
+    })
+    .unwrap_err();
+    assert_eq!(failure.reason_code(), "type.resource-escape");
+    std::fs::remove_file(path).unwrap();
+}

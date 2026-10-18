@@ -41,7 +41,8 @@ select the first reported failure deterministically.
 or filesystem source. `builtin` is a reserved root name: configuring it as a
 filesystem root fails with `invocation.reserved-root` before filesystem
 inspection. The modules specified beneath that root are `@builtin.cell`,
-`@builtin.bytes`, `@builtin.string` and `@builtin.foreign`. Unknown paths, including
+`@builtin.generic_cell`, `@builtin.bytes`, `@builtin.string` and
+`@builtin.foreign`. Unknown paths, including
 `@builtin.cell.extra`, fail
 with `module.unknown-builtin`.
 
@@ -50,6 +51,22 @@ Complete imports, targeted imports, renaming and public re-exports preserve
 their defining identities. Direct and facade routes reach the same module;
 a facade creates no additional provider authority. An ordinary file named
 `cell.ash` or copied API declarations have no compiler-owned origin.
+
+The separate compiler-owned `@builtin.generic_cell` module exports exactly
+`Cell`, `Provider`, `Ops`, `read` and `write`. `Cell<R,T>` has kind
+`Type -> Type -> Type`; both interface and effect retain two kind-`Type`
+arguments. Its hidden constructor and sealed provider follow the same
+origin checks as the integer API. Imports, selective renaming and facade
+reexports preserve all defining identities and arguments.
+
+Named acquisition recognizes the canonical `Cell` family through those paths,
+including a facade with no direct builtin import. It requires exactly two
+arguments. Position zero is a fresh unqualified identity binder; `T` and the
+initializer resolve in the preceding scope. A preceding same-spelled type or
+term still resolves there. The new identity and value binder scope over the
+body only. An ordinary same-spelled type supplies no acquisition authority.
+The [foundation publication restriction](static-semantics.md#generic-cell-foundation)
+still applies after ordinary checking.
 
 A module containing a `resource cell` expression must directly import `@builtin.cell`.
 Either a complete or targeted import satisfies this requirement, independently

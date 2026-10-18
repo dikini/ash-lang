@@ -7911,7 +7911,10 @@ fn validate_pending_expressions<'a, 'body>(
                     canonical.spelling.len().saturating_add(2),
                     expression.span,
                 )?;
-                if !acquisition.acquisition.owns(acquisition)
+                if !acquisition
+                    .acquisition
+                    .owns(acquisition, type_work)
+                    .map_err(|()| resource(expression.span))?
                     || canonical.kind != Kind::Type
                     || canonical.spelling != acquisition.identity.spelling
                     || canonical.origin.primary_span() != acquisition.identity.origin.primary_span()
@@ -9746,7 +9749,11 @@ fn authenticate_lexical_header(
     let mut nominals = HashSet::new();
     let mut has_local_key = false;
     if let Some(acquisition) = source.acquisition {
-        if checked.acquisition != Some(acquisition) || !acquisition.supplies(source) {
+        if checked.acquisition != Some(acquisition)
+            || !acquisition
+                .supplies(source, type_work)
+                .map_err(|()| resource(source.span))?
+        {
             return Err(invalid_root(source.span));
         }
         let mut head = local_head;
@@ -9754,7 +9761,9 @@ fn authenticate_lexical_header(
             charge(budget, 1, source.span)?;
             let (entry, parent) = locals.get(index).ok_or_else(|| invalid_root(source.span))?;
             if let LinkedLocalScope::Resource(resource_scope) = entry {
-                has_local_key = acquisition.owns(resource_scope);
+                has_local_key = acquisition
+                    .owns(resource_scope, type_work)
+                    .map_err(|()| resource(source.span))?;
                 break;
             }
             head = *parent;

@@ -2959,6 +2959,8 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     deferred_local_nominal_escapes: Vec<(NominalTypeId, InferenceVariableId, Span)>,
     deferred_resource_escapes: Vec<(TypeVariableId, InferenceVariableId, Span, Span)>,
     active_acquisitions: Vec<crate::resolved::ResourceAcquisition>,
+    // Ordinary checking continues; no generic-dependent summary may publish yet.
+    pending_generic_dependency: Option<Span>,
     provider_codes: ProviderCodeAvailability,
     source_provider_contracts:
         HashMap<crate::module::ModuleId, Arc<provider::CheckedProviderContracts>>,
@@ -3306,6 +3308,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
             active_acquisitions: Vec::new(),
+            pending_generic_dependency: None,
             provider_codes: ProviderCodeAvailability::default(),
             source_provider_contracts: HashMap::new(),
             pending_local_provider: None,
@@ -3459,6 +3462,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
             active_acquisitions: Vec::new(),
+            pending_generic_dependency: None,
             provider_codes: ProviderCodeAvailability::default(),
             source_provider_contracts: HashMap::new(),
             pending_local_provider: None,
@@ -3603,6 +3607,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
             active_acquisitions: Vec::new(),
+            pending_generic_dependency: None,
             provider_codes: ProviderCodeAvailability::default(),
             source_provider_contracts: HashMap::new(),
             pending_local_provider: None,
@@ -4043,6 +4048,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
             active_acquisitions: Vec::new(),
+            pending_generic_dependency: None,
             provider_codes: ProviderCodeAvailability::default(),
             source_provider_contracts: HashMap::new(),
             pending_local_provider: None,
@@ -5147,6 +5153,17 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         } else {
             self.zonk_builder_types_since(None, false)
                 .map_err(TypeError::Internal)?;
+        }
+        let generic_type_origin = self
+            .builder
+            .generic_cell_dependency_origin(&mut self.type_work)
+            .map_err(|()| type_resource())?;
+        if let Some(span) = self.pending_generic_dependency.or(generic_type_origin) {
+            return Err(self.resource_escape_failure(
+                span,
+                span,
+                "generic cell dependency admission is pending TASK-0046",
+            ));
         }
         if self.capture_publication_required(module, checked_schemes)? {
             self.type_work
@@ -7150,6 +7167,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         span: Span,
         cause: Option<SynthesisCause>,
     ) -> Result<TypedNode, TypeError> {
+        if method.interface().module().is_builtin_generic_cell() {
+            self.pending_generic_dependency.get_or_insert(span);
+        }
         if self.registry.foreign_state_access(method).is_some() {
             return Err(foreign_privilege_unavailable());
         }
@@ -12646,6 +12666,15 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             span,
             result,
         } = progress;
+        if request
+            .effect
+            .instance
+            .effect()
+            .module()
+            .is_builtin_generic_cell()
+        {
+            self.pending_generic_dependency.get_or_insert(span);
+        }
         let requested = EffectRow::singleton(
             clone_effect_instance_with_budget(&request.effect.instance, &mut self.type_work)
                 .map_err(|error| TypeError::Internal(error.into()))?,
@@ -12793,7 +12822,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         self.constraint_work
             .charge(1)
             .map_err(|()| constraint_resource())?;
-        if !F::EFFECTS || !resource.acquisition.owns(resource) {
+        if !F::EFFECTS
+            || !resource
+                .acquisition
+                .owns(resource, &mut self.type_work)
+                .map_err(|()| type_resource())?
+        {
             return Err(invalid_state());
         }
         let api = resource.acquisition.api().ok_or_else(invalid_state)?;
@@ -12807,10 +12841,18 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         self.active_acquisitions
             .try_reserve(1)
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        let handle_type = IterativeTypeOwner::new(Type::Application(
+        let owner_type = Type::Application(
             Box::new(Type::Nominal(api.handle())),
             Box::new(Type::Variable(resource.identity.id)),
-        ));
+        );
+        let handle_type = IterativeTypeOwner::new(if api.generic() {
+            let payload = resource.payload().ok_or_else(invalid_state)?;
+            let payload = self.clone_type(payload)?;
+            self.type_work.charge(2).map_err(|()| type_resource())?;
+            Type::Application(Box::new(owner_type), Box::new(payload))
+        } else {
+            owner_type
+        });
         let handle_provenance =
             self.at_span_provenance(&handle_type, resource.handle.origin.primary_span())?;
         let handle_fact = self.clone_type(&handle_type)?;
@@ -12850,8 +12892,15 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .charge(6)
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         let body_effects = self.zonk_effect_row(&body.effects)?;
-        let instance =
-            EffectInstance::new(api.ops(), Box::new([Type::Variable(resource.identity.id)]));
+        let arguments = if api.generic() {
+            let payload = self.clone_type(resource.payload().ok_or_else(invalid_state)?)?;
+            self.type_work.charge(1).map_err(|()| type_resource())?;
+            self.pending_generic_dependency.get_or_insert(span);
+            Box::new([Type::Variable(resource.identity.id), payload]) as Box<[Type]>
+        } else {
+            Box::new([Type::Variable(resource.identity.id)]) as Box<[Type]>
+        };
+        let instance = EffectInstance::new(api.ops(), arguments);
         let outward = self.remove_cleanup_effect(&body_effects, &instance, span, true)?;
         let body_type = IterativeTypeOwner::new(self.zonk(&body.ty)?);
         let ty = body_type;
@@ -14061,7 +14110,11 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             self.constraint_work
                 .charge(2)
                 .map_err(|()| constraint_resource())?;
-            if self.active_acquisitions.last() != Some(&owner) || !owner.supplies(source) {
+            if self.active_acquisitions.last() != Some(&owner)
+                || !owner
+                    .supplies(source, &mut self.type_work)
+                    .map_err(|()| type_resource())?
+            {
                 return Err(invalid_state());
             }
             true
@@ -14491,12 +14544,30 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     ) -> Result<(), TypeError> {
         self.type_work.charge(2).map_err(|()| type_resource())?;
         tasks.0.try_reserve(2).map_err(|_| type_resource())?;
+        if let Some(payload) = resource.payload()
+            && self.contains_provider_state(payload)?
+        {
+            return Err(provider::ordinary_state_unavailable(
+                resource.initializer.span,
+            ));
+        }
+        let ty =
+            IterativeTypeOwner::new(if resource.acquisition.builtin.is_builtin_generic_cell() {
+                self.clone_type(resource.payload().ok_or_else(invalid_state)?)?
+            } else {
+                Type::Int
+            });
+        let provenance = if resource.acquisition.builtin.is_builtin_generic_cell() {
+            self.at_span_provenance(&ty, resource.initializer.span)?
+        } else {
+            TypeProvenance::atom(Some(resource.initializer.span))
+        };
         tasks.push(ElaborationTask::ResourceBody { resource, span });
         tasks.push(ElaborationTask::Check {
             expression: &resource.initializer,
             expected: ProvenancedType {
-                ty: Type::Int,
-                provenance: TypeProvenance::atom(Some(resource.initializer.span)),
+                ty: ty.into_inner(),
+                provenance,
             },
             kind: CheckKind::General,
         });
@@ -29279,6 +29350,16 @@ pub(crate) fn cell_resource_core_fixture_for_test() -> (
 }
 
 #[cfg(test)]
+pub(crate) fn generic_cell_resource_core_fixture_for_test() -> (
+    crate::core::effect::UnvalidatedEffectProgram,
+    ResolvedModule,
+    Vec<crate::source::SourceFile>,
+    Arc<ResolvedRegistry>,
+) {
+    tests::cell_resource_core_fixture_with_generic(true)
+}
+
+#[cfg(test)]
 pub(crate) fn cell_resource_linked_header_fixture_for_test() -> ResolvedModuleProgram {
     tests::cell_resource_linked_header_fixture()
 }
@@ -30926,8 +31007,24 @@ mod tests {
         Vec<SourceFile>,
         Arc<ResolvedRegistry>,
     ) {
-        let (module, sources, registry, _) =
-            cell_resource_fixture_sources("resource cell<R> c = (40 + 1) {\n42\n}");
+        cell_resource_core_fixture_with_generic(false)
+    }
+
+    pub(crate) fn cell_resource_core_fixture_with_generic(
+        generic: bool,
+    ) -> (
+        crate::core::effect::UnvalidatedEffectProgram,
+        ResolvedModule,
+        Vec<SourceFile>,
+        Arc<ResolvedRegistry>,
+    ) {
+        let (module, sources, registry, _) = if generic {
+            cell_module_fixture_sources(
+                "import @builtin.generic_cell as Cell\nmain : Unit -> Int\nmain () = resource Cell.Cell<R, Bool> c = true {\n42\n}\n",
+            )
+        } else {
+            cell_resource_fixture_sources("resource cell<R> c = (40 + 1) {\n42\n}")
+        };
         let mut elaborator = cell_resource_elaborator(&module);
         let mut context = elaborator.base_context.clone();
         let typed = elaborator
@@ -31004,6 +31101,72 @@ mod tests {
                 .builder
                 .finish(typed.node)
                 .expect("resource arena");
+        }
+    }
+
+    #[test]
+    fn generic_cell_helper_failure_publishes_no_evidence_or_summary() {
+        let module = cell_module_fixture_sources("import @builtin.generic_cell as Cell\npub get<R,T> : Cell.Cell<R,T> -> T ! {Cell.Ops<R,T>} where Cell.Provider<R,T>\nget c = Cell.read c\n").0;
+        let ResolvedDefinitionKind::Equational(definition) = &module.definitions()[0].kind else {
+            panic!("definition");
+        };
+        let ResolvedExprKind::Apply(application) = &definition.equations[0].body.kind else {
+            panic!("call");
+        };
+        let ResolvedExprKind::Occurrence(occurrence) = &application.function.kind else {
+            panic!("method");
+        };
+        let evidence = occurrence.evidence[0].handle();
+        let error = check_module(module).unwrap_err();
+        assert!(
+            matches!(error, TypeError::Source(ref diagnostic) if diagnostic.reason == TypeReason::ResourceEscape),
+            "{error:?}"
+        );
+        assert!(evidence.selection().is_none());
+    }
+
+    #[test]
+    fn generic_cell_function_payload_reaches_pending_admission() {
+        let module = cell_module_fixture_sources("import @builtin.generic_cell as Cell\nfixed : Int -> Int\nfixed value = value\nmain : Unit -> Int\nmain () = resource Cell.Cell<R, (Int -> Int)> c = fixed {\nlet call = Cell.read c\ncall 42\n}\n").0;
+        let error = check_module(module).unwrap_err();
+        assert!(
+            matches!(error, TypeError::Source(ref diagnostic) if diagnostic.reason == TypeReason::ResourceEscape),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn generic_cell_elaboration_work_has_exact_budgets_and_fresh_retry() {
+        fn run(limit: usize) -> (Result<(), TypeError>, usize, usize) {
+            let module = cell_module_fixture_sources("import @builtin.generic_cell as Cell\nmain : Unit -> Int\nmain () = resource Cell.Cell<R, Bool> c = true {\n42\n}\n").0;
+            let mut elaborator = cell_resource_elaborator(&module);
+            elaborator.type_work = TypeWorkBudget::with_limit(limit);
+            let mut context = elaborator.base_context.clone();
+            let result = elaborator
+                .elaborate_expression_with_context(
+                    ElaborationTask::Synthesize {
+                        expression: fixture_result(&module),
+                        cause: None,
+                    },
+                    &mut context,
+                )
+                .map(|typed| drop(TypedNodeOwner::new(typed)));
+            (
+                result,
+                elaborator.type_work.used(),
+                elaborator.active_acquisitions.len(),
+            )
+        }
+        let (result, required, active) = run(crate::types::TYPE_WORK_LIMIT);
+        result.unwrap();
+        assert_eq!(active, 0);
+        let (short, _, active) = run(required - 1);
+        assert!(short.is_err());
+        assert_eq!(active, 0);
+        for _ in 0..2 {
+            let (result, used, active) = run(required);
+            result.unwrap();
+            assert_eq!((used, active), (required, 0));
         }
     }
 

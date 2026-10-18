@@ -1144,3 +1144,159 @@ main () = (number (Fork(Leaf(0), Leaf(0))), number (Fork(Leaf(0), Leaf(0))))
 "#;
     assert_check(Tree::new().check(source), None);
 }
+
+#[test]
+fn cell_n01_generic_ordinary_errors_precede_pending_dependency_admission() {
+    let tree = Tree::new();
+    for (body, reason) in [
+        ("resource Cell.Cell<R, Int> c = true {\n42\n}", "Mismatch"),
+        (
+            "resource Cell.Cell<R, Int> c = 41 {\nlet _ = Cell.write (c, true)\n42\n}",
+            "Argument",
+        ),
+        ("resource Cell.Cell<R> c = 41 {\n42\n}", "TypeKind"),
+        (
+            "resource Cell.Cell<R, Int, Bool> c = 41 {\n42\n}",
+            "TypeKind",
+        ),
+        ("resource Cell.Cell<R, Cell.Cell> c = 41 {\n42\n}", "Kind"),
+        ("resource Cell.Cell<R, {}> c = 41 {\n42\n}", "TypeKind"),
+    ] {
+        assert_check(
+            tree.check(&format!(
+                "import @builtin.generic_cell as Cell\nmain : Unit -> Int\nmain () = {body}\n"
+            )),
+            Some(reason),
+        );
+    }
+}
+
+#[test]
+fn cell_n08_generic_initializer_and_payload_precede_fresh_binders() {
+    let tree = Tree::new();
+    for body in [
+        "resource Cell.Cell<R, Int> c = c {\n42\n}",
+        "resource Cell.Cell<R, R> c = 41 {\n42\n}",
+        "resource Cell.Cell<R, Int> c = (fn(value) {\nlet missing : R = value\n41\n}) {\n42\n}",
+    ] {
+        let error = tree
+            .check(&format!(
+                "import @builtin.generic_cell as Cell\nmain : Unit -> Int\nmain () = {body}\n"
+            ))
+            .unwrap_err();
+        assert!(error.contains("Unknown"), "{error}");
+    }
+    // A preceding type R and term c remain visible in T and the initializer.
+    let source = "import @builtin.generic_cell as Cell\ntype R = R(Int)\nmain : Unit -> Int\nmain () = {\nlet c = R(41)\nresource Cell.Cell<R, R> c = c {\n42\n}\n}\n";
+    assert_check(tree.check(source), Some("ResourceEscape"));
+}
+
+#[test]
+fn generic_cell_foundation_checks_supported_payload_shapes_then_refuses_publication() {
+    let tree = Tree::new();
+    for (declarations, payload, initial, body) in [
+        (
+            "",
+            "Int",
+            "41",
+            "let alias = c\nlet _ = Cell.write (alias, 42)\nCell.read c",
+        ),
+        (
+            "",
+            "Bool",
+            "true",
+            "let _ = Cell.write (c, false)\nlet _ = Cell.read c\n42",
+        ),
+        (
+            "",
+            "(Int, Bool)",
+            "(41, true)",
+            "let _ = Cell.write (c, (42, false))\nlet _ = Cell.read c\n42",
+        ),
+        (
+            "type Box = Box(Int)\n",
+            "Box",
+            "(Box(41))",
+            "let _ = Cell.write (c, Box(42))\nlet _ = Cell.read c\n42",
+        ),
+        (
+            "fixed : Int -> Int\nfixed value = value\n",
+            "(Int -> Int)",
+            "fixed",
+            "let get = Cell.read c\nget 42",
+        ),
+    ] {
+        // CELL-P01/P11 source typing only. Runtime observations stay pending.
+        assert_check(tree.check(&format!("import @builtin.generic_cell as Cell\n{declarations}main : Unit -> Int\nmain () = resource Cell.Cell<R, {payload}> c = {initial} {{\n{body}\n}}\n")), Some("ResourceEscape"));
+    }
+}
+
+#[test]
+fn cell_n09_generic_calls_need_exact_evidence_and_counterfeit_family_cannot_acquire() {
+    let tree = Tree::new();
+    let missing = "import @builtin.generic_cell as Cell\nmain<R> : Cell.Cell<R, Int> -> Int ! {Cell.Ops<R, Int>}\nmain c = Cell.read c\n";
+    let error = tree.check(missing).unwrap_err();
+    assert!(!error.contains("ResourceEscape"), "{error}");
+    assert!(
+        error.contains("Unsatisfied") || error.contains("NoImplementation"),
+        "{error}"
+    );
+    assert_check(tree.check("pub opaque type Cell<R,T> = Hidden\nmain : Unit -> Int\nmain () = resource Cell<R, Int> c = 41 {\n42\n}\n"), Some("UnknownType"));
+}
+
+#[test]
+fn cell_n10_generic_read_is_monomorphic_before_admission() {
+    let tree = Tree::new();
+    assert_check(tree.check("import @builtin.generic_cell as Cell\nid : Int -> Int\nid value = value\nmain : Unit -> Int\nmain () = resource Cell.Cell<R, (Int -> Int)> c = id {\nlet saved = Cell.read c\nlet _ = saved 41\nlet _ = saved true\n42\n}\n"), Some("Argument"));
+}
+
+#[test]
+fn generic_helpers_and_facade_acquisition_cannot_publish_pending_dependency_summaries() {
+    let tree = Tree::new();
+    fs::write(tree.0.join("facade.ash"), "pub import @builtin.generic_cell (Cell as Access, Provider as Supply, Ops as Requests, read as get, write as put)\n").unwrap();
+    for source in [
+        "import @builtin.generic_cell as Cell\npub get<R,T> : Cell.Cell<R,T> -> T ! {Cell.Ops<R,T>} where Cell.Provider<R,T>\nget c = Cell.read c\n",
+        "import facade as F\npub get<R,T> : F.Access<R,T> -> T ! {F.Requests<R,T>} where F.Supply<R,T>\nget c = F.get c\n",
+        "import facade as F\nmain : Unit -> Int\nmain () = resource F.Access<R, Int> c = 41 {\nF.get c\n}\n",
+    ] {
+        assert_check(tree.check(source), Some("ResourceEscape"));
+    }
+}
+
+#[test]
+fn cell_n11_native_state_and_continuation_payloads_keep_ordinary_restrictions() {
+    let tree = Tree::new();
+    fs::write(
+        tree.0.join("owner.ash"),
+        include_str!("fixtures/source-owner/owner.ash"),
+    )
+    .unwrap();
+    for payload in [
+        "Owner.State<Int>",
+        "(Int, Owner.State<Int>)",
+        "Wrapped<Owner.State<Int>>",
+    ] {
+        let source = format!(
+            "import @builtin.generic_cell as Cell\nimport owner as Owner\ntype Wrapped<T> = Wrap(T)\nmain : Unit -> Int\nmain () = resource Cell.Cell<R, {payload}> c = 41 {{\n42\n}}\n"
+        );
+        assert_check(tree.check(&source), Some("Argument"));
+    }
+    let source = "import @builtin.generic_cell as Cell\neffect Ask {\nask : Unit -> Int\n}\nmain : Unit -> Int\nmain () = handle (perform Ask.ask ()) with Ask {\nask ignored => resource Cell.Cell<R, (Unit -> Int)> c = (fn(ignored) {\nresume 42\n}) {\n42\n}\n}\n";
+    let error = tree.check(source).unwrap_err();
+    assert!(
+        error.contains("ResumeCapture") || error.contains("Continuation"),
+        "{error}"
+    );
+}
+
+#[test]
+fn cell_p11_mixed_api_typing_reaches_the_foundation_gate() {
+    let tree = Tree::new();
+    assert_check(tree.check("import @builtin.cell as Legacy\nimport @builtin.generic_cell as Cell\nmain : Unit -> Int\nmain () = resource cell<A> a = 41 {\nresource Cell.Cell<B, Bool> b = true {\nlet _ = Legacy.write (a, 42)\nlet _ = Cell.read b\nLegacy.read a\n}\n}\n"), Some("ResourceEscape"));
+}
+
+#[test]
+fn generic_cell_indexed_callable_metadata_cannot_publish_without_an_acquisition() {
+    let tree = Tree::new();
+    assert_check(tree.check("import @builtin.generic_cell (Ops)\npub relay<R,T> : (Unit -> T ! {Ops<R,T>}) -> (Unit -> T ! {Ops<R,T>})\nrelay callback = callback\n"), Some("ResourceEscape"));
+}

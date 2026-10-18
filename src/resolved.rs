@@ -47,6 +47,16 @@ impl ResourceApi {
         module.is_builtin_resource().then_some(Self { module })
     }
 
+    pub(crate) fn generic(self) -> bool {
+        self.module.is_builtin_generic_cell()
+    }
+    pub(crate) fn handle_name(self) -> &'static str {
+        if self.generic() { "Cell" } else { "Handle" }
+    }
+    pub(crate) fn argument_count(self) -> usize {
+        if self.generic() { 2 } else { 1 }
+    }
+
     pub(crate) fn method_names(self) -> &'static [&'static str] {
         &["read", "write"]
     }
@@ -67,7 +77,7 @@ impl ResourceApi {
         parameters: &[ResolvedTypeVariable],
     ) -> Option<(&'static str, &'static [u32])> {
         if id == self.handle() && self.parameter(parameters, 0) {
-            Some(("Handle", &[0]))
+            Some((self.handle_name(), &[0]))
         } else {
             None
         }
@@ -86,8 +96,12 @@ impl ResourceApi {
     }
 
     fn parameter(self, parameters: &[ResolvedTypeVariable], ordinal: u32) -> bool {
-        matches!(parameters, [parameter] if parameter.id == TypeVariableId::resolved(self.module, ordinal)
-            && parameter.kind == Kind::Type && parameter.spelling == "R")
+        parameters.len() == self.argument_count()
+            && parameters.iter().enumerate().all(|(index, parameter)| {
+                parameter.id == TypeVariableId::resolved(self.module, ordinal + index as u32)
+                    && parameter.kind == Kind::Type
+                    && parameter.spelling == if index == 0 { "R" } else { "T" }
+            })
     }
 
     pub(crate) fn nominal(
@@ -202,7 +216,20 @@ impl ResourceApi {
     }
 
     fn handle_type(self, ty: &Type, parameter: TypeVariableId) -> bool {
-        matches!(ty, Type::Application(head, argument)
+        let owner = if self.generic() {
+            let Type::Application(head, payload) = ty else {
+                return false;
+            };
+            if **payload
+                != Type::Variable(TypeVariableId::resolved(self.module, parameter.local() + 1))
+            {
+                return false;
+            }
+            &**head
+        } else {
+            ty
+        };
+        matches!(owner, Type::Application(head, argument)
             if matches!(head.as_ref(), Type::Nominal(id) if *id == self.handle())
                 && matches!(argument.as_ref(), Type::Variable(id) if *id == parameter))
     }
@@ -211,6 +238,11 @@ impl ResourceApi {
         let Some(function) = ty.function_view() else {
             return false;
         };
+        let payload = if self.generic() {
+            Type::Variable(TypeVariableId::resolved(self.module, parameter.local() + 1))
+        } else {
+            Type::Int
+        };
         if method {
             let Some(row) = function.effects() else {
                 return false;
@@ -218,7 +250,9 @@ impl ResourceApi {
             if row.tail().is_some()
                 || !matches!(row.known(), [instance]
                 if instance.effect() == self.ops()
-                    && matches!(instance.arguments(), [crate::types::KindedArgument::TypeArg(Type::Variable(id))] if *id == parameter))
+                    && instance.arguments().len() == self.argument_count()
+                    && instance.arguments()[0] == crate::types::KindedArgument::TypeArg(Type::Variable(parameter))
+                    && (!self.generic() || instance.arguments()[1] == crate::types::KindedArgument::TypeArg(payload.clone())))
             {
                 return false;
             }
@@ -226,10 +260,10 @@ impl ResourceApi {
             return false;
         }
         if ordinal == 1 {
-            matches!(function.domain(), Type::Tuple(fields) if matches!(fields.as_ref(), [handle, Type::Int] if self.handle_type(handle, parameter)))
+            matches!(function.domain(), Type::Tuple(fields) if matches!(fields.as_ref(), [handle, value] if self.handle_type(handle, parameter) && *value == payload))
                 && matches!(function.value(), Type::Unit)
         } else {
-            self.handle_type(function.domain(), parameter) && matches!(function.value(), Type::Int)
+            self.handle_type(function.domain(), parameter) && *function.value() == payload
         }
     }
 
@@ -237,7 +271,7 @@ impl ResourceApi {
         effect.id == self.ops()
             && effect.public
             && effect.spelling == "Ops"
-            && self.parameter(&effect.parameters, 1)
+            && self.parameter(&effect.parameters, self.argument_count() as u32)
             && effect.operations.len() == self.method_names().len()
             && effect
                 .operations
@@ -258,7 +292,7 @@ impl ResourceApi {
     pub(crate) fn interface(self, interface: &CheckedInterfaceFact) -> bool {
         interface.id == self.provider()
             && interface.spelling == "Provider"
-            && self.parameter(&interface.parameters, 2)
+            && self.parameter(&interface.parameters, 2 * self.argument_count() as u32)
             && interface.determination().is_none()
             && interface.methods.len() == self.method_names().len()
             && interface.methods.iter().enumerate().all(|(index, method)| {
@@ -276,14 +310,56 @@ impl ResourceApi {
         parameters: &[(TypeVariableId, Kind)],
         value_type: &Type,
     ) -> bool {
-        let parameter = TypeVariableId::resolved(self.module, 2);
-        interface_parameters == [parameter]
+        let parameter = TypeVariableId::resolved(self.module, 2 * self.argument_count() as u32);
+        interface_parameters.len() == self.argument_count()
+            && interface_parameters.iter().enumerate().all(|(index, id)| {
+                *id == TypeVariableId::resolved(
+                    self.module,
+                    2 * self.argument_count() as u32 + index as u32,
+                )
+            })
             && parameters.is_empty()
             && self.method_names().iter().enumerate().any(|(ordinal, _)| {
                 id == MethodId::new(self.provider(), ordinal as u32)
                     && self.signature(value_type, parameter, ordinal, true)
             })
     }
+}
+
+/// Pending foundation admission applies to computational uses of generic access
+/// or indexed operations, including a body-free helper's exposed callable type.
+pub(crate) fn generic_cell_dependency_type(
+    root: &Type,
+    work: &mut TypeWorkBudget,
+) -> Result<bool, ()> {
+    crate::types::visit_type_structure_with_budget(root, work, |node, work| match node {
+        crate::types::TypeStructureNode::Type(Type::Nominal(id)) => {
+            Ok(id.module().is_builtin_generic_cell())
+        }
+        crate::types::TypeStructureNode::Type(ty) => {
+            let Some(row) = ty.function_view().and_then(|function| function.effects()) else {
+                return Ok(false);
+            };
+            work.charge(
+                row.known()
+                    .len()
+                    .checked_add(row.tail().map_or(0, |tail| tail.lacks().len()))
+                    .ok_or(())?,
+            )?;
+            Ok(row
+                .known()
+                .iter()
+                .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
+                .any(|instance| instance.effect().module().is_builtin_generic_cell()))
+        }
+        crate::types::TypeStructureNode::Tail(tail) => {
+            work.charge(tail.lacks().len())?;
+            Ok(tail
+                .lacks()
+                .iter()
+                .any(|instance| instance.effect().module().is_builtin_generic_cell()))
+        }
+    })
 }
 
 #[cfg(test)]
@@ -14747,7 +14823,7 @@ impl ExportSummary {
                 || self.nominals.len() != api.nominal_count()
                 || self
                     .nominals
-                    .get("Handle")
+                    .get(api.handle_name())
                     .is_none_or(|nominal| !api.exported_nominal(nominal))
                 || self.interface_names.len() != 1
                 || self.interface_names.get("Provider") != Some(&api.provider())
@@ -26709,14 +26785,18 @@ impl ResourceAcquisition {
         (api.method_names().len() == self.methods.len()).then_some(api)
     }
 
-    pub(crate) fn owns(self, resource: &ResolvedResourceExpr) -> bool {
+    pub(crate) fn owns(
+        self,
+        resource: &ResolvedResourceExpr,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ()> {
         let ResolvedExprKind::Block(body) = &resource.body.kind else {
-            return false;
+            return Ok(false);
         };
         let [ResolvedLocalDeclaration::Evidence(source)] = body.declarations.as_slice() else {
-            return false;
+            return Ok(false);
         };
-        self.supplies(source)
+        Ok(self.supplies(source, work)?
             && self == resource.acquisition
             && self.identity == resource.identity.id
             && resource.identity.kind == Kind::Type
@@ -26733,55 +26813,107 @@ impl ResourceAcquisition {
             && self.methods.iter().all(|method| {
                 method.module() == Some(self.provider.module()) && *method != self.handle
             })
-            && self.api().is_some()
+            && self.api().is_some())
     }
 
     /// Authenticates only the fixed generated forwarding equations. The caller
     /// must additionally establish this acquisition as the active body owner.
-    pub(crate) fn supplies(self, source: &ResolvedLexicalEvidence) -> bool {
-        let Some(api) = self.api() else { return false };
+    pub(crate) fn supplies(
+        self,
+        source: &ResolvedLexicalEvidence,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ()> {
+        let Some(api) = self.api() else {
+            return Ok(false);
+        };
         if source.acquisition != Some(self)
             || source.id != self.provider
             || source.span != self.span
             || source.application.interface.id != api.provider()
-            || !matches!(source.application.arguments.as_ref(), [argument] if argument.ty == crate::types::KindedArgument::TypeArg(Type::Variable(self.identity)))
+            || source.application.arguments.len() != api.argument_count()
+            || source.application.arguments[0].ty
+                != crate::types::KindedArgument::TypeArg(Type::Variable(self.identity))
             || source.method_groups.len() != api.method_names().len()
         {
-            return false;
+            return Ok(false);
         }
-        source.method_groups.iter().enumerate().all(|(ordinal, group)| {
-            if group.binder.id != self.methods[ordinal] || !group.contextual_parameters.is_empty()
-                || group.identity.is_some() || group.method != Some(MethodId::new(api.provider(), ordinal as u32))
-                || group.binder.spelling != api.method_names()[ordinal]
-                || group.binder.origin.primary_span() != self.span
-            { return false; }
-            let [equation] = group.equations.as_ref() else { return false };
-            let [pattern] = equation.patterns.as_slice() else { return false };
-            let ResolvedPatternKind::Binder(parameter) = &pattern.kind else { return false };
-            let ResolvedExprKind::Perform(request) = &equation.body.kind else { return false };
-            let ResolvedExprKind::Occurrence(operand) = &request.operand.kind else { return false };
-            equation.name.binder == group.binder.id
-                && equation.name.spelling == api.method_names()[ordinal]
-                && group.span == self.span
-                && equation.span == self.span
-                && pattern.span == self.span
-                && parameter.origin.primary_span() == self.span
-                && parameter.id != self.handle
-                && !self.methods.contains(&parameter.id)
-                && equation.body.span == self.span
-                && request.operand.span == self.span
-                && request.spelling == api.method_names()[ordinal]
-                && equation.name.origin.primary_span() == self.span
-                && request.origin.primary_span() == self.span
-                && request.effect.origin.primary_span() == self.span
-                && operand.origin.primary_span() == self.span
-                && request.operation == crate::types::OperationId::new(api.ops(), ordinal as u32)
-                && request.effect.instance.effect() == api.ops()
-                && matches!(request.effect.instance.arguments(), [crate::types::KindedArgument::TypeArg(Type::Variable(identity))] if *identity == self.identity)
-                && operand.term == ResolvedTermName::Global(parameter.id)
-                && operand.evidence.is_empty()
-                && parameter.id.module() == Some(self.provider.module())
-        })
+        // Reconstruct every complete forwarding instance with the owning ledger,
+        // before the fixed-shape checks. No recursive equality on arbitrary T.
+        for group in &source.method_groups {
+            work.charge(1)?;
+            for equation in &group.equations {
+                work.charge(1)?;
+                let ResolvedExprKind::Perform(request) = &equation.body.kind else {
+                    return Ok(false);
+                };
+                if request.effect.instance.arguments().len() != source.application.arguments.len() {
+                    return Ok(false);
+                }
+                for (actual, expected) in request
+                    .effect
+                    .instance
+                    .arguments()
+                    .iter()
+                    .zip(source.application.arguments.iter())
+                {
+                    if !crate::types::same_kinded_argument_with_budget(actual, &expected.ty, work)?
+                    {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+        Ok(source
+            .method_groups
+            .iter()
+            .enumerate()
+            .all(|(ordinal, group)| {
+                if group.binder.id != self.methods[ordinal]
+                    || !group.contextual_parameters.is_empty()
+                    || group.identity.is_some()
+                    || group.method != Some(MethodId::new(api.provider(), ordinal as u32))
+                    || group.binder.spelling != api.method_names()[ordinal]
+                    || group.binder.origin.primary_span() != self.span
+                {
+                    return false;
+                }
+                let [equation] = group.equations.as_ref() else {
+                    return false;
+                };
+                let [pattern] = equation.patterns.as_slice() else {
+                    return false;
+                };
+                let ResolvedPatternKind::Binder(parameter) = &pattern.kind else {
+                    return false;
+                };
+                let ResolvedExprKind::Perform(request) = &equation.body.kind else {
+                    return false;
+                };
+                let ResolvedExprKind::Occurrence(operand) = &request.operand.kind else {
+                    return false;
+                };
+                equation.name.binder == group.binder.id
+                    && equation.name.spelling == api.method_names()[ordinal]
+                    && group.span == self.span
+                    && equation.span == self.span
+                    && pattern.span == self.span
+                    && parameter.origin.primary_span() == self.span
+                    && parameter.id != self.handle
+                    && !self.methods.contains(&parameter.id)
+                    && equation.body.span == self.span
+                    && request.operand.span == self.span
+                    && request.spelling == api.method_names()[ordinal]
+                    && equation.name.origin.primary_span() == self.span
+                    && request.origin.primary_span() == self.span
+                    && request.effect.origin.primary_span() == self.span
+                    && operand.origin.primary_span() == self.span
+                    && request.operation
+                        == crate::types::OperationId::new(api.ops(), ordinal as u32)
+                    && request.effect.instance.effect() == api.ops()
+                    && operand.term == ResolvedTermName::Global(parameter.id)
+                    && operand.evidence.is_empty()
+                    && parameter.id.module() == Some(self.provider.module())
+            }))
     }
 }
 
@@ -26808,6 +26940,25 @@ pub struct ResolvedResourceExpr {
     pub initializer: Box<ResolvedExpr>,
     /// The body, including compiler-owned exact provider methods.
     pub body: Box<ResolvedExpr>,
+}
+
+impl ResolvedResourceExpr {
+    /// The generic payload is retained in the exact generated provider application.
+    pub(crate) fn payload(&self) -> Option<&Type> {
+        if !self.acquisition.builtin.is_builtin_generic_cell() {
+            return None;
+        }
+        let ResolvedExprKind::Block(body) = &self.body.kind else {
+            return None;
+        };
+        let [ResolvedLocalDeclaration::Evidence(source)] = body.declarations.as_slice() else {
+            return None;
+        };
+        match &source.application.arguments.get(1)?.ty {
+            crate::types::KindedArgument::TypeArg(ty) => Some(ty),
+            _ => None,
+        }
+    }
 }
 
 /// One resolved discard use, with no value operand.

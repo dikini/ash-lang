@@ -1050,15 +1050,12 @@ impl DirectDemandProof {
                     expression = proof.union(expression, &initializer, work)?;
                 }
                 EffectExprKind::Operation(EffectOperation::Resource(scope)) => {
-                    let api = scope
-                        .acquisition
-                        .api()
-                        .ok_or_else(|| invalid(equation.node))?;
-                    charge(work, 1)?;
-                    let effect = EffectInstance::new(
-                        api.ops(),
-                        Box::new([crate::types::Type::Variable(scope.acquisition.identity)]),
-                    );
+                    let effect = scope
+                        .instance_with_budget(work)
+                        .map_err(|error| match error {
+                            crate::core::BuildError::TypeWorkExceeded => resource(),
+                            _ => invalid(equation.node),
+                        })?;
                     let body = recipe.node_equations
                         [scope.body().index().map_err(|_| invalid(equation.node))?]
                     .ok_or_else(|| invalid(equation.node))?;

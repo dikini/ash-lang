@@ -239,15 +239,15 @@ impl HandlerRowRecipeDraft {
                         else {
                             return Err(invalid(equation.node));
                         };
-                        let api = scope
-                            .acquisition
-                            .api()
-                            .ok_or_else(|| invalid(equation.node))?;
-                        charge(work, 2)?;
-                        let effect = EffectInstance::new(
-                            api.ops(),
-                            Box::new([Type::Variable(scope.acquisition.identity)]),
-                        );
+                        let effect =
+                            scope
+                                .instance_with_budget(work)
+                                .map_err(|error| match error {
+                                    crate::core::BuildError::TypeWorkExceeded => {
+                                        super::super::resource()
+                                    }
+                                    _ => invalid(equation.node),
+                                })?;
                         let body = self.node_equations
                             [scope.body.index().map_err(|_| invalid(equation.node))?]
                         .ok_or_else(|| invalid(equation.node))?;

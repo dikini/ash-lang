@@ -101,6 +101,22 @@ the authenticated lexical provider, whose ordinary method functions request
 the corresponding `Ops<R>` operations. This is not a generic provider registry
 or an ordinary source `with` declaration. Pure Core admits no resource carrier.
 
+The generic-cell foundation reuses this carrier. Its authenticated builtin
+origin selects the separate family; its handle type retains the complete
+`Cell<R,T>` application, with owned position zero. The initializer retains `T`,
+and generated provider methods retain the matching `Provider<R,T>` and
+`Ops<R,T>` arguments. Independent ordinary validation reconstructs these facts,
+checks initializer/body types, evidence, origins and exact outward rows, and
+then refuses generic dependency admission. Copying and row replay retain the
+complete handle type and exact effect instance.
+
+Private program images distinguish the generic builtin module role from an
+ordinary module and authenticate its canonical source bytes. They retain the
+complete carrier through the existing handle, child, origin and acquisition
+records. Restoration performs the same ordinary checks and pending dependency
+rejection. No restored image or body-free source summary gains unchecked
+contents authority; public generic execution remains unavailable.
+
 The carrier selects the closed cell API and retains the body's result type.
 Independent linked and Core validation authenticate the exact builtin cell,
 sealed provider, generated methods, ownership, origins and result/row relation.

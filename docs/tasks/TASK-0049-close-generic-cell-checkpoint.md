@@ -150,6 +150,8 @@ All entries are pending at task creation.
   and dispatched as `gpt-6.1-sol` with `medium` reasoning effort.
 - Independent reviewer: `/root/task0045_reviewer`, with inherited model/effort.
   The reviewer does not author implementation and coordinates any build reruns.
+- Local commit policy: unsigned commits, using `git -c commit.gpgsign=false commit`;
+  no push or Main integration.
 - Authorized scope: TASK-0045 foundation implementation, required tests and
   specification/task updates, local commits and repair/re-review. Review must
   finish before any advance to TASK-0046/0047. No Main integration is authorized.

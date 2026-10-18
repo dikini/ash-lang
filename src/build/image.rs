@@ -792,6 +792,8 @@ fn encode_program<'work, F: crate::core::dialect::CoreOperationFamily>(
             SourceRecord {
                 role: if module.is_builtin_foreign() {
                     ModuleRoleRecord::BuiltinForeign
+                } else if module.is_builtin_generic_cell() {
+                    ModuleRoleRecord::BuiltinGenericCell
                 } else if module.is_builtin_cell() {
                     ModuleRoleRecord::BuiltinCell
                 } else if module.is_builtin_string() {
@@ -895,7 +897,7 @@ impl Encoder<'_> {
         acquisition: crate::resolved::ResourceAcquisition,
     ) -> Result<CellAcquisitionRecord, ImageFailure> {
         let crate::resolved::ResourceMethods::Cell([read, write]) = acquisition.methods;
-        if !acquisition.builtin.is_builtin_cell() {
+        if !acquisition.builtin.is_builtin_resource() {
             return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
         }
         Ok(CellAcquisitionRecord {
@@ -2903,7 +2905,7 @@ impl PureImage {
                     }
                     crate::module::ImageModuleRole::BuiltinBytes
                 }
-                ModuleRoleRecord::BuiltinCell => {
+                ModuleRoleRecord::BuiltinCell | ModuleRoleRecord::BuiltinGenericCell => {
                     return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
                 }
                 ModuleRoleRecord::BuiltinForeign => {
@@ -3553,6 +3555,65 @@ impl Decoder<'_> {
 mod tests {
     use super::*;
     use crate::sqlite_output_order;
+
+    #[test]
+    fn generic_cell_private_image_restores_full_carrier_then_refuses_admission() {
+        let (core, sources) = crate::core::validate::generic_cell_core_fixture_for_test();
+        // This test-only donor grants no production validation or execution.
+        let donor = crate::core::dialect::forge_validated_for_test(core);
+        let provenance = donor
+            .registry()
+            .type_variables()
+            .map(|parameter| {
+                let module = parameter.id.module().unwrap();
+                let source = sources
+                    .iter()
+                    .find(|source| source.id() == parameter.origin.primary_span().source())
+                    .unwrap();
+                (module, std::sync::Arc::new(source.clone()))
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let build = encode_effect_for_build(
+            &donor,
+            &provenance,
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        assert!(
+            build
+                .image
+                .sources
+                .iter()
+                .any(|source| matches!(source.role, ModuleRoleRecord::BuiltinGenericCell))
+        );
+        let bytes = build
+            .image
+            .encode_bytes(&mut TypeWorkBudget::default())
+            .unwrap();
+        let expected = build
+            .image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        drop(build);
+        drop(donor);
+        drop(sources);
+        let mut work = TypeWorkBudget::default();
+        let decoded = PureImage::decode_bytes(&bytes, &mut work).unwrap();
+        decoded
+            .admit_expected_native_facts(&expected, &mut work)
+            .unwrap();
+        let error = match decoded.restore_effect(&mut work) {
+            Ok(_) => panic!("pending generic dependencies admitted"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(error, ImageFailure::Validation(ref error) if error.reason() == crate::core::ValidationReason::ResourceEscape),
+            "{error:?}"
+        );
+    }
 
     #[test]
     fn prospective_preparation_source_and_node_sizing_is_paid_and_carried() {
@@ -6687,6 +6748,7 @@ enum ModuleRoleRecord {
     Ordinary,
     BuiltinForeign,
     BuiltinCell,
+    BuiltinGenericCell,
     BuiltinString,
     BuiltinBytes,
 }
@@ -7422,6 +7484,7 @@ impl Wire for ModuleRoleRecord {
             Self::BuiltinCell => 2,
             Self::BuiltinString => 3,
             Self::BuiltinBytes => 4,
+            Self::BuiltinGenericCell => 5,
         }
         .write(writer)
     }
@@ -7432,6 +7495,7 @@ impl Wire for ModuleRoleRecord {
             2 => Ok(Self::BuiltinCell),
             3 => Ok(Self::BuiltinString),
             4 => Ok(Self::BuiltinBytes),
+            5 => Ok(Self::BuiltinGenericCell),
             _ => Err(ImageFailure::InvalidEncoding),
         }
     }
@@ -11606,6 +11670,7 @@ impl PureImage {
         };
         let mut seen_common = false;
         let mut seen_cell = false;
+        let mut seen_generic_cell = false;
         let mut seen_string = false;
         let mut seen_bytes = false;
         for record in &self.sources {
@@ -11627,6 +11692,12 @@ impl PureImage {
                         return Err(ImageFailure::InvalidRecord);
                     }
                     crate::module::ImageModuleRole::BuiltinBytes
+                }
+                ModuleRoleRecord::BuiltinGenericCell => {
+                    if std::mem::replace(&mut seen_generic_cell, true) {
+                        return Err(ImageFailure::InvalidRecord);
+                    }
+                    crate::module::ImageModuleRole::BuiltinGenericCell
                 }
                 ModuleRoleRecord::BuiltinCell => {
                     if std::mem::replace(&mut seen_cell, true) {
@@ -11748,7 +11819,7 @@ impl Decoder<'_> {
         record: CellAcquisitionRecord,
     ) -> Result<crate::resolved::ResourceAcquisition, ImageFailure> {
         let builtin = *get(&self.modules, record.module)?;
-        if !builtin.is_builtin_cell() {
+        if !builtin.is_builtin_resource() {
             return Err(ImageFailure::InvalidRecord);
         }
         Ok(crate::resolved::ResourceAcquisition {
@@ -12419,7 +12490,7 @@ pub(crate) fn encode_effect_for_build(
             crate::core::EffectExprKind::Operation(crate::core::EffectOperation::Resource(
                 scope,
             )) => {
-                if !scope.acquisition.builtin.is_builtin_cell() {
+                if !scope.acquisition.builtin.is_builtin_resource() {
                     return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata).into());
                 }
                 push(&mut identities, scope.acquisition.identity, work)?;
