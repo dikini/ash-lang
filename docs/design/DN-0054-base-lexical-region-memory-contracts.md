@@ -57,6 +57,15 @@ payload dependencies, not successful completion of all this region work.
   package or reference count extends a whole region beyond its resource scope.
 - Reject cycles of resource ownership dependencies. Preserve ordinary sharing
   and cyclic immutable graphs within their checked validity.
+- Keep `Cell<R,T>` access tied to R's resource scope. Its retained payload
+  dependencies must strictly outlive R; longer backing lifetime or quarantine
+  cannot admit self-dependency, an owner cycle, or access after R closes.
+- Preserve ash-ffi's request-payload boundary, including hidden captures and
+  indexed operation metadata. Allocation introduces no exception for a request
+  interpreted outside a required owner.
+- Distinguish source scope completion from physical owner consumption. Retained
+  owners and their transitive dependencies remain protected with ordinary access
+  revoked; source completion alone does not authorize backing release.
 - Require explicit region access at allocation-capable helper boundaries first.
   Keep existing rank-1 source restrictions; do not introduce implicit
   allocation-polymorphic returned closures.
@@ -127,13 +136,56 @@ construction and call, including callbacks and returned closures. It cannot
 select another region at runtime merely because a similarly named provider is
 nearer. This note adds no implicit caller-context rule.
 
-### Construction, aliases, and projection
+### Checked construction
 
 A new region allocation requires live exact region access, an admitted
 representation and construction, checked size and alignment, sufficient
 capacity, and initialized contents before readable access is published. Public
 operations expose typed access, not forgeable addresses or arbitrary object
 indices. Native layout and Ash representation are separate contracts.
+
+### Reservation and local initialization
+
+Construction with younger dependencies uses two separate boundaries. Consider
+outer region A and inner cell R. Sending an R-dependent closure as an ordinary
+allocation request to A's outer interpreter is forbidden by the
+[baseline request-payload rule](https://github.com/dikini/ash-lang/blob/354c76b391fe4af665cf6a03479a9874a57cb3e3/spec/static-semantics.md#scoped-cells-and-resource-dependencies),
+even when the eventual object would remain confined to R.
+
+The proposed route reserves storage using independent requirements, then
+initializes it locally while R remains live. This is a scenario description,
+not executable source or a new ordinary function API:
+
+```text
+inside R, with access to outer region A:
+    prepare the closure and its checked representation locally
+    reserve storage from A using independent size and alignment requirements
+    initialize the reserved storage locally with the closure
+    publish access requiring both A and R
+```
+
+The reservation request's operands and exact type/effect metadata must be
+independent of R. An R-indexed layout descriptor stays local; omitting the
+closure term while exporting its dependency through metadata is not sufficient.
+A reservation publishes no readable typed object or ownership of A.
+
+Local initialization requires a separately checked construction primitive or
+compiler lowering. It authenticates the exact reservation, extent, layout,
+initializer, and retained dependencies before publication. It executes in the
+constructing computation under R, invokes no source callback, and issues no
+outward request carrying the payload. Ordinary access types or compatible
+descriptors cannot manufacture this permission. This boundary is proposed work,
+not permission already supplied by ash-ffi or its native byte primitives.
+
+Any pending reservation belongs to that construction's completion obligation
+before fallible reply handling. Capture/resume preserves the same obligation;
+abandonment must cancel or account for it without publishing readable access,
+corrupting other allocations, or bypassing retained-owner protection. Independent
+Core validation must check the reservation, local initialization, and publication
+relationship. A provider without this checked boundary rejects construction
+with younger dependencies; it cannot forward the payload to A instead.
+
+### Aliases and projection
 
 Constructing a new object in A gives access to that object's storage a
 dependency on A. Its retained fields can add dependencies. Aliasing an existing
@@ -161,8 +213,10 @@ it and every capability or stored reference actually needed by its use.
 Access requires all those owners to remain valid. The fact that A's bytes are
 live proves only A's storage contribution, not every captured dependency.
 
-This permits a local immutable closure allocated in longer-lived storage A
-to capture a scoped cell R, while its usable value remains confined to R.
+The reservation and local-initialization route can place a local immutable
+closure in longer-lived storage A while it captures scoped cell R. Its usable
+value remains confined to R; an ordinary outer allocation request carrying
+the closure still rejects.
 The closure requires both A and R. It cannot escape R merely because its own
 record is in A. When R closes, no surviving source-accessible root may retain
 that closure's R-dependent access. Inaccessible arena bytes are not an
@@ -184,12 +238,21 @@ a longer-lived mutable root.
 
 ### Owner dependencies and ordinary cycles
 
-An owner dependency records authority or completion state that one resource
-must retain until its own completion. The initial model admits such edges only
-to already established enclosing owners. Edges point from dependent to longer
-lived owner; self-dependency and owner cycles reject. Capture/resume preserves
-this relation through inactive periods rather than recomputing it from the
-currently visible textual block.
+An owner dependency records authority or backing that must remain protected
+until the dependent owner's consumption is established. Ending its source scope
+alone does not discharge an outstanding edge. The initial model admits such
+edges only to already established
+enclosing owners. Edges point from dependent to longer-lived owner;
+self-dependency and owner cycles reject. Capture/resume preserves this relation
+through inactive periods rather than recomputing it from the currently visible
+textual block. A retained disposition keeps the same edges after ordinary
+source access has been revoked; it creates no new lifetime or cycle permission.
+
+Consumption means the admitted disposition of the resource owner, not immediate
+reclamation of every byte it used. Ordinary Cell close consumes its slot's
+completion authority and drops the payload root even if an enclosing arena
+retains the storage. For a foreign owner, only the recorded native disposition
+establishes consumption; returning from source finish does not.
 
 An allocation owned by A referring to another ordinary allocation in A is not
 an owner-dependency edge from A to itself. Cyclic immutable graphs can therefore
@@ -232,16 +295,50 @@ not a bound on execution memory or reclamation work.
 
 ### Completion, control, and reclamation
 
-Normal completion checks the body result and outward dependencies, completes
-inner dependent resources and scheduled cleanup, then releases backing storage
-once. Cleanup using A's storage runs while A is live. Ordinary unreachable-data
-reclamation invokes no arbitrary effectful source cleanup.
+Normal scope completion checks the body result and outward dependencies and
+performs required inner completion and scheduled cleanup. Backing release is
+permitted only when dependent consumption and the backing owner's disposition
+authorize it. Successful consumption releases once; a completed source scope
+does not by itself establish that consumption. Cleanup using A's storage runs
+while A is live. Ordinary unreachable-data reclamation invokes no arbitrary
+effectful source cleanup.
+
+Composition with foreign owners preserves the existing
+[ash-ffi retained-owner rules](https://github.com/dikini/ash-lang/blob/354c76b391fe4af665cf6a03479a9874a57cb3e3/spec/dynamic-semantics.md#source-resource-execution-with-native-owners):
+
+- A consumed dependent removes its existing edges once, including when source
+  finish reports a consumed failure. That failure does not permit a second
+  release or become successful completion.
+- `RetainedError` preserves the same physical owner and dependency edges.
+  The owner and transitive dependency closure remain quarantined, with ordinary
+  source access revoked. Merely returning a completion report releases no edge.
+- A retained dependent blocks a consuming enclosing call before native entry.
+  `BlockedDependent` grants neither a fabricated disposition nor permission to
+  free an enclosing region through another path. Only the already admitted
+  completing operations may use protected dependencies under their exact rules.
+- Separately admitted host destruction attempts dependents before enclosing
+  owners. Successful consumption removes the same edges; retained destruction
+  keeps them and blocks enclosing destruction. An incomplete attempt is terminal,
+  is not retried, and protects unresolved objects until process termination.
+  Host destruction runs no source finish or handler and cannot turn earlier
+  failed source completion into success.
+
+Physical protection beyond source scope exit grants no usable owner package,
+region access, or extension of Cell R's scope. It cannot justify retaining
+younger access in an outer cell or admitting resource dependency cycles. A
+provider unable to preserve retained backing and dependency protection must
+exclude retaining foreign composition from its admitted profile.
 
 Capture moves the same owner, storage, and obligations into owned control;
 resume restores them without acquisition or reinitialization. A textual boundary
-crossed during capture is not a release event. Checked discard closes exactly
-its owned abandoned obligations in structural order and cannot skip required
-outside or running completion.
+crossed during capture is not a release event. Checked discard initiates closing
+exactly its owned abandoned obligations in structural order and cannot skip
+required outside or running completion. A witnessed retained foreign finish
+keeps ash-ffi's terminal `runtime.resource-completion` behavior: no abandoned
+body report is published and the discarding clause does not continue. Its
+physical protection remains in force.
+Consumed failures during owned discard keep their existing terminal behavior
+as well; a failure report is not permission to repeat physical consumption.
 
 The fixed arena supplies no individual free, compaction, resize invalidation,
 or earlier reclamation guarantee. Repeated aliases do not duplicate release.
@@ -259,6 +356,8 @@ their existing limits on source cleanup and eventual release.
 | Cell lifetime is its resource scope. | Backing-region lifetime and closure record placement grant no extension. |
 | Cell resource dependency cycles reject. | Retained cell payloads require strictly older owners; ordinary graph cycles remain distinct. |
 | Hidden captures cannot evade escape checking. | Values retain storage, access, evidence, and operation dependencies through calls and imports. |
+| Younger-dependent operands cannot reach outer interpreters. | Reservation carries only independent requirements; checked local initialization keeps the payload under its required owners. |
+| Source completion does not imply physical consumption. | Retained edges and quarantine block enclosing release until actual consumption; they grant no source lifetime extension. |
 | One-shot control moves ownership. | Capture/resume preserves activations and ordered completion; it creates no exclusive borrow proof. |
 | Ordinary values remain reusable. | Aliases share valid immutable data; resource owners remain separate obligations. |
 | Native signatures do not establish memory safety. | Admitted representation, initialization, provenance, and access are separate checked obligations. |
@@ -272,10 +371,13 @@ These are proposed requirements, not completed experiments or proofs:
 | --- | --- | --- |
 | Explicit helper | A rank-1 helper allocates into its supplied region; aliases retain their original allocation. | A call silently changes the captured allocator or acquires a hidden region. |
 | Nested construction | Inner storage can retain outer data; a projected outer reference can survive inner completion. | An inner aggregate or inline view escapes after its storage closes. |
-| Local closure | A closure in older storage is used only while its younger captured cell is live. | Returning it, storing it in an older cell, or republishing it through an object index restores expired access. |
+| Local closure | Independent reservation followed by checked local initialization creates an A-backed closure requiring A and younger R, usable only inside R. | Sending the closure or R-dependent metadata to A's outer interpreter, escaping it, or restoring expired access rejects. |
+| Pending construction | Capture/resume retains the exact reservation; abandonment accounts for unpublished storage before permitted backing release. | A forged reservation, mismatched initializer, partial readable object, or lost construction obligation is admitted. |
 | Snapshot | A closure retaining an independent copied result can escape a cell. | A shallow copy of a region reference loses its backing dependency. |
 | Graphs | Admitted immutable sharing and cycles preserve reference relationships. | A graph is accepted without its required initialization or representation support. |
 | Owner ordering | A region, nested cell, and dependent cleanup complete in valid order. | Direct or indirect owner cycles, double release, or release before cleanup. |
+| Retained dependent | A child returning `RetainedError` preserves its edges and quarantines transitive backing; enclosing teardown is blocked before native entry. | Source completion or `BlockedDependent` is treated as consumption and backing is freed. |
+| Consumed failure and host destruction | Consumed failure removes edges once; host destruction follows dependency order without changing the source outcome. | Duplicate release, retry of incomplete destruction, source cleanup during host destruction, or lost protection after retention. |
 | Fixed capacity | Exact fit succeeds; refused construction preserves earlier objects and accounting. | Partial readable publication, overflow, hidden backing fallback, or corruption. |
 | Captured control | Resume preserves allocation identity; discard closes owned storage once. | Premature release or skipped outside/running completion. |
 | Independent validation | Source summaries, Core copying/transforms, and runtime agree on regions and dependencies. | Same-shaped types, copied claims, or changed provenance grant storage authority. |
@@ -296,8 +398,8 @@ workflow plus matching surface/Core semantics and evidence.
 
 ## Open questions
 
-- Which checked construction and representation facts provide the smallest
-  common allocation boundary for ordinary data and closures?
+- Which retained construction and representation facts implement the reservation
+  and local-initialization boundary with the least new machinery?
 - How should independent validation retain value validity that can be shorter
   than its physical allocation, including through opaque public results?
 - What explicit region API and effect-row spelling preserve useful inference
