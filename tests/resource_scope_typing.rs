@@ -1309,9 +1309,12 @@ fn generic_cell_known_ops_inside_resource_row_arguments_cannot_publish() {
         include_str!("fixtures/source-owner/owner.ash"),
     )
     .unwrap();
+    // Keep this helper private: the public fixture reaches a separate export
+    // summary failure. Both variants still cross checked
+    // module admission with a genuine computational ResourceApply RowArg.
     for (row, expected) in [("Ops<Int, Bool>", Some("ResourceEscape")), ("Tick", None)] {
         let source = format!(
-            "import @builtin.generic_cell (Ops)\nimport owner as Owner\neffect Tick {{\ntick : Unit -> Unit\n}}\npub relay : Owner.Probe<{{{row}}}, Int, {{}}> -> Owner.Probe<{{{row}}}, Int, {{}}>\nrelay value = value\n"
+            "import @builtin.generic_cell (Ops)\nimport owner as Owner\neffect Tick {{\ntick : Unit -> Unit\n}}\nrelay<R> : Owner.Probe<{{{row}}}, R, {{}}> -> Owner.Probe<{{{row}}}, R, {{}}>\nrelay value = value\n"
         );
         assert_check(tree.check(&source), expected);
     }
