@@ -12035,7 +12035,10 @@ Memory.AllocationRefused(error) => 0
         const DEPTH: usize = 16_384;
         // Export freeze retains one defining-source Arc record; the complete
         // zonk visitor eliminates the one-cell redundant row-tail scan.
-        const DEFINING_TYPE_WORK: usize = 13 * DEPTH + 29 + 1 - 1;
+        // Computational admission scans the single Unit result: one node visit
+        // and one structural root, independent of the constructor payload depth.
+        const COMPUTATIONAL_ADMISSION_WORK: usize = 2;
+        const DEFINING_TYPE_WORK: usize = 13 * DEPTH + 29 + 1 - 1 + COMPUTATIONAL_ADMISSION_WORK;
         const {
             assert!(DEFINING_TYPE_WORK < crate::types::TYPE_WORK_LIMIT);
             assert!(13 * (2 * DEPTH) + 29 > crate::types::TYPE_WORK_LIMIT);
