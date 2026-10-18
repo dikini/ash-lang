@@ -332,34 +332,16 @@ pub(crate) fn generic_cell_dependency_type(
     root: &Type,
     work: &mut TypeWorkBudget,
 ) -> Result<bool, ()> {
-    crate::types::visit_type_structure_with_budget(root, work, |node, work| match node {
-        crate::types::TypeStructureNode::Type(Type::Nominal(id)) => {
-            Ok(id.module().is_builtin_generic_cell())
-        }
-        crate::types::TypeStructureNode::Type(ty) => {
-            let Some(row) = ty.function_view().and_then(|function| function.effects()) else {
-                return Ok(false);
-            };
-            work.charge(
-                row.known()
-                    .len()
-                    .checked_add(row.tail().map_or(0, |tail| tail.lacks().len()))
-                    .ok_or(())?,
-            )?;
-            Ok(row
-                .known()
-                .iter()
-                .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
-                .any(|instance| instance.effect().module().is_builtin_generic_cell()))
-        }
-        crate::types::TypeStructureNode::Tail(tail) => {
-            work.charge(tail.lacks().len())?;
-            Ok(tail
-                .lacks()
-                .iter()
-                .any(|instance| instance.effect().module().is_builtin_generic_cell()))
-        }
-    })
+    crate::types::visit_type_structure_and_instances_with_budget(
+        root,
+        work,
+        |node, _| {
+            Ok(
+                matches!(node, crate::types::TypeStructureNode::Type(Type::Nominal(id)) if id.module().is_builtin_generic_cell()),
+            )
+        },
+        |instance, _| Ok(instance.effect().module().is_builtin_generic_cell()),
+    )
 }
 
 #[cfg(test)]

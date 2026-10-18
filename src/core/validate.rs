@@ -4821,7 +4821,35 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         )?;
         self.validate_scopes()?;
         self.validate_type_scopes()?;
-        self.reject_pure_byte_applications()
+        self.reject_pure_byte_applications()?;
+        self.reject_pending_generic_computations()
+    }
+
+    fn reject_pending_generic_computations(&self) -> Result<(), ValidationError> {
+        for (index, node) in self.program.nodes.iter().enumerate() {
+            self.charge_type_work(1)?;
+            let mut work = TypeWorkBudget::with_limit(
+                self.type_work_limit.saturating_sub(self.type_work.get()),
+            );
+            let typed = crate::resolved::generic_cell_dependency_type(&node.ty, &mut work);
+            self.charge_type_work(work.used())?;
+            if typed.map_err(|()| ValidationError::new(ValidationReason::Resource, None))? {
+                return Err(ValidationError::new(
+                    ValidationReason::ResourceEscape,
+                    Some(node_id(self.program.arena, index)?),
+                ));
+            }
+        }
+        for anchor in &self.program.method_evidence_anchors {
+            self.charge_type_work(1)?;
+            if anchor.method.interface().module().is_builtin_generic_cell() {
+                return Err(ValidationError::new(
+                    ValidationReason::ResourceEscape,
+                    Some(anchor.node),
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn validate_method_evidence_type_owners(
@@ -16027,34 +16055,19 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         self.validate_effect_abstraction_shapes(&authenticated_method_evidence)?;
         self.validate_scopes()?;
         self.validate_type_scopes()?;
-        // TASK-0045 retains ordinary generic-cell facts but grants no contents
-        // dependency authority. This applies to direct, copied and restored Core.
+        // Both dialects deny unsupported computational generic-cell authority
+        // after ordinary checks; effect-only carriers also have explicit guards.
+        self.reject_pending_generic_computations()?;
         for (index, node) in self.program.nodes.iter().enumerate() {
             self.charge_type_work(1)?;
-            let mut work = TypeWorkBudget::with_limit(
-                self.type_work_limit.saturating_sub(self.type_work.get()),
-            );
-            let typed = crate::resolved::generic_cell_dependency_type(&node.ty, &mut work);
-            self.charge_type_work(work.used())?;
-            let typed =
-                typed.map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
             let pending = matches!(&node.kind,
                 super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Resource(scope)) if scope.acquisition.builtin.is_builtin_generic_cell())
                 || matches!(&node.kind,
                     super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Request(request)) if request.effect().effect().module().is_builtin_generic_cell());
-            if pending || typed {
+            if pending {
                 return Err(ValidationError::new(
                     ValidationReason::ResourceEscape,
                     Some(node_id(self.program.arena, index)?),
-                ));
-            }
-        }
-        for anchor in &self.program.method_evidence_anchors {
-            self.charge_type_work(1)?;
-            if anchor.method.interface().module().is_builtin_generic_cell() {
-                return Err(ValidationError::new(
-                    ValidationReason::ResourceEscape,
-                    Some(anchor.node),
                 ));
             }
         }
@@ -22970,6 +22983,106 @@ mod tests {
         core.method_evidence = std::sync::Arc::new(catalog);
         core.method_evidence_anchors = anchors;
         (core, sources)
+    }
+
+    #[test]
+    fn generic_cell_scanner_sees_known_ops_in_nested_owner_row_arguments() {
+        let (core, _) = cell_core_fixture_with_generic(true);
+        let super::super::effect::EffectExprKind::Operation(
+            super::super::effect::EffectOperation::Resource(scope),
+        ) = &core.nodes[core.root.index().unwrap()].kind
+        else {
+            panic!("donor");
+        };
+        let api = scope.acquisition.api().unwrap();
+        let nested = crate::types::KindedArgument::RowArg(EffectRow::singleton(
+            EffectInstance::new(api.ops(), Box::new([Type::Int, Type::Bool])),
+        ));
+        for ty in [
+            Type::ResourceApply(
+                crate::resolved::ResourceDefinitionId::new(scope.acquisition.provider.module(), 0),
+                Box::new([nested.clone()]),
+            ),
+            Type::ForeignOwnerApply(api.handle(), Box::new([nested.clone()])),
+            Type::ForeignOwnerApply(
+                api.handle(),
+                Box::new([crate::types::KindedArgument::RowArg(EffectRow::singleton(
+                    EffectInstance::new_kinded(
+                        crate::types::EffectId::new(scope.acquisition.provider.module(), 0),
+                        Box::new([nested]),
+                    ),
+                ))]),
+            ),
+        ] {
+            let ty = crate::types::IterativeTypeOwner::new(ty);
+            let mut work = TypeWorkBudget::default();
+            assert!(crate::resolved::generic_cell_dependency_type(&ty, &mut work).unwrap());
+            let mut short = TypeWorkBudget::with_limit(work.used() - 1);
+            assert!(crate::resolved::generic_cell_dependency_type(&ty, &mut short).is_err());
+            let mut retry = TypeWorkBudget::with_limit(work.used());
+            assert!(crate::resolved::generic_cell_dependency_type(&ty, &mut retry).unwrap());
+        }
+    }
+
+    #[test]
+    fn generic_cell_pure_core_identity_cannot_gain_pending_permission() {
+        use super::super::dialect::MethodEvidenceCatalog;
+        let (donor, sources) = cell_core_fixture_with_generic(true);
+        let super::super::effect::EffectExprKind::Operation(
+            super::super::effect::EffectOperation::Resource(scope),
+        ) = &donor.nodes[donor.root.index().unwrap()].kind
+        else {
+            panic!("resource donor");
+        };
+        let access = Type::Application(
+            Box::new(Type::Application(
+                Box::new(Type::Nominal(scope.acquisition.api().unwrap().handle())),
+                Box::new(Type::Int),
+            )),
+            Box::new(Type::Bool),
+        );
+        let catalog = MethodEvidenceCatalog::new(
+            donor.method_evidence.methods().to_vec(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        let mut builder = super::super::CoreBuilder::<super::super::dialect::PureOperationFamily>::with_registry_and_method_evidence(std::sync::Arc::clone(&donor.registry), std::sync::Arc::new(catalog)).unwrap();
+        let origin = donor.nodes[donor.root.index().unwrap()]
+            .origin
+            .clone()
+            .unwrap();
+        let parameter = builder.binder(access.clone(), origin.clone()).unwrap();
+        let body = builder
+            .variable(parameter.id(), access.clone(), origin.clone())
+            .unwrap();
+        let root = builder
+            .function(
+                parameter,
+                body,
+                Type::Function(Box::new(access.clone()), Box::new(access)),
+                origin,
+            )
+            .unwrap();
+        let core = builder.finish(root).unwrap();
+        let refs = sources.iter().collect::<Vec<_>>();
+        let relation = core
+            .registry
+            .type_variables()
+            .map(|parameter| {
+                (
+                    parameter.id.module().unwrap(),
+                    parameter.origin.primary_span().source(),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let error = super::super::validate_modules(core, &refs, &relation).unwrap_err();
+        assert_eq!(error.reason(), ValidationReason::ResourceEscape);
     }
 
     #[test]

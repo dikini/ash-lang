@@ -1300,3 +1300,19 @@ fn generic_cell_indexed_callable_metadata_cannot_publish_without_an_acquisition(
     let tree = Tree::new();
     assert_check(tree.check("import @builtin.generic_cell (Ops)\npub relay<R,T> : (Unit -> T ! {Ops<R,T>}) -> (Unit -> T ! {Ops<R,T>})\nrelay callback = callback\n"), Some("ResourceEscape"));
 }
+
+#[test]
+fn generic_cell_known_ops_inside_resource_row_arguments_cannot_publish() {
+    let tree = Tree::new();
+    fs::write(
+        tree.0.join("owner.ash"),
+        include_str!("fixtures/source-owner/owner.ash"),
+    )
+    .unwrap();
+    for (row, expected) in [("Ops<Int, Bool>", Some("ResourceEscape")), ("Tick", None)] {
+        let source = format!(
+            "import @builtin.generic_cell (Ops)\nimport owner as Owner\neffect Tick {{\ntick : Unit -> Unit\n}}\npub relay : Owner.Probe<{{{row}}}, Int, {{}}> -> Owner.Probe<{{{row}}}, Int, {{}}>\nrelay value = value\n"
+        );
+        assert_check(tree.check(&source), expected);
+    }
+}

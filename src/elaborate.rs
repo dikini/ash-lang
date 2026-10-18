@@ -12847,8 +12847,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         );
         let handle_type = IterativeTypeOwner::new(if api.generic() {
             let payload = resource.payload().ok_or_else(invalid_state)?;
-            let payload = self.clone_type(payload)?;
-            self.type_work.charge(2).map_err(|()| type_resource())?;
+            let payload = prepare_resource_payload_copy(payload, 2, &mut self.type_work)
+                .map_err(|()| type_resource())?;
             Type::Application(Box::new(owner_type), Box::new(payload))
         } else {
             owner_type
@@ -12893,8 +12893,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         let body_effects = self.zonk_effect_row(&body.effects)?;
         let arguments = if api.generic() {
-            let payload = self.clone_type(resource.payload().ok_or_else(invalid_state)?)?;
-            self.type_work.charge(1).map_err(|()| type_resource())?;
+            let payload = prepare_resource_payload_copy(
+                resource.payload().ok_or_else(invalid_state)?,
+                1,
+                &mut self.type_work,
+            )
+            .map_err(|()| type_resource())?;
             self.pending_generic_dependency.get_or_insert(span);
             Box::new([Type::Variable(resource.identity.id), payload]) as Box<[Type]>
         } else {
@@ -25186,6 +25190,17 @@ fn unsupported_provider_resource() -> TypeError {
     TypeError::Internal(ElaborationFailure::InvalidState)
 }
 
+/// Retain temporary payload ownership across a later metadata reservation.
+fn prepare_resource_payload_copy(
+    payload: &Type,
+    metadata: usize,
+    work: &mut TypeWorkBudget,
+) -> Result<Type, ()> {
+    let copy = IterativeTypeOwner::new(clone_type_with_budget(payload, work)?);
+    work.charge(metadata)?;
+    Ok(copy.into_inner())
+}
+
 fn invalid_state() -> TypeError {
     TypeError::Internal(ElaborationFailure::InvalidState)
 }
@@ -31102,6 +31117,33 @@ mod tests {
                 .finish(typed.node)
                 .expect("resource arena");
         }
+    }
+
+    #[test]
+    fn generic_cell_deep_payload_copy_refusals_dispose_iteratively() {
+        std::thread::Builder::new().stack_size(256 * 1024).spawn(|| {
+            const DEPTH: usize = crate::core::CORE_PAYLOAD_DEPTH_LIMIT - 2;
+            let mut payload = Type::Int;
+            for _ in 0..DEPTH { payload = Type::Tuple(Box::new([Type::Int, payload])); }
+            let payload = IterativeTypeOwner::new(payload);
+            for metadata in [1, 2] {
+                let mut measured = TypeWorkBudget::default();
+                let copy = prepare_resource_payload_copy(&payload, metadata, &mut measured).unwrap();
+                crate::types::reset_type_discard_observation();
+                drop(IterativeTypeOwner::new(copy));
+                let complete_visits = crate::types::type_discard_visits();
+                assert_eq!(complete_visits, 2 * DEPTH + 1);
+                let mut short = TypeWorkBudget::with_limit(measured.used() - 1);
+                crate::types::reset_type_discard_observation();
+                assert!(prepare_resource_payload_copy(&payload, metadata, &mut short).is_err());
+                assert_eq!(crate::types::type_discard_visits(), complete_visits, "the complete cloned T must have iterative ownership when metadata charging fails");
+                for _ in 0..2 {
+                    let mut exact = TypeWorkBudget::with_limit(measured.used());
+                    drop(IterativeTypeOwner::new(prepare_resource_payload_copy(&payload, metadata, &mut exact).unwrap()));
+                    assert_eq!(exact.used(), measured.used());
+                }
+            }
+        }).unwrap().join().unwrap();
     }
 
     #[test]

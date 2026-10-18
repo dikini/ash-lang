@@ -65,7 +65,8 @@ All acceptance remains pending until its complete original observations exist.
 
 The candidate adds canonical metadata, named acquisition and ordinary checking
 on the existing Effect Resource carrier. Its handle type and generated evidence
-retain complete arguments. Generic acquisitions, operations, method bodies and computational signatures
+retain complete arguments. Generic acquisitions, operations, method bodies and
+computational signatures
 that retain generic access or indexed operations fail closed before source
 helper-summary publication and after independent
 ordinary Core validation. Import-only metadata and facades can publish. Copies,
@@ -142,7 +143,13 @@ full checkpoint gate; these focused checks do not close it.
 
 ## Discoveries
 
-None recorded. Return a missing semantic rule to CP-0023 before implementing it.
+Independent review identified missing Pure Core staged denial, a known-instance
+identity omission in nested Row arguments, and temporary payload copies without
+iterative ownership across a later metadata refusal. The repair shares the
+computational denial between dialects, scans complete effect instances on the
+existing iterative worklist, and retains copied payload ownership until transfer.
+These are foundation enforcement repairs, not changes to CP-0023 semantics.
+Review and refreshed verification of the repair remain pending.
 
 ## Deviations
 

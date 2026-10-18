@@ -115,7 +115,9 @@ ordinary module and authenticate its canonical source bytes. They retain the
 complete carrier through the existing handle, child, origin and acquisition
 records. Restoration performs the same ordinary checks and pending dependency
 rejection. No restored image or body-free source summary gains unchecked
-contents authority; public generic execution remains unavailable.
+contents authority; public generic execution remains unavailable. Pure and
+Effect Core both refuse unsupported computational generic access or indexed
+metadata after their ordinary checks.
 
 The carrier selects the closed cell API and retains the body's result type.
 Independent linked and Core validation authenticate the exact builtin cell,
