@@ -19,7 +19,9 @@ Use [the template](template.md) and allocate the next `CP-NNNN` ID.
 
 ## Proposed changes
 
-No proposed semantic transition is awaiting acceptance.
+- [CP-0023: Scoped Generic Cells](CP-0023-scoped-generic-cells.md) proposes typed
+  mutation without native owners, with resource-scope lifetime, tracked payload
+  dependencies and rejection of resource dependency cycles.
 
 ## Accepted changes
 

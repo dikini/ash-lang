@@ -2,7 +2,8 @@
 
 - ID: `DN-0053`
 - Status: exploring
-- Related: [DN-0035](DN-0035-region-memory-management-and-verified-providers.md),
+- Related: [CP-0023](../proposals/CP-0023-scoped-generic-cells.md),
+  [DN-0035](DN-0035-region-memory-management-and-verified-providers.md),
   [DN-0038](DN-0038-resource-properties-and-mutable-variable-usage.md),
   [DN-0037](DN-0037-ash-authored-foreign-library-interfaces.md),
   [DN-0043](DN-0043-shorter-surface-alternatives.md),
@@ -15,6 +16,11 @@
 > implementation architecture, and authorizes no product implementation or
 > prototype. Resource-scope lifetime and rejection of resource dependency
 > cycles are explicit initial restrictions.
+
+[CP-0023](../proposals/CP-0023-scoped-generic-cells.md) specifies the concrete
+proposed API, semantics and required acceptance cases. This note retains the
+candidate's rationale, alternatives and future questions. The broader region
+contracts remain in [DN-0054](DN-0054-base-lexical-region-memory-contracts.md).
 
 ## Question
 
