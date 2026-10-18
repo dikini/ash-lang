@@ -17,8 +17,9 @@
 > prototype. Resource-scope lifetime and rejection of resource dependency
 > cycles are explicit initial restrictions.
 
-[CP-0023](../proposals/CP-0023-scoped-generic-cells.md) specifies the concrete
-proposed API, semantics and required acceptance cases. This note retains the
+[CP-0023](../proposals/CP-0023-scoped-generic-cells.md) is the accepted change
+proposal specifying the API, semantics and required acceptance cases; it is not
+current Ash before product integration. This note retains the
 candidate's rationale, alternatives and future questions. The broader region
 contracts remain in [DN-0054](DN-0054-base-lexical-region-memory-contracts.md).
 

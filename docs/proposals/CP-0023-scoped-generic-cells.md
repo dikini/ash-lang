@@ -1,15 +1,17 @@
 # CP-0023: Scoped Generic Cells
 
 - ID: `CP-0023`
-- Status: proposed
-- Related: [DN-0053](../design/DN-0053-scoped-generic-cells-without-native-owners.md),
+- Status: accepted
+- Related: [TASK-0049](../tasks/TASK-0049-close-generic-cell-checkpoint.md),
+  [DN-0053](../design/DN-0053-scoped-generic-cells-without-native-owners.md),
   [DN-0038](../design/DN-0038-resource-properties-and-mutable-variable-usage.md),
   [DN-0054](../design/DN-0054-base-lexical-region-memory-contracts.md),
   [AD-0007](../decisions/AD-0007-typed-core-dialects.md),
   [AD-0008](../decisions/AD-0008-explicit-evaluator-machine.md)
 
-> This proposal is not current Ash. It specifies a transition from the ash-ffi
-> checkpoint and does not authorize implementation while its status is proposed.
+> This accepted proposal is not current Ash. It authorizes the bounded
+> implementation tasks coordinated by TASK-0049 for the ash-ffi baseline.
+> The transition becomes current only after complete product integration.
 
 ## Current behavior
 
@@ -320,7 +322,7 @@ Surface typing, linked Core validation and execution agree on family identity,
 payload type, activation, contents dependencies and structural completion.
 Existing integer cells, rank-1 typing, request-payload boundaries, native
 retained-owner protections and failure behavior remain current alongside the
-new family. These statements remain proposed until that integration.
+new family. These statements become current only with that integration.
 
 ## Interactions
 
@@ -371,9 +373,11 @@ generalization. The present API requires explicit read and write calls.
 ## Required evidence
 
 Acceptance of this proposal settles the semantics; it is not implementation
-acceptance. A later authorized product task must deliver the API, source
-checking, elaboration, module summaries, independent Core checking, execution
-and specification updates together. Each case below is a required observation
+acceptance. [TASK-0049](../tasks/TASK-0049-close-generic-cell-checkpoint.md)
+coordinates TASK-0045 through TASK-0048 and assigns every case below to a
+primary task. The checkpoint must deliver the API, source checking,
+elaboration, module summaries, independent Core checking, execution and
+specification updates together. Each case below is a required observation
 at that checkpoint, not evidence already obtained. Cases must run through the
 public source path and affected Core validation paths, with assertions for the
 stated value, diagnostic or failure boundary.

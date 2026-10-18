@@ -19,10 +19,12 @@ Use [the template](template.md) and allocate the next `CP-NNNN` ID.
 
 ## Proposed changes
 
-- [CP-0023: Scoped Generic Cells](CP-0023-scoped-generic-cells.md) proposes typed
-  mutation without native owners, with resource-scope lifetime, tracked payload
-  dependencies and rejection of resource dependency cycles.
+No proposed semantic transition is awaiting acceptance.
 
 ## Accepted changes
 
-No accepted semantic transition awaits its product checkpoint.
+- [CP-0023: Scoped Generic Cells](CP-0023-scoped-generic-cells.md) accepts typed
+  mutation without native owners, with resource-scope lifetime, tracked payload
+  dependencies and rejection of resource dependency cycles. Implementation and
+  acceptance are coordinated by
+  [TASK-0049](../tasks/TASK-0049-close-generic-cell-checkpoint.md).
