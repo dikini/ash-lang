@@ -164,10 +164,11 @@ restricted target after checking. Relevant unknown behavior may reject when
 the relation cannot be proved; runtime testing of a key is not a substitute
 for source and Core dependency checking.
 
-An intercepted write that never reaches a slot creates no retained slot edge.
-It still obeys ordinary request-payload and handler-result dependency checks.
-Forwarding to a cell interpreter applies the same retained-payload invariant
-as a direct write.
+An intercepted write that never reaches a slot creates no retained slot edge
+for that request's replacement. It still obeys ordinary request-payload and
+handler-result dependency checks. Other writes performed while handling the
+request retain their own payloads under the same rules. Forwarding to a cell
+interpreter applies the same retained-payload invariant as a direct write.
 
 ### Reads, snapshots and closures
 
@@ -193,9 +194,15 @@ They do not require an exact analysis of arbitrary higher-order programs.
 Ordinary source handlers keep lexical precedence over the builtin interpreter.
 An intercepted read returns the handler's actual reply and its dependencies,
 which may differ from the stored value. Checking must not infer independence
-solely from the builtin operation's name. A locally intercepted write that is
-not forwarded leaves the slot unchanged. Interception grants no handle,
-provider or completion authority.
+solely from the builtin operation's name. An intercepted write that is not
+forwarded performs no builtin replacement itself. Its clause, other handlers
+and the resumed computation retain their ordinary effects. Any mutations they
+perform update contents-flow and dependency facts in execution order, even
+when the handler replies with an independent value. The baseline's
+[handler selection](https://github.com/dikini/ash-lang/blob/354c76b391fe4af665cf6a03479a9874a57cb3e3/spec/dynamic-semantics.md#effect-handlers-and-completion)
+removes the selected handler while its clause runs; requests from the clause
+can reach outer handlers, including a cell interpreter still inside the cell's
+owner. Interception grants no handle, provider or completion authority.
 
 ### Execution and completion
 
@@ -381,11 +388,13 @@ stated value, diagnostic or failure boundary.
 | CELL-P04 | The snapshot program below stores an outer-dependent closure after reading an independent closure. | Earlier snapshot escapes both scopes and returns `7`. |
 | CELL-P05 | The recursive program below acquires the same lexical family site twice and stores an outer activation's capture in the inner cell. | Returns `9`; distinct live activations and exactly one release per acquisition. |
 | CELL-P06 | Pass aliases through a constrained local helper, an imported helper and a facade; include a well-typed branch choosing between two aliases of the same cell. | Same slot observations and dependency relationships as direct calls; facade acquisition needs no direct builtin import. Distinct rigid owner types do not become interchangeable. |
-| CELL-P07 | A source handler for exact `Ops<R,Int>` replies `99` to a read of a slot holding `41`; intercept a write without forwarding, then read outside that handler. Separately forward a write once. In a function-cell variant, a handler inside R discards a replacement capturing R without forwarding it. | Overridden read returns `99`; intercepted write leaves `41`; forwarded write changes the slot once. The discarded function replacement creates no slot dependency or resource cycle. |
+| CELL-P07 | A source handler for exact `Ops<R,Int>` replies `99` to a read of a slot holding `41`; intercept a write without forwarding, then read outside that handler. In this setup the clause, other handlers and resumed computation perform no other mutation. Separately forward a write once. In a function-cell variant, a handler inside R discards a replacement capturing R without forwarding it or storing it elsewhere. | Overridden read returns `99`; the read after the intercepted write returns `41` in the no-other-mutation setup; forwarded write changes the slot once. The discarded function replacement creates no slot dependency or resource cycle. |
 | CELL-P08 | A local read handler replies with an identity-free closure capturing another owner; consume it while all dependencies remain live. An independent handler reply may escape. | Actual reply dependencies govern admission and behavior. |
 | CELL-P09 | Send an independent snapshot to a handler outside the cell scope; send an outer-dependent value across an unrelated inner scope to a handler still inside its owner. | Both admit and preserve values under the existing per-owner crossing rule. |
 | CELL-P10 | Store an already admitted cyclic immutable value with no resource dependency, then read and project a finite prefix. | Preserves the ordinary value's observable sharing/cycle behavior; no resource-cycle diagnostic. |
 | CELL-P11 | Store a fixed monomorphic function and call repeated reads at that type; nest legacy and generic cells and use their respective providers. | Repeated results agree; only each acquired exact effect instance is discharged. |
+| CELL-P12 | Inside cell R initialized to `41`, an exact write handler intercepts `write (c,42)`, requests `Tick.tick`, then resumes with `()` without forwarding the original write. An outer Tick handler, still inside R, independently writes `99` to c and resumes. Read c at the builtin interpreter after both handlers finish. | Returns `99`; the original replacement `42` never reaches the slot, but the separate write through the outer handler does. |
+| CELL-P13 | Inside outer cell A, initialize function cell B with an independent `Unit -> Int` function returning `7`. B's exact read handler writes a closure capturing A into B, then resumes with the independent function. Return that handler reply snapshot beyond both scopes and call it. | Returns `7`; the reply snapshot remains independent, while the handler's write updates B's contents to retain A. The paired later builtin read is CELL-N12. |
 
 CELL-P04 fixes the required distinction between a snapshot and current contents:
 
@@ -464,6 +473,7 @@ depends on the enclosing invocation's live cell, rather than its own new cell.
 | CELL-N09 | Manufacture the sealed provider using `impl` or `with`, use a same-spelled counterfeit family, or call a method without its exact provider. | Existing sealed-provider, family-resolution or unsatisfied-requirement failure; no acquisition authority. |
 | CELL-N10 | Read one stored identity function and use that same monomorphic value at incompatible argument types; attempt a scheme-valued or higher-rank T. | Existing rank-1/type restrictions; reading does not generalize a stored value. |
 | CELL-N11 | Store native State, a prohibited view or a continuation capability, directly or inside ordinary wrappers. | Existing storage/transport restriction, not an invented generic-cell exemption. |
+| CELL-N12 | Use CELL-P13's setup, but after the read handler finishes and while B remains live, return a later builtin read of B beyond A instead of the handler reply snapshot. | `type.resource-escape` at A's close: the later read retains A through the stored closure, despite the earlier independent handler reply and identity-free function type. |
 
 ### Control, validation and failure cases
 
