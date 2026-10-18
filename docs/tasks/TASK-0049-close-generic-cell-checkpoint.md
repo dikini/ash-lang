@@ -159,13 +159,20 @@ All entries are pending at task creation.
   below; TASK-0045 uses focused checks and independent review. Criterion-specific
   and full-checkpoint acceptance remain distinct.
 
-TASK-0045 is launched as recorded above. Its implementation and foundation
-review are pending; all 31 case criteria and complete checkpoint acceptance
-remain open. TASK-0046 through TASK-0048 have not been dispatched.
+TASK-0045 retains its foundation candidate locally at
+`752b69cdb909c66f6810cec4709aa06fde44b2e8`. Its
+[verification record](TASK-0045-generic-cell-api-and-acquisition.md#foundation-verification-record)
+pins focused tests, ordinary authentication, staged publication restrictions
+and the remaining dependency/runtime evidence. Independent code re-review is
+clear, and its independent technical evidence verdict has no unresolved
+findings. The coordinator accepted foundation readiness only. All 31 case
+criteria and complete checkpoint acceptance remain open. TASK-0046 through
+TASK-0048 have not been dispatched. DN-0054 remains byte-identical; no region
+implementation is included.
 
 - [x] TASK-0045 launch records product inputs, retaining branch, roles and
   permissions. Later task dispatches require their own exact input handoffs.
-- [ ] TASK-0045 foundation enables the downstream work without unchecked publication.
+- [x] TASK-0045 foundation enables the downstream work without unchecked publication.
 - [ ] TASK-0045–0047 deliver connected behavior and specification changes.
 - [ ] All 31 primary case records include every CP-0023 variant and required
   positive, negative, Core, runtime and native observations.

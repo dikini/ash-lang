@@ -66,12 +66,12 @@ All acceptance remains pending until its complete original observations exist.
 The candidate adds canonical metadata, named acquisition and ordinary checking
 on the existing Effect Resource carrier. Its handle type and generated evidence
 retain complete arguments. Generic acquisitions, operations, method bodies and
-computational signatures
-that retain generic access or indexed operations fail closed before source
-helper-summary publication and after independent
-ordinary Core validation. Import-only metadata and facades can publish. Copies,
-transforms and restored images must pass the same gate. This restriction is the
-TASK-0049 staging boundary, not a substitute for the required positive cases.
+computational signatures that retain generic access or indexed operations fail
+closed before source helper-summary publication and after independent ordinary
+Core validation in both dialects. Import-only metadata and facades can publish.
+Copies, transforms and restored images must pass the same gate. This restriction
+is the TASK-0049 staging boundary, not a substitute for the required positive
+cases.
 
 CELL-P01/P06/P11 source-shape tests expect pending dependency rejection. Their
 replacement, sharing, initializer-count, imported-helper and repeated runtime
@@ -80,7 +80,7 @@ ordinary diagnostic precedence, fresh scope, valid preceding shadowing, sealing,
 exact evidence and monomorphic reads. Restricted-value and native compatibility
 acceptance remains open for connected evidence.
 
-- [ ] Reviewed foundation receipt names the retained commit, ordinary
+- [x] Reviewed foundation receipt names the retained commit, ordinary
   authentication checks, publication restrictions and remaining dependencies.
 - [ ] CELL-P01: Int/Bool/tuple/nominal payloads share one slot through aliases;
   replacement is observed and the initializer executes once.
@@ -114,25 +114,99 @@ CARGO_BUILD_JOBS=1 cargo test \
     --test resource_scope_typing --test resource_scope_core
 ```
 
-### Candidate verification record
+### Foundation verification record
 
-The initial focused invocation observed 1 Core, 12 module, 4 syntax and 63 typing
-tests passing, with one additional child filtered typing run. It is an initial
-regression observation rather than an immutable baseline receipt: editing began
-while compilation was running. The first expanded run preserved those regressions
-and exposed fixture errors and a function-initializer provenance defect. The first
-complete generic unit run exposed the remaining unary lexical-owner check. These
-findings are repaired in the candidate; fresh verification and independent review
-are pending. No passing final gate is claimed by the candidate commit.
+The reviewed production implementation is
+`21421b373207ca165dac030266c5174ac401b1ac`.
+The frozen verification candidate is
+`752b69cdb909c66f6810cec4709aa06fde44b2e8`. Its later changes only calibrate one
+existing exact-work test and repair the nested-row source fixture. All eight
+case criteria above remain open. Independent code and evidence review by
+`/root/task0045_reviewer` are clear at the frozen candidate, with no unresolved
+findings. The coordinator accepted foundation readiness only; no downstream
+dispatch or complete case acceptance follows from this receipt.
 
-Commands use `CARGO_BUILD_JOBS=1 RUSTC_WRAPPER=`, the product checkout's `target`
-cache, and Rust 1.97.1 (`8bab26f4f68e0e26f0bb7960be334d5b520ea452`,
-`x86_64-unknown-linux-gnu`, LLVM 22.1.6). The configured sccache wrapper could not
-start in the sandbox; that wrapper failure is not a product test failure.
+The full library receipt was obtained at
+`a3562b8f1b6f589388f55274ff76756099c665be` and transfers to the candidate
+by exact `src/`, Cargo manifest/lock, toolchain and Cargo configuration equality.
+The only intervening change is the integration fixture in
+`tests/resource_scope_typing.rs`.
+Frozen Git tree identities are:
 
-Fresh required focused checks, generic/legacy/resource unit probes, formatting
-and affected-target lint remain pending on this candidate. TASK-0049 still owns
-the later connected full gate. Acceptance remains unchecked.
+- `src/`: `602dd80038d490687220e893420f49020319e914`
+- `tests/`: `665340514768d029e1865dcdfdf3f9c8c0568457`
+- `Cargo.toml`: `28c3994bdc0f60423bb884abb22e60d07bce7f96`
+- `Cargo.lock`: `e12d96b05d2bf0e37d5da153ba2672128c60ea3b`
+- `rust-toolchain.toml`: `b4d5fb623671bfddb58e622e6a603b1b6b0c9d3e`
+- `.cargo/config.toml`: `e8799810d2eafed1a7d59c5eb32874078e0b1b36`
+
+Commands use `CARGO_BUILD_JOBS=1 RUSTC_WRAPPER=`, the product checkout's own
+`target` cache, and Rust 1.97.1
+(`8bab26f4f68e0e26f0bb7960be334d5b520ea452`, `x86_64-unknown-linux-gnu`,
+LLVM 22.1.6). The configured sccache wrapper could not start in the sandbox;
+that wrapper refusal is not a product baseline failure. No limits or stack
+sizes were raised. Commands below have exit status zero unless marked pending.
+
+```sh
+CARGO_BUILD_JOBS=1 RUSTC_WRAPPER= cargo test --lib -- --test-threads=1
+CARGO_BUILD_JOBS=1 RUSTC_WRAPPER= cargo test \
+    --test resource_scope_syntax --test resource_scope_modules \
+    --test resource_scope_typing --test resource_scope_core \
+    -- --test-threads=1
+CARGO_BUILD_JOBS=1 RUSTC_WRAPPER= cargo test \
+    --test source_resource_execution --test source_resource_acquired_only \
+    --test native_buffer_typing --test native_buffer_core \
+    --test native_buffer_modules --test native_buffer_runtime \
+    -- --test-threads=1
+```
+
+| Target | Passed | Test time |
+| --- | ---: | ---: |
+| Library | 1,898 | 178.99 s |
+| Resource Core / modules / syntax / typing | 2 / 14 / 5 / 73 | 0.07 / 0.79 / 0.01 / 4.48 s |
+| Native buffer Core / modules / runtime / typing | 3 / 6 / 9 / 12 | 0.41 / 215.02 / 27.91 / 1.34 s |
+| Source resource acquired-only / execution | 5 / 78 | 5.39 / 153.16 s |
+
+The resource typing suite also passed its one-test child process. Compilation
+for the library, resource and affected-caller commands took 45.51 s, 9.47 s and
+15.36 s respectively. The library run covers every Core validation test,
+module/publication exact-budget probe and the new deep-copy, Pure admission and
+nested-instance scanner regressions. Native caller results are regression
+evidence; they do not close the connected generic/native cases in TASK-0048.
+
+Working logs are `/tmp/task0045-lib-a3562b8.log`,
+`/tmp/task0045-resource-752b69c.log` and
+`/tmp/task0045-affected-752b69c.log`. The earlier `21421b3` library run passed
+1,897 tests and failed the old deep-constructor work expectation: the paid
+computational scan adds exactly two fixed cells for its single Unit result
+(node visit and structural root). The corrected probe preserves depth 16,384,
+the production limit, its 256 KiB stack and exact/one-short link assertions.
+The initial focused run remains an observation rather than an immutable
+baseline receipt because editing began while compilation was running.
+
+Focused all-features Clippy passed in 49.24 s with warnings denied. Formatting
+and `git diff --check` passed without source changes. Their exact commands are:
+
+```sh
+CARGO_BUILD_JOBS=1 RUSTC_WRAPPER= cargo clippy --lib \
+    --test resource_scope_syntax --test resource_scope_modules \
+    --test resource_scope_typing --test resource_scope_core \
+    --test source_resource_execution --test source_resource_acquired_only \
+    --test native_buffer_typing --test native_buffer_core \
+    --test native_buffer_modules --test native_buffer_runtime \
+    --all-features -- -D warnings
+cargo fmt --all -- --check
+git diff --check
+```
+
+Lint and formatting logs are `/tmp/task0045-clippy-752b69c.log` and
+`/tmp/task0045-fmt-752b69c.log`. TASK-0049 owns the later full
+checkpoint gate; these focused checks do not close it. TASK-0046 owns contents
+and dependency proof, TASK-0047 owns connected execution observations, and
+TASK-0048 owns integrated case and native/retention evidence. No downstream task
+has been advanced. The next checkpoint requires separately authorized
+TASK-0046 dependency admission, followed by TASK-0047 execution and TASK-0048
+integrated evidence before TASK-0049 can run its fresh full gate.
 
 Run added unit tests for builtin metadata and summary authentication as well.
 After TASK-0046/0047 connect, obtain the runtime observations for the positive
@@ -147,9 +221,15 @@ Independent review identified missing Pure Core staged denial, a known-instance
 identity omission in nested Row arguments, and temporary payload copies without
 iterative ownership across a later metadata refusal. The repair shares the
 computational denial between dialects, scans complete effect instances on the
-existing iterative worklist, and retains copied payload ownership until transfer.
-These are foundation enforcement repairs, not changes to CP-0023 semantics.
-Review and refreshed verification of the repair remain pending.
+existing iterative worklist, and retains copied payload ownership until
+transfer. These are foundation enforcement repairs, not changes to CP-0023
+semantics. Independent code re-review and the refreshed evidence verdict are
+clear. A paired private helper with genuine source-resource Row arguments checks
+with Tick and rejects known generic Ops before checked-module publication. The
+public safe helper instead reached an export-freeze `InvalidState`, including a
+control without any generic import. This is a bounded candidate observation, not
+a language restriction or a demonstrated baseline defect. The dedicated row
+probe stays private; separate public generic-helper tests cover summary denial.
 
 ## Deviations
 
