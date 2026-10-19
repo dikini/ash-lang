@@ -87,6 +87,13 @@ require a native executable to carry that evaluator.
 [DN-0035](DN-0035-region-memory-management-and-verified-providers.md) owns the
 broader memory-policy exploration, including implicit construction, storage
 dependencies, provider verification, and allocation context across calls.
+Regions provide placement and allocation. Ownership schemes determine who owns
+a region and its lifetime; lexical scope is the first scheme to explore.
+Reclamation composes separately, including region-specific collection.
+Region ownership includes ownership of its allocated objects. Their permitted
+uses require the region to remain valid; selecting a policy cannot silently
+shorten an owned object's required lifetime. Reclaiming the region reclaims all
+remaining objects together.
 This note adds the no-default-runtime objective and a simpler initial route:
 supply policy defaults to compilation before considering complex inference.
 It does not settle DN-0035's lifetime or memory-model questions.
@@ -131,13 +138,14 @@ parallelism, or a collector before the initial direction can be explored.
 
 The initial working preference is:
 
-1. The application selects a library-provided policy as a compilation default.
+1. The application selects region placement and allocation defaults together
+   with compatible ownership, lifetime, and reclamation contracts.
 2. Ordinary construction keeps its surface presentation. A typed lowering
    makes the required storage operations and provider relationships explicit.
 3. Explicit scopes can override that default for scratch storage or other
    policies when their lifetime and completion contracts permit it.
-4. The chosen provider realizes storage and reclamation. The compiler checks
-   the required contracts and lowers or specializes the corresponding calls.
+4. Library providers realize the chosen allocation and management composition.
+   The compiler checks its contracts and lowers or specializes the calls.
 5. Services absent from the resulting program can be omitted from its artifact.
 
 A supplied default is a policy choice made by the application. It need not be
@@ -181,6 +189,21 @@ current signature remains sufficient. Module summaries and compiled artifacts
 must retain whatever requirements their consumers need to check.
 
 ### Storage policies worth comparing
+
+The rows compare compositions rather than definitions of a region. Placement
+and allocation belong to the region; ownership establishes its owner and
+lifetime. Lexical scope is the first ownership scheme. A collector can reclaim
+individual objects while the region remains live, under separate contracts for
+rooting and reference validity. A scoped resource is one way to manage backing
+storage, rather than a mandatory representation of every region.
+
+Each region type may specify a different object reclamation policy. Selecting
+that type can therefore select both allocation behavior and its associated
+reclamation policy, while ownership and region lifetime remain separate
+contracts that preserve valid object use. An object policy may reclaim objects
+earlier, but reclaiming the region reclaims all remaining objects together.
+These distinctions do not require independent runtime policy selection or a
+common collector for every region type.
 
 | Policy | Useful case | Main pressure |
 | --- | --- | --- |
@@ -251,8 +274,9 @@ its data.
 
 Recursive data adds initialization and partially constructed graph obligations.
 A failure during construction must account for what has been published and
-what remains owned. Region completion, individual reclamation, and effectful
-resource cleanup need distinct contracts and a defined order.
+what remains owned. The end of a region's lifetime under its ownership scheme,
+individual reclamation, and effectful resource cleanup need distinct contracts
+and a defined order.
 
 ### Provider and control foundations
 

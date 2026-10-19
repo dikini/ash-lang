@@ -41,7 +41,7 @@ and exclusions remain at their linked owners.
 | DN-0030: compiler macros and hooks | Typed Core validation and runtime effect/resource contracts provide the foundation. | Macros, compiler-phase hooks, staged handlers, registration/selection, and specialized kernels are not implemented. |
 | DN-0031–0032: resource composition | Concept maps and [bounded algebraic derivations](DN-0032-algebra-of-scoped-resource-composition.md) relate candidates to current sequencing and scopes. | General contextual provision, composition laws, and combined soundness remain open. |
 | DN-0033–0034: direct effects and verification | The [one-shot formalization](direct-effects/one-shot/README.md#current-proof-status) establishes stated annotated-model admission, preservation, progress, and bounded execution results. | It is not a complete Ash compiler-correctness proof. Core alignment evidence remains branch-local and incomplete. |
-| DN-0035: regions and verified providers | Current dependency rules and scalar Arena experiments supply limited evidence. | General region interfaces, borrowing, ordinary storage policy, and provider verification remain open. |
+| DN-0035: regions and verified providers | Current dependency rules and scalar Arena experiments supply limited evidence. | Region placement and allocation, composed ownership and reclamation policies, borrowing, ordinary construction lowering, and provider verification remain design work; lexical ownership is the first scheme. |
 | DN-0036: foreign/provider experiments | [Main delivery](provider-experiments/main-delivery-2026-10-08/README.md) retains verified Rust-authored SQLite and scalar Arena experiments. | Product adoption, general borrowing, and wider Arena payload/graph work remain incomplete. |
 | DN-0037: Ash-authored foreign interfaces | The [readiness brief](foreign-authoring/dn-0036-readiness.md) selects copying SQLite and a minimal Arena lifecycle comparison. | Source-authored foreign contracts, generic ABI bridges, temporary access, and native build/link support are not established on `main`. |
 | DN-0038: resource properties and mutation | Scoped cells already distinguish reusable access from scope-owned release. | General linear/unique usage, borrowing, disposal permissions, and mutable syntax remain candidates. |
@@ -50,8 +50,11 @@ and exclusions remain at their linked owners.
 | DN-0044–0046: runtime services, native execution, agent tooling | Existing Core, evaluator, and diagnostics provide foundations; native execution and agent tooling are outlined in the trajectory. | Selectable runtime services, a native backend, interactive native execution, LSP, and the agent semantic interface remain design work. |
 | DN-0047: ECS and heterogeneous stores | [Checked source fragments](DN-0047-ecs-and-open-heterogeneous-stores.md#evidence-and-experiments) validate limited current-language encodings. | No ECS implementation or measured performance follows; open stores and existential packaging remain candidates. |
 | DN-0048: parallel kernels | Current Pure Core and strict evaluation supply reference obligations. | Kernel extraction, a kernel IR, interaction-net translation, and SIMD/GPU lowering are not implemented by this note. |
+| DN-0049: native storage and packed data shapes | Current resource checks and bounded native experiments supply foundations. | Native-backed library storage, general access rules, packed layouts, and calculated shaped views remain design work. |
+| DN-0051: userspace concurrency | Current sequential effect/resource checks supply foundations; the note records external research. | Task suspension, scheduling, cancellation, and parallel sharing remain future design work, separate from sequential stabilization. |
 | DN-0053: scoped generic cells | The ash-ffi checkpoint supplies integer cells and native-resource private data. | The agreed generic Cell candidate needs no native owner, keeps resource-scope lifetime, and rejects resource dependency cycles; it is not implemented. |
-| DN-0054: base lexical regions | Existing ownership/dependency rules and scalar Arena evidence supply limited foundations. | Explicit region access, value validity, graph publication, and completion are proposed base contracts; ordinary construction lowering and richer reclamation remain open. |
+| DN-0054: region allocation and lexical ownership | Existing ownership/dependency rules and scalar Arena evidence supply limited foundations. | Regions provide placement and allocation; types may reclaim objects earlier. Lexical ownership first determines the owner and lifetime of the region and its objects. Region reclamation reclaims all remaining objects together; validity, publication, completion, and other management schemes remain design work. |
+| DN-0055: region, lifetime, and ownership algebra | Candidate set-order derivations and a nested-region bound are recorded; DN-0032 supplies bounded sequencing comparisons. | Typed region transitions, policy preservation, and source/Core/runtime correspondence remain open; no executable model or complete soundness proof is established. |
 
 ## Current notes
 
@@ -163,6 +166,10 @@ and exclusions remain at their linked owners.
 
 ### Effects and dynamic composition
 
+- [DN-0051: Userspace Concurrency and Scheduling](DN-0051-userspace-concurrency-and-scheduling.md)
+  — future task ownership, suspension representations, scheduler policies,
+  parallel safety boundaries, and current-practice research; separate from
+  sequential stabilization.
 - [DN-0043: Shorter Surface Alternatives](DN-0043-shorter-surface-alternatives.md)
   — requests and mutable-resource access; a catalogue of scope, handler,
   function, evidence and type-notation alternatives with checked authority.
@@ -225,12 +232,23 @@ and exclusions remain at their linked owners.
 
 ### Downstream type-system and resource exploration
 
+- [DN-0055: Algebra of Regions, Lifetimes, and Ownership](DN-0055-algebra-of-regions-lifetimes-and-ownership.md)
+  — candidate lifetime order, placement and ownership facts, region-specific
+  reclamation, conditional composition laws, counterexamples, and a first
+  lexical-ownership preservation target for later work.
 - [DN-0053: Scoped Generic Cells Without Native Owners](DN-0053-scoped-generic-cells-without-native-owners.md)
   — the agreed ash-ffi candidate for typed shared state, explicit resource-scope
   lifetime, cycle rejection, snapshots, and closure dependencies.
-- [DN-0054: Base Lexical Region Memory Contracts](DN-0054-base-lexical-region-memory-contracts.md)
-  — proposed explicit allocation, storage and value validity, immutable sharing,
-  graph publication, and completion rules compatible with scoped cells.
+- [DN-0054: Region Allocation and Lexical Ownership Contracts](DN-0054-base-lexical-region-memory-contracts.md)
+  — region placement and allocation composed first with lexical ownership and
+  its region lifetime, preserving owned object validity. Region types may
+  reclaim objects earlier; reclaiming a region reclaims all remaining objects
+  together. Publication and completion contracts remain proposed and compatible
+  with scoped cells; other ownership schemes remain open.
+- [DN-0049: Native Storage, Access, and Packed Data Shapes](DN-0049-native-storage-access-and-packed-data-shapes.md)
+  — native allocation through FFI, Ash-library storage policy, sharing,
+  borrowing, mutation, packed layouts, and library-defined shapes with calculated
+  positions over memory; generic memory operations remain undecided.
 - [DN-0047: ECS and Open Heterogeneous Stores](DN-0047-ecs-and-open-heterogeneous-stores.md)
   — ECS as a stress case for typed immutable worlds, generic queries, static
   heterogeneous schemas, authenticated type-key composition, checked lookup
@@ -262,8 +280,10 @@ and exclusions remain at their linked owners.
   surface syntax and Core semantics, a foreign-library authoring blueprint,
   tooling, and an adoption path into Ash and its standard library.
 - [DN-0035: Region Memory Management and Verified Providers](DN-0035-region-memory-management-and-verified-providers.md)
-  — nested lexical regions, statically selected library policies, immutable
-  sharing, provider verification, and a memory-management reference corpus.
+  — placement and allocation composed with ownership, lifetimes, and
+  reclamation policies that may differ by region type; lexical scope as the
+  first ownership scheme, immutable sharing, provider verification, and a
+  memory-management corpus.
 - [DN-0013: Session and Resource Protocol Stress Tests](DN-0013-session-and-resource-protocol-stress-tests.md) — tests for protocol, multiplicity, continuation, and handler composition machinery.
 - [DN-0014: Finite Kinds and Promotion](DN-0014-finite-kinds-and-promotion.md) — finite nominal static domains and restricted datatype promotion.
 - [DN-0017: Resource Management and Storage Policy](DN-0017-resource-management-and-storage-policy.md) — deterministic cleanup, plural storage policies, transfer, sharing, and cost visibility.

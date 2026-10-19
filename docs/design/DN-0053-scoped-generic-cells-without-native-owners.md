@@ -227,6 +227,17 @@ places its slot in region A, A must remain valid for the slot, but closing the
 cell still revokes access at R. A region-backed payload retains its original
 region dependencies. Assignment neither relocates it nor extends its region.
 
+Regions provide placement and allocation. An ownership scheme determines who
+owns A and its allocated objects and determines A's lifetime; lexical scope is
+the first scheme explored in
+[DN-0054](DN-0054-base-lexical-region-memory-contracts.md). Each region type may
+specify an earlier object reclamation policy, including region-specific
+collection. That policy must preserve valid object use; reclaiming A reclaims
+all remaining objects allocated there together. A slot backed by A is subject
+to this storage lifetime while R still bounds its logical access and completion.
+None of these choices changes this cell candidate's resource-scope lifetime or
+retained payload restrictions.
+
 Under [DN-0054](DN-0054-base-lexical-region-memory-contracts.md), allocating
 helpers initially receive explicit region access. That choice does not extend
 cell lifetimes or introduce implicit allocation-polymorphic closures.
