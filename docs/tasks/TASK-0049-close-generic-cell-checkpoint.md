@@ -246,6 +246,44 @@ DN-0054 remains separate and byte-identical. No region work, native lifetime
 relaxation or private lifecycle expansion is authorized. Worktree/cache
 retirement and proposal cleanup wait for the completed product checkpoint.
 
+### TASK-0047 runtime handoff, 2026-10-19
+
+The [runtime connection receipt](TASK-0047-generic-cell-execution-and-completion.md#runtime-connection-2026-10-19)
+records P01–P13 actual values, recursive acquisition/release counts, C01 latest
+roots, separate C02 initializer/outside/running-completion controls, owning
+preflight/disposal boundaries and generated execution after source removal.
+The runtime observation pin is unsigned
+`8d5b3c125d042901518c9fcc413ad2c48c730382`; the final inventory-test pin is
+unsigned `ac72d18623724f399f1f1dfcf3a0046d63669b81`, tree
+`7cab3d454aeac34f4e77c3603b382814fa6cef46`.
+
+Only the architecture test's closed inventory changes between these pins.
+All other 1761 file modes/contents are exact, preserving
+production/configuration
+and previously exercised test inputs. TASK-0047 records both frozen manifests,
+explicit five-check transfer, fresh architecture/Clippy/formatting receipts,
+commands, tool pins and actual log hashes. Current 1762-record SHA-256 is
+`11f96a5286ad8290df680b81a89cb5189d58a9f5f2ca74be78b2a78b7b61deed`.
+
+Checks pass: library 1931, resource/cleanup 170, affected/native/build 121,
+architecture 47, exact CLI example 1, strict affected Clippy, formatting and
+warnings-denied Rustdoc. All eight selected receipts exit zero with stable
+inputs at their stated pins; no complete checkpoint gate is claimed.
+
+`/root/task0046_reviewer` cleared code and technical evidence at `ac72d18`.
+`/root` accepted TASK-0047 connection readiness subject to the final
+receipt-only
+retained readback before TASK-0048 advancement. Original TASK-0046 compound
+criteria, all 31 primary case records, TASK-0048's
+complete matrix and TASK-0049's fresh full gate remain open. Actual deep generic
+owned discard remains TASK-0048 C05; normal/replacement/internal-failure payload
+disposal and common discard regressions do not supply it. Baseline native
+callers passing is distinct from pending real mixed C06. DN-0054 remains
+byte-identical. Only task receipt prose changes after `ac72d18`; production,
+other tests, specification and configuration stay exact. No Cargo process
+remains live; the worktree, cache and useful evidence remain. No push, Main
+integration or checkpoint cleanup has occurred.
+
 - [x] TASK-0045 launch records product inputs, retaining branch, roles and
   permissions. Later task dispatches require their own exact input handoffs.
 - [x] TASK-0045 foundation enables the downstream work without unchecked publication.
