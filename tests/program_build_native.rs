@@ -343,7 +343,10 @@ pub foreign library Counter {
         let mut configuration = BuildConfiguration::new(directory.join("program"));
         configuration.native_inputs = vec![native];
         configuration.cargo_target_directory = Some(
-            PathBuf::from(std::env::var_os("CARGO_TARGET_DIR").unwrap()).join("ffi-native-hosts"),
+            std::env::var_os("CARGO_TARGET_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"))
+                .join("ffi-native-hosts"),
         );
         let prepared = prepare_program(&compiled, configuration).unwrap();
         drop(compiled);
@@ -398,7 +401,10 @@ pub foreign library Sentinels {
         let mut configuration = BuildConfiguration::new(directory.join("program"));
         configuration.native_inputs = vec![native];
         configuration.cargo_target_directory = Some(
-            PathBuf::from(std::env::var_os("CARGO_TARGET_DIR").unwrap()).join("ffi-native-hosts"),
+            std::env::var_os("CARGO_TARGET_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"))
+                .join("ffi-native-hosts"),
         );
         let prepared = prepare_program(&compiled, configuration).unwrap();
         assert!(

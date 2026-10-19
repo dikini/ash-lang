@@ -1114,8 +1114,12 @@ fn execute_product_fixture_with_native_input(
             .native_inputs
             .insert(0, NativeLinkInput::StaticArchive(archive));
     }
-    configuration.cargo_target_directory =
-        Some(PathBuf::from(std::env::var_os("CARGO_TARGET_DIR").unwrap()).join("ffi-native-hosts"));
+    configuration.cargo_target_directory = Some(
+        std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"))
+            .join("ffi-native-hosts"),
+    );
     let prepared = prepare_program(&compiled, configuration)
         .unwrap_or_else(|failure| panic!("product SQLite native preparation: {failure:?}"));
     println!(

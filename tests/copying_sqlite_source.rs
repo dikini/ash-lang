@@ -665,8 +665,12 @@ fn sqlite_input_extent_refusal_precedes_binding_and_preserves_owner_release() {
         NativeLinkInput::StaticArchive(archive),
         NativeLinkInput::SharedLibrary(PathBuf::from("/usr/lib/x86_64-linux-gnu/libsqlite3.so.0")),
     ];
-    configuration.cargo_target_directory =
-        Some(PathBuf::from(std::env::var_os("CARGO_TARGET_DIR").unwrap()).join("ffi-native-hosts"));
+    configuration.cargo_target_directory = Some(
+        std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"))
+            .join("ffi-native-hosts"),
+    );
     let prepared = prepare_program(&compiled, configuration).unwrap();
     for name in ["entry.ash", "sqlite.ash"] {
         fs::remove_file(fixture.0.join(name)).unwrap();
@@ -865,8 +869,12 @@ fn real_column_copy_probe_with_key(bind_blob: bool, dynamic_key: Option<i32>) {
             .native_inputs
             .insert(0, NativeLinkInput::StaticArchive(archive));
     }
-    configuration.cargo_target_directory =
-        Some(PathBuf::from(std::env::var_os("CARGO_TARGET_DIR").unwrap()).join("ffi-native-hosts"));
+    configuration.cargo_target_directory = Some(
+        std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"))
+            .join("ffi-native-hosts"),
+    );
     // Optional local failure observation only. The fixture, budgets and
     // generated host are unchanged; retain exact inputs before normal disposal.
     let diagnostic = std::env::var_os("ASH_SQLITE_DIAGNOSTIC_DIR").map(PathBuf::from);
@@ -1105,8 +1113,12 @@ fn imported_connection_diagnostic_is_a_nonconsuming_guarded_native_call() {
     configuration.native_inputs = vec![NativeLinkInput::SharedLibrary(PathBuf::from(
         "/usr/lib/x86_64-linux-gnu/libsqlite3.so.0",
     ))];
-    configuration.cargo_target_directory =
-        Some(PathBuf::from(std::env::var_os("CARGO_TARGET_DIR").unwrap()).join("ffi-native-hosts"));
+    configuration.cargo_target_directory = Some(
+        std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"))
+            .join("ffi-native-hosts"),
+    );
     let prepared = prepare_program(&compiled, configuration).unwrap();
     fs::remove_file(fixture.0.join("entry.ash")).unwrap();
     fs::remove_file(fixture.0.join("sqlite.ash")).unwrap();
@@ -1138,8 +1150,12 @@ fn canonical_string_operations_restore_from_embedded_image_after_source_erasure(
     .unwrap();
     let executable = fixture.0.join("program");
     let mut configuration = BuildConfiguration::new(executable.clone());
-    configuration.cargo_target_directory =
-        Some(PathBuf::from(std::env::var_os("CARGO_TARGET_DIR").unwrap()).join("ffi-native-hosts"));
+    configuration.cargo_target_directory = Some(
+        std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"))
+            .join("ffi-native-hosts"),
+    );
     let prepared = prepare_program(&compiled, configuration).unwrap();
     fs::remove_file(entry).unwrap();
     let built = build_prepared(prepared).unwrap();
@@ -1342,8 +1358,12 @@ fn nested_statement_probe(dynamic_index: bool, protocol: bool, offset_first: boo
     configuration
         .native_inputs
         .insert(0, NativeLinkInput::StaticArchive(archive));
-    configuration.cargo_target_directory =
-        Some(PathBuf::from(std::env::var_os("CARGO_TARGET_DIR").unwrap()).join("ffi-native-hosts"));
+    configuration.cargo_target_directory = Some(
+        std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"))
+            .join("ffi-native-hosts"),
+    );
     let prepared = prepare_program(&compiled, configuration).unwrap();
     fs::remove_file(fixture.0.join("entry.ash")).unwrap();
     fs::remove_file(fixture.0.join("sqlite.ash")).unwrap();
@@ -1486,8 +1506,12 @@ fn connection_program_probe(
             .native_inputs
             .insert(0, NativeLinkInput::StaticArchive(archive));
     }
-    configuration.cargo_target_directory =
-        Some(PathBuf::from(std::env::var_os("CARGO_TARGET_DIR").unwrap()).join("ffi-native-hosts"));
+    configuration.cargo_target_directory = Some(
+        std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"))
+            .join("ffi-native-hosts"),
+    );
     let prepared = prepare_program(&compiled, configuration).unwrap();
     fs::remove_file(fixture.0.join("entry.ash")).unwrap();
     fs::remove_file(fixture.0.join("sqlite.ash")).unwrap();
