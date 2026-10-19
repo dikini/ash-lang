@@ -4829,6 +4829,14 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let mut generic = false;
         for node in &self.program.nodes {
             self.charge_type_work(1)?;
+            generic |= F::resource_scope(&node.kind)
+                .is_some_and(|scope| scope.acquisition.api().is_some_and(|api| api.generic()));
+            let row = F::effect_row(&node.effects);
+            self.charge_type_work(row.known().len())?;
+            generic |= row
+                .known()
+                .iter()
+                .any(|effect| effect.effect().module().is_builtin_generic_cell());
             let mut work = TypeWorkBudget::with_limit(
                 self.type_work_limit.saturating_sub(self.type_work.get()),
             );
@@ -23004,6 +23012,19 @@ mod tests {
     }
 
     #[test]
+    fn generic_cell_scanner_sees_scope_without_typed_uses_or_method_anchors() {
+        let (mut core, sources) = cell_core_fixture_with_generic(true);
+        core.method_evidence_anchors = Box::new([]);
+        for node in &mut core.nodes {
+            node.ty = Type::Unit;
+            node.effects = EffectRow::empty();
+        }
+        let refs = sources.iter().collect::<Vec<_>>();
+        let validator = Validator::new(&core, &refs);
+        assert!(validator.generic_cell_computations().unwrap());
+    }
+
+    #[test]
     fn generic_cell_scanner_sees_known_ops_in_nested_owner_row_arguments() {
         let (core, _) = cell_core_fixture_with_generic(true);
         let super::super::effect::EffectExprKind::Operation(
@@ -23202,6 +23223,38 @@ mod tests {
         let refs = sources.iter().collect::<Vec<_>>();
         let donor = super::super::validate_effect_modules(copy, &refs, &relation).unwrap();
         (donor, sources, relation)
+    }
+
+    #[test]
+    fn generic_cell_exact_handler_owner_ports_survive_independent_core_transforms() {
+        for (source, helper) in [
+            (
+                include_str!("../../tests/fixtures/generic-cell/exact-handler-entry.ash"),
+                None,
+            ),
+            (
+                include_str!("../../tests/fixtures/generic-cell/handler-select-entry.ash"),
+                Some(include_str!(
+                    "../../tests/fixtures/generic-cell/handler-select-helper.ash"
+                )),
+            ),
+            (
+                include_str!("../../tests/fixtures/generic-cell/intercept-entry.ash"),
+                Some(include_str!(
+                    "../../tests/fixtures/generic-cell/intercept-helper.ash"
+                )),
+            ),
+        ] {
+            let (donor, sources, relation) = generic_cell_source_fixture(source, helper);
+            let refs = sources.iter().collect::<Vec<_>>();
+            for transform in [
+                crate::core::transform::identity_effect_traversal,
+                crate::core::transform::fold_effect_literal_primitives,
+            ] {
+                let copied = transform(&donor).unwrap();
+                super::super::validate_effect_modules(copied, &refs, &relation).unwrap();
+            }
+        }
     }
 
     #[test]

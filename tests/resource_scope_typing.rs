@@ -188,9 +188,11 @@ impl Tree {
                 }
             }
         }
-        if source_checked.is_err() && compiled.is_ok() {
-            panic!("module checking and linked checking disagree: {source_checked:?}");
-        }
+        assert_eq!(
+            source_checked.is_ok(),
+            compiled.is_ok(),
+            "source and linked admission disagree: source={source_checked:?}; linked={compiled:?}"
+        );
         compiled.map(|_| ()).map_err(|error| format!("{error:?}"))
     }
 
@@ -1445,7 +1447,14 @@ fn cell_n11_native_state_and_continuation_payloads_keep_ordinary_restrictions() 
         let source = format!(
             "import @builtin.generic_cell as Cell\nimport owner as Owner\ntype Wrapped<T> = Wrap(T)\nmain : Unit -> Int\nmain () = resource Cell.Cell<R, {payload}> c = 41 {{\n42\n}}\n"
         );
-        assert_check(tree.check(&source), Some("Argument"));
+        let error = tree.check(&source).unwrap_err();
+        assert!(
+            error.contains("Argument")
+                && error.contains(
+                    "controlled native state is unavailable in ordinary callable types or captures"
+                ),
+            "{error}"
+        );
     }
     let source = "import @builtin.generic_cell as Cell\neffect Ask {\nask : Unit -> Int\n}\nmain : Unit -> Int\nmain () = handle (perform Ask.ask ()) with Ask {\nask ignored => resource Cell.Cell<R, (Unit -> Int)> c = (fn(ignored) {\nresume 42\n}) {\n42\n}\n}\n";
     let error = tree.check(source).unwrap_err();
@@ -1639,6 +1648,7 @@ fn cell_n03_self_retention_and_n04_younger_cycle_reject_at_write() {
     for body in [
         "resource Cell.Cell<A,(Unit -> Int)> a = independent {\nlet bad : Unit -> Int = fn(ignored) {\nlet held = a\n42\n}\nlet _ = Cell.write (a,bad)\nlet _ = Cell.write (a,independent)\n42\n}",
         "resource Cell.Cell<A,(Unit -> Int)> a = independent {\nresource Cell.Cell<B,(Unit -> Int)> b = independent {\nlet outer : Unit -> Int = fn(ignored) {\nlet held = a\n42\n}\nlet _ = Cell.write (b,outer)\nlet inner : Unit -> Int = fn(ignored) {\nlet held = b\n42\n}\nlet _ = Cell.write (a,inner)\n42\n}\n}",
+        "resource Cell.Cell<A,(Unit -> Int)> a = independent {\nresource Cell.Cell<B,(Unit -> Int)> b = independent {\nlet outer : Unit -> Int = fn(ignored) {\nlet held = a\n42\n}\nlet _ = Cell.write (b,outer)\nlet inner : Unit -> Int = fn(ignored) {\nlet held = b\n42\n}\nlet _ = Cell.write (a,inner)\nlet _ = Cell.write (a,independent)\n42\n}\n}",
         "resource Cell.Cell<A,(Unit -> Int)> a = independent {\nresource Cell.Cell<B,Int> b = 7 {\nlet bad : Unit -> Int = fn(ignored) {\nlet held = b\n42\n}\nlet _ = Cell.write (a,bad)\n42\n}\n}",
     ] {
         assert_check(tree.check_dependencies_at(&format!("import @builtin.generic_cell as Cell\nindependent : Unit -> Int\nindependent () = 7\nmain : Unit -> Int\nmain () = {body}\n"), if body.contains("(a,inner)") { "Cell.write (a,inner)" } else { "Cell.write (a,bad)" }, if body.contains("let held = b") { "let held = b" } else { "let held = a" }, "Cell.Cell<A", None), Some("ResourceEscape"));
@@ -2006,25 +2016,43 @@ fn cell_n07_indexed_operation_metadata_alone_crosses_with_its_owner() {
 #[test]
 fn cell_n04_wrappers_and_selected_fields_keep_only_actual_payload_dependencies() {
     let tree = Tree::new();
-    fs::write(tree.0.join("helper.ash"), "pub opaque type Pair<A,B> = Hidden(A,B)\npub pack<A,B> : (A,B) -> Pair<A,B>\npack (first,second) = Hidden(first,second)\npub first<A,B> : Pair<A,B> -> A\nfirst (Hidden(first,second)) = first\npub second<A,B> : Pair<A,B> -> B\nsecond (Hidden(first,second)) = second\n").unwrap();
-    for (selection, expected) in [("first", Some("ResourceEscape")), ("second", None)] {
-        let source = format!(
-            "import @builtin.generic_cell as Cell\nimport helper as Helper\nindependent : Unit -> Int\nindependent () = 7\nmain : Unit -> Int\nmain () = resource Cell.Cell<A,(Unit -> Int)> a = independent {{\nresource Cell.Cell<B,Int> b = 41 {{\nlet dependent : Unit -> Int = fn(ignored) {{\nlet held = b\n42\n}}\nlet package = Helper.pack (dependent,independent)\nlet payload = Helper.{selection} package\nlet _ = Cell.write (a,payload)\n42\n}}\n}}\n"
-        );
-        assert_check(
-            if expected.is_some() {
-                tree.check_dependencies_at(
-                    &source,
-                    "Cell.write (a,payload)",
-                    "let held = b",
-                    "Cell.Cell<A",
-                    None,
-                )
-            } else {
-                tree.check_dependencies(&source)
-            },
-            expected,
-        );
+    fs::write(tree.0.join("helper.ash"), "pub opaque type Pair<A,B> = Hidden(A,B)\npub pack<A,B> : (A,B) -> Pair<A,B>\npack (first,second) = Hidden(first,second)\npub first<A,B> : Pair<A,B> -> A\nfirst (Hidden(first,second)) = first\npub second<A,B> : Pair<A,B> -> B\nsecond (Hidden(first,second)) = second\npub hold<A> : A -> (Unit -> Int)\nhold value = fn(ignored) {\nlet held = value\n42\n}\n").unwrap();
+    for hidden in [false, true] {
+        for clear in [false, true] {
+            for (selection, expected) in [("first", Some("ResourceEscape")), ("second", None)] {
+                let dependent = if hidden {
+                    "let dependent = Helper.hold b"
+                } else {
+                    "let dependent : Unit -> Int = fn(ignored) {\nlet held = b\n42\n}"
+                };
+                let clear = if clear {
+                    "let _ = Cell.write (a,independent)"
+                } else {
+                    ""
+                };
+                let source = format!(
+                    "import @builtin.generic_cell as Cell\nimport helper as Helper\nindependent : Unit -> Int\nindependent () = 7\nmain : Unit -> Int\nmain () = resource Cell.Cell<A,(Unit -> Int)> a = independent {{\nresource Cell.Cell<B,(Unit -> Int)> b = independent {{\nlet outer : Unit -> Int = fn(ignored) {{\nlet held = a\n42\n}}\nlet _ = Cell.write (b,outer)\n{dependent}\nlet package = Helper.pack (dependent,independent)\nlet payload = Helper.{selection} package\nlet _ = Cell.write (a,payload)\n{clear}\n42\n}}\n}}\n"
+                );
+                assert_check(
+                    if expected.is_some() {
+                        tree.check_dependencies_at(
+                            &source,
+                            "Cell.write (a,payload)",
+                            if hidden {
+                                "let held = value"
+                            } else {
+                                "let held = b"
+                            },
+                            "Cell.Cell<A",
+                            None,
+                        )
+                    } else {
+                        tree.check_dependencies(&source)
+                    },
+                    expected,
+                );
+            }
+        }
     }
 }
 
@@ -2158,4 +2186,185 @@ fn generic_cell_completion_keeps_structural_discard_obligations() {
     let unsafe_discard = "import @builtin.generic_cell as Cell\neffect A {\nask : Unit -> Unit\n}\neffect B {\nask : Unit -> Unit\n}\nmain : Unit -> Unit\nmain () = handle (resource Cell.Cell<R,Int> c = 41 {\nperform A.ask ()\n}) with A {\nask ignored => {\nlet _ = handle ({\nlet _ = perform B.ask ()\nresume ()\n}) with B {\nask ignored => discard\n}\n()\n}\n}\n";
     let error = tree.check_dependencies(unsafe_discard).unwrap_err();
     assert!(error.contains("DiscardUnsafe"), "{error}");
+}
+
+#[test]
+fn cell_exact_function_handler_does_not_intercept_distinct_outer_read() {
+    let source = include_str!("fixtures/generic-cell/exact-handler-entry.ash");
+    let tree = Tree::new();
+    assert_check(tree.check_dependencies(source), None);
+    assert_check(
+        tree.check_dependencies_at(
+            &source.replace("Cell.read a\n", "Cell.read b\n"),
+            "handle",
+            "let held = b",
+            "Cell.Cell<B",
+            None,
+        ),
+        Some("ResourceEscape"),
+    );
+}
+
+#[test]
+fn cell_scope_report_escape_points_to_the_actual_body_value() {
+    let tree = Tree::new();
+    fs::write(
+        tree.0.join("owner.ash"),
+        include_str!("fixtures/source-owner/owner.ash"),
+    )
+    .unwrap();
+    let source = r#"import @builtin.generic_cell as Cell
+import owner as Owner
+main : Unit -> Owner.Scope<Unit,Unit,(Unit -> Int)>
+main () = resource Cell.Cell<R,Int> c = 41 {
+    resource Owner.Probe<{},O,{}> outer = 42 {
+        let bad : Unit -> Int = fn(ignored) {
+            let held = c
+            7
+        }
+        bad
+    }
+}
+"#;
+    fs::write(
+        tree.0.join("entry.ash"),
+        source.replace("let held = c", "let held = 41"),
+    )
+    .unwrap();
+    ash::driver::compile_path(ash::driver::RunConfiguration {
+        entry: tree.0.join("entry.ash"),
+        roots: ModuleRoots::empty(),
+    })
+    .expect("independent function report remains admissible");
+    fs::write(tree.0.join("entry.ash"), source).unwrap();
+    let failure = ash::driver::compile_path(ash::driver::RunConfiguration {
+        entry: tree.0.join("entry.ash"),
+        roots: ModuleRoots::empty(),
+    })
+    .expect_err("captured cell must not escape inside the completed report");
+    assert_eq!(failure.reason_code(), "type.resource-escape", "{failure:?}");
+    let ash::driver::FileFailure::Pipeline(context) = &failure else {
+        panic!("source phase");
+    };
+    let ash::driver::PipelineFailure::Typing(ash::elaborate::TypeError::Source(diagnostic)) =
+        context.failure()
+    else {
+        panic!("source typing: {failure:?}");
+    };
+    let text = |span: ash::source::Span| {
+        let source = failure
+            .sources()
+            .iter()
+            .find(|source| source.id() == span.source())
+            .unwrap();
+        &source.text()[span.range().start() as usize..span.range().end() as usize]
+    };
+    assert_eq!(text(diagnostic.primary.span()).trim(), "bad");
+    assert!(
+        diagnostic
+            .related
+            .iter()
+            .any(|label| label.message().contains("acquired")
+                && text(label.span()).contains("Cell.Cell<R"))
+    );
+    assert!(
+        diagnostic
+            .related
+            .iter()
+            .any(|label| label.message().contains("carries")
+                && text(label.span()).contains("let held = c"))
+    );
+}
+
+#[test]
+fn cell_exact_handler_with_constant_owner_metadata_remains_admissible() {
+    assert_check(Tree::new().check_dependencies("import @builtin.generic_cell as Cell\npub read : Cell.Cell<Int,Int> -> Int\nread c = handle (perform Cell.Ops<Int,Int>.read c) with Cell.Ops<Int,Int> {\nread ignored => resume 7\nwrite ignored => resume ()\n}\nmain : Unit -> Int\nmain () = 42\n"), None);
+}
+
+#[test]
+fn cell_unused_scope_in_source_provider_preparation_retains_phase_restriction() {
+    let tree = Tree::new();
+    let owner = format!(
+        "import @builtin.generic_cell as Cell\n{}",
+        include_str!("fixtures/source-owner/owner.ash").replace(
+            "read access => resume data",
+            "read access => resume (resource Cell.Cell<X,Int> unused = 0 {\ndata\n})"
+        )
+    );
+    fs::write(tree.0.join("owner.ash"), owner).unwrap();
+    fs::write(tree.0.join("entry.ash"), "import owner as Owner\nmain : Unit -> Owner.Scope<Unit,Unit,Int>\nmain () = resource Owner.Probe<{},R,{}> c = 42 {\nOwner.read c\n}\n").unwrap();
+    let failure = ash::driver::compile_path(ash::driver::RunConfiguration {
+        entry: tree.0.join("entry.ash"),
+        roots: ModuleRoots::empty(),
+    })
+    .expect_err("the existing native phase profile excludes nested resources");
+    assert_eq!(failure.reason_code(), "type.argument", "{failure:?}");
+    assert!(
+        format!("{failure:?}")
+            .contains("resource phases cannot introduce lexical evidence or nested resources")
+    );
+}
+
+#[test]
+fn cell_imported_handler_owner_ports_preserve_distinct_and_equal_actuals() {
+    let tree = Tree::new();
+    fs::write(
+        tree.0.join("helper.ash"),
+        include_str!("fixtures/generic-cell/handler-select-helper.ash"),
+    )
+    .unwrap();
+    for (actual, expected) in [("b", None), ("a", Some("ResourceEscape"))] {
+        let source = include_str!("fixtures/generic-cell/handler-select-entry.ash").replace(
+            "Helper.select (a,b)",
+            &format!("Helper.select (a,{actual})"),
+        );
+        assert_check(tree.check_dependencies(&source), expected);
+    }
+}
+
+#[test]
+fn cell_imported_exact_write_interceptor_creates_no_slot_retention() {
+    let tree = Tree::new();
+    fs::write(
+        tree.0.join("helper.ash"),
+        include_str!("fixtures/generic-cell/intercept-helper.ash"),
+    )
+    .unwrap();
+    assert_check(
+        tree.check_dependencies(include_str!("fixtures/generic-cell/intercept-entry.ash")),
+        None,
+    );
+}
+
+#[test]
+fn cell_n07_outer_write_interceptor_rejects_crossing_but_inner_interceptor_discards() {
+    let tree = Tree::new();
+    for outside in [false, true] {
+        let write = "Cell.write (a,bad)";
+        let clauses = "read ignored => resume independent\nwrite ignored => resume ()";
+        let answer = if outside {
+            format!("let _ = {write}\n42")
+        } else {
+            format!("let _ = handle ({write}) with Cell.Ops<A,(Unit -> Int)> {{\n{clauses}\n}}\n42")
+        };
+        let inner = format!(
+            "resource Cell.Cell<B,Int> b = 41 {{\nlet bad : Unit -> Int = fn(ignored) {{\nlet held = b\n42\n}}\n{answer}\n}}"
+        );
+        let body = if outside {
+            format!("handle ({inner}) with Cell.Ops<A,(Unit -> Int)> {{\n{clauses}\n}}")
+        } else {
+            inner
+        };
+        let source = format!(
+            "import @builtin.generic_cell as Cell\nindependent : Unit -> Int\nindependent () = 7\nmain : Unit -> Int\nmain () = resource Cell.Cell<A,(Unit -> Int)> a = independent {{\n{body}\n}}\n"
+        );
+        assert_check(
+            if outside {
+                tree.check_dependencies_at(&source, write, "let held = b", "Cell.Cell<B", None)
+            } else {
+                tree.check_dependencies(&source)
+            },
+            outside.then_some("ResourceEscape"),
+        );
+    }
 }

@@ -13901,7 +13901,16 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 .lexical_interface(interface)
                 .ok_or_else(invalid_state)?
         } else {
-            let lowering = self.evidence_lowering.as_ref().ok_or_else(invalid_state)?;
+            let Some(lowering) = self.evidence_lowering.as_ref() else {
+                if self.provider_context.is_some() {
+                    return Err(inference_failure(
+                        TypeReason::Argument,
+                        source.application.span,
+                        "resource phases cannot introduce lexical evidence or nested resources",
+                    ));
+                }
+                return Err(invalid_state());
+            };
             let fact = lowering
                 .interfaces
                 .get(&interface)
@@ -28311,9 +28320,9 @@ fn capture_failure(
         Failure::Dependency {
             source,
             acquisition,
-            capture,
-            call,
+            causes,
         } => {
+            let [capture, call] = *causes;
             let count = 2 + usize::from(capture.is_some()) + usize::from(call.is_some());
             if budget.charge(count).is_err() {
                 return type_resource();
@@ -30049,20 +30058,22 @@ mod tests {
             (Some(CompletionOwner::Clause(span(16, 21))), "clause"),
             (Some(CompletionOwner::Cleanup(span(16, 21))), "cleanup"),
         ] {
-            let failure = Failure::Unsafe(UnsafeDiscard {
-                node: 0,
-                discard: span(0, 7),
-                request: span(8, 15),
-                owner,
-            });
+            let failure = || {
+                Failure::Unsafe(UnsafeDiscard {
+                    node: 0,
+                    discard: span(0, 7),
+                    request: span(8, 15),
+                    owner,
+                })
+            };
             let work = 2 + usize::from(owner.is_some());
             let mut short = TypeWorkBudget::with_limit(work - 1);
             assert!(matches!(
-                capture_failure(failure, &mut short),
+                capture_failure(failure(), &mut short),
                 TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
             ));
             let mut budget = TypeWorkBudget::with_limit(work);
-            let TypeError::Source(mut error) = capture_failure(failure, &mut budget) else {
+            let TypeError::Source(mut error) = capture_failure(failure(), &mut budget) else {
                 unreachable!()
             };
             assert_eq!(budget.used(), work);
@@ -32716,12 +32727,14 @@ mod tests {
         for capture in [false, true] {
             for call in [false, true] {
                 let error = capture_failure(
-                    crate::core::capture::Failure::Dependency {
-                        source: span(&caller, 0, 5),
-                        acquisition: span(&caller, 6, 17),
-                        capture: capture.then(|| span(&imported, 0, 7)),
-                        call: call.then(|| span(&imported, 8, 12)),
-                    },
+                    crate::core::capture::Failure::dependency(
+                        span(&caller, 0, 5),
+                        span(&caller, 6, 17),
+                        capture.then(|| span(&imported, 0, 7)),
+                        call.then(|| span(&imported, 8, 12)),
+                        &mut TypeWorkBudget::default(),
+                    )
+                    .unwrap(),
                     &mut TypeWorkBudget::default(),
                 );
                 let TypeError::Source(mut diagnostic) = error else {

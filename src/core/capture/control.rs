@@ -3778,6 +3778,14 @@ impl<'a> Analysis<'a> {
         Ok((possible, outward))
     }
 
+    fn is_generic_cell_handler(&self, frame: Frame) -> bool {
+        let code = match frame {
+            Frame::Handler { code, .. } | Frame::RemovedHandler { code, .. } => code,
+            _ => return false,
+        };
+        matches!(&self.graph.code[code], Control::Handler { effect, .. } if effect.effect.as_ref().is_some_and(|effect| effect.effect().module().is_builtin_generic_cell()))
+    }
+
     fn boundary_match_key(&self, frame: Frame) -> (usize, usize, Option<Frame>) {
         let (code, context) = match frame {
             Frame::Handler { code, context, .. }
@@ -3794,7 +3802,8 @@ impl<'a> Analysis<'a> {
         (
             code,
             context,
-            (grouped || self.is_generic_cell(frame)).then_some(frame),
+            (grouped || self.is_generic_cell(frame) || self.is_generic_cell_handler(frame))
+                .then_some(frame),
         )
     }
 
@@ -3916,6 +3925,39 @@ impl<'a> Analysis<'a> {
                     // builtin occurrence; every other possible target continues
                     // outward. Empty operands await the value-queue replay.
                     (relation.0 && possible, relation.1 || outward)
+                } else if self.is_generic_cell_handler(edge.frame)
+                    && let Control::Request(request) = &self.graph.code[event.code]
+                    && let Some(operation) = request.operation
+                    && operation.owner().module().is_builtin_generic_cell()
+                {
+                    let (Frame::Handler { value_context, .. }
+                    | Frame::RemovedHandler { value_context, .. }) = edge.frame
+                    else {
+                        return Err(Failure::Invalid);
+                    };
+                    let data = self.data.as_mut().ok_or(Failure::Invalid)?;
+                    if let Some(owners) = data.handler_cell_owners(code, value_context, budget)? {
+                        if cell_operands.is_none() {
+                            cell_operands = Some(data.cell_operands(
+                                event.port.ok_or(Failure::Invalid)?,
+                                operation == crate::types::OperationId::new(operation.owner(), 1),
+                                budget,
+                            )?);
+                        }
+                        let mut possible = false;
+                        let mut outward = false;
+                        for (targets, _) in cell_operands.as_ref().ok_or(Failure::Invalid)? {
+                            for target in targets {
+                                charge(budget, owners.len() + 1)?;
+                                let matches = owners.contains(target);
+                                possible |= matches;
+                                outward |= !matches;
+                            }
+                        }
+                        (relation.0 && possible, relation.1 || outward)
+                    } else {
+                        relation
+                    }
                 } else {
                     relation
                 };
@@ -4396,10 +4438,10 @@ impl<'a> Analysis<'a> {
                 (retention.source, retention.acquisition),
                 budget,
             ) {
-                if let Failure::Dependency { source, call, .. } = &mut failure
+                if let Failure::Dependency { source, causes, .. } = &mut failure
                     && let Some(request) = retention.request
                 {
-                    (*source, *call) =
+                    (*source, causes[1]) =
                         data.cell_request_site(request, *source, retention.acquisition, budget)?;
                 }
                 return Err(failure);

@@ -1267,7 +1267,7 @@ pub(crate) fn selection_targets<'a>(
     values.remove(&selection.root()).ok_or(Failure::Invalid)
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub(crate) enum Failure {
     Resource,
     Escape {
@@ -1277,8 +1277,7 @@ pub(crate) enum Failure {
     Dependency {
         source: Span,
         acquisition: Span,
-        capture: Option<Span>,
-        call: Option<Span>,
+        causes: Box<[Option<Span>; 2]>,
     },
     Invalid,
     Unsafe(UnsafeDiscard),
@@ -1291,6 +1290,31 @@ pub(crate) enum Failure {
         node: usize,
         source: Span,
     },
+}
+
+impl Failure {
+    /// Keep shared Result frames bounded while retaining exact optional causes.
+    pub(crate) fn dependency(
+        source: Span,
+        acquisition: Span,
+        capture: Option<Span>,
+        call: Option<Span>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, Self> {
+        charge(budget, 2)?;
+        let mut causes = Vec::new();
+        causes.try_reserve_exact(2).map_err(|_| Self::Resource)?;
+        causes.extend([capture, call]);
+        let causes = causes
+            .into_boxed_slice()
+            .try_into()
+            .map_err(|_| Self::Invalid)?;
+        Ok(Self::Dependency {
+            source,
+            acquisition,
+            causes,
+        })
+    }
 }
 
 fn charge(budget: &mut TypeWorkBudget, count: usize) -> Result<(), Failure> {
@@ -6400,6 +6424,46 @@ mod tests {
         source::{ByteRange, SourceFile},
         types::EffectRow,
     };
+
+    #[test]
+    fn dependency_failure_storage_is_charged_exact_and_retryable() {
+        let source =
+            SourceFile::new("dependency-causes.ash", "source acquisition capture call").unwrap();
+        let span = |start, end| source.span(ByteRange::new(start, end).unwrap()).unwrap();
+        for capture in [None, Some(span(19, 26))] {
+            for call in [None, Some(span(27, 31))] {
+                assert!(matches!(
+                    Failure::dependency(
+                        span(0, 6),
+                        span(7, 18),
+                        capture,
+                        call,
+                        &mut TypeWorkBudget::with_limit(1)
+                    ),
+                    Err(Failure::Resource)
+                ));
+                for _ in 0..2 {
+                    let mut budget = TypeWorkBudget::with_limit(2);
+                    let Failure::Dependency {
+                        source: actual,
+                        acquisition,
+                        causes,
+                    } = Failure::dependency(span(0, 6), span(7, 18), capture, call, &mut budget)
+                        .unwrap()
+                    else {
+                        panic!("dependency failure");
+                    };
+                    assert_eq!(
+                        (actual, acquisition, *causes),
+                        (span(0, 6), span(7, 18), [capture, call])
+                    );
+                    assert_eq!(budget.used(), 2);
+                }
+            }
+        }
+        // Optional diagnostic storage must not widen every shared Result frame.
+        assert!(std::mem::size_of::<Failure>() <= 48);
+    }
 
     #[test]
     fn request_copy_retains_exact_legacy_and_group_work_boundaries() {

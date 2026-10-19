@@ -31,6 +31,8 @@ enum Expr {
     // user answer rather than the wrapper's declaration span.
     Forward(usize),
     Merge(Vec<usize>),
+    // Type-argument union seed, distinct from an independent value alternative.
+    MetadataMerge(Vec<usize>),
     Function {
         parameters: Vec<usize>,
         body: usize,
@@ -99,6 +101,8 @@ enum Expr {
     Handler {
         body: usize,
         clauses: Vec<DataClause>,
+        // Exact generic effect identity, rebuilt from authenticated metadata.
+        cell_owner: Option<usize>,
     },
     Evidence {
         value: usize,
@@ -154,6 +158,7 @@ impl Expr {
             Self::Alias(value) => Self::Alias(value + offset),
             Self::Forward(value) => Self::Forward(value + offset),
             Self::Merge(values) => Self::Merge(ids(values, budget)?),
+            Self::MetadataMerge(values) => Self::MetadataMerge(ids(values, budget)?),
             Self::Tuple(values) => Self::Tuple(ids(values, budget)?),
             Self::Constructor(id) => Self::Constructor(*id),
             Self::Project {
@@ -277,7 +282,11 @@ impl Expr {
                     bindings,
                 }
             }
-            Self::Handler { body, clauses } => {
+            Self::Handler {
+                body,
+                clauses,
+                cell_owner,
+            } => {
                 charge(budget, clauses.len())?;
                 let mut copied = Vec::new();
                 copied
@@ -294,6 +303,7 @@ impl Expr {
                 Self::Handler {
                     body: body + offset,
                     clauses: copied,
+                    cell_owner: cell_owner.map(|port| port + offset),
                 }
             }
         })
@@ -1063,7 +1073,7 @@ impl Graph {
                 Expr::Alias(value) | Expr::Forward(value) | Expr::Project { value, .. } => {
                     std::slice::from_ref(value)
                 }
-                Expr::Merge(values) | Expr::Tuple(values) => values,
+                Expr::Merge(values) | Expr::MetadataMerge(values) | Expr::Tuple(values) => values,
                 Expr::Function { captures, .. } => captures,
                 Expr::Slot => {
                     charge(budget, self.globals.len())?;
@@ -1161,7 +1171,9 @@ impl Graph {
                 Expr::Alias(value) | Expr::Forward(value) | Expr::Project { value, .. } => {
                     children = copy_slice(&[*value], budget)?
                 }
-                Expr::Merge(values) | Expr::Tuple(values) => children = copy_slice(values, budget)?,
+                Expr::Merge(values) | Expr::MetadataMerge(values) | Expr::Tuple(values) => {
+                    children = copy_slice(values, budget)?
+                }
                 Expr::Function { captures, .. } => children = copy_slice(captures, budget)?,
                 Expr::Call {
                     function,
@@ -1251,8 +1263,17 @@ impl Graph {
                     }
                 }
                 Expr::Resume { operand } => children = copy_slice(&[*operand], budget)?,
-                Expr::Handler { body, clauses } => {
+                Expr::Handler {
+                    body,
+                    clauses,
+                    cell_owner,
+                } => {
                     children = copy_slice(&[*body], budget)?;
+                    if let Some(owner) = cell_owner {
+                        charge(budget, 1)?;
+                        children.try_reserve(1).map_err(|_| Failure::Resource)?;
+                        children.push(*owner);
+                    }
                     for clause in clauses {
                         charge(
                             budget,
@@ -1673,7 +1694,7 @@ impl Graph {
                 for variable in metadata.variables {
                     slots.push(self.symbol(types, variable, source, budget)?);
                 }
-                let argument = self.push(Expr::Merge(slots), source, budget)?;
+                let argument = self.push(Expr::MetadataMerge(slots), source, budget)?;
                 arguments.push(argument);
                 captures.push(argument);
             }
@@ -2154,7 +2175,7 @@ impl Graph {
                         slots.try_reserve(1).map_err(|_| Failure::Resource)?;
                         slots.push(slot);
                     }
-                    let argument = self.push(Expr::Merge(slots), source, budget)?;
+                    let argument = self.push(Expr::MetadataMerge(slots), source, budget)?;
                     arguments.try_reserve(1).map_err(|_| Failure::Resource)?;
                     arguments.push(argument);
                 }
@@ -2297,139 +2318,17 @@ impl Graph {
             Some(
                 selected_operation @ (EffectOperation::Handler(_)
                 | EffectOperation::ProviderScope(_)),
-            ) => {
-                let (handler, provider) = match selected_operation {
-                    EffectOperation::Handler(handler) => (handler, None),
-                    EffectOperation::ProviderScope(scope) => (&scope.handler, Some(scope.as_ref())),
-                    _ => return Err(Failure::Invalid),
-                };
-                let members = provider.map_or(1, |scope| scope.member_count());
-                if members > 1 {
-                    charge(budget, members)?;
-                }
-                let mut clauses = Vec::new();
-                for member in 0..members {
-                    let member_handler = if let Some(scope) = provider {
-                        scope.handler_member(member).ok_or(Failure::Invalid)?
-                    } else {
-                        handler
-                    };
-                    if member_handler.body() != handler.body() {
-                        return Err(Failure::Invalid);
-                    }
-                    charge(budget, member_handler.clauses().len())?;
-                    clauses
-                        .try_reserve(member_handler.clauses().len())
-                        .map_err(|_| Failure::Resource)?;
-                    for clause in member_handler.clauses() {
-                        clauses.push(self.clause_data(
-                            clause.pattern(),
-                            index(clause.body()),
-                            source,
-                            nodes,
-                            symbols,
-                            types,
-                            methods,
-                            adapters,
-                            headers,
-                            budget,
-                        )?);
-                    }
-                }
-                let handler = Expr::Handler {
-                    body: index(handler.body()),
-                    clauses,
-                };
-                if let Some(scope) = provider {
-                    let handler = self.push(handler, source, budget)?;
-                    let handle = self.symbol(symbols, scope.handle.id(), source, budget)?;
-                    let identity =
-                        self.symbol(types, scope.descriptor.identity(), source, budget)?;
-                    // Preserve original symbol/allocation order for a legacy
-                    // single handler; only a genuine group extends the binds.
-                    let primary_state = if scope.member_count() == 1 {
-                        Some(self.symbol(symbols, scope.handler_state.id(), source, budget)?)
-                    } else {
-                        None
-                    };
-                    let finish =
-                        self.symbol(symbols, scope.finish.parameter.id(), source, budget)?;
-                    let acquire =
-                        self.symbol(symbols, scope.acquire.parameter.id(), source, budget)?;
-                    let completed = self.push(
-                        Expr::Cleanup {
-                            body: handler,
-                            action: index(scope.finish.body),
-                        },
-                        source,
-                        budget,
-                    )?;
-                    let with_finish = self.push(
-                        Expr::Bind {
-                            binder: finish,
-                            initializer: handle,
-                            body: completed,
-                        },
-                        source,
-                        budget,
-                    )?;
-                    let mut with_state = with_finish;
-                    if scope.member_count() > 1 {
-                        charge(budget, scope.member_count())?;
-                    }
-                    for member in (0..scope.member_count()).rev() {
-                        let state = if let Some(primary) = primary_state {
-                            primary
-                        } else {
-                            self.symbol(
-                                symbols,
-                                scope
-                                    .handler_state_member(member)
-                                    .ok_or(Failure::Invalid)?
-                                    .id(),
-                                source,
-                                budget,
-                            )?
-                        };
-                        with_state = self.push(
-                            Expr::Bind {
-                                binder: state,
-                                initializer: handle,
-                                body: with_state,
-                            },
-                            source,
-                            budget,
-                        )?;
-                    }
-                    let acquired = self.push(
-                        Expr::Bind {
-                            binder: acquire,
-                            initializer: index(scope.initializer),
-                            body: index(scope.acquire.body),
-                        },
-                        source,
-                        budget,
-                    )?;
-                    // Completed carries the actual body value and independent
-                    // completion data. Both tuple projections must survive
-                    // resource-result and imported-summary reconstruction.
-                    let completion = self.push(Expr::Scalar, source, budget)?;
-                    let result_fields = copy_slice(&[with_state, completion], budget)?;
-                    let result = self.push(Expr::Tuple(result_fields), source, budget)?;
-                    Expr::Resource {
-                        success: Some(scope.descriptor.protocol().scope[1]),
-                        failure: Some(scope.descriptor.protocol().scope[0]),
-                        failure_payload: None,
-                        handle,
-                        identity,
-                        initializer: acquired,
-                        body: result,
-                        source,
-                    }
-                } else {
-                    handler
-                }
-            }
+            ) => self.build_handler_operation(
+                selected_operation,
+                source,
+                nodes,
+                symbols,
+                types,
+                methods,
+                adapters,
+                headers,
+                budget,
+            )?,
             Some(EffectOperation::SourceCopyWindow(window)) => {
                 let identity = self.symbol(types, window.identity(), source, budget)?;
                 // This nonowning lexical marker uses the same iterative hidden
@@ -2461,6 +2360,163 @@ impl Graph {
                 operand: index(resume.value()),
             },
             _ => Expr::Scalar,
+        })
+    }
+
+    // Handler construction has a separate frame so ordinary deep graph
+    // preparation keeps its existing small-stack boundary.
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)] // Borrowed phase inputs avoid an owning environment.
+    fn build_handler_operation<F: CoreOperationFamily>(
+        &mut self,
+        selected_operation: &EffectOperation,
+        source: Span,
+        nodes: &[StoredNode<F>],
+        symbols: &mut HashMap<BinderId, usize>,
+        types: &mut HashMap<crate::types::TypeVariableId, usize>,
+        methods: &super::MethodUses<'_>,
+        adapters: &[super::MethodAdapter],
+        headers: &mut FunctionMetadataPreparation<'_, F>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Expr, Failure> {
+        let (handler, provider) = match selected_operation {
+            EffectOperation::Handler(handler) => (handler, None),
+            EffectOperation::ProviderScope(scope) => (&scope.handler, Some(scope.as_ref())),
+            _ => return Err(Failure::Invalid),
+        };
+        let members = provider.map_or(1, |scope| scope.member_count());
+        if members > 1 {
+            charge(budget, members)?;
+        }
+        let mut clauses = Vec::new();
+        for member in 0..members {
+            let member_handler = if let Some(scope) = provider {
+                scope.handler_member(member).ok_or(Failure::Invalid)?
+            } else {
+                handler
+            };
+            if member_handler.body() != handler.body() {
+                return Err(Failure::Invalid);
+            }
+            charge(budget, member_handler.clauses().len())?;
+            clauses
+                .try_reserve(member_handler.clauses().len())
+                .map_err(|_| Failure::Resource)?;
+            for clause in member_handler.clauses() {
+                clauses.push(self.clause_data(
+                    clause.pattern(),
+                    index(clause.body()),
+                    source,
+                    nodes,
+                    symbols,
+                    types,
+                    methods,
+                    adapters,
+                    headers,
+                    budget,
+                )?);
+            }
+        }
+        let cell_owner = if handler.effect().effect().module().is_builtin_generic_cell() {
+            match handler.effect().arguments().first() {
+                Some(crate::types::KindedArgument::TypeArg(Type::Variable(variable))) => {
+                    Some(self.symbol(types, *variable, source, budget)?)
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let handler = Expr::Handler {
+            cell_owner,
+            body: index(handler.body()),
+            clauses,
+        };
+        Ok(if let Some(scope) = provider {
+            let handler = self.push(handler, source, budget)?;
+            let handle = self.symbol(symbols, scope.handle.id(), source, budget)?;
+            let identity = self.symbol(types, scope.descriptor.identity(), source, budget)?;
+            // Preserve original symbol/allocation order for a legacy
+            // single handler; only a genuine group extends the binds.
+            let primary_state = if scope.member_count() == 1 {
+                Some(self.symbol(symbols, scope.handler_state.id(), source, budget)?)
+            } else {
+                None
+            };
+            let finish = self.symbol(symbols, scope.finish.parameter.id(), source, budget)?;
+            let acquire = self.symbol(symbols, scope.acquire.parameter.id(), source, budget)?;
+            let completed = self.push(
+                Expr::Cleanup {
+                    body: handler,
+                    action: index(scope.finish.body),
+                },
+                source,
+                budget,
+            )?;
+            let with_finish = self.push(
+                Expr::Bind {
+                    binder: finish,
+                    initializer: handle,
+                    body: completed,
+                },
+                source,
+                budget,
+            )?;
+            let mut with_state = with_finish;
+            if scope.member_count() > 1 {
+                charge(budget, scope.member_count())?;
+            }
+            for member in (0..scope.member_count()).rev() {
+                let state = if let Some(primary) = primary_state {
+                    primary
+                } else {
+                    self.symbol(
+                        symbols,
+                        scope
+                            .handler_state_member(member)
+                            .ok_or(Failure::Invalid)?
+                            .id(),
+                        source,
+                        budget,
+                    )?
+                };
+                with_state = self.push(
+                    Expr::Bind {
+                        binder: state,
+                        initializer: handle,
+                        body: with_state,
+                    },
+                    source,
+                    budget,
+                )?;
+            }
+            let acquired = self.push(
+                Expr::Bind {
+                    binder: acquire,
+                    initializer: index(scope.initializer),
+                    body: index(scope.acquire.body),
+                },
+                source,
+                budget,
+            )?;
+            // Completed carries the actual body value and independent
+            // completion data. Both tuple projections must survive
+            // resource-result and imported-summary reconstruction.
+            let completion = self.push(Expr::Scalar, source, budget)?;
+            let result_fields = copy_slice(&[with_state, completion], budget)?;
+            let result = self.push(Expr::Tuple(result_fields), source, budget)?;
+            Expr::Resource {
+                success: Some(scope.descriptor.protocol().scope[1]),
+                failure: Some(scope.descriptor.protocol().scope[0]),
+                failure_payload: None,
+                handle,
+                identity,
+                initializer: acquired,
+                body: result,
+                source,
+            }
+        } else {
+            handler
         })
     }
 
@@ -2655,6 +2711,7 @@ impl Graph {
             }
             let handler = self.push(
                 Expr::Handler {
+                    cell_owner: None,
                     body: index(scope.handler.body()),
                     clauses,
                 },
@@ -3137,6 +3194,7 @@ impl Graph {
             let body = graph.push(Expr::Unknown, source, budget)?;
             *handler = Some(graph.push(
                 Expr::Handler {
+                    cell_owner: None,
                     body,
                     clauses: data_clauses,
                 },
@@ -3454,6 +3512,8 @@ fn scalar(ty: &Type) -> bool {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum Atom {
     Free,
+    // Only a TypeApplication metadata join contributes this neutral seed.
+    MetadataNeutral,
     IndependentCallable,
     Unknown,
     Closure(usize, usize),
@@ -4970,7 +5030,10 @@ impl<'a> Analysis<'a> {
             }
             for atom in atoms {
                 let fields = match *atom {
-                    Atom::Free | Atom::IndependentCallable | Atom::Constructor(_) => None,
+                    Atom::Free
+                    | Atom::MetadataNeutral
+                    | Atom::IndependentCallable
+                    | Atom::Constructor(_) => None,
                     Atom::Closure(target, context) if allow_callable => {
                         let Expr::Function { captures, .. } = &self.graph.expressions[target]
                         else {
@@ -5452,12 +5515,9 @@ impl<'a> Analysis<'a> {
         for input in inputs {
             charge(budget, 1)?;
             // Do not materialize an absent/future input to manufacture validity.
-            ports.push(
-                *self
-                    .indices
-                    .get(&(input, context))
-                    .ok_or(Failure::Invalid)?,
-            );
+            if let Some(port) = self.indices.get(&(input, context)) {
+                ports.push(*port);
+            }
         }
         Ok(ports)
     }
@@ -5572,11 +5632,14 @@ impl<'a> Analysis<'a> {
     }
 
     fn result_source(
-        &self,
+        &mut self,
         mut expression: usize,
+        context: usize,
+        owner: Atom,
         budget: &mut TypeWorkBudget,
     ) -> Result<Span, Failure> {
         let mut seen = HashSet::new();
+        let mut report_source = None;
         loop {
             charge(budget, 1)?;
             if seen.contains(&expression) {
@@ -5590,6 +5653,43 @@ impl<'a> Analysis<'a> {
                 .get(expression)
                 .ok_or(Failure::Invalid)?
             {
+                Expr::Resource {
+                    success: Some(_),
+                    body,
+                    source,
+                    ..
+                } => {
+                    report_source = Some(*source);
+                    *body
+                }
+                Expr::Tuple(fields)
+                    if fields.len() == 2
+                        && self.graph.sources.get(expression).copied() == report_source =>
+                {
+                    let answer = fields[0];
+                    let dependent_answer =
+                        if let Some(port) = self.indices.get(&(answer, context)).copied() {
+                            let required = self.dependencies(port, budget)?;
+                            charge(budget, required.len())?;
+                            required.contains(&owner)
+                        } else {
+                            false
+                        };
+                    if !dependent_answer {
+                        return self
+                            .graph
+                            .sources
+                            .get(expression)
+                            .copied()
+                            .ok_or(Failure::Invalid);
+                    }
+                    answer
+                }
+                Expr::Handler { body, .. }
+                    if self.graph.sources.get(expression).copied() == report_source =>
+                {
+                    *body
+                }
                 Expr::Bind { body, .. }
                 | Expr::Recursive { body, .. }
                 | Expr::Resource { body, .. }
@@ -5642,7 +5742,7 @@ impl<'a> Analysis<'a> {
             };
             (
                 *self.indices.get(&(body, context)).ok_or(Failure::Invalid)?,
-                self.result_source(body, budget)?,
+                self.result_source(body, context, Atom::Resource(expression, context), budget)?,
             )
         };
         let capture = self.dependency_origin(port, Atom::Resource(expression, context), budget)?;
@@ -5651,12 +5751,7 @@ impl<'a> Analysis<'a> {
         } else {
             (source, None)
         };
-        Ok(Failure::Dependency {
-            source,
-            acquisition,
-            capture,
-            call,
-        })
+        Failure::dependency(source, acquisition, capture, call, budget)
     }
 
     pub(super) fn cell_focus(&self) -> Option<(usize, usize)> {
@@ -5710,6 +5805,37 @@ impl<'a> Analysis<'a> {
             targets.push((*owner, *creation));
         }
         Ok(targets)
+    }
+
+    pub(super) fn handler_cell_owners(
+        &mut self,
+        code: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Option<Vec<(usize, usize)>>, Failure> {
+        let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
+        let Expr::Handler { cell_owner, .. } = self.graph.expressions[expression] else {
+            return Err(Failure::Invalid);
+        };
+        let Some(owner) = cell_owner else {
+            return Ok(None);
+        };
+        let port = self.slot(owner, context, budget)?;
+        self.close(budget)?;
+        let mut owners = Vec::new();
+
+        for atom in &self.slots[port].atoms {
+            charge(budget, 1)?;
+            if matches!(atom, Atom::MetadataNeutral) {
+                continue;
+            }
+            let Atom::Resource(owner, creation) = atom else {
+                return Ok(None);
+            };
+            owners.try_reserve(1).map_err(|_| Failure::Resource)?;
+            owners.push((*owner, *creation));
+        }
+        Ok((!owners.is_empty()).then_some(owners))
     }
 
     pub(super) fn cell_operands(
@@ -5801,12 +5927,13 @@ impl<'a> Analysis<'a> {
             if !predecessor || Some((owner, creation)) == self.focus {
                 let capture =
                     self.dependency_origin(root, Atom::Resource(owner, creation), budget)?;
-                return Err(Failure::Dependency {
+                return Err(Failure::dependency(
                     source,
                     acquisition,
                     capture,
-                    call: None,
-                });
+                    None,
+                    budget,
+                )?);
             }
         }
         Ok(())
@@ -6435,8 +6562,16 @@ impl<'a> Analysis<'a> {
                 }
                 SetupOutcome::NeedsInputsOrDynamic
             }
-            Expr::Merge(values) => {
-                self.atom(slot, Atom::Free, budget)?;
+            Expr::Merge(values) | Expr::MetadataMerge(values) => {
+                self.atom(
+                    slot,
+                    if matches!(&self.graph.expressions[expression], Expr::MetadataMerge(_)) {
+                        Atom::MetadataNeutral
+                    } else {
+                        Atom::Free
+                    },
+                    budget,
+                )?;
                 for value in values {
                     P::link(self, slot, *value, context, budget)?;
                 }
@@ -6746,7 +6881,12 @@ impl<'a> Analysis<'a> {
                 self.slot(*operand, context, budget)?;
                 SetupOutcome::NeedsInputsOrDynamic
             }
-            Expr::Handler { body, .. } => {
+            Expr::Handler {
+                body, cell_owner, ..
+            } => {
+                if let Some(owner) = cell_owner {
+                    self.slot(*owner, context, budget)?;
+                }
                 P::link(self, slot, *body, context, budget)?;
                 SetupOutcome::NeedsInputsOrDynamic
             }
@@ -6919,7 +7059,7 @@ impl<'a> Analysis<'a> {
                         pending.try_reserve(1).map_err(|_| Failure::Resource)?;
                         pending.push(*value);
                     }
-                    Expr::Merge(values) => {
+                    Expr::Merge(values) | Expr::MetadataMerge(values) => {
                         charge(budget, values.len())?;
                         pending
                             .try_reserve(values.len())
@@ -7578,6 +7718,110 @@ mod tests {
             metadata: HashMap::new(),
             evidence: Vec::new(),
             evidence_index: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn handler_owner_ports_keep_free_unknown_and_empty_fallbacks() {
+        let mut graph = graph(vec![
+            Expr::Slot,
+            Expr::Scalar,
+            Expr::Handler {
+                body: 1,
+                clauses: Vec::new(),
+                cell_owner: Some(0),
+            },
+        ]);
+        graph.positions.insert(7, 2);
+        let owner = Atom::Resource(9, 0);
+        for (atoms, expected) in [
+            (vec![], None),
+            (vec![Atom::Free], None),
+            (vec![owner, Atom::Free], None),
+            (vec![Atom::Unknown], None),
+            (vec![Atom::MetadataNeutral], None),
+            (vec![owner, Atom::MetadataNeutral], Some(vec![(9, 0)])),
+            (vec![owner], Some(vec![(9, 0)])),
+        ] {
+            let mut work = TypeWorkBudget::default();
+            let mut analysis = Analysis::new(&graph, &mut work).unwrap();
+            let port = analysis.slot(0, 0, &mut work).unwrap();
+            for atom in atoms {
+                analysis.atom(port, atom, &mut work).unwrap();
+            }
+            assert_eq!(
+                analysis.handler_cell_owners(7, 0, &mut work).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn report_diagnostic_does_not_choose_independent_answer_over_dependent_completion() {
+        let file =
+            crate::source::SourceFile::new("report.ash", "report answer completion").unwrap();
+        let span = |start, end| {
+            file.span(crate::source::ByteRange::new(start, end).unwrap())
+                .unwrap()
+        };
+        let report = span(0, 6);
+        let answer = span(7, 13);
+        let mut graph = graph(vec![
+            Expr::Slot,
+            Expr::Slot,
+            Expr::Scalar,
+            Expr::Slot,
+            Expr::Slot,
+            Expr::Tuple(vec![3, 4]),
+            Expr::Resource {
+                success: Some(ConstructorId::new(
+                    crate::types::NominalTypeId::new(crate::module::ModuleId::new(990), 0),
+                    0,
+                )),
+                failure: None,
+                failure_payload: None,
+                handle: 0,
+                identity: 1,
+                initializer: 2,
+                body: 5,
+                source: report,
+            },
+        ]);
+        graph.sources[3] = answer;
+        graph.sources[5] = report;
+        let owner = Atom::Resource(999, 0);
+        for dependent_answer in [false, true] {
+            let mut work = TypeWorkBudget::default();
+            let mut analysis = Analysis::new(&graph, &mut work).unwrap();
+            let answer_port = analysis.slot(3, 0, &mut work).unwrap();
+            let completion_port = analysis.slot(4, 0, &mut work).unwrap();
+            analysis
+                .atom(
+                    if dependent_answer {
+                        answer_port
+                    } else {
+                        completion_port
+                    },
+                    owner,
+                    &mut work,
+                )
+                .unwrap();
+            analysis
+                .atom(
+                    if dependent_answer {
+                        completion_port
+                    } else {
+                        answer_port
+                    },
+                    Atom::Free,
+                    &mut work,
+                )
+                .unwrap();
+            analysis.close(&mut work).unwrap();
+            assert_eq!(
+                analysis.result_source(6, 0, owner, &mut work).unwrap(),
+                if dependent_answer { answer } else { report }
+            );
         }
     }
 
@@ -11327,6 +11571,7 @@ mod tests {
                 arms: (0..WIDTH).map(|_| (Vec::new(), 0)).collect(),
             },
             Expr::Handler {
+                cell_owner: None,
                 body: 0,
                 clauses: (0..WIDTH)
                     .map(|_| DataClause {
@@ -11495,6 +11740,7 @@ mod tests {
             Expr::Alias(0),
             Expr::Unknown,
             Expr::Handler {
+                cell_owner: None,
                 body: 3,
                 clauses: vec![DataClause {
                     input: 1,
@@ -11510,7 +11756,7 @@ mod tests {
         let handler = actual
             .import_conditional_handler(&original, 4, 10, 50, 0, 20, &mut budget)
             .unwrap();
-        let Expr::Handler { body, clauses } = &actual.expressions[handler] else {
+        let Expr::Handler { body, clauses, .. } = &actual.expressions[handler] else {
             panic!("handler");
         };
         assert_eq!(*body, 4);
@@ -11565,6 +11811,7 @@ mod tests {
         let mut original = graph(vec![
             Expr::Unknown,
             Expr::Handler {
+                cell_owner: None,
                 body: 0,
                 clauses: vec![],
             },
@@ -12566,6 +12813,7 @@ mod tests {
                 Expr::Slot,   // original owner handle
                 Expr::Slot,   // original owned identity
                 Expr::Handler {
+                    cell_owner: None,
                     body: 1,
                     clauses: Vec::new(),
                 },
