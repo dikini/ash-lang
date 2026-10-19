@@ -1,7 +1,7 @@
 # TASK-0048: Generic Cell Integrated Verification
 
 - ID: `TASK-0048`
-- Status: active
+- Status: completed
 - Related: [CP-0023](../proposals/CP-0023-scoped-generic-cells.md),
   [TASK-0045](TASK-0045-generic-cell-api-and-acquisition.md),
   [TASK-0046](TASK-0046-generic-cell-contents-and-dependencies.md),
@@ -65,15 +65,15 @@ readiness and independent retained readback. The task-owned
 criteria remain open until their complete matching observations and checkpoint
 gate exist.
 
-- [ ] CELL-C03: original, imported, copied, restored and transformed Core agree;
+- [x] CELL-C03: original, imported, copied, restored and transformed Core agree;
   every specified tamper fails independent admission.
-- [ ] CELL-C04: all named layers pass exact/insufficient/retry budget probes
+- [x] CELL-C04: all named layers pass exact/insufficient/retry budget probes
   with no partial permission, publication or mutation.
-- [ ] CELL-C05: live/captured capacity, shared payload and deep-disposal checks
+- [x] CELL-C05: live/captured capacity, shared payload and deep-disposal checks
   preserve accounting and iterative execution without relaxed limits.
-- [ ] CELL-C06: legacy and ash-ffi regressions plus the mixed quarantine case
+- [x] CELL-C06: legacy and ash-ffi regressions plus the mixed quarantine case
   establish retained native protection and denial before native entry.
-- [ ] All 31 case receipts are connected to the same candidate or have explicit
+- [x] All 31 case receipts are connected to the same candidate or have explicit
   input-equality justification; gaps are returned to their primary task owners.
 
 ## Verification
@@ -151,3 +151,24 @@ configuration and fixture bytes. Original criteria stay
 unchecked. TASK-0049 owns the fresh default seven-stage workspace gate and
 original compound acceptance, followed by authorized lifecycle cleanup.
 No push/Main integration, DN-0054 change or retirement is included.
+
+## Local checkpoint acceptance, 2026-10-19
+
+The complete connected checkpoint was verified at
+`7e80df3e66a6d3074b86f29b7582cadb6696a563`, tree
+`dd26e7d5a2218cdf374c626af7759e558b8105ef`. The fresh default complete
+gate executed all seven stages without reuse or filters: 4,112 parent-harness
+passes, zero failures and one optional native calibration study ignored.
+Nine nested child-process summaries are excluded. The
+[complete case map and receipt](../design/generic-cell/evidence.md)
+retain all 31 primary cases, their variants, owning ledgers, native inputs,
+commands, results and digests. This closes connected product criteria rather
+than relying on earlier component readiness.
+
+Independent checkpoint review and coordinator acceptance are recorded in that
+receipt. TASK-0049 lifecycle cleanup remains pending until the separate
+reviewed deletion/index/link delta is retained and read back. Main integration
+has not been authorized or performed; its conditional verification guard is
+untriggered. No push, PR or worktree/cache retirement is included. DN-0054
+remains separate and byte-identical. Historical role and component receipts
+above retain their original scope.

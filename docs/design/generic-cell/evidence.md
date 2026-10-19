@@ -1,12 +1,18 @@
 # Generic cell checkpoint evidence
 
-This record maps accepted [CP-0023](../../proposals/CP-0023-scoped-generic-cells.md)
-observations to product tests. The [current specification](../../../spec/README.md)
+This record maps accepted
+[CP-0023](../../proposals/CP-0023-scoped-generic-cells.md)
+observations to product tests. The [current
+specification](../../../spec/README.md)
 defines Ash; this record supplies evidence and no additional permission.
-[TASK-0048](../../tasks/TASK-0048-generic-cell-integrated-verification.md)
-owns this matrix. TASK-0049's fresh complete workspace gate and original
-compound acceptance remain pending. Coordinator acceptance here is bounded to
-TASK-0048 focused readiness.
+The complete local checkpoint was verified at
+`7e80df3e66a6d3074b86f29b7582cadb6696a563`: all seven default stages
+executed freshly, with zero reused stages. The 140 parent test harnesses report
+4,112 passes, zero failures and one optional native calibration study ignored.
+The current real native pair embeds runtime fingerprint
+`6270711a6b9492367ecff76a0b1612a1b21f475b44282d9618eabbd08598fcf9`.
+The final receipt below supersedes earlier component-only readiness.
+Main integration and lifecycle cleanup remain separate, unperformed steps.
 
 ## Observation boundaries
 
@@ -289,7 +295,8 @@ The [capture unit](../../../src/core/capture.rs)
 `generic_cell_body_free_write_summary_authenticates_contents_graph_and_return`
 starts from an actual checked public `put<R,T>` export, retaining a stored-value
 graph and the indexed type of its authentic Cell.write call. Its unchanged
-binder/scheme/origin/capture fact compares equal. Erased/replaced graph or erased
+binder/scheme/origin/capture fact compares equal. Erased/replaced graph or
+erased
 returned-target relationships compare unequal. This comparison is duplicate
 import-route coherence, not a second Core admission API.
 The reachable [resolver control](../../../src/resolve/module_tests.rs)
@@ -303,9 +310,11 @@ separate proof and never trusts a forged body-free summary.
 original, copied identity and folded inputs at P07 read99/intercept41/forward42,
 P12 Tick99 and P13 (7,42). Tick uses real literal arithmetic 90+9; its folded
 program must contain fewer Primitive nodes before independent admission and
-execution. `generic_cell_exact_handler_owner_ports_survive_independent_core_transforms`
+execution.
+`generic_cell_exact_handler_owner_ports_survive_independent_core_transforms`
 executes imported distinct/equal owner routing and discarded replacement cases
-at 7. `generic_cell_imported_flow_images_rebuild_with_exact_short_and_retry_work`
+at 7.
+`generic_cell_imported_flow_images_rebuild_with_exact_short_and_retry_work`
 restores snapshot7, recursion9, handler7, intercepted function7, scalar99/41/42,
 Tick99 and reply mutation(7,42). Tick's image is encoded from independently
 revalidated optimized Core. Images reconstruct proofs after original inputs
@@ -430,7 +439,7 @@ probe performs fresh acquisition, capture and owned discard at the same stack
 limit, without warming paths, cloning the deep root or changing production
 runtime behavior.
 
-## Frozen focused receipt
+## Historical TASK-0048 focused receipt
 
 The retaining code/test pin is unsigned
 `b785e5605569492103a64ffb9e2a3b5de64ded88`, tree
@@ -565,7 +574,7 @@ Passed, warnings denied via RUSTDOCFLAGS="-D warnings".
 Log SHA-256:
 `97ae32712a1310a707d514947709536684a412a09645072f372de7bd3da626b7`.
 
-## Real native input and output binding
+## Historical TASK-0048 native binding
 
 Both generated hosts embed runtime fingerprint
 `b8c62ad3ad13fab49c6cd4197f7d14d395eb0628f187e0bd8829bc57d58e1fce`.
@@ -619,7 +628,7 @@ retain child4, release child4, then release parent64 exactly once. C's close
 neither consumes A nor removes B-to-A native protection. These are real native
 observations, separate from injected teardown failures.
 
-## Review, acceptance and remainder
+## Historical TASK-0048 review and remainder
 
 Independent reviewer `/root/task0046_reviewer` cleared the complete code and
 technical evidence at the retaining pin, including actual raw log hashes,
@@ -633,12 +642,833 @@ checks. The static semantics now states the accepted rule explicitly: R is a
 logical owner, Cell lifetime is exactly its resource scope, and backing storage
 cannot extend live access/reader escape or defer required completion.
 
-Original TASK-0046/0047/0048/0049 compound criteria and all-31-case checkpoint
-acceptance remain open. TASK-0049 must run the fresh default complete
-seven-stage
-`cargo xtask verify` without reuse at the retained handoff, preserve durable
-stage/input/tool/log summaries, then perform its acceptance and authorized
-lifecycle cleanup. Complete legacy/ffi regressions are required there; this
-focused run does not relabel unselected native targets as freshly executed.
-DN-0054 remains separate and byte-identical. No push, PR/Main integration or
-worktree/cache retirement is part of this handoff.
+The following complete checkpoint receipt supersedes this historical focused
+remainder. Earlier receipts remain bounded to their own declared inputs,
+commands and fingerprints. They do not imply byte equality with the final
+checkpoint. The final gate executes all preserved legacy/native targets.
+
+## Fresh complete checkpoint gate
+
+The sole build operator ran the default complete gate without reuse or
+stage filters on frozen inputs. No product file changed during the run.
+
+```sh
+CARGO_BUILD_JOBS=1 RUSTC_WRAPPER= \
+ASH_SQLITE_STATIC_ARCHIVE=/tmp/task0049-sqlite-prerequisite/libsqlite3.a \
+cargo xtask verify \
+    --input /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/\
+bin/cargo \
+    --input /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/\
+bin/clippy-driver \
+    --input /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/\
+bin/rustc \
+    --input /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/\
+bin/rustfmt \
+    --input /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/\
+lib/rustlib/x86_64-unknown-linux-gnu/bin/gcc-ld/ld.lld \
+    --input /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/\
+lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld \
+    --input /lib64/ld-linux-x86-64.so.2 \
+    --input /tmp/task0049-sqlite-prerequisite/libsqlite3.a \
+    --input /tmp/task0049-sqlite-prerequisite/sqlite-amalgamation-3460100.zip \
+    --input /tmp/task0049-sqlite-prerequisite/sqlite3.c \
+    --input /tmp/task0049-sqlite-prerequisite/sqlite3.h \
+    --input /tmp/task0049-sqlite-prerequisite/sqlite3.o \
+    --input /usr/bin/ar \
+    --input /usr/bin/cc \
+    --input /usr/bin/nm \
+    --input /usr/bin/readelf \
+    --input /usr/bin/x86_64-linux-gnu-ar \
+    --input /usr/bin/x86_64-linux-gnu-as \
+    --input /usr/bin/x86_64-linux-gnu-gcc-15 \
+    --input /usr/bin/x86_64-linux-gnu-ld.bfd \
+    --input /usr/bin/x86_64-linux-gnu-nm \
+    --input /usr/bin/x86_64-linux-gnu-readelf \
+    --input /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 \
+    --input /usr/lib/x86_64-linux-gnu/libc.so.6 \
+    --input /usr/lib/x86_64-linux-gnu/libgcc_s.so.1 \
+    --input /usr/lib/x86_64-linux-gnu/libm.so.6 \
+    --input /usr/lib/x86_64-linux-gnu/libsqlite3.so.0 \
+    --input /usr/lib/x86_64-linux-gnu/libsqlite3.so.0.8.6 \
+    --input /usr/libexec/gcc/x86_64-linux-gnu/15/cc1 \
+    --input /usr/libexec/gcc/x86_64-linux-gnu/15/collect2
+```
+
+- Code/document input commit: `7e80df3e66a6d3074b86f29b7582cadb6696a563`.
+- Tree: `dd26e7d5a2218cdf374c626af7759e558b8105ef`.
+- Repository inventory (1,769 files) SHA-256: `d470d374f0540649718f04bef22ae85ed4bd0bb3f78a2e6a54a7ace24cef231b`.
+- Operator receipt SHA-256: `2be060b3fb77cd959d4cfd07b3675927fd3375c3c7c3a327c652899c5c7a9501`.
+- Complete stdout SHA-256: `854a405ea45e256339e72d6d93ebd83f863cb8ff8345199ea4fe8a7a19029b13`.
+
+The following stage commands ran freshly; each terminal status was zero.
+
+### Complete gate: format
+
+```sh
+cargo fmt --all --check
+```
+
+Elapsed seconds: `9.692987282`.
+Log SHA-256: `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
+Stage receipt SHA-256:
+`093556a372577f74904633497ab66a664d9ba0270611db50cd90cd1b8552b2f2`.
+
+### Complete gate: metadata
+
+```sh
+cargo metadata --format-version 1 --locked --no-deps
+```
+
+Elapsed seconds: `0.016850596`.
+Log SHA-256: `6b5d88f0feb5de4b5f95039b3ffcf291c493b3d92b663658264b8cb2ac8c37a7`.
+Stage receipt SHA-256:
+`005d5bed7658e1791414bd06ed3bfd217fc265fc17ba00e6b57cb07bad8958e9`.
+
+### Complete gate: check
+
+```sh
+cargo check --workspace --all-targets --locked
+```
+
+Elapsed seconds: `0.31929546`.
+Log SHA-256: `d7dae192715495fa89ccbe279af3efb9792c1dae1768228e369035e68a1df673`.
+Stage receipt SHA-256:
+`ce7365f1796821a0117dfa6a9c7d84b811dca1e1f7b38fc055fb28f13c0feb9d`.
+
+### Complete gate: build
+
+```sh
+cargo build --workspace --lib --bins --examples --locked
+```
+
+Elapsed seconds: `0.129419723`.
+Log SHA-256: `4cf86278c1e6d659943a46a3d7e3da429ac15be90f0f17742e24ef85228e7d3e`.
+Stage receipt SHA-256:
+`6094585140cb82d2322223f397c33d2e286871bc7f42ab777867c631c2cdfa8c`.
+
+### Complete gate: clippy
+
+```sh
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+```
+
+Elapsed seconds: `0.360834044`.
+Log SHA-256: `d7dae192715495fa89ccbe279af3efb9792c1dae1768228e369035e68a1df673`.
+Stage receipt SHA-256:
+`0609cc04db6cb91eccf99bcdf936fda4acf5d5a5bed9abbf37df33feb3722f45`.
+
+### Complete gate: test
+
+```sh
+cargo test --workspace --all-targets --all-features --locked
+```
+
+Elapsed seconds: `888.624643464`.
+Log SHA-256: `1d5114e7f1019ab520bd170db1e5877d95828c3069c8ddd1237e1463186c71d4`.
+Stage receipt SHA-256:
+`f7aa97a8a25dc1bef7fe099e10e77ed78e23d89eb6816835829fe436c4d6333c`.
+
+### Complete gate: documentation
+
+```sh
+RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --locked
+```
+
+Elapsed seconds: `18.103189801`.
+Log SHA-256: `299e1b45676ebe450573328fac701b5c9ee2a996dcfb4eda0a852562a137d043`.
+Stage receipt SHA-256:
+`ffb24eb3e626388e421bccc8956892c81aaaa5c64464e8d0fae9eaacb69ec0d2`.
+
+### Executed suites
+
+Parent harness totals exclude nested child-process summaries:
+
+{"failed": 0, "filtered_out": 0, "ignored": 1, "measured": 0, "passed": 4112}
+
+- `unittests src/lib.rs`:
+  1939 passed; 0 ignored.
+- `unittests src/main.rs`:
+  20 passed; 0 ignored.
+- `tests/architecture.rs`:
+  47 passed; 0 ignored.
+- `tests/bindings.rs`:
+  10 passed; 0 ignored.
+- `tests/bytes_strings.rs`:
+  6 passed; 0 ignored.
+- `tests/check_ffi.rs`:
+  11 passed; 0 ignored.
+- `tests/cleanup_abandonment.rs`:
+  11 passed; 0 ignored.
+- `tests/cleanup_interactions.rs`:
+  6 passed; 0 ignored.
+- `tests/cleanup_partial_acquisition.rs`:
+  1 passed; 0 ignored.
+- `tests/cleanup_reporting.rs`:
+  8 passed; 0 ignored.
+- `tests/cleanup_syntax.rs`:
+  7 passed; 0 ignored.
+- `tests/cleanup_typing.rs`:
+  14 passed; 0 ignored.
+- `tests/cli.rs`:
+  17 passed; 0 ignored.
+- `tests/cli_build.rs`:
+  6 passed; 0 ignored.
+- `tests/compiled_program.rs`:
+  3 passed; 0 ignored.
+- `tests/compiler_work_reporting.rs`:
+  5 passed; 0 ignored.
+- `tests/copying_sqlite_source.rs`:
+  29 passed; 0 ignored.
+- `tests/core_validation.rs`:
+  67 passed; 0 ignored.
+- `tests/corpus.rs`:
+  13 passed; 0 ignored.
+- `tests/data_and_adts.rs`:
+  32 passed; 0 ignored.
+- `tests/diagnostic_catalogues.rs`:
+  3 passed; 0 ignored.
+- `tests/diagnostic_input.rs`:
+  9 passed; 0 ignored.
+- `tests/diagnostic_json.rs`:
+  1 passed; 0 ignored.
+- `tests/diagnostic_options.rs`:
+  7 passed; 0 ignored.
+- `tests/diagnostic_precedence.rs`:
+  13 passed; 0 ignored.
+- `tests/diagnostic_presentation.rs`:
+  9 passed; 0 ignored.
+- `tests/diagnostic_rendering.rs`:
+  5 passed; 0 ignored.
+- `tests/diagnostic_reporting.rs`:
+  3 passed; 0 ignored.
+- `tests/diagnostics.rs`:
+  83 passed; 0 ignored.
+- `tests/effect_core.rs`:
+  6 passed; 0 ignored.
+- `tests/effect_diagnostics.rs`:
+  23 passed; 0 ignored.
+- `tests/effect_modules.rs`:
+  13 passed; 0 ignored.
+- `tests/effect_rows.rs`:
+  13 passed; 0 ignored.
+- `tests/effect_runtime.rs`:
+  27 passed; 0 ignored.
+- `tests/effect_typing.rs`:
+  30 passed; 0 ignored.
+- `tests/effects_syntax.rs`:
+  5 passed; 0 ignored.
+- `tests/file_diagnostic_dispatch.rs`:
+  7 passed; 0 ignored.
+- `tests/foreign_codec_failures.rs`:
+  10 passed; 0 ignored.
+- `tests/foreign_common_module.rs`:
+  5 passed; 0 ignored.
+- `tests/foreign_module_admission.rs`:
+  23 passed; 0 ignored.
+- `tests/foreign_native_program_preparation.rs`:
+  6 passed; 0 ignored.
+- `tests/foreign_source_admission.rs`:
+  12 passed; 0 ignored.
+- `tests/foreign_source_contracts.rs`:
+  11 passed; 0 ignored.
+- `tests/foreign_source_owner_admission.rs`:
+  8 passed; 0 ignored.
+- `tests/foreign_source_owner_contracts.rs`:
+  4 passed; 0 ignored.
+- `tests/foreign_source_syntax.rs`:
+  8 passed; 0 ignored.
+- `tests/functions.rs`:
+  19 passed; 0 ignored.
+- `tests/hooks_core.rs`:
+  12 passed; 0 ignored.
+- `tests/hooks_runtime.rs`:
+  15 passed; 0 ignored.
+- `tests/hooks_syntax.rs`:
+  7 passed; 0 ignored.
+- `tests/hooks_typing.rs`:
+  25 passed; 0 ignored.
+- `tests/implementations.rs`:
+  80 passed; 0 ignored.
+- `tests/integer.rs`:
+  8 passed; 0 ignored.
+- `tests/interface_corpus.rs`:
+  11 passed; 0 ignored.
+- `tests/interface_diagnostics.rs`:
+  9 passed; 0 ignored.
+- `tests/interface_generic_summary.rs`:
+  4 passed; 0 ignored.
+- `tests/interface_identity_diamond.rs`:
+  2 passed; 0 ignored.
+- `tests/interface_modules.rs`:
+  24 passed; 0 ignored.
+- `tests/interface_resources.rs`:
+  6 passed; 0 ignored.
+- `tests/interface_selection.rs`:
+  40 passed; 0 ignored.
+- `tests/interface_validation.rs`:
+  2 passed; 0 ignored.
+- `tests/interfaces.rs`:
+  44 passed; 0 ignored.
+- `tests/interfaces_syntax.rs`:
+  30 passed; 0 ignored.
+- `tests/kind_modules.rs`:
+  3 passed; 0 ignored.
+- `tests/kind_resources.rs`:
+  1 passed; 0 ignored.
+- `tests/kinds.rs`:
+  27 passed; 0 ignored.
+- `tests/kinds_syntax.rs`:
+  15 passed; 0 ignored.
+- `tests/lexer.rs`:
+  25 passed; 0 ignored.
+- `tests/library_imports.rs`:
+  17 passed; 0 ignored.
+- `tests/local_newtypes.rs`:
+  20 passed; 0 ignored.
+- `tests/local_newtypes_syntax.rs`:
+  4 passed; 0 ignored.
+- `tests/method_parameter_resources.rs`:
+  4 passed; 0 ignored.
+- `tests/modular_closure.rs`:
+  4 passed; 0 ignored.
+- `tests/module_cli.rs`:
+  17 passed; 0 ignored.
+- `tests/module_elaboration.rs`:
+  8 passed; 0 ignored.
+- `tests/module_elaboration_nominals.rs`:
+  8 passed; 0 ignored.
+- `tests/module_entry.rs`:
+  14 passed; 0 ignored.
+- `tests/module_loading.rs`:
+  24 passed; 0 ignored.
+- `tests/module_newtypes.rs`:
+  21 passed; 0 ignored.
+- `tests/module_resolution.rs`:
+  11 passed; 0 ignored.
+- `tests/module_visibility.rs`:
+  4 passed; 0 ignored.
+- `tests/modules_syntax.rs`:
+  20 passed; 0 ignored.
+- `tests/native_buffer_core.rs`:
+  3 passed; 0 ignored.
+- `tests/native_buffer_imports.rs`:
+  9 passed; 0 ignored.
+- `tests/native_buffer_interactions.rs`:
+  8 passed; 0 ignored.
+- `tests/native_buffer_modules.rs`:
+  6 passed; 0 ignored.
+- `tests/native_buffer_runtime.rs`:
+  9 passed; 0 ignored.
+- `tests/native_buffer_source.rs`:
+  13 passed; 0 ignored.
+- `tests/native_buffer_syntax.rs`:
+  4 passed; 0 ignored.
+- `tests/native_buffer_typing.rs`:
+  12 passed; 0 ignored.
+- `tests/newtype_resources.rs`:
+  1 passed; 0 ignored.
+- `tests/packed_core.rs`:
+  9 passed; 0 ignored.
+- `tests/parser.rs`:
+  50 passed; 0 ignored.
+- `tests/polymorphism.rs`:
+  43 passed; 0 ignored.
+- `tests/primitive_vertical.rs`:
+  12 passed; 0 ignored.
+- `tests/program_build.rs`:
+  5 passed; 0 ignored.
+- `tests/program_build_native.rs`:
+  3 passed; 0 ignored.
+- `tests/provenance.rs`:
+  4 passed; 0 ignored.
+- `tests/provider_arena_allocation.rs`:
+  7 passed; 0 ignored.
+- `tests/provider_arena_source.rs`:
+  4 passed; 0 ignored.
+- `tests/provider_control_source.rs`:
+  22 passed; 0 ignored.
+- `tests/provider_owner_rows.rs`:
+  9 passed; 0 ignored.
+- `tests/provider_retention_source.rs`:
+  3 passed; 0 ignored.
+- `tests/provider_sqlite_control.rs`:
+  2 passed; 0 ignored.
+- `tests/provider_sqlite_copying.rs`:
+  8 passed; 0 ignored.
+- `tests/provider_sqlite_sessions.rs`:
+  8 passed; 0 ignored.
+- `tests/provider_sqlite_source.rs`:
+  10 passed; 0 ignored.
+- `tests/recursion.rs`:
+  10 passed; 0 ignored.
+- `tests/resolution.rs`:
+  60 passed; 0 ignored.
+- `tests/resource_calibration_native.rs`:
+  0 passed; 1 ignored.
+- `tests/resource_calibration_observer.rs`:
+  2 passed; 0 ignored.
+- `tests/resource_provider_resolution.rs`:
+  15 passed; 0 ignored.
+- `tests/resource_provider_syntax.rs`:
+  9 passed; 0 ignored.
+- `tests/resource_scope_core.rs`:
+  2 passed; 0 ignored.
+- `tests/resource_scope_modules.rs`:
+  16 passed; 0 ignored.
+- `tests/resource_scope_runtime.rs`:
+  32 passed; 0 ignored.
+- `tests/resource_scope_syntax.rs`:
+  5 passed; 0 ignored.
+- `tests/resource_scope_typing.rs`:
+  105 passed; 0 ignored.
+- `tests/runtime_diagnostics.rs`:
+  10 passed; 0 ignored.
+- `tests/scoped_evidence.rs`:
+  2 passed; 0 ignored.
+- `tests/scoped_evidence_interactions.rs`:
+  53 passed; 0 ignored.
+- `tests/scoped_evidence_syntax.rs`:
+  6 passed; 0 ignored.
+- `tests/semantics.rs`:
+  13 passed; 0 ignored.
+- `tests/source_arena_execution.rs`:
+  5 passed; 0 ignored.
+- `tests/source_diagnostics.rs`:
+  10 passed; 0 ignored.
+- `tests/source_resource_acquired_only.rs`:
+  5 passed; 0 ignored.
+- `tests/source_resource_execution.rs`:
+  79 passed; 0 ignored.
+- `tests/source_resource_resolution.rs`:
+  18 passed; 0 ignored.
+- `tests/source_resource_syntax.rs`:
+  2 passed; 0 ignored.
+- `tests/spec_examples.rs`:
+  79 passed; 0 ignored.
+- `tests/sqlite_library.rs`:
+  35 passed; 0 ignored.
+- `tests/string_literals.rs`:
+  7 passed; 0 ignored.
+- `unittests src/lib.rs`:
+  49 passed; 0 ignored.
+- `tests/arena.rs`:
+  10 passed; 0 ignored.
+- `tests/sqlite_text.rs`:
+  11 passed; 0 ignored.
+- `unittests examples/arena.rs`:
+  0 passed; 0 ignored.
+- `unittests examples/arena_typed.rs`:
+  0 passed; 0 ignored.
+- `unittests examples/sqlite_session.rs`:
+  0 passed; 0 ignored.
+- `unittests src/main.rs`:
+  0 passed; 0 ignored.
+- `tests/verify.rs`:
+  17 passed; 0 ignored.
+
+Raw working records remain outside the target cache under
+`/tmp/task0049-complete-with-sqlite/`. These digests and complete command/result
+summaries retain the checkpoint evidence independently of cache lifetime.
+
+Independent review and coordinator acceptance are recorded under
+Checkpoint acceptance and retained-input boundary.
+Executed source/test/config/fixture equality after receipt prose and cleanup
+requires the separate retained readback below.
+
+The 140 parent harnesses report 4,112 passes, zero failures and one ignored
+optional native calibration study. Nine child-process summaries are excluded
+from these counts. The ignored study is not a CP-0023 case. No test filter
+was requested. All 30 external byte/mode/link records and repository/tool
+records are equal before and after the gate. Every stage records canonical
+environment SHA-256:
+`0b1ff2ae01f528844f5e7087aa4aecd899607fc446024dcbac03285edb433b9f`.
+
+## Current native quarantine observation
+
+Frozen code: `7e80df3e66a6d3074b86f29b7582cadb6696a563`.
+Both independently generated hosts embed runtime fingerprint
+`6270711a6b9492367ecff76a0b1612a1b21f475b44282d9618eabbd08598fcf9`.
+The positive host returns `Completed(42, RetainedError(()))`, status zero;
+the paired provider/State-access refusal reports inconsistent control state,
+status one, before native borrow entry. Their exact traces differ only in
+parent-final-byte 99 versus 0, with child release before parent release.
+The historical TASK-0048 b8 fingerprint below is a distinct earlier run.
+
+The complete post-execution native readback SHA-256 is
+`badefb0bf8c0f7688bf09fcb228146133c71096814572fd9170687ca959b1069`.
+Its two case preimages, keys and every retained file were independently
+verified, including input tools, embedded fingerprint and dynamic libraries.
+
+The static SQLite archive environment is consumed only by the SQLite workload
+helper and is excluded from compiler/runtime fingerprint configuration. The
+current C06 source, tools and its own native inputs remain unchanged across
+that prerequisite setup; the complete gate has a broader external/environment
+fingerprint. This collector command uses default features. The full workspace
+test stage uses all features and independently exercises C06; no generated
+binary equality is asserted across those feature configurations.
+
+The focused collector ran once with one build job and an empty Rust wrapper.
+`ASH_OWNER_EVIDENCE_DIR=/tmp/task0049-repaired/native-artifacts` retained
+the two actual hosts. Exact test selection:
+
+```sh
+cargo test --test source_resource_execution --locked \
+    generic_cell_c06_stored_native_access_reads_after_quarantine_but_cannot_\
+restore_use \
+    -- --exact --nocapture
+```
+
+Native log SHA-256:
+`5fbcd1014cb0c5ca62ba2c04b7f115108281d25a84e00d632b466302b08f4a23`.
+Operator receipt SHA-256:
+`cc18918a6eabb8d748f9b59690fff90436b2b23a8cfd7590f8c8551b368ec33a`.
+
+### Native status 0
+
+Case preimage/key SHA-256:
+`61f61b2def775c537c4f2912ab714845b950493754e6eb9aea122df19e860a5d`.
+
+- `Cargo.lock` SHA-256:
+  `1095bf7bb381414fc9d23a876bb0ad88cef52d46525843c1df1e333c51470850`.
+- `Cargo.toml` SHA-256:
+  `84bdf1f41873e4551ccad8c0f223de9657385e699c5b8aa0495652628189514b`.
+- `case-inputs.json` SHA-256:
+  `61f61b2def775c537c4f2912ab714845b950493754e6eb9aea122df19e860a5d`.
+- `dynamic-libraries.txt` SHA-256:
+  `11b46e4ef20b79ac8112c988c763ade2b35703948969307c68852bdbd7863400`.
+- `elf-linker-comment.txt` SHA-256:
+  `e3c7ac576e038de4ad0b8204de2b388acb47be48db95cbd2e16c5155de77bebb`.
+- `entry.ash` SHA-256:
+  `354bf3b61e252cca7b5868745e2cbf3a50d9c1e82660a7d318d54b38a21e9d14`.
+- `exit-code` SHA-256:
+  `e67403f811c9e0307b56d6067ee62452c96101087926773b09f24f8f923fb7db`.
+- `expected-facts.bin` SHA-256:
+  `7c5ab6e601d40c1d68e6656c4676527508823806e8acd2c84a693aa36ef82c6b`.
+- `generated.rs` SHA-256:
+  `d092f0fd6414befe7984561b4264804d94303a73fdecf3a44422c86388fcb6cb`.
+- `inputs.json` SHA-256:
+  `30c5c45cfc69114e41cedccf9f1886a20b9124f7de8d5f3f062754f58bd10039`.
+- `native-build.log` SHA-256:
+  `4ac61bf23d7788c3486918565bee94709c4219cdb4f59c5e4cf1b597ee3f7b96`.
+- `native-trace` SHA-256:
+  `e0f3b1a06f22abab1345f01e4887bd4305696ddb400bb9a01558dbb60dec4097`.
+- `native_library` SHA-256:
+  `2e6941bfb030d03daa3467b3578a65f1eb5be761f3fa03d60a0f22a7e1ca62da`.
+- `native_owner.c` SHA-256:
+  `f2517bde5d012ed946e3b4042f6b5e9ae9860469980b108a6ac06406c8e52a51`.
+- `native_owner.o` SHA-256:
+  `086d76fd2a7b54c08281379fbc8d06a3d26baca550d90375fd7c8110dc8e32aa`.
+- `owner.ash` SHA-256:
+  `542326baaba3391f26c5cdf0521e52c7a1699769cfb9c8b29f8ad54e94ecc4af`.
+- `program` SHA-256:
+  `b23cdb57380f475348724081cf3391afaee86dd3246f9effca0cb23426dcb63e`.
+- `program-image.bin` SHA-256:
+  `b9a38669c118e1da20084dd817fbd7159dab3607c363d28dfc34d686011bb5df`.
+- `rust-toolchain.toml` SHA-256:
+  `cdb9bea833b62d4c26fbba417000b2929746d667ba25ad4eee40dfa61aa75a89`.
+- `stderr` SHA-256:
+  `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
+- `stdout` SHA-256:
+  `73dca124c41d123ccd3e37f2f4c5820c0abb454fbcd2b8c6b3c5f9603e9962a8`.
+
+### Native status 1
+
+Case preimage/key SHA-256:
+`88326c26ecb599bdb550e7a128d67c05a192ef554956d4cacc6fdbbd04a268d8`.
+
+- `Cargo.lock` SHA-256:
+  `397f81dea463bbe72c8c59894091ab4ccd1051fa59b2a3c3657e71ba917e8c77`.
+- `Cargo.toml` SHA-256:
+  `6a508ad9155fe00747c613088d74e3e74584522539e27bde5045255cec67388e`.
+- `case-inputs.json` SHA-256:
+  `88326c26ecb599bdb550e7a128d67c05a192ef554956d4cacc6fdbbd04a268d8`.
+- `dynamic-libraries.txt` SHA-256:
+  `d9c76fd57ba3c39a2fc9572d65e47b0ec5b6c7414a459782e5c9e6f2d923c79f`.
+- `elf-linker-comment.txt` SHA-256:
+  `e3c7ac576e038de4ad0b8204de2b388acb47be48db95cbd2e16c5155de77bebb`.
+- `entry.ash` SHA-256:
+  `1b4cf2a9cb40759052efc31cbfd13b508b465fdfbeafbdaf659bab24039ed920`.
+- `exit-code` SHA-256:
+  `d6e36ebf7a67e41cba8650a93a22f4e1fe88e12cf4381d2b15ca5f6adacbdb62`.
+- `expected-facts.bin` SHA-256:
+  `c75198c99240d831ccb13b67025761c128644f28352060d108573ec97eff8feb`.
+- `generated.rs` SHA-256:
+  `64e52ca2d99e1a1164da0d762dd7523626213b60c6c5d07938d12497db924e56`.
+- `inputs.json` SHA-256:
+  `ac336c5d97c6e0abaeda90b65f0800a8a51808128f17e859eefb5391d23fa340`.
+- `native-build.log` SHA-256:
+  `f3a73f4afe421440025e4a95a62749327ea37749c9c44b405b05c2832959df1d`.
+- `native-trace` SHA-256:
+  `5affeb71e2330f5fb7270df6086a581ac7fadff3a73aa6c30351273008c76905`.
+- `native_library` SHA-256:
+  `1ee545410eb01bd34eafa3b69e340c47d9e64db3c4261557a5f120252c4f1d91`.
+- `native_owner.c` SHA-256:
+  `f2517bde5d012ed946e3b4042f6b5e9ae9860469980b108a6ac06406c8e52a51`.
+- `native_owner.o` SHA-256:
+  `fe3ed686aad963a248f7756a135cae7d5a4f24685a74555db1b545eb0a7bf99f`.
+- `owner.ash` SHA-256:
+  `542326baaba3391f26c5cdf0521e52c7a1699769cfb9c8b29f8ad54e94ecc4af`.
+- `program` SHA-256:
+  `395cb2e55de32690c71a9e80084539233810353a36d447f977ed3a85223bcc51`.
+- `program-image.bin` SHA-256:
+  `4ad660df6f60ab693450ca0c8d436f1d7aa122daf8a0e1564f63211c515d349d`.
+- `rust-toolchain.toml` SHA-256:
+  `cdb9bea833b62d4c26fbba417000b2929746d667ba25ad4eee40dfa61aa75a89`.
+- `stderr` SHA-256:
+  `54be4403d05b844a8381816fade3a8cb1b68e97c4fae0ca0453255a8815aae1e`.
+- `stdout` SHA-256:
+  `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
+
+## Complete-gate repair history
+
+Three earlier complete-gate attempts failed and remain separate from the final
+checkpoint. None of these failed runs supplies a complete checkpoint pass.
+
+### Initial attempt
+
+Input commit: `e3cb981f27d15f84c866a352259e2285b2541bb4`.
+Terminal gate status: `1`; input/tool equality held.
+Complete stdout SHA-256:
+`eee194de50027bc3ada11c8f2262b0b4f503912b5d37fa8b7666c4722da12ffe`.
+Operator receipt SHA-256:
+`64e1e732773df9b74d1cfc985d025ce01f41554e8f117cb226b5f5b53d79bf09`.
+
+The SQLite native test helper unwrapped optional CARGO_TARGET_DIR before host
+preparation. Its target had 14 passes and 15 panics. Nine sites across three
+native integration-test files now preserve an override or use the existing
+repository target/ffi-native-hosts default.
+
+### Cache-repaired attempt
+
+Input commit: `9f35eaf310fb0dd5199cb9bea9d98404ade9aa25`.
+Terminal gate status: `1`; input/tool equality held.
+Complete stdout SHA-256:
+`e2258fa2c4ff694f36788fe3ce1784419cf171b73be58ff934d13c7f627de00d`.
+Operator receipt SHA-256:
+`441fbb6c19a4939a184ab21925e80d80ef966145f28000287b0b05df6880560e`.
+
+The unchanged 8,000-member recursion fixture exhausted source type work during
+generic identity discovery. The test-cache repair itself passed the complete
+affected native targets before this later failure.
+
+### Discovery diagnosis and repair
+
+The source scan began with 264,097 units used out of 327,680 and 48,009
+completed Core nodes. Further generic-type discovery exhausted the same
+ledger. After the source-only cost repair, the focused unchanged fixture
+reached a second refusal in independent Pure Core discovery at its unchanged
+983,040-unit limit. These are distinct phases, not one shared allowance.
+
+The retained implementation pays a base and every canonical identity-store
+entry before source discovery, including materialized, lexical and opaque
+abstract nominal kinds and canonical effects. Absent generic identities avoid
+the redundant full scan. Existing generic origins and capture-summary
+publication remain intact. Independent Pure Core recomputes its own census
+only after ordinary registry, row, binder, node, scope and anchor checks, and
+only for final Pure input without contextual/provider/external or separate
+abstract authority. Effect and contextual/provider discovery remain unchanged.
+No source safety bit is transferred to Core.
+
+The exact/one-short/two-fresh census test checks all four stores and defining
+identity rather than spelling. Raw missing-family Core still rejects NodeType.
+The original 8,000 members, 256 KiB stack and source/Core work limits are
+unchanged; the complete ten-test recursion target passes. Connected controls
+pass 47 generic unit probes, four contextual tests and 155 resource tests.
+Strict workspace Clippy, format and the complete 47-test architecture audit
+pass. The fresh seven-stage receipt supplies the final checkpoint result.
+
+### Missing static SQLite prerequisite
+
+At unchanged `7e80df3e66a6d3074b86f29b7582cadb6696a563`, the third
+complete attempt passed the preceding targets and reached the SQLite library
+suite: 34 passed; the genuine static workload refused its missing mandatory
+`ASH_SQLITE_STATIC_ARCHIVE`. Documentation had prescribed this operator input;
+it was omitted from that attempt. No product or assertion repair was needed.
+The failed run is not relabelled as a complete checkpoint pass.
+
+Failed stdout SHA-256:
+`e61e9f26c601fe6fb8e2ceda64b690234ef7e7dcf45642b8156283a9d2afde96`.
+Failed operator receipt SHA-256:
+`43c8dc2b2f0fc7ca605cc1f8aa65973ab20173513e5dbab32115d87325e2736d`.
+
+The prescribed official SQLite 3.46.1 ZIP, C and header hashes were verified;
+the header equals the vendored header. The sources were copied read-only from
+a retained input bundle, then rebuilt with current `cc -O2 -fPIC -c` and
+`ar crs`, preserving default compile options. The genuine archive is
+1,397,878 bytes, SHA-256:
+`7c2b4dc4aa149543e60252b5fffcb62088398470a09885cebb5e3120459c0617`.
+
+Build receipt SHA-256:
+`b6065cff7ec1f9b87a87ac0e3184cb64b2d20c9edafb60f0b6a4947921665d52`.
+The actual all-feature static copying workload passed, checking eight
+implementation symbols in archive and executable, no SQLite DT_NEEDED, and
+the complete copying result. Its log SHA-256:
+`a44b870f802ab498e43655442a30a30a97b080fe9abaaccf4c8f7f338342109a`.
+
+The final retry declares the archive path in the environment and all archive,
+ZIP, C, header, object, selected C/Rust tools/linkers and shared SQLite/runtime
+library bytes as explicit inputs. This preserves the default complete seven
+stages; no reuse or filtered stage is requested. Source, tests, configuration
+and the current 627 native observation are unchanged.
+
+## Checkpoint tool and configuration identities
+
+Rust/Cargo 1.97.1, rustfmt 1.9.0, Clippy 0.1.97, Linux x86_64,
+GCC 15.2.0 and the selected C/Rust linkers were checked at the frozen pin.
+Every command keeps `CARGO_BUILD_JOBS=1 RUSTC_WRAPPER=`. No resource,
+stack or capacity limit changes are part of the repairs.
+
+### tools-config.json
+
+Record SHA-256:
+`6eabfd0f0a4bd13a0f03eea9b35ac5c1cf1ab6ad3790bf1e3ff2c54bee92a662`.
+
+- `rustc executable`:
+  `d3a664c970a9fd8361b64194861bebc1ae37b9054e5ee3400dc1c9e691797eea`.
+- `cargo executable`:
+  `828980723df339d62434390e9fb8ef8831036583343ae2316b7ab5646b5c1953`.
+- `rustfmt executable`:
+  `30de9e1efcd8f8fe7750e00d0c45ff8f4c480608ef1be5baf9ab6f1b4556e8f8`.
+- `clippy-driver executable`:
+  `e8fa6ad666c353e4c9248fc67074cf160ff2a5dbd97debd20416b81d7f917373`.
+- `/home/dikini/.cargo/config.toml`:
+  `13ed130670278614272c1fca1af627d4e427b8d306cd530a96f0d7555dbcd6a5`.
+- `.cargo/config.toml`:
+  `2eb887744ac35113f513a449e09d637cf4ae0e08e8361bd7b3401e41e37051f9`.
+
+### native-tool-pins.json
+
+Record SHA-256:
+`0baaf3a5c89d8168f300ae3bd0d80b490887fdc47ab8aeedaa95c439eaf41445`.
+
+- `cc`:
+  `b5f1b773a7c733738352000c92a077dc5852a1a2fc6d836b1e411be1e9ec5f88`.
+- `ar`:
+  `531473816bf553e863df5aab14c8177c72b732cf80c51dcf0fa990a50125041c`.
+- `ld`:
+  `97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075`.
+- `cc-selected-ld`:
+  `97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075`.
+- `cc-selected-cc1`:
+  `30510b346885152c4fce41d2b501751c95d3690b1c34eaa04ebb970e70eae620`.
+- `cc-selected-collect2`:
+  `8ab5d946ba2c948e5ea5c91e25a104439302e0599a521785770d10690c565437`.
+
+### rust-linker-pins.json
+
+Record SHA-256:
+`d89b8b4a1c7dca7eacacc80ec5867d9e20d230120427f580b1f6572701fe5bd2`.
+
+- `rust-lld`:
+  `38a9f28404309892f9c9afe02fa4979a0d9e8bc866979cde09f5bb7ec17e5721`.
+- `gcc-ld/ld.lld`:
+  `514ad5e5087dee69b173ab8a0bc0dfc717be3a2b2a47fcb4f36f50afe4d779c7`.
+
+### Repository configuration inputs
+
+- `Cargo.lock`:
+  `26be4499e4330e8146d024cfbf6950f6e711edc5909c9a700ec0f2ed58749e08`.
+- `Cargo.toml`:
+  `2d1a3d056418f5feb2e36d3ff99924e30f6a9136900b7aa2bb73ead902a1395c`.
+- `rust-toolchain.toml`:
+  `cdb9bea833b62d4c26fbba417000b2929746d667ba25ad4eee40dfa61aa75a89`.
+
+## Explicit external checkpoint inputs
+
+The complete gate declares all 30 paths below with `--input`, including the
+genuine static archive and source bundle, selected compiler/archive/symbol/ELF
+tools, compiler backends/linkers, shared SQLite and runtime libraries.
+The archive environment is
+`ASH_SQLITE_STATIC_ARCHIVE=/tmp/task0049-sqlite-prerequisite/libsqlite3.a`.
+All default seven stages run; `--input` adds byte identities, not stage filters.
+
+- `/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/cargo`:
+  SHA-256 `828980723df339d62434390e9fb8ef8831036583343ae2316b7ab5646b5c1953`.
+- `/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/clippy-driver`:
+  SHA-256 `e8fa6ad666c353e4c9248fc67074cf160ff2a5dbd97debd20416b81d7f917373`.
+- `/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rustc`:
+  SHA-256 `d3a664c970a9fd8361b64194861bebc1ae37b9054e5ee3400dc1c9e691797eea`.
+- `/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rustfmt`:
+  SHA-256 `30de9e1efcd8f8fe7750e00d0c45ff8f4c480608ef1be5baf9ab6f1b4556e8f8`.
+- `/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin/gcc-ld/ld.lld`:
+  SHA-256 `514ad5e5087dee69b173ab8a0bc0dfc717be3a2b2a47fcb4f36f50afe4d779c7`.
+- `/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld`:
+  SHA-256 `38a9f28404309892f9c9afe02fa4979a0d9e8bc866979cde09f5bb7ec17e5721`.
+- `/lib64/ld-linux-x86-64.so.2`:
+  SHA-256 `bda779ea9e9ad234f60315477d7cfd0bdde861cd8ddd9df8cdaf62f18c4cec14`.
+- `/tmp/task0049-sqlite-prerequisite/libsqlite3.a`:
+  SHA-256 `7c2b4dc4aa149543e60252b5fffcb62088398470a09885cebb5e3120459c0617`.
+- `/tmp/task0049-sqlite-prerequisite/sqlite-amalgamation-3460100.zip`:
+  SHA-256 `77823cb110929c2bcb0f5d48e4833b5c59a8a6e40cdea3936b99e199dbbe5784`.
+- `/tmp/task0049-sqlite-prerequisite/sqlite3.c`:
+  SHA-256 `6c35bc5f7f85eac9c49928bacbb02bb694b547aabf69197e058cca245ad80e83`.
+- `/tmp/task0049-sqlite-prerequisite/sqlite3.h`:
+  SHA-256 `89b62c671c5964e137409ce034941b7b05a3af2c9875aba41f47f9483d0c2515`.
+- `/tmp/task0049-sqlite-prerequisite/sqlite3.o`:
+  SHA-256 `ccd7e4bedda7aa4530b482098e56c8ac3d24cbd0368d5d98804523d2aea04cad`.
+- `/usr/bin/ar`:
+  SHA-256 `531473816bf553e863df5aab14c8177c72b732cf80c51dcf0fa990a50125041c`.
+- `/usr/bin/cc`:
+  SHA-256 `b5f1b773a7c733738352000c92a077dc5852a1a2fc6d836b1e411be1e9ec5f88`.
+- `/usr/bin/nm`:
+  SHA-256 `f04262bf48192a7cbb78a17ca49ae03f8930b0372bd0115576f957b2e2a57a01`.
+- `/usr/bin/readelf`:
+  SHA-256 `c857339616bbbfa5eba32733e22365048903fbaf6ed2126b897dd138bcb741fc`.
+- `/usr/bin/x86_64-linux-gnu-ar`:
+  SHA-256 `531473816bf553e863df5aab14c8177c72b732cf80c51dcf0fa990a50125041c`.
+- `/usr/bin/x86_64-linux-gnu-as`:
+  SHA-256 `4e5fcaa3cdc160173cb5cfe7aa35dc39d7aa1f06ba8d75b8d923bbae5473991b`.
+- `/usr/bin/x86_64-linux-gnu-gcc-15`:
+  SHA-256 `b5f1b773a7c733738352000c92a077dc5852a1a2fc6d836b1e411be1e9ec5f88`.
+- `/usr/bin/x86_64-linux-gnu-ld.bfd`:
+  SHA-256 `97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075`.
+- `/usr/bin/x86_64-linux-gnu-nm`:
+  SHA-256 `f04262bf48192a7cbb78a17ca49ae03f8930b0372bd0115576f957b2e2a57a01`.
+- `/usr/bin/x86_64-linux-gnu-readelf`:
+  SHA-256 `c857339616bbbfa5eba32733e22365048903fbaf6ed2126b897dd138bcb741fc`.
+- `/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2`:
+  SHA-256 `bda779ea9e9ad234f60315477d7cfd0bdde861cd8ddd9df8cdaf62f18c4cec14`.
+- `/usr/lib/x86_64-linux-gnu/libc.so.6`:
+  SHA-256 `85e64f97e348786a8fb4d9f3d52fec289e2fb86bba20f0731dfe61990525e0f7`.
+- `/usr/lib/x86_64-linux-gnu/libgcc_s.so.1`:
+  SHA-256 `9d339ecb409578d6a5d587e6c537a8f9589b8a13fefba30d167433a4b5758bee`.
+- `/usr/lib/x86_64-linux-gnu/libm.so.6`:
+  SHA-256 `1c488db6f4fe8cecb72456bc018de000b7a9b539c2994864b0416b5e8371b3d8`.
+- `/usr/lib/x86_64-linux-gnu/libsqlite3.so.0`:
+  SHA-256 `4633a4be13fdf05cb0f859e04fb06077a1fe30a90e405721a23873bd1f3d88a8`.
+- `/usr/lib/x86_64-linux-gnu/libsqlite3.so.0.8.6`:
+  SHA-256 `4633a4be13fdf05cb0f859e04fb06077a1fe30a90e405721a23873bd1f3d88a8`.
+- `/usr/libexec/gcc/x86_64-linux-gnu/15/cc1`:
+  SHA-256 `30510b346885152c4fce41d2b501751c95d3690b1c34eaa04ebb970e70eae620`.
+- `/usr/libexec/gcc/x86_64-linux-gnu/15/collect2`:
+  SHA-256 `8ab5d946ba2c948e5ea5c91e25a104439302e0599a521785770d10690c565437`.
+
+External mode, byte-count, symlink and resolved-path records are retained
+with the operator receipt. Their before/after equality is required in addition
+to the repository and tool/configuration comparisons.
+
+## Checkpoint acceptance and retained-input boundary
+
+Independent reviewer `/root/task0046_reviewer` cleared the full code and
+technical checkpoint at the tested pin. Coordinator `/root` accepted that
+checkpoint after independent review and its own raw receipt/input readback.
+Developer and sole Cargo operator is `/root/task0046_developer`,
+requested and dispatched as `gpt-6.1-sol` with `medium` reasoning effort.
+All 31 case sections above retain their complete positive, negative and
+compound observations. Original TASK-0045–0048 criteria close on the connected
+behavior and final gate; TASK-0049's product-checkpoint criteria close on the
+same receipt. Its artifact-cleanup criterion remains pending actual separate
+retirement and readback. The conditional Main integration guard is
+untriggered; this record claims no Main gate or integration.
+
+The gate pins every file, including Markdown, at the exact tested commit.
+Later acceptance prose is not a literal gate pass at another all-file input
+fingerprint. Executed source, tests, configuration, fixtures and runtime
+fingerprint must remain equal to that tested inventory; manual Markdown,
+local-link and authority review covers the changed receipt prose. The
+acceptance-retention readback is recorded separately before cleanup.
+No resource, stack, work or capacity limit was widened. Cell lifetime remains
+exactly its resource scope, with strict payload outlives ordering, cycle and
+payload-crossing rejection, and unchanged native retained-owner protections.
+DN-0054 remains byte-identical and separate. No remote publication, PR, Main
+integration or branch/worktree/cache retirement is part of this checkpoint.

@@ -1,7 +1,7 @@
 # TASK-0046: Generic Cell Contents and Dependencies
 
 - ID: `TASK-0046`
-- Status: active
+- Status: completed
 - Related: [CP-0023](../proposals/CP-0023-scoped-generic-cells.md),
   [TASK-0045](TASK-0045-generic-cell-api-and-acquisition.md),
   [TASK-0047](TASK-0047-generic-cell-execution-and-completion.md),
@@ -62,34 +62,34 @@ The task-owned [execution plan](task-0046-execution-plan.md) records the sequenc
 Dependency readiness and execution readiness remain separate; all original case
 criteria stay open until their complete observations exist.
 
-- [ ] CELL-P02: earlier scalar snapshots and snapshot-only closures escape with
+- [x] CELL-P02: earlier scalar snapshots and snapshot-only closures escape with
   their original value after replacement.
-- [ ] CELL-P03: inner cells retain and return outer access while its owner lives.
-- [ ] CELL-P04: an earlier independent function snapshot escapes after a later
+- [x] CELL-P03: inner cells retain and return outer access while its owner lives.
+- [x] CELL-P04: an earlier independent function snapshot escapes after a later
   outer-dependent replacement and still returns `7`.
-- [ ] CELL-P05: same-site recursion stores an enclosing activation's capture,
+- [x] CELL-P05: same-site recursion stores an enclosing activation's capture,
   returns `9`, and retains distinct activations with one release each.
-- [ ] CELL-P08: handler-provided closures retain their actual dependencies;
+- [x] CELL-P08: handler-provided closures retain their actual dependencies;
   local use and independent reply escape remain admitted.
-- [ ] CELL-P09: independent outward payloads and outer-dependent values crossing
+- [x] CELL-P09: independent outward payloads and outer-dependent values crossing
   unrelated inner scopes remain admitted at their permitted recipients.
-- [ ] CELL-P10: admitted ordinary immutable cycles remain usable and preserve
+- [x] CELL-P10: admitted ordinary immutable cycles remain usable and preserve
   observable sharing without a resource-cycle diagnostic.
-- [ ] CELL-P13: a handler writes an A-dependent closure into B but replies with
+- [x] CELL-P13: a handler writes an A-dependent closure into B but replies with
   an independent function; that reply snapshot escapes and returns `7`.
-- [ ] CELL-N02: handles, wrappers and live-reader/evidence closures cannot escape
+- [x] CELL-N02: handles, wrappers and live-reader/evidence closures cannot escape
   their own resource scope, including through imports.
-- [ ] CELL-N03: a fixed-type stored closure capturing its own cell rejects.
-- [ ] CELL-N04: indirect cycles through younger cells, wrappers and helpers
+- [x] CELL-N03: a fixed-type stored closure capturing its own cell rejects.
+- [x] CELL-N04: indirect cycles through younger cells, wrappers and helpers
   reject; a later clearing write does not repair retention.
-- [ ] CELL-N05: younger/incomparable retention and unsafe branch alternatives
+- [x] CELL-N05: younger/incomparable retention and unsafe branch alternatives
   reject even without a resource cycle.
-- [ ] CELL-N06: later dependent reads and dependent handler replies cannot escape.
-- [ ] CELL-N07: outward request payloads preserve hidden capture, evidence and
+- [x] CELL-N06: later dependent reads and dependent handler replies cannot escape.
+- [x] CELL-N07: outward request payloads preserve hidden capture, evidence and
   indexed metadata dependencies despite an independent eventual body answer.
-- [ ] CELL-N12: the builtin read after CELL-P13's handler retains A and rejects
+- [x] CELL-N12: the builtin read after CELL-P13's handler retains A and rejects
   escape at A's close.
-- [ ] Independent reconstruction and charged analysis cover all these cases;
+- [x] Independent reconstruction and charged analysis cover all these cases;
   TASK-0048's adversarial and budget checks confirm the connected boundary.
 
 Each ID includes every CP-0023 variant. Positive observations requiring runtime
@@ -280,3 +280,24 @@ semantic question for CP-0023, not an implicit reduction in scope.
 None authorized. Cell scope lifetime and resource-cycle rejection are fixed;
 temporary younger retention, new capture annotations and DN-0054 region
 mechanisms are excluded.
+
+## Local checkpoint acceptance, 2026-10-19
+
+The complete connected checkpoint was verified at
+`7e80df3e66a6d3074b86f29b7582cadb6696a563`, tree
+`dd26e7d5a2218cdf374c626af7759e558b8105ef`. The fresh default complete
+gate executed all seven stages without reuse or filters: 4,112 parent-harness
+passes, zero failures and one optional native calibration study ignored.
+Nine nested child-process summaries are excluded. The
+[complete case map and receipt](../design/generic-cell/evidence.md)
+retain all 31 primary cases, their variants, owning ledgers, native inputs,
+commands, results and digests. This closes connected product criteria rather
+than relying on earlier component readiness.
+
+Independent checkpoint review and coordinator acceptance are recorded in that
+receipt. TASK-0049 lifecycle cleanup remains pending until the separate
+reviewed deletion/index/link delta is retained and read back. Main integration
+has not been authorized or performed; its conditional verification guard is
+untriggered. No push, PR or worktree/cache retirement is included. DN-0054
+remains separate and byte-identical. Historical role and component receipts
+above retain their original scope.

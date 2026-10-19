@@ -312,12 +312,12 @@ not complete that acceptance.
 - [x] TASK-0045 launch records product inputs, retaining branch, roles and
   permissions. Later task dispatches require their own exact input handoffs.
 - [x] TASK-0045 foundation enables the downstream work without unchecked publication.
-- [ ] TASK-0045–0047 deliver connected behavior and specification changes.
-- [ ] All 31 primary case records include every CP-0023 variant and required
+- [x] TASK-0045–0047 deliver connected behavior and specification changes.
+- [x] All 31 primary case records include every CP-0023 variant and required
   positive, negative, Core, runtime and native observations.
-- [ ] TASK-0048 integrated evidence and independent review have no unresolved
+- [x] TASK-0048 integrated evidence and independent review have no unresolved
   findings or omitted boundaries.
-- [ ] Fresh full gate passes at pinned checkpoint inputs; retained result verified.
+- [x] Fresh full gate passes at pinned checkpoint inputs; retained result verified.
 - [ ] Product acceptance updates, proposal cleanup and index/link repairs are
   retained without prematurely claiming Main integration.
 - [ ] Any separately authorized Main integration satisfies its gate and retained
@@ -397,3 +397,24 @@ through eventual target/cache cleanup rather than relying only on latest.json.
 All original compound criteria and all-31-case acceptance remain open until the
 fresh full gate, review and acceptance are complete. DN-0054 and planning
 checkout changes remain separate; no push/PR/Main integration is authorized.
+
+## Local checkpoint acceptance, 2026-10-19
+
+The complete connected checkpoint was verified at
+`7e80df3e66a6d3074b86f29b7582cadb6696a563`, tree
+`dd26e7d5a2218cdf374c626af7759e558b8105ef`. The fresh default complete
+gate executed all seven stages without reuse or filters: 4,112 parent-harness
+passes, zero failures and one optional native calibration study ignored.
+Nine nested child-process summaries are excluded. The
+[complete case map and receipt](../design/generic-cell/evidence.md)
+retain all 31 primary cases, their variants, owning ledgers, native inputs,
+commands, results and digests. This closes connected product criteria rather
+than relying on earlier component readiness.
+
+Independent checkpoint review and coordinator acceptance are recorded in that
+receipt. TASK-0049 lifecycle cleanup remains pending until the separate
+reviewed deletion/index/link delta is retained and read back. Main integration
+has not been authorized or performed; its conditional verification guard is
+untriggered. No push, PR or worktree/cache retirement is included. DN-0054
+remains separate and byte-identical. Historical role and component receipts
+above retain their original scope.

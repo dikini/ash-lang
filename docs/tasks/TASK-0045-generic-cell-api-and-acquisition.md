@@ -1,7 +1,7 @@
 # TASK-0045: Generic Cell API and Acquisition
 
 - ID: `TASK-0045`
-- Status: active
+- Status: completed
 - Related: [CP-0023](../proposals/CP-0023-scoped-generic-cells.md),
   [TASK-0046](TASK-0046-generic-cell-contents-and-dependencies.md),
   [TASK-0047](TASK-0047-generic-cell-execution-and-completion.md),
@@ -82,20 +82,20 @@ acceptance remains open for connected evidence.
 
 - [x] Reviewed foundation receipt names the retained commit, ordinary
   authentication checks, publication restrictions and remaining dependencies.
-- [ ] CELL-P01: Int/Bool/tuple/nominal payloads share one slot through aliases;
+- [x] CELL-P01: Int/Bool/tuple/nominal payloads share one slot through aliases;
   replacement is observed and the initializer executes once.
-- [ ] CELL-P06: local/imported helpers, facades and alias branches preserve
+- [x] CELL-P06: local/imported helpers, facades and alias branches preserve
   behavior and dependency relationships; distinct owner types stay distinct.
-- [ ] CELL-P11: fixed function payloads and mixed legacy/generic cells preserve
+- [x] CELL-P11: fixed function payloads and mixed legacy/generic cells preserve
   repeated calls, exact evidence and exact effect discharge.
-- [ ] CELL-N01: wrong payload type, initializer type, kind and arity reject at
+- [x] CELL-N01: wrong payload type, initializer type, kind and arity reject at
   the existing ordinary phase before dependency checking.
-- [ ] CELL-N08: fresh binders are unavailable to the initializer and payload
+- [x] CELL-N08: fresh binders are unavailable to the initializer and payload
   type; valid preceding same-spelled bindings still resolve correctly.
-- [ ] CELL-N09: counterfeit families/providers and missing exact evidence reject.
-- [ ] CELL-N10: a read does not generalize its result; schemes and higher-rank
+- [x] CELL-N09: counterfeit families/providers and missing exact evidence reject.
+- [x] CELL-N10: a read does not generalize its result; schemes and higher-rank
   payloads retain existing rejection.
-- [ ] CELL-N11: restricted State, views and continuation capabilities cannot
+- [x] CELL-N11: restricted State, views and continuation capabilities cannot
   enter the payload directly or through wrappers.
 
 The case IDs refer to all variants in CP-0023, not only the descriptions above.
@@ -236,3 +236,24 @@ probe stays private; separate public generic-helper tests cover summary denial.
 
 None authorized. Region construction from DN-0054, arbitrary pure-state resource
 declarations and legacy API migration remain outside this task.
+
+## Local checkpoint acceptance, 2026-10-19
+
+The complete connected checkpoint was verified at
+`7e80df3e66a6d3074b86f29b7582cadb6696a563`, tree
+`dd26e7d5a2218cdf374c626af7759e558b8105ef`. The fresh default complete
+gate executed all seven stages without reuse or filters: 4,112 parent-harness
+passes, zero failures and one optional native calibration study ignored.
+Nine nested child-process summaries are excluded. The
+[complete case map and receipt](../design/generic-cell/evidence.md)
+retain all 31 primary cases, their variants, owning ledgers, native inputs,
+commands, results and digests. This closes connected product criteria rather
+than relying on earlier component readiness.
+
+Independent checkpoint review and coordinator acceptance are recorded in that
+receipt. TASK-0049 lifecycle cleanup remains pending until the separate
+reviewed deletion/index/link delta is retained and read back. Main integration
+has not been authorized or performed; its conditional verification guard is
+untriggered. No push, PR or worktree/cache retirement is included. DN-0054
+remains separate and byte-identical. Historical role and component receipts
+above retain their original scope.

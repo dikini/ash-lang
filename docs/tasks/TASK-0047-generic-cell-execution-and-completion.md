@@ -1,7 +1,7 @@
 # TASK-0047: Generic Cell Execution and Completion
 
 - ID: `TASK-0047`
-- Status: active
+- Status: completed
 - Related: [CP-0023](../proposals/CP-0023-scoped-generic-cells.md),
   [TASK-0045](TASK-0045-generic-cell-api-and-acquisition.md),
   [TASK-0046](TASK-0046-generic-cell-contents-and-dependencies.md),
@@ -60,18 +60,18 @@ task-owned [execution plan](task-0047-execution-plan.md) records the sequence.
 All original acceptance remains pending until its complete observations and
 checkpoint evidence exist.
 
-- [ ] CELL-P07: exact read override, no-other-mutation intercepted write,
+- [x] CELL-P07: exact read override, no-other-mutation intercepted write,
   forwarded write and dropped self-capturing replacement have their specified
   results; the discarded replacement creates no retained slot edge.
-- [ ] CELL-P12: the unforwarded original write plus the Tick handler's separate
+- [x] CELL-P12: the unforwarded original write plus the Tick handler's separate
   mutation leaves `99`, not `41` or the original replacement `42`.
-- [ ] CELL-C01: capture/resume observes the latest payload without reacquisition;
+- [x] CELL-C01: capture/resume observes the latest payload without reacquisition;
   nested/same-site activations stay distinct; donor/stale keys fail before access.
-- [ ] CELL-C02: owned discard closes once after dependent cleanup; unsafe outside
+- [x] CELL-C02: owned discard closes once after dependent cleanup; unsafe outside
   or running abandonment rejects; initializer capture creates no premature owner.
-- [ ] Runtime observations for all TASK-0045/0046 positive cases are delivered
+- [x] Runtime observations for all TASK-0045/0046 positive cases are delivered
   to their primary owners, including P05 release counts and P13's result.
-- [ ] Runtime charging, preparation, iterative disposal and failure probes are
+- [x] Runtime charging, preparation, iterative disposal and failure probes are
   connected for TASK-0048's C04/C05/C06 checks.
 
 The primary cases include all CP-0023 variants, not only the summary above.
@@ -292,3 +292,24 @@ Missing/mismatched carriers and reversed header order still reject.
 None authorized. No native owner is acquired for a generic cell. Region-backed
 storage, owner transport, manual release, atomic updates and DN-0054 allocation
 work are excluded.
+
+## Local checkpoint acceptance, 2026-10-19
+
+The complete connected checkpoint was verified at
+`7e80df3e66a6d3074b86f29b7582cadb6696a563`, tree
+`dd26e7d5a2218cdf374c626af7759e558b8105ef`. The fresh default complete
+gate executed all seven stages without reuse or filters: 4,112 parent-harness
+passes, zero failures and one optional native calibration study ignored.
+Nine nested child-process summaries are excluded. The
+[complete case map and receipt](../design/generic-cell/evidence.md)
+retain all 31 primary cases, their variants, owning ledgers, native inputs,
+commands, results and digests. This closes connected product criteria rather
+than relying on earlier component readiness.
+
+Independent checkpoint review and coordinator acceptance are recorded in that
+receipt. TASK-0049 lifecycle cleanup remains pending until the separate
+reviewed deletion/index/link delta is retained and read back. Main integration
+has not been authorized or performed; its conditional verification guard is
+untriggered. No push, PR or worktree/cache retirement is included. DN-0054
+remains separate and byte-identical. Historical role and component receipts
+above retain their original scope.
