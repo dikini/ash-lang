@@ -1686,6 +1686,11 @@ results. Existing ordinary kind, type, row, sealed-evidence, State/view transpor
 and continuation restrictions apply before dependency admission. In particular,
 restricted native State and views cannot become cell payloads through wrappers.
 
+`R` identifies the cell's logical owner, not an allocation region. The cell's
+lifetime is exactly its resource scope. Longer-lived backing storage cannot
+extend access, return a live-reader closure beyond that scope or defer its
+required completion.
+
 Dependency admission tracks the current contents of each possible activation
 separately from its access values and previous read results. Initialization and
 actual builtin replacements require every retained resource owner to strictly

@@ -100,14 +100,54 @@ acceptance remains pending even if these focused checks pass.
 
 ## Discoveries
 
-None recorded. Record measured bounds and failures with their exact inputs.
+The 64 KiB deep function test needed a test-only helper extraction after the
+added discard branch inflated its shared caller frame: the observed overflow
+was mode-zero acquisition before discard, not recursive teardown. Fresh actual
+owned capture/discard then passed at unchanged limits with one deep root and
+exact accounting/release events. The native artifact collector initially used
+the generated src directory for Cargo files; its path-only repair and failed
+pre-execution receipt remain separate from the successful real native pair.
 
 ## Deviations
 
 None authorized. No general region mechanism, native lifetime relaxation,
 alternative legacy API or verification-policy change belongs to this task.
 
-The [31-case observation map](../design/generic-cell/evidence.md) records the
-working source/Core/runtime/native boundaries and exact-work probes. Frozen
-verification and the independent retained review remain pending; TASK-0049's
-fresh complete gate is still required before original compound acceptance.
+### Focused readiness receipt
+
+The [31-case observation map](../design/generic-cell/evidence.md) retains exact
+commands, phases, values/counts, refusal reasons, tool/input/native bindings and
+all nine raw-log digests. Independent code/technical review is clear and root
+accepted bounded TASK-0048 focused readiness on 2026-10-19 at unsigned
+`b785e5605569492103a64ffb9e2a3b5de64ded88`, tree
+`70577492c6ed4297a40a2451f7e18639d0386ac4`.
+
+Library 1,937, resource/cleanup 173, full architecture 47, declared-view one and
+shared Core rank-1 one passed; the real native paired test passed with two
+hosts, and strict Clippy/fmt/rustdoc passed. Five unaffected observations at
+`b3445f51b6aafb6b3e7a866a438763104dd595f8` transfer across only the native
+collector test-path repair, with 1,768 other mode/content records exact.
+Fresh fmt/Clippy/native/rustdoc bind the repaired records; failed native
+collection supplies no execution result. The retaining 1,769-record digest is
+`0136ae86db4d585bec0023defebe3d893eb3b7048b20b50aca92c5bc99201b85`.
+
+Both actual hosts embed
+`b8c62ad3ad13fab49c6cd4197f7d14d395eb0628f187e0bd8829bc57d58e1fce`.
+Permitted stored-handle reads and C close preserve retained native protection;
+subsequent Owner.borrow provider/State access is denied before native entry.
+The real traces distinguish completed result 42/parent byte 99 from internal
+refusal/byte zero, with child-before-parent release once each. Native readback
+SHA-256 is
+`a525773b3239dce15847f996211244737dd5092b9adf05ba3e766293d7d499f9`.
+
+Fresh actors remain developer/Cargo operator `/root/task0046_developer`,
+independent reviewer `/root/task0046_reviewer` and acceptance owner `/root`;
+the dispatched model/effort remains `gpt-6.1-sol`, `medium`. One Cargo job,
+Rust 1.97.1, empty RUSTC_WRAPPER and the existing cache were preserved. Working
+receipts live outside the cache under `/tmp/task0048-launch/frozen/`.
+Reviewed receipt prose and explicit existing-scope specification wording change
+after the tested pin; retained readback preserves all executed source, tests,
+configuration and fixture bytes. Original criteria stay
+unchecked. TASK-0049 owns the fresh default seven-stage workspace gate and
+original compound acceptance, followed by authorized lifecycle cleanup.
+No push/Main integration, DN-0054 change or retirement is included.

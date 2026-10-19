@@ -4,8 +4,9 @@ This record maps accepted [CP-0023](../../proposals/CP-0023-scoped-generic-cells
 observations to product tests. The [current specification](../../../spec/README.md)
 defines Ash; this record supplies evidence and no additional permission.
 [TASK-0048](../../tasks/TASK-0048-generic-cell-integrated-verification.md)
-owns this matrix. TASK-0049's fresh complete workspace gate and coordinator
-acceptance remain pending. A working observation is not a frozen receipt.
+owns this matrix. TASK-0049's fresh complete workspace gate and original
+compound acceptance remain pending. Coordinator acceptance here is bounded to
+TASK-0048 focused readiness.
 
 ## Observation boundaries
 
@@ -15,7 +16,7 @@ architecture inventory repair at `ac72d18` and receipt head `9cfd39a9`.
 Their task records retain exact commands, input records, log hashes and bounded
 transfers. TASK-0048 changes test bodies in compiler source files, so those
 historical runs do not imply identical compiler fingerprints or a fresh gate.
-The final TASK-0048 receipt will bind the observations below to frozen inputs.
+The frozen TASK-0048 receipt below binds these observations to exact inputs.
 
 The public runtime fixtures use `compile_path`, independent linked Core
 admission and actual execution. `generic_runtime_observation` checks the value,
@@ -387,9 +388,257 @@ Internal teardown failure after a completed replacement remains distinct:
 checks Teardown/EnvironmentDisposal and incomplete execution after publication.
 It is not evidence of preparation rollback or a new source cleanup guarantee.
 
-## Ledger and receipt status
+## Variant traceability
 
-This working map is not acceptance. TASK-0048's frozen command receipt, exact
-input/tool/native manifests and independent verdict remain to be appended.
-TASK-0049 must execute the fresh full workspace checkpoint before original
-compound criteria or all 31 cases are accepted.
+The generic opaque-wrapper and selected-evidence witnesses for N02/N07 are
+`cell_n02_n07_imported_evidence_dependencies_survive_wrappers_and_crossings`;
+its imported pack/unpack and Read/invoke routes pair independent old snapshots
+with hidden owner captures. Direct wrapper/live-reader variants are named
+`cell_n02_access_wrappers_and_live_reader_results_cannot_leave_their_owner`.
+N06's imported P04 later-read companion is
+`cell_p04_imported_read_helper_preserves_two_call_snapshots`; its direct pair is
+`cell_p04_snapshot_stays_independent_after_dependent_replacement`.
+N07's indexed-only carrier witness is
+`cell_n07_indexed_operation_metadata_alone_crosses_with_its_owner`.
+P06's ordinary rigid-owner boundary is
+`cell_p06_distinct_rigid_owners_do_not_unify_at_an_ordinary_branch`: different
+owners fail Typing/type.mismatch while same-owner aliases admit. N09's missing
+exact evidence fails Typing/constraint.unsatisfied; counterfeit family fails
+Resolution/resolve.unknown-type.
+
+C02's initializer capture/discard observation is
+`generic_cell_c02_initializer_discard_never_publishes_the_unacquired_owner`.
+Its outside-pending-resume unsafe completion and ordinary owned discard are
+separated in `generic_cell_completion_keeps_structural_discard_obligations`.
+Running cleanup has its own source control,
+`generic_cell_running_cleanup_cannot_be_abandoned_by_an_outer_handler`, with
+source Typing/effect.discard-unsafe and causal discard labels. The independent
+Core capture-authority control is
+`generic_cell_actual_core_rejects_discard_of_running_cleanup`: it checks the
+actual mutated completion operation and refuses Unsafe/Cleanup. It does not
+claim complete altered-arena validation or execute an orphaned malformed graph.
+
+C05's captured capacity and fresh-key control is
+`generic_cell_captured_capacity_preserves_latest_root_and_fresh_reuse`.
+Repeated large/shared cyclic reads are named
+`generic_cell_repeated_large_cyclic_reads_share_the_exact_heap_root`.
+Deep function-root modes and common deep captured-control walker tests are
+separate observations. Adding the discard mode initially inflated the shared
+test closure and overflowed mode-zero acquisition before discard on 64 KiB;
+a test-only helper extraction removed that caller-frame aggregation. The final
+probe performs fresh acquisition, capture and owned discard at the same stack
+limit, without warming paths, cloning the deep root or changing production
+runtime behavior.
+
+## Frozen focused receipt
+
+The retaining code/test pin is unsigned
+`b785e5605569492103a64ffb9e2a3b5de64ded88`, tree
+`70577492c6ed4297a40a2451f7e18639d0386ac4`.
+Its 1,769 path/mode/content records have canonical SHA-256
+`0136ae86db4d585bec0023defebe3d893eb3b7048b20b50aca92c5bc99201b85`;
+the saved manifest file SHA-256 is
+`f0adaee2028949a9c699fe6e64845e75c20dfe94e0b011bddf50e9baa267bfe9`.
+All source, tests, fixtures, manifest/lockfile and configuration stayed fixed
+during their applicable checks. Rust/Cargo 1.97.1, rustfmt 1.9.0 and Clippy
+0.1.97 were reconfirmed with their executable/configuration hashes. All commands
+used `CARGO_BUILD_JOBS=1 RUSTC_WRAPPER=` and the existing target cache.
+
+The library/resource/view/architecture/rank-1 observations ran at initial
+unsigned candidate `b3445f51b6aafb6b3e7a866a438763104dd595f8`, tree
+`6c71acf7605281d03ae32e72b5bb36bad7bf79ad`, with 1,769 records SHA-256
+`518ead7bdc00be1ceb255495ff1a0dba63be92cbae5189c81beda7d8cfbb8905`.
+The only subsequent repair changed optional evidence-collector paths in
+`tests/source_resource_execution.rs`: generated Rust/images live under src,
+whereas Cargo inputs live at its parent and the build log has its own accessor.
+The failed collector run stopped before host execution; its failed receipt and
+partial artifacts remain separate and supply no C06 result. Exact comparison
+retains all 1,768 other records, including every production/compiler source,
+configuration, fixture and exercised input for those five unaffected targets.
+Those five receipts transfer within that scope only. Fresh fmt/strict Clippy
+used the complete repaired records before the administrative commit; fresh
+native and rustdoc observations ran at the retaining pin. No prior native
+observation transfers across the collector failure.
+
+Working manifests, receipts and raw logs remain outside the target cache in
+`/tmp/task0048-launch/frozen/`. The following command/result/input/log digest
+summary is durable here; it is focused evidence and not the complete workspace
+gate. Nested child-test summaries are not counted twice.
+
+### fmt
+
+```sh
+cargo fmt --check
+```
+
+Passed.
+Log SHA-256:
+`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
+
+### clippy
+
+```sh
+cargo clippy -p ash --all-targets --all-features --locked -- -D warnings
+```
+
+Passed, warnings denied.
+Log SHA-256:
+`e95307c7c88b6e2caacdfcd9265dc9529c7d8693a8a9195654deb75b342f928f`.
+
+### lib
+
+```sh
+cargo test --lib --locked -- --show-output
+```
+
+1,937 passed.
+Log SHA-256:
+`c0aec9f25203c06128b6fa5940cef903998adeb2a7536d662d21d22997ca4b0c`.
+
+### resource
+
+```sh
+cargo test --test resource_scope_typing --test resource_scope_modules \
+    --test resource_scope_core --test resource_scope_runtime --test \
+    cleanup_abandonment --test cleanup_interactions --test \
+    cleanup_partial_acquisition --locked
+```
+
+173 passed: typing 105, modules 16, Core 2, runtime 32; cleanup 11 + 6 + 1.
+Log SHA-256:
+`a8ee06292022533d8ef28d46c1ed1b1eca821bf00766d64478de2302c13c3dfa`.
+
+### views
+
+```sh
+cargo test --test copying_sqlite_source --locked generic_cell_n11 -- \
+    --nocapture
+```
+
+One test passed, covering three prohibited-view shapes and two valid companions.
+Log SHA-256:
+`46dffc6926368098a1d488e898b45d76fd0a69b27e536b4717023822818e587b`.
+
+### architecture
+
+```sh
+cargo test --test architecture --locked
+```
+
+All 47 passed.
+Log SHA-256:
+`ca36e55e43a9345db58b86cb69fc71fa0f069c36710b654cd758175af7763877`.
+
+### rank1
+
+```sh
+cargo test --test core_validation --locked \
+    rejects_nested_forall_as_an_outer_instantiation_argument -- --exact
+```
+
+One shared Core rank-1 control passed.
+Log SHA-256:
+`a58c7f3549bca70be6da5fc0015d9e9649fc46c7d50061a3d3b90feff0595349`.
+
+### native
+
+```sh
+cargo test --test source_resource_execution --locked \
+    generic_cell_c06_stored_native_access_reads_after_quarantine_but_\
+cannot_restore_use \
+    -- --exact --nocapture
+```
+
+One paired test passed: two actual generated native hosts. Native evidence
+collection used `ASH_OWNER_EVIDENCE_DIR` set to
+`/tmp/task0048-launch/frozen/native-artifacts`.
+Log SHA-256:
+`c8e13cfe35c1580ccf668ad49f09896b33740c228ccc70c1b6fb03d75a37e689`.
+
+### rustdoc
+
+```sh
+cargo doc -p ash --no-deps --all-features --locked
+```
+
+Passed, warnings denied via RUSTDOCFLAGS="-D warnings".
+Log SHA-256:
+`97ae32712a1310a707d514947709536684a412a09645072f372de7bd3da626b7`.
+
+## Real native input and output binding
+
+Both generated hosts embed runtime fingerprint
+`b8c62ad3ad13fab49c6cd4197f7d14d395eb0628f187e0bd8829bc57d58e1fce`.
+The operator parsed all 32 hexadecimal bytes from generated Rust and compared
+them with the recorded matching compiler identity. Each case retains and hashes
+14 inputs: serialized complete case preimage, entry/owner/native source, native
+object/archive, linked executable, generated Rust, image/expected facts, Cargo
+manifest/lockfile/toolchain and native build log. Four post-execution outputs
+(native trace, stdout, stderr and exact optional exit status) are independently
+hashed. The readback additionally records ELF linker metadata and actual dynamic
+library paths/hashes: 21 retained files per case. Its manifest SHA-256 is
+`a525773b3239dce15847f996211244737dd5092b9adf05ba3e766293d7d499f9`.
+
+Actual tools are GCC 15.2.0, GNU ar 2.46, Rust 1.97.1 and LLD 22.1.6, on
+x86_64 Linux 7.0.0-38 with glibc 2.43. The six C-tool/resolved frontend/linker
+hashes and two bundled Rust-linker hashes were checked against actual files;
+ELF comments independently identify GCC/Rust/LLD in both executables. Rust's
+nine executable/configuration pins match the preceding component receipts.
+The native compiler/link commands, generated Cargo inputs and library hashes
+are retained in the input manifests; no implicit current prebuilt binary is
+substituted for these generated hosts.
+
+Permitted stored-handle case:
+
+- Complete case key: `dc1f33c3e4a855e278d49937874768d9dbd94e60ff3f73cc38cf7553f51d93ba`.
+- Linked host SHA-256:
+  `4c6d7c41ecd760ea18aed37d0736bee3796ba560ee33623fb1bbacbc9a7ef423`.
+- Generated Rust SHA-256:
+  `c2974e0fbe198bce87d236bc8635596f3c502c898f078b9a433fe5b730aa7b95`.
+- Native trace SHA-256:
+  `e0f3b1a06f22abab1345f01e4887bd4305696ddb400bb9a01558dbb60dec4097`.
+
+Denied provider/State-access case:
+
+- Complete case key: `56f23e25e528ea04d70720dc1df24f5fd17118b555b8abd433d96e44ac0ad57d`.
+- Linked host SHA-256:
+  `693886bc9e610ed298d6d42adc2403da7c374327bafbd044897bf06bfa9e4015`.
+- Generated Rust SHA-256:
+  `07212db8956db643273c012a3b395ef1ec5270245443f750f031b7e4b8894240`.
+- Native trace SHA-256:
+  `5affeb71e2330f5fb7270df6086a581ac7fadff3a73aa6c30351273008c76905`.
+
+The permitted case returns `Completed(42, RetainedError(()))`, exits zero and
+ends with parent byte 99. The denied case reaches the second successful ordinary
+Cell.read and closes C, then attempts `Owner.borrow recovered`: existing
+provider/State authority rejects before native entry, exits one, emits the
+internal-control-state message and leaves parent byte zero. This observes
+provider/State access denial on the path toward native use; it does not claim a
+native borrow call occurred. Both actual C traces acquire parent64/child4,
+retain child4, release child4, then release parent64 exactly once. C's close
+neither consumes A nor removes B-to-A native protection. These are real native
+observations, separate from injected teardown failures.
+
+## Review, acceptance and remainder
+
+Independent reviewer `/root/task0046_reviewer` cleared the complete code and
+technical evidence at the retaining pin, including actual raw log hashes,
+precise five-stage input transfer and native post-execution readback.
+Coordinator `/root` accepted TASK-0048 focused readiness on 2026-10-19.
+Developer/Cargo operator remains `/root/task0046_developer`, dispatched
+`gpt-6.1-sol`, `medium`. Receipt prose and explicit existing-scope
+specification wording receive manual
+Markdown/link/authority review and exact executed source/test/config retention
+checks. The static semantics now states the accepted rule explicitly: R is a
+logical owner, Cell lifetime is exactly its resource scope, and backing storage
+cannot extend live access/reader escape or defer required completion.
+
+Original TASK-0046/0047/0048/0049 compound criteria and all-31-case checkpoint
+acceptance remain open. TASK-0049 must run the fresh default complete
+seven-stage
+`cargo xtask verify` without reuse at the retained handoff, preserve durable
+stage/input/tool/log summaries, then perform its acceptance and authorized
+lifecycle cleanup. Complete legacy/ffi regressions are required there; this
+focused run does not relabel unselected native targets as freshly executed.
+DN-0054 remains separate and byte-identical. No push, PR/Main integration or
+worktree/cache retirement is part of this handoff.

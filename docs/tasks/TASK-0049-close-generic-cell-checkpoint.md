@@ -353,3 +353,47 @@ flow relationships; they do not require the broader base-region model first.
 
 None authorized. Semantic changes return to CP-0023; tasks cannot relax its
 scope lifetime, cycles, positive-case precision, crossing or retention rules.
+
+### TASK-0048 focused readiness and next checkpoint
+
+Root accepted focused TASK-0048 readiness after independent code/technical
+clearance at unsigned `b785e5605569492103a64ffb9e2a3b5de64ded88`, tree
+`70577492c6ed4297a40a2451f7e18639d0386ac4`. The
+[31-case evidence record](../design/generic-cell/evidence.md) supplies the
+complete case/variant mapping, all nine exact commands/results/log hashes,
+ledger boundaries and actual native input/output/fingerprint binding.
+
+The library/resource/views/architecture/rank-1 observations at `b3445f5` transfer
+only across an optional native evidence-collector path repair in its separate
+test target: 1,768 other records, including production/compiler source,
+configurations, fixtures and those exercised target inputs, remain exact.
+Fresh fmt/strict Clippy/native/rustdoc bind the retaining 1,769-record digest
+`0136ae86db4d585bec0023defebe3d893eb3b7048b20b50aca92c5bc99201b85`.
+The failed collector run ended before host execution and remains separate.
+Results are library 1,937; resource/cleanup 173; architecture 47; declared-view
+one; shared Core rank-1 one; native paired test one with two generated hosts;
+fmt/Clippy/rustdoc passed. No complete workspace result is inferred.
+
+Both real hosts embed
+`b8c62ad3ad13fab49c6cd4197f7d14d395eb0628f187e0bd8829bc57d58e1fce`;
+readback SHA-256 is
+`a525773b3239dce15847f996211244737dd5092b9adf05ba3e766293d7d499f9`.
+Fourteen inputs and four post-execution outputs per case, actual native-tool/
+Rust-linker identities, ELF metadata and dynamic-library hashes are retained
+outside the target cache in `/tmp/task0048-launch/frozen/`. The evidence record
+preserves the durable command/input/tool/log digest summary. Permitted generic
+reads preserve native quarantine; later Owner.borrow provider/State access is
+denied before native entry, with the actual 99/0 parent-byte discriminator and
+child-before-parent release once each.
+
+Developer/Cargo operator `/root/task0046_developer` and independent reviewer
+`/root/task0046_reviewer` retain their roles under root acceptance ownership;
+model/effort remains `gpt-6.1-sol`, `medium`. The next owner is root, to initiate
+TASK-0049's fresh default complete seven-stage `cargo xtask verify` without
+reuse at the retained handoff. Keep `CARGO_BUILD_JOBS=1 RUSTC_WRAPPER=`, the
+existing cache and unchanged limits. No source or documentation edits occur
+during that gate. Retain durable stage commands/results/input/tool/log hashes
+through eventual target/cache cleanup rather than relying only on latest.json.
+All original compound criteria and all-31-case acceptance remain open until the
+fresh full gate, review and acceptance are complete. DN-0054 and planning
+checkout changes remain separate; no push/PR/Main integration is authorized.
