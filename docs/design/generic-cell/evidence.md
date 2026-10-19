@@ -1,9 +1,7 @@
 # Generic cell checkpoint evidence
 
-This record maps accepted
-[CP-0023](../../proposals/CP-0023-scoped-generic-cells.md)
-observations to product tests. The [current
-specification](../../../spec/README.md)
+This record maps the accepted generic cell transition to product tests.
+The [current specification](../../../spec/README.md)
 defines Ash; this record supplies evidence and no additional permission.
 The complete local checkpoint was verified at
 `7e80df3e66a6d3074b86f29b7582cadb6696a563`: all seven default stages
@@ -12,7 +10,8 @@ executed freshly, with zero reused stages. The 140 parent test harnesses report
 The current real native pair embeds runtime fingerprint
 `6270711a6b9492367ecff76a0b1612a1b21f475b44282d9618eabbd08598fcf9`.
 The final receipt below supersedes earlier component-only readiness.
-Main integration and lifecycle cleanup remain separate, unperformed steps.
+Main integration has not been authorized or performed. The local
+transition artifacts are retired after checkpoint acceptance, as recorded below.
 
 ## Observation boundaries
 
@@ -1457,8 +1456,9 @@ requested and dispatched as `gpt-6.1-sol` with `medium` reasoning effort.
 All 31 case sections above retain their complete positive, negative and
 compound observations. Original TASK-0045–0048 criteria close on the connected
 behavior and final gate; TASK-0049's product-checkpoint criteria close on the
-same receipt. Its artifact-cleanup criterion remains pending actual separate
-retirement and readback. The conditional Main integration guard is
+same receipt. Its artifact-cleanup criterion closes only through the reviewed
+retirement
+and retained readback below. The conditional Main integration guard is
 untriggered; this record claims no Main gate or integration.
 
 The gate pins every file, including Markdown, at the exact tested commit.
@@ -1466,9 +1466,72 @@ Later acceptance prose is not a literal gate pass at another all-file input
 fingerprint. Executed source, tests, configuration, fixtures and runtime
 fingerprint must remain equal to that tested inventory; manual Markdown,
 local-link and authority review covers the changed receipt prose. The
-acceptance-retention readback is recorded separately before cleanup.
+acceptance-retention readback below precedes cleanup.
 No resource, stack, work or capacity limit was widened. Cell lifetime remains
 exactly its resource scope, with strict payload outlives ordering, cycle and
 payload-crossing rejection, and unchanged native retained-owner protections.
 DN-0054 remains byte-identical and separate. No remote publication, PR, Main
 integration or branch/worktree/cache retirement is part of this checkpoint.
+
+## Local acceptance retention and transition retirement
+
+The reviewed acceptance update was retained at unsigned local commit
+`97792795d9d53285844e4ff6f5a7a2a02bbfa366`, tree
+`d4429549ce3c4451b93bd288f05898b121243c95`, directly after the tested
+checkpoint. Its clean 1,769-file inventory SHA-256 is
+`6e802c91f0e65ad090b657692bedc73bc14061d563093d9db70e4c93755e4877`.
+Only the six reviewed receipt Markdown files changed; all 1,763 other files,
+including executed source, tests, configuration and fixtures, match the gate.
+There is no commit signature. Independent review and coordinator readback
+cover the retained acceptance, not a new code-gate invocation.
+
+The separate reviewed lifecycle delta removes exactly ten transition files:
+the accepted proposal, TASK-0045–0049 and four execution plans. It changes
+exactly five surviving documents: this evidence, the task/proposal/design
+indexes and DN-0053. DN-0053 remains informative and retained because the
+byte-identical DN-0054 links to it. No unrelated artifact, source, test,
+configuration, fixture, worktree or build cache is removed or changed.
+The retirement readback must verify actual file absence, repaired local links,
+current specification authority and equality of every retained executed input.
+The retained retirement readback is still required to fulfill TASK-0049's
+lifecycle criterion. The conditional Main guard remains untriggered.
+Main integration has not occurred.
+
+### Local transition history
+
+The proposal, original complete criteria, acceptance marks, historical roles
+and execution plans remain in the local acceptance object. These commits have
+not been pushed; remote publication is not implied. Retrieve all ten exact
+artifacts with the following verified local Git commands:
+
+```sh
+checkpoint=97792795d9d53285844e4ff6f5a7a2a02bbfa366
+artifact=docs/proposals/CP-0023-scoped-generic-cells.md
+git show "$checkpoint:$artifact"
+artifact=docs/tasks/TASK-0045-generic-cell-api-and-acquisition.md
+git show "$checkpoint:$artifact"
+artifact=docs/tasks/TASK-0046-generic-cell-contents-and-dependencies.md
+git show "$checkpoint:$artifact"
+artifact=docs/tasks/TASK-0047-generic-cell-execution-and-completion.md
+git show "$checkpoint:$artifact"
+artifact=docs/tasks/TASK-0048-generic-cell-integrated-verification.md
+git show "$checkpoint:$artifact"
+artifact=docs/tasks/TASK-0049-close-generic-cell-checkpoint.md
+git show "$checkpoint:$artifact"
+artifact=docs/tasks/task-0045-execution-plan.md
+git show "$checkpoint:$artifact"
+artifact=docs/tasks/task-0046-execution-plan.md
+git show "$checkpoint:$artifact"
+artifact=docs/tasks/task-0047-execution-plan.md
+git show "$checkpoint:$artifact"
+artifact=docs/tasks/task-0048-execution-plan.md
+git show "$checkpoint:$artifact"
+```
+
+Current language rules are in the specification; this evidence supplies no
+additional semantics or permission. The checkpoint preserves Cell's exact
+resource-scope lifetime, strict payload ordering, resource-cycle rejection,
+ordinary payload-crossing and all native retained-owner protections. DN-0054
+SHA-256 remains
+`c7a596a9fbd84029adfd5333af02594e1a82eea30c548947be362f722cd1e342`.
+No push, PR, Main integration or branch/worktree/cache retirement is included.

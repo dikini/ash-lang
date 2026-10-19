@@ -2,7 +2,7 @@
 
 - ID: `DN-0053`
 - Status: exploring
-- Related: [CP-0023](../proposals/CP-0023-scoped-generic-cells.md),
+- Related: [generic cell checkpoint evidence](generic-cell/evidence.md),
   [DN-0035](DN-0035-region-memory-management-and-verified-providers.md),
   [DN-0038](DN-0038-resource-properties-and-mutable-variable-usage.md),
   [DN-0037](DN-0037-ash-authored-foreign-library-interfaces.md),
@@ -17,11 +17,13 @@
 > prototype. Resource-scope lifetime and rejection of resource dependency
 > cycles are explicit initial restrictions.
 
-[CP-0023](../proposals/CP-0023-scoped-generic-cells.md) is the accepted change
-proposal specifying the API, semantics and required acceptance cases; it is not
-current Ash before product integration. This note retains the
-candidate's rationale, alternatives and future questions. The broader region
-contracts remain in [DN-0054](DN-0054-base-lexical-region-memory-contracts.md).
+The [local product checkpoint](generic-cell/evidence.md) retains the accepted
+transition's implementation, specification, tests and verification, together
+with commands for retrieving its proposal and task history from local Git.
+Main integration remains pending. This note retains the candidate's rationale,
+alternatives and future questions; the current specification supplies language
+rules. Broader region contracts remain in
+[DN-0054](DN-0054-base-lexical-region-memory-contracts.md).
 
 ## Question
 
@@ -239,8 +241,9 @@ The cell contract selects no mutable-variable grammar.
 
 ## Evidence and experiments
 
-The following are required observations for a later authorized implementation,
-not claims that the generic cell is implemented or verified:
+The following observations motivated the accepted transition. The
+[checkpoint evidence](generic-cell/evidence.md) records their implemented and
+verified product results; this informative table supplies no additional rules.
 
 | Case | Positive evidence | Required rejection or failure observation |
 | --- | --- | --- |
@@ -255,22 +258,17 @@ not claims that the generic cell is implemented or verified:
 | Validation | Construction, copying, transforms, and restored Core preserve all retained facts. | Changed owner, payload type, operation, or dependency facts reject independently. |
 | Failure and cost | Exact, insufficient, and retry budgets preserve publication and mutation boundaries. | No partial authority or silent increase of work, stack, or capacity limits. |
 
-No prototype is authorized by recording this note. If later needed, bound it
-to the unresolved contents-flow question using the snapshot, helper, and hidden
-capture cases above. Compare source/Core admission and runtime observations;
-retain reproducible cases and measured costs as evidence. Discard machinery
-that loses these distinctions or depends on native ownership. Product adoption
-requires a change proposal, task, implementation, tests, and matching surface
-and Core specification updates.
+This note authorizes no prototype or product change. Any later experiment
+must isolate a remaining question and preserve the checkpoint's snapshot,
+helper, hidden-capture, scope-completion and dependency boundaries.
 
 ## Open questions
 
-- What retained contents-flow facts let public helpers and independent Core
-  validation preserve snapshots without excessive conservative rejection?
-- Should the new family have a distinct public API while sharing a kernel with
-  existing integer cells, or should a later compatibility proposal migrate them?
-- Which exact Core encoding retains the agreed contract with the least new
-  machinery and acceptable inference and runtime costs?
+The checkpoint retains the selected immutable contents-flow graph, shared
+runtime kernel with distinct generic and legacy APIs, and authenticated Core
+encoding. Its [evidence](generic-cell/evidence.md) records their measured costs
+and boundaries. Further changes require separate design and authorization.
+
 - Which concrete cases later justify temporary younger dependencies, resource
   cycles, restricted payloads, or finer borrow endpoints?
 - How should future mutable syntax expose read, access sharing, and replacement

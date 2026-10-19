@@ -23,7 +23,7 @@ No proposed semantic transition is under review.
 
 ## Accepted changes
 
-- [CP-0023: Scoped Generic Cells](CP-0023-scoped-generic-cells.md) authorizes
-  the generic Cell implementation coordinated by
-  [TASK-0049](../tasks/TASK-0049-close-generic-cell-checkpoint.md). It is not
-  current Ash before complete product integration.
+No accepted transition awaits product checkpoint retention.
+The [generic cell checkpoint evidence](../design/generic-cell/evidence.md)
+retains the completed local transition and historical retrieval commands.
+Main integration remains pending.
