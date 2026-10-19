@@ -27,6 +27,9 @@ enum Expr {
     Slot,
     Unknown,
     Alias(usize),
+    // Transparent scope/conversion; result diagnostics follow the original
+    // user answer rather than the wrapper's declaration span.
+    Forward(usize),
     Merge(Vec<usize>),
     Function {
         parameters: Vec<usize>,
@@ -149,6 +152,7 @@ impl Expr {
             Self::Slot => Self::Slot,
             Self::Unknown => Self::Unknown,
             Self::Alias(value) => Self::Alias(value + offset),
+            Self::Forward(value) => Self::Forward(value + offset),
             Self::Merge(values) => Self::Merge(ids(values, budget)?),
             Self::Tuple(values) => Self::Tuple(ids(values, budget)?),
             Self::Constructor(id) => Self::Constructor(*id),
@@ -325,6 +329,7 @@ struct EvidenceIndex {
 pub(super) struct SourceResourcePositions {
     pub(super) acquire: usize,
     pub(super) body: usize,
+    pub(super) completed: usize,
     pub(super) cleanup: usize,
     pub(super) handler: usize,
     pub(super) finish: usize,
@@ -1055,7 +1060,9 @@ impl Graph {
             }
             let children: &[usize] = match self.expressions.get(id).ok_or(Failure::Invalid)? {
                 Expr::Scalar | Expr::IndependentCallable | Expr::Constructor(_) => &[],
-                Expr::Alias(value) | Expr::Project { value, .. } => std::slice::from_ref(value),
+                Expr::Alias(value) | Expr::Forward(value) | Expr::Project { value, .. } => {
+                    std::slice::from_ref(value)
+                }
                 Expr::Merge(values) | Expr::Tuple(values) => values,
                 Expr::Function { captures, .. } => captures,
                 Expr::Slot => {
@@ -1151,7 +1158,7 @@ impl Graph {
                     inputs.try_reserve(1).map_err(|_| Failure::Resource)?;
                     inputs.push(id);
                 }
-                Expr::Alias(value) | Expr::Project { value, .. } => {
+                Expr::Alias(value) | Expr::Forward(value) | Expr::Project { value, .. } => {
                     children = copy_slice(&[*value], budget)?
                 }
                 Expr::Merge(values) | Expr::Tuple(values) => children = copy_slice(values, budget)?,
@@ -2161,9 +2168,9 @@ impl Graph {
                     type_application: true,
                 }
             }
-            PureComputation::LocalNominalScope(scope) => Expr::Alias(index(scope.body())),
+            PureComputation::LocalNominalScope(scope) => Expr::Forward(index(scope.body())),
             PureComputation::NewtypeConversion(conversion) => {
-                Expr::Alias(index(conversion.child()))
+                Expr::Forward(index(conversion.child()))
             }
             PureComputation::Primitive(_) => {
                 let mut children = Vec::new();
@@ -2265,13 +2272,15 @@ impl Graph {
         let node = nodes.get(id).ok_or(Failure::Invalid)?;
         let source = self.sources[id];
         Ok(match operation(&node.kind) {
-            Some(EffectOperation::NativeInterpret(boundary)) => Expr::Alias(index(boundary.body())),
+            Some(EffectOperation::NativeInterpret(boundary)) => {
+                Expr::Forward(index(boundary.body()))
+            }
             Some(EffectOperation::ProviderStateAccess(_)) => Expr::Unknown,
             Some(EffectOperation::Cleanup(scope)) => Expr::Cleanup {
                 body: index(scope.body),
                 action: index(scope.action),
             },
-            Some(EffectOperation::Registration(scope)) => Expr::Alias(index(scope.body)),
+            Some(EffectOperation::Registration(scope)) => Expr::Forward(index(scope.body)),
             Some(EffectOperation::Resource(resource)) => {
                 resource.acquisition.api().ok_or(Failure::Invalid)?;
                 Expr::Resource {
@@ -3280,12 +3289,13 @@ impl Graph {
         Ok(())
     }
 
-    /// Distinct existing value equations for the acquired-only source-control
+    /// Distinct existing value equations for authenticated source-control
     /// phases. No cut may substitute the enclosing report for a completed
     /// acquisition or for a still-live cleanup/handler result.
     pub(super) fn source_resource_positions(
         &self,
         scope: usize,
+        has_completion: bool,
         budget: &mut TypeWorkBudget,
     ) -> Result<SourceResourcePositions, Failure> {
         charge(budget, 1)?;
@@ -3300,7 +3310,20 @@ impl Graph {
         if !matches!(self.expressions.get(acquire), Some(Expr::Bind { .. })) {
             return Err(Failure::Invalid);
         }
-        let mut cleanup = raw_body;
+        let mut cleanup = if has_completion {
+            charge(budget, 1)?;
+            let Expr::Tuple(fields) = self.expressions.get(raw_body).ok_or(Failure::Invalid)?
+            else {
+                return Err(Failure::Invalid);
+            };
+            let [completed, _completion] = fields.as_slice() else {
+                return Err(Failure::Invalid);
+            };
+            *completed
+        } else {
+            raw_body
+        };
+        let completed = cleanup;
         loop {
             charge(budget, 1)?;
             cleanup = match self.expressions.get(cleanup).ok_or(Failure::Invalid)? {
@@ -3314,6 +3337,7 @@ impl Graph {
                     return Ok(SourceResourcePositions {
                         acquire,
                         body: raw_body,
+                        completed,
                         cleanup,
                         handler: *body,
                         finish: *action,
@@ -5409,6 +5433,385 @@ impl<'a> Analysis<'a> {
         Ok(())
     }
 
+    /// Conditional birth witnesses are existing original predecessor ports.
+    /// The lexical walk excludes this resource and all subtree-bound symbols.
+    /// In a focused query these ports were frozen before its fresh owner exists.
+    pub(super) fn cell_predecessors(
+        &self,
+        code: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Vec<usize>, Failure> {
+        let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
+        let inputs = self.graph.free_inputs(expression, budget)?;
+        let mut ports = Vec::new();
+        charge(budget, inputs.len())?;
+        ports
+            .try_reserve(inputs.len())
+            .map_err(|_| Failure::Resource)?;
+        for input in inputs {
+            charge(budget, 1)?;
+            // Do not materialize an absent/future input to manufacture validity.
+            ports.push(
+                *self
+                    .indices
+                    .get(&(input, context))
+                    .ok_or(Failure::Invalid)?,
+            );
+        }
+        Ok(ports)
+    }
+
+    pub(super) fn cell_initializer_source(
+        &self,
+        code: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Span, Failure> {
+        charge(budget, 1)?;
+        let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
+        let Expr::Resource { initializer, .. } = self.graph.expressions[expression] else {
+            return Err(Failure::Invalid);
+        };
+        self.graph
+            .sources
+            .get(initializer)
+            .copied()
+            .ok_or(Failure::Invalid)
+    }
+
+    pub(super) fn cell_request_site(
+        &self,
+        request: usize,
+        fallback: Span,
+        acquisition: Span,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(Span, Option<Span>), Failure> {
+        let (_, context) = self.slots.get(request).ok_or(Failure::Invalid)?.key;
+        let mut primary = fallback;
+        let mut outer = None;
+        for step in self.contexts.forward(context, budget)? {
+            charge(budget, 1)?;
+            if let Transition::Invoke(call, _) = step
+                && let Some(source) = self.graph.sources.get(call).copied()
+                && source != acquisition
+            {
+                outer.get_or_insert(source);
+                primary = source;
+            }
+        }
+        Ok((primary, outer.filter(|source| *source != primary)))
+    }
+
+    fn dependency_origin(
+        &mut self,
+        root: usize,
+        owner: Atom,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Option<Span>, Failure> {
+        let mut pending = copy_slice(&[root], budget)?;
+        let mut seen = HashSet::new();
+        while let Some(port) = pending.pop() {
+            charge(budget, 1)?;
+            if seen.contains(&port) {
+                continue;
+            }
+            seen.try_reserve(1).map_err(|_| Failure::Resource)?;
+            seen.insert(port);
+            let required = self.dependencies(port, budget)?;
+            charge(budget, required.len())?;
+            if !required.contains(&owner) {
+                continue;
+            }
+            for atom in copy_slice(&self.slots[port].atoms, budget)? {
+                charge(budget, 1)?;
+                match atom {
+                    Atom::Closure(target, creation) => {
+                        let Expr::Function { captures, .. } = &self.graph.expressions[target]
+                        else {
+                            return Err(Failure::Invalid);
+                        };
+                        let captures = copy_slice(captures, budget)?;
+                        for capture in captures {
+                            charge(budget, 1)?;
+                            if let Some(port) = self.indices.get(&(capture, creation)).copied() {
+                                let required = self.dependencies(port, budget)?;
+                                charge(budget, required.len())?;
+                                if required.contains(&owner) {
+                                    return Ok(self.graph.sources.get(target).copied());
+                                }
+                            }
+                        }
+                    }
+                    Atom::Aggregate(target, creation) => {
+                        let fields = match &self.graph.expressions[target] {
+                            Expr::Tuple(fields)
+                            | Expr::Call {
+                                arguments: fields, ..
+                            } => fields.as_slice(),
+                            Expr::Resource { body, .. } => std::slice::from_ref(body),
+                            _ => return Err(Failure::Invalid),
+                        };
+                        charge(budget, fields.len())?;
+                        pending
+                            .try_reserve(fields.len())
+                            .map_err(|_| Failure::Resource)?;
+                        for field in fields {
+                            pending.push(
+                                *self
+                                    .indices
+                                    .get(&(*field, creation))
+                                    .ok_or(Failure::Invalid)?,
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(self.graph.sources.get(self.slots[root].key.0).copied())
+    }
+
+    fn result_source(
+        &self,
+        mut expression: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Span, Failure> {
+        let mut seen = HashSet::new();
+        loop {
+            charge(budget, 1)?;
+            if seen.contains(&expression) {
+                return Err(Failure::Invalid);
+            }
+            seen.try_reserve(1).map_err(|_| Failure::Resource)?;
+            seen.insert(expression);
+            expression = match self
+                .graph
+                .expressions
+                .get(expression)
+                .ok_or(Failure::Invalid)?
+            {
+                Expr::Bind { body, .. }
+                | Expr::Recursive { body, .. }
+                | Expr::Resource { body, .. }
+                | Expr::Cleanup { body, .. } => *body,
+                Expr::Evidence { value, .. } | Expr::Forward(value) => *value,
+                Expr::Match { arms, .. } if arms.len() == 1 => arms[0].1,
+                _ => {
+                    return self
+                        .graph
+                        .sources
+                        .get(expression)
+                        .copied()
+                        .ok_or(Failure::Invalid);
+                }
+            };
+        }
+    }
+
+    pub(super) fn cell_escape_failure(
+        &mut self,
+        failure: Failure,
+        request: Option<usize>,
+        owner: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Failure, Failure> {
+        let Failure::Escape {
+            source,
+            acquisition,
+        } = failure
+        else {
+            return Ok(failure);
+        };
+        let expression = *self.graph.positions.get(&owner).ok_or(Failure::Invalid)?;
+        let (port, source) = if let Some(request) = request {
+            let (expression, creation) = self.slots[request].key;
+            let Expr::Request { operand, .. } = self.graph.expressions[expression] else {
+                return Err(Failure::Invalid);
+            };
+            (
+                *self
+                    .indices
+                    .get(&(operand, creation))
+                    .ok_or(Failure::Invalid)?,
+                source,
+            )
+        } else {
+            let Expr::Resource { body, .. } = self.graph.expressions[expression] else {
+                return Err(Failure::Invalid);
+            };
+            (
+                *self.indices.get(&(body, context)).ok_or(Failure::Invalid)?,
+                self.result_source(body, budget)?,
+            )
+        };
+        let capture = self.dependency_origin(port, Atom::Resource(expression, context), budget)?;
+        let (source, call) = if let Some(request) = request {
+            self.cell_request_site(request, source, acquisition, budget)?
+        } else {
+            (source, None)
+        };
+        Ok(Failure::Dependency {
+            source,
+            acquisition,
+            capture,
+            call,
+        })
+    }
+
+    pub(super) fn cell_focus(&self) -> Option<(usize, usize)> {
+        self.focus
+    }
+
+    /// Original resource coordinates and initializer port; no inferred claim is
+    /// accepted from source summaries. Imported graphs retain these equations.
+    pub(super) fn cell_initializer(
+        &mut self,
+        code: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<((usize, usize), usize), Failure> {
+        let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
+        let Expr::Resource { initializer, .. } = self.graph.expressions[expression] else {
+            return Err(Failure::Invalid);
+        };
+        let port = self.slot(initializer, context, budget)?;
+        self.close(budget)?;
+        Ok(((expression, context), port))
+    }
+
+    pub(super) fn cell_owner(
+        &mut self,
+        code: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Vec<(usize, usize)>, Failure> {
+        let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
+        let Expr::Resource { handle, .. } = self.graph.expressions[expression] else {
+            return Err(Failure::Invalid);
+        };
+        let port = self.slot(handle, context, budget)?;
+        self.close(budget)?;
+        self.cell_targets(port, budget)
+    }
+
+    fn cell_targets(
+        &self,
+        port: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Vec<(usize, usize)>, Failure> {
+        let mut targets = Vec::new();
+        for atom in &self.slots[port].atoms {
+            charge(budget, 1)?;
+            let Atom::Resource(owner, creation) = atom else {
+                return Err(Failure::Invalid);
+            };
+            targets.try_reserve(1).map_err(|_| Failure::Resource)?;
+            targets.push((*owner, *creation));
+        }
+        Ok(targets)
+    }
+
+    pub(super) fn cell_operands(
+        &mut self,
+        request: usize,
+        write: bool,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Vec<(Vec<(usize, usize)>, Option<usize>)>, Failure> {
+        let (expression, context) = self.slots[request].key;
+        let Expr::Request { operand, .. } = self.graph.expressions[expression] else {
+            return Err(Failure::Invalid);
+        };
+        let operand = self.slot(operand, context, budget)?;
+        self.close(budget)?;
+        let mut results = Vec::new();
+        if !write {
+            charge(budget, 1)?;
+            results.try_reserve(1).map_err(|_| Failure::Resource)?;
+            results.push((self.cell_targets(operand, budget)?, None));
+            return Ok(results);
+        }
+        for position in 0..self.slots[operand].atoms.len() {
+            charge(budget, 1)?;
+            let Atom::Aggregate(tuple, creation) = self.slots[operand].atoms[position] else {
+                return Err(Failure::Invalid);
+            };
+            let Expr::Tuple(fields) = &self.graph.expressions[tuple] else {
+                return Err(Failure::Invalid);
+            };
+            let [handle, replacement] = fields.as_slice() else {
+                return Err(Failure::Invalid);
+            };
+            let handle = self.slot(*handle, creation, budget)?;
+            let replacement = self.slot(*replacement, creation, budget)?;
+            self.close(budget)?;
+            let targets = self.cell_targets(handle, budget)?;
+            charge(budget, 1)?;
+            results.try_reserve(1).map_err(|_| Failure::Resource)?;
+            results.push((targets, Some(replacement)));
+        }
+        Ok(results)
+    }
+
+    pub(super) fn cell_read(
+        &mut self,
+        request: usize,
+        root: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        self.edge(request, root, budget)
+    }
+
+    pub(super) fn cell_retention(
+        &mut self,
+        root: usize,
+        enclosing: &[(usize, usize)],
+        predecessors: &[usize],
+        site: (Span, Span),
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let (source, acquisition) = site;
+        self.close(budget)?;
+        for atom in self.dependencies(root, budget)? {
+            charge(budget, enclosing.len() + 1)?;
+            let Atom::Resource(owner, creation) = atom else {
+                return Err(Failure::Invalid);
+            };
+            if enclosing.contains(&(owner, creation)) {
+                continue;
+            }
+            let mut predecessor = false;
+            for port in predecessors {
+                charge(budget, 1)?;
+                let slot = self.slots.get(*port).ok_or(Failure::Invalid)?;
+                // Original predecessor coordinates are immutable before birth.
+                // Body/call/restore contexts under Focus cannot reuse them.
+                if !slot.terminal || slot.key.1 >= self.frozen_contexts {
+                    return Err(Failure::Invalid);
+                }
+                let required = self.dependencies(*port, budget)?;
+                charge(budget, required.len())?;
+                predecessor |= required.contains(&Atom::Resource(owner, creation));
+            }
+            // This is a conditional predecessor-value validity proof, not an
+            // inference that every unequal/older atom lexically encloses us.
+            // Ordinary scope/crossing/completion validation establishes the
+            // original input's validity; structural birth strictly nests this
+            // cell. Actual atoms remain unchanged for all later escape checks.
+            if !predecessor || Some((owner, creation)) == self.focus {
+                let capture =
+                    self.dependency_origin(root, Atom::Resource(owner, creation), budget)?;
+                return Err(Failure::Dependency {
+                    source,
+                    acquisition,
+                    capture,
+                    call: None,
+                });
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn external_result(
         &mut self,
         request: usize,
@@ -5960,7 +6363,7 @@ impl<'a> Analysis<'a> {
                 self.atom(slot, Atom::Unknown, budget)?;
                 SetupOutcome::NeedsInputsOrDynamic
             }
-            Expr::Alias(value) => {
+            Expr::Alias(value) | Expr::Forward(value) => {
                 P::link(self, slot, *value, context, budget)?;
                 SetupOutcome::FixedSetupReady
             }
@@ -6511,7 +6914,7 @@ impl<'a> Analysis<'a> {
             if !replaced {
                 // Preserve the old stack push order, hence LIFO first-visit order.
                 match original {
-                    Expr::Alias(value) => {
+                    Expr::Alias(value) | Expr::Forward(value) => {
                         charge(budget, 1)?;
                         pending.try_reserve(1).map_err(|_| Failure::Resource)?;
                         pending.push(*value);
@@ -12156,107 +12559,144 @@ mod tests {
             crate::types::NominalTypeId::new(crate::module::ModuleId::new(77), 1),
             0,
         );
-        let mut graph = graph(vec![
-            Expr::Scalar, // native/initializer scalar, never replayed
-            Expr::Slot,   // resumed body value carrying the clause-created cell
-            Expr::Slot,   // original owner handle
-            Expr::Slot,   // original owned identity
-            Expr::Handler {
-                body: 1,
-                clauses: Vec::new(),
-            },
-            Expr::Cleanup { body: 4, action: 0 },
-            Expr::Slot, // local handler-state binder
-            Expr::Bind {
-                binder: 6,
-                initializer: 0,
-                body: 5,
-            },
-            Expr::Slot, // acquisition parameter
-            Expr::Bind {
-                binder: 8,
-                initializer: 0,
-                body: 0,
-            },
-        ]);
-        graph.expressions.push(Expr::Resource {
-            success: Some(success),
-            failure: Some(ConstructorId::new(success.owner(), 1)),
-            failure_payload: None,
-            handle: 2,
-            identity: 3,
-            initializer: 9,
-            body: 7,
-            source: graph.sources[0],
-        });
-        graph.expressions.push(Expr::Project {
-            value: 10,
-            field: 0,
-            constructor: Some(success),
-        });
-        graph.sources.extend([graph.sources[0]; 2]);
-        for value in 0..graph.expressions.len() {
-            graph.positions.insert(value, value);
-        }
-        for (code, value) in [(100, 10), (101, 9), (102, 5), (103, 7), (104, 7), (105, 4)] {
-            graph.positions.insert(code, value);
-        }
-        let run = |budget: &mut TypeWorkBudget| {
-            let positions = graph.source_resource_positions(10, budget)?;
-            assert_eq!(
-                (
-                    positions.acquire,
-                    positions.body,
-                    positions.cleanup,
-                    positions.handler,
-                    positions.finish
-                ),
-                (9, 7, 5, 4, 0)
-            );
-            let mut analysis = Analysis::new(&graph, budget)?;
-            analysis.slot(10, 0, budget)?;
-            analysis.close(budget)?;
-            analysis.frozen_contexts = 1;
-            let focus = analysis.context(0, Transition::Focus, budget)?;
-            analysis.focus = Some((99, focus));
-            let marker = Atom::Resource(99, focus);
-            let handler = analysis.restore_cut(0, 105, usize::MAX - 1, 1, &[], true, budget)?;
-            analysis.atom(handler.input, marker, budget)?;
-            let cleanup = analysis.restore_cut(0, 102, usize::MAX - 2, 105, &[], false, budget)?;
-            analysis.join_ports(cleanup.input, handler.result, budget)?;
-            let next = analysis.restore_cut(0, 104, 1, 103, &[101], false, budget)?;
-            analysis.join_ports(next.input, cleanup.result, budget)?;
-            let owner = analysis.restore_cut(0, 100, usize::MAX - 1, 104, &[], true, budget)?;
-            analysis.join_ports(owner.input, next.result, budget)?;
-            let projected = analysis.slot(11, owner.context, budget)?;
-            analysis.close(budget)?;
-            assert!(
-                analysis.dependencies(projected, budget)?.contains(&marker),
-                "the Success projection retains the cell captured in the live resumed closure"
-            );
-            assert!(
-                !analysis.indices.contains_key(&(10, next.context)),
-                "the completed prefix freezes acquisition, never the outer report"
-            );
-            for value in [0, 2, 3, 9] {
-                assert!(
-                    !analysis.indices.contains_key(&(value, owner.context)),
-                    "restoring the report must not reacquire its owner: {value}"
-                );
+        for has_completion in [false, true] {
+            let mut graph = graph(vec![
+                Expr::Scalar, // native/initializer scalar, never replayed
+                Expr::Slot,   // resumed body value carrying the clause-created cell
+                Expr::Slot,   // original owner handle
+                Expr::Slot,   // original owned identity
+                Expr::Handler {
+                    body: 1,
+                    clauses: Vec::new(),
+                },
+                Expr::Cleanup { body: 4, action: 0 },
+                Expr::Slot, // local handler-state binder
+                Expr::Bind {
+                    binder: 6,
+                    initializer: 0,
+                    body: 5,
+                },
+                Expr::Slot, // acquisition parameter
+                Expr::Bind {
+                    binder: 8,
+                    initializer: 0,
+                    body: 0,
+                },
+            ]);
+            graph.expressions.push(Expr::Resource {
+                success: Some(success),
+                failure: Some(ConstructorId::new(success.owner(), 1)),
+                failure_payload: None,
+                handle: 2,
+                identity: 3,
+                initializer: 9,
+                body: if has_completion { 12 } else { 7 },
+                source: graph.sources[0],
+            });
+            graph.expressions.push(Expr::Project {
+                value: 10,
+                field: 0,
+                constructor: Some(success),
+            });
+            if has_completion {
+                graph.expressions.push(Expr::Tuple(vec![7, 0]));
+                graph.expressions.push(Expr::Project {
+                    value: 11,
+                    field: 0,
+                    constructor: None,
+                });
+                graph.expressions.push(Expr::Project {
+                    value: 11,
+                    field: 1,
+                    constructor: None,
+                });
+                graph.sources.extend([graph.sources[0]; 5]);
+            } else {
+                graph.sources.extend([graph.sources[0]; 2]);
             }
-            Ok::<(), Failure>(())
-        };
-        let mut measured = TypeWorkBudget::unbounded();
-        run(&mut measured).unwrap();
-        for prefix in [0, 23] {
-            let mut short = TypeWorkBudget::with_limit(prefix + measured.used() - 1);
-            short.charge(prefix).unwrap();
-            assert!(matches!(run(&mut short), Err(Failure::Resource)));
-            for _ in 0..2 {
-                let mut exact = TypeWorkBudget::with_limit(prefix + measured.used());
-                exact.charge(prefix).unwrap();
-                run(&mut exact).unwrap();
-                assert_eq!(exact.used(), prefix + measured.used());
+            for value in 0..graph.expressions.len() {
+                graph.positions.insert(value, value);
+            }
+            for (code, value) in [
+                (100, 10),
+                (101, 9),
+                (102, 5),
+                (103, 7),
+                (104, if has_completion { 12 } else { 7 }),
+                (105, 4),
+            ] {
+                graph.positions.insert(code, value);
+            }
+            let run = |budget: &mut TypeWorkBudget| {
+                let positions = graph.source_resource_positions(10, has_completion, budget)?;
+                assert_eq!(
+                    (
+                        positions.acquire,
+                        positions.body,
+                        positions.cleanup,
+                        positions.handler,
+                        positions.finish
+                    ),
+                    (9, if has_completion { 12 } else { 7 }, 5, 4, 0)
+                );
+                let mut analysis = Analysis::new(&graph, budget)?;
+                analysis.slot(10, 0, budget)?;
+                analysis.close(budget)?;
+                analysis.frozen_contexts = 1;
+                let focus = analysis.context(0, Transition::Focus, budget)?;
+                analysis.focus = Some((99, focus));
+                let marker = Atom::Resource(99, focus);
+                let handler = analysis.restore_cut(0, 105, usize::MAX - 1, 1, &[], true, budget)?;
+                analysis.atom(handler.input, marker, budget)?;
+                let cleanup =
+                    analysis.restore_cut(0, 102, usize::MAX - 2, 105, &[], false, budget)?;
+                analysis.join_ports(cleanup.input, handler.result, budget)?;
+                let next = analysis.restore_cut(0, 104, 1, 103, &[101], false, budget)?;
+                analysis.join_ports(next.input, cleanup.result, budget)?;
+                let owner = analysis.restore_cut(0, 100, usize::MAX - 1, 104, &[], true, budget)?;
+                analysis.join_ports(owner.input, next.result, budget)?;
+                let projected =
+                    analysis.slot(if has_completion { 13 } else { 11 }, owner.context, budget)?;
+                let completion = if has_completion {
+                    Some(analysis.slot(14, owner.context, budget)?)
+                } else {
+                    None
+                };
+                analysis.close(budget)?;
+                assert!(
+                    analysis.dependencies(projected, budget)?.contains(&marker),
+                    "the Success projection retains the cell captured in the live resumed closure"
+                );
+                if let Some(completion) = completion {
+                    assert!(
+                        !analysis.dependencies(completion, budget)?.contains(&marker),
+                        "completion data must not inherit the body answer's retained cell"
+                    );
+                }
+                assert!(
+                    !analysis.indices.contains_key(&(10, next.context)),
+                    "the completed prefix freezes acquisition, never the outer report"
+                );
+                for value in [0, 2, 3, 9] {
+                    assert!(
+                        !analysis.indices.contains_key(&(value, owner.context)),
+                        "restoring the report must not reacquire its owner: {value}"
+                    );
+                }
+                Ok::<(), Failure>(())
+            };
+            let mut measured = TypeWorkBudget::unbounded();
+            run(&mut measured).unwrap();
+            for prefix in [0, 23] {
+                let mut short = TypeWorkBudget::with_limit(prefix + measured.used() - 1);
+                short.charge(prefix).unwrap();
+                assert!(matches!(run(&mut short), Err(Failure::Resource)));
+                for _ in 0..2 {
+                    let mut exact = TypeWorkBudget::with_limit(prefix + measured.used());
+                    exact.charge(prefix).unwrap();
+                    run(&mut exact).unwrap();
+                    assert_eq!(exact.used(), prefix + measured.used());
+                }
             }
         }
     }

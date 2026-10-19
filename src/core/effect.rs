@@ -21,6 +21,23 @@ use crate::{
     },
 };
 
+/// Dependency validation and executable support are separate capabilities
+/// during TASK-0046. This paid scan grants no proof or dynamic key authority.
+pub(crate) fn has_generic_cell_scopes(
+    program: &ValidatedEffectProgram,
+    work: &mut TypeWorkBudget,
+) -> Result<bool, ()> {
+    for node in program.nodes() {
+        work.charge(1)?;
+        if matches!(&node.kind, EffectExprKind::Operation(EffectOperation::Resource(scope))
+            if scope.acquisition.builtin.is_builtin_generic_cell())
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AshEffectDialect;
 

@@ -4070,9 +4070,24 @@ pub fn evaluate(program: &ValidatedProgram) -> Result<Evaluation, RuntimeFailure
     Machine::new(program).run()
 }
 
+fn reject_pending_generic_cell_execution(
+    program: &ValidatedEffectProgram,
+    work: &mut TypeWorkBudget,
+) -> Result<(), RuntimeFailure> {
+    if crate::core::effect::has_generic_cell_scopes(program, work)
+        .map_err(|()| RuntimeFailure::ResourceCapacity)?
+    {
+        // TASK-0047 owns the generic payload runtime. Static dependency proof
+        // alone must not enter the legacy integer interpreter.
+        return Err(RuntimeFailure::InvalidControlState);
+    }
+    Ok(())
+}
+
 /// Evaluates one independently validated effect Core program.
 pub fn evaluate_effect(program: &ValidatedEffectProgram) -> Result<Evaluation, RuntimeFailure> {
     let mut work = TypeWorkBudget::default();
+    reject_pending_generic_cell_execution(program, &mut work)?;
     crate::foreign::source_bindings::reject_missing_source_bindings(program, &mut work)?;
     Machine::new_effect(program).run()
 }
@@ -4087,6 +4102,7 @@ pub fn evaluate_effect_with_source_native_program(
     admitted: crate::foreign::source_bindings::AdmittedSourceNativeProgram<'_, '_>,
 ) -> Result<Evaluation, RuntimeFailure> {
     let (program, bindings, errors) = admitted.into_parts();
+    reject_pending_generic_cell_execution(program, &mut TypeWorkBudget::default())?;
     let mut machine = Machine::new_effect(program);
     machine.source_bindings = Some(bindings);
     machine.source_errors = Some(&errors);
@@ -4105,6 +4121,7 @@ pub fn evaluate_effect_with_foreign_runtime(
     runtime: &mut crate::foreign::runtime::ForeignRuntime,
 ) -> Result<Evaluation, RuntimeFailure> {
     let mut work = TypeWorkBudget::default();
+    reject_pending_generic_cell_execution(program, &mut work)?;
     crate::foreign::source_bindings::reject_missing_source_bindings(program, &mut work)?;
     let mut machine = Machine::new_effect(program);
     machine.foreign_runtime = Some(runtime);

@@ -166,9 +166,21 @@ pins focused tests, ordinary authentication, staged publication restrictions
 and the remaining dependency/runtime evidence. Independent code re-review is
 clear, and its independent technical evidence verdict has no unresolved
 findings. The coordinator accepted foundation readiness only. All 31 case
-criteria and complete checkpoint acceptance remain open. TASK-0046 through
+criteria and complete checkpoint acceptance remain open. TASK-0047 and
 TASK-0048 have not been dispatched. DN-0054 remains byte-identical; no region
 implementation is included.
+
+TASK-0046 is authorized from reviewed local commit
+`77032c7659278a49a80dc736497649e563ec2dd9`, using the same product checkout and
+retaining branch. `/root/task0045_developer` remains sole writer/build operator
+with requested/effective `gpt-6.1-sol` and `medium` effort;
+`/root/task0045_reviewer` independently reviews and `/root` owns acceptance.
+Exact model runtime is unavailable. All local commits remain unsigned using
+`git -c commit.gpgsign=false commit`. No push, Main integration, TASK-0047
+implementation/dispatch or DN-0054 changes are authorized. TASK-0046 delivers
+all assigned dependency-checking obligations; required runtime observations
+remain pending TASK-0047, integrated evidence TASK-0048 and the fresh full gate
+this checkpoint. Source admission must not grant generic execution readiness.
 
 - [x] TASK-0045 launch records product inputs, retaining branch, roles and
   permissions. Later task dispatches require their own exact input handoffs.

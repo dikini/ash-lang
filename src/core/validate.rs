@@ -4822,34 +4822,26 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         self.validate_scopes()?;
         self.validate_type_scopes()?;
         self.reject_pure_byte_applications()?;
-        self.reject_pending_generic_computations()
+        self.generic_cell_computations().map(|_| ())
     }
 
-    fn reject_pending_generic_computations(&self) -> Result<(), ValidationError> {
-        for (index, node) in self.program.nodes.iter().enumerate() {
+    fn generic_cell_computations(&self) -> Result<bool, ValidationError> {
+        let mut generic = false;
+        for node in &self.program.nodes {
             self.charge_type_work(1)?;
             let mut work = TypeWorkBudget::with_limit(
                 self.type_work_limit.saturating_sub(self.type_work.get()),
             );
             let typed = crate::resolved::generic_cell_dependency_type(&node.ty, &mut work);
             self.charge_type_work(work.used())?;
-            if typed.map_err(|()| ValidationError::new(ValidationReason::Resource, None))? {
-                return Err(ValidationError::new(
-                    ValidationReason::ResourceEscape,
-                    Some(node_id(self.program.arena, index)?),
-                ));
-            }
+            generic |=
+                typed.map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
         }
         for anchor in &self.program.method_evidence_anchors {
             self.charge_type_work(1)?;
-            if anchor.method.interface().module().is_builtin_generic_cell() {
-                return Err(ValidationError::new(
-                    ValidationReason::ResourceEscape,
-                    Some(anchor.node),
-                ));
-            }
+            generic |= anchor.method.interface().module().is_builtin_generic_cell();
         }
-        Ok(())
+        Ok(generic)
     }
 
     fn validate_method_evidence_type_owners(
@@ -16055,22 +16047,9 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         self.validate_effect_abstraction_shapes(&authenticated_method_evidence)?;
         self.validate_scopes()?;
         self.validate_type_scopes()?;
-        // Both dialects deny unsupported computational generic-cell authority
-        // after ordinary checks; effect-only carriers also have explicit guards.
-        self.reject_pending_generic_computations()?;
-        for (index, node) in self.program.nodes.iter().enumerate() {
-            self.charge_type_work(1)?;
-            let pending = matches!(&node.kind,
-                super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Resource(scope)) if scope.acquisition.builtin.is_builtin_generic_cell())
-                || matches!(&node.kind,
-                    super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Request(request)) if request.effect().effect().module().is_builtin_generic_cell());
-            if pending {
-                return Err(ValidationError::new(
-                    ValidationReason::ResourceEscape,
-                    Some(node_id(self.program.arena, index)?),
-                ));
-            }
-        }
+        // Ordinary authentication precedes dependency reconstruction. Generic
+        // computations force that proof even in private provider preparations.
+        let has_generic = self.generic_cell_computations()?;
 
         let mut has_resource = false;
         for node in &self.program.nodes {
@@ -16088,11 +16067,12 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 has_resource = true;
             }
         }
-        if (!has_discard && !has_resource)
-            || self
-                .provider_handler_entry
-                .is_some_and(|entry| entry.row_recipe.is_some())
-            || self.source_handler_graph.is_some()
+        if !has_generic
+            && ((!has_discard && !has_resource)
+                || self
+                    .provider_handler_entry
+                    .is_some_and(|entry| entry.row_recipe.is_some())
+                || self.source_handler_graph.is_some())
         {
             return Ok(());
         }
@@ -16135,6 +16115,11 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             super::capture::Failure::Escape {
                 source,
                 acquisition,
+            }
+            | super::capture::Failure::Dependency {
+                source,
+                acquisition,
+                ..
             } => ValidationError::with_cause(
                 ValidationCause::CapturedResourceEscape {
                     source,
@@ -18660,6 +18645,39 @@ fn node_id(arena: super::dialect::ArenaId, index: usize) -> Result<NodeId, Valid
 pub(crate) fn generic_cell_core_fixture_for_test()
 -> (super::effect::UnvalidatedEffectProgram, Vec<SourceFile>) {
     tests::cell_core_fixture_with_generic(true)
+}
+
+#[cfg(test)]
+pub(crate) fn generic_cell_validated_fixture_for_test()
+-> (super::effect::ValidatedEffectProgram, Vec<SourceFile>) {
+    let (core, sources) = generic_cell_core_fixture_for_test();
+    let refs = sources.iter().collect::<Vec<_>>();
+    let relation = core
+        .registry
+        .type_variables()
+        .map(|parameter| {
+            (
+                parameter.id.module().unwrap(),
+                parameter.origin.primary_span().source(),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let program = super::validate_effect_modules(core, &refs, &relation).unwrap();
+    (program, sources)
+}
+
+#[cfg(test)]
+pub(crate) fn generic_cell_source_fixture_for_test(
+    source: &str,
+    helper: Option<&str>,
+) -> (
+    super::effect::ValidatedEffectProgram,
+    Vec<SourceFile>,
+    Vec<(ModuleId, SourceId)>,
+) {
+    tests::generic_cell_source_fixture(source, helper)
 }
 
 #[cfg(test)]
@@ -23025,7 +23043,7 @@ mod tests {
     }
 
     #[test]
-    fn generic_cell_pure_core_identity_cannot_gain_pending_permission() {
+    fn generic_cell_pure_core_identity_preserves_conditional_access() {
         use super::super::dialect::MethodEvidenceCatalog;
         let (donor, sources) = cell_core_fixture_with_generic(true);
         let super::super::effect::EffectExprKind::Operation(
@@ -23081,12 +23099,11 @@ mod tests {
             .collect::<std::collections::BTreeMap<_, _>>()
             .into_iter()
             .collect::<Vec<_>>();
-        let error = super::super::validate_modules(core, &refs, &relation).unwrap_err();
-        assert_eq!(error.reason(), ValidationReason::ResourceEscape);
+        super::super::validate_modules(core, &refs, &relation).unwrap();
     }
 
     #[test]
-    fn generic_cell_indexed_callable_core_without_requests_cannot_admit() {
+    fn generic_cell_indexed_callable_core_retains_conditional_rows() {
         use super::super::dialect::MethodEvidenceCatalog;
         let (donor, sources) = cell_core_fixture_with_generic(true);
         let super::super::effect::EffectExprKind::Operation(
@@ -23139,38 +23156,263 @@ mod tests {
         let core = builder.finish(root).unwrap();
         // There is no acquisition, request or selected-method anchor here.
         assert!(core.method_evidence_anchors.is_empty());
-        assert_eq!(
-            cell_core_reason(&core, &sources, 0).0,
-            Some(ValidationReason::ResourceEscape)
-        );
+        assert_eq!(cell_core_reason(&core, &sources, 0).0, None);
     }
 
     #[test]
-    fn generic_cell_copied_and_transformed_core_retains_pending_admission() {
-        let (core, sources) = cell_core_fixture_with_generic(true);
-        // Test-only donor permits testing transforms before TASK-0046 admission.
-        // It is never evaluated or returned through a public checking path.
-        let donor = super::super::dialect::forge_validated_for_test(core);
+    fn generic_cell_copied_and_transformed_core_reconstructs_dependency_proof() {
+        let (donor, sources) = super::generic_cell_validated_fixture_for_test();
         for transform in [
             crate::core::transform::identity_effect_traversal,
             crate::core::transform::fold_effect_literal_primitives,
         ] {
             let copied = transform(&donor).unwrap();
+            assert_eq!(cell_core_reason(&copied, &sources, 0).0, None);
+        }
+    }
+
+    pub(super) fn generic_cell_source_fixture(
+        source: &str,
+        helper: Option<&str>,
+    ) -> (
+        super::super::ValidatedEffectProgram,
+        Vec<SourceFile>,
+        Vec<(ModuleId, SourceId)>,
+    ) {
+        let tree = LinkedValidationDirectory::create();
+        if let Some(helper) = helper {
+            tree.write("helper.ash", helper);
+        }
+        let entry = tree.write("entry.ash", source);
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry,
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref().clone())
+            .collect::<Vec<_>>();
+        let relation = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let copy = crate::core::transform::identity_effect_traversal(program).unwrap();
+        let refs = sources.iter().collect::<Vec<_>>();
+        let donor = super::super::validate_effect_modules(copy, &refs, &relation).unwrap();
+        (donor, sources, relation)
+    }
+
+    #[test]
+    fn generic_cell_linked_hidden_retention_is_reconstructed_after_transforms() {
+        use super::super::{
+            effect::{EffectExprKind, EffectOperation},
+            variable::VariableNode,
+        };
+        let source = "import @builtin.generic_cell as Cell\nimport helper (put)\nindependent : Unit -> Int\nindependent () = 7\nmain : Unit -> Int\nmain () = resource Cell.Cell<A,Int> a = 41 {\nresource Cell.Cell<B,(Unit -> Int)> b = independent {\nlet safe : Unit -> Int = fn(ignored) {\nlet held = a\n42\n}\nlet _ = put (b,safe)\n42\n}\n}\n";
+        let helper = "import @builtin.generic_cell as Cell\npub put<R,T> : (Cell.Cell<R,T>,T) -> Unit ! {Cell.Ops<R,T>} where Cell.Provider<R,T>\nput pair = Cell.write pair\n";
+        let (donor, sources, relation) = generic_cell_source_fixture(source, Some(helper));
+        let refs = sources.iter().collect::<Vec<_>>();
+        for transform in [
+            crate::core::transform::identity_effect_traversal,
+            crate::core::transform::fold_effect_literal_primitives,
+        ] {
+            let mut copied = transform(&donor).unwrap();
+            let handles = copied
+                .nodes
+                .iter()
+                .filter_map(|node| match &node.kind {
+                    EffectExprKind::Operation(EffectOperation::Resource(scope)) => {
+                        Some(scope.handle.clone())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(handles.len(), 2);
+            let scalar = handles
+                .iter()
+                .find(|handle| {
+                    handle.ty().to_string().contains("Int")
+                        && !handle.ty().to_string().contains("->")
+                })
+                .unwrap();
+            let function = handles
+                .iter()
+                .find(|handle| handle.id() != scalar.id())
+                .unwrap();
+            let changed = copied.nodes.iter().enumerate().filter_map(|(index,node)| {
+                matches!(&node.kind, EffectExprKind::Pure(PureExprKind::Variable(value)) if value.binder() == scalar.id()).then_some(index)
+            }).collect::<Vec<_>>();
             assert_eq!(
-                cell_core_reason(&copied, &sources, 0).0,
-                Some(ValidationReason::ResourceEscape)
+                changed.len(),
+                1,
+                "only the original hidden capture uses the scalar access"
             );
+            let changed = changed[0];
+            copied.nodes[changed].kind =
+                EffectExprKind::Pure(PureExprKind::Variable(VariableNode::new(function.id())));
+            copied.nodes[changed].ty = function.ty().clone();
+            let changed = node_id(copied.arena, changed).unwrap();
+            let mut binders = 0;
+            for node in &mut copied.nodes {
+                if let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                    binding,
+                ))) = &mut node.kind
+                    && binding.initializer() == changed
+                {
+                    binding.binder_mut().replace_type(function.ty().clone());
+                    binders += 1;
+                }
+            }
+            assert_eq!(binders, 1);
+            // The arrow, rows, selected helper evidence and acquisition facts
+            // remain well typed; only the hidden capture now retains its slot.
+            let error =
+                super::super::validate_effect_modules(copied, &refs, &relation).unwrap_err();
+            assert_eq!(error.reason(), ValidationReason::ResourceEscape);
         }
     }
 
     #[test]
-    fn generic_cell_core_checks_ordinary_facts_before_pending_dependency_proof() {
+    fn generic_cell_imported_snapshot_recursive_and_handler_core_work_is_retryable() {
+        for (source, helper) in [
+            (
+                include_str!("../../tests/fixtures/generic-cell/snapshot-entry.ash"),
+                include_str!("../../tests/fixtures/generic-cell/dependency-helper.ash"),
+            ),
+            (
+                include_str!("../../tests/fixtures/generic-cell/recursive-entry.ash"),
+                include_str!("../../tests/fixtures/generic-cell/recursive-helper.ash"),
+            ),
+            (
+                include_str!("../../tests/fixtures/generic-cell/handler-snapshot-entry.ash"),
+                include_str!("../../tests/fixtures/generic-cell/dependency-helper.ash"),
+            ),
+        ] {
+            let (donor, sources, relation) = generic_cell_source_fixture(source, Some(helper));
+            let refs = sources.iter().collect::<Vec<_>>();
+            for transform in [
+                crate::core::transform::identity_effect_traversal,
+                crate::core::transform::fold_effect_literal_primitives,
+            ] {
+                let copied = transform(&donor).unwrap();
+                let check = |used| {
+                    let mut validator =
+                        super::Validator::new_modules(&copied, &refs, &relation).unwrap();
+                    validator.type_work.set(used);
+                    let result = validator.run_effect().err().map(|error| error.reason());
+                    (result, validator.type_work.get() - used)
+                };
+                let (reason, work) = check(0);
+                assert_eq!(reason, None);
+                assert!(work > 0);
+                assert_eq!(
+                    check(CORE_VALIDATION_TYPE_WORK_LIMIT - work + 1).0,
+                    Some(ValidationReason::Resource)
+                );
+                for _ in 0..2 {
+                    assert_eq!(check(CORE_VALIDATION_TYPE_WORK_LIMIT - work).0, None);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn generic_cell_core_rebuilds_escape_crossing_and_later_read_dependencies() {
+        use super::super::{
+            effect::{EffectExprKind, EffectOperation},
+            variable::VariableNode,
+        };
+        let candidate = "let candidate : Unit -> Int = fn(ignored) {\nlet held = 9999\n42\n}\n";
+        for body in [
+            format!(
+                "{{\nlet saved = resource Cell.Cell<R,Int> c = 41 {{\n{candidate}candidate\n}}\nsaved ()\n}}"
+            ),
+            format!(
+                "handle (resource Cell.Cell<R,Int> c = 41 {{\n{candidate}let _ = perform Send.send candidate\n42\n}}) with Send {{\nsend payload => resume ()\n}}"
+            ),
+            format!(
+                "{{\nlet saved = resource Cell.Cell<R,Int> c = 41 {{\nresource Cell.Cell<B,(Unit -> Int)> b = independent {{\n{candidate}let _ = Cell.write (b,candidate)\nCell.read b\n}}\n}}\nsaved ()\n}}"
+            ),
+        ] {
+            let source = format!(
+                "import @builtin.generic_cell as Cell\neffect Send {{\nsend : (Unit -> Int) -> Unit\n}}\nindependent : Unit -> Int\nindependent () = 7\nmain : Unit -> Int\nmain () = {body}\n"
+            );
+            let (donor, sources, relation) = generic_cell_source_fixture(&source, None);
+            let refs = sources.iter().collect::<Vec<_>>();
+            for transform in [
+                crate::core::transform::identity_effect_traversal,
+                crate::core::transform::fold_effect_literal_primitives,
+            ] {
+                let mut copied = transform(&donor).unwrap();
+                let handle = copied
+                    .nodes
+                    .iter()
+                    .find_map(|node| match &node.kind {
+                        EffectExprKind::Operation(EffectOperation::Resource(scope))
+                            if !scope.handle.ty().to_string().contains("->") =>
+                        {
+                            Some(scope.handle.clone())
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                let changed = copied.nodes.iter().enumerate().find_map(|(index,node)| {
+                    matches!(&node.kind, EffectExprKind::Pure(PureExprKind::Value(PureValue::Integer(value))) if value.value().to_string()=="9999").then_some(index)
+                }).unwrap();
+                copied.nodes[changed].kind =
+                    EffectExprKind::Pure(PureExprKind::Variable(VariableNode::new(handle.id())));
+                copied.nodes[changed].ty = handle.ty().clone();
+                let changed = node_id(copied.arena, changed).unwrap();
+                let mut count = 0;
+                for node in &mut copied.nodes {
+                    if let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                        binding,
+                    ))) = &mut node.kind
+                        && binding.initializer() == changed
+                    {
+                        binding.binder_mut().replace_type(handle.ty().clone());
+                        count += 1;
+                    }
+                }
+                assert_eq!(count, 1);
+                let error =
+                    super::super::validate_effect_modules(copied, &refs, &relation).unwrap_err();
+                assert_eq!(error.reason(), ValidationReason::ResourceEscape);
+            }
+        }
+    }
+
+    #[test]
+    fn generic_cell_direct_recursive_core_work_is_measured_and_retryable() {
+        let (core, sources, relation) = hook_source_fixture(include_str!(
+            "../../tests/fixtures/generic-cell/recursive-direct-entry.ash"
+        ));
+        let refs = sources.iter().collect::<Vec<_>>();
+        let check = |used| {
+            let mut validator = super::Validator::new_modules(&core, &refs, &relation).unwrap();
+            validator.type_work.set(used);
+            let reason = validator.run_effect().err().map(|error| error.reason());
+            (reason, validator.type_work.get() - used)
+        };
+        let (reason, required) = check(0);
+        assert_eq!(reason, None);
+        println!("generic direct recursive independent Core work={required}");
+        assert_eq!(
+            check(CORE_VALIDATION_TYPE_WORK_LIMIT - required + 1).0,
+            Some(ValidationReason::Resource)
+        );
+        for _ in 0..2 {
+            assert_eq!(check(CORE_VALIDATION_TYPE_WORK_LIMIT - required).0, None);
+        }
+    }
+
+    #[test]
+    fn generic_cell_core_checks_ordinary_facts_before_dependency_proof() {
         use super::super::effect::{EffectExprKind, EffectOperation};
         let (core, sources) = cell_core_fixture_with_generic(true);
-        assert_eq!(
-            cell_core_reason(&core, &sources, 0).0,
-            Some(ValidationReason::ResourceEscape)
-        );
+        assert_eq!(cell_core_reason(&core, &sources, 0).0, None);
         for mutation in 0..5 {
             let (mut core, sources) = cell_core_fixture_with_generic(true);
             let root = core.root.index().unwrap();
@@ -23507,6 +23749,23 @@ mod tests {
             cell_core_reason(&core, &sources, 0).0,
             Some(ValidationReason::TypeScope)
         );
+    }
+
+    #[test]
+    fn generic_cell_core_dependency_work_is_exact_and_retryable() {
+        let (core, sources) = cell_core_fixture_with_generic(true);
+        let (reason, work) = cell_core_reason(&core, &sources, 0);
+        assert_eq!(reason, None);
+        assert_eq!(
+            cell_core_reason(&core, &sources, CORE_VALIDATION_TYPE_WORK_LIMIT - work + 1).0,
+            Some(ValidationReason::Resource)
+        );
+        for _ in 0..2 {
+            assert_eq!(
+                cell_core_reason(&core, &sources, CORE_VALIDATION_TYPE_WORK_LIMIT - work).0,
+                None
+            );
+        }
     }
 
     #[test]

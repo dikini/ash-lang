@@ -1274,6 +1274,12 @@ pub(crate) enum Failure {
         source: Span,
         acquisition: Span,
     },
+    Dependency {
+        source: Span,
+        acquisition: Span,
+        capture: Option<Span>,
+        call: Option<Span>,
+    },
     Invalid,
     Unsafe(UnsafeDiscard),
     CleanupContext {
@@ -2826,14 +2832,14 @@ fn compile_source_resource_capture_control<F: CoreOperationFamily>(
             .ok_or(Failure::Resource)?,
     )?;
     graph.code.try_reserve(7).map_err(|_| Failure::Resource)?;
-    let positions = if matches!(
-        scope.header().codec.report,
-        super::source_resource::SourceResourceReportCodec::AcquiredOnly { .. }
-    ) {
-        Some(data.source_resource_positions(id, budget)?)
-    } else {
-        None
-    };
+    let positions = data.source_resource_positions(
+        id,
+        matches!(
+            scope.header().codec.report,
+            super::source_resource::SourceResourceReportCodec::Scope { .. }
+        ),
+        budget,
+    )?;
     let mut clauses = Vec::new();
     clauses
         .try_reserve_exact(scope.handler.clauses().len())
@@ -2849,11 +2855,7 @@ fn compile_source_resource_capture_control<F: CoreOperationFamily>(
         });
     }
     let handler = graph.code.len();
-    if let Some(positions) = positions {
-        data.position(handler, positions.handler, budget)?;
-    } else {
-        data.position_provider_handler(handler, id, true, budget)?;
-    }
+    data.position(handler, positions.handler, budget)?;
     graph.code.push(Control::Handler {
         body: index(scope.handler.body()) + 1,
         effect: Request::effect(scope.handler.effect(), source, budget)?,
@@ -2874,7 +2876,7 @@ fn compile_source_resource_capture_control<F: CoreOperationFamily>(
         effects.push(effect);
     }
     let native_handler = graph.code.len();
-    data.position(native_handler, positions.map_or(id, |p| p.handler), budget)?;
+    data.position(native_handler, positions.handler, budget)?;
     graph.code.push(Control::NativeInterpret {
         body: handler,
         effects,
@@ -2882,8 +2884,8 @@ fn compile_source_resource_capture_control<F: CoreOperationFamily>(
     let mut phases = Vec::new();
     phases.try_reserve_exact(2).map_err(|_| Failure::Resource)?;
     for (root, value) in [
-        (scope.acquire.body, positions.map_or(id, |p| p.acquire)),
-        (scope.finish.body, positions.map_or(id, |p| p.finish)),
+        (scope.acquire.body, positions.acquire),
+        (scope.finish.body, positions.finish),
     ] {
         let mut effects = Vec::new();
         charge(budget, scope.native_interpretations().len())?;
@@ -2904,7 +2906,7 @@ fn compile_source_resource_capture_control<F: CoreOperationFamily>(
         phases.push(position);
     }
     let successful = graph.code.len();
-    data.position(successful, positions.map_or(id, |p| p.cleanup), budget)?;
+    data.position(successful, positions.cleanup, budget)?;
     // Finish is an armed structural obligation, not a body suffix that
     // discard may skip. Its running frame is nonabandonable under the
     // same independent capture rules as an ordinary cleanup action.
@@ -2941,12 +2943,12 @@ fn compile_source_resource_capture_control<F: CoreOperationFamily>(
         source,
     });
     let outcome = graph.code.len();
-    data.position(outcome, positions.map_or(id, |p| p.body), budget)?;
+    data.position(outcome, positions.completed, budget)?;
     graph
         .code
         .push(Control::Choice(copy_slice(&[0, successful], budget)?));
     let acquisition = graph.code.len();
-    data.position(acquisition, positions.map_or(id, |p| p.body), budget)?;
+    data.position(acquisition, positions.body, budget)?;
     graph.code.push(Control::Sequence(copy_slice(
         &[phases[0], outcome],
         budget,
@@ -3080,11 +3082,17 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
             graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
             let scope = graph.code.len();
             data.position(scope, id, budget)?;
-            let mut arguments = Vec::new();
-            charge(budget, 1)?;
-            arguments.try_reserve(1).map_err(|_| Failure::Resource)?;
-            arguments.push(Type::Variable(resource.acquisition.identity));
-            let effect = EffectInstance::new(api.ops(), arguments.into_boxed_slice());
+            let effect = if api.generic() {
+                resource
+                    .instance_with_budget(budget)
+                    .map_err(|_| Failure::Resource)?
+            } else {
+                let mut arguments = Vec::new();
+                charge(budget, 1)?;
+                arguments.try_reserve(1).map_err(|_| Failure::Resource)?;
+                arguments.push(Type::Variable(resource.acquisition.identity));
+                EffectInstance::new(api.ops(), arguments.into_boxed_slice())
+            };
             graph.code.push(Control::Resource {
                 body: index(resource.body) + 1,
                 effect: Request::effect(&effect, resource.acquisition.span, budget)?,

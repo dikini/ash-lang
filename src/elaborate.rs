@@ -806,6 +806,7 @@ pub struct TypeDiagnostic {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TypeDiagnosticContext {
     Plain,
+    ResourceDependency { capture: bool, call: bool },
     FunctionNeedsContext(Option<SynthesisCause>),
     EquationArity(EquationArityCause),
     HandlerCoverage(HandlerCoverageCause),
@@ -908,6 +909,16 @@ impl TypeDiagnostic {
     }
 
     pub(crate) fn source_message(&self) -> Option<TypeSourceMessage<'_>> {
+        if let TypeDiagnosticContext::ResourceDependency { capture, call } = self.context {
+            if self.reason != TypeReason::ResourceEscape {
+                return None;
+            }
+            let mut message = self
+                .reason
+                .source_message(self.expected.as_deref(), self.found.as_deref())?;
+            message.minimum_related = 1 + usize::from(capture) + usize::from(call);
+            return Some(message);
+        }
         if self.reason == TypeReason::DiscardUnsafe {
             let TypeDiagnosticContext::DiscardUnsafe(owner) = self.context else {
                 return None;
@@ -1069,6 +1080,21 @@ impl TypeDiagnostic {
         &self,
         index: usize,
     ) -> Option<(crate::message::Message<'static>, &'static str)> {
+        if let TypeDiagnosticContext::ResourceDependency { capture, call } = self.context {
+            if self.reason != TypeReason::ResourceEscape {
+                return None;
+            }
+            use crate::message::Message;
+            return match index {
+                0 => Some((Message::resource_acquisition(), "resource_acquisition")),
+                1 if capture => Some((Message::resource_dependency_capture(), "resource_capture")),
+                1 if call => Some((Message::resource_dependency_call(), "resource_call")),
+                2 if capture && call => {
+                    Some((Message::resource_dependency_call(), "resource_call"))
+                }
+                _ => None,
+            };
+        }
         if self.reason == TypeReason::DiscardUnsafe {
             let TypeDiagnosticContext::DiscardUnsafe(owner) = self.context else {
                 return None;
@@ -2959,8 +2985,8 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     deferred_local_nominal_escapes: Vec<(NominalTypeId, InferenceVariableId, Span)>,
     deferred_resource_escapes: Vec<(TypeVariableId, InferenceVariableId, Span, Span)>,
     active_acquisitions: Vec<crate::resolved::ResourceAcquisition>,
-    // Ordinary checking continues; no generic-dependent summary may publish yet.
-    pending_generic_dependency: Option<Span>,
+    // A generic computation requires complete dependency inference before summary publication.
+    generic_dependency_origin: Option<Span>,
     provider_codes: ProviderCodeAvailability,
     source_provider_contracts:
         HashMap<crate::module::ModuleId, Arc<provider::CheckedProviderContracts>>,
@@ -3308,7 +3334,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
             active_acquisitions: Vec::new(),
-            pending_generic_dependency: None,
+            generic_dependency_origin: None,
             provider_codes: ProviderCodeAvailability::default(),
             source_provider_contracts: HashMap::new(),
             pending_local_provider: None,
@@ -3462,7 +3488,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
             active_acquisitions: Vec::new(),
-            pending_generic_dependency: None,
+            generic_dependency_origin: None,
             provider_codes: ProviderCodeAvailability::default(),
             source_provider_contracts: HashMap::new(),
             pending_local_provider: None,
@@ -3607,7 +3633,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
             active_acquisitions: Vec::new(),
-            pending_generic_dependency: None,
+            generic_dependency_origin: None,
             provider_codes: ProviderCodeAvailability::default(),
             source_provider_contracts: HashMap::new(),
             pending_local_provider: None,
@@ -4048,7 +4074,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
             active_acquisitions: Vec::new(),
-            pending_generic_dependency: None,
+            generic_dependency_origin: None,
             provider_codes: ProviderCodeAvailability::default(),
             source_provider_contracts: HashMap::new(),
             pending_local_provider: None,
@@ -5158,14 +5184,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .builder
             .generic_cell_dependency_origin(&mut self.type_work)
             .map_err(|()| type_resource())?;
-        if let Some(span) = self.pending_generic_dependency.or(generic_type_origin) {
-            return Err(self.resource_escape_failure(
-                span,
-                span,
-                "generic cell dependency admission is pending TASK-0046",
-            ));
-        }
-        if self.capture_publication_required(module, checked_schemes)? {
+        if self
+            .generic_dependency_origin
+            .or(generic_type_origin)
+            .is_some()
+            || self.capture_publication_required(module, checked_schemes)?
+        {
             self.type_work
                 .charge(globals.len())
                 .map_err(|()| type_resource())?;
@@ -7168,7 +7192,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         cause: Option<SynthesisCause>,
     ) -> Result<TypedNode, TypeError> {
         if method.interface().module().is_builtin_generic_cell() {
-            self.pending_generic_dependency.get_or_insert(span);
+            self.generic_dependency_origin.get_or_insert(span);
         }
         if self.registry.foreign_state_access(method).is_some() {
             return Err(foreign_privilege_unavailable());
@@ -12673,7 +12697,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .module()
             .is_builtin_generic_cell()
         {
-            self.pending_generic_dependency.get_or_insert(span);
+            self.generic_dependency_origin.get_or_insert(span);
         }
         let requested = EffectRow::singleton(
             clone_effect_instance_with_budget(&request.effect.instance, &mut self.type_work)
@@ -12899,7 +12923,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 &mut self.type_work,
             )
             .map_err(|()| type_resource())?;
-            self.pending_generic_dependency.get_or_insert(span);
+            self.generic_dependency_origin.get_or_insert(span);
             Box::new([Type::Variable(resource.identity.id), payload]) as Box<[Type]>
         } else {
             Box::new([Type::Variable(resource.identity.id)]) as Box<[Type]>
@@ -28284,6 +28308,47 @@ fn capture_failure(
         }
         Failure::Invalid => invalid_state(),
         Failure::Resource => type_resource(),
+        Failure::Dependency {
+            source,
+            acquisition,
+            capture,
+            call,
+        } => {
+            let count = 2 + usize::from(capture.is_some()) + usize::from(call.is_some());
+            if budget.charge(count).is_err() {
+                return type_resource();
+            }
+            let mut diagnostic = Diagnostic::new(
+                TypeReason::ResourceEscape,
+                SourceLabel::new(source, "this value retains an unproved resource dependency"),
+            );
+            if diagnostic.related.try_reserve_exact(count - 1).is_err() {
+                return type_resource();
+            }
+            diagnostic.related.push(SourceLabel::new(
+                acquisition,
+                "this resource is acquired here",
+            ));
+            if let Some(capture) = capture {
+                diagnostic.related.push(SourceLabel::new(
+                    capture,
+                    "this value carries the retained dependency",
+                ));
+            }
+            if let Some(call) = call {
+                diagnostic.related.push(SourceLabel::new(
+                    call,
+                    "this call propagates the retained value",
+                ));
+            }
+            TypeError::Source(Box::new(TypeDiagnostic {
+                diagnostic,
+                context: TypeDiagnosticContext::ResourceDependency {
+                    capture: capture.is_some(),
+                    call: call.is_some(),
+                },
+            }))
+        }
         Failure::Escape {
             source,
             acquisition,
@@ -31147,34 +31212,119 @@ mod tests {
     }
 
     #[test]
-    fn generic_cell_helper_failure_publishes_no_evidence_or_summary() {
-        let module = cell_module_fixture_sources("import @builtin.generic_cell as Cell\npub get<R,T> : Cell.Cell<R,T> -> T ! {Cell.Ops<R,T>} where Cell.Provider<R,T>\nget c = Cell.read c\n").0;
-        let ResolvedDefinitionKind::Equational(definition) = &module.definitions()[0].kind else {
-            panic!("definition");
-        };
-        let ResolvedExprKind::Apply(application) = &definition.equations[0].body.kind else {
-            panic!("call");
-        };
-        let ResolvedExprKind::Occurrence(occurrence) = &application.function.kind else {
-            panic!("method");
-        };
-        let evidence = occurrence.evidence[0].handle();
-        let error = check_module(module).unwrap_err();
+    fn generic_cell_helper_publication_refusal_keeps_evidence_empty_and_retries_exactly() {
+        fn run(limit: usize) -> (Result<(), TypeError>, usize, bool) {
+            let module = cell_module_fixture_sources("import @builtin.generic_cell as Cell\npub get<R,T> : Cell.Cell<R,T> -> T ! {Cell.Ops<R,T>} where Cell.Provider<R,T>\nget c = Cell.read c\n").0;
+            let ResolvedDefinitionKind::Equational(definition) = &module.definitions()[0].kind
+            else {
+                panic!("definition")
+            };
+            let ResolvedExprKind::Apply(application) = &definition.equations[0].body.kind else {
+                panic!("call")
+            };
+            let ResolvedExprKind::Occurrence(occurrence) = &application.function.kind else {
+                panic!("method")
+            };
+            let evidence = occurrence.evidence[0].handle();
+            let mut work = TypeWorkBudget::with_limit(limit);
+            let result = check_module_with_budget(
+                module,
+                &mut work,
+                &mut UsefulnessBudget::default(),
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .map(drop);
+            (result, work.used(), evidence.selection().is_some())
+        }
+        let (result, required, selected) = run(crate::types::TYPE_WORK_LIMIT);
+        result.unwrap();
+        assert!(selected);
+        let (short, _, selected) = run(required - 1);
+        assert!(short.is_err());
         assert!(
-            matches!(error, TypeError::Source(ref diagnostic) if diagnostic.reason == TypeReason::ResourceEscape),
-            "{error:?}"
+            !selected,
+            "failed publication must leave original evidence pending"
         );
-        assert!(evidence.selection().is_none());
+        for _ in 0..2 {
+            let (result, used, selected) = run(required);
+            result.unwrap();
+            assert_eq!(used, required);
+            assert!(selected);
+        }
     }
 
     #[test]
-    fn generic_cell_function_payload_reaches_pending_admission() {
+    fn generic_cell_imported_flow_publication_is_exact_and_retryable() {
+        for (source, helper) in [
+            (
+                include_str!("../tests/fixtures/generic-cell/snapshot-entry.ash"),
+                include_str!("../tests/fixtures/generic-cell/dependency-helper.ash"),
+            ),
+            (
+                include_str!("../tests/fixtures/generic-cell/recursive-entry.ash"),
+                include_str!("../tests/fixtures/generic-cell/recursive-helper.ash"),
+            ),
+            (
+                include_str!("../tests/fixtures/generic-cell/handler-snapshot-entry.ash"),
+                include_str!("../tests/fixtures/generic-cell/dependency-helper.ash"),
+            ),
+        ] {
+            let run = |limit| {
+                let tree = PublicAuthorizationGraphFixture::create(0);
+                fs::write(tree.0.join("helper.ash"), helper).unwrap();
+                fs::write(tree.0.join("entry.ash"), source).unwrap();
+                let graph =
+                    load_module_graph(&tree.0.join("entry.ash"), &ModuleRoots::empty()).unwrap();
+                let mut checked = Vec::<CheckedModule>::new();
+                for loaded in graph.modules() {
+                    let dependencies = loaded
+                        .dependencies()
+                        .iter()
+                        .map(|edge| {
+                            crate::resolve::DependencyExports::new(
+                                edge,
+                                checked
+                                    .iter()
+                                    .find(|module| module.module() == edge.target())
+                                    .unwrap()
+                                    .exports(),
+                            )
+                            .unwrap()
+                        })
+                        .collect::<Vec<_>>();
+                    let resolved = resolve_module(loaded, &dependencies).unwrap();
+                    if loaded.id() == graph.entry() {
+                        let mut work = TypeWorkBudget::with_limit(limit);
+                        let result = check_module_with_budget(
+                            resolved,
+                            &mut work,
+                            &mut UsefulnessBudget::default(),
+                            &mut InterfaceConstraintBudget::default(),
+                        );
+                        return (result.map(drop), work.used());
+                    }
+                    checked.push(check_module(resolved).unwrap());
+                }
+                panic!("entry");
+            };
+            let (result, required) = run(crate::types::TYPE_WORK_LIMIT);
+            result.unwrap();
+            assert!(
+                run(required - 1).0.is_err(),
+                "no checked module can be published after refusal"
+            );
+            for _ in 0..2 {
+                let (result, used) = run(required);
+                result.unwrap();
+                assert_eq!(used, required);
+            }
+        }
+    }
+
+    #[test]
+    fn generic_cell_function_payload_passes_dependency_admission() {
         let module = cell_module_fixture_sources("import @builtin.generic_cell as Cell\nfixed : Int -> Int\nfixed value = value\nmain : Unit -> Int\nmain () = resource Cell.Cell<R, (Int -> Int)> c = fixed {\nlet call = Cell.read c\ncall 42\n}\n").0;
-        let error = check_module(module).unwrap_err();
-        assert!(
-            matches!(error, TypeError::Source(ref diagnostic) if diagnostic.reason == TypeReason::ResourceEscape),
-            "{error:?}"
-        );
+        check_module(module).unwrap();
     }
 
     #[test]
@@ -32548,6 +32698,79 @@ mod tests {
                 crate::core::capture::CaptureValueSummary::default(),
                 "a private pure module has no portable-summary consumer"
             );
+        }
+    }
+
+    #[test]
+    fn generic_cell_dependency_presentation_preserves_optional_causal_roles() {
+        use crate::message::{Catalogue, Locale};
+        use crate::presentation::{
+            PresentationError, compile_type_diagnostic, write_human, write_json,
+        };
+        use crate::source::ByteRange;
+
+        let caller = SourceFile::new("caller.ash", "write acquisition").unwrap();
+        let imported = SourceFile::new("imported-helper.ash", "capture call").unwrap();
+        let span =
+            |file: &SourceFile, start, end| file.span(ByteRange::new(start, end).unwrap()).unwrap();
+        for capture in [false, true] {
+            for call in [false, true] {
+                let error = capture_failure(
+                    crate::core::capture::Failure::Dependency {
+                        source: span(&caller, 0, 5),
+                        acquisition: span(&caller, 6, 17),
+                        capture: capture.then(|| span(&imported, 0, 7)),
+                        call: call.then(|| span(&imported, 8, 12)),
+                    },
+                    &mut TypeWorkBudget::default(),
+                );
+                let TypeError::Source(mut diagnostic) = error else {
+                    panic!("typed dependency diagnostic")
+                };
+                let sources = [&caller, &imported];
+                let presented = compile_type_diagnostic(&diagnostic, &sources).unwrap();
+                let mut json = Vec::new();
+                write_json(&mut json, &presented).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+                let labels = json["labels"].as_array().unwrap();
+                assert_eq!(labels.len(), 2 + usize::from(capture) + usize::from(call));
+                assert_eq!(labels[1]["relationship"], "resource_acquisition");
+                let mut index = 2;
+                if capture {
+                    assert_eq!(labels[index]["relationship"], "resource_capture");
+                    assert_eq!(labels[index]["path"], "imported-helper.ash");
+                    index += 1;
+                }
+                if call {
+                    assert_eq!(labels[index]["relationship"], "resource_call");
+                    assert_eq!(labels[index]["path"], "imported-helper.ash");
+                }
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut text = Vec::new();
+                    write_human(&mut text, &presented, &Catalogue::new(locale).unwrap()).unwrap();
+                    assert!(!text.is_empty());
+                }
+                if capture || call {
+                    assert!(matches!(
+                        compile_type_diagnostic(&diagnostic, &[&caller]),
+                        Err(PresentationError::MissingSource)
+                    ));
+                }
+                diagnostic
+                    .diagnostic
+                    .related
+                    .push(SourceLabel::new(span(&caller, 0, 5), "unclassified"));
+                assert!(matches!(
+                    compile_type_diagnostic(&diagnostic, &sources),
+                    Err(PresentationError::Unsupported)
+                ));
+                diagnostic.diagnostic.related.pop();
+                diagnostic.diagnostic.related.pop();
+                assert!(matches!(
+                    compile_type_diagnostic(&diagnostic, &sources),
+                    Err(PresentationError::MissingFact)
+                ));
+            }
         }
     }
 

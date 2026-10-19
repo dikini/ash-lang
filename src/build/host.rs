@@ -314,6 +314,13 @@ pub fn prepare_program(
         // The established non-native Pure path keeps its existing policy.
         TypeWorkBudget::default()
     };
+    if let Some((core, _)) = program.effect_build_input() {
+        if crate::core::effect::has_generic_cell_scopes(core, &mut work)
+            .map_err(|()| BuildFailure(Failure::PreparationResource))?
+        {
+            return Err(BuildFailure(Failure::UnsupportedProgram));
+        }
+    }
     // Native filesystem inputs are checked before emission/tool execution. This
     // check grants no source contract authority and performs no Ash checking.
     for (index, input) in configuration.native_inputs.iter_mut().enumerate() {

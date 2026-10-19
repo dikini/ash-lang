@@ -56,7 +56,11 @@ structures or analysis machinery.
 
 ## Progress
 
-Implementation has not started. All acceptance remains pending.
+Implementation starts from reviewed foundation
+`77032c7659278a49a80dc736497649e563ec2dd9` on `codex/generic-cells`.
+The task-owned [execution plan](task-0046-execution-plan.md) records the sequence.
+Dependency readiness and execution readiness remain separate; all original case
+criteria stay open until their complete observations exist.
 
 - [ ] CELL-P02: earlier scalar snapshots and snapshot-only closures escape with
   their original value after replacement.
@@ -113,8 +117,36 @@ verification. TASK-0049 owns the full checkpoint gate.
 
 ## Discoveries
 
-None recorded. An analysis that cannot admit a required positive is unfinished
-work or a semantic question for CP-0023, not an implicit reduction in scope.
+The candidate uses ordered immutable value ports in control states, separately
+from native monotone retained-data summaries. Focused reconstruction fixes each
+target's acquisition enclosure and preserves it across continuation movement.
+Recursive context folding merges ordinary formal inputs, so their owner atoms
+alone cannot prove strict enclosure. The candidate instead retains a conditional
+relation to existing original free-input ports frozen before fresh owner birth;
+subtree inputs, missing/future ports and the fresh access cannot witness it.
+Actual owner atoms remain available for later crossing and escape checks. The
+same relation is rebuilt from linked Core rather than trusted from a summary.
+Independent review of the final candidate and complete frozen evidence remain
+pending.
+
+Stricter causal-diagnostic probes found an early builtin routing refusal when
+conservative type matching considered an inner same-payload cell for an outer
+access target. The repair intersects label matching with actual target
+occurrences and preserves outward alternatives. It does not change ordinary
+source-handler precedence. Review also identified full-State replay lookups
+whose precharges omitted either the heap or newly nested cell vectors on hits;
+a shared structural-key precharge and width/refusal/retry probes address those
+sites in the candidate.
+
+An enclosing declared-source access remains an ordinary eligible payload. The
+public driver retains original provider code for its checked module pass and
+independent linked validation. The raw `check_module` API receives only the
+caller-supplied summaries and, by default, no imported provider code; its
+missing-code refusal is a separate fail-closed control, not a language rejection
+of that payload. The native-access probe records both API inputs explicitly.
+
+An analysis that cannot admit a required positive remains unfinished work or a
+semantic question for CP-0023, not an implicit reduction in scope.
 
 ## Deviations
 

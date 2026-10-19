@@ -526,7 +526,7 @@ The builtin designator remains an ordinary identifier outside this position.
 The compiler-owned generic cell also uses the named form:
 `resource Cell.Cell<R, T> c = initializer { body }`, with owned position zero.
 It requires the complete two-argument application and no new grammar production.
-Its foundation admission restriction is described in
+Its dependency admission rules are described in
 [static semantics](static-semantics.md#generic-cell-foundation).
 
 The ordinary buffer library uses the source form, for example

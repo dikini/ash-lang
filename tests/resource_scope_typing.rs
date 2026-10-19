@@ -31,6 +31,169 @@ impl Tree {
         }
     }
 
+    fn check_dependencies(&self, source: &str) -> Result<(), String> {
+        self.check_dependencies_cause(source, None)
+    }
+
+    fn check_dependencies_at(
+        &self,
+        source: &str,
+        primary: &str,
+        capture: &str,
+        acquisition: &str,
+        call: Option<&str>,
+    ) -> Result<(), String> {
+        self.check_dependencies_cause(source, Some((primary, capture, acquisition, call)))
+    }
+
+    fn check_dependencies_cause(
+        &self,
+        source: &str,
+        cause: Option<(&str, &str, &str, Option<&str>)>,
+    ) -> Result<(), String> {
+        let source_checked = self.check(source);
+        let compiled = ash::driver::compile_path(ash::driver::RunConfiguration {
+            entry: self.0.join("entry.ash"),
+            roots: ModuleRoots::empty(),
+        });
+        if let Err(failure) = &compiled {
+            if source_checked
+                .as_ref()
+                .is_err_and(|error| error.contains("ResourceEscape"))
+            {
+                assert_eq!(
+                    failure.reason_code(),
+                    "type.resource-escape",
+                    "dependency refusal must belong to source checking"
+                );
+            }
+            if failure.reason_code() == "effect.discard-unsafe" {
+                let ash::driver::FileFailure::Pipeline(context) = failure else {
+                    panic!("discard phase: {failure:?}")
+                };
+                let ash::driver::PipelineFailure::Typing(ash::elaborate::TypeError::Source(
+                    diagnostic,
+                )) = context.failure()
+                else {
+                    panic!("unsafe completion must belong to source checking: {failure:?}")
+                };
+                let span = diagnostic.primary.span();
+                let source = failure
+                    .sources()
+                    .iter()
+                    .find(|source| source.id() == span.source())
+                    .unwrap();
+                assert_eq!(
+                    source.text()[span.range().start() as usize..span.range().end() as usize]
+                        .trim(),
+                    "discard"
+                );
+                assert!(
+                    !diagnostic.related.is_empty(),
+                    "unsafe completion must retain its causal request/owner labels"
+                );
+            }
+            if failure.reason_code() == "type.resource-escape" {
+                let ash::driver::FileFailure::Pipeline(context) = failure else {
+                    panic!("dependency phase: {failure:?}")
+                };
+                let ash::driver::PipelineFailure::Typing(ash::elaborate::TypeError::Source(
+                    diagnostic,
+                )) = context.failure()
+                else {
+                    panic!("dependency error must belong to source checking: {failure:?}")
+                };
+                let text = |span: ash::source::Span| {
+                    let source = failure
+                        .sources()
+                        .iter()
+                        .find(|source| source.id() == span.source())
+                        .unwrap();
+                    &source.text()[span.range().start() as usize..span.range().end() as usize]
+                };
+                let refs = failure.sources().iter().collect::<Vec<_>>();
+                let presented = ash::presentation::compile_type_diagnostic(diagnostic, &refs)
+                    .expect("every causal dependency label must compile for user-facing reporting");
+                let mut json = Vec::new();
+                ash::presentation::write_json(&mut json, &presented).unwrap();
+                assert!(!json.is_empty());
+                for locale in [
+                    ash::message::Locale::English,
+                    ash::message::Locale::Bulgarian,
+                ] {
+                    let mut text = Vec::new();
+                    let catalogue = ash::message::Catalogue::new(locale).unwrap();
+                    ash::presentation::write_human(&mut text, &presented, &catalogue).unwrap();
+                    assert!(!text.is_empty());
+                }
+                let primary = text(diagnostic.primary.span());
+                if let Some((
+                    expected_primary,
+                    expected_capture,
+                    expected_acquisition,
+                    expected_call,
+                )) = cause
+                {
+                    assert!(
+                        primary.contains(expected_primary),
+                        "expected causal expression {expected_primary:?}, got {primary:?}"
+                    );
+                    assert!(
+                        diagnostic
+                            .related
+                            .iter()
+                            .any(|label| label.message().contains("acquired")
+                                && text(label.span()).contains(expected_acquisition)),
+                        "wrong acquisition cause: {diagnostic:?}"
+                    );
+                    if !expected_capture.is_empty() {
+                        assert!(
+                            diagnostic.related.iter().any(|label| label
+                                .message()
+                                .contains("carries the retained dependency")
+                                && text(label.span()).contains(expected_capture)),
+                            "missing causal capture {expected_capture:?}: {diagnostic:?}"
+                        );
+                    }
+                    if let Some(expected_call) = expected_call {
+                        assert!(
+                            diagnostic
+                                .related
+                                .iter()
+                                .any(|label| label.message().contains("call propagates")
+                                    && text(label.span()).contains(expected_call)),
+                            "missing caller {expected_call:?}: {diagnostic:?}"
+                        );
+                    }
+                }
+                assert!(
+                    !primary.trim_start().starts_with("resource "),
+                    "dependency diagnostic must identify the retention/crossing/escaping value, not the entire acquisition: {primary:?}"
+                );
+                assert!(
+                    diagnostic
+                        .related
+                        .iter()
+                        .any(|label| label.message().contains("acquired")
+                            && text(label.span()).contains("resource ")),
+                    "acquisition cause must survive: {diagnostic:?}"
+                );
+                if diagnostic.primary.message().contains("unproved") {
+                    assert!(
+                        diagnostic.related.iter().any(|label| label
+                            .message()
+                            .contains("carries the retained dependency")),
+                        "known retained capture/value cause must survive: {diagnostic:?}"
+                    );
+                }
+            }
+        }
+        if source_checked.is_err() && compiled.is_ok() {
+            panic!("module checking and linked checking disagree: {source_checked:?}");
+        }
+        compiled.map(|_| ()).map_err(|error| format!("{error:?}"))
+    }
+
     fn check(&self, source: &str) -> Result<(), String> {
         let entry = self.0.join("entry.ash");
         fs::write(&entry, source).unwrap();
@@ -55,7 +218,10 @@ impl Tree {
                 .collect::<Vec<_>>();
             let resolved =
                 resolve_module(module, &dependencies).map_err(|error| format!("{error:?}"))?;
-            checked.push(check_module(resolved).map_err(|error| format!("{error:?}"))?);
+            checked.push(
+                check_module(resolved)
+                    .map_err(|error| format!("{}: {error:?}", module.source().display_path()))?,
+            );
         }
         Ok(())
     }
@@ -1146,7 +1312,7 @@ main () = (number (Fork(Leaf(0), Leaf(0))), number (Fork(Leaf(0), Leaf(0))))
 }
 
 #[test]
-fn cell_n01_generic_ordinary_errors_precede_pending_dependency_admission() {
+fn cell_n01_generic_ordinary_errors_precede_dependency_admission() {
     let tree = Tree::new();
     for (body, reason) in [
         ("resource Cell.Cell<R, Int> c = true {\n42\n}", "Mismatch"),
@@ -1188,11 +1354,11 @@ fn cell_n08_generic_initializer_and_payload_precede_fresh_binders() {
     }
     // A preceding type R and term c remain visible in T and the initializer.
     let source = "import @builtin.generic_cell as Cell\ntype R = R(Int)\nmain : Unit -> Int\nmain () = {\nlet c = R(41)\nresource Cell.Cell<R, R> c = c {\n42\n}\n}\n";
-    assert_check(tree.check(source), Some("ResourceEscape"));
+    assert_check(tree.check(source), None);
 }
 
 #[test]
-fn generic_cell_foundation_checks_supported_payload_shapes_then_refuses_publication() {
+fn generic_cell_fixed_payload_shapes_pass_dependency_admission() {
     let tree = Tree::new();
     for (declarations, payload, initial, body) in [
         (
@@ -1227,7 +1393,7 @@ fn generic_cell_foundation_checks_supported_payload_shapes_then_refuses_publicat
         ),
     ] {
         // CELL-P01/P11 source typing only. Runtime observations stay pending.
-        assert_check(tree.check(&format!("import @builtin.generic_cell as Cell\n{declarations}main : Unit -> Int\nmain () = resource Cell.Cell<R, {payload}> c = {initial} {{\n{body}\n}}\n")), Some("ResourceEscape"));
+        assert_check(tree.check(&format!("import @builtin.generic_cell as Cell\n{declarations}main : Unit -> Int\nmain () = resource Cell.Cell<R, {payload}> c = {initial} {{\n{body}\n}}\n")), None);
     }
 }
 
@@ -1251,7 +1417,7 @@ fn cell_n10_generic_read_is_monomorphic_before_admission() {
 }
 
 #[test]
-fn generic_helpers_and_facade_acquisition_cannot_publish_pending_dependency_summaries() {
+fn generic_helpers_and_facade_acquisition_publish_conditional_dependency_graphs() {
     let tree = Tree::new();
     fs::write(tree.0.join("facade.ash"), "pub import @builtin.generic_cell (Cell as Access, Provider as Supply, Ops as Requests, read as get, write as put)\n").unwrap();
     for source in [
@@ -1259,7 +1425,7 @@ fn generic_helpers_and_facade_acquisition_cannot_publish_pending_dependency_summ
         "import facade as F\npub get<R,T> : F.Access<R,T> -> T ! {F.Requests<R,T>} where F.Supply<R,T>\nget c = F.get c\n",
         "import facade as F\nmain : Unit -> Int\nmain () = resource F.Access<R, Int> c = 41 {\nF.get c\n}\n",
     ] {
-        assert_check(tree.check(source), Some("ResourceEscape"));
+        assert_check(tree.check(source), None);
     }
 }
 
@@ -1290,19 +1456,19 @@ fn cell_n11_native_state_and_continuation_payloads_keep_ordinary_restrictions() 
 }
 
 #[test]
-fn cell_p11_mixed_api_typing_reaches_the_foundation_gate() {
+fn cell_p11_mixed_api_typing_preserves_both_families() {
     let tree = Tree::new();
-    assert_check(tree.check("import @builtin.cell as Legacy\nimport @builtin.generic_cell as Cell\nmain : Unit -> Int\nmain () = resource cell<A> a = 41 {\nresource Cell.Cell<B, Bool> b = true {\nlet _ = Legacy.write (a, 42)\nlet _ = Cell.read b\nLegacy.read a\n}\n}\n"), Some("ResourceEscape"));
+    assert_check(tree.check("import @builtin.cell as Legacy\nimport @builtin.generic_cell as Cell\nmain : Unit -> Int\nmain () = resource cell<A> a = 41 {\nresource Cell.Cell<B, Bool> b = true {\nlet _ = Legacy.write (a, 42)\nlet _ = Cell.read b\nLegacy.read a\n}\n}\n"), None);
 }
 
 #[test]
-fn generic_cell_indexed_callable_metadata_cannot_publish_without_an_acquisition() {
+fn generic_cell_indexed_callable_metadata_keeps_conditional_dependencies() {
     let tree = Tree::new();
-    assert_check(tree.check("import @builtin.generic_cell (Ops)\npub relay<R,T> : (Unit -> T ! {Ops<R,T>}) -> (Unit -> T ! {Ops<R,T>})\nrelay callback = callback\n"), Some("ResourceEscape"));
+    assert_check(tree.check("import @builtin.generic_cell (Ops)\npub relay<R,T> : (Unit -> T ! {Ops<R,T>}) -> (Unit -> T ! {Ops<R,T>})\nrelay callback = callback\n"), None);
 }
 
 #[test]
-fn generic_cell_known_ops_inside_resource_row_arguments_cannot_publish() {
+fn generic_cell_known_ops_inside_resource_row_arguments_pass_metadata_admission() {
     let tree = Tree::new();
     fs::write(
         tree.0.join("owner.ash"),
@@ -1312,10 +1478,684 @@ fn generic_cell_known_ops_inside_resource_row_arguments_cannot_publish() {
     // Keep this helper private: the public fixture reaches a separate export
     // summary failure. Both variants still cross checked
     // module admission with a genuine computational ResourceApply RowArg.
-    for (row, expected) in [("Ops<Int, Bool>", Some("ResourceEscape")), ("Tick", None)] {
+    for (row, expected) in [("Ops<Int, Bool>", None), ("Tick", None)] {
         let source = format!(
             "import @builtin.generic_cell (Ops)\nimport owner as Owner\neffect Tick {{\ntick : Unit -> Unit\n}}\nrelay<R> : Owner.Probe<{{{row}}}, R, {{}}> -> Owner.Probe<{{{row}}}, R, {{}}>\nrelay value = value\n"
         );
         assert_check(tree.check(&source), expected);
     }
+}
+
+#[test]
+fn cell_p04_snapshot_stays_independent_after_dependent_replacement() {
+    let tree = Tree::new();
+    for (result, expected) in [("old", None), ("Cell.read b", Some("ResourceEscape"))] {
+        let source = format!(
+            r#"import @builtin.generic_cell as Cell
+independent : Unit -> Int
+independent () = 7
+main : Unit -> Int
+main () = {{
+    let saved = resource Cell.Cell<A, Int> a = 1 {{
+        resource Cell.Cell<B, (Unit -> Int)> b = independent {{
+            let old = Cell.read b
+            let replacement : Unit -> Int = fn(ignored) {{
+                let held = a
+                42
+            }}
+            let _ = Cell.write (b, replacement)
+            {result}
+        }}
+    }}
+    saved ()
+}}
+"#
+        );
+        assert_check(
+            if expected.is_some() {
+                tree.check_dependencies_at(
+                    &source,
+                    "Cell.read b",
+                    "let held = a",
+                    "Cell.Cell<A",
+                    None,
+                )
+            } else {
+                tree.check_dependencies(&source)
+            },
+            expected,
+        );
+    }
+}
+
+#[test]
+fn cell_p13_reply_snapshot_and_n12_later_builtin_read_keep_distinct_dependencies() {
+    let tree = Tree::new();
+    for (result, expected) in [("reply", None), ("Cell.read b", Some("ResourceEscape"))] {
+        let source = format!(
+            r#"import @builtin.generic_cell as Cell
+independent : Unit -> Int
+independent () = 7
+main : Unit -> Int
+main () = {{
+    let saved = resource Cell.Cell<A, Int> a = 1 {{
+        resource Cell.Cell<B, (Unit -> Int)> b = independent {{
+            let replacement : Unit -> Int = fn(ignored) {{
+                let held = a
+                42
+            }}
+            let reply = handle (Cell.read b) with Cell.Ops<B, (Unit -> Int)> {{
+                read ignored => {{
+                    let _ = Cell.write (b, replacement)
+                    resume independent
+                }}
+                write ignored => resume ()
+            }}
+            {result}
+        }}
+    }}
+    saved ()
+}}
+"#
+        );
+        assert_check(
+            if expected.is_some() {
+                tree.check_dependencies_at(
+                    &source,
+                    "Cell.read b",
+                    "let held = a",
+                    "Cell.Cell<A",
+                    None,
+                )
+            } else {
+                tree.check_dependencies(&source)
+            },
+            expected,
+        );
+    }
+}
+
+#[test]
+fn cell_p05_recursive_activation_retains_enclosing_capture() {
+    let source = r#"import @builtin.generic_cell as Cell
+visit : (Bool, Unit -> Int) -> Int
+visit (again, initial) = resource Cell.Cell<R, (Unit -> Int)> c = initial {
+    match again {
+        true => {
+            let next : Unit -> Int = fn(ignored) {
+                let held = c
+                9
+            }
+            visit (false, next)
+        }
+        false => {
+            let saved = Cell.read c
+            saved ()
+        }
+    }
+}
+initial : Unit -> Int
+initial () = 7
+main : Unit -> Int
+main () = visit (true, initial)
+"#;
+    assert_check(Tree::new().check_dependencies(source), None);
+}
+
+#[test]
+fn cell_p02_snapshots_and_p03_enclosing_access_check_without_runtime_permission() {
+    let tree = Tree::new();
+    for source in [
+        "import @builtin.generic_cell as Cell\nmain : Unit -> (Int,Int)\nmain () = resource Cell.Cell<R,Int> c = 41 {\nlet old = Cell.read c\nlet _ = Cell.write (c,42)\n(old, Cell.read c)\n}\n",
+        "import @builtin.generic_cell as Cell\nmain : Unit -> Int\nmain () = {\nlet saved = resource Cell.Cell<R,Int> c = 41 {\nlet old = Cell.read c\nlet _ = Cell.write (c,42)\nlet snapshot : Unit -> Int = fn(ignored) {\nold\n}\nsnapshot\n}\nsaved ()\n}\n",
+        "import @builtin.generic_cell as Cell\nmain : Unit -> Int\nmain () = resource Cell.Cell<A,Int> a = 7 {\nlet outer = resource Cell.Cell<B,Cell.Cell<A,Int>> b = a {\nCell.read b\n}\nCell.read outer\n}\n",
+    ] {
+        assert_check(tree.check_dependencies(source), None);
+    }
+}
+
+#[test]
+fn cell_p10_independent_cyclic_immutable_payload_remains_admitted() {
+    let source = r#"import @builtin.generic_cell as Cell
+type Stream = Next(Int, Stream)
+main : Unit -> Int
+main () = {
+    let rec ones : Stream = Next(1, ones)
+    resource Cell.Cell<R,Stream> c = ones {
+        match Cell.read c {
+            Next(first, rest) => match rest {
+                Next(second, ignored) => first + second
+            }
+        }
+    }
+}
+"#;
+    assert_check(Tree::new().check_dependencies(source), None);
+}
+
+#[test]
+fn cell_n03_self_retention_and_n04_younger_cycle_reject_at_write() {
+    let tree = Tree::new();
+    for body in [
+        "resource Cell.Cell<A,(Unit -> Int)> a = independent {\nlet bad : Unit -> Int = fn(ignored) {\nlet held = a\n42\n}\nlet _ = Cell.write (a,bad)\nlet _ = Cell.write (a,independent)\n42\n}",
+        "resource Cell.Cell<A,(Unit -> Int)> a = independent {\nresource Cell.Cell<B,(Unit -> Int)> b = independent {\nlet outer : Unit -> Int = fn(ignored) {\nlet held = a\n42\n}\nlet _ = Cell.write (b,outer)\nlet inner : Unit -> Int = fn(ignored) {\nlet held = b\n42\n}\nlet _ = Cell.write (a,inner)\n42\n}\n}",
+        "resource Cell.Cell<A,(Unit -> Int)> a = independent {\nresource Cell.Cell<B,Int> b = 7 {\nlet bad : Unit -> Int = fn(ignored) {\nlet held = b\n42\n}\nlet _ = Cell.write (a,bad)\n42\n}\n}",
+    ] {
+        assert_check(tree.check_dependencies_at(&format!("import @builtin.generic_cell as Cell\nindependent : Unit -> Int\nindependent () = 7\nmain : Unit -> Int\nmain () = {body}\n"), if body.contains("(a,inner)") { "Cell.write (a,inner)" } else { "Cell.write (a,bad)" }, if body.contains("let held = b") { "let held = b" } else { "let held = a" }, "Cell.Cell<A", None), Some("ResourceEscape"));
+    }
+}
+
+#[test]
+fn cell_p04_imported_read_helper_preserves_two_call_snapshots() {
+    let tree = Tree::new();
+    fs::write(tree.0.join("helper.ash"), "import @builtin.generic_cell as Cell\npub get<R,T> : Cell.Cell<R,T> -> T ! {Cell.Ops<R,T>} where Cell.Provider<R,T>\nget c = Cell.read c\npub put<R,T> : (Cell.Cell<R,T>,T) -> Unit ! {Cell.Ops<R,T>} where Cell.Provider<R,T>\nput pair = Cell.write pair\n").unwrap();
+    for (result, expected) in [("old", None), ("Helper.get b", Some("ResourceEscape"))] {
+        let source = format!(
+            r#"import @builtin.generic_cell as Cell
+import helper as Helper
+independent : Unit -> Int
+independent () = 7
+main : Unit -> Int
+main () = {{
+    let saved = resource Cell.Cell<A, Int> a = 1 {{
+        resource Cell.Cell<B, (Unit -> Int)> b = independent {{
+            let old = Helper.get b
+            let replacement : Unit -> Int = fn(ignored) {{
+                let held = a
+                42
+            }}
+            let _ = Helper.put (b, replacement)
+            {result}
+        }}
+    }}
+    saved ()
+}}
+"#
+        );
+        assert_check(
+            if expected.is_some() {
+                tree.check_dependencies_at(
+                    &source,
+                    "Helper.get b",
+                    "let held = a",
+                    "Cell.Cell<A",
+                    None,
+                )
+            } else {
+                tree.check_dependencies(&source)
+            },
+            expected,
+        );
+    }
+}
+
+#[test]
+fn cell_p08_actual_handler_reply_dependencies_pair_with_n06_escape() {
+    let tree = Tree::new();
+    for (answer, expected) in [("reply ()", None), ("reply", Some("ResourceEscape"))] {
+        let result_type = if expected.is_some() {
+            "(Unit -> Int)"
+        } else {
+            "Int"
+        };
+        let source = format!(
+            r#"import @builtin.generic_cell as Cell
+independent : Unit -> Int
+independent () = 7
+main : Unit -> {result_type}
+main () = resource Cell.Cell<A,Int> a = 1 {{
+    resource Cell.Cell<B,(Unit -> Int)> b = independent {{
+        let dependent : Unit -> Int = fn(ignored) {{
+            let held = a
+            42
+        }}
+        let reply = handle (Cell.read b) with Cell.Ops<B,(Unit -> Int)> {{
+            read ignored => resume dependent
+            write ignored => resume ()
+        }}
+        {answer}
+    }}
+}}
+"#
+        );
+        assert_check(
+            if expected.is_some() {
+                tree.check_dependencies_at(&source, "reply", "let held = a", "Cell.Cell<A", None)
+            } else {
+                tree.check_dependencies(&source)
+            },
+            expected,
+        );
+    }
+}
+
+#[test]
+fn cell_p09_independent_and_enclosing_payload_crossings_pair_with_n07() {
+    let tree = Tree::new();
+    for (capture, expected) in [("old", None), ("c", Some("ResourceEscape"))] {
+        let source = format!(
+            r#"import @builtin.generic_cell as Cell
+effect Send {{
+send : (Unit -> Int) -> Unit
+}}
+main : Unit -> Int
+main () = handle (resource Cell.Cell<R,Int> c = 41 {{
+    let old = Cell.read c
+    let payload : Unit -> Int = fn(ignored) {{
+        let held = {capture}
+        42
+    }}
+    let _ = perform Send.send payload
+    42
+}}) with Send {{
+    send payload => {{
+        let _ = payload ()
+        resume ()
+    }}
+}}
+"#
+        );
+        assert_check(
+            if expected.is_some() {
+                tree.check_dependencies_at(
+                    &source,
+                    "perform Send.send payload",
+                    "let held = c",
+                    "Cell.Cell<R",
+                    None,
+                )
+            } else {
+                tree.check_dependencies(&source)
+            },
+            expected,
+        );
+    }
+    let permitted = r#"import @builtin.generic_cell as Cell
+effect Send {
+send : (Unit -> Int) -> Unit
+}
+main : Unit -> Int
+main () = resource Cell.Cell<A,Int> a = 7 {
+    handle (resource Cell.Cell<B,Int> b = 41 {
+        let payload : Unit -> Int = fn(ignored) {
+            let held = a
+            42
+        }
+        let _ = perform Send.send payload
+        42
+    }) with Send {
+        send payload => {
+            let _ = payload ()
+            resume ()
+        }
+    }
+}
+"#;
+    assert_check(tree.check_dependencies(permitted), None);
+}
+
+#[test]
+fn cell_n02_hidden_access_closures_and_n05_unsafe_payload_joins_reject() {
+    let tree = Tree::new();
+    let escape = r#"import @builtin.generic_cell as Cell
+main : Unit -> (Unit -> Int)
+main () = resource Cell.Cell<R,Int> c = 41 {
+    let live : Unit -> Int = fn(ignored) {
+        let held = c
+        42
+    }
+    live
+}
+"#;
+    assert_check(
+        tree.check_dependencies_at(escape, "live", "let held = c", "Cell.Cell<R", None),
+        Some("ResourceEscape"),
+    );
+    let branch = r#"import @builtin.generic_cell as Cell
+independent : Unit -> Int
+independent () = 7
+choose : Bool -> Int
+choose flag = resource Cell.Cell<A,(Unit -> Int)> a = independent {
+    resource Cell.Cell<B,Int> b = 41 {
+        let bad : Unit -> Int = fn(ignored) {
+            let held = b
+            42
+        }
+        let payload = match flag {
+true => independent
+false => bad
+}
+        let _ = Cell.write (a,payload)
+        42
+    }
+}
+main : Unit -> Int
+main () = choose true
+"#;
+    assert_check(
+        tree.check_dependencies_at(
+            branch,
+            "Cell.write (a,payload)",
+            "let held = b",
+            "Cell.Cell<A",
+            None,
+        ),
+        Some("ResourceEscape"),
+    );
+}
+
+#[test]
+fn cell_n05_resumed_stack_does_not_extend_an_older_slots_birth_enclosure() {
+    let tree = Tree::new();
+    let prelude = "import @builtin.generic_cell as Cell\neffect Start {\nstart : Unit -> (Unit -> Int)\n}\nindependent : Unit -> Int\nindependent () = 7\nmain : Unit -> Int\n";
+    let negative = r#"main () = handle (resource Cell.Cell<A,(Unit -> Int)> a = independent {
+    let incoming = perform Start.start ()
+    let _ = Cell.write (a,incoming)
+    42
+}) with Start {
+    start ignored => resource Cell.Cell<B,Int> b = 7 {
+        let younger : Unit -> Int = fn(ignored) {
+            let held = b
+            42
+        }
+        resume younger
+    }
+}
+"#;
+    assert_check(
+        tree.check_dependencies_at(
+            &format!("{prelude}{negative}"),
+            "Cell.write (a,incoming)",
+            "let held = b",
+            "Cell.Cell<A",
+            None,
+        ),
+        Some("ResourceEscape"),
+    );
+    let positive = r#"main () = resource Cell.Cell<B,Int> b = 7 {
+    handle (resource Cell.Cell<A,(Unit -> Int)> a = independent {
+        let incoming = perform Start.start ()
+        let _ = Cell.write (a,incoming)
+        42
+    }) with Start {
+        start ignored => {
+            let enclosing : Unit -> Int = fn(ignored) {
+                let held = b
+                42
+            }
+            resume enclosing
+        }
+    }
+}
+"#;
+    assert_check(
+        tree.check_dependencies(&format!("{prelude}{positive}")),
+        None,
+    );
+}
+
+#[test]
+fn cell_p05_birth_relation_never_authorizes_recursive_self_replacement() {
+    let tree = Tree::new();
+    let source = r#"import @builtin.generic_cell as Cell
+visit : (Bool, Unit -> Int) -> Int
+visit (again, initial) = resource Cell.Cell<R,(Unit -> Int)> c = initial {
+    let next : Unit -> Int = fn(ignored) {
+        let held = c
+        9
+    }
+    match again {
+        true => visit (false,next)
+        false => {
+            let _ = Cell.write (c,next)
+            42
+        }
+    }
+}
+initial : Unit -> Int
+initial () = 7
+main : Unit -> Int
+main () = visit (true,initial)
+"#;
+    assert_check(
+        tree.check_dependencies_at(
+            source,
+            "Cell.write (c,next)",
+            "let held = c",
+            "Cell.Cell<R",
+            None,
+        ),
+        Some("ResourceEscape"),
+    );
+}
+
+#[test]
+fn cell_n02_n07_imported_evidence_dependencies_survive_wrappers_and_crossings() {
+    for crossing in [false, true] {
+        for hidden in [false, true] {
+            let tree = Tree::new();
+            fs::write(tree.0.join("helper.ash"), "pub interface Read<A> {\nread : A -> Int\n}\npub invoke<A> : A -> Int where Read<A>\ninvoke value = read value\npub opaque type Box<A> = Hidden(A)\npub pack<A> : A -> Box<A>\npack value = Hidden value\npub unpack<A> : Box<A> -> A\nunpack (Hidden value) = value\n").unwrap();
+            let method = if hidden { "let held = c\n42" } else { "old" };
+            let returned = if crossing {
+                "let _ = perform Send.send later\n42"
+            } else {
+                "later"
+            };
+            let outer = if crossing { "handle (" } else { "" };
+            let close = if crossing {
+                ") with Send {\nsend payload => {\nlet _ = payload ()\nresume ()\n}\n}"
+            } else {
+                ""
+            };
+            let result_type = if crossing { "Int" } else { "(Unit -> Int)" };
+            let source = format!(
+                "import @builtin.generic_cell as Cell\nimport helper (Read,read,invoke,pack,unpack)\neffect Send {{\nsend : (Unit -> Int) -> Unit\n}}\nmain : Unit -> {result_type}\nmain () = {outer}resource Cell.Cell<R,Int> c = 41 {{\nlet old = Cell.read c\nnewtype Token = Token(Unit)\nlet token = Token(())\nwith Read<Token> {{\nread ignored = {{\n{method}\n}}\n}}\nlet callback : Unit -> Int = fn(ignored) {{\ninvoke token\n}}\nlet wrapped = pack callback\nlet later = unpack wrapped\n{returned}\n}}{close}\n"
+            );
+            assert_check(
+                if hidden {
+                    tree.check_dependencies_at(
+                        &source,
+                        if crossing {
+                            "perform Send.send later"
+                        } else {
+                            "later"
+                        },
+                        "invoke token",
+                        "Cell.Cell<R",
+                        None,
+                    )
+                } else {
+                    tree.check_dependencies(&source)
+                },
+                hidden.then_some("ResourceEscape"),
+            );
+        }
+    }
+}
+
+#[test]
+fn cell_n07_indexed_operation_metadata_alone_crosses_with_its_owner() {
+    let tree = Tree::new();
+    for (body, expected) in [
+        (
+            "let scoped : Unit -> Int ! {Cell.Ops<R,Int>} = quiet\nhandle (scoped ()) with Cell.Ops<R,Int> {\nread value => resume 42\nwrite value => resume ()\n}",
+            Some("ResourceEscape"),
+        ),
+        ("42", None),
+    ] {
+        let source = format!(
+            "import @builtin.generic_cell as Cell\nquiet<R> : Unit -> Int ! {{Cell.Ops<R,Int>}}\nquiet () = 42\neffect Send {{\nsend : (Unit -> Int) -> Unit\n}}\nmain : Unit -> Int\nmain () = handle (resource Cell.Cell<R,Int> c = 41 {{\nlet payload : Unit -> Int = fn(ignored) {{\n{body}\n}}\nlet _ = perform Send.send payload\n42\n}}) with Send {{\nsend payload => resume ()\n}}\n"
+        );
+        assert_check(
+            if expected.is_some() {
+                tree.check_dependencies_at(
+                    &source,
+                    "perform Send.send payload",
+                    "Cell.Ops<R,Int>",
+                    "Cell.Cell<R",
+                    None,
+                )
+            } else {
+                tree.check_dependencies(&source)
+            },
+            expected,
+        );
+    }
+}
+
+#[test]
+fn cell_n04_wrappers_and_selected_fields_keep_only_actual_payload_dependencies() {
+    let tree = Tree::new();
+    fs::write(tree.0.join("helper.ash"), "pub opaque type Pair<A,B> = Hidden(A,B)\npub pack<A,B> : (A,B) -> Pair<A,B>\npack (first,second) = Hidden(first,second)\npub first<A,B> : Pair<A,B> -> A\nfirst (Hidden(first,second)) = first\npub second<A,B> : Pair<A,B> -> B\nsecond (Hidden(first,second)) = second\n").unwrap();
+    for (selection, expected) in [("first", Some("ResourceEscape")), ("second", None)] {
+        let source = format!(
+            "import @builtin.generic_cell as Cell\nimport helper as Helper\nindependent : Unit -> Int\nindependent () = 7\nmain : Unit -> Int\nmain () = resource Cell.Cell<A,(Unit -> Int)> a = independent {{\nresource Cell.Cell<B,Int> b = 41 {{\nlet dependent : Unit -> Int = fn(ignored) {{\nlet held = b\n42\n}}\nlet package = Helper.pack (dependent,independent)\nlet payload = Helper.{selection} package\nlet _ = Cell.write (a,payload)\n42\n}}\n}}\n"
+        );
+        assert_check(
+            if expected.is_some() {
+                tree.check_dependencies_at(
+                    &source,
+                    "Cell.write (a,payload)",
+                    "let held = b",
+                    "Cell.Cell<A",
+                    None,
+                )
+            } else {
+                tree.check_dependencies(&source)
+            },
+            expected,
+        );
+    }
+}
+
+#[test]
+fn cell_p12_other_handler_and_resumed_mutations_change_only_later_reads() {
+    let tree = Tree::new();
+    for resumed in [false, true] {
+        for (result, expected) in [("old", None), ("Cell.read b", Some("ResourceEscape"))] {
+            let body = if resumed {
+                "{\nlet _ = perform Tick.tick ()\nlet _ = Cell.write (b,dependent)\nCell.read b\n}"
+            } else {
+                "Cell.write (b,independent)"
+            };
+            let handler = if resumed {
+                "handle ({BODY}) with Tick {\ntick ignored => resume ()\n}"
+            } else {
+                "handle (handle ({BODY}) with Cell.Ops<B,(Unit -> Int)> {\nread ignored => resume independent\nwrite ignored => {\nlet _ = perform Tick.tick ()\nresume ()\n}\n}) with Tick {\ntick ignored => {\nlet _ = Cell.write (b,dependent)\nresume ()\n}\n}"
+            }.replace("{BODY}",body);
+            let source = format!(
+                "import @builtin.generic_cell as Cell\neffect Tick {{\ntick : Unit -> Unit\n}}\nindependent : Unit -> Int\nindependent () = 7\nmain : Unit -> Int\nmain () = {{\nlet saved = resource Cell.Cell<A,Int> a = 1 {{\nresource Cell.Cell<B,(Unit -> Int)> b = independent {{\nlet old = Cell.read b\nlet dependent : Unit -> Int = fn(ignored) {{\nlet held = a\n42\n}}\nlet ignored = {handler}\n{result}\n}}\n}}\nsaved ()\n}}\n"
+            );
+            assert_check(
+                if expected.is_some() {
+                    tree.check_dependencies_at(
+                        &source,
+                        "Cell.read b",
+                        "let held = a",
+                        "Cell.Cell<A",
+                        None,
+                    )
+                } else {
+                    tree.check_dependencies(&source)
+                },
+                expected,
+            );
+        }
+    }
+}
+
+#[test]
+fn cell_n05_every_possible_target_must_admit_the_replacement() {
+    let tree = Tree::new();
+    for (payload, expected) in [("independent", None), ("dependent", Some("ResourceEscape"))] {
+        let source = format!(
+            "import @builtin.generic_cell as Cell\nindependent : Unit -> Int\nindependent () = 7\nput<R> : (Cell.Cell<R,(Unit -> Int)>,(Unit -> Int)) -> Unit ! {{Cell.Ops<R,(Unit -> Int)>}} where Cell.Provider<R,(Unit -> Int)>\nput pair = Cell.write pair\nmain : Unit -> Int\nmain () = resource Cell.Cell<A,(Unit -> Int)> a = independent {{\nresource Cell.Cell<B,(Unit -> Int)> b = independent {{\nlet dependent : Unit -> Int = fn(ignored) {{\nlet held = a\n42\n}}\nlet choose = true\nlet _ = match choose {{\ntrue => put (a,{payload})\nfalse => put (b,{payload})\n}}\n42\n}}\n}}\n"
+        );
+        assert_check(
+            if expected.is_some() {
+                tree.check_dependencies_at(
+                    &source,
+                    "Cell.write pair",
+                    "let held = a",
+                    "Cell.Cell<A",
+                    Some("put (a,dependent)"),
+                )
+            } else {
+                tree.check_dependencies(&source)
+            },
+            expected,
+        );
+    }
+}
+
+#[test]
+fn cell_exact_handlers_preserve_outer_targets_with_the_same_payload_type() {
+    let tree = Tree::new();
+    for target in ["A", "B"] {
+        let source = format!(
+            "import @builtin.generic_cell as Cell\nmain : Unit -> Int\nmain () = resource Cell.Cell<A,Int> a = 1 {{\nresource Cell.Cell<B,Int> b = 2 {{\nlet _ = handle ({{\nlet _ = Cell.write (b,9)\nCell.write (a,42)\n}}) with Cell.Ops<{target},Int> {{\nread value => resume 7\nwrite value => resume ()\n}}\nCell.read a\n}}\n}}\n"
+        );
+        assert_check(tree.check_dependencies(&source), None);
+    }
+}
+
+#[test]
+fn cell_n02_access_wrappers_and_live_reader_results_cannot_leave_their_owner() {
+    let tree = Tree::new();
+    fs::write(tree.0.join("helper.ash"), "pub opaque type Box<A> = Hidden(A)\npub pack<A> : A -> Box<A>\npack value = Hidden value\n").unwrap();
+    for result in [
+        "c",
+        "pack c",
+        "let reader : Unit -> Int ! {Cell.Ops<R,Int>} = fn(ignored) {\nCell.read c\n}\nreader",
+    ] {
+        let source = format!(
+            "import @builtin.generic_cell as Cell\nimport helper (pack)\nmain : Unit -> Int\nmain () = {{\nlet escaped = resource Cell.Cell<R,Int> c = 41 {{\n{result}\n}}\n42\n}}\n"
+        );
+        assert_check(
+            tree.check_dependencies_at(
+                &source,
+                if result.starts_with("let reader") {
+                    "reader"
+                } else {
+                    result
+                },
+                "",
+                "Cell.Cell<R",
+                None,
+            ),
+            Some("ResourceEscape"),
+        );
+    }
+}
+
+#[test]
+fn generic_cell_payload_can_retain_an_enclosing_source_access() {
+    let tree = Tree::new();
+    fs::write(
+        tree.0.join("owner.ash"),
+        include_str!("fixtures/source-owner/owner.ash"),
+    )
+    .unwrap();
+    let source = "import @builtin.generic_cell as Cell\nimport owner as Owner\nmain : Unit -> Owner.Scope<Unit,Unit,Int>\nmain () = resource Owner.Probe<{},O,{}> outer = 42 {\nresource Cell.Cell<R,Owner.Probe<{},O,{}>> c = outer {\nlet selected = Cell.read c\nOwner.read selected\n}\n}\n";
+    // The raw checker receives declaration summaries, but no original source
+    // provider code. Its refusal must publish no checked entry module.
+    let missing_code = tree.check(source).unwrap_err();
+    assert!(missing_code.contains("InvalidState"), "{missing_code}");
+    // The public driver retains the defining provider code during source
+    // checking, then independently reconstructs linked Core dependencies.
+    ash::driver::compile_path(ash::driver::RunConfiguration {
+        entry: tree.0.join("entry.ash"),
+        roots: ModuleRoots::empty(),
+    })
+    .expect("enclosing ordinary source access remains a valid generic payload");
+}
+
+#[test]
+fn generic_cell_completion_keeps_structural_discard_obligations() {
+    let tree = Tree::new();
+    let admitted = "import @builtin.generic_cell as Cell\neffect Stop {\nstop : Unit -> Unit\n}\nmain : Unit -> Unit\nmain () = handle (resource Cell.Cell<R,Int> c = 41 {\nperform Stop.stop ()\n}) with Stop {\nstop ignored => discard\n}\n";
+    assert_check(tree.check_dependencies(admitted), None);
+    let unsafe_discard = "import @builtin.generic_cell as Cell\neffect A {\nask : Unit -> Unit\n}\neffect B {\nask : Unit -> Unit\n}\nmain : Unit -> Unit\nmain () = handle (resource Cell.Cell<R,Int> c = 41 {\nperform A.ask ()\n}) with A {\nask ignored => {\nlet _ = handle ({\nlet _ = perform B.ask ()\nresume ()\n}) with B {\nask ignored => discard\n}\n()\n}\n}\n";
+    let error = tree.check_dependencies(unsafe_discard).unwrap_err();
+    assert!(error.contains("DiscardUnsafe"), "{error}");
 }

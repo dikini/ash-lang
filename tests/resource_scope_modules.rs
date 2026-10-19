@@ -478,3 +478,104 @@ fn cell_n09_generic_provider_is_sealed_through_direct_and_facade_imports() {
         }
     }
 }
+
+#[test]
+fn cell_p05_imported_recursive_predecessor_relation_reconstructs_from_linked_code() {
+    let tree = Tree::new();
+    let helper = r#"import @builtin.generic_cell as Cell
+pub visit : (Bool, Unit -> Int) -> Int
+visit (again, initial) = resource Cell.Cell<R,(Unit -> Int)> c = initial {
+    match again {
+        true => {
+            let next : Unit -> Int = fn(ignored) {
+                let held = c
+                9
+            }
+            visit (false,next)
+        }
+        false => {
+            let saved = Cell.read c
+            saved ()
+        }
+    }
+}
+"#;
+    tree.write("helper.ash", helper);
+    let entry = tree.write("entry.ash", "import helper (visit)\ninitial : Unit -> Int\ninitial () = 7\nmain : Unit -> Int\nmain () = visit (true,initial)\n");
+    let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+    check(&graph);
+    ash::driver::compile_path(ash::driver::RunConfiguration {
+        entry,
+        roots: ModuleRoots::empty(),
+    })
+    .expect("imported recursive predecessor proof must rebuild from linked code");
+}
+
+#[test]
+fn cell_p06_facade_aliases_and_conditional_write_summary_keep_all_targets_and_payloads() {
+    let tree = Tree::new();
+    tree.write("helper.ash", "import @builtin.generic_cell as Cell\npub get<R,T> : Cell.Cell<R,T> -> T ! {Cell.Ops<R,T>} where Cell.Provider<R,T>\nget c = Cell.read c\npub put<R,T> : (Cell.Cell<R,T>,T) -> Unit ! {Cell.Ops<R,T>} where Cell.Provider<R,T>\nput pair = Cell.write pair\n");
+    tree.write(
+        "facade.ash",
+        "pub import helper (get,put)\npub import @builtin.generic_cell (Cell as Access)\n",
+    );
+    let entry = tree.write("entry.ash", "import facade as F\nmain : Unit -> Int\nmain () = resource F.Access<R,Int> c = 41 {\nlet alias = c\nlet selected = match true {\ntrue => c\nfalse => alias\n}\nlet _ = F.put (selected,42)\nF.get c\n}\n");
+    ash::driver::compile_path(ash::driver::RunConfiguration {
+        entry: entry.clone(),
+        roots: ModuleRoots::empty(),
+    })
+    .expect("facade and same-owner alias branches preserve conditional flow");
+    tree.write("entry.ash", "import facade as F\nindependent : Unit -> Int\nindependent () = 7\nmain : Unit -> Int\nmain () = resource F.Access<A,(Unit -> Int)> a = independent {\nresource F.Access<B,Int> b = 41 {\nlet bad : Unit -> Int = fn(ignored) {\nlet held = b\n42\n}\nlet _ = F.put (a,bad)\n42\n}\n}\n");
+    let error = ash::driver::compile_path(ash::driver::RunConfiguration {
+        entry,
+        roots: ModuleRoots::empty(),
+    })
+    .unwrap_err();
+    assert_eq!(error.reason_code(), "type.resource-escape");
+    let ash::driver::FileFailure::Pipeline(context) = &error else {
+        panic!("source dependency phase")
+    };
+    let ash::driver::PipelineFailure::Typing(ash::elaborate::TypeError::Source(diagnostic)) =
+        context.failure()
+    else {
+        panic!("source dependency reason: {error:?}")
+    };
+    let refs = error.sources().iter().collect::<Vec<_>>();
+    let presented = ash::presentation::compile_type_diagnostic(diagnostic, &refs)
+        .expect("imported capture/call labels must compile for presentation");
+    let mut json = Vec::new();
+    ash::presentation::write_json(&mut json, &presented).unwrap();
+    assert!(!json.is_empty());
+    for locale in [
+        ash::message::Locale::English,
+        ash::message::Locale::Bulgarian,
+    ] {
+        let mut text = Vec::new();
+        let catalogue = ash::message::Catalogue::new(locale).unwrap();
+        ash::presentation::write_human(&mut text, &presented, &catalogue).unwrap();
+        assert!(!text.is_empty());
+    }
+    let text = |span: ash::source::Span| {
+        let source = error
+            .sources()
+            .iter()
+            .find(|source| source.id() == span.source())
+            .unwrap();
+        &source.text()[span.range().start() as usize..span.range().end() as usize]
+    };
+    assert!(text(diagnostic.primary.span()).contains("Cell.write pair"));
+    for (label, fragment) in [
+        ("acquired", "resource F.Access<A"),
+        ("carries the retained dependency", "let held = b"),
+        ("call propagates", "F.put (a,bad)"),
+    ] {
+        assert!(
+            diagnostic
+                .related
+                .iter()
+                .any(|related| related.message().contains(label)
+                    && text(related.span()).contains(fragment)),
+            "missing {label}: {diagnostic:?}"
+        );
+    }
+}

@@ -3557,10 +3557,8 @@ mod tests {
     use crate::sqlite_output_order;
 
     #[test]
-    fn generic_cell_private_image_restores_full_carrier_then_refuses_admission() {
-        let (core, sources) = crate::core::validate::generic_cell_core_fixture_for_test();
-        // This test-only donor grants no production validation or execution.
-        let donor = crate::core::dialect::forge_validated_for_test(core);
+    fn generic_cell_private_image_reconstructs_dependency_proof_without_execution() {
+        let (donor, sources) = crate::core::validate::generic_cell_validated_fixture_for_test();
         let provenance = donor
             .registry()
             .type_variables()
@@ -3605,12 +3603,199 @@ mod tests {
         decoded
             .admit_expected_native_facts(&expected, &mut work)
             .unwrap();
-        let error = match decoded.restore_effect(&mut work) {
-            Ok(_) => panic!("pending generic dependencies admitted"),
+        let restored = decoded.restore_effect(&mut work).unwrap();
+        assert_eq!(
+            crate::eval::evaluate_effect(&restored.program)
+                .unwrap_err()
+                .reason_code(),
+            "runtime.invalid-control-state"
+        );
+    }
+
+    #[test]
+    fn generic_cell_imported_flow_images_rebuild_with_exact_short_and_retry_work() {
+        for (source, helper) in [
+            (
+                include_str!("../../tests/fixtures/generic-cell/snapshot-entry.ash"),
+                include_str!("../../tests/fixtures/generic-cell/dependency-helper.ash"),
+            ),
+            (
+                include_str!("../../tests/fixtures/generic-cell/recursive-entry.ash"),
+                include_str!("../../tests/fixtures/generic-cell/recursive-helper.ash"),
+            ),
+            (
+                include_str!("../../tests/fixtures/generic-cell/handler-snapshot-entry.ash"),
+                include_str!("../../tests/fixtures/generic-cell/dependency-helper.ash"),
+            ),
+        ] {
+            let (program, sources, relation) =
+                crate::core::validate::generic_cell_source_fixture_for_test(source, Some(helper));
+            let provenance = relation
+                .iter()
+                .map(|(module, id)| {
+                    (
+                        *module,
+                        Arc::new(
+                            sources
+                                .iter()
+                                .find(|source| source.id() == *id)
+                                .unwrap()
+                                .clone(),
+                        ),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let build = encode_effect_for_build(
+                &program,
+                &provenance,
+                super::super::NATIVE_TARGET,
+                &mut TypeWorkBudget::default(),
+            )
+            .unwrap();
+            let bytes = build
+                .image
+                .encode_bytes(&mut TypeWorkBudget::default())
+                .unwrap();
+            let expected = build
+                .image
+                .encode_native_expectations(&mut TypeWorkBudget::default())
+                .unwrap();
+            drop(build);
+            drop(program);
+            drop(provenance);
+            drop(sources);
+            let restore = |work: &mut TypeWorkBudget| {
+                let image = PureImage::decode_bytes(&bytes, work)?;
+                image.admit_expected_native_facts(&expected, work)?;
+                image.restore_effect(work)
+            };
+            let mut measured = TypeWorkBudget::default();
+            let restored = restore(&mut measured).unwrap();
+            assert_eq!(
+                crate::eval::evaluate_effect(&restored.program)
+                    .unwrap_err()
+                    .reason_code(),
+                "runtime.invalid-control-state"
+            );
+            drop(restored);
+            let mut short = TypeWorkBudget::with_limit(measured.used() - 1);
+            assert!(restore(&mut short).is_err());
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(measured.used());
+                drop(restore(&mut exact).unwrap());
+                assert_eq!(exact.used(), measured.used());
+            }
+        }
+    }
+
+    #[test]
+    fn generic_cell_image_reconstructs_hidden_capture_instead_of_trusting_prior_proof() {
+        let (program, sources, relation) =
+            crate::core::validate::generic_cell_source_fixture_for_test(
+                include_str!("../../tests/fixtures/generic-cell/retention-entry.ash"),
+                Some(include_str!(
+                    "../../tests/fixtures/generic-cell/dependency-helper.ash"
+                )),
+            );
+        let provenance = relation
+            .iter()
+            .map(|(module, id)| {
+                (
+                    *module,
+                    Arc::new(
+                        sources
+                            .iter()
+                            .find(|source| source.id() == *id)
+                            .unwrap()
+                            .clone(),
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+        let build = encode_effect_for_build(
+            &program,
+            &provenance,
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        let expected = build
+            .image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        let mut image = build.image;
+        let handles = image
+            .nodes
+            .iter()
+            .filter_map(|node| match node.tag {
+                NodeTag::CellScope {
+                    handle,
+                    initializer,
+                    ..
+                } => Some((
+                    handle,
+                    matches!(image.nodes[initializer as usize].tag, NodeTag::Integer(41)),
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(handles.len(), 2);
+        let scalar = image.binders[handles.iter().find(|(_, scalar)| *scalar).unwrap().0 as usize];
+        let function =
+            image.binders[handles.iter().find(|(_, scalar)| !*scalar).unwrap().0 as usize];
+        let same_binder = |left, right| match (left, right) {
+            (
+                BinderIdentity::Resolved {
+                    module: a,
+                    local: b,
+                },
+                BinderIdentity::Resolved {
+                    module: c,
+                    local: d,
+                },
+            ) => a == c && b == d,
+            (BinderIdentity::Generated(a), BinderIdentity::Generated(b)) => a == b,
+            _ => false,
+        };
+        let changed = image
+            .nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, node)| {
+                matches!(node.tag, NodeTag::Variable(id) if same_binder(id,scalar.id))
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(changed.len(), 1);
+        let changed = changed[0];
+        image.nodes[changed].tag = NodeTag::Variable(function.id);
+        image.nodes[changed].ty = function.ty;
+        let mut binders = 0;
+        for node in &image.nodes {
+            if let NodeTag::Bind {
+                binder,
+                initializer,
+                ..
+            } = node.tag
+                && initializer as usize == changed
+            {
+                image.binders[binder as usize].ty = function.ty;
+                binders += 1;
+            }
+        }
+        assert_eq!(binders, 1);
+        let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
+        let decoded = PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+        decoded
+            .admit_expected_native_facts(&expected, &mut TypeWorkBudget::default())
+            .unwrap();
+        let error = match decoded.restore_effect(&mut TypeWorkBudget::default()) {
             Err(error) => error,
+            Ok(_) => panic!("changed hidden retention must fail independent image validation"),
         };
         assert!(
-            matches!(error, ImageFailure::Validation(ref error) if error.reason() == crate::core::ValidationReason::ResourceEscape),
+            matches!(error, ImageFailure::Validation(ref error)
+            if error.reason() == crate::core::ValidationReason::ResourceEscape),
             "{error:?}"
         );
     }

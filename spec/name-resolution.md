@@ -65,8 +65,8 @@ arguments. Position zero is a fresh unqualified identity binder; `T` and the
 initializer resolve in the preceding scope. A preceding same-spelled type or
 term still resolves there. The new identity and value binder scope over the
 body only. An ordinary same-spelled type supplies no acquisition authority.
-The [foundation publication restriction](static-semantics.md#generic-cell-foundation)
-still applies after ordinary checking.
+The [dependency admission rules](static-semantics.md#generic-cell-foundation)
+apply after ordinary checking; imported names alone supply no contents proof.
 
 A module containing a `resource cell` expression must directly import `@builtin.cell`.
 Either a complete or targeted import satisfies this requirement, independently
