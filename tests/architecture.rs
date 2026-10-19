@@ -501,6 +501,15 @@ const TASK_4_PHASE_CONSTRAINT: &str = "kind inference is intentionally absent on
 
 #[rustfmt::skip]
 const KIND_SITES: &[KindSite] = &[
+    // Generic acquisition/row replay and runtime roots retain existing owner categories.
+    kind_site!("src/core/effect.rs::$impl_CoreBuilder::$fn_replay_effect_rows_in_range::Equation.Resource.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
+    kind_site!("src/eval/machine.rs::Frame.ResourceBoundary.payload", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Mixed),
+    kind_site!("src/eval/machine.rs::ResourcePayload.Generic.instance", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState),
+    kind_site!("src/eval/machine.rs::ResourcePayload.Generic.value", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/resolve.rs::ResolveTask.FinishResource.payload", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
+    kind_site!("src/resolve.rs::ResolveTask.GenericResourceInitializer.source", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
+    kind_site!("src/resolve.rs::ResolvedCellPayloadOwner.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
+
     // Passive access and copy-window fields retain their physical owners.
     // Borrowed views, shared facts and owned buffers keep separate profiles.
     kind_site!("src/build/image.rs::DecodedType.value", FieldBuildTypeOwned),
@@ -785,9 +794,9 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/foreign/source_runtime.rs::NativeOwnerGuard.$alias", FieldSourceRuntimeOwnerShared),
     kind_site!("src/foreign/source_runtime.rs::NativeByteAccess.$alias", FieldSourceRuntimeOwnerShared, Borrowed),
     kind_site!("src/foreign/source_runtime.rs::NativeOwnerGuardReady.$alias", FieldSourceRuntimeOwnerShared),
-    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_source_resource_definitions::$block_163_0_3::$block_163_0_3_6::Effects.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
-    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_source_resource_definitions::$block_163_0_3::$block_163_0_3_6::Handlers.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
-    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_source_resource_definitions::$block_163_0_3::$block_163_0_3_6::Provider.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
+    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_source_resource_definitions::$block_166_0_3::$block_166_0_3_6::Effects.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
+    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_source_resource_definitions::$block_166_0_3::$block_166_0_3_6::Handlers.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
+    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_source_resource_definitions::$block_166_0_3::$block_166_0_3_6::Provider.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolve.rs::ResolvedDeclarations.source_resources", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolve.rs::ResolvedSourceResourceBuffer.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolve.rs::Resolver.source_foreign_libraries", FieldForeignPreparedKinds, Shared),
