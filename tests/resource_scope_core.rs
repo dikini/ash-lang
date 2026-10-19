@@ -49,7 +49,7 @@ fn generic_cell_dependency_admission_does_not_grant_execution_permission() {
         ash::build::BuildConfiguration::new(output.clone()),
     )
     .unwrap_err();
-    assert_eq!(failure.reason_code(), "build.unsupported-program");
+    assert_eq!(failure.reason(), "build.unsupported-program");
     assert!(
         !output.exists(),
         "dependency admission cannot publish a generic executable"

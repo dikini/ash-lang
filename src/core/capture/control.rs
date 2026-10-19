@@ -4173,28 +4173,26 @@ impl<'a> Analysis<'a> {
                 },
                 budget,
             )?;
-            if !absent {
-                if let Some(data) = &mut self.data {
-                    let occurrence = ProviderResourceOccurrence {
-                        code,
-                        value_context,
-                    };
-                    charge(budget, state.cells.len())?;
-                    let owners = if let Some(cell) = state
-                        .cells
-                        .iter()
-                        .find(|cell| cell.occurrence == occurrence)
-                    {
-                        copy_slice(&[cell.owner], budget)?
-                    } else {
-                        data.cell_owner(code, value_context, budget)?
-                    };
-                    charge(budget, owners.len())?;
-                    enclosing
-                        .try_reserve(owners.len())
-                        .map_err(|_| Failure::Resource)?;
-                    enclosing.extend(owners);
-                }
+            if !absent && let Some(data) = &mut self.data {
+                let occurrence = ProviderResourceOccurrence {
+                    code,
+                    value_context,
+                };
+                charge(budget, state.cells.len())?;
+                let owners = if let Some(cell) = state
+                    .cells
+                    .iter()
+                    .find(|cell| cell.occurrence == occurrence)
+                {
+                    copy_slice(&[cell.owner], budget)?
+                } else {
+                    data.cell_owner(code, value_context, budget)?
+                };
+                charge(budget, owners.len())?;
+                enclosing
+                    .try_reserve(owners.len())
+                    .map_err(|_| Failure::Resource)?;
+                enclosing.extend(owners);
             }
         }
         Ok(enclosing)

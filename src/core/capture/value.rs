@@ -16,6 +16,8 @@ use crate::{
     types::{ConstructorId, Type, TypeWorkBudget},
 };
 
+type CellOperand = (Vec<(usize, usize)>, Option<usize>);
+
 #[derive(Debug)]
 enum Expr {
     Cleanup {
@@ -5843,7 +5845,7 @@ impl<'a> Analysis<'a> {
         request: usize,
         write: bool,
         budget: &mut TypeWorkBudget,
-    ) -> Result<Vec<(Vec<(usize, usize)>, Option<usize>)>, Failure> {
+    ) -> Result<Vec<CellOperand>, Failure> {
         let (expression, context) = self.slots[request].key;
         let Expr::Request { operand, .. } = self.graph.expressions[expression] else {
             return Err(Failure::Invalid);
