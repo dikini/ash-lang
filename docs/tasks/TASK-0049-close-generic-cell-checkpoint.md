@@ -182,6 +182,37 @@ all assigned dependency-checking obligations; required runtime observations
 remain pending TASK-0047, integrated evidence TASK-0048 and the fresh full gate
 this checkpoint. Source admission must not grant generic execution readiness.
 
+### TASK-0046 resumed handoff, 2026-10-19
+
+The resumed developer and sole product writer/Cargo operator is
+`/root/task0046_developer`, dispatched as `gpt-6.1-sol` with `medium` effort;
+exact model runtime is unavailable. `/root/task0046_reviewer` independently
+reviews and `/root` retains coordination and acceptance ownership. The earlier
+TASK-0045 assignments above are historical and remain unchanged. The checkout,
+retaining branch, unsigned-only commit policy and authorization exclusions stay
+the same. The pre-pause whole-library process was cancelled (exit 130); absent
+old temporary logs supply no transferred final receipt.
+
+TASK-0046's [resumed dependency record](TASK-0046-generic-cell-contents-and-dependencies.md#resumed-dependency-delivery-2026-10-19)
+pins code commit `3f72e9ce3a1822631eb94762dbe1f6c0bde1806c`, its exact input
+records, fresh focused commands/results and the identical-file Clippy transfer.
+It maps all fifteen assigned families to paired source/import/Core evidence and
+records the stack, exact-handler, diagnostic and private-phase repairs. This is
+a dependency-readiness handoff accepted by the coordinator at that code pin.
+All original TASK-0046 case criteria and all 31 checkpoint cases, including every
+compound variant,
+remain open pending their complete observations.
+
+Next owners remain TASK-0047 for runtime transitions, results, sharing and
+release counts; TASK-0048 for the connected adversarial, budget, capacity and
+native matrix; this task for matching specification, case receipts, independent
+checkpoint review and the fresh full workspace gate. TASK-0047 has not been
+implemented or dispatched by this handoff. Generic source/Core admission still
+grants no evaluator/build execution permission. Scope lifetime, strict owner
+ordering, resource-cycle rejection, outward payload crossing and native
+retained-owner rules remain fixed. DN-0054 is unchanged and no region mechanism
+is included. No push, PR, Main integration or cleanup is authorized here.
+
 - [x] TASK-0045 launch records product inputs, retaining branch, roles and
   permissions. Later task dispatches require their own exact input handoffs.
 - [x] TASK-0045 foundation enables the downstream work without unchecked publication.

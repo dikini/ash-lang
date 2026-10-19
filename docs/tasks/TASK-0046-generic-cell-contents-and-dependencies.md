@@ -115,6 +115,103 @@ checks tampering and exact/insufficient/retry budgets across all paths.
 Retain frozen inputs, focused results, independent review and retained-commit
 verification. TASK-0049 owns the full checkpoint gate.
 
+### Resumed dependency delivery, 2026-10-19
+
+The retained code candidate is
+`3f72e9ce3a1822631eb94762dbe1f6c0bde1806c`, an unsigned descendant of the
+reviewed foundation. The resumed developer and sole Cargo operator is
+`/root/task0046_developer`; `/root/task0046_reviewer` supplies independent
+review and `/root` owns acceptance. The developer dispatch retains requested
+`gpt-6.1-sol`, `medium`; exact model runtime is unavailable. Historical
+TASK-0045 assignments and results remain recorded in TASK-0049.
+
+The pre-pause whole-library process was cancelled with exit 130. Its old
+`/tmp` logs are absent after resume and supply no transferred result. Fresh
+verification found and repaired a 64 KiB stack regression, exact-handler target
+ambiguity and diagnostic/coverage gaps before this candidate was frozen.
+
+Independent code and technical-evidence review by
+`/root/task0046_reviewer` is clear at this pin. Root independently read the
+retained file records and focused results. The coordinator accepted dependency
+readiness at this code pin, preserving the original compound criteria and
+TASK-0047/0048/0049 obligations. Complete task/checkpoint acceptance remains open.
+
+The following is dependency evidence; it does not complete the original case
+criteria above. Test names are in `tests/resource_scope_typing.rs` unless a
+module is named. Each paired test retains its variants and causal assertions.
+
+| Family | Named dependency evidence |
+| --- | --- |
+| P02, P03 | `cell_p02_snapshots_and_p03_enclosing_access_check_without_runtime_permission` |
+| P04 | `cell_p04_snapshot_stays_independent_after_dependent_replacement`; `cell_p04_imported_read_helper_preserves_two_call_snapshots` |
+| P05 | `cell_p05_recursive_activation_retains_enclosing_capture`; module test `cell_p05_imported_recursive_predecessor_relation_reconstructs_from_linked_code`; recursive self-replacement and resumed older-slot negative companions |
+| P08, N06 | `cell_p08_actual_handler_reply_dependencies_pair_with_n06_escape` |
+| P09, N07 | `cell_p09_independent_and_enclosing_payload_crossings_pair_with_n07`; imported evidence, indexed-metadata and outer/inner write-interceptor crossing companions |
+| P10 | `cell_p10_independent_cyclic_immutable_payload_remains_admitted` |
+| P13, N12 | `cell_p13_reply_snapshot_and_n12_later_builtin_read_keep_distinct_dependencies` |
+| N02 | `cell_n02_hidden_access_closures_and_n05_unsafe_payload_joins_reject`; `cell_n02_access_wrappers_and_live_reader_results_cannot_leave_their_owner`; imported evidence companions |
+| N03, N04 | `cell_n03_self_retention_and_n04_younger_cycle_reject_at_write`; `cell_n04_wrappers_and_selected_fields_keep_only_actual_payload_dependencies`, including genuine indirect cycles, opaque projections, imported capture factories and later-clear variants |
+| N05 | `cell_n05_resumed_stack_does_not_extend_an_older_slots_birth_enclosure`; `cell_n05_every_possible_target_must_admit_the_replacement`; unsafe-join companions |
+
+Additional paired source/Core tests distinguish actual handler owner arguments
+through imported distinct/equal substitutions and a nonforwarding exact write
+interceptor. The shared fixtures are independently rebuilt from actual Core
+after identity/folding transforms. Available-code generic fixtures require
+source/compiled admission parity; dependency-negative fixtures require the
+typing phase, reason and causal labels. The dedicated missing-provider-code raw
+API refusal remains separate from the authenticated public imported native-access
+positive.
+`generic_cell_dependency_admission_does_not_grant_execution_permission` confirms
+that neither evaluator nor build publication receives generic execution
+permission from this proof.
+
+The candidate supplies implementation and focused evidence for all seven work
+items at this boundary. Runtime observations, release counts and cyclic-value
+sharing remain with
+TASK-0047; the complete adversarial, capacity, native and budget matrix remains
+with TASK-0048. The connected fresh full checkpoint gate remains with TASK-0049.
+The unchecked original criteria are preserved.
+
+The code tree is `0cae369bddc33a0355aaf08604f968824166bf76`. The frozen
+manifest contains 1,759 tracked/non-ignored file records (path, mode and content
+SHA-256), with canonical records digest
+`37f7f6adaf44714775ab4d3a32fa5c50bbd1a98b4ff0f36f4a39f77d8c942986`.
+Every run below preserved those exact records. Rust/Cargo 1.97.1,
+rustfmt 1.9.0 and Clippy 0.1.97 were reconfirmed before handoff, as were the
+manifest, lockfile, toolchain and Cargo configuration hashes. The inherited
+Cargo configuration SHA-256 is
+`13ed130670278614272c1fca1af627d4e427b8d306cd530a96f0d7555dbcd6a5`.
+All commands ran sequentially in the product checkout with
+`CARGO_BUILD_JOBS=1 RUSTC_WRAPPER=` and its stable target cache.
+
+| Focused command | Result | Log SHA-256 |
+| --- | --- | --- |
+| `cargo test --lib --locked` | 1,916 passed | `74024bd79fe428d2d52ba73f57905a69c2876c9ff0a612fa3916838db69e115b` |
+| `cargo test --test resource_scope_typing --test resource_scope_modules --test resource_scope_core --locked` | Core 2, modules 16, typing 101 passed | `cf90fddbb5b0996d5bc9e60d59ff4ee39093cbd9ec813315163866a9ce40ffdf` |
+| `cargo test --test source_resource_execution --test source_resource_acquired_only --test native_buffer_source --test native_buffer_runtime --test native_buffer_interactions --test provider_retention_source --test resource_scope_runtime --locked` | 130 passed across seven targets | `c813b281deb66599e7d4c4db90f056518b00548002b3a070bd7ea9e56d3749d4` |
+| `cargo clippy -p ash --all-targets --all-features --locked -- -D warnings` | Passed, warnings denied | `f7e2345b1c2044b852d65a036c2adf9daa9851ead6eefeb64a296a50f3f87028` |
+| `RUSTDOCFLAGS="-D warnings" cargo doc -p ash --no-deps --all-features --locked` | Passed, warnings denied | `ce0c419bb2154defc5c9f90997f0d4de6f08ad27e8516f44432decd5701f90e3` |
+| `cargo fmt --check` | Passed | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
+
+The three-suite command is the task-prescribed scope. The seven affected targets
+cover source Scope/acquired-only phases, real native buffer interactions,
+retention, blocked teardown and structural cleanup. Child-process reruns within
+a test are not counted as additional test cases. The library run includes the
+unchanged 64 KiB stack test, summary/import reconstruction, transformed Core,
+State restrictions and exact/one-short/fresh-retry unit probes.
+
+Library, resource and caller runs are fresh at the retained code commit.
+Clippy ran before the administrative commit while the prior Git HEAD remained
+`1c460f4eb07b156773521ff3b4d1e6a4dbe3d046`; its complete file records match the
+retained candidate exactly. This transfers that focused result across Git
+metadata only. These commands and custom working receipts are focused evidence,
+not canonical verification-stage receipts or a complete workspace gate.
+Working logs, file records and per-command receipts are in
+`/tmp/task0046-resume/`; the durable pins, results and hashes are retained here.
+Later receipt-only prose changes receive manual documentation checks and do not
+claim a new code run. Root verifies their source/config equality before retaining
+the handoff.
+
 ## Discoveries
 
 The candidate uses ordered immutable value ports in control states, separately
@@ -126,8 +223,8 @@ relation to existing original free-input ports frozen before fresh owner birth;
 subtree inputs, missing/future ports and the fresh access cannot witness it.
 Actual owner atoms remain available for later crossing and escape checks. The
 same relation is rebuilt from linked Core rather than trusted from a summary.
-Independent review of the final candidate and complete frozen evidence remain
-pending.
+Independent review of the retained dependency candidate is clear; the focused
+verification record above pins its results and remaining obligations.
 
 Stricter causal-diagnostic probes found an early builtin routing refusal when
 conservative type matching considered an inner same-payload cell for an outer
@@ -144,6 +241,36 @@ independent linked validation. The raw `check_module` API receives only the
 caller-supplied summaries and, by default, no imported provider code; its
 missing-code refusal is a separate fail-closed control, not a language rejection
 of that payload. The native-access probe records both API inputs explicitly.
+
+Exact source handlers need the same actual-owner precision as builtin routing.
+The candidate carries an authenticated owned-argument value port on the handler;
+selection intersects known acquisition identities while retaining unmatched
+outward paths. Free, unknown or uninstantiated alternatives preserve ordinary
+conservative matching. Type-application metadata unions distinguish their
+neutral seed from a genuine independent-value alternative. This distinction is
+rebuilt from Core, copied through summaries and charged through the existing
+equations; it supplies no source safety assertion or new runtime form. Imported
+distinct/equal owner substitutions and intercepted self-dependent writes cover
+both precision and refusal.
+
+Diagnostic enrichment follows a generated Scope report's answer only when that
+actual answer port retains the escaping owner; a completion-only dependency
+keeps the report origin. Public native Scope probes pair a hidden body capture
+with an independent function result. Unmaterialized original free-input ports
+are omitted from predecessor witnesses rather than created as future evidence.
+Private native phases retain their existing supported-control profile: a nested
+generic scope receives the ordinary profile refusal, not new phase support.
+Existing actual-State capture rejection and exact restricted-payload reasons
+remain required.
+
+The unchanged 64 KiB capture test exposed aggregate Rust frame pressure in the
+finite graph-building call chain. Optional causal labels now use a fallible,
+precharged fixed two-role carrier, with one-short/exact/fresh-retry probes and
+no allocating failure clone. On this target, the actual foundation and compact
+failure enums both measure 48 bytes. A bounded handler-builder extraction keeps
+operation and charge order unchanged; independent inverse-extraction comparison
+reproduced the previous file exactly. The fresh whole-library run includes the
+original stack bound. No work allowance or test stack was increased.
 
 An analysis that cannot admit a required positive remains unfinished work or a
 semantic question for CP-0023, not an implicit reduction in scope.
