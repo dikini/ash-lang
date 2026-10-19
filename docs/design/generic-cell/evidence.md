@@ -1072,7 +1072,7 @@ summaries retain the checkpoint evidence independently of cache lifetime.
 Independent review and coordinator acceptance are recorded under
 Checkpoint acceptance and retained-input boundary.
 Executed source/test/config/fixture equality after receipt prose and cleanup
-requires the separate retained readback below.
+is verified by the retained readbacks below.
 
 The 140 parent harnesses report 4,112 passes, zero failures and one ignored
 optional native calibration study. Nine child-process summaries are excluded
@@ -1456,9 +1456,9 @@ requested and dispatched as `gpt-6.1-sol` with `medium` reasoning effort.
 All 31 case sections above retain their complete positive, negative and
 compound observations. Original TASK-0045–0048 criteria close on the connected
 behavior and final gate; TASK-0049's product-checkpoint criteria close on the
-same receipt. Its artifact-cleanup criterion closes only through the reviewed
-retirement
-and retained readback below. The conditional Main integration guard is
+same receipt. Its artifact-cleanup criterion is fulfilled by the reviewed
+retirement and
+retained readback below. The conditional Main integration guard is
 untriggered; this record claims no Main gate or integration.
 
 The gate pins every file, including Markdown, at the exact tested commit.
@@ -1491,10 +1491,10 @@ exactly five surviving documents: this evidence, the task/proposal/design
 indexes and DN-0053. DN-0053 remains informative and retained because the
 byte-identical DN-0054 links to it. No unrelated artifact, source, test,
 configuration, fixture, worktree or build cache is removed or changed.
-The retirement readback must verify actual file absence, repaired local links,
-current specification authority and equality of every retained executed input.
-The retained retirement readback is still required to fulfill TASK-0049's
-lifecycle criterion. The conditional Main guard remains untriggered.
+The retained retirement readback verified actual file absence, repaired local
+links, current specification authority and equality of every retained executed
+input. This fulfills TASK-0049's lifecycle criterion. The conditional Main
+guard remains untriggered.
 Main integration has not occurred.
 
 ### Local transition history
@@ -1535,3 +1535,38 @@ ordinary payload-crossing and all native retained-owner protections. DN-0054
 SHA-256 remains
 `c7a596a9fbd84029adfd5333af02594e1a82eea30c548947be362f722cd1e342`.
 No push, PR, Main integration or branch/worktree/cache retirement is included.
+
+## Retained cleanup readback and local closure
+
+The actual lifecycle delta was retained unsigned at local commit
+`9807f6d45326a4fde08a422037c186596f3d781a`, tree
+`91f47ce7039c322128ed42460c4e4e94d120e824`, directly after the acceptance
+commit. The retained tree is clean and contains no commit signature. All ten
+retired paths are absent, rather than empty files. Exactly the five reviewed
+surviving Markdown documents changed. The 1,759 retained mode/content records
+have SHA-256:
+`cbbe9a25a13a7887d3bd33989f4c8d37b1867e25842c93a5688078c606cfceac`.
+
+All 1,754 other retained records match the tested `7e80df3e` inventory,
+including executed source, tests, configuration and fixtures. The current
+runtime fingerprint remains `6270711a` as fully identified above. Manual
+readback verified 125 relative file/anchor targets across the five surviving
+documents and no stale retired-artifact links in surviving documentation,
+specification or agent Markdown. All ten local historical retrieval commands
+resolve to their exact acceptance objects. The 31 distinct primary case
+sections remain. DN-0053 is retained; DN-0054 has its unchanged hash above.
+
+Independent reviewer `/root/task0046_reviewer` and coordinator `/root` cleared
+the actual retained cleanup before this final evidence-only closure update.
+This fulfills the last applicable TASK-0049 lifecycle criterion and closes the
+local TASK-0045–0049 checkpoint, including TASK-0046's original compound
+acceptance. Main integration remains unauthorized and unperformed; its
+conditional guard is untriggered. No push, PR, branch/worktree/cache retirement
+or separate DN-0054 work is claimed.
+
+The fresh complete code gate remains bound to `7e80df3e`, not a later
+all-file documentation fingerprint. This final update changes only the
+evidence Markdown and receives manual authority/link review plus retained
+executed-input equality readback. The raw gate, native and prerequisite
+records remain outside the build cache; this document retains their complete
+command/result/input/tool/log digests and local historical locators.
