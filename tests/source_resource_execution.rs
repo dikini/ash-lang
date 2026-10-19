@@ -2049,14 +2049,11 @@ fn generated_owner_execution_with_native_link(
         ] {
             fs::copy(from, directory.join(name)).unwrap();
         }
-        for name in [
-            "Cargo.toml",
-            "Cargo.lock",
-            "rust-toolchain.toml",
-            "native-build.log",
-        ] {
-            fs::copy(generated.join(name), directory.join(name)).unwrap();
+        let project = generated.parent().unwrap();
+        for name in ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml"] {
+            fs::copy(project.join(name), directory.join(name)).unwrap();
         }
+        fs::copy(built.build_log(), directory.join("native-build.log")).unwrap();
         let mut records = serde_json::Map::new();
         for name in [
             "case-inputs.json",
