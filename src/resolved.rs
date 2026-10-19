@@ -24172,6 +24172,37 @@ impl ResolvedRegistry {
         Ok(())
     }
 
+    /// The caller must have authenticated its closed nominal/effect registry,
+    /// including opaque imported kinds. This query discovers identities only;
+    /// it grants no capture, source or Core admission permission.
+    pub(crate) fn has_generic_cell_type_identity(
+        &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ()> {
+        let count = self
+            .nominals
+            .len()
+            .checked_add(self.lexical_nominals.len())
+            .and_then(|count| count.checked_add(self.abstract_nominal_kinds.len()))
+            .and_then(|count| count.checked_add(self.effects.len()))
+            .and_then(|count| count.checked_add(1))
+            .ok_or(())?;
+        work.charge(count)?;
+        Ok(self
+            .nominals
+            .iter()
+            .chain(self.lexical_nominals.iter())
+            .any(|nominal| nominal.id.module().is_builtin_generic_cell())
+            || self
+                .abstract_nominal_kinds
+                .keys()
+                .any(|id| id.module().is_builtin_generic_cell())
+            || self
+                .effects
+                .iter()
+                .any(|effect| effect.id.module().is_builtin_generic_cell()))
+    }
+
     /// Returns nominal declarations in source order.
     #[must_use]
     pub fn nominals(&self) -> &[ResolvedNominalType] {
@@ -27505,6 +27536,96 @@ pub(crate) fn discard_resolved_local_declaration_iteratively(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn generic_cell_identity_census_covers_every_kind_store_with_exact_retries() {
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/generic-cell/handler-read-entry.ash"),
+            roots: crate::module::ModuleRoots::empty(),
+        })
+        .unwrap();
+        let (core, _) = compiled.effect_build_input().unwrap();
+        let effect = core
+            .registry()
+            .effects()
+            .iter()
+            .find(|effect| effect.id.module().is_builtin_generic_cell())
+            .unwrap();
+        let source = SourceFile::new("identity-census.ash", "Cell").unwrap();
+        let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
+        // These isolate discovery stores, not whole-registry admission. The
+        // independently checked donor provides the actual builtin identity.
+        for generic in [false, true] {
+            let module = if generic {
+                effect.id.module()
+            } else {
+                ModuleId::new(99_091)
+            };
+            for store in 0..4 {
+                let mut registry = ResolvedRegistry::default();
+                let id = if store == 1 {
+                    NominalTypeId::lexical(module, 0)
+                } else {
+                    NominalTypeId::new(module, 0)
+                };
+                let nominal = || ResolvedNominalType {
+                    id,
+                    declaration_kind: ResolvedNominalDeclarationKind::Data,
+                    spelling: "Cell".into(),
+                    constructors: Box::new([]),
+                    representation: None,
+                    representation_provenance: None,
+                    origin: Origin::Source(span),
+                };
+                match store {
+                    0 => registry.nominals = Box::new([nominal()]),
+                    1 => registry.lexical_nominals = Box::new([nominal()]),
+                    2 => {
+                        registry.abstract_nominal_kinds.insert(
+                            id,
+                            NonMaterializedNominalKindFact {
+                                kind: NonMaterializedNominalKind::Ordinary(Kind::Type),
+                                origin: span,
+                            },
+                        );
+                    }
+                    3 => {
+                        let mut effect = effect.clone();
+                        effect.id = EffectId::new(module, 0);
+                        registry.effects = Box::new([effect]);
+                    }
+                    _ => unreachable!(),
+                }
+                let mut measured = TypeWorkBudget::unbounded();
+                assert_eq!(
+                    registry.has_generic_cell_type_identity(&mut measured),
+                    Ok(generic)
+                );
+                assert_eq!(measured.used(), 2);
+                let mut short = TypeWorkBudget::with_limit(measured.used() - 1);
+                assert_eq!(registry.has_generic_cell_type_identity(&mut short), Err(()));
+                assert_eq!(short.used(), 0, "precharge before examining any identity");
+                for _ in 0..2 {
+                    let mut exact = TypeWorkBudget::with_limit(measured.used());
+                    assert_eq!(
+                        registry.has_generic_cell_type_identity(&mut exact),
+                        Ok(generic)
+                    );
+                    assert_eq!(exact.remaining(), 0);
+                }
+            }
+        }
+        let empty = ResolvedRegistry::default();
+        assert_eq!(
+            empty.has_generic_cell_type_identity(&mut TypeWorkBudget::with_limit(0)),
+            Err(())
+        );
+        assert_eq!(
+            empty.has_generic_cell_type_identity(&mut TypeWorkBudget::with_limit(1)),
+            Ok(false)
+        );
+    }
+
     #[test]
     fn effect_clone_refusal_prices_text_and_discards_retained_deep_operations() {
         std::thread::Builder::new()

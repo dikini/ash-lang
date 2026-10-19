@@ -4822,6 +4822,30 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         self.validate_scopes()?;
         self.validate_type_scopes()?;
         self.reject_pure_byte_applications()?;
+        // All ordinary structural checks above independently authenticate the
+        // closed Pure registry. With no external/abstract authority, an absent
+        // generic identity cannot occur in any admitted type. Contextual and
+        // provider preparations retain their complete discovery path.
+        if F::REQUIRES_EMPTY_ROWS
+            && !F::ALLOWS_EFFECTFUL_TYPES
+            && self.source_resource_context == SourceResourceValidationContext::FinalProgram
+            && self.contextual_registry.is_none()
+            && self.source_original_provider.is_none()
+            && self.provider_external_types.is_none()
+            && self.authenticated_abstract_nominals.borrow().is_empty()
+        {
+            let mut work = TypeWorkBudget::with_limit(
+                self.type_work_limit.saturating_sub(self.type_work.get()),
+            );
+            let present = self
+                .program
+                .registry
+                .has_generic_cell_type_identity(&mut work);
+            self.charge_type_work(work.used())?;
+            if !present.map_err(|()| ValidationError::new(ValidationReason::Resource, None))? {
+                return Ok(());
+            }
+        }
         self.generic_cell_computations().map(|_| ())
     }
 
@@ -23164,6 +23188,61 @@ mod tests {
                 "{result:?}"
             );
         }
+    }
+
+    #[test]
+    fn generic_cell_discovery_absence_does_not_admit_unregistered_core_identity() {
+        let (donor, _) = cell_core_fixture_with_generic(true);
+        let scope = donor
+            .nodes
+            .iter()
+            .find_map(|node| {
+                if let super::super::effect::EffectExprKind::Operation(
+                    super::super::effect::EffectOperation::Resource(scope),
+                ) = &node.kind
+                {
+                    Some(scope)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        let access = Type::Application(
+            Box::new(Type::Application(
+                Box::new(Type::Nominal(scope.acquisition.api().unwrap().handle())),
+                Box::new(Type::Int),
+            )),
+            Box::new(Type::Bool),
+        );
+        let source = crate::source::SourceFile::new("unregistered-cell.ash", "x").unwrap();
+        let span = source
+            .span(crate::source::ByteRange::new(0, 1).unwrap())
+            .unwrap();
+        let origin = crate::source::Origin::Source(span);
+        let mut builder = super::super::CoreBuilder::new();
+        let parameter = builder.binder(access.clone(), origin.clone()).unwrap();
+        let body = builder
+            .variable(parameter.id(), access.clone(), origin.clone())
+            .unwrap();
+        let root = builder
+            .function(
+                parameter,
+                body,
+                Type::Function(Box::new(access.clone()), Box::new(access)),
+                origin,
+            )
+            .unwrap();
+        // Source discovery relies on a closed authenticated registry. A raw
+        // builder does not supply that source proof or admit its finished Core.
+        assert_eq!(
+            builder
+                .generic_cell_dependency_origin(&mut TypeWorkBudget::with_limit(1))
+                .unwrap(),
+            None
+        );
+        let core = builder.finish(root).unwrap();
+        let failure = super::super::validate(core, &[&source]).unwrap_err();
+        assert_eq!(failure.reason(), ValidationReason::NodeType);
     }
 
     #[test]
