@@ -3272,6 +3272,82 @@ mod tests {
     }
 
     #[test]
+    fn generic_cell_core_builder_reconstruction_is_exact_and_fresh_retryable() {
+        let (program, sources) = crate::core::validate::generic_cell_validated_fixture_for_test();
+        let refs = sources.iter().collect::<Vec<_>>();
+        let relation = program
+            .registry()
+            .type_variables()
+            .map(|parameter| {
+                (
+                    parameter.id.module().unwrap(),
+                    parameter.origin.primary_span().source(),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        for fold in [false, true] {
+            // This is the CoreBuilder ledger, separate from source inference.
+            // Find the exact smallest remaining allowance with fresh builders.
+            let mut low = 0;
+            let mut high = crate::types::TYPE_WORK_LIMIT;
+            while low < high {
+                let allowance = low + (high - low) / 2;
+                match rebuild_with_initial_type_work(
+                    &program,
+                    fold,
+                    crate::types::TYPE_WORK_LIMIT - allowance,
+                ) {
+                    Ok(output) => {
+                        drop(output);
+                        high = allowance;
+                    }
+                    Err(TransformError::Build(super::super::BuildError::TypeWorkExceeded)) => {
+                        low = allowance + 1
+                    }
+                    Err(error) => panic!("unexpected builder refusal: {error:?}"),
+                }
+            }
+            let exact = low;
+            assert!(exact > 0);
+            assert!(
+                matches!(
+                    rebuild_with_initial_type_work(
+                        &program,
+                        fold,
+                        crate::types::TYPE_WORK_LIMIT - exact + 1
+                    ),
+                    Err(TransformError::Build(
+                        super::super::BuildError::TypeWorkExceeded
+                    ))
+                ),
+                "one-short publishes no Core output"
+            );
+            for _ in 0..2 {
+                let output = rebuild_with_initial_type_work(
+                    &program,
+                    fold,
+                    crate::types::TYPE_WORK_LIMIT - exact,
+                )
+                .unwrap();
+                let admitted =
+                    crate::core::validate_effect_modules(output, &refs, &relation).unwrap();
+                assert_eq!(
+                    crate::eval::evaluate_effect(&admitted)
+                        .unwrap()
+                        .value
+                        .to_string(),
+                    "42"
+                );
+            }
+            println!(
+                "generic CoreBuilder fold={fold} exactwork={exact}; one-short refused; two fresh retries42"
+            );
+        }
+    }
+
+    #[test]
     fn higher_kinded_transform_copies_have_an_exact_type_budget() {
         // Body: one retained clone + one admission visit = 2.
         // Abstraction scheme: six clone units and six admission units.

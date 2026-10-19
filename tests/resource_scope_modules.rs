@@ -449,6 +449,19 @@ fn cell_n09_generic_provider_is_sealed_through_direct_and_facade_imports() {
                 "entry.ash",
                 &format!("import {import} as Cell\n{declaration}"),
             );
+            let failure = ash::driver::compile_path(ash::driver::RunConfiguration {
+                entry: entry.clone(),
+                roots: ModuleRoots::empty(),
+            })
+            .unwrap_err();
+            assert_eq!(failure.reason_code(), "resolve.sealed-provider");
+            let ash::driver::FileFailure::Pipeline(context) = failure else {
+                panic!("public resolver refusal")
+            };
+            assert!(matches!(
+                context.failure(),
+                ash::driver::PipelineFailure::Resolution(_)
+            ));
             let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
             let mut checked: Vec<CheckedModule> = Vec::new();
             for module in graph.modules() {

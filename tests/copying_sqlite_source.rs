@@ -1013,6 +1013,60 @@ fn declared_sqlite_access_views_cannot_be_hidden_in_private_payloads() {
 }
 
 #[test]
+fn generic_cell_n11_declared_views_cannot_be_payloads_or_hidden_in_wrappers() {
+    use ash::{
+        driver::{FileFailure, PipelineFailure},
+        elaborate::TypeError,
+    };
+    let fixture = Fixture::new();
+    let library = CONNECTION.replace(
+        "    symbol Initialize",
+        &format!("{STATEMENT_DECLARATIONS}{COLUMN_VIEW_DECLARATIONS}    symbol Initialize"),
+    );
+    fs::write(fixture.0.join("sqlite.ash"), library).unwrap();
+    for (payload, initial) in [("Int", "41"), ("Wrapped<Int>", "Wrap(41)")] {
+        fs::write(fixture.0.join("entry.ash"), format!("import @ffi.sqlite as Sqlite\nimport @builtin.generic_cell as Cell\ntype Wrapped<T> = Wrap(T)\nmain : Unit -> Int\nmain () = resource Cell.Cell<R,{payload}> c = ({initial}) {{\n42\n}}\n")).unwrap();
+        let compiled = compile_path(RunConfiguration {
+            entry: fixture.0.join("entry.ash"),
+            roots: ModuleRoots::new([("ffi", &fixture.0)]).unwrap(),
+        })
+        .unwrap();
+        assert_eq!(
+            ash::driver::execute(&compiled).unwrap().value_display(),
+            "42"
+        );
+    }
+    for payload in [
+        "Sqlite.ColumnView<Unit,Unit,Unit>",
+        "(Int,Sqlite.ColumnView<Unit,Unit,Unit>)",
+        "Wrapped<Sqlite.ColumnView<Unit,Unit,Unit>>",
+    ] {
+        fs::write(fixture.0.join("entry.ash"), format!("import @ffi.sqlite as Sqlite\nimport @builtin.generic_cell as Cell\ntype Wrapped<T> = Wrap(T)\nmain : Unit -> Int\nmain () = resource Cell.Cell<R,{payload}> c = 41 {{\n42\n}}\n")).unwrap();
+        let failure = compile_path(RunConfiguration {
+            entry: fixture.0.join("entry.ash"),
+            roots: ModuleRoots::new([("ffi", &fixture.0)]).unwrap(),
+        })
+        .unwrap_err();
+        assert_eq!(
+            failure.reason_code(),
+            "type.argument",
+            "{payload}: {failure:?}"
+        );
+        let FileFailure::Pipeline(context) = failure else {
+            panic!("checked public payload refusal")
+        };
+        let PipelineFailure::Typing(TypeError::Source(diagnostic)) = context.failure() else {
+            panic!("source payload refusal: {:?}", context.failure())
+        };
+        assert_eq!(
+            diagnostic.primary.message(),
+            "controlled native state is unavailable in ordinary callable types or captures",
+            "{payload}: {diagnostic:?}"
+        );
+    }
+}
+
+#[test]
 fn pure_nul_preflight_has_an_explicit_ordinary_result() {
     for (input, expected) in [("", "true"), ("é/name", "true"), ("bad\0name", "false")] {
         let fixture = Fixture::new();

@@ -8235,6 +8235,117 @@ mod tests {
     }
 
     #[test]
+    fn generic_cell_body_free_write_summary_authenticates_contents_graph_and_return() {
+        use crate::{
+            elaborate::check_module,
+            interface::InterfaceConstraintBudget,
+            module::{ModuleRoots, load_module_graph},
+            resolve::{DependencyExports, resolve_module},
+            resolved::{
+                CheckedModule, ImportedGlobalScheme, same_imported_global_fact_with_budget,
+            },
+        };
+        let unique = SourceFile::new("generic-summary-id", "")
+            .unwrap()
+            .id()
+            .value();
+        let path = std::env::temp_dir().join(format!(
+            "ash-generic-summary-{}-{unique}.ash",
+            std::process::id()
+        ));
+        std::fs::write(&path, "import @builtin.generic_cell as Cell\npub put<R,T> : (Cell.Cell<R,T>,T) -> Unit ! {Cell.Ops<R,T>} where Cell.Provider<R,T>\nput pair = Cell.write pair\n").unwrap();
+        let loaded = load_module_graph(&path, &ModuleRoots::empty());
+        std::fs::remove_file(path).unwrap();
+        let graph = loaded.unwrap();
+        let mut checked: Vec<CheckedModule> = Vec::new();
+        for module in graph.modules() {
+            let dependencies = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    DependencyExports::new(
+                        edge,
+                        checked
+                            .iter()
+                            .find(|value| value.module() == edge.target())
+                            .unwrap()
+                            .exports(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            checked.push(check_module(resolve_module(module, &dependencies).unwrap()).unwrap());
+        }
+        let exported = checked
+            .iter()
+            .find(|value| value.module() == graph.entry())
+            .unwrap()
+            .exports()
+            .term("put")
+            .unwrap();
+        let retained = exported.capture.graph.as_ref().unwrap();
+        assert!(
+            retained.data.is_some(),
+            "actual generic stored-value equations are retained"
+        );
+        assert!(
+            retained.code.iter().any(|control| match control {
+                Control::Call { ty, .. } => crate::resolved::generic_cell_dependency_type(
+                    &retained.types.0[*ty],
+                    &mut TypeWorkBudget::default()
+                )
+                .unwrap(),
+                _ => false,
+            }),
+            "the checked Cell.write call retains its generic indexed type"
+        );
+        let canonical = || ImportedGlobalScheme {
+            scalar_preflight: exported.scalar_preflight.clone(),
+            binder: exported.binder,
+            scheme: exported
+                .scheme
+                .clone_with_budget(&mut TypeWorkBudget::unbounded())
+                .unwrap(),
+            origin: exported.origin.clone(),
+            capture: exported.capture.clone(),
+        };
+        let matches = |imported: &ImportedGlobalScheme| {
+            same_imported_global_fact_with_budget(
+                imported,
+                exported,
+                &mut TypeWorkBudget::unbounded(),
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .unwrap()
+        };
+        assert!(matches(&canonical()));
+        for mutation in 0..3 {
+            let mut imported = canonical();
+            match mutation {
+                0 => imported.capture.graph = None,
+                1 => {
+                    imported.capture.graph = Some(Arc::new(SummaryGraph {
+                        effects: true,
+                        data: None,
+                        types: TypeArguments(Vec::new()),
+                        callables: CallableSlots::default(),
+                        code: Vec::new(),
+                    }))
+                }
+                2 => {
+                    assert!(!imported.capture.value.targets.is_empty());
+                    imported.capture.value.targets.clear();
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                !matches(&imported),
+                "forged generic contents/returned-value carrier {mutation}"
+            );
+        }
+    }
+
+    #[test]
     fn imported_capture_carriers_authenticate_identity_and_unknown_state() {
         use crate::{
             interface::{ConstrainedScheme, InterfaceConstraintBudget},

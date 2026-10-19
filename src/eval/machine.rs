@@ -6848,6 +6848,53 @@ mod tests {
         }
     }
 
+    // Keep discard-local frame storage out of the common acquisition caller.
+    #[inline(never)]
+    fn discard_deep_generic_root(machine: &mut Machine<'_>) {
+        let captured = machine.capture_from(0).unwrap();
+        assert_eq!(machine.live_resources, 1);
+        assert_eq!(machine.captured_cells, 1);
+        assert_eq!(captured.frames.len(), 1);
+        assert!(matches!(
+            &captured.frames[0],
+            Frame::ResourceBoundary {
+                payload: ResourcePayload::Generic {
+                    value: Value::Function(_),
+                    ..
+                },
+                ..
+            }
+        ));
+        let handler = HandlerId::new(0);
+        let owner = ResumeId::new(0);
+        machine.frames.push(Frame::ClauseBoundary {
+            registration: None,
+            handler,
+            owner,
+            continuation: Some(captured),
+        });
+        machine.discard(handler, owner).unwrap();
+        for _ in 0..3 {
+            let frame = machine.frames.pop().unwrap();
+            machine.return_from(frame, Value::Unit).unwrap();
+        }
+        assert!(machine.frames.is_empty());
+        assert_eq!(machine.live_resources, 0);
+        assert_eq!(machine.captured_cells, 0);
+        assert_eq!(machine.next_activation, 1);
+        let trace = machine.effect_trace.as_deref().unwrap();
+        assert_eq!(
+            trace,
+            &[
+                EffectTraceEvent::ResourceAcquired(0),
+                EffectTraceEvent::Discard(handler),
+                EffectTraceEvent::ResourceReleased(0),
+                EffectTraceEvent::ClauseReturned(handler),
+            ]
+        );
+        disposal::check().unwrap();
+    }
+
     #[test]
     fn generic_cell_admitted_function_origin_and_deep_environment_dispose_on_small_stack() {
         let program = effect_program(
@@ -6862,7 +6909,7 @@ mod tests {
             .stack_size(64 * 1024)
             .spawn(move || {
                 let node = resource_node(&program);
-                for mode in 0..3 {
+                for mode in 0..4 {
                     let mut function = template.clone();
                     let span = function.origin.primary_span();
                     function.origin = Origin::Source(span);
@@ -6885,6 +6932,10 @@ mod tests {
                             .extend(BinderId::new(index), Value::Unit)
                             .unwrap();
                     }
+                    assert_eq!(
+                        Arc::strong_count(function.environment.head.as_ref().unwrap()),
+                        1
+                    );
                     let mut machine = Machine::new_effect(&program);
                     machine
                         .acquire_resource(node, Environment::new(), Value::Function(function))
@@ -6914,7 +6965,7 @@ mod tests {
                                 .unwrap();
                             assert_eq!(machine.live_resources, 1);
                         }
-                        _ => {
+                        2 => {
                             let scope = disposal::Scope::enter();
                             drop(machine);
                             assert_eq!(
@@ -6922,6 +6973,7 @@ mod tests {
                                 Err(RuntimeFailure::MissingBinding)
                             );
                         }
+                        _ => discard_deep_generic_root(&mut machine),
                     }
                 }
             })

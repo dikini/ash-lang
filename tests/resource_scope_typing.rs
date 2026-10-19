@@ -196,6 +196,32 @@ impl Tree {
         compiled.map(|_| ()).map_err(|error| format!("{error:?}"))
     }
 
+    fn check_public_ordinary(&self, source: &str, reason: &str, phase: &str) -> String {
+        let raw = self.check(source).unwrap_err();
+        let failure = ash::driver::compile_path(ash::driver::RunConfiguration {
+            entry: self.0.join("entry.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap_err();
+        assert_eq!(failure.reason_code(), reason, "{raw}; {failure:?}");
+        let ash::driver::FileFailure::Pipeline(context) = &failure else {
+            panic!("expected public pipeline refusal: {failure:?}")
+        };
+        assert!(
+            match phase {
+                "resolve" => matches!(
+                    context.failure(),
+                    ash::driver::PipelineFailure::Resolution(_)
+                ),
+                "kind" => matches!(context.failure(), ash::driver::PipelineFailure::Kind(_)),
+                "typing" => matches!(context.failure(), ash::driver::PipelineFailure::Typing(_)),
+                _ => false,
+            },
+            "wrong public phase: {failure:?}"
+        );
+        raw
+    }
+
     fn check(&self, source: &str) -> Result<(), String> {
         let entry = self.0.join("entry.ash");
         fs::write(&entry, source).unwrap();
@@ -1316,26 +1342,52 @@ main () = (number (Fork(Leaf(0), Leaf(0))), number (Fork(Leaf(0), Leaf(0))))
 #[test]
 fn cell_n01_generic_ordinary_errors_precede_dependency_admission() {
     let tree = Tree::new();
-    for (body, reason) in [
-        ("resource Cell.Cell<R, Int> c = true {\n42\n}", "Mismatch"),
+    for (body, reason, code, phase) in [
+        (
+            "resource Cell.Cell<R, Int> c = true {\n42\n}",
+            "Mismatch",
+            "type.mismatch",
+            "typing",
+        ),
         (
             "resource Cell.Cell<R, Int> c = 41 {\nlet _ = Cell.write (c, true)\n42\n}",
             "Argument",
+            "type.argument",
+            "typing",
         ),
-        ("resource Cell.Cell<R> c = 41 {\n42\n}", "TypeKind"),
+        (
+            "resource Cell.Cell<R> c = 41 {\n42\n}",
+            "TypeKind",
+            "resolve.type-kind",
+            "resolve",
+        ),
         (
             "resource Cell.Cell<R, Int, Bool> c = 41 {\n42\n}",
             "TypeKind",
+            "resolve.type-kind",
+            "resolve",
         ),
-        ("resource Cell.Cell<R, Cell.Cell> c = 41 {\n42\n}", "Kind"),
-        ("resource Cell.Cell<R, {}> c = 41 {\n42\n}", "TypeKind"),
+        (
+            "resource Cell.Cell<R, Cell.Cell> c = 41 {\n42\n}",
+            "Kind",
+            "kind.argument",
+            "kind",
+        ),
+        (
+            "resource Cell.Cell<R, {}> c = 41 {\n42\n}",
+            "TypeKind",
+            "resolve.type-kind",
+            "resolve",
+        ),
     ] {
-        assert_check(
-            tree.check(&format!(
+        let error = tree.check_public_ordinary(
+            &format!(
                 "import @builtin.generic_cell as Cell\nmain : Unit -> Int\nmain () = {body}\n"
-            )),
-            Some(reason),
+            ),
+            code,
+            phase,
         );
+        assert!(error.contains(reason), "{error}");
     }
 }
 
@@ -1353,10 +1405,31 @@ fn cell_n08_generic_initializer_and_payload_precede_fresh_binders() {
             ))
             .unwrap_err();
         assert!(error.contains("Unknown"), "{error}");
+        let code = if error.contains("UnknownName") {
+            "resolve.unknown-name"
+        } else {
+            "resolve.unknown-type"
+        };
+        tree.check_public_ordinary(
+            &format!(
+                "import @builtin.generic_cell as Cell\nmain : Unit -> Int\nmain () = {body}\n"
+            ),
+            code,
+            "resolve",
+        );
     }
     // A preceding type R and term c remain visible in T and the initializer.
     let source = "import @builtin.generic_cell as Cell\ntype R = R(Int)\nmain : Unit -> Int\nmain () = {\nlet c = R(41)\nresource Cell.Cell<R, R> c = c {\n42\n}\n}\n";
-    assert_check(tree.check(source), None);
+    assert_check(tree.check_dependencies(source), None);
+    let compiled = ash::driver::compile_path(ash::driver::RunConfiguration {
+        entry: tree.0.join("entry.ash"),
+        roots: ModuleRoots::empty(),
+    })
+    .unwrap();
+    assert_eq!(
+        ash::driver::execute(&compiled).unwrap().value_display(),
+        "42"
+    );
 }
 
 #[test]
@@ -1403,19 +1476,46 @@ fn generic_cell_fixed_payload_shapes_pass_dependency_admission() {
 fn cell_n09_generic_calls_need_exact_evidence_and_counterfeit_family_cannot_acquire() {
     let tree = Tree::new();
     let missing = "import @builtin.generic_cell as Cell\nmain<R> : Cell.Cell<R, Int> -> Int ! {Cell.Ops<R, Int>}\nmain c = Cell.read c\n";
-    let error = tree.check(missing).unwrap_err();
+    let error = tree.check_public_ordinary(missing, "constraint.unsatisfied", "typing");
     assert!(!error.contains("ResourceEscape"), "{error}");
     assert!(
         error.contains("Unsatisfied") || error.contains("NoImplementation"),
         "{error}"
     );
-    assert_check(tree.check("pub opaque type Cell<R,T> = Hidden\nmain : Unit -> Int\nmain () = resource Cell<R, Int> c = 41 {\n42\n}\n"), Some("UnknownType"));
+    let error = tree.check_public_ordinary("pub opaque type Cell<R,T> = Hidden\nmain : Unit -> Int\nmain () = resource Cell<R, Int> c = 41 {\n42\n}\n", "resolve.unknown-type", "resolve");
+    assert!(error.contains("UnknownType"), "{error}");
 }
 
 #[test]
 fn cell_n10_generic_read_is_monomorphic_before_admission() {
     let tree = Tree::new();
-    assert_check(tree.check("import @builtin.generic_cell as Cell\nid : Int -> Int\nid value = value\nmain : Unit -> Int\nmain () = resource Cell.Cell<R, (Int -> Int)> c = id {\nlet saved = Cell.read c\nlet _ = saved 41\nlet _ = saved true\n42\n}\n"), Some("Argument"));
+    let error = tree.check_public_ordinary("import @builtin.generic_cell as Cell\nid : Int -> Int\nid value = value\nmain : Unit -> Int\nmain () = resource Cell.Cell<R, (Int -> Int)> c = id {\nlet saved = Cell.read c\nlet _ = saved 41\nlet _ = saved true\n42\n}\n", "type.argument", "typing");
+    assert!(error.contains("Argument"));
+}
+
+#[test]
+fn cell_n10_nested_schemes_are_not_source_payload_types() {
+    let tree = Tree::new();
+    for payload in [
+        "(forall A. A -> A)",
+        "(Int,forall A. A -> A)",
+        "((forall A. A -> A) -> Int)",
+    ] {
+        let source = format!(
+            "import @builtin.generic_cell as Cell\nmain : Unit -> Int\nmain () = resource Cell.Cell<R,{payload}> c = 41 {{\n42\n}}\n"
+        );
+        fs::write(tree.0.join("entry.ash"), source).unwrap();
+        let failure = ash::driver::compile_path(ash::driver::RunConfiguration {
+            entry: tree.0.join("entry.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap_err();
+        assert!(
+            matches!(&failure, ash::driver::FileFailure::Graph(_)),
+            "{failure:?}"
+        );
+        assert_eq!(failure.reason_code(), "parse.expected-form", "{failure:?}");
+    }
 }
 
 #[test]
@@ -1447,7 +1547,7 @@ fn cell_n11_native_state_and_continuation_payloads_keep_ordinary_restrictions() 
         let source = format!(
             "import @builtin.generic_cell as Cell\nimport owner as Owner\ntype Wrapped<T> = Wrap(T)\nmain : Unit -> Int\nmain () = resource Cell.Cell<R, {payload}> c = 41 {{\n42\n}}\n"
         );
-        let error = tree.check(&source).unwrap_err();
+        let error = tree.check_public_ordinary(&source, "type.argument", "typing");
         assert!(
             error.contains("Argument")
                 && error.contains(
@@ -1457,11 +1557,46 @@ fn cell_n11_native_state_and_continuation_payloads_keep_ordinary_restrictions() 
         );
     }
     let source = "import @builtin.generic_cell as Cell\neffect Ask {\nask : Unit -> Int\n}\nmain : Unit -> Int\nmain () = handle (perform Ask.ask ()) with Ask {\nask ignored => resource Cell.Cell<R, (Unit -> Int)> c = (fn(ignored) {\nresume 42\n}) {\n42\n}\n}\n";
-    let error = tree.check(source).unwrap_err();
+    let error = tree.check_public_ordinary(source, "effect.resume-capture", "typing");
     assert!(
         error.contains("ResumeCapture") || error.contains("Continuation"),
         "{error}"
     );
+}
+
+#[test]
+fn cell_n11_wrapped_continuations_keep_the_ordinary_capture_refusal() {
+    let tree = Tree::new();
+    for (payload, initial) in [
+        ("(Int,(Unit -> Int))", "(41,fn(ignored) {\nresume 42\n})"),
+        (
+            "Wrapped<(Unit -> Int)>",
+            "Wrap(fn(ignored) {\nresume 42\n})",
+        ),
+    ] {
+        let source = format!(
+            "import @builtin.generic_cell as Cell\ntype Wrapped<T> = Wrap(T)\neffect Ask {{\nask : Unit -> Int\n}}\nmain : Unit -> Int\nmain () = handle (perform Ask.ask ()) with Ask {{\nask ignored => resource Cell.Cell<R,{payload}> c = ({initial}) {{\n42\n}}\n}}\n"
+        );
+        let error = tree.check_public_ordinary(&source, "effect.resume-capture", "typing");
+        assert!(error.contains("ResumeCapture"), "{error}");
+    }
+}
+
+#[test]
+fn cell_p06_distinct_rigid_owners_do_not_unify_at_an_ordinary_branch() {
+    let tree = Tree::new();
+    for other in [false, true] {
+        let selected = if other { "b" } else { "a" };
+        let source = format!(
+            "import @builtin.generic_cell as Cell\nmain : Unit -> Int\nmain () = resource Cell.Cell<A,Int> a = 41 {{\nresource Cell.Cell<B,Int> b = 42 {{\nlet selected = match true {{\ntrue => a\nfalse => {selected}\n}}\nCell.read selected\n}}\n}}\n"
+        );
+        if other {
+            let error = tree.check_public_ordinary(&source, "type.mismatch", "typing");
+            assert!(error.contains("Mismatch"), "{error}");
+        } else {
+            assert_check(tree.check_dependencies(&source), None);
+        }
+    }
 }
 
 #[test]

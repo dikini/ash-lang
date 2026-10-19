@@ -58,7 +58,12 @@ adding an alternative permission or uncharged test path.
 
 ## Progress
 
-Implementation and verification have not started.
+Integrated verification is authorized from retained unsigned
+`9cfd39a9a9f82e265cd82bbc73d438dc4968d357`, after TASK-0047 runtime component
+readiness and independent retained readback. The task-owned
+[execution plan](task-0048-execution-plan.md) records the sequence. All original
+criteria remain open until their complete matching observations and checkpoint
+gate exist.
 
 - [ ] CELL-C03: original, imported, copied, restored and transformed Core agree;
   every specified tamper fails independent admission.
@@ -101,3 +106,8 @@ None recorded. Record measured bounds and failures with their exact inputs.
 
 None authorized. No general region mechanism, native lifetime relaxation,
 alternative legacy API or verification-policy change belongs to this task.
+
+The [31-case observation map](../design/generic-cell/evidence.md) records the
+working source/Core/runtime/native boundaries and exact-work probes. Frozen
+verification and the independent retained review remain pending; TASK-0049's
+fresh complete gate is still required before original compound acceptance.

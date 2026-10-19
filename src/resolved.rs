@@ -14576,6 +14576,16 @@ impl ExportSummary {
         Ok(summary)
     }
 
+    #[cfg(test)]
+    pub(crate) fn erase_exported_capture_for_test(&mut self, spelling: &str) {
+        let exported = self
+            .terms
+            .get_mut(spelling)
+            .expect("existing checked export");
+        assert!(exported.capture.has_graph());
+        exported.capture = crate::core::capture::CaptureValueSummary::default();
+    }
+
     pub(crate) fn term(&self, spelling: &str) -> Option<&ExportedGlobal> {
         self.terms.get(spelling)
     }

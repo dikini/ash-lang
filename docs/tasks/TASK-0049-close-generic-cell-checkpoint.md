@@ -284,6 +284,31 @@ other tests, specification and configuration stay exact. No Cargo process
 remains live; the worktree, cache and useful evidence remain. No push, Main
 integration or checkpoint cleanup has occurred.
 
+### TASK-0048 verification launch, 2026-10-19
+
+Root accepted retained TASK-0047 runtime component readiness at unsigned clean
+`9cfd39a9a9f82e265cd82bbc73d438dc4968d357`, tree
+`0d96a246739bcba2086538798dd3e1a9e3d5816a`, after independent retained review.
+The user's existing authorization now advances TASK-0048, using its task-owned
+[execution plan](task-0048-execution-plan.md). Runtime observations remain pinned
+to `8d5b3c1`, final inventory evidence to `ac72d18`, with scoped input transfers.
+
+`/root/task0046_developer` remains sole product writer/Cargo operator on
+`.worktree/generic-cells`, branch `codex/generic-cells`, dispatched as
+`gpt-6.1-sol`, `medium`. `/root/task0046_reviewer` independently reviews without
+Cargo; `/root` owns acceptance and the following TASK-0049 full checkpoint.
+Reuse Rust 1.97.1, one job, `RUSTC_WRAPPER=` and the existing target cache.
+Preserve the planning checkout's concurrent design paths and DN-0054 bytes.
+No new permission, native lifetime relaxation, private phase expansion, region
+implementation, push/PR/Main integration or cleanup is included.
+
+The immediate checkpoint is frozen TASK-0048 connected/adversarial/budget/
+capacity/native evidence, independent review and retained readback. Actual deep
+generic owned discard and mixed real native quarantine close the named C05/C06
+gaps. All 31 original case/variant records remain subject to complete matching
+evidence and TASK-0049's fresh full `cargo xtask verify`; focused readiness does
+not complete that acceptance.
+
 - [x] TASK-0045 launch records product inputs, retaining branch, roles and
   permissions. Later task dispatches require their own exact input handoffs.
 - [x] TASK-0045 foundation enables the downstream work without unchecked publication.

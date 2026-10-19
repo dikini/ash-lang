@@ -59,6 +59,61 @@ fn generic_cell_summary_authenticates_complete_facade_facts() {
 }
 
 #[test]
+fn generic_cell_duplicate_import_routes_reject_erased_contents_capture_fact() {
+    for erase in [false, true] {
+        let tree = TempTree::create();
+        tree.write("helper.ash", "import @builtin.generic_cell as Cell\npub put<R,T> : (Cell.Cell<R,T>,T) -> Unit ! {Cell.Ops<R,T>} where Cell.Provider<R,T>\nput pair = Cell.write pair\n");
+        tree.write("facade.ash", "pub import helper (put)\n");
+        let graph = load(
+            &tree,
+            "import @builtin.generic_cell as Cell\nimport helper (put as direct)\nimport facade (put as via_facade)\nmain : Unit -> Int\nmain () = resource Cell.Cell<R,Int> c = 41 {\nlet _ = direct (c,42)\nlet _ = via_facade (c,43)\nCell.read c\n}\n",
+            &[],
+        );
+        let mut summaries = Vec::new();
+        for module in graph.modules() {
+            let dependencies = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    DependencyExports::new(
+                        edge,
+                        summaries
+                            .iter()
+                            .find(|(id, _)| *id == edge.target())
+                            .map(|(_, summary)| summary)
+                            .unwrap(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let resolved = resolve_module(module, &dependencies);
+            if module.id() == graph.entry() {
+                if erase {
+                    let error = resolved.unwrap_err();
+                    assert!(
+                        matches!(error,ResolveModuleError::Resolution(ref diagnostic) if diagnostic.reason==ResolveReason::InternalState),
+                        "{error:?}"
+                    );
+                    assert!(
+                        format!("{error:?}")
+                            .contains("alternate global routes disagree on the checked fact"),
+                        "{error:?}"
+                    );
+                } else {
+                    check_module(resolved.unwrap()).unwrap();
+                }
+                break;
+            }
+            let mut summary = check_module(resolved.unwrap()).unwrap().into_exports();
+            if erase && module.source().display_path().ends_with("facade.ash") {
+                summary.erase_exported_capture_for_test("put");
+            }
+            summaries.push((module.id(), summary));
+        }
+    }
+}
+
+#[test]
 fn builtin_cell_summary_rejects_well_kinded_operation_tampering() {
     use crate::resolved::BuiltinCellSummaryMutationForTest;
     let tree = TempTree::create();

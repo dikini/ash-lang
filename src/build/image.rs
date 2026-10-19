@@ -3631,9 +3631,47 @@ mod tests {
                 include_str!("../../tests/fixtures/generic-cell/dependency-helper.ash"),
                 "7",
             ),
+            (
+                include_str!("../../tests/fixtures/generic-cell/tick-entry.ash"),
+                "",
+                "99",
+            ),
+            (
+                include_str!("../../tests/fixtures/generic-cell/reply-mutation-entry.ash"),
+                "",
+                "(7, 42)",
+            ),
+            (
+                include_str!("../../tests/fixtures/generic-cell/intercept-entry.ash"),
+                include_str!("../../tests/fixtures/generic-cell/intercept-helper.ash"),
+                "7",
+            ),
+            (
+                include_str!("../../tests/fixtures/generic-cell/handler-read-entry.ash"),
+                "",
+                "99",
+            ),
+            (
+                include_str!("../../tests/fixtures/generic-cell/handler-write-entry.ash"),
+                "",
+                "41",
+            ),
+            (
+                include_str!("../../tests/fixtures/generic-cell/handler-forward-entry.ash"),
+                "",
+                "42",
+            ),
         ] {
             let (program, sources, relation) =
                 crate::core::validate::generic_cell_source_fixture_for_test(source, Some(helper));
+            let program = if source.contains("90 + 9") {
+                let refs = sources.iter().collect::<Vec<_>>();
+                let folded =
+                    crate::core::transform::fold_effect_literal_primitives(&program).unwrap();
+                crate::core::validate_effect_modules(folded, &refs, &relation).unwrap()
+            } else {
+                program
+            };
             let provenance = relation
                 .iter()
                 .map(|(module, id)| {
