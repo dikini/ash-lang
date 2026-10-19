@@ -1715,8 +1715,9 @@ Ordinary errors retain precedence. Unproved retention or escape reports
 `type.resource-escape` at the initializer, replacement or escaping expression,
 with acquisition and known capture/call causes. No module, helper summary or
 linked Core permission is published without the dependency proof. Canonical
-metadata imports and conditional helpers remain admissible. Generic execution
-is separately unavailable until its runtime transition is implemented.
+metadata imports and conditional helpers remain admissible. Execution requires
+this source/Core proof and the separate runtime operation, complete type and
+activation checks described in the dynamic semantics.
 
 ## Scoped cells and resource dependencies
 

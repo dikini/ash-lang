@@ -54,7 +54,11 @@ implementation is optional and must preserve its behavior.
 
 ## Progress
 
-Implementation has not started. All acceptance remains pending.
+Implementation is authorized from retained dependency handoff
+`ee306d161478d2b135c503d7b79056f8b0dfa32b` on `codex/generic-cells`. The
+task-owned [execution plan](task-0047-execution-plan.md) records the sequence.
+All original acceptance remains pending until its complete observations and
+checkpoint evidence exist.
 
 - [ ] CELL-P07: exact read override, no-other-mutation intercepted write,
   forwarded write and dropped self-capturing replacement have their specified

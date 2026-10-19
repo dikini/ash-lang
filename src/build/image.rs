@@ -3557,7 +3557,7 @@ mod tests {
     use crate::sqlite_output_order;
 
     #[test]
-    fn generic_cell_private_image_reconstructs_dependency_proof_without_execution() {
+    fn generic_cell_private_image_reconstructs_dependency_proof_and_executes() {
         let (donor, sources) = crate::core::validate::generic_cell_validated_fixture_for_test();
         let provenance = donor
             .registry()
@@ -3606,26 +3606,30 @@ mod tests {
         let restored = decoded.restore_effect(&mut work).unwrap();
         assert_eq!(
             crate::eval::evaluate_effect(&restored.program)
-                .unwrap_err()
-                .reason_code(),
-            "runtime.invalid-control-state"
+                .unwrap()
+                .value
+                .to_string(),
+            "42"
         );
     }
 
     #[test]
     fn generic_cell_imported_flow_images_rebuild_with_exact_short_and_retry_work() {
-        for (source, helper) in [
+        for (source, helper, value) in [
             (
                 include_str!("../../tests/fixtures/generic-cell/snapshot-entry.ash"),
                 include_str!("../../tests/fixtures/generic-cell/dependency-helper.ash"),
+                "7",
             ),
             (
                 include_str!("../../tests/fixtures/generic-cell/recursive-entry.ash"),
                 include_str!("../../tests/fixtures/generic-cell/recursive-helper.ash"),
+                "9",
             ),
             (
                 include_str!("../../tests/fixtures/generic-cell/handler-snapshot-entry.ash"),
                 include_str!("../../tests/fixtures/generic-cell/dependency-helper.ash"),
+                "7",
             ),
         ] {
             let (program, sources, relation) =
@@ -3673,9 +3677,10 @@ mod tests {
             let restored = restore(&mut measured).unwrap();
             assert_eq!(
                 crate::eval::evaluate_effect(&restored.program)
-                    .unwrap_err()
-                    .reason_code(),
-                "runtime.invalid-control-state"
+                    .unwrap()
+                    .value
+                    .to_string(),
+                value
             );
             drop(restored);
             let mut short = TypeWorkBudget::with_limit(measured.used() - 1);

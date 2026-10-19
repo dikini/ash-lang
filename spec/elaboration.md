@@ -147,11 +147,12 @@ boolean substitutes for it. All graph insertion, state copying, joins and
 recursive replay charge their owning work ledger before proportional work;
 refusal publishes no partial checked module or permission.
 
-Execution admission remains separate: evaluator and executable-build entry
-points refuse programs with generic acquisition scopes before running Ash.
-This gate supplies no dependency proof and does not prevent source/Core
-checking of safe generic programs. No runtime activation is allocated by Core
-validation or private image restoration.
+Execution admission remains separate from dependency proof. Interpreted and
+generated execution use the same resource machine after independent validation.
+A generic boundary retains its complete instantiated `Ops<R,T>` authority and
+an ordinary shared value root. Operation selection authenticates that complete
+instance and the live activation before reading or replacing the root. No
+runtime activation is allocated by Core validation or private image restoration.
 
 The carrier selects the closed cell API and retains the body's result type.
 Independent linked and Core validation authenticate the exact builtin cell,

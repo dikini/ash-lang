@@ -326,7 +326,7 @@ impl ResourceApi {
     }
 }
 
-/// Pending foundation admission applies to computational uses of generic access
+/// Dependency admission applies to computational uses of generic access
 /// or indexed operations, including a body-free helper's exposed callable type.
 pub(crate) fn generic_cell_dependency_type(
     root: &Type,

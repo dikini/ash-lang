@@ -259,3 +259,425 @@ fn nearest_exact_user_handler_intercepts_cell_operations() {
     );
     assert_eq!(result.value.to_string(), "42");
 }
+
+#[test]
+fn generic_cell_public_bool_alias_replaces_one_shared_root() {
+    let path = std::env::temp_dir().join(format!(
+        "ash-generic-runtime-{}.ash",
+        SourceFile::new("generic runtime", "").unwrap().id().value(),
+    ));
+    std::fs::write(
+        &path,
+        "import @builtin.generic_cell as Cell\nmain : Unit -> Bool\nmain () = resource Cell.Cell<R, Bool> c = false {\n    let alias = c\n    let _ = Cell.write (alias, true)\n    Cell.read c\n}\n",
+    )
+    .unwrap();
+    let result = ash::driver::run_path(ash::driver::RunConfiguration {
+        entry: path.clone(),
+        roots: ModuleRoots::empty(),
+    });
+    std::fs::remove_file(path).unwrap();
+    assert_eq!(
+        result.expect("generic Bool execution").value().to_string(),
+        "true"
+    );
+}
+
+fn generic_runtime_observation(
+    source: &str,
+    modules: &[(&str, &str)],
+    expected: &str,
+    acquisitions: usize,
+    writes: usize,
+) -> Evaluation {
+    let directory = std::env::temp_dir().join(format!(
+        "ash-generic-observation-{}-{}",
+        std::process::id(),
+        SourceFile::new("generic observation", "")
+            .unwrap()
+            .id()
+            .value(),
+    ));
+    std::fs::create_dir(&directory).unwrap();
+    for (name, text) in modules {
+        std::fs::write(directory.join(name), text).unwrap();
+    }
+    let path = directory.join("entry.ash");
+    std::fs::write(&path, source).unwrap();
+    let public = ash::driver::run_path(ash::driver::RunConfiguration {
+        entry: path,
+        roots: ModuleRoots::empty(),
+    });
+    std::fs::remove_dir_all(directory).unwrap();
+    assert_eq!(
+        public.expect("public generic runtime").value().to_string(),
+        expected
+    );
+    // Reconstruct from the same source through ordinary linked validation to
+    // observe machine ownership events without adding a product tracing API.
+    let evaluation = evaluate_effect(&program_with_modules(source, modules)).unwrap();
+    assert_eq!(evaluation.value.to_string(), expected);
+    let acquired = evaluation
+        .effect_trace()
+        .iter()
+        .filter_map(|event| match event {
+            EffectTraceEvent::ResourceAcquired(key) => Some(*key),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let released = evaluation
+        .effect_trace()
+        .iter()
+        .filter_map(|event| match event {
+            EffectTraceEvent::ResourceReleased(key) => Some(*key),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(acquired.len(), acquisitions);
+    assert_eq!(released.len(), acquisitions);
+    for key in &acquired {
+        assert_eq!(acquired.iter().filter(|other| *other == key).count(), 1);
+        assert_eq!(released.iter().filter(|other| *other == key).count(), 1);
+    }
+    assert_eq!(
+        evaluation
+            .effect_trace()
+            .iter()
+            .filter(|event| matches!(event, EffectTraceEvent::ResourceWritten(_)))
+            .count(),
+        writes
+    );
+    evaluation
+}
+
+#[test]
+fn generic_cell_p01_fixed_payload_shapes_share_aliases() {
+    for (declarations, ty, initial, replacement, answer, expected) in [
+        ("", "Int", "41", "42", "Cell.read c", "42"),
+        ("", "Bool", "false", "true", "Cell.read c", "true"),
+        (
+            "",
+            "(Int,Bool)",
+            "(41,false)",
+            "(42,true)",
+            "Cell.read c",
+            "(42, true)",
+        ),
+        (
+            "type Payload = Pack(Int)\n",
+            "Payload",
+            "(Pack 41)",
+            "(Pack 42)",
+            "match Cell.read c {\nPack(value) => value\n}",
+            "42",
+        ),
+    ] {
+        let source = format!(
+            "import @builtin.generic_cell as Cell\n{declarations}main : Unit -> {result}\nmain () = resource Cell.Cell<R,{ty}> c = {initial} {{\nlet alias = c\nlet _ = Cell.write (alias,{replacement})\n{answer}\n}}\n",
+            result = if ty == "Payload" { "Int" } else { ty }
+        );
+        generic_runtime_observation(&source, &[], expected, 1, 1);
+    }
+}
+
+#[test]
+fn generic_cell_p02_snapshots_and_p03_outer_access_have_actual_values() {
+    for (source, expected, acquisitions, writes) in [
+        (
+            "import @builtin.generic_cell as Cell\nmain : Unit -> (Int,Int)\nmain () = resource Cell.Cell<R,Int> c = 41 {\nlet old = Cell.read c\nlet _ = Cell.write (c,42)\n(old, Cell.read c)\n}\n",
+            "(41, 42)",
+            1,
+            1,
+        ),
+        (
+            "import @builtin.generic_cell as Cell\nmain : Unit -> Int\nmain () = {\nlet saved = resource Cell.Cell<R,Int> c = 41 {\nlet old = Cell.read c\nlet _ = Cell.write (c,42)\nlet snapshot : Unit -> Int = fn(ignored) {\nold\n}\nsnapshot\n}\nsaved ()\n}\n",
+            "41",
+            1,
+            1,
+        ),
+        (
+            "import @builtin.generic_cell as Cell\nmain : Unit -> Int\nmain () = resource Cell.Cell<A,Int> a = 7 {\nlet outer = resource Cell.Cell<B,Cell.Cell<A,Int>> b = a {\nCell.read b\n}\nCell.read outer\n}\n",
+            "7",
+            2,
+            0,
+        ),
+    ] {
+        generic_runtime_observation(source, &[], expected, acquisitions, writes);
+    }
+}
+
+#[test]
+fn generic_cell_p04_p05_p13_imported_snapshots_and_recursive_owners_execute() {
+    for (source, modules, expected, acquisitions, writes) in [
+        (
+            include_str!("fixtures/generic-cell/snapshot-entry.ash"),
+            vec![(
+                "helper.ash",
+                include_str!("fixtures/generic-cell/dependency-helper.ash"),
+            )],
+            "7",
+            2,
+            1,
+        ),
+        (
+            include_str!("fixtures/generic-cell/handler-snapshot-entry.ash"),
+            vec![(
+                "helper.ash",
+                include_str!("fixtures/generic-cell/dependency-helper.ash"),
+            )],
+            "7",
+            2,
+            1,
+        ),
+        (
+            include_str!("fixtures/generic-cell/recursive-direct-entry.ash"),
+            vec![],
+            "9",
+            2,
+            0,
+        ),
+        (
+            include_str!("fixtures/generic-cell/recursive-entry.ash"),
+            vec![(
+                "helper.ash",
+                include_str!("fixtures/generic-cell/recursive-helper.ash"),
+            )],
+            "9",
+            2,
+            0,
+        ),
+    ] {
+        generic_runtime_observation(source, &modules, expected, acquisitions, writes);
+    }
+}
+
+#[test]
+fn generic_cell_p07_exact_handler_interception_and_forwarding_execute() {
+    for (body, expected, writes) in [
+        (
+            "handle (Cell.read c) with Cell.Ops<R,Int> {\nread ignored => resume 99\nwrite ignored => resume ()\n}",
+            "99",
+            0,
+        ),
+        (
+            "let _ = handle (Cell.write (c,42)) with Cell.Ops<R,Int> {\nread ignored => resume 99\nwrite ignored => resume ()\n}\nCell.read c",
+            "41",
+            0,
+        ),
+        (
+            "let _ = handle (Cell.write (c,42)) with Cell.Ops<R,Int> {\nread value => resume (Cell.read value)\nwrite pair => {\nlet _ = Cell.write pair\nresume ()\n}\n}\nCell.read c",
+            "42",
+            1,
+        ),
+    ] {
+        let source = format!(
+            "import @builtin.generic_cell as Cell\nmain : Unit -> Int\nmain () = resource Cell.Cell<R,Int> c = 41 {{\n{body}\n}}\n"
+        );
+        generic_runtime_observation(&source, &[], expected, 1, writes);
+    }
+    generic_runtime_observation(
+        include_str!("fixtures/generic-cell/intercept-entry.ash"),
+        &[(
+            "helper.ash",
+            include_str!("fixtures/generic-cell/intercept-helper.ash"),
+        )],
+        "7",
+        1,
+        0,
+    );
+}
+
+#[test]
+fn generic_cell_p10_cyclic_immutable_payload_keeps_finite_prefix() {
+    generic_runtime_observation(
+        "import @builtin.generic_cell as Cell\ntype Stream = Next(Int, Stream)\nmain : Unit -> Int\nmain () = {\nlet rec ones : Stream = Next(1, ones)\nresource Cell.Cell<R,Stream> c = ones {\nmatch Cell.read c {\nNext(first, rest) => match rest {\nNext(second, ignored) => first + second\n}\n}\n}\n}\n",
+        &[],
+        "2",
+        1,
+        0,
+    );
+}
+
+#[test]
+fn generic_cell_p12_other_handler_mutation_survives_original_write_interception() {
+    generic_runtime_observation(
+        "import @builtin.generic_cell as Cell\neffect Tick {\ntick : Unit -> Unit\n}\nmain : Unit -> Int\nmain () = resource Cell.Cell<R,Int> c = 41 {\nlet _ = handle (handle (Cell.write (c,42)) with Cell.Ops<R,Int> {\nread ignored => resume 0\nwrite ignored => {\nlet _ = perform Tick.tick ()\nresume ()\n}\n}) with Tick {\ntick ignored => {\nlet _ = Cell.write (c,99)\nresume ()\n}\n}\nCell.read c\n}\n",
+        &[],
+        "99",
+        1,
+        1,
+    );
+}
+
+#[test]
+fn generic_cell_p01_initializer_runs_once_before_body_publication() {
+    generic_runtime_observation(
+        "import @builtin.generic_cell as Cell\nimport @builtin.cell as Legacy\neffect Init {\nstart : Unit -> Int\n}\nmain : Unit -> (Int,Int)\nmain () = resource cell<C> count = 0 {\nlet answer = handle (resource Cell.Cell<R,Int> c = (perform Init.start ()) {\nlet _ = Cell.write (c,42)\nCell.read c\n}) with Init {\nstart ignored => {\nlet previous = Legacy.read count\nlet _ = Legacy.write (count, previous + 1)\nresume 41\n}\n}\n(answer, Legacy.read count)\n}\n",
+        &[],
+        "(42, 1)",
+        2,
+        2,
+    );
+}
+
+#[test]
+fn generic_cell_p06_local_imported_facade_and_same_owner_branch_agree() {
+    let modules = [
+        (
+            "helper.ash",
+            include_str!("fixtures/generic-cell/dependency-helper.ash"),
+        ),
+        (
+            "facade.ash",
+            "pub import helper (get,put)\npub import @builtin.generic_cell (Cell as Access,Provider,Ops)\n",
+        ),
+    ];
+    for choice in ["true", "false"] {
+        generic_runtime_observation(
+        &"import facade as Wrapped\nlocal<R> : Wrapped.Access<R,Int> -> Int ! {Wrapped.Ops<R,Int>} where Wrapped.Provider<R,Int>\nlocal value = Wrapped.get value\nmain : Unit -> Int\nmain () = resource Wrapped.Access<R,Int> c = 41 {\nlet alias = c\nlet selected = match true {\ntrue => c\nfalse => alias\n}\nlet _ = Wrapped.put (selected,42)\nlocal c\n}\n".replace("match true", &format!("match {choice}")),
+        &modules,
+        "42",
+        1,
+        1,
+    );
+    }
+}
+
+#[test]
+fn generic_cell_p08_actual_local_reply_and_independent_escape_execute() {
+    for (dependent, answer, expected) in
+        [("let held = a\n42", "reply ()", "42"), ("7", "reply", "7")]
+    {
+        let body = format!(
+            "resource Cell.Cell<A,Int> a = 1 {{\nresource Cell.Cell<B,(Unit -> Int)> b = independent {{\nlet actual : Unit -> Int = fn(ignored) {{\n{dependent}\n}}\nlet reply = handle (Cell.read b) with Cell.Ops<B,(Unit -> Int)> {{\nread ignored => resume actual\nwrite ignored => resume ()\n}}\n{answer}\n}}\n}}"
+        );
+        let main = if answer == "reply" {
+            format!("let saved = {body}\nsaved ()")
+        } else {
+            body
+        };
+        let source = format!(
+            "import @builtin.generic_cell as Cell\nindependent : Unit -> Int\nindependent () = 7\nmain : Unit -> Int\nmain () = {{\n{main}\n}}\n"
+        );
+        generic_runtime_observation(&source, &[], expected, 2, 0);
+    }
+}
+
+#[test]
+fn generic_cell_p09_independent_and_enclosing_payload_crossings_execute() {
+    generic_runtime_observation(
+        "import @builtin.generic_cell as Cell\neffect Send {\nsend : Int -> Int\n}\nmain : Unit -> Int\nmain () = handle (resource Cell.Cell<R,Int> c = 41 {\nlet old = Cell.read c\nlet _ = Cell.write (c,42)\nperform Send.send old\n}) with Send {\nsend value => resume (value + 1)\n}\n",
+        &[],
+        "42",
+        1,
+        1,
+    );
+    generic_runtime_observation(
+        "import @builtin.generic_cell as Cell\neffect Send {\nsend : (Unit -> Int) -> Int\n}\nmain : Unit -> Int\nmain () = resource Cell.Cell<A,Int> a = 7 {\nhandle (resource Cell.Cell<B,Int> b = 41 {\nlet payload : Unit -> Int = fn(ignored) {\nlet held = a\n7\n}\nperform Send.send payload\n}) with Send {\nsend action => resume (action ())\n}\n}\n",
+        &[],
+        "7",
+        2,
+        0,
+    );
+}
+
+#[test]
+fn generic_cell_p11_repeated_monomorphic_reads_and_legacy_nesting_execute() {
+    generic_runtime_observation(
+        "import @builtin.generic_cell as Cell\nimport @builtin.cell as Legacy\nplus : Int -> Int\nplus value = value + 1\nmain : Unit -> Int\nmain () = resource cell<L> legacy = 40 {\nresource Cell.Cell<R,(Int -> Int)> c = plus {\nlet first = Cell.read c\nlet second = Cell.read c\nfirst (second (Legacy.read legacy))\n}\n}\n",
+        &[],
+        "42",
+        2,
+        0,
+    );
+}
+
+#[test]
+fn generic_cell_p13_reply_and_later_stored_function_have_distinct_actual_values() {
+    generic_runtime_observation(
+        "import @builtin.generic_cell as Cell\nindependent : Unit -> Int\nindependent () = 7\nmain : Unit -> (Int,Int)\nmain () = resource Cell.Cell<A,Int> a = 1 {\nresource Cell.Cell<B,(Unit -> Int)> b = independent {\nlet dependent : Unit -> Int = fn(ignored) {\nlet held = a\n42\n}\nlet reply = handle (Cell.read b) with Cell.Ops<B,(Unit -> Int)> {\nread ignored => {\nlet _ = Cell.write (b,dependent)\nresume independent\n}\nwrite ignored => resume ()\n}\nlet later = Cell.read b\n(reply (), later ())\n}\n}\n",
+        &[],
+        "(7, 42)",
+        2,
+        1,
+    );
+}
+
+#[test]
+fn generic_cell_indexed_effectful_function_payload_uses_its_saved_outer_owner() {
+    generic_runtime_observation(
+        "import @builtin.generic_cell as Cell\nimport helper (get)\nmain : Unit -> Int\nmain () = resource Cell.Cell<A,Int> a = 7 {\nlet access : Unit -> Int ! {Cell.Ops<A,Int>} = fn(ignored) {\nCell.read a\n}\nresource Cell.Cell<B,(Unit -> Int ! {Cell.Ops<A,Int>})> b = access {\nlet action = get b\naction ()\n}\n}\n",
+        &[(
+            "helper.ash",
+            include_str!("fixtures/generic-cell/dependency-helper.ash"),
+        )],
+        "7",
+        2,
+        0,
+    );
+}
+
+#[test]
+fn generic_cell_c01_capture_resume_moves_the_latest_function_root() {
+    generic_runtime_observation(
+        "import @builtin.generic_cell as Cell\neffect Pause {\npause : Unit -> Unit\n}\ninitial : Unit -> Int\ninitial () = 7\nmain : Unit -> (Int,Int)\nmain () = handle (resource Cell.Cell<R,(Unit -> Int)> c = initial {\nlet first : Unit -> Int = fn(ignored) {\n41\n}\nlet _ = Cell.write (c,first)\nlet _ = perform Pause.pause ()\nlet observed = Cell.read c\nlet first_result = observed ()\nlet second : Unit -> Int = fn(ignored) {\n42\n}\nlet _ = Cell.write (c,second)\nlet _ = perform Pause.pause ()\nlet final = Cell.read c\n(first_result, final ())\n}) with Pause {\npause ignored => resume ()\n}\n",
+        &[],
+        "(41, 42)",
+        1,
+        2,
+    );
+}
+
+#[test]
+fn generic_cell_c02_owned_discard_keeps_both_cells_live_for_dependent_cleanup() {
+    let result = generic_runtime_observation(
+        "import @builtin.generic_cell as Cell\neffect Stop {\nstop : Unit -> Unit\n}\nindependent : Unit -> Int\nindependent () = 7\nmain : Unit -> Int\nmain () = resource Cell.Cell<A,Int> trace = 0 {\nlet _ = handle (resource Cell.Cell<B,(Unit -> Int)> c = independent {\ncleanup fn(ignored) {\nlet action = Cell.read c\nCell.write (trace,action ())\n} {\nperform Stop.stop ()\n}\n}) with Stop {\nstop ignored => discard\n}\nCell.read trace\n}\n",
+        &[],
+        "7",
+        2,
+        1,
+    );
+    let written = result
+        .effect_trace()
+        .iter()
+        .position(|event| matches!(event, EffectTraceEvent::ResourceWritten(0)))
+        .unwrap();
+    let inner_release = result
+        .effect_trace()
+        .iter()
+        .position(|event| matches!(event, EffectTraceEvent::ResourceReleased(1)))
+        .unwrap();
+    assert!(
+        written < inner_release,
+        "dependent cleanup precedes inner release"
+    );
+}
+
+#[test]
+fn generic_cell_c04_handle_and_replacement_effects_keep_strict_source_order() {
+    generic_runtime_observation(
+        include_str!("fixtures/generic-cell/operand-order-entry.ash"),
+        &[],
+        "(42, 12)",
+        2,
+        3,
+    );
+}
+
+#[test]
+fn generic_cell_c02_initializer_discard_never_publishes_the_unacquired_owner() {
+    let result = generic_runtime_observation(
+        "import @builtin.generic_cell as Cell\neffect Stop {\nstop : Unit -> Int\n}\nmain : Unit -> Int\nmain () = resource Cell.Cell<A,Int> side = 0 {\nlet _ = handle ({\nlet answer = resource Cell.Cell<B,Int> target = ({\nlet _ = Cell.write (side,1)\nperform Stop.stop ()\n}) {\nlet _ = Cell.write (side,99)\nCell.read target\n}\nCell.write (side,88)\n}) with Stop {\nstop ignored => discard\n}\nCell.read side\n}\n",
+        &[],
+        "1",
+        1,
+        1,
+    );
+    assert_eq!(
+        result
+            .effect_trace()
+            .iter()
+            .filter(|event| matches!(event, EffectTraceEvent::ResourceAcquired(_)))
+            .count(),
+        1
+    );
+}

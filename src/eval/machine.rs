@@ -779,6 +779,10 @@ enum ProviderFinish {
 #[derive(Debug)]
 enum ResourcePayload {
     Cell(crate::integer::Integer),
+    Generic {
+        value: Value,
+        instance: EffectInstance,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1826,18 +1830,23 @@ impl<'runtime> Machine<'runtime> {
         value: Value,
     ) -> Result<(), RuntimeFailure> {
         disposal::check()?;
-        let Value::Integer(cell) = value else {
+        let resource_program = self.program.clone();
+        let Some(ExecutableNode::Effect(expression)) = resource_program.node(node) else {
             return Err(RuntimeFailure::InvalidControlState);
         };
-        let resource = self
-            .resource(node)
-            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let EffectExprKind::Operation(EffectOperation::Resource(resource)) = &expression.kind
+        else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
         let acquisition = resource.acquisition;
         let body = resource.body();
         let api = acquisition
             .api()
             .ok_or(RuntimeFailure::InvalidControlState)?;
         if !api.registry(self.program.registry()) {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        if !api.generic() && !matches!(value, Value::Integer(_)) {
             return Err(RuntimeFailure::InvalidControlState);
         }
         let live = self
@@ -1899,7 +1908,30 @@ impl<'runtime> Machine<'runtime> {
             Value::ResourceHandle(key),
             RuntimePhase::Acquisition,
         )?;
-        let payload = ResourcePayload::Cell(cell);
+        let payload = if api.generic() {
+            charge_effect_work(&mut self.instantiation_work, 1, RuntimePhase::Acquisition)?;
+            let instance = resource
+                .instance_with_budget(&mut self.instantiation_work)
+                .map_err(|error| match error {
+                    crate::core::BuildError::TypeWorkExceeded => effect_work_failure(
+                        &self.instantiation_work,
+                        None,
+                        RuntimePhase::Acquisition,
+                    ),
+                    _ => RuntimeFailure::InvalidControlState,
+                })?;
+            let instance = environment.instantiation.effect(
+                &instance,
+                &mut self.instantiation_work,
+                Some(RuntimePhase::Acquisition),
+            )?;
+            ResourcePayload::Generic { value, instance }
+        } else {
+            let Value::Integer(cell) = value else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
+            ResourcePayload::Cell(cell)
+        };
         // Publish only after every fallible preflight. The frame is the sole
         // payload owner; handles and lexical metadata carry only its key.
         self.frames
@@ -2065,7 +2097,7 @@ impl<'runtime> Machine<'runtime> {
         let handler_program = self.program.clone();
         for (index, frame) in self.frames.iter().enumerate().rev() {
             charge_effect_work(&mut self.instantiation_work, 1, RuntimePhase::Access)?;
-            if let Frame::ResourceBoundary { node, key, .. } = frame {
+            if let Frame::ResourceBoundary { node, key, payload } = frame {
                 let resource = self
                     .resource(*node)
                     .ok_or(RuntimeFailure::InvalidControlState)?;
@@ -2073,9 +2105,25 @@ impl<'runtime> Machine<'runtime> {
                     .acquisition
                     .api()
                     .ok_or(RuntimeFailure::InvalidControlState)?;
-                if effect.effect() == api.ops() && Instantiation::activation(&effect) == Some(*key)
-                {
-                    self.trace_effect(EffectTraceEvent::Request(operation));
+                let matches = match payload {
+                    ResourcePayload::Cell(_) => {
+                        effect.effect() == api.ops()
+                            && Instantiation::activation(&effect) == Some(*key)
+                    }
+                    ResourcePayload::Generic { instance, .. } => {
+                        effect.effect() == api.ops()
+                            && Instantiation::activation_at(&effect, 0) == Some(*key)
+                            && same_effect_instance(
+                                instance,
+                                &effect,
+                                &mut self.instantiation_work,
+                            )?
+                    }
+                };
+                if matches {
+                    if !api.generic() {
+                        self.trace_effect(EffectTraceEvent::Request(operation));
+                    }
                     return self.interpret_cell(index, operation, value);
                 }
                 continue;
@@ -2267,6 +2315,9 @@ impl<'runtime> Machine<'runtime> {
             .resource(*node)
             .and_then(|resource| resource.acquisition.api())
             .ok_or(RuntimeFailure::InvalidControlState)?;
+        if api.generic() {
+            return self.interpret_generic_cell(selected, operation, value);
+        }
         let (handle, written) = if operation == OperationId::new(api.ops(), 0) {
             (value, None)
         } else if operation == OperationId::new(api.ops(), 1) {
@@ -2304,6 +2355,81 @@ impl<'runtime> Machine<'runtime> {
                 EffectTraceEvent::ResourceRead(key.0),
             )
         };
+        self.trace_effect(event);
+        self.control = Some(Control::Return(result));
+        Ok(())
+    }
+
+    fn interpret_generic_cell(
+        &mut self,
+        selected: usize,
+        operation: OperationId,
+        value: Value,
+    ) -> Result<(), RuntimeFailure> {
+        disposal::check()?;
+        let Frame::ResourceBoundary {
+            key,
+            payload: ResourcePayload::Generic { instance, .. },
+            ..
+        } = &self.frames[selected]
+        else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        let key = *key;
+        let effect = instance.effect();
+        let (handle, replacement) = if operation == OperationId::new(effect, 0) {
+            (value, None)
+        } else if operation == OperationId::new(effect, 1) {
+            let Value::Location(location) = value else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
+            let location =
+                resolve_location_with_work(&self.heap, location, &mut self.instantiation_work)?;
+            let Some(HeapCell::Tuple(elements)) = self.heap.get(location) else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
+            let [Value::ResourceHandle(handle), replacement] = elements.as_ref() else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
+            if *handle != key {
+                return Err(RuntimeFailure::InvalidControlState);
+            }
+            let replacement = copy_generic_cell_value(replacement, &mut self.instantiation_work)?;
+            (Value::ResourceHandle(*handle), Some(replacement))
+        } else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        if !matches!(handle, Value::ResourceHandle(found) if found == key) {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        // Both builtin events commit together only after all fallible preparation.
+        charge_effect_work(&mut self.instantiation_work, 2, RuntimePhase::Access)?;
+        if let Some(trace) = &mut self.effect_trace {
+            trace.try_reserve(2).map_err(|_| {
+                resource_failure(
+                    ResourceFailureCause::StorageReservationFailed,
+                    RuntimePhase::Access,
+                    RuntimeResource::EffectTrace,
+                    Some(2),
+                    None,
+                )
+            })?;
+        }
+        let Frame::ResourceBoundary {
+            payload: ResourcePayload::Generic { value: root, .. },
+            ..
+        } = &mut self.frames[selected]
+        else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        let (result, event) = if let Some(replacement) = replacement {
+            *root = replacement;
+            (Value::Unit, EffectTraceEvent::ResourceWritten(key.0))
+        } else {
+            let reply = copy_generic_cell_value(root, &mut self.instantiation_work)?;
+            (reply, EffectTraceEvent::ResourceRead(key.0))
+        };
+        self.trace_effect(EffectTraceEvent::Request(operation));
         self.trace_effect(event);
         self.control = Some(Control::Return(result));
         Ok(())
@@ -2916,6 +3042,32 @@ fn effect_work_failure(
         requested,
         Some(work.remaining()),
     ))
+}
+
+// Represented aggregate values and environments share their existing roots.
+// Integer magnitude and function provenance are proportional retained copies.
+fn copy_generic_cell_value(
+    value: &Value,
+    work: &mut TypeWorkBudget,
+) -> Result<Value, RuntimeFailure> {
+    let magnitude = match value {
+        Value::Integer(integer) => usize::try_from(integer.magnitude_byte_length())
+            .map_err(|_| effect_work_failure(work, None, RuntimePhase::Access))?,
+        _ => 0,
+    };
+    charge_effect_work(work, magnitude.saturating_add(1), RuntimePhase::Access)?;
+    if let Value::Function(function) = value {
+        let origin = crate::resolved::clone_effect_origin_with_budget(&function.origin, work)
+            .map_err(|()| effect_work_failure(work, None, RuntimePhase::Access))?;
+        return Ok(Value::Function(Closure {
+            parameter: function.parameter,
+            body: function.body,
+            program: function.program.clone(),
+            environment: function.environment.clone(),
+            origin,
+        }));
+    }
+    Ok(value.clone())
 }
 
 fn same_effect_instance(
@@ -4070,24 +4222,9 @@ pub fn evaluate(program: &ValidatedProgram) -> Result<Evaluation, RuntimeFailure
     Machine::new(program).run()
 }
 
-fn reject_pending_generic_cell_execution(
-    program: &ValidatedEffectProgram,
-    work: &mut TypeWorkBudget,
-) -> Result<(), RuntimeFailure> {
-    if crate::core::effect::has_generic_cell_scopes(program, work)
-        .map_err(|()| RuntimeFailure::ResourceCapacity)?
-    {
-        // TASK-0047 owns the generic payload runtime. Static dependency proof
-        // alone must not enter the legacy integer interpreter.
-        return Err(RuntimeFailure::InvalidControlState);
-    }
-    Ok(())
-}
-
 /// Evaluates one independently validated effect Core program.
 pub fn evaluate_effect(program: &ValidatedEffectProgram) -> Result<Evaluation, RuntimeFailure> {
     let mut work = TypeWorkBudget::default();
-    reject_pending_generic_cell_execution(program, &mut work)?;
     crate::foreign::source_bindings::reject_missing_source_bindings(program, &mut work)?;
     Machine::new_effect(program).run()
 }
@@ -4102,7 +4239,6 @@ pub fn evaluate_effect_with_source_native_program(
     admitted: crate::foreign::source_bindings::AdmittedSourceNativeProgram<'_, '_>,
 ) -> Result<Evaluation, RuntimeFailure> {
     let (program, bindings, errors) = admitted.into_parts();
-    reject_pending_generic_cell_execution(program, &mut TypeWorkBudget::default())?;
     let mut machine = Machine::new_effect(program);
     machine.source_bindings = Some(bindings);
     machine.source_errors = Some(&errors);
@@ -4121,7 +4257,6 @@ pub fn evaluate_effect_with_foreign_runtime(
     runtime: &mut crate::foreign::runtime::ForeignRuntime,
 ) -> Result<Evaluation, RuntimeFailure> {
     let mut work = TypeWorkBudget::default();
-    reject_pending_generic_cell_execution(program, &mut work)?;
     crate::foreign::source_bindings::reject_missing_source_bindings(program, &mut work)?;
     let mut machine = Machine::new_effect(program);
     machine.foreign_runtime = Some(runtime);
@@ -6230,6 +6365,767 @@ mod tests {
             .unwrap()
             .join()
             .unwrap();
+    }
+
+    #[test]
+    fn generic_cell_acquisition_work_refusal_is_atomic_and_retryable() {
+        let (program, _) = crate::core::validate::generic_cell_validated_fixture_for_test();
+        let node = resource_node(&program);
+        let mut measured = Machine::new_effect(&program);
+        measured.instantiation_work = TypeWorkBudget::unbounded();
+        measured
+            .acquire_resource(node, Environment::new(), integer("41"))
+            .unwrap();
+        let required = measured.instantiation_work.used();
+        for allowance in 0..required {
+            let mut short = Machine::new_effect(&program);
+            short.instantiation_work = TypeWorkBudget::with_limit(allowance);
+            let trace = short.effect_trace.clone();
+            let failure = short
+                .acquire_resource(node, Environment::new(), integer("41"))
+                .unwrap_err();
+            assert!(is_work_exhaustion(failure), "allowance={allowance}");
+            assert_eq!(short.live_resources, 0);
+            assert_eq!(short.next_activation, 0);
+            assert!(short.frames.is_empty());
+            assert_eq!(short.effect_trace, trace);
+        }
+        for _ in 0..2 {
+            let mut exact = Machine::new_effect(&program);
+            exact.instantiation_work = TypeWorkBudget::with_limit(required);
+            exact
+                .acquire_resource(node, Environment::new(), integer("41"))
+                .unwrap();
+            assert_eq!(exact.instantiation_work.used(), required);
+            assert_eq!(exact.live_resources, 1);
+            assert_eq!(exact.next_activation, 1);
+        }
+    }
+
+    #[test]
+    fn generic_cell_write_preflight_is_atomic_paid_and_retryable() {
+        let (program, _) = crate::core::validate::generic_cell_validated_fixture_for_test();
+        let node = resource_node(&program);
+        let prepare = || {
+            let mut machine = Machine::new_effect(&program);
+            machine
+                .acquire_resource(node, Environment::new(), integer("41"))
+                .unwrap();
+            let operand = allocate_heap(
+                &mut machine.heap,
+                HeapCell::Tuple(Box::new([
+                    Value::ResourceHandle(ActivationKey(0)),
+                    integer("999999999999999999999999999999999999"),
+                ])),
+            )
+            .unwrap();
+            machine.instantiation_work = TypeWorkBudget::unbounded();
+            (machine, Value::Location(operand))
+        };
+        let (mut measured, operand) = prepare();
+        let write = OperationId::new(
+            measured
+                .resource(node)
+                .unwrap()
+                .acquisition
+                .api()
+                .unwrap()
+                .ops(),
+            1,
+        );
+        measured.interpret_cell(0, write, operand).unwrap();
+        let required = measured.instantiation_work.used();
+        assert_eq!(
+            measured.effect_trace.as_deref().unwrap(),
+            &[
+                EffectTraceEvent::ResourceAcquired(0),
+                EffectTraceEvent::Request(write),
+                EffectTraceEvent::ResourceWritten(0),
+            ]
+        );
+        assert!(required > 2, "integer magnitude is charged");
+        for allowance in 0..required {
+            let (mut short, operand) = prepare();
+            short.instantiation_work = TypeWorkBudget::with_limit(allowance);
+            let trace = short.effect_trace.clone();
+            let failure = short.interpret_cell(0, write, operand).unwrap_err();
+            assert!(matches!(failure, RuntimeFailure::Report(report)
+                if report.primary.resource().is_some_and(|details|
+                    details.cause == ResourceFailureCause::WorkBudgetExhausted
+                    && details.phase == RuntimePhase::Access
+                    && details.resource == RuntimeResource::WorkUnits)));
+
+            assert_eq!(short.effect_trace, trace);
+            assert!(matches!(&short.frames[0], Frame::ResourceBoundary {
+                payload: ResourcePayload::Generic { value: Value::Integer(value), .. }, ..
+            } if value.to_string() == "41"));
+            assert_eq!(short.live_resources, 1);
+            assert_eq!(short.next_activation, 1);
+        }
+        for _ in 0..2 {
+            let (mut exact, operand) = prepare();
+            exact.instantiation_work = TypeWorkBudget::with_limit(required);
+            exact.interpret_cell(0, write, operand).unwrap();
+            assert_eq!(exact.instantiation_work.used(), required);
+            assert_eq!(
+                exact.effect_trace.as_deref().unwrap(),
+                &[
+                    EffectTraceEvent::ResourceAcquired(0),
+                    EffectTraceEvent::Request(write),
+                    EffectTraceEvent::ResourceWritten(0),
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn generic_cell_function_copy_charges_origin_before_retaining_metadata() {
+        let program =
+            effect_program("main : Unit -> (Unit -> Int)\nmain () = fn(ignored) {\n7\n}\n");
+        let Value::Function(mut function) = Machine::new_effect(&program).run().unwrap().value
+        else {
+            panic!("function fixture")
+        };
+        let span = function.origin.primary_span();
+        function.origin = Origin::Source(span);
+        for depth in 0..crate::core::dialect::CORE_PAYLOAD_DEPTH_LIMIT {
+            function.origin = if depth % 2 == 0 {
+                Origin::Generated {
+                    cause: Box::new(function.origin),
+                    reason: crate::source::GeneratedReason::TypeChecking,
+                }
+            } else {
+                Origin::Related {
+                    primary: Box::new(function.origin),
+                    related: vec![span; 4],
+                }
+            };
+        }
+        let value = Value::Function(function);
+        let mut measured = TypeWorkBudget::unbounded();
+        drop(copy_generic_cell_value(&value, &mut measured).unwrap());
+        let required = measured.used();
+        assert!(required > crate::core::dialect::CORE_PAYLOAD_DEPTH_LIMIT);
+        let mut short = TypeWorkBudget::with_limit(required - 1);
+        assert!(copy_generic_cell_value(&value, &mut short).is_err());
+        for _ in 0..2 {
+            let mut exact = TypeWorkBudget::with_limit(required);
+            let copied = copy_generic_cell_value(&value, &mut exact).unwrap();
+            assert_eq!(exact.used(), required);
+            assert!(
+                matches!(&copied, Value::Function(function) if function.origin.primary_span() == span)
+            );
+            drop(copied);
+        }
+    }
+
+    #[test]
+    fn generic_cell_requests_reject_wrong_type_live_donor_stale_and_family() {
+        let program = effect_program(
+            "import @builtin.generic_cell as Cell\nimport @builtin.cell as Legacy\nmain : Unit -> Int\nmain () = resource cell<L> legacy = 7 {\nlet first = resource Cell.Cell<C,Int> c = 41 {\nCell.read c\n}\nlet second = resource Cell.Cell<B,Bool> b = true {\nCell.read b\n}\nlet ignored = Legacy.read legacy\nmatch second {\ntrue => first\nfalse => 0\n}\n}\n",
+        );
+        let mut pending = vec![program.root()];
+        let mut generic_node = None;
+        let mut int_request = None;
+        let mut bool_request = None;
+        let mut legacy_request = None;
+        while let Some(node) = pending.pop() {
+            let kind = &program.node(node).unwrap().kind;
+            match kind {
+                EffectExprKind::Operation(EffectOperation::Resource(scope))
+                    if scope.acquisition.api().unwrap().generic() =>
+                {
+                    let Type::Application(_, payload) = scope.handle().ty() else {
+                        panic!("complete handle")
+                    };
+                    match &**payload {
+                        Type::Int => generic_node = Some((node, None)),
+                        Type::Variable(parameter) if generic_node.is_none() => {
+                            generic_node = Some((node, Some(*parameter)))
+                        }
+                        _ => {}
+                    }
+                }
+                EffectExprKind::Operation(EffectOperation::Request(request)) => {
+                    if let [
+                        crate::types::KindedArgument::TypeArg(Type::Variable(owner)),
+                        crate::types::KindedArgument::TypeArg(payload),
+                    ] = request.effect().arguments()
+                    {
+                        match payload {
+                            Type::Int => int_request = Some((node, *owner)),
+                            Type::Bool => bool_request = Some((node, *owner)),
+                            _ => {}
+                        }
+                    } else if let [crate::types::KindedArgument::TypeArg(Type::Variable(owner))] =
+                        request.effect().arguments()
+                        && request.effect().effect().module().is_builtin_cell()
+                    {
+                        legacy_request = Some((node, *owner));
+                    }
+                }
+                _ => {}
+            }
+            pending.extend((0..kind.child_count()).filter_map(|index| kind.child_at(index)));
+        }
+        let (node, parameter) = generic_node.expect("Int acquisition");
+        let (int_request, int_owner) = int_request.expect("actual closed Int request");
+        let (bool_request, bool_owner) = bool_request.expect("actual closed Bool request");
+        let instantiate = |owner, key| {
+            Instantiation::default()
+                .acquire(owner, key, &mut TypeWorkBudget::default(), None)
+                .unwrap()
+        };
+        let mut environment = Environment::new();
+        if let Some(parameter) = parameter {
+            environment.instantiation = Instantiation::default()
+                .apply(
+                    &Instantiation::default(),
+                    &[(parameter, crate::types::Kind::Type)],
+                    &[Type::Int],
+                    &[],
+                    &mut TypeWorkBudget::default(),
+                )
+                .unwrap();
+        }
+        let mut machine = Machine::new_effect(&program);
+        machine
+            .acquire_resource(node, environment.clone(), integer("41"))
+            .unwrap();
+        machine
+            .acquire_resource(node, environment.clone(), integer("99"))
+            .unwrap();
+        for (request, owner, handle, reason) in [
+            (bool_request, bool_owner, 0, "runtime.foreign-binding"),
+            (int_request, int_owner, 1, "runtime.invalid-control-state"),
+        ] {
+            let trace = machine.effect_trace.clone();
+            let failure = machine
+                .return_request(
+                    request,
+                    &instantiate(owner, ActivationKey(0)),
+                    Value::ResourceHandle(ActivationKey(handle)),
+                )
+                .unwrap_err();
+            assert_eq!(failure.reason_code(), reason);
+            assert_eq!(machine.effect_trace, trace);
+            for (frame, expected) in machine.frames.iter().zip(["41", "99"]) {
+                assert!(
+                    matches!(frame,Frame::ResourceBoundary { payload:ResourcePayload::Generic { value:Value::Integer(value),.. },.. } if value.to_string()==expected)
+                );
+            }
+        }
+        let (legacy, identity) = legacy_request.expect("legacy family request");
+        let trace = machine.effect_trace.clone();
+        assert_eq!(
+            machine
+                .return_request(
+                    legacy,
+                    &instantiate(identity, ActivationKey(0)),
+                    Value::ResourceHandle(ActivationKey(0))
+                )
+                .unwrap_err()
+                .reason_code(),
+            "runtime.foreign-binding"
+        );
+        assert_eq!(machine.effect_trace, trace);
+        machine
+            .return_request(
+                int_request,
+                &instantiate(int_owner, ActivationKey(0)),
+                Value::ResourceHandle(ActivationKey(0)),
+            )
+            .unwrap();
+        assert!(
+            matches!(&machine.control,Some(Control::Return(Value::Integer(value))) if value.to_string()=="41")
+        );
+        for _ in 0..2 {
+            let frame = machine.frames.pop().unwrap();
+            machine.return_from(frame, Value::Unit).unwrap();
+        }
+        machine
+            .acquire_resource(node, environment, integer("7"))
+            .unwrap();
+        assert_eq!(machine.next_activation, 3);
+        let trace = machine.effect_trace.clone();
+        assert_eq!(
+            machine
+                .return_request(
+                    int_request,
+                    &instantiate(int_owner, ActivationKey(0)),
+                    Value::ResourceHandle(ActivationKey(0))
+                )
+                .unwrap_err()
+                .reason_code(),
+            "runtime.foreign-binding"
+        );
+        assert_eq!(machine.effect_trace, trace);
+        let donor = effect_program(
+            "import @builtin.generic_cell as Cell\nmain : Unit -> Int\nmain () = resource Cell.Cell<R,Int> c = 41 {\nCell.read c\n}\n",
+        );
+        let mut pending = vec![donor.root()];
+        let request = loop {
+            let node = pending.pop().expect("donor request");
+            let kind = &donor.node(node).unwrap().kind;
+            if matches!(kind, EffectExprKind::Operation(EffectOperation::Request(_))) {
+                break node;
+            }
+            pending.extend((0..kind.child_count()).filter_map(|index| kind.child_at(index)));
+        };
+        assert!(matches!(
+            &donor.node(request).unwrap().kind,
+            EffectExprKind::Operation(EffectOperation::Request(_))
+        ));
+        assert!(machine.program.node(request).is_none());
+        assert_eq!(
+            machine
+                .return_request(
+                    request,
+                    &instantiate(int_owner, ActivationKey(2)),
+                    Value::ResourceHandle(ActivationKey(2))
+                )
+                .unwrap_err(),
+            RuntimeFailure::InvalidControlState
+        );
+        assert_eq!(machine.effect_trace, trace);
+    }
+
+    #[test]
+    fn generic_cell_repeated_large_cyclic_reads_share_the_exact_heap_root() {
+        let program = effect_program(
+            "import @builtin.generic_cell as Cell\ntype Stream = Next(Int,Stream)\nmain : Unit -> Int\nmain () = {\nlet rec ones : Stream = Next(1,ones)\nresource Cell.Cell<R,Stream> c = ones {\nmatch Cell.read c {\nNext(first,rest) => first\n}\n}\n}\n",
+        );
+        let node = resource_node(&program);
+        let constructor = program
+            .registry()
+            .constructors()
+            .iter()
+            .find(|constructor| constructor.spelling == "Next")
+            .unwrap()
+            .id;
+        let mut costs = Vec::new();
+        for depth in [1, 4096] {
+            let mut machine = Machine::new_effect(&program);
+            for index in 0..depth {
+                let next = ((index + 1) % depth) * 2;
+                machine.heap.push(HeapCell::Constructor(
+                    constructor,
+                    Some(Value::Location(index * 2 + 1)),
+                ));
+                machine.heap.push(HeapCell::Tuple(Box::new([
+                    integer("1"),
+                    Value::Location(next),
+                ])));
+            }
+            machine
+                .acquire_resource(node, Environment::new(), Value::Location(0))
+                .unwrap();
+            let read = OperationId::new(
+                machine
+                    .resource(node)
+                    .unwrap()
+                    .acquisition
+                    .api()
+                    .unwrap()
+                    .ops(),
+                0,
+            );
+            for _ in 0..2 {
+                machine.instantiation_work = TypeWorkBudget::unbounded();
+                machine
+                    .interpret_cell(0, read, Value::ResourceHandle(ActivationKey(0)))
+                    .unwrap();
+                costs.push(machine.instantiation_work.used());
+                assert!(matches!(
+                    machine.control,
+                    Some(Control::Return(Value::Location(0)))
+                ));
+                assert_eq!(machine.heap.len(), depth * 2);
+                assert!(matches!(
+                    &machine.frames[0],
+                    Frame::ResourceBoundary {
+                        payload: ResourcePayload::Generic {
+                            value: Value::Location(0),
+                            ..
+                        },
+                        ..
+                    }
+                ));
+            }
+        }
+        assert!(
+            costs.iter().all(|cost| *cost == costs[0]),
+            "read does not walk shared cyclic payload"
+        );
+    }
+
+    #[test]
+    fn generic_cell_captured_capacity_preserves_latest_root_and_fresh_reuse() {
+        let (program, _) = crate::core::validate::generic_cell_validated_fixture_for_test();
+        let node = resource_node(&program);
+        for discard in [false, true] {
+            let mut machine = Machine::new_effect(&program);
+            machine.resource_limit = 1;
+            machine
+                .acquire_resource(node, Environment::new(), integer("41"))
+                .unwrap();
+            let api = machine.resource(node).unwrap().acquisition.api().unwrap();
+            let operand = allocate_heap(
+                &mut machine.heap,
+                HeapCell::Tuple(Box::new([
+                    Value::ResourceHandle(ActivationKey(0)),
+                    integer("99"),
+                ])),
+            )
+            .unwrap();
+            machine
+                .interpret_cell(0, OperationId::new(api.ops(), 1), Value::Location(operand))
+                .unwrap();
+            let mut captured = machine.capture_from(0).unwrap();
+            assert_eq!(machine.live_resources, 1);
+            assert_eq!(machine.captured_cells, 1);
+            assert!(
+                matches!(&captured.frames[0], Frame::ResourceBoundary { payload: ResourcePayload::Generic { value: Value::Integer(value), .. }, .. } if value.to_string()=="99")
+            );
+            let trace = machine.effect_trace.clone();
+            assert!(is_configured_capacity(
+                machine
+                    .acquire_resource(node, Environment::new(), integer("7"))
+                    .unwrap_err(),
+                RuntimeFailure::ResourceCapacity,
+                RuntimeResource::ResourceOwners
+            ));
+            assert_eq!(machine.effect_trace, trace);
+            assert_eq!(machine.next_activation, 1);
+            if discard {
+                let handler = HandlerId::new(0);
+                let owner = ResumeId::new(0);
+                machine.frames.push(Frame::ClauseBoundary {
+                    registration: None,
+                    handler,
+                    owner,
+                    continuation: Some(captured),
+                });
+                machine.discard(handler, owner).unwrap();
+                let frame = machine.frames.pop().unwrap();
+                machine.return_from(frame, Value::Unit).unwrap();
+                let frame = machine.frames.pop().unwrap();
+                machine.return_from(frame, Value::Unit).unwrap();
+                let frame = machine.frames.pop().unwrap();
+                machine.return_from(frame, Value::Unit).unwrap();
+            } else {
+                machine.frames.append(&mut captured.frames);
+                machine.captured_cells = 0;
+                machine
+                    .interpret_cell(
+                        0,
+                        OperationId::new(api.ops(), 0),
+                        Value::ResourceHandle(ActivationKey(0)),
+                    )
+                    .unwrap();
+                assert!(
+                    matches!(&machine.control,Some(Control::Return(Value::Integer(value))) if value.to_string()=="99")
+                );
+                let frame = machine.frames.pop().unwrap();
+                machine.return_from(frame, Value::Unit).unwrap();
+            }
+            assert_eq!(machine.live_resources, 0);
+            assert_eq!(machine.captured_cells, 0);
+            machine
+                .acquire_resource(node, Environment::new(), integer("7"))
+                .unwrap();
+            assert_eq!(machine.next_activation, 2);
+            let trace = machine.effect_trace.clone();
+            assert_eq!(
+                machine.interpret_cell(
+                    0,
+                    OperationId::new(api.ops(), 0),
+                    Value::ResourceHandle(ActivationKey(0))
+                ),
+                Err(RuntimeFailure::InvalidControlState)
+            );
+            assert_eq!(machine.effect_trace, trace);
+        }
+    }
+
+    #[test]
+    fn generic_cell_admitted_function_origin_and_deep_environment_dispose_on_small_stack() {
+        let program = effect_program(
+            "import @builtin.generic_cell as Cell\ninitial : Unit -> Int\ninitial () = 7\nmain : Unit -> Int\nmain () = resource Cell.Cell<R,(Unit -> Int)> c = initial {\nlet action = Cell.read c\naction ()\n}\n",
+        );
+        let callable =
+            effect_program("main : Unit -> (Unit -> Int)\nmain () = fn(ignored) {\n7\n}\n");
+        let Value::Function(template) = Machine::new_effect(&callable).run().unwrap().value else {
+            panic!("function")
+        };
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(move || {
+                let node = resource_node(&program);
+                for mode in 0..3 {
+                    let mut function = template.clone();
+                    let span = function.origin.primary_span();
+                    function.origin = Origin::Source(span);
+                    for depth in 0..crate::core::dialect::CORE_PAYLOAD_DEPTH_LIMIT {
+                        function.origin = if depth % 2 == 0 {
+                            Origin::Generated {
+                                cause: Box::new(function.origin),
+                                reason: crate::source::GeneratedReason::TypeChecking,
+                            }
+                        } else {
+                            Origin::Related {
+                                primary: Box::new(function.origin),
+                                related: vec![span; 4],
+                            }
+                        };
+                    }
+                    for index in 0..32_000 {
+                        function.environment = function
+                            .environment
+                            .extend(BinderId::new(index), Value::Unit)
+                            .unwrap();
+                    }
+                    let mut machine = Machine::new_effect(&program);
+                    machine
+                        .acquire_resource(node, Environment::new(), Value::Function(function))
+                        .unwrap();
+                    match mode {
+                        0 => {
+                            let frame = machine.frames.pop().unwrap();
+                            machine.return_from(frame, Value::Unit).unwrap();
+                            assert_eq!(machine.live_resources, 0);
+                        }
+                        1 => {
+                            let api = machine.resource(node).unwrap().acquisition.api().unwrap();
+                            let operand = allocate_heap(
+                                &mut machine.heap,
+                                HeapCell::Tuple(Box::new([
+                                    Value::ResourceHandle(ActivationKey(0)),
+                                    Value::Function(template.clone()),
+                                ])),
+                            )
+                            .unwrap();
+                            machine
+                                .interpret_cell(
+                                    0,
+                                    OperationId::new(api.ops(), 1),
+                                    Value::Location(operand),
+                                )
+                                .unwrap();
+                            assert_eq!(machine.live_resources, 1);
+                        }
+                        _ => {
+                            let scope = disposal::Scope::enter();
+                            drop(machine);
+                            assert_eq!(
+                                scope.finish::<()>(Err(RuntimeFailure::MissingBinding)),
+                                Err(RuntimeFailure::MissingBinding)
+                            );
+                        }
+                    }
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn generic_cell_public_polymorphic_acquisition_matches_int_and_bool() {
+        let (program, _, _) = crate::core::validate::generic_cell_source_fixture_for_test(
+            "import @builtin.generic_cell as Cell\nscope<T> : T -> T\nscope initial = resource Cell.Cell<R,T> c = initial {\nCell.read c\n}\nmain : Unit -> (Int,Bool)\nmain () = (scope 41, scope true)\n",
+            None,
+        );
+        assert_eq!(
+            evaluate_effect(&program).unwrap().value.to_string(),
+            "(41, true)"
+        );
+    }
+
+    #[test]
+    fn generic_cell_public_polymorphic_acquisition_coexists_with_legacy_helper() {
+        let (program, _, _) = crate::core::validate::generic_cell_source_fixture_for_test(
+            include_str!("../../tests/fixtures/generic-cell/polymorphic-acquisition-entry.ash"),
+            None,
+        );
+        assert_eq!(evaluate_effect(&program).unwrap().value.to_string(), "7");
+    }
+
+    #[test]
+    fn generic_cell_write_refusal_retains_prior_strict_operand_effects() {
+        let program = effect_program(include_str!(
+            "../../tests/fixtures/generic-cell/operand-order-entry.ash"
+        ));
+        let mut measured = Machine::new_effect(&program);
+        measured.instantiation_work = TypeWorkBudget::unbounded();
+        let observation = measured.run_loop().unwrap();
+        assert_eq!(observation.value.to_string(), "(42, 12)");
+        let required = observation.runtime_work;
+        let mut cut = None;
+        for allowance in 0..required {
+            let mut machine = Machine::new_effect(&program);
+            machine.instantiation_work = TypeWorkBudget::with_limit(allowance);
+            let Err(RuntimeFailure::Report(report)) = machine.run_loop() else {
+                continue;
+            };
+            if !report.primary.resource().is_some_and(|details| {
+                details.phase == RuntimePhase::Access
+                    && details.cause == ResourceFailureCause::WorkBudgetExhausted
+            }) {
+                continue;
+            }
+            let root = |key| {
+                machine.frames.iter().find_map(|frame| match frame {
+                    Frame::ResourceBoundary {
+                        key: actual,
+                        payload:
+                            ResourcePayload::Generic {
+                                value: Value::Integer(value),
+                                ..
+                            },
+                        ..
+                    } if actual.0 == key => Some(value.to_string()),
+                    _ => None,
+                })
+            };
+            if root(0).as_deref() != Some("12") || root(1).as_deref() != Some("41") {
+                continue;
+            }
+            let trace = machine.effect_trace.as_deref().unwrap();
+            assert_eq!(
+                trace
+                    .iter()
+                    .filter(|event| matches!(event, EffectTraceEvent::ResourceWritten(0)))
+                    .count(),
+                2
+            );
+            assert!(
+                !trace
+                    .iter()
+                    .any(|event| matches!(event, EffectTraceEvent::ResourceWritten(1)))
+            );
+            let api = machine
+                .frames
+                .iter()
+                .find_map(|frame| match frame {
+                    Frame::ResourceBoundary { node, key, .. } if key.0 == 1 => {
+                        machine.resource(*node).unwrap().acquisition.api()
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            let write = OperationId::new(api.ops(), 1);
+            assert_eq!(trace.iter().filter(|event|matches!(event,EffectTraceEvent::Request(operation) if *operation==write)).count(),2,"target request is not published");
+            assert_eq!(machine.live_resources, 2);
+            assert_eq!(machine.next_activation, 2);
+            cut = Some(allowance);
+            break;
+        }
+        let cut = cut.expect("write preparation can refuse after both operand effects");
+        for _ in 0..2 {
+            let mut exact = Machine::new_effect(&program);
+            exact.instantiation_work = TypeWorkBudget::with_limit(required);
+            assert_eq!(exact.run_loop().unwrap().value.to_string(), "(42, 12)");
+        }
+        println!("generic operand-order full work={required}; prewrite refusal allowance={cut}");
+    }
+
+    #[test]
+    fn generic_cell_replaced_function_root_reports_internal_disposal_failure_after_commit() {
+        let program = effect_program(
+            "import @builtin.generic_cell as Cell\ninitial : Unit -> Int\ninitial () = 7\nmain : Unit -> Int\nmain () = resource Cell.Cell<R,(Unit -> Int)> c = initial {\nlet action = Cell.read c\naction ()\n}\n",
+        );
+        let callable =
+            effect_program("main : Unit -> (Unit -> Int)\nmain () = fn(ignored) {\n7\n}\n");
+        let Value::Function(template) = Machine::new_effect(&callable).run().unwrap().value else {
+            panic!("function")
+        };
+        let mut frontier = (0..512).map(|_| Environment::new()).collect::<Vec<_>>();
+        while frontier.len() > 1 {
+            let mut next = Vec::new();
+            while let Some(right) = frontier.pop() {
+                let left = frontier.pop().unwrap();
+                let mut function = template.clone();
+                function.environment = right;
+                next.push(
+                    left.extend(BinderId::new(1), Value::Function(function))
+                        .unwrap(),
+                );
+            }
+            frontier = next;
+        }
+        let mut previous = template.clone();
+        previous.environment = frontier.pop().unwrap();
+        let mut machine = Machine::new_effect(&program);
+        let node = resource_node(&program);
+        machine
+            .acquire_resource(node, Environment::new(), Value::Function(previous))
+            .unwrap();
+        let operation = OperationId::new(
+            machine
+                .resource(node)
+                .unwrap()
+                .acquisition
+                .api()
+                .unwrap()
+                .ops(),
+            1,
+        );
+        let operand = allocate_heap(
+            &mut machine.heap,
+            HeapCell::Tuple(Box::new([
+                Value::ResourceHandle(ActivationKey(0)),
+                Value::Function(template.clone()),
+            ])),
+        )
+        .unwrap();
+        let report = {
+            let scope = disposal::Scope::enter();
+            disposal::reset_growth_attempts();
+            machine_test_hooks::FAIL_DISPOSAL_GROWTH.set(true);
+            assert!(
+                machine
+                    .interpret_cell(0, operation, Value::Location(operand))
+                    .is_ok()
+            );
+            assert!(
+                matches!(&machine.frames[0],Frame::ResourceBoundary { payload:ResourcePayload::Generic { value:Value::Function(function),.. },.. } if function.environment.len()==template.environment.len())
+            );
+            assert!(machine.effect_trace.as_ref().unwrap().ends_with(&[
+                EffectTraceEvent::Request(operation),
+                EffectTraceEvent::ResourceWritten(0)
+            ]));
+            assert!(
+                disposal::check().is_err(),
+                "next control step cannot execute source code"
+            );
+            assert_eq!(disposal::growth_attempts(), 1);
+            scope.finish(Ok::<_, RuntimeFailure>(())).unwrap_err()
+        };
+        let RuntimeFailure::Report(report) = report else {
+            panic!("internal disposal report")
+        };
+        let details = report.primary.resource().unwrap();
+        assert_eq!(details.phase, RuntimePhase::Teardown);
+        assert_eq!(details.resource, RuntimeResource::EnvironmentDisposal);
+        assert_eq!(details.cause, ResourceFailureCause::AllocatorRefused);
+        assert_eq!(report.cleanup, CleanupStatus::Incomplete);
+        machine_test_hooks::reset();
+    }
+
+    #[test]
+    fn legacy_cell_invalid_initializer_precedes_capacity_and_metadata_work() {
+        let program = resource_program();
+        let node = resource_node(&program);
+        let mut machine = Machine::new_effect(&program);
+        machine.resource_limit = 0;
+        machine.instantiation_work = TypeWorkBudget::with_limit(0);
+        assert_eq!(
+            machine.acquire_resource(node, Environment::new(), Value::Boolean(false)),
+            Err(RuntimeFailure::InvalidControlState)
+        );
+        assert_eq!(machine.next_activation, 0);
+        assert!(machine.frames.is_empty());
     }
 
     #[test]

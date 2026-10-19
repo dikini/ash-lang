@@ -6683,6 +6683,24 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             if owner.source_parameters.contains(&id) {
                 return Ok(true);
             }
+            // Resource identities are allocated while resolving bodies, after
+            // global declaration parameters. Their source position can therefore
+            // precede an earlier registry ID without changing header ordering.
+            // A catalog claim alone is insufficient: require the actual complete
+            // acquisition carrier, whose authority is checked later as well.
+            if let Some(super::dialect::MethodEvidenceResourceOwner::Builtin(acquisition)) =
+                &owner.resource
+                && acquisition.identity == id
+            {
+                for node in &self.program.nodes {
+                    self.charge_type_work(1)?;
+                    if F::resource_scope(&node.kind)
+                        .is_some_and(|scope| scope.acquisition == *acquisition)
+                    {
+                        return Ok(true);
+                    }
+                }
+            }
             if let Some(super::dialect::MethodEvidenceResourceOwner::Provider(resource)) =
                 &owner.resource
                 && resource.identity == id
@@ -23009,6 +23027,143 @@ mod tests {
         core.method_evidence = std::sync::Arc::new(catalog);
         core.method_evidence_anchors = anchors;
         (core, sources)
+    }
+
+    #[test]
+    fn builtin_resource_source_order_classification_requires_actual_complete_carrier() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        for missing in [false, true] {
+            let (mut core, sources) = cell_core_fixture_with_generic(true);
+            let EffectExprKind::Operation(EffectOperation::Resource(scope)) =
+                &core.nodes[core.root.index().unwrap()].kind
+            else {
+                panic!("resource root");
+            };
+            let identity = scope.acquisition.identity;
+            let refs = sources.iter().collect::<Vec<_>>();
+            assert!(
+                Validator::new(&core, &refs)
+                    .is_lexical_source_parameter(identity)
+                    .unwrap()
+            );
+            if missing {
+                core.nodes[core.root.index().unwrap()].kind = EffectExprKind::Pure(
+                    PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
+                );
+            } else {
+                let catalog = Arc::make_mut(&mut core.method_evidence);
+                let mut owners = catalog.lexical_owners().to_vec();
+                for owner in &mut owners {
+                    let Some(super::super::dialect::MethodEvidenceResourceOwner::Builtin(
+                        acquisition,
+                    )) = &mut owner.resource
+                    else {
+                        panic!("builtin owner");
+                    };
+                    acquisition.handle = acquisition.methods[0];
+                }
+                catalog.set_lexical_owners(owners);
+            }
+            assert!(
+                !Validator::new(&core, &refs)
+                    .is_lexical_source_parameter(identity)
+                    .unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn module_registry_still_rejects_reversed_header_parameter_source_order() {
+        let file = SourceFile::new("reversed-headers.ash", "AA BB").unwrap();
+        let module = ModuleId::new(0);
+        let registry = crate::resolved::ResolvedRegistry::default().with_additional_type_variables(
+            [4u32, 1]
+                .into_iter()
+                .enumerate()
+                .map(|(index, start)| ResolvedTypeVariable {
+                    id: crate::types::TypeVariableId::resolved(module, index as u32),
+                    spelling: if index == 0 { "A" } else { "B" }.into(),
+                    kind: Kind::Type,
+                    origin: Origin::Source(
+                        file.span(crate::source::ByteRange::new(start, start + 1).unwrap())
+                            .unwrap(),
+                    ),
+                }),
+        );
+        let mut builder = super::super::CoreBuilder::with_registry(Arc::new(registry));
+        let root = builder
+            .unit(
+                Type::Unit,
+                Origin::Source(
+                    file.span(crate::source::ByteRange::new(0, 5).unwrap())
+                        .unwrap(),
+                ),
+            )
+            .unwrap();
+        let core = builder.finish(root).unwrap();
+        let refs = [&file];
+        let validator = Validator::new_modules(&core, &refs, &[(module, file.id())]).unwrap();
+        assert_eq!(
+            validator.validate_registry().unwrap_err().reason(),
+            ValidationReason::Registry
+        );
+    }
+
+    #[test]
+    fn generic_cell_actual_core_rejects_discard_of_running_cleanup() {
+        use super::super::{
+            capture,
+            effect::{DiscardNode, EffectExprKind, EffectOperation},
+        };
+        let source = "import @builtin.generic_cell as Cell\neffect Stop {\nstop : Unit -> Unit\n}\nmain : Unit -> Unit\nmain () = resource Cell.Cell<R,Int> c = 41 {\nhandle (cleanup fn(ignored) {\nperform Stop.stop ()\n} {\n()\n}) with Stop {\nstop ignored => resume ()\n}\n}\n";
+        let (valid, _, _) = generic_cell_source_fixture(source, None);
+        for transform in [
+            crate::core::transform::identity_effect_traversal,
+            crate::core::transform::fold_effect_literal_primitives,
+        ] {
+            let mut core = transform(&valid).unwrap();
+            let resume = core
+                .nodes
+                .iter_mut()
+                .find(|node| {
+                    matches!(
+                        node.kind,
+                        EffectExprKind::Operation(EffectOperation::Resume(_))
+                    )
+                })
+                .unwrap();
+            let EffectExprKind::Operation(EffectOperation::Resume(node)) = &resume.kind else {
+                unreachable!()
+            };
+            resume.kind = EffectExprKind::Operation(EffectOperation::Discard(DiscardNode::new(
+                node.handler(),
+                node.owner(),
+                node.use_state(),
+            )));
+            // Probe the independent completion proof directly: the unused
+            // former resume argument is intentionally still in this raw arena.
+            // No altered arena is admitted or executed.
+            let result = capture::check_nodes(
+                &core.nodes,
+                &[],
+                &[],
+                |kind| match kind {
+                    EffectExprKind::Operation(operation) => Some(operation),
+                    _ => None,
+                },
+                &mut TypeWorkBudget::default(),
+            );
+            assert!(
+                matches!(
+                    result,
+                    Err(capture::Failure::Unsafe(capture::UnsafeDiscard {
+                        owner: Some(capture::CompletionOwner::Cleanup(_)),
+                        ..
+                    }))
+                ),
+                "{result:?}"
+            );
+        }
     }
 
     #[test]

@@ -32,7 +32,7 @@ fn resource_programs_execute_after_independent_ownership_validation() {
 }
 
 #[test]
-fn generic_cell_dependency_admission_does_not_grant_execution_permission() {
+fn generic_cell_dependency_checked_program_executes_and_prepares_for_build() {
     let path = std::env::temp_dir().join(format!(
         "ash-generic-cell-admission-{}.ash",
         SourceFile::new("identity", "").unwrap().id().value()
@@ -44,25 +44,29 @@ fn generic_cell_dependency_admission_does_not_grant_execution_permission() {
     })
     .expect("source and independent Core dependency proof should succeed");
     let output = path.with_extension("executable");
-    let failure = ash::build::prepare_program(
+    assert_eq!(
+        ash::driver::execute(&compiled).unwrap().value().to_string(),
+        "42"
+    );
+    let prepared = ash::build::prepare_program(
         &compiled,
         ash::build::BuildConfiguration::new(output.clone()),
     )
-    .unwrap_err();
-    assert_eq!(failure.reason(), "build.unsupported-program");
+    .expect("connected generic runtime build preparation");
+    assert!(prepared.preparation_work() > 0);
     assert!(
         !output.exists(),
-        "dependency admission cannot publish a generic executable"
+        "preparation alone publishes no executable"
     );
     assert_eq!(
-        ash::driver::execute(&compiled).unwrap_err().reason_code(),
-        "runtime.invalid-control-state"
+        run_path(RunConfiguration {
+            entry: path.clone(),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap()
+        .value()
+        .to_string(),
+        "42"
     );
-    let failure = run_path(RunConfiguration {
-        entry: path.clone(),
-        roots: ModuleRoots::empty(),
-    })
-    .unwrap_err();
-    assert_eq!(failure.reason_code(), "runtime.invalid-control-state");
     std::fs::remove_file(path).unwrap();
 }

@@ -213,6 +213,39 @@ ordering, resource-cycle rejection, outward payload crossing and native
 retained-owner rules remain fixed. DN-0054 is unchanged and no region mechanism
 is included. No push, PR, Main integration or cleanup is authorized here.
 
+### TASK-0047 connection authorization, 2026-10-19
+
+The user authorized the prerequisite TASK-0047/0048/0049 work needed to complete
+original TASK-0046 acceptance. This supersedes the earlier TASK-0047 exclusion
+for the new assignment; historical launch/receipt restrictions remain recorded
+as they applied then. Start from clean retained head
+`ee306d161478d2b135c503d7b79056f8b0dfa32b`, with tested dependency code
+`3f72e9ce3a1822631eb94762dbe1f6c0bde1806c` and reviewed foundation `77032c7`.
+
+`/root/task0046_developer` remains sole product writer and Cargo operator,
+requested/dispatched as `gpt-6.1-sol`, `medium`; exact model runtime is
+unavailable.
+`/root/task0046_reviewer` independently reviews immutable inputs without Cargo;
+`/root` coordinates and owns acceptance. Reuse `.worktree/generic-cells`, branch
+`codex/generic-cells`, Rust 1.97.1 and its existing target cache, one Cargo job
+and `RUSTC_WRAPPER=`. Preserve the planning checkout and concurrent design work.
+All local commits remain unsigned; no push, PR or Main integration is
+authorized.
+
+The [TASK-0047 plan](task-0047-execution-plan.md) connects the authenticated
+carrier to ordinary fixed-type payload execution, completion and owning ledger
+probes. Required public P01–P13 and C01/C02 observations include actual values,
+distinct recursive activations and release counts. Independent review and
+focused verification at a frozen runtime pin precede advancement. Root then
+advances TASK-0048's integrated adversarial/budget/capacity/native matrix and
+owns TASK-0049's next fresh full `cargo xtask verify` checkpoint after connected
+behavior, specification and case receipts are ready. Original compound criteria
+remain open until their complete observations exist.
+
+DN-0054 remains separate and byte-identical. No region work, native lifetime
+relaxation or private lifecycle expansion is authorized. Worktree/cache
+retirement and proposal cleanup wait for the completed product checkpoint.
+
 - [x] TASK-0045 launch records product inputs, retaining branch, roles and
   permissions. Later task dispatches require their own exact input handoffs.
 - [x] TASK-0045 foundation enables the downstream work without unchecked publication.

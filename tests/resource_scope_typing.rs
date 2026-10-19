@@ -2189,6 +2189,17 @@ fn generic_cell_completion_keeps_structural_discard_obligations() {
 }
 
 #[test]
+fn generic_cell_running_cleanup_cannot_be_abandoned_by_an_outer_handler() {
+    let tree = Tree::new();
+    let source = "import @builtin.generic_cell as Cell\neffect Stop {\nstop : Unit -> Unit\n}\nmain : Unit -> Unit\nmain () = resource Cell.Cell<R,Int> c = 41 {\nhandle (cleanup fn(ignored) {\nperform Stop.stop ()\n} {\n()\n}) with Stop {\nstop ignored => resume ()\n}\n}\n";
+    assert_check(tree.check_dependencies(source), None);
+    let error = tree
+        .check_dependencies(&source.replace("resume ()", "discard"))
+        .unwrap_err();
+    assert!(error.contains("DiscardUnsafe"), "{error}");
+}
+
+#[test]
 fn cell_exact_function_handler_does_not_intercept_distinct_outer_read() {
     let source = include_str!("fixtures/generic-cell/exact-handler-entry.ash");
     let tree = Tree::new();
