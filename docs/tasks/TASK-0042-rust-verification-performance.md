@@ -1,7 +1,7 @@
 # TASK-0042: Rust verification performance
 
 - ID: `TASK-0042`
-- Status: active
+- Status: complete
 - Related: [AD-0014](../decisions/AD-0014-rust-verification-stage-reuse.md),
   [AD-0001](../decisions/AD-0001-implementation-environment.md)
 
@@ -47,6 +47,34 @@ The human subsequently authorized an unsigned local Main merge and syncing
 non-forced push explicitly after the required evidence; no other remote
 publication is in scope. Main remains unchanged during comparison delivery.
 
+## Completion — 2026-10-20
+
+All five work items are complete. The existing integrated implementation
+preserves default-feature checking/product linkage (1), explicit selection and
+exact-input successful-stage receipts (2), and failure/invalidation regressions
+(3). The lasting [performance record](../project/verification-performance-2026-10-20.md)
+and tool guides retain commands, dependencies and ownership boundaries (4).
+The reviewed serial current-source comparison completed with comparable warm
+conditions, raw receipts and matching native proof (5). It observed the revised
+Cargo total 110.259 seconds slower in one ordered warm sample, without a
+causal/general speedup or regression claim.
+
+The measured revised leg passed all seven fresh stages with zero reuse,
+140 exact outer harnesses, 4,112 passes, no failures, one optional calibration
+ignore and nine nested exclusions. Both legs retain C06 and genuine static
+SQLite observations. The refused first attempt remains invalid and preserved.
+The permanent record pins all receipts and explains the scoped comparison.
+
+Result: retain the lasting findings and all live evidence/compatible caches;
+remove only this completed task and its owned plan after reviewed completion
+retention. Next owner: the PM accepts closure and assigns separate unsigned
+Main integration/non-forced origin sync after retirement review. This prose
+changes all-file receipt identity; acceptance uses manual documentation review
+and demonstrated unchanged executed source/configuration/native inputs.
+
+All sections below are historical implementation records. Their then-current
+pending integrations, paths and partial status do not describe this closure.
+
 ## Historical implementation assignment
 
 
@@ -70,7 +98,7 @@ checkpoint and transition evidence, unrelated worktrees and Main drafts.
 
 The [execution plan](rust-verification-performance-plan.md) belongs to this task.
 
-## Progress
+## Historical progress
 
 [PR #18](https://github.com/dikini/ash-lang/pull/18) delivers the revised command
 matrix, conservative exact-input receipts and temporary generated-host cleanup.
@@ -256,7 +284,7 @@ package. The database date bounds this observation. Published SHA-2 advisory
 does not affect the resolved 0.10.9 release. Full workspace verification with the
 changed lockfile passed the candidate's fresh gate recorded above.
 
-## Verification
+## Historical verification
 
 Require the complete fresh seven-stage gate and exact product/tool target
 inventory at the final candidate. Retain focused cleanup/tool regressions,
@@ -285,7 +313,7 @@ small-stack behavior, traces and post-transform validation remain independent
 obligations. Historical target totals do not establish savings for any proposed
 optimization; those changes and measurements require a later delivery window.
 
-## Deviations
+## Historical deviations
 
 The whole-task controlled timing comparison remains incomplete. This partial
 delivery removes no semantic, negative, native or stress tests and changes no

@@ -65,3 +65,14 @@ seven-stage gate, matching native/image proof, manual documentation checks,
 independent verdict, verified retention and scoped cleanup handoff. Exact reuse
 is a distinct witness. The full task additionally requires a controlled
 old/revised comparison; it remains active until that evidence exists.
+
+## Closure result — 2026-10-20
+
+The controlled comparison and fresh revised-seven checkpoint completed at
+`56ad7d66`. The [lasting record](../project/verification-performance-2026-10-20.md)
+retains exact recipes, accepted warm conditions, the slower observed revised
+sample, all-stage/native proof and limits. The initial attempt remains refused
+and preserved. Implementation and comparison obligations are complete;
+reviewed completion retention precedes removal of this task-owned plan and
+TASK-0042. Main integration/non-forced origin sync remains a separate PM
+assignment after closure review; it is not a further comparison obligation.
