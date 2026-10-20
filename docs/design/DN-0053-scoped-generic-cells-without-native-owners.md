@@ -17,11 +17,13 @@
 > prototype. Resource-scope lifetime and rejection of resource dependency
 > cycles are explicit initial restrictions.
 
-The [local product checkpoint](generic-cell/evidence.md) retains the accepted
-transition's implementation, specification, tests and verification, together
+The [product checkpoint integrated into local Main](generic-cell/evidence.md)
+retains the accepted transition's implementation, specification, tests and
+verification, together
 with commands for retrieving its proposal and task history from local Git.
-Main integration remains pending. This note retains the candidate's rationale,
-alternatives and future questions; the current specification supplies language
+Its verified local Main integration is recorded there. This note retains the
+candidate's rationale, alternatives and future questions; the current
+specification supplies language
 rules. Broader region contracts remain in
 [DN-0054](DN-0054-base-lexical-region-memory-contracts.md).
 

@@ -25,5 +25,5 @@ No proposed semantic transition is under review.
 
 No accepted transition awaits product checkpoint retention.
 The [generic cell checkpoint evidence](../design/generic-cell/evidence.md)
-retains the completed local transition and historical retrieval commands.
-Main integration remains pending.
+retains the completed transition, verified local Main integration and
+historical retrieval commands.

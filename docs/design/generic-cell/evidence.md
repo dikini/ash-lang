@@ -3,15 +3,22 @@
 This record maps the accepted generic cell transition to product tests.
 The [current specification](../../../spec/README.md)
 defines Ash; this record supplies evidence and no additional permission.
-The complete local checkpoint was verified at
+The original 2026-10-19 local checkpoint was verified at
 `7e80df3e66a6d3074b86f29b7582cadb6696a563`: all seven default stages
 executed freshly, with zero reused stages. The 140 parent test harnesses report
 4,112 passes, zero failures and one optional native calibration study ignored.
-The current real native pair embeds runtime fingerprint
+The then-recorded default-feature native pair embeds runtime fingerprint
 `6270711a6b9492367ecff76a0b1612a1b21f475b44282d9618eabbd08598fcf9`.
 The final receipt below supersedes earlier component-only readiness.
-Main integration has not been authorized or performed. The local
-transition artifacts are retired after checkpoint acceptance, as recorded below.
+The checkpoint is integrated into local `main`; the 2026-10-20 receipt below
+records the fresh integration gate and retained result. Earlier checkpoint,
+acceptance and cleanup observations remain scoped to their recorded commits.
+The transition artifacts were retired after checkpoint acceptance.
+
+The sections from “Observation boundaries” through “Retained cleanup readback
+and local closure” record the 2026-10-19 checkpoint. Their Main authorization,
+retention and default-feature native statements describe that earlier boundary.
+The later local Main receipt follows those historical observations.
 
 ## Observation boundaries
 
@@ -1570,3 +1577,116 @@ evidence Markdown and receives manual authority/link review plus retained
 executed-input equality readback. The raw gate, native and prerequisite
 records remain outside the build cache; this document retains their complete
 command/result/input/tool/log digests and local historical locators.
+
+## Local Main integration — 2026-10-20
+
+The human authorized local Main integration. The unsigned explicit merge
+`849fa6f408ebbfea9a3973bc841e1f693142a788` has parents
+`67ba281d4e93dbfad65e5fd1e6a34c3dfb132686` (refreshed `origin/main`) and
+`9756383d176f23ae325f36cd4d614f8c16994be2` (`codex/generic-cells`). Its tree
+`bf1aad4980c5bd8cf620991198906222d4258cdd` exactly matches the checkpoint.
+The fresh default seven-stage gate ran on that frozen candidate with one Cargo
+job, no reused or filtered stages, the genuine SQLite 3.46.1 static archive
+and all 30 explicit external inputs. All seven stages passed freshly. The 140
+parent harnesses report 4,112 passes, zero failures, one optional calibration
+study ignored and zero filtered tests. Nine nested harness summaries are
+excluded from that total.
+
+The retained records are outside the build cache at
+`.worktrees/generic-cell-main-integration-evidence-20261020/`.
+`launch.json` retains the complete command and explicit observer environment
+overrides;
+`before.json` and `after.json` retain the equal all-file input inventories.
+The gate summary, seven stage receipts/logs and operator receipt have these
+digests:
+
+- `gate/latest.json`: `baee4686a4d58d54f8fdd00d98869834fa45499ae3d3582e4a53b3f7c242ab44`.
+- `operator-receipt.json`: `765fce6576f237828647e8edcd813e04b8f4c2436ab793f611abcdeceb0e0393`.
+
+Format stage receipt SHA-256:
+`58b9b05eab5a933a40bc3bf2810625d9c90608bf5dc5d10856f9d201e65015b1`.
+Log SHA-256:
+`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
+
+Metadata stage receipt SHA-256:
+`c575e783f4b11b61df02d5f03e4c96c6876a2743fc735222de49427e9ca9e717`.
+Log SHA-256:
+`6b5d88f0feb5de4b5f95039b3ffcf291c493b3d92b663658264b8cb2ac8c37a7`.
+
+Check stage receipt SHA-256:
+`13c6db79ee023e124f9a94bbc7f0056448efd0eb7708e48b38c27e7fc1f0a931`.
+Log SHA-256:
+`a51aede1546a3145e51e3669479e1b1cf857d5205d2584b82c62441074ab8217`.
+
+Build stage receipt SHA-256:
+`4cdbd5e7c1e7ab0a9552cce2bc85b58d31e625d0bdff830f6d23d8edfebd69a1`.
+Log SHA-256:
+`d3fa026151c4b518e159c46bba7cf6aabab416d03f0bd6a58bf81de358febb7e`.
+
+Clippy stage receipt SHA-256:
+`895294ccc29a929b5847960c723b0586838d120a72bf6482f8387de1f085e958`.
+Log SHA-256:
+`81a5c30fc6cf1957f02eed17e6920af99e48fbdb76c34a0b6bffb92140bada30`.
+
+Test stage receipt SHA-256:
+`2233e032da5c57bd07c0c006673b291cb760df0b913c996a45d37569f979f81f`.
+Log SHA-256:
+`be5401df5ef9745b6aa1cc6c85c241644052f10af3461cc61a2442e06e3478c9`.
+
+Documentation stage receipt SHA-256:
+`e9c3bd45b2c7570b0433aacb62f1823211d89cf48076c156b56e8eb97f12d3ad`.
+Log SHA-256:
+`dfbfa746f13222f26c1fdc2a354b245dd12d553da64877be1d0754a873ee3bb8`.
+
+Repository files, configuration, tools, runner, canonical environment and all
+external byte/count/mode/symlink/resolved-path records match before and after
+the run. The observer environment explicitly includes `ASH_OWNER_EVIDENCE_DIR`;
+this is fresh evidence. The earlier checkpoint run used a different observer
+environment.
+
+The fresh C06 native pair embeds runtime fingerprint
+`1726d5f5b691a5d5ec0dc8a2e435e907fa43412284ebae7ff4e7a035cdc704e2`
+for the all-feature, resource-calibration-matched compiler/runtime configuration.
+The permitted host returns `Completed(42, RetainedError(()))` with parent final
+byte 99; the denied later borrow exits 1 before native entry with parent byte
+0. Both acquire parent64/child4, retain child4 and release child4 then parent64
+exactly once. `native-readback.json` SHA-256 is
+`30d089c7acdb76341d3d4e14d673a3f17e32648eb29edf39f8094ee871612f42`.
+It records identities for all 19 retained files per host, case-preimages,
+native compile/link
+commands and actual resolved-library pins. Companion `.comment`, ELF
+program-header/dynamic and symbol logs retain compiler, interpreter and linkage
+observations. The earlier default-feature native receipts remain historical;
+missing old temporary artifacts supply no current equality proof.
+
+The genuine archive SHA-256 remains
+`7c2b4dc4aa149543e60252b5fffcb62088398470a09885cebb5e3120459c0617`.
+The retained ZIP, C, header and object match the earlier five byte pins; all
+selected C/Rust tools, linkers and shared-library bytes match the 30-input
+inventory. Fresh symbol and ELF readback accompanies the prerequisite record.
+The old temporary build receipt was unavailable and is not claimed recovered.
+
+Independent reviewer `/root/merge_reviewer` cleared the frozen candidate and
+raw gate/native evidence; coordinator `/root` accepted those results before
+authorizing ref movement. The atomic ref transaction preserved the old local
+Main tip `3e6326390cb182b211328682df9591d5c0311fc3` at
+`archive/planning/main-before-generic-cells-20261020` and moved local `main`
+to `849fa6f408ebbfea9a3973bc841e1f693142a788`. Its six unique planning
+commits were not merged into product history. `main-retention.json` SHA-256 is
+`883bf981bf10249f0138c138047c03d1c1b352507156ab68a10bd30ee37bd0a3`.
+The clean retained tree, merge parents and absence of a commit signature were
+read back. The existing product checkout switched to Main at the same tree;
+the unrelated planning checkout's branch, HEAD, dirty-file bytes and status
+remain equal. The checkpoint branch remains at `9756383d`, and the delivery
+branch remains at `849fa6f4`. `origin/main` at the final pre-merge fetch was
+`67ba281d`. No push, PR, branch/worktree/cache retirement or DN-0054 work is
+included. DN-0054 remains byte-identical at SHA-256
+`c7a596a9fbd84029adfd5333af02594e1a82eea30c548947be362f722cd1e342`.
+
+This acceptance update changes only five Markdown documents. Its manual
+writing, link and authority review and retained executed-input equality
+readback cover the prose delta; the full gate remains bound to the merge tree.
+The current specification owns the integrated language rules. This record
+closes the formerly conditional Main integration obligation while preserving
+the historical checkpoint boundaries and all resource-scope lifetime, strict
+payload ordering, resource-cycle, payload-crossing and native-owner protections.
