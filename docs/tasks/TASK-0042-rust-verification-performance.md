@@ -7,7 +7,48 @@
 
 > This task organizes authorized tooling work. It does not define Ash semantics.
 
-## Dependencies
+## Current closure assignment — 2026-10-20
+
+The human assigned completion of the controlled old-six/revised-seven
+comparison, independent review, updated records and task/plan retirement.
+Developer `/root/merge_developer` is the sole writer and Cargo operator;
+`/root/merge_reviewer` reviews independently and `/root` owns acceptance.
+Requested developer model/effort is `gpt-6.1-sol` / `medium`; no independent
+runtime API exposes effective settings or exact model runtime.
+
+PR #18 is integrated through `4716b960` and Main delivery `354c76b3`.
+The implementation and its connected regressions are retained; the remaining
+whole-task obligation is the controlled command-plan comparison. The
+historical measurements below are separate observations, not that comparison.
+
+Use branch `codex/task0042-closure` in the existing physical checkout
+`.worktree/generic-cells`, based on local Main `3bde9db1`. Preserve its
+compatible `target` and `target/ffi-native-hosts` caches. The old ffi checkout and PR11
+cache paths below are historical and are not continuation points. Keep the
+retained generic-cell integration evidence unchanged. DN-0054 remains separate.
+
+Before execution, retain an exact recipe/operator outside the build cache and
+obtain independent recipe review and PM assignment. Compare the command plans
+serially on the same frozen current sources, configuration, tools and native
+inputs, with one Cargo job and demonstrated comparable warm cache conditions.
+Keep subprocess totals, actual runner/input/evidence overhead and any reuse
+witness separate. One ordered sample supports only its bounded observation.
+
+The measured revised-seven leg is the required fresh complete checkpoint and
+pre-Main code gate: seven executed stages, zero reused, complete outer target
+inventory and matching native/image proof, including C06 and mandatory static
+SQLite inputs. Its trigger is the reviewed frozen recipe and PM go after warm
+preparation. Later completion/retirement prose uses manual Markdown, link and
+authority review plus demonstrated executed-input equality. Changed executable
+or configuration inputs require refreshed affected evidence before integration.
+
+The human subsequently authorized an unsigned local Main merge and syncing
+`origin/main` after closure review. PM assigns that final integration and
+non-forced push explicitly after the required evidence; no other remote
+publication is in scope. Main remains unchanged during comparison delivery.
+
+## Historical implementation assignment
+
 
 The user authorized implementation and coordination with the ffi-ash team.
 Continue PR #18 on its existing `codex/verification-reuse` branch in the assigned
@@ -132,7 +173,7 @@ Neither the fresh gate nor exact reuse supplies the deferred controlled
 old/revised comparison or a causal speedup claim. TASK-0042 remains active after
 this partial delivery; no ffi criterion is completed by the tooling evidence.
 
-## Operating and cleanup handoff
+## Historical operating and cleanup handoff
 
 Use one branch per PR, one physical product checkout and one shared build set.
 The developer is the sole writer and Cargo operator; use one job and sequential
