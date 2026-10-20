@@ -9,7 +9,7 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-- [TASK-0042: Rust verification performance](TASK-0042-rust-verification-performance.md)
+No active implementation tasks.
 
 The generic cell product checkpoint is integrated into local `main`. Its
 [case map, verification and local history](../design/generic-cell/evidence.md)
@@ -24,4 +24,7 @@ TASK-0041 is superseded for closure coordination by the existing
 The [exact task history](https://github.com/dikini/ash-lang/blob/7471200efb1bd90782fcad81be54b992fbd92982/docs/tasks/TASK-0041-ffi-ash-milestone-closure.md)
 preserves its work and findings. The handoff carries all final Main verification,
 acceptance and checkpoint-lifecycle obligations; supersession does not complete
-or waive them. TASK-0042 and its execution plan remain active and partial.
+or waive them. The
+[TASK-0042 performance record](../project/verification-performance-2026-10-20.md)
+retains the completed controlled comparison and tooling findings. The completed
+task and its owned execution plan are retired; Git retains their history.

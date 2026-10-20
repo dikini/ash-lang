@@ -4,7 +4,7 @@
 - Status: accepted
 - Related: [AD-0001](AD-0001-implementation-environment.md),
   [AD-0011](AD-0011-milestone-worktree-lifecycle.md),
-  [TASK-0042](../tasks/TASK-0042-rust-verification-performance.md)
+  [performance record](../project/verification-performance-2026-10-20.md)
 
 ## Decision
 
