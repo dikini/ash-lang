@@ -101,6 +101,59 @@ the authenticated lexical provider, whose ordinary method functions request
 the corresponding `Ops<R>` operations. This is not a generic provider registry
 or an ordinary source `with` declaration. Pure Core admits no resource carrier.
 
+The generic-cell foundation reuses this carrier. Its authenticated builtin
+origin selects the separate family; its handle type retains the complete
+`Cell<R,T>` application, with owned position zero. The initializer retains `T`,
+and generated provider methods retain the matching `Provider<R,T>` and
+`Ops<R,T>` arguments. Independent ordinary validation reconstructs these facts,
+checks initializer/body types, evidence, origins and exact outward rows, and
+then reconstructs generic dependency admission. Copying and row replay retain
+the complete handle type and exact effect instance.
+
+Private program images distinguish the generic builtin module role from an
+ordinary module and authenticate its canonical source bytes. They retain the
+complete carrier through the existing handle, child, origin and acquisition
+records. Restoration performs the same ordinary and dependency checks. No
+restored image or body-free source summary gains unchecked contents authority.
+Pure computational signatures retain conditional relationships; Effect scopes
+require their independently reconstructed control/value proof.
+
+The existing finite capture graphs retain immutable value ports and ordered
+control states. Generic cell states hold current root alternatives separately
+from the native monotone retained-data relation. Reads link their result ports
+to those current roots; replacements change successor states without modifying
+earlier result edges. Joins retain all possible targets and payloads. Actual
+builtin dispatch intersects exact effect matching with access-owner occurrences;
+nonmatching alternatives continue outward. Source handlers retain their ordinary
+selected-clause and continuation behavior.
+
+Acquisition fixes each activation's enclosure relation. Focused reconstruction
+introduces a fresh designated owner and checks all actual replacements against
+that relation, including after capture and restoration. Recursive context
+folding cannot supply an enclosure proof merely because two symbolic owners
+differ. Original free-input ports, frozen before the fresh owner exists, retain
+conditional predecessor-value relationships. Their validity follows from the
+original call/control environment and ordinary crossing/completion checks;
+subtree binders, absent future inputs and the fresh owner's own access cannot
+supply such a witness. Original owner atoms remain available for subsequent
+caller and escape checks.
+
+Public helper summaries retain the authenticated finite equations and ordered
+control relationships, with conditional target/payload ports. Actual imports
+and Type/Row/owner substitutions must discharge those relationships. Linked
+Core validation builds them again from actual admitted Core. Copying,
+transforms and image restoration repeat that reconstruction. No source-summary
+boolean substitutes for it. All graph insertion, state copying, joins and
+recursive replay charge their owning work ledger before proportional work;
+refusal publishes no partial checked module or permission.
+
+Execution admission remains separate from dependency proof. Interpreted and
+generated execution use the same resource machine after independent validation.
+A generic boundary retains its complete instantiated `Ops<R,T>` authority and
+an ordinary shared value root. Operation selection authenticates that complete
+instance and the live activation before reading or replacing the root. No
+runtime activation is allocated by Core validation or private image restoration.
+
 The carrier selects the closed cell API and retains the body's result type.
 Independent linked and Core validation authenticate the exact builtin cell,
 sealed provider, generated methods, ownership, origins and result/row relation.

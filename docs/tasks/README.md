@@ -11,6 +11,12 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 - [TASK-0042: Rust verification performance](TASK-0042-rust-verification-performance.md)
 
+The generic cell product checkpoint is retained locally. Its
+[case map, verification and local history](../design/generic-cell/evidence.md)
+record the completed transition and exact scope. Main integration remains
+pending. [DN-0054](../design/DN-0054-base-lexical-region-memory-contracts.md)
+remains separate design work.
+
 ## ffi-ash closure coordination
 
 TASK-0041 is superseded for closure coordination by the existing

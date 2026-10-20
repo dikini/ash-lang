@@ -90,3 +90,14 @@ fn deeply_nested_acquisitions_have_a_syntax_owned_limit_and_retry() {
     }
     assert!(parses("resource cell<R> c = 41 {\n42\n}"));
 }
+
+#[test]
+fn generic_cell_reuses_named_resource_grammar_and_primary_initializer() {
+    for expression in [
+        "resource Cell.Cell<R, Int> c = 41 {\n42\n}",
+        "resource Access<R, (Int -> Int)> c = (make ()) {\n42\n}",
+    ] {
+        assert!(parses(expression), "{expression}");
+    }
+    assert!(!parses("resource Cell.Cell<R, Int> c = make () {\n42\n}"));
+}

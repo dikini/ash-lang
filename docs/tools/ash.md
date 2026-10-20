@@ -350,11 +350,13 @@ once.
 `import @builtin.cell as Cell` loads the compiler-owned cell API without a
 `--root` option or filesystem lookup. `builtin` cannot be configured as a root:
 `--root builtin=path` reports `invocation.reserved-root` before inspecting
-configured paths. `@builtin.cell`, `@builtin.bytes`, `@builtin.string` and
+configured paths. `@builtin.cell`, `@builtin.generic_cell`, `@builtin.bytes`,
+`@builtin.string` and
 `@builtin.foreign` are the fixed modules beneath this root; another path
 reports `module.unknown-builtin`. Ordinary aliases, targeted imports and
-facade re-exports preserve the API's identity, but a module that acquires a
-resource must directly import its selected builtin module.
+facade re-exports preserve the API's identity. Legacy lowercase `resource cell`
+acquisition requires a direct builtin import. Named generic family acquisition
+follows its defining identity through aliases and facades.
 
 ## Complete module-tree example
 
@@ -490,6 +492,26 @@ Run it with `ash entry.ash`, without a builtin root option. It prints
 `42 : Int` followed by a newline and releases the cell before observation.
 Handles and captured cell access cannot escape the scope; the returned integer
 is an ordinary copy.
+
+The separate `@builtin.generic_cell` API stores an ordinary fixed-type value.
+The executable test `generic_cell_documentation_example_has_exact_cli_output`
+checks this program:
+
+```ash
+import @builtin.generic_cell as Cell
+
+main : Unit -> Bool
+main () = resource Cell.Cell<R,Bool> c = false {
+    let _ = Cell.write (c, true)
+    Cell.read c
+}
+```
+
+It prints `true : Bool` followed by a newline. Reads preserve ordinary value
+sharing and earlier snapshots; replacing the slot does not change an earlier
+read. Handles and values depending on the scope still cannot escape it.
+Interpreted execution and generated executables require the same independent
+source/Core dependency proof.
 
 The executable test `native_buffer_documentation_example_has_exact_cli_output`
 checks this complete native-buffer program:

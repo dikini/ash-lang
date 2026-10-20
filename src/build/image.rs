@@ -792,6 +792,8 @@ fn encode_program<'work, F: crate::core::dialect::CoreOperationFamily>(
             SourceRecord {
                 role: if module.is_builtin_foreign() {
                     ModuleRoleRecord::BuiltinForeign
+                } else if module.is_builtin_generic_cell() {
+                    ModuleRoleRecord::BuiltinGenericCell
                 } else if module.is_builtin_cell() {
                     ModuleRoleRecord::BuiltinCell
                 } else if module.is_builtin_string() {
@@ -895,7 +897,7 @@ impl Encoder<'_> {
         acquisition: crate::resolved::ResourceAcquisition,
     ) -> Result<CellAcquisitionRecord, ImageFailure> {
         let crate::resolved::ResourceMethods::Cell([read, write]) = acquisition.methods;
-        if !acquisition.builtin.is_builtin_cell() {
+        if !acquisition.builtin.is_builtin_resource() {
             return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
         }
         Ok(CellAcquisitionRecord {
@@ -2903,7 +2905,7 @@ impl PureImage {
                     }
                     crate::module::ImageModuleRole::BuiltinBytes
                 }
-                ModuleRoleRecord::BuiltinCell => {
+                ModuleRoleRecord::BuiltinCell | ModuleRoleRecord::BuiltinGenericCell => {
                     return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
                 }
                 ModuleRoleRecord::BuiltinForeign => {
@@ -3553,6 +3555,293 @@ impl Decoder<'_> {
 mod tests {
     use super::*;
     use crate::sqlite_output_order;
+
+    #[test]
+    fn generic_cell_private_image_reconstructs_dependency_proof_and_executes() {
+        let (donor, sources) = crate::core::validate::generic_cell_validated_fixture_for_test();
+        let provenance = donor
+            .registry()
+            .type_variables()
+            .map(|parameter| {
+                let module = parameter.id.module().unwrap();
+                let source = sources
+                    .iter()
+                    .find(|source| source.id() == parameter.origin.primary_span().source())
+                    .unwrap();
+                (module, std::sync::Arc::new(source.clone()))
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let build = encode_effect_for_build(
+            &donor,
+            &provenance,
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        assert!(
+            build
+                .image
+                .sources
+                .iter()
+                .any(|source| matches!(source.role, ModuleRoleRecord::BuiltinGenericCell))
+        );
+        let bytes = build
+            .image
+            .encode_bytes(&mut TypeWorkBudget::default())
+            .unwrap();
+        let expected = build
+            .image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        drop(build);
+        drop(donor);
+        drop(sources);
+        let mut work = TypeWorkBudget::default();
+        let decoded = PureImage::decode_bytes(&bytes, &mut work).unwrap();
+        decoded
+            .admit_expected_native_facts(&expected, &mut work)
+            .unwrap();
+        let restored = decoded.restore_effect(&mut work).unwrap();
+        assert_eq!(
+            crate::eval::evaluate_effect(&restored.program)
+                .unwrap()
+                .value
+                .to_string(),
+            "42"
+        );
+    }
+
+    #[test]
+    fn generic_cell_imported_flow_images_rebuild_with_exact_short_and_retry_work() {
+        for (source, helper, value) in [
+            (
+                include_str!("../../tests/fixtures/generic-cell/snapshot-entry.ash"),
+                include_str!("../../tests/fixtures/generic-cell/dependency-helper.ash"),
+                "7",
+            ),
+            (
+                include_str!("../../tests/fixtures/generic-cell/recursive-entry.ash"),
+                include_str!("../../tests/fixtures/generic-cell/recursive-helper.ash"),
+                "9",
+            ),
+            (
+                include_str!("../../tests/fixtures/generic-cell/handler-snapshot-entry.ash"),
+                include_str!("../../tests/fixtures/generic-cell/dependency-helper.ash"),
+                "7",
+            ),
+            (
+                include_str!("../../tests/fixtures/generic-cell/tick-entry.ash"),
+                "",
+                "99",
+            ),
+            (
+                include_str!("../../tests/fixtures/generic-cell/reply-mutation-entry.ash"),
+                "",
+                "(7, 42)",
+            ),
+            (
+                include_str!("../../tests/fixtures/generic-cell/intercept-entry.ash"),
+                include_str!("../../tests/fixtures/generic-cell/intercept-helper.ash"),
+                "7",
+            ),
+            (
+                include_str!("../../tests/fixtures/generic-cell/handler-read-entry.ash"),
+                "",
+                "99",
+            ),
+            (
+                include_str!("../../tests/fixtures/generic-cell/handler-write-entry.ash"),
+                "",
+                "41",
+            ),
+            (
+                include_str!("../../tests/fixtures/generic-cell/handler-forward-entry.ash"),
+                "",
+                "42",
+            ),
+        ] {
+            let (program, sources, relation) =
+                crate::core::validate::generic_cell_source_fixture_for_test(source, Some(helper));
+            let program = if source.contains("90 + 9") {
+                let refs = sources.iter().collect::<Vec<_>>();
+                let folded =
+                    crate::core::transform::fold_effect_literal_primitives(&program).unwrap();
+                crate::core::validate_effect_modules(folded, &refs, &relation).unwrap()
+            } else {
+                program
+            };
+            let provenance = relation
+                .iter()
+                .map(|(module, id)| {
+                    (
+                        *module,
+                        Arc::new(
+                            sources
+                                .iter()
+                                .find(|source| source.id() == *id)
+                                .unwrap()
+                                .clone(),
+                        ),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let build = encode_effect_for_build(
+                &program,
+                &provenance,
+                super::super::NATIVE_TARGET,
+                &mut TypeWorkBudget::default(),
+            )
+            .unwrap();
+            let bytes = build
+                .image
+                .encode_bytes(&mut TypeWorkBudget::default())
+                .unwrap();
+            let expected = build
+                .image
+                .encode_native_expectations(&mut TypeWorkBudget::default())
+                .unwrap();
+            drop(build);
+            drop(program);
+            drop(provenance);
+            drop(sources);
+            let restore = |work: &mut TypeWorkBudget| {
+                let image = PureImage::decode_bytes(&bytes, work)?;
+                image.admit_expected_native_facts(&expected, work)?;
+                image.restore_effect(work)
+            };
+            let mut measured = TypeWorkBudget::default();
+            let restored = restore(&mut measured).unwrap();
+            assert_eq!(
+                crate::eval::evaluate_effect(&restored.program)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                value
+            );
+            drop(restored);
+            let mut short = TypeWorkBudget::with_limit(measured.used() - 1);
+            assert!(restore(&mut short).is_err());
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(measured.used());
+                drop(restore(&mut exact).unwrap());
+                assert_eq!(exact.used(), measured.used());
+            }
+        }
+    }
+
+    #[test]
+    fn generic_cell_image_reconstructs_hidden_capture_instead_of_trusting_prior_proof() {
+        let (program, sources, relation) =
+            crate::core::validate::generic_cell_source_fixture_for_test(
+                include_str!("../../tests/fixtures/generic-cell/retention-entry.ash"),
+                Some(include_str!(
+                    "../../tests/fixtures/generic-cell/dependency-helper.ash"
+                )),
+            );
+        let provenance = relation
+            .iter()
+            .map(|(module, id)| {
+                (
+                    *module,
+                    Arc::new(
+                        sources
+                            .iter()
+                            .find(|source| source.id() == *id)
+                            .unwrap()
+                            .clone(),
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+        let build = encode_effect_for_build(
+            &program,
+            &provenance,
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        let expected = build
+            .image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        let mut image = build.image;
+        let handles = image
+            .nodes
+            .iter()
+            .filter_map(|node| match node.tag {
+                NodeTag::CellScope {
+                    handle,
+                    initializer,
+                    ..
+                } => Some((
+                    handle,
+                    matches!(image.nodes[initializer as usize].tag, NodeTag::Integer(41)),
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(handles.len(), 2);
+        let scalar = image.binders[handles.iter().find(|(_, scalar)| *scalar).unwrap().0 as usize];
+        let function =
+            image.binders[handles.iter().find(|(_, scalar)| !*scalar).unwrap().0 as usize];
+        let same_binder = |left, right| match (left, right) {
+            (
+                BinderIdentity::Resolved {
+                    module: a,
+                    local: b,
+                },
+                BinderIdentity::Resolved {
+                    module: c,
+                    local: d,
+                },
+            ) => a == c && b == d,
+            (BinderIdentity::Generated(a), BinderIdentity::Generated(b)) => a == b,
+            _ => false,
+        };
+        let changed = image
+            .nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, node)| {
+                matches!(node.tag, NodeTag::Variable(id) if same_binder(id,scalar.id))
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(changed.len(), 1);
+        let changed = changed[0];
+        image.nodes[changed].tag = NodeTag::Variable(function.id);
+        image.nodes[changed].ty = function.ty;
+        let mut binders = 0;
+        for node in &image.nodes {
+            if let NodeTag::Bind {
+                binder,
+                initializer,
+                ..
+            } = node.tag
+                && initializer as usize == changed
+            {
+                image.binders[binder as usize].ty = function.ty;
+                binders += 1;
+            }
+        }
+        assert_eq!(binders, 1);
+        let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
+        let decoded = PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+        decoded
+            .admit_expected_native_facts(&expected, &mut TypeWorkBudget::default())
+            .unwrap();
+        let error = match decoded.restore_effect(&mut TypeWorkBudget::default()) {
+            Err(error) => error,
+            Ok(_) => panic!("changed hidden retention must fail independent image validation"),
+        };
+        assert!(
+            matches!(error, ImageFailure::Validation(ref error)
+            if error.reason() == crate::core::ValidationReason::ResourceEscape),
+            "{error:?}"
+        );
+    }
 
     #[test]
     fn prospective_preparation_source_and_node_sizing_is_paid_and_carried() {
@@ -6687,6 +6976,7 @@ enum ModuleRoleRecord {
     Ordinary,
     BuiltinForeign,
     BuiltinCell,
+    BuiltinGenericCell,
     BuiltinString,
     BuiltinBytes,
 }
@@ -7422,6 +7712,7 @@ impl Wire for ModuleRoleRecord {
             Self::BuiltinCell => 2,
             Self::BuiltinString => 3,
             Self::BuiltinBytes => 4,
+            Self::BuiltinGenericCell => 5,
         }
         .write(writer)
     }
@@ -7432,6 +7723,7 @@ impl Wire for ModuleRoleRecord {
             2 => Ok(Self::BuiltinCell),
             3 => Ok(Self::BuiltinString),
             4 => Ok(Self::BuiltinBytes),
+            5 => Ok(Self::BuiltinGenericCell),
             _ => Err(ImageFailure::InvalidEncoding),
         }
     }
@@ -11606,6 +11898,7 @@ impl PureImage {
         };
         let mut seen_common = false;
         let mut seen_cell = false;
+        let mut seen_generic_cell = false;
         let mut seen_string = false;
         let mut seen_bytes = false;
         for record in &self.sources {
@@ -11627,6 +11920,12 @@ impl PureImage {
                         return Err(ImageFailure::InvalidRecord);
                     }
                     crate::module::ImageModuleRole::BuiltinBytes
+                }
+                ModuleRoleRecord::BuiltinGenericCell => {
+                    if std::mem::replace(&mut seen_generic_cell, true) {
+                        return Err(ImageFailure::InvalidRecord);
+                    }
+                    crate::module::ImageModuleRole::BuiltinGenericCell
                 }
                 ModuleRoleRecord::BuiltinCell => {
                     if std::mem::replace(&mut seen_cell, true) {
@@ -11748,7 +12047,7 @@ impl Decoder<'_> {
         record: CellAcquisitionRecord,
     ) -> Result<crate::resolved::ResourceAcquisition, ImageFailure> {
         let builtin = *get(&self.modules, record.module)?;
-        if !builtin.is_builtin_cell() {
+        if !builtin.is_builtin_resource() {
             return Err(ImageFailure::InvalidRecord);
         }
         Ok(crate::resolved::ResourceAcquisition {
@@ -12419,7 +12718,7 @@ pub(crate) fn encode_effect_for_build(
             crate::core::EffectExprKind::Operation(crate::core::EffectOperation::Resource(
                 scope,
             )) => {
-                if !scope.acquisition.builtin.is_builtin_cell() {
+                if !scope.acquisition.builtin.is_builtin_resource() {
                     return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata).into());
                 }
                 push(&mut identities, scope.acquisition.identity, work)?;

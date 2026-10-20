@@ -11686,9 +11686,126 @@ impl Resolver {
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn start_builtin_resource<'a>(
+        &mut self,
+        builtin: ModuleId,
+        payload: ResolvedCellPayloadOwner,
+        identity_source: &crate::surface::SurfaceName,
+        handle_source: &crate::surface::SurfaceName,
+        body: &'a SurfaceBlock,
+        span: Span,
+        tasks: &mut ResolveTaskBuffer<'a>,
+        expressions: &mut ResolvedExpressionBuffer,
+    ) -> Result<(), ResolveError> {
+        let initializer = expressions.pop_owned().ok_or_else(|| {
+            error(
+                ResolveReason::InternalState,
+                span,
+                "resource initializer is missing",
+            )
+            .with_context(ResolveContext::WorkState {
+                part: "resource-initializer",
+                problem: "missing",
+            })
+        })?;
+        let identity = self.allocate_type_variable(identity_source, None, Kind::Type)?;
+        let handle = self.allocate_binder(&handle_source.text, handle_source.span)?;
+        self.type_work.charge(4).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "resource scope retention exceeded its budget",
+            )
+        })?;
+        self.lexical_method_parameters
+            .0
+            .try_reserve(1)
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "resource identity retention could not be reserved",
+                )
+            })?;
+        let retained = self.clone_type_variable_for_retention(
+            &identity,
+            span,
+            "resource identity retention exceeded its budget",
+        )?;
+        self.lexical_method_parameters.push(retained);
+        let scope_checkpoint = self.scopes.len();
+        let type_scope_checkpoint = self.type_scopes.len();
+        let mut terms = HashMap::new();
+        terms.try_reserve(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "resource handle scope could not be reserved",
+            )
+        })?;
+        terms.insert(
+            handle.spelling.clone(),
+            ResolvedTermBinding::local(ResolvedTermName::Global(handle.id)),
+        );
+        let mut types = HashMap::new();
+        types.try_reserve(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "resource type scope could not be reserved",
+            )
+        })?;
+        types.insert(identity.spelling.clone(), identity.id);
+        self.scopes.try_reserve(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "resource scope could not be reserved",
+            )
+        })?;
+        self.type_scopes.try_reserve(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "resource type scope could not be reserved",
+            )
+        })?;
+        self.scopes.push(terms);
+        self.type_scopes.push(types);
+        tasks.0.try_reserve(2).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "resource body scheduling could not be reserved",
+            )
+        })?;
+        self.type_work.charge(1).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "resource initializer ownership exceeded its type-work budget",
+            )
+        })?;
+        tasks.push(ResolveTask::FinishResource {
+            builtin,
+            payload,
+            identity,
+            handle,
+            initializer: Box::new(initializer),
+            scope_checkpoint,
+            type_scope_checkpoint,
+            span,
+        });
+        tasks.push(ResolveTask::VisitBlock(body));
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn finish_resource_expression(
         &mut self,
-        kind: crate::surface::SurfaceResourceKind,
+        builtin: ModuleId,
+        payload: ResolvedCellPayloadOwner,
         identity: ResolvedTypeVariable,
         handle: Binder,
         initializer: ResolvedExpressionOwner,
@@ -11699,27 +11816,12 @@ impl Resolver {
             ResolvedEffectInstance, ResolvedPerformExpr, ResolvedResourceExpr, ResourceAcquisition,
             ResourceApi,
         };
-        let builtin = self.resource_builtin(kind).ok_or_else(|| {
-            error(
-                ResolveReason::InternalState,
-                span,
-                "resource builtin origin is missing",
-            )
-            .with_context(ResolveContext::WorkState {
-                part: "resource-builtin-origin",
-                problem: "missing",
-            })
-        })?;
         let api = ResourceApi::for_module(builtin).ok_or_else(|| {
             error(
                 ResolveReason::InternalState,
                 span,
                 "resource builtin origin is invalid",
             )
-            .with_context(ResolveContext::WorkState {
-                part: "resource-builtin-origin",
-                problem: "wrong",
-            })
         })?;
         // Each fixed method retains its forwarding equation, pattern, operand
         // and effect argument alongside one complete provider application.
@@ -11790,7 +11892,12 @@ impl Resolver {
                         argument_provenance: Box::new([]),
                         instance: crate::types::EffectInstance::from_type_arguments_with_budget(
                             api.ops(),
-                            Box::new([Type::Variable(identity.id)]),
+                            if let Some(payload) = payload.as_ref() {
+                                Box::new([Type::Variable(identity.id), match &payload.ty {
+                                    crate::types::KindedArgument::TypeArg(ty) => crate::types::clone_type_with_budget(ty, &mut self.type_work).map_err(|()| error(ResolveReason::TypeResourceExhausted, span, "generic payload retention exceeded its budget"))?,
+                                    _ => return Err(error(ResolveReason::TypeKind, payload.span, "cell payload must have kind Type")),
+                                }])
+                            } else { Box::new([Type::Variable(identity.id)]) },
                             &mut self.type_work,
                         )
                         .map_err(|()| {
@@ -11852,15 +11959,22 @@ impl Resolver {
                     spelling: "Provider".to_owned(),
                     origin: Origin::Source(span),
                 },
-                arguments: Box::new([crate::resolved::ResolvedOwnerArgument {
-                    ty: crate::types::KindedArgument::TypeArg(Type::Variable(identity.id)),
-                    provenance: crate::resolved::ResolvedTypeProvenance::new(
-                        vec![crate::resolved::ResolvedTypeProvenanceNode::Fact(span)],
-                        0,
-                    ),
-                    origin: Origin::Source(span),
-                    span,
-                }]),
+                arguments: {
+                    let mut arguments = Vec::with_capacity(api.argument_count());
+                    arguments.push(crate::resolved::ResolvedOwnerArgument {
+                        ty: crate::types::KindedArgument::TypeArg(Type::Variable(identity.id)),
+                        provenance: crate::resolved::ResolvedTypeProvenance::new(
+                            vec![crate::resolved::ResolvedTypeProvenanceNode::Fact(span)],
+                            0,
+                        ),
+                        origin: Origin::Source(span),
+                        span,
+                    });
+                    if let Some(payload) = payload.into_inner() {
+                        arguments.push(payload);
+                    }
+                    arguments.into_boxed_slice()
+                },
                 span,
             },
             method_groups: groups.into_boxed_slice(),
@@ -12622,108 +12736,83 @@ impl Resolver {
                 self.finish_provider_resource(*pending, expressions)?;
             }
             ResolveTask::ResourceInitializer { source, span } => {
-                let initializer = expressions.pop_owned().ok_or_else(|| {
+                let builtin = self.resource_builtin(source.kind).ok_or_else(|| {
                     error(
                         ResolveReason::InternalState,
                         span,
-                        "resource initializer is missing",
-                    )
-                    .with_context(ResolveContext::WorkState {
-                        part: "resource-initializer",
-                        problem: "missing",
-                    })
-                })?;
-                let identity = self.allocate_type_variable(&source.identity, None, Kind::Type)?;
-                let handle = self.allocate_binder(&source.handle.text, source.handle.span)?;
-                self.type_work.charge(4).map_err(|()| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        span,
-                        "resource scope retention exceeded its budget",
+                        "missing resource builtin",
                     )
                 })?;
-                self.lexical_method_parameters
-                    .0
-                    .try_reserve(1)
-                    .map_err(|_| {
-                        error(
-                            ResolveReason::TypeResourceExhausted,
-                            span,
-                            "resource identity retention could not be reserved",
-                        )
-                    })?;
-                let retained = self.clone_type_variable_for_retention(
-                    &identity,
+                self.start_builtin_resource(
+                    builtin,
+                    ResolvedCellPayloadOwner(None),
+                    &source.identity,
+                    &source.handle,
+                    &source.body,
                     span,
-                    "resource identity retention exceeded its budget",
+                    tasks,
+                    expressions,
                 )?;
-                self.lexical_method_parameters.push(retained);
-                let scope_checkpoint = self.scopes.len();
-                let type_scope_checkpoint = self.type_scopes.len();
-                let mut terms = HashMap::new();
-                terms.try_reserve(1).map_err(|_| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
+            }
+            ResolveTask::GenericResourceInitializer {
+                source,
+                builtin,
+                span,
+            } => {
+                if source.arguments.len() != 2 {
+                    return Err(error(
+                        ResolveReason::TypeKind,
                         span,
-                        "resource handle scope could not be reserved",
-                    )
-                })?;
-                terms.insert(
-                    handle.spelling.clone(),
-                    ResolvedTermBinding::local(ResolvedTermName::Global(handle.id)),
-                );
-                let mut types = HashMap::new();
-                types.try_reserve(1).map_err(|_| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        span,
-                        "resource type scope could not be reserved",
-                    )
-                })?;
-                types.insert(identity.spelling.clone(), identity.id);
-                self.scopes.try_reserve(1).map_err(|_| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        span,
-                        "resource scope could not be reserved",
-                    )
-                })?;
-                self.type_scopes.try_reserve(1).map_err(|_| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        span,
-                        "resource type scope could not be reserved",
-                    )
-                })?;
-                self.scopes.push(terms);
-                self.type_scopes.push(types);
-                tasks.0.try_reserve(2).map_err(|_| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        span,
-                        "resource body scheduling could not be reserved",
-                    )
-                })?;
+                        "generic cell requires two Type arguments",
+                    ));
+                }
+                let SurfaceTypeKind::Named(SurfaceReference::Unqualified(identity)) =
+                    &source.arguments[0].kind
+                else {
+                    return Err(error(
+                        ResolveReason::TypeKind,
+                        source.arguments[0].span,
+                        "cell owner must be a fresh unqualified Type identity",
+                    ));
+                };
                 self.type_work.charge(1).map_err(|()| {
                     error(
                         ResolveReason::TypeResourceExhausted,
                         span,
-                        "resource initializer ownership exceeded its type-work budget",
+                        "generic payload ownership exceeded its budget",
                     )
                 })?;
-                tasks.push(ResolveTask::FinishResource {
-                    kind: source.kind,
+                let payload = ResolvedCellPayloadOwner(Some(Box::new(
+                    self.resolve_owner_argument(&source.arguments[1])?,
+                )));
+                let argument = payload.as_ref().ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "generic payload is missing",
+                    )
+                })?;
+                if !matches!(argument.ty, crate::types::KindedArgument::TypeArg(_)) {
+                    return Err(error(
+                        ResolveReason::TypeKind,
+                        argument.span,
+                        "cell payload must have kind Type",
+                    ));
+                }
+                self.start_builtin_resource(
+                    builtin,
+                    payload,
                     identity,
-                    handle,
-                    initializer: Box::new(initializer),
-                    scope_checkpoint,
-                    type_scope_checkpoint,
+                    &source.handle,
+                    &source.body,
                     span,
-                });
-                tasks.push(ResolveTask::VisitBlock(&source.body));
+                    tasks,
+                    expressions,
+                )?;
             }
             ResolveTask::FinishResource {
-                kind,
+                builtin,
+                payload,
                 identity,
                 handle,
                 initializer,
@@ -12745,7 +12834,8 @@ impl Resolver {
                 self.scopes.truncate(scope_checkpoint);
                 self.type_scopes.truncate(type_scope_checkpoint);
                 expressions.push(self.finish_resource_expression(
-                    kind,
+                    builtin,
+                    payload,
                     identity,
                     handle,
                     *initializer,
@@ -13560,6 +13650,32 @@ impl Resolver {
             }
             SurfaceExprKind::ProviderResource(source) => {
                 let family = self.nominal_reference(&source.family)?;
+                if let Some(api) = crate::resolved::ResourceApi::for_module(family.id.module())
+                    && api.generic()
+                    && family.id == api.handle()
+                {
+                    self.type_work.charge(2).map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            expression.span,
+                            "generic cell scheduling exceeded its budget",
+                        )
+                    })?;
+                    tasks.0.try_reserve(2).map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            expression.span,
+                            "generic cell tasks could not reserve storage",
+                        )
+                    })?;
+                    tasks.push(ResolveTask::GenericResourceInitializer {
+                        source,
+                        builtin: family.id.module(),
+                        span: expression.span,
+                    });
+                    tasks.push(ResolveTask::VisitExpr(&source.initializer));
+                    return Ok(());
+                }
                 let definition =
                     self.resource_families
                         .get(&family.id)
@@ -13898,6 +14014,27 @@ impl Resolver {
     }
 }
 
+/// Keeps the payload's type/row and origin iterative when a queued phase fails.
+struct ResolvedCellPayloadOwner(Option<Box<crate::resolved::ResolvedOwnerArgument>>);
+impl std::ops::Deref for ResolvedCellPayloadOwner {
+    type Target = Option<Box<crate::resolved::ResolvedOwnerArgument>>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl ResolvedCellPayloadOwner {
+    fn into_inner(mut self) -> Option<crate::resolved::ResolvedOwnerArgument> {
+        self.0.take().map(|payload| *payload)
+    }
+}
+impl Drop for ResolvedCellPayloadOwner {
+    fn drop(&mut self) {
+        if let Some(payload) = self.0.take() {
+            (*payload).discard_iteratively();
+        }
+    }
+}
+
 struct ResolvedBinderBuffer(Vec<Binder>);
 
 impl Deref for ResolvedBinderBuffer {
@@ -14011,12 +14148,18 @@ enum ResolveTask<'a> {
         span: Span,
     },
     FinishProviderResource(Box<PendingProviderResource>),
+    GenericResourceInitializer {
+        source: &'a crate::surface::SurfaceProviderResourceExpr,
+        builtin: ModuleId,
+        span: Span,
+    },
     ResourceInitializer {
         source: &'a crate::surface::SurfaceResourceExpr,
         span: Span,
     },
     FinishResource {
-        kind: crate::surface::SurfaceResourceKind,
+        builtin: ModuleId,
+        payload: ResolvedCellPayloadOwner,
         identity: ResolvedTypeVariable,
         handle: Binder,
         initializer: Box<ResolvedExpressionOwner>,
@@ -14109,6 +14252,7 @@ impl ResolveTask<'_> {
             | Self::FinishRegistration { span, .. }
             | Self::CopyWindowState { span, .. }
             | Self::ProviderResourceInitializer { span, .. }
+            | Self::GenericResourceInitializer { span, .. }
             | Self::ResourceInitializer { span, .. }
             | Self::FinishResource { span, .. }
             | Self::FinishBinary { span, .. }

@@ -1103,21 +1103,26 @@ unhandled-operation, abort, exception, cancellation, or unwind result.
 
 ## Scoped cell execution
 
-A resource scope owns one mutable integer payload. Its handle is an opaque,
+A cell scope owns one current payload root. Legacy `resource cell<R>` scopes
+retain integer payloads and their unary API. Generic `Cell.Cell<R,T>` scopes
+retain an ordinary checked value of the fixed type `T`; aggregate and callable
+values use the ordinary shared value representation. Its handle is an opaque,
 non-owning activation key: copying a handle, closure or environment does not
-copy the payload or its release obligation. The ordinary value heap owns no
-resource payload, including through unused entries in closure environments.
+copy the mutable slot or its release obligation. The ordinary value heap owns
+no resource boundary, including through unused closure environment entries.
 
 Acquisition first evaluates the initializer exactly once in the preceding
-environment. Only after it returns an integer does the machine check capacity
-and prepare the new scope, handle binding and lexical instantiation. Successful
+environment. Legacy initialization requires an integer. Generic initialization
+returns the checked `T` value before the new owner exists. The machine checks
+capacity and prepares the new scope, handle binding, lexical instantiation and
+complete `Ops<R,T>` authority before publishing a generic owner. Successful
 acquisition creates a fresh activation, distinct from every earlier successful
 execution, even at the same source site. Failure publishes none of the new
 scope or authority. It is an internal failure, not a source allocation branch.
 
-The following rules describe entry and normal release. `RESOURCE_INIT` retains
-the initializer's following body and preceding environment. `CELL(a, n)` owns
-payload `n` for activation `a`. `bind_cell` binds `c` to the non-owning handle
+The following legacy rules describe entry and normal release. `RESOURCE_INIT`
+retains the initializer's following body and preceding environment. `CELL(a, n)`
+owns payload `n` for activation `a`. `bind_cell` binds `c` to the non-owning handle
 for `a` and binds the rigid identity `R` to `a` in lexical instantiation; it
 does not place `n` in the value heap. The acquisition premise includes all
 capacity and fallible preparation, before publication.
@@ -1142,8 +1147,8 @@ family resource-boundary-steps:
 
 Static checking ensures that the returning value does not depend on `a`.
 An inner return releases the inner cell before continuing inside its outer
-scope. An escaped copied integer or closure containing only copied data
-retains no cell payload after release.
+scope. An escaped independent snapshot retains its ordinary shared value after
+release. Reading a snapshot does not freeze cells reachable through it.
 
 Requests retain their lexical type and row instantiation as described above.
 An activation binding travels through generic applications, returned closures,
@@ -1155,16 +1160,36 @@ activation from operand values or use a global substitution environment.
 
 Request selection searches source-handler and cell boundaries in ordinary
 innermost-to-outermost order. A cell boundary accepts only its authenticated
-builtin operation at its exact activation; nonmatching boundaries are passed.
+builtin operation at its exact activation; generic selection also checks the
+complete instantiated `R,T` arguments. Nonmatching boundaries are passed.
 A nearer exact source handler intercepts the request by the existing handler
 rules. Its interception creates neither a handle nor provider authority.
 
-For a request selected by a cell boundary, the operand handle must equal that
-boundary's activation. `read` returns a copied payload integer and leaves the
-scope in place. `write` requires the tuple `(handle, integer)`, replaces the
+For a request selected by a legacy cell boundary, the operand handle must equal
+that boundary's activation. `read` returns a copied payload integer and leaves
+the scope in place. `write` requires the tuple `(handle, integer)`, replaces the
 owned payload and returns `Unit`. Alias resolution and complete operand,
 operation and activation checks precede any mutation. Malformed operands or
 identity disagreement are internal failures, not source use-after-release.
+
+For generic cells, `read` returns the current ordinary value and preserves
+shared aggregate identity; it performs no deep payload traversal. Earlier read
+results remain unchanged by later replacements. `write` takes `(handle, value)`
+and replaces the current root with that checked `T` value. Complete operation,
+type and activation authentication, paid alias resolution, proportional scalar
+or origin copying, and fallible reply/trace preparation precede publication or
+replacement. Preparation refusal leaves the root unchanged; effects already
+performed while evaluating the operands remain performed. The primitive invokes
+no user callback. Internal failure while disposing a replaced last-owned value
+terminates execution with incomplete teardown; it is neither a preparation
+refusal nor a source cleanup transition.
+
+An exact source handler's intercepted read returns its actual reply, and an
+intercepted write performs no builtin replacement. Clause, other-handler and
+resumed-computation writes still update the slot in control order. Merely
+reading, replacing or dropping a payload containing native access neither
+consumes its native owner nor restores quarantined authority. A subsequent
+native operation must pass the ordinary native liveness checks.
 
 An outward resource-free request may capture a cell boundary. Capture moves
 the owned scope into the continuation; resume moves it back in its original

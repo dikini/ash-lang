@@ -1896,6 +1896,20 @@ fn resource_cell_documentation_example_has_exact_cli_output() {
 }
 
 #[test]
+fn generic_cell_documentation_example_has_exact_cli_output() {
+    let text = "import @builtin.generic_cell as Cell\n\nmain : Unit -> Bool\nmain () = resource Cell.Cell<R,Bool> c = false {\n    let _ = Cell.write (c, true)\n    Cell.read c\n}\n";
+    let source = TempFile::write(text);
+    let output = Command::new(env!("CARGO_BIN_EXE_ash"))
+        .arg(source.path())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, b"true : Bool\n");
+    assert!(output.stderr.is_empty());
+    assert_documented("docs/tools/ash.md", text);
+}
+
+#[test]
 fn native_buffer_documentation_example_has_exact_cli_output() {
     let text = "import @ffi.native_buffer as Buffer\n\nmain : Unit -> Buffer.Outcome<Buffer.Outcome<Int>>\nmain () = resource Buffer.Buffer<R> b = 4 {\n    match Buffer.write (b, 0, 42) {\n        Buffer.Success(()) => Buffer.read (b, 0)\n        Buffer.Failure(error) => Buffer.Failure error\n    }\n}\n";
     let source = TempFile::write(text);

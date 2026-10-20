@@ -23,5 +23,7 @@ No proposed semantic transition is under review.
 
 ## Accepted changes
 
-No accepted proposals remain in this product tree. Completed transition
-evidence remains in Git; artifact retirement does not integrate it into Main.
+No accepted transition awaits product checkpoint retention.
+The [generic cell checkpoint evidence](../design/generic-cell/evidence.md)
+retains the completed local transition and historical retrieval commands.
+Main integration remains pending.

@@ -288,7 +288,7 @@ pub(crate) fn visit_type_structure_with_budget<B: TypeWorkMeter>(
     budget: &mut B,
     visit: impl FnMut(TypeStructureNode<'_>, &mut B) -> Result<bool, B::Error>,
 ) -> Result<bool, B::Error> {
-    visit_structural_components(StructuralRoot::Type(root), budget, visit)
+    visit_structural_components(StructuralRoot::Type(root), budget, visit, |_, _| Ok(false))
 }
 
 pub(crate) fn visit_argument_structure_with_budget<B: TypeWorkMeter>(
@@ -296,13 +296,27 @@ pub(crate) fn visit_argument_structure_with_budget<B: TypeWorkMeter>(
     budget: &mut B,
     visit: impl FnMut(TypeStructureNode<'_>, &mut B) -> Result<bool, B::Error>,
 ) -> Result<bool, B::Error> {
-    visit_structural_components(StructuralRoot::Argument(root), budget, visit)
+    visit_structural_components(StructuralRoot::Argument(root), budget, visit, |_, _| {
+        Ok(false)
+    })
+}
+
+/// Includes each complete effect identity inside known and lacks rows, even
+/// when those rows occur only as owner arguments. Uses the same paid worklist.
+pub(crate) fn visit_type_structure_and_instances_with_budget<B: TypeWorkMeter>(
+    root: &Type,
+    budget: &mut B,
+    visit: impl FnMut(TypeStructureNode<'_>, &mut B) -> Result<bool, B::Error>,
+    visit_instance: impl FnMut(&EffectInstance, &mut B) -> Result<bool, B::Error>,
+) -> Result<bool, B::Error> {
+    visit_structural_components(StructuralRoot::Type(root), budget, visit, visit_instance)
 }
 
 fn visit_structural_components<B: TypeWorkMeter>(
     root: StructuralRoot<'_>,
     budget: &mut B,
     mut visit: impl FnMut(TypeStructureNode<'_>, &mut B) -> Result<bool, B::Error>,
+    mut visit_instance: impl FnMut(&EffectInstance, &mut B) -> Result<bool, B::Error>,
 ) -> Result<bool, B::Error> {
     let mut pending = Vec::new();
     fn push<'a, B: TypeWorkMeter>(
@@ -369,6 +383,9 @@ fn visit_structural_components<B: TypeWorkMeter>(
                 push(&mut pending, StructuralRoot::Row(row), budget)?
             }
             StructuralRoot::Instance(instance) => {
+                if visit_instance(instance, budget)? {
+                    return Ok(true);
+                }
                 for argument in instance.arguments().iter().rev() {
                     push(&mut pending, StructuralRoot::Argument(argument), budget)?;
                 }

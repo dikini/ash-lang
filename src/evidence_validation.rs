@@ -7911,7 +7911,10 @@ fn validate_pending_expressions<'a, 'body>(
                     canonical.spelling.len().saturating_add(2),
                     expression.span,
                 )?;
-                if !acquisition.acquisition.owns(acquisition)
+                if !acquisition
+                    .acquisition
+                    .owns(acquisition, type_work)
+                    .map_err(|()| resource(expression.span))?
                     || canonical.kind != Kind::Type
                     || canonical.spelling != acquisition.identity.spelling
                     || canonical.origin.primary_span() != acquisition.identity.origin.primary_span()
@@ -9746,7 +9749,11 @@ fn authenticate_lexical_header(
     let mut nominals = HashSet::new();
     let mut has_local_key = false;
     if let Some(acquisition) = source.acquisition {
-        if checked.acquisition != Some(acquisition) || !acquisition.supplies(source) {
+        if checked.acquisition != Some(acquisition)
+            || !acquisition
+                .supplies(source, type_work)
+                .map_err(|()| resource(source.span))?
+        {
             return Err(invalid_root(source.span));
         }
         let mut head = local_head;
@@ -9754,7 +9761,9 @@ fn authenticate_lexical_header(
             charge(budget, 1, source.span)?;
             let (entry, parent) = locals.get(index).ok_or_else(|| invalid_root(source.span))?;
             if let LinkedLocalScope::Resource(resource_scope) = entry {
-                has_local_key = acquisition.owns(resource_scope);
+                has_local_key = acquisition
+                    .owns(resource_scope, type_work)
+                    .map_err(|()| resource(source.span))?;
                 break;
             }
             head = *parent;
@@ -12026,7 +12035,10 @@ Memory.AllocationRefused(error) => 0
         const DEPTH: usize = 16_384;
         // Export freeze retains one defining-source Arc record; the complete
         // zonk visitor eliminates the one-cell redundant row-tail scan.
-        const DEFINING_TYPE_WORK: usize = 13 * DEPTH + 29 + 1 - 1;
+        // Computational admission scans the single Unit result: one node visit
+        // and one structural root, independent of the constructor payload depth.
+        const COMPUTATIONAL_ADMISSION_WORK: usize = 2;
+        const DEFINING_TYPE_WORK: usize = 13 * DEPTH + 29 + 1 - 1 + COMPUTATIONAL_ADMISSION_WORK;
         const {
             assert!(DEFINING_TYPE_WORK < crate::types::TYPE_WORK_LIMIT);
             assert!(13 * (2 * DEPTH) + 29 > crate::types::TYPE_WORK_LIMIT);

@@ -1136,6 +1136,49 @@ fn generated_dependent_retained_child_revokes_ordinary_parent_access() {
 }
 
 #[test]
+fn generic_cell_c06_stored_native_access_reads_after_quarantine_but_cannot_restore_use() {
+    for later_use in [false, true] {
+        let suffix = if later_use {
+            "let state : Owner.ParentState<ParentFresh> = Owner.borrow recovered\n    42"
+        } else {
+            "42"
+        };
+        let entry = format!(
+            r#"import owner as Owner
+import @builtin.generic_cell as Cell
+main : Unit -> Owner.Scope<Unit, Unit, Int>
+main () = resource Owner.Parent<ParentFresh> parent = 64 {{
+    let recovered = resource Cell.Cell<C,Owner.Parent<ParentFresh>> c = parent {{
+        let dependency = Cell.read c
+        let child_report = resource Owner.Child<ParentFresh, ChildFresh> child = (dependency, 4) {{
+            Owner.child_read child
+        }}
+        Cell.read c
+    }}
+    {suffix}
+}}
+"#
+        );
+        generated_owner_execution_with_native(
+            include_str!("fixtures/source-owner/dependent_owner.ash"),
+            &entry,
+            None,
+            if later_use {
+                Err("runtime machine control state is inconsistent")
+            } else {
+                Ok("Completed(42, RetainedError(()))")
+            },
+            if later_use {
+                "parent-acquire:64\nchild-acquire:4\nchild-retain:4\nchild-release:4\nparent-final-byte:0\nparent-release:64\n"
+            } else {
+                "parent-acquire:64\nchild-acquire:4\nchild-retain:4\nchild-release:4\nparent-final-byte:99\nparent-release:64\n"
+            },
+            include_str!("fixtures/source-owner/native_dependent_owner.c"),
+        );
+    }
+}
+
+#[test]
 fn generated_dependent_incomplete_host_destruction_does_not_close_parent_or_retry() {
     let owner = include_str!("fixtures/source-owner/dependent_owner.ash").replace(
         "name \"ash_child_release\"\n        abi (pointer(Address), pointer(ParentBytes)) -> void\n        operand 0 from 0 current\n        operand 1 from 1 enclosing\n        retained_dependents block\n        outcome otherwise { consumed 0 }",
@@ -1932,6 +1975,8 @@ fn generated_owner_execution_with_native_link(
             String::from_utf8_lossy(&output.stderr)
         );
     }
+    let compile_command = format!("{compile:?}");
+    let link_command = format!("{linker:?}");
     // The generated host restores checked Core; it does not reopen Ash source.
     fs::remove_file(fixture.0.join("entry.ash")).unwrap();
     fs::remove_file(fixture.0.join("owner.ash")).unwrap();
@@ -1941,8 +1986,8 @@ fn generated_owner_execution_with_native_link(
     let executable = fixture.0.join("program");
     let mut configuration = BuildConfiguration::new(executable.clone());
     configuration.native_inputs = vec![match link {
-        OwnerLink::Static => NativeLinkInput::StaticArchive(library),
-        OwnerLink::Shared => NativeLinkInput::SharedLibrary(library),
+        OwnerLink::Static => NativeLinkInput::StaticArchive(library.clone()),
+        OwnerLink::Shared => NativeLinkInput::SharedLibrary(library.clone()),
     }];
     println!(
         "owner/native link mode: {}",
@@ -1968,6 +2013,86 @@ fn generated_owner_execution_with_native_link(
         fs::metadata(&image).unwrap().len(),
         fs::metadata(&facts).unwrap().len(),
     );
+    // Optional operator-owned evidence survives Fixture cleanup. It grants no
+    // execution authority and is separate from the child's source search roots.
+    let evidence = std::env::var_os("ASH_OWNER_EVIDENCE_DIR").map(|root| {
+        use sha2::{Digest, Sha256};
+        let link_mode = match link {
+            OwnerLink::Static => "static",
+            OwnerLink::Shared => "shared",
+        };
+        let case = serde_json::to_vec(&(
+            entry,
+            owner,
+            helpers,
+            native_source,
+            link_mode,
+            env!("ASH_RUNTIME_FINGERPRINT"),
+        ))
+        .unwrap();
+        let identity = format!("{:x}", Sha256::digest(&case));
+        let directory = PathBuf::from(root)
+            .join(&identity)
+            .join(fixture.0.file_name().unwrap());
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("case-inputs.json"), &case).unwrap();
+        fs::write(directory.join("entry.ash"), entry).unwrap();
+        fs::write(directory.join("owner.ash"), owner).unwrap();
+        fs::write(directory.join("native_owner.c"), native_source).unwrap();
+        for (from, name) in [
+            (object.as_path(), "native_owner.o"),
+            (library.as_path(), "native_library"),
+            (built.executable(), "program"),
+            (built.generated_source(), "generated.rs"),
+            (image.as_path(), "program-image.bin"),
+            (facts.as_path(), "expected-facts.bin"),
+        ] {
+            fs::copy(from, directory.join(name)).unwrap();
+        }
+        let project = generated.parent().unwrap();
+        for name in ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml"] {
+            fs::copy(project.join(name), directory.join(name)).unwrap();
+        }
+        fs::copy(built.build_log(), directory.join("native-build.log")).unwrap();
+        let mut records = serde_json::Map::new();
+        for name in [
+            "case-inputs.json",
+            "Cargo.toml",
+            "Cargo.lock",
+            "rust-toolchain.toml",
+            "native-build.log",
+            "entry.ash",
+            "owner.ash",
+            "native_owner.c",
+            "native_owner.o",
+            "native_library",
+            "program",
+            "generated.rs",
+            "program-image.bin",
+            "expected-facts.bin",
+        ] {
+            let bytes = fs::read(directory.join(name)).unwrap();
+            records.insert(
+                name.into(),
+                serde_json::json!({
+                    "bytes": bytes.len(), "sha256": format!("{:x}", Sha256::digest(&bytes)),
+                }),
+            );
+        }
+        fs::write(
+            directory.join("inputs.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "runtime_fingerprint": env!("ASH_RUNTIME_FINGERPRINT"),
+                "native_compile_command": compile_command,
+                "native_link_command": link_command,
+                "preparation_work": preparation_work, "artifacts": records,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        println!("owner/native retained evidence: {}", directory.display());
+        directory
+    });
     // Compilation embeds both exact payloads. Execution must require neither
     // Ash source nor files used to build the standalone host.
     fs::remove_file(image).unwrap();
@@ -2000,6 +2125,16 @@ fn generated_owner_execution_with_native_link(
         Err(error) => panic!("cannot read native trace: {error}"),
     };
     println!("owner/native actual trace:\n{observed_trace}");
+    if let Some(directory) = evidence {
+        fs::write(directory.join("native-trace"), &observed_trace).unwrap();
+        fs::write(directory.join("stdout"), &output.stdout).unwrap();
+        fs::write(directory.join("stderr"), &output.stderr).unwrap();
+        fs::write(
+            directory.join("exit-code"),
+            format!("{:?}\n", output.status.code()),
+        )
+        .unwrap();
+    }
     match expected_result {
         Ok(expected) => {
             assert!(

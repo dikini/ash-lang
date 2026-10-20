@@ -28,6 +28,92 @@ use super::{
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
 #[test]
+fn generic_cell_summary_authenticates_complete_facade_facts() {
+    use crate::resolved::BuiltinCellSummaryMutationForTest::*;
+    for mutation in [
+        OperationResult,
+        ProviderResult,
+        MissingHandle,
+        MissingOps,
+        HandleKind,
+    ] {
+        let tree = TempTree::create();
+        tree.write("facade.ash", "pub import @builtin.generic_cell (read)\n");
+        let graph = load(&tree, "import facade (read)\n", &[]);
+        let builtin = &graph.modules()[0];
+        let checked = check_module(resolve_module(builtin, &[]).unwrap()).unwrap();
+        let facade = &graph.modules()[1];
+        let dependency =
+            DependencyExports::new(&facade.dependencies()[0], checked.exports()).unwrap();
+        let mut summary = check_module(resolve_module(facade, &[dependency]).unwrap())
+            .unwrap()
+            .into_exports();
+        summary.corrupt_builtin_fact_for_test(mutation);
+        let entry = graph.module(graph.entry()).unwrap();
+        let dependency = DependencyExports::new(&entry.dependencies()[0], &summary).unwrap();
+        assert!(
+            resolve_module(entry, &[dependency]).is_err(),
+            "generic summary forgery admitted"
+        );
+    }
+}
+
+#[test]
+fn generic_cell_duplicate_import_routes_reject_erased_contents_capture_fact() {
+    for erase in [false, true] {
+        let tree = TempTree::create();
+        tree.write("helper.ash", "import @builtin.generic_cell as Cell\npub put<R,T> : (Cell.Cell<R,T>,T) -> Unit ! {Cell.Ops<R,T>} where Cell.Provider<R,T>\nput pair = Cell.write pair\n");
+        tree.write("facade.ash", "pub import helper (put)\n");
+        let graph = load(
+            &tree,
+            "import @builtin.generic_cell as Cell\nimport helper (put as direct)\nimport facade (put as via_facade)\nmain : Unit -> Int\nmain () = resource Cell.Cell<R,Int> c = 41 {\nlet _ = direct (c,42)\nlet _ = via_facade (c,43)\nCell.read c\n}\n",
+            &[],
+        );
+        let mut summaries = Vec::new();
+        for module in graph.modules() {
+            let dependencies = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    DependencyExports::new(
+                        edge,
+                        summaries
+                            .iter()
+                            .find(|(id, _)| *id == edge.target())
+                            .map(|(_, summary)| summary)
+                            .unwrap(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let resolved = resolve_module(module, &dependencies);
+            if module.id() == graph.entry() {
+                if erase {
+                    let error = resolved.unwrap_err();
+                    assert!(
+                        matches!(error,ResolveModuleError::Resolution(ref diagnostic) if diagnostic.reason==ResolveReason::InternalState),
+                        "{error:?}"
+                    );
+                    assert!(
+                        format!("{error:?}")
+                            .contains("alternate global routes disagree on the checked fact"),
+                        "{error:?}"
+                    );
+                } else {
+                    check_module(resolved.unwrap()).unwrap();
+                }
+                break;
+            }
+            let mut summary = check_module(resolved.unwrap()).unwrap().into_exports();
+            if erase && module.source().display_path().ends_with("facade.ash") {
+                summary.erase_exported_capture_for_test("put");
+            }
+            summaries.push((module.id(), summary));
+        }
+    }
+}
+
+#[test]
 fn builtin_cell_summary_rejects_well_kinded_operation_tampering() {
     use crate::resolved::BuiltinCellSummaryMutationForTest;
     let tree = TempTree::create();

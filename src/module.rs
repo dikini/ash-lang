@@ -37,6 +37,12 @@ const CELL_SOURCE: &str = concat!(
     "pub interface Provider<R> {\nread : Handle<R> -> Int ! {Ops<R>}\nwrite : (Handle<R>, Int) -> Unit ! {Ops<R>}\n}\n",
 );
 
+const GENERIC_CELL_SOURCE: &str = concat!(
+    "pub opaque type Cell<R,T> = Hidden\n",
+    "pub effect Ops<R,T> {\nread : Cell<R,T> -> T\nwrite : (Cell<R,T>, T) -> Unit\n}\n",
+    "pub interface Provider<R,T> {\nread : Cell<R,T> -> T ! {Ops<R,T>}\nwrite : (Cell<R,T>, T) -> Unit ! {Ops<R,T>}\n}\n",
+);
+
 const BYTES_SOURCE: &str = concat!(
     "pub type AppendResult = BytesAppended(Bytes)\n| InvalidByte\n",
     "pub empty : Unit -> Bytes\nempty value = empty value\n",
@@ -279,6 +285,7 @@ pub struct ModuleId {
 enum ModuleIdNamespace {
     Admitted,
     BuiltinCell,
+    BuiltinGenericCell,
     BuiltinBytes,
     BuiltinString,
     BuiltinForeign,
@@ -315,6 +322,10 @@ impl ModuleId {
         self.value as usize
     }
 
+    pub(crate) const fn is_builtin_generic_cell(self) -> bool {
+        matches!(self.namespace, ModuleIdNamespace::BuiltinGenericCell)
+    }
+
     pub(crate) const fn is_builtin_cell(self) -> bool {
         matches!(self.namespace, ModuleIdNamespace::BuiltinCell)
     }
@@ -340,7 +351,7 @@ impl ModuleId {
     }
 
     pub(crate) const fn is_builtin_resource(self) -> bool {
-        self.is_builtin_cell()
+        self.is_builtin_cell() || self.is_builtin_generic_cell()
     }
 
     /// Returns the graph-local identity value.
@@ -373,6 +384,13 @@ impl fmt::Display for ModuleId {
                 write!(formatter, "builtin.foreign:{}:{}", self.graph, self.value)
             }
             ModuleIdNamespace::Admitted => write!(formatter, "{}:{}", self.graph, self.value),
+            ModuleIdNamespace::BuiltinGenericCell => {
+                write!(
+                    formatter,
+                    "builtin.generic_cell:{}:{}",
+                    self.graph, self.value
+                )
+            }
             ModuleIdNamespace::BuiltinCell => {
                 write!(formatter, "builtin.cell:{}:{}", self.graph, self.value)
             }
@@ -1482,6 +1500,7 @@ pub fn load_module_graph(
         }];
         let mut dependency_order = Vec::new();
         let mut builtin_cell = None;
+        let mut builtin_generic_cell = None;
         let mut builtin_bytes = None;
         let mut builtin_string = None;
         let mut builtin_foreign = None;
@@ -1589,7 +1608,7 @@ pub fn load_module_graph(
                 if segments.len() != 1
                     || !matches!(
                         segments[0].text.as_str(),
-                        "cell" | "bytes" | "string" | "foreign"
+                        "cell" | "generic_cell" | "bytes" | "string" | "foreign"
                     )
                 {
                     return Err(ModuleFailure::source(
@@ -1606,6 +1625,8 @@ pub fn load_module_graph(
                     &mut builtin_string
                 } else if segments[0].text == "foreign" {
                     &mut builtin_foreign
+                } else if segments[0].text == "generic_cell" {
+                    &mut builtin_generic_cell
                 } else {
                     &mut builtin_cell
                 };
@@ -1631,6 +1652,7 @@ pub fn load_module_graph(
                         )?
                     } else {
                         admit_builtin_resource(
+                            segments[0].text == "generic_cell",
                             graph_identity,
                             import.span,
                             &mut budget,
@@ -1823,6 +1845,7 @@ fn admit_builtin_packed(
 }
 
 fn admit_builtin_resource(
+    generic: bool,
     graph: u32,
     import_span: Span,
     budget: &mut GraphBudget,
@@ -1836,17 +1859,30 @@ fn admit_builtin_resource(
     dependency_order
         .try_reserve(1)
         .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
-    let path = PathBuf::from("@builtin.cell");
+    let path = PathBuf::from(if generic {
+        "@builtin.generic_cell"
+    } else {
+        "@builtin.cell"
+    });
     let (source, surface) = parse_surface_module(
         &path,
-        CELL_SOURCE.to_owned(),
+        if generic {
+            GENERIC_CELL_SOURCE
+        } else {
+            CELL_SOURCE
+        }
+        .to_owned(),
         Some(import_span),
         &mut budget.syntax_work,
     )?;
     let value = u32::try_from(staged.len())
         .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
     let id = ModuleId {
-        namespace: ModuleIdNamespace::BuiltinCell,
+        namespace: if generic {
+            ModuleIdNamespace::BuiltinGenericCell
+        } else {
+            ModuleIdNamespace::BuiltinCell
+        },
         graph,
         value,
     };
@@ -2239,6 +2275,37 @@ mod tests {
     }
 
     #[test]
+    fn generic_cell_image_role_checks_source_and_charges_before_retention() {
+        let source = SourceFile::new("@builtin.generic_cell", GENERIC_CELL_SOURCE).unwrap();
+        let required = GENERIC_CELL_SOURCE.len() + 2;
+        let mut short = crate::types::TypeWorkBudget::with_limit(required - 1);
+        assert!(
+            restore_image_module(&source, ImageModuleRole::BuiltinGenericCell, &mut short).is_err()
+        );
+        for _ in 0..2 {
+            let mut exact = crate::types::TypeWorkBudget::with_limit(required);
+            let module =
+                restore_image_module(&source, ImageModuleRole::BuiltinGenericCell, &mut exact)
+                    .unwrap();
+            assert!(module.is_builtin_generic_cell());
+            assert_eq!(exact.used(), required);
+        }
+        let counterfeit = SourceFile::new(
+            "@builtin.generic_cell",
+            GENERIC_CELL_SOURCE.replace("-> T", "-> R"),
+        )
+        .unwrap();
+        assert!(matches!(
+            restore_image_module(
+                &counterfeit,
+                ImageModuleRole::BuiltinGenericCell,
+                &mut crate::types::TypeWorkBudget::default()
+            ),
+            Err(ImageModuleFailure::InvalidBuiltinSource)
+        ));
+    }
+
+    #[test]
     fn builtin_admission_charges_sources_before_publishing_and_retries() {
         let source = SourceFile::new("importer", "import @builtin.cell as Cell\n").unwrap();
         let span = source
@@ -2251,7 +2318,8 @@ mod tests {
             });
             let mut staged = Vec::new();
             let mut order = Vec::new();
-            let result = admit_builtin_resource(17, span, &mut budget, &mut staged, &mut order);
+            let result =
+                admit_builtin_resource(false, 17, span, &mut budget, &mut staged, &mut order);
             if allowance == 0 {
                 assert_resource(result.map(|_| ()), ModuleResource::Sources);
                 assert!(staged.is_empty() && order.is_empty());
@@ -2483,6 +2551,7 @@ pub(crate) enum ImageModuleRole {
     Ordinary,
     BuiltinForeign,
     BuiltinCell,
+    BuiltinGenericCell,
     BuiltinString,
     BuiltinBytes,
 }
@@ -2502,12 +2571,16 @@ pub(crate) fn restore_image_module(
     match role {
         ImageModuleRole::Ordinary => Ok(ModuleId::from(source.id())),
         ImageModuleRole::BuiltinForeign
+        | ImageModuleRole::BuiltinGenericCell
         | ImageModuleRole::BuiltinCell
         | ImageModuleRole::BuiltinString
         | ImageModuleRole::BuiltinBytes => {
             let (canonical, namespace) = match role {
                 ImageModuleRole::BuiltinForeign => {
                     (FOREIGN_SOURCE, ModuleIdNamespace::BuiltinForeign)
+                }
+                ImageModuleRole::BuiltinGenericCell => {
+                    (GENERIC_CELL_SOURCE, ModuleIdNamespace::BuiltinGenericCell)
                 }
                 ImageModuleRole::BuiltinCell => (CELL_SOURCE, ModuleIdNamespace::BuiltinCell),
                 ImageModuleRole::BuiltinString => (STRING_SOURCE, ModuleIdNamespace::BuiltinString),

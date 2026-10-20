@@ -3281,7 +3281,11 @@ mod tests {
                     .sources
                     .iter_mut()
                     .find(|source| {
-                        matches!(source.role, super::super::ModuleRoleRecord::BuiltinCell)
+                        matches!(
+                            source.role,
+                            super::super::ModuleRoleRecord::BuiltinCell
+                                | super::super::ModuleRoleRecord::BuiltinGenericCell
+                        )
                     })
                     .unwrap();
                 if mutation == 4 {

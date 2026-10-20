@@ -208,3 +208,39 @@ fn private_runtime_refuses_a_mismatched_compiler_before_decoding() {
         "embedded program requires its matching compiler/runtime"
     );
 }
+
+#[test]
+fn generated_generic_cell_host_preserves_function_snapshot_after_source_removal() {
+    let fixture = Fixture::new(
+        "import @builtin.generic_cell as Cell\nindependent : Unit -> Int\nindependent () = 7\nreplacement : Unit -> Int\nreplacement () = 42\nmain : Unit -> Int\nmain () = {\nlet saved = resource Cell.Cell<R,(Unit -> Int)> c = independent {\nlet old = Cell.read c\nlet _ = Cell.write (c,replacement)\nold\n}\nsaved ()\n}\n",
+    );
+    let checked = compile_path(fixture.source()).unwrap();
+    let mut configuration = BuildConfiguration::new(fixture.0.join("generic-program"));
+    let cache = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
+    configuration.cargo_target_directory = Some(cache.join("ffi-native-hosts"));
+    let prepared = prepare_program(&checked, configuration).unwrap();
+    fs::remove_file(fixture.0.join("entry.ash")).unwrap();
+    drop(checked);
+    let built = build_prepared(prepared).unwrap_or_else(|error| {
+        let log = error
+            .build_log()
+            .and_then(|path| fs::read_to_string(path).ok())
+            .unwrap_or_default();
+        panic!("{error}\n{log}");
+    });
+    for _ in 0..2 {
+        let output = Command::new(built.executable())
+            .current_dir(&fixture.0)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.stdout, b"7\n");
+        assert!(output.stderr.is_empty());
+    }
+}

@@ -696,6 +696,117 @@ struct Edge {
     next: Address,
 }
 
+/// Current roots are immutable value ports. A later replacement changes only
+/// this control state's root; earlier read ports keep their original edge.
+#[derive(Debug, Eq, Hash, PartialEq)]
+struct CellContents {
+    occurrence: ProviderResourceOccurrence,
+    owner: (usize, usize),
+    roots: Vec<usize>,
+    enclosing: Arc<[(usize, usize)]>,
+    predecessors: Arc<[usize]>,
+    shared: bool,
+}
+
+impl CellContents {
+    fn copy(&self, budget: &mut TypeWorkBudget) -> Result<Self, Failure> {
+        charge(budget, 2)?;
+        Ok(Self {
+            occurrence: self.occurrence,
+            owner: self.owner,
+            roots: copy_slice(&self.roots, budget)?,
+            enclosing: Arc::clone(&self.enclosing),
+            predecessors: Arc::clone(&self.predecessors),
+            shared: self.shared,
+        })
+    }
+    fn intersect_birth(
+        &mut self,
+        enclosing: &[(usize, usize)],
+        predecessors: &[usize],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        charge(
+            budget,
+            self.enclosing
+                .len()
+                .checked_mul(enclosing.len())
+                .ok_or(Failure::Resource)?,
+        )?;
+        charge(
+            budget,
+            self.predecessors
+                .len()
+                .checked_mul(predecessors.len())
+                .ok_or(Failure::Resource)?,
+        )?;
+        let same_enclosing = self.enclosing.iter().all(|owner| enclosing.contains(owner));
+        let same_predecessors = self
+            .predecessors
+            .iter()
+            .all(|port| predecessors.contains(port));
+        if same_enclosing && same_predecessors {
+            return Ok(());
+        }
+        // Construct both immutable replacements before changing this state.
+        // Other copied states retain their original acquisition relation.
+        charge(budget, 2)?;
+        let enclosing = if same_enclosing {
+            Arc::clone(&self.enclosing)
+        } else {
+            let mut retained = copy_slice(&self.enclosing, budget)?;
+            charge(
+                budget,
+                retained
+                    .len()
+                    .checked_mul(enclosing.len())
+                    .ok_or(Failure::Resource)?,
+            )?;
+            retained.retain(|owner| enclosing.contains(owner));
+            share_cell_birth_slice(retained, budget)?
+        };
+        let predecessors = if same_predecessors {
+            Arc::clone(&self.predecessors)
+        } else {
+            let mut retained = copy_slice(&self.predecessors, budget)?;
+            charge(
+                budget,
+                retained
+                    .len()
+                    .checked_mul(predecessors.len())
+                    .ok_or(Failure::Resource)?,
+            )?;
+            retained.retain(|port| predecessors.contains(port));
+            share_cell_birth_slice(retained, budget)?
+        };
+        self.enclosing = enclosing;
+        self.predecessors = predecessors;
+        Ok(())
+    }
+
+    fn insert_root(&mut self, root: usize, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        charge(budget, self.roots.len() + 1)?;
+        if let Err(position) = self.roots.binary_search(&root) {
+            self.roots.try_reserve(1).map_err(|_| Failure::Resource)?;
+            self.roots.insert(position, root);
+        }
+        Ok(())
+    }
+}
+
+/// Birth metadata contains only flat Copy coordinates. Converting the owned
+/// vector into shared immutable storage pays its allocation/copy before use.
+fn share_cell_birth_slice<T: Copy>(
+    values: Vec<T>,
+    budget: &mut TypeWorkBudget,
+) -> Result<Arc<[T]>, Failure> {
+    charge(
+        budget,
+        values.len().checked_add(1).ok_or(Failure::Resource)?,
+    )?;
+    Ok(Arc::from(values))
+}
+
 #[derive(Debug, Eq, Hash, PartialEq)]
 struct State {
     position: Position,
@@ -703,10 +814,37 @@ struct State {
     value_context: usize,
     stack: Address,
     heap: Vec<Edge>,
+    cells: Vec<CellContents>,
     abandoned: Option<(usize, Event)>,
 }
 
 impl State {
+    fn charge_cells(&self, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        charge(budget, self.cells.len())?;
+        for cell in &self.cells {
+            let units = cell
+                .enclosing
+                .len()
+                .checked_mul(2)
+                .and_then(|units| units.checked_add(cell.roots.len()))
+                .and_then(|units| units.checked_add(cell.predecessors.len()))
+                .and_then(|units| units.checked_add(4))
+                .ok_or(Failure::Resource)?;
+            charge(budget, units)?;
+        }
+        Ok(())
+    }
+
+    /// Every State-keyed lookup/insertion visits the complete structural key,
+    /// including hits which perform no copying or new state retention.
+    fn charge_key(&self, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        charge(
+            budget,
+            self.heap.len().checked_add(1).ok_or(Failure::Resource)?,
+        )?;
+        self.charge_cells(budget)
+    }
+
     fn edges(&self, address: Address, budget: &mut TypeWorkBudget) -> Result<&[Edge], Failure> {
         charge(budget, self.heap.len().max(1).ilog2() as usize + 1)?;
         let start = self.heap.partition_point(|edge| edge.address < address);
@@ -722,12 +860,21 @@ impl State {
         Ok(&self.heap[start..start + count])
     }
     fn copy(&self, budget: &mut TypeWorkBudget) -> Result<Self, Failure> {
+        charge(budget, self.cells.len())?;
+        let mut cells = Vec::new();
+        cells
+            .try_reserve(self.cells.len())
+            .map_err(|_| Failure::Resource)?;
+        for cell in &self.cells {
+            cells.push(cell.copy(budget)?);
+        }
         Ok(Self {
             position: self.position,
             context: self.context,
             value_context: self.value_context,
             stack: self.stack,
             heap: copy_slice(&self.heap, budget)?,
+            cells,
             abandoned: self.abandoned,
         })
     }
@@ -1063,6 +1210,25 @@ struct ObservedCall {
     delivered: Option<super::value::DeliveredCallPrefix>,
 }
 
+#[derive(Clone, Copy)]
+struct CellRetentionSite {
+    target: (usize, usize),
+    request: Option<usize>,
+    root: usize,
+    source: Span,
+    acquisition: Span,
+}
+
+struct CellRetention {
+    target: (usize, usize),
+    request: Option<usize>,
+    root: usize,
+    enclosing: Vec<(usize, usize)>,
+    predecessors: Vec<usize>,
+    source: Span,
+    acquisition: Span,
+}
+
 pub(super) struct Analysis<'a> {
     graph: &'a SummaryGraph,
     types: PreparedTypeUniverse<'a>,
@@ -1076,6 +1242,7 @@ pub(super) struct Analysis<'a> {
     candidates: HashSet<(usize, usize)>,
     focusing: bool,
     payloads: Vec<(usize, usize, usize)>,
+    cell_retentions: Vec<CellRetention>,
     pub(super) infer_cleanup_rows: bool,
     pub(super) collect_cleanup_rows: bool,
     pub(super) authenticate_actual_captures: bool,
@@ -1610,6 +1777,7 @@ impl<'a> Analysis<'a> {
             candidates: HashSet::new(),
             focusing: false,
             payloads: Vec::new(),
+            cell_retentions: Vec::new(),
             infer_cleanup_rows: false,
             collect_cleanup_rows: false,
             authenticate_actual_captures: false,
@@ -2268,11 +2436,12 @@ impl<'a> Analysis<'a> {
                 state.abandoned = None;
             }
         }
-        charge(budget, state.heap.len() + 1)?;
+        state.charge_key(budget)?;
         if visited.contains(&state) {
             return Ok(());
         }
         let saved = state.copy(budget)?;
+        state.charge_key(budget)?;
         visited.try_reserve(1).map_err(|_| Failure::Resource)?;
         visited.insert(saved);
         pending.try_reserve(1).map_err(|_| Failure::Resource)?;
@@ -2343,6 +2512,7 @@ impl<'a> Analysis<'a> {
                     value_context,
                     stack: Address::Empty,
                     heap: Vec::new(),
+                    cells: Vec::new(),
                     abandoned: None,
                 };
                 analysis.discover(&[], Some(&state), budget)?;
@@ -2439,6 +2609,7 @@ impl<'a> Analysis<'a> {
             return Ok(());
         }
         self.check_payloads(budget)?;
+        self.check_cell_retentions(budget)?;
         if let Some(data) = &mut self.data {
             data.close(budget)?;
             for candidate in data.resource_candidates(budget)? {
@@ -2461,6 +2632,7 @@ impl<'a> Analysis<'a> {
         let mut pending = VecDeque::new();
         let mut visited = HashSet::new();
         let mut calls: Vec<ObservedCall> = Vec::new();
+        let mut cell_requests = HashSet::new();
         let mut observed_calls = HashMap::new();
         let mut revision = self
             .data
@@ -2489,6 +2661,7 @@ impl<'a> Analysis<'a> {
                     value_context,
                     stack: Address::Empty,
                     heap: Vec::new(),
+                    cells: Vec::new(),
                     abandoned: None,
                 },
                 &mut pending,
@@ -2529,7 +2702,20 @@ impl<'a> Analysis<'a> {
                     | Control::NativeInterpret { body, .. } => {
                         self.discover_boundary(state, *body, &mut pending, &mut visited, budget)?;
                     }
-                    Control::Request(_) => {
+                    Control::Request(request) => {
+                        if request.effect.as_ref().is_some_and(|effect| {
+                            effect.effect().module().is_builtin_generic_cell()
+                        }) {
+                            state.charge_key(budget)?;
+                            if !cell_requests.contains(&state) {
+                                cell_requests
+                                    .try_reserve(1)
+                                    .map_err(|_| Failure::Resource)?;
+                                let saved = state.copy(budget)?;
+                                state.charge_key(budget)?;
+                                cell_requests.insert(saved);
+                            }
+                        }
                         let label = self.label(code, state.context, budget)?;
                         let port = self
                             .data
@@ -2611,6 +2797,13 @@ impl<'a> Analysis<'a> {
                 .map_err(|_| Failure::Resource)?;
             for call in &calls {
                 pending.push_back(call.state.copy(budget)?);
+            }
+            charge(budget, cell_requests.len())?;
+            pending
+                .try_reserve(cell_requests.len())
+                .map_err(|_| Failure::Resource)?;
+            for request in &cell_requests {
+                pending.push_back(request.copy(budget)?);
             }
         }
         Ok(())
@@ -2697,6 +2890,7 @@ impl<'a> Analysis<'a> {
                 closing: None,
             }
         } else if matches!(self.graph.code[code], Control::Resource { .. }) {
+            self.initialize_cell(&mut next, code, budget)?;
             if !self.focusing {
                 charge(budget, 1)?;
                 self.entries.try_reserve(1).map_err(|_| Failure::Resource)?;
@@ -2767,7 +2961,7 @@ impl<'a> Analysis<'a> {
             return Err(Failure::Invalid);
         };
         let (successors, publication) = if let Some(data) = &mut self.data {
-            charge(budget, state.heap.len() + 1)?;
+            state.charge_key(budget)?;
             let index = if let Some(index) = observed_calls.get(&state) {
                 *index
             } else {
@@ -2778,7 +2972,9 @@ impl<'a> Analysis<'a> {
                     .try_reserve(1)
                     .map_err(|_| Failure::Resource)?;
                 let index = calls.len();
-                observed_calls.insert(state.copy(budget)?, index);
+                let saved = state.copy(budget)?;
+                state.charge_key(budget)?;
+                observed_calls.insert(saved, index);
                 calls.try_reserve(1).map_err(|_| Failure::Resource)?;
                 calls.push(ObservedCall {
                     state: state.copy(budget)?,
@@ -2922,13 +3118,28 @@ impl<'a> Analysis<'a> {
                 let (query, context) =
                     normal.focused(entry.position.code, entry.value_context, budget)?;
                 self.data = Some(query);
+                self.cell_retentions.clear();
                 let seed = self.restore_entry(entry, context, budget)?;
                 self.payloads.clear();
                 self.discover(&[], Some(&seed), budget)?;
+                self.check_cell_retentions(budget)?;
                 self.check_payloads(budget)?;
                 let data = self.data.as_mut().ok_or(Failure::Invalid)?;
                 data.close(budget)?;
-                data.check_resources(budget)?;
+                if let Err(failure) = data.check_resources(budget) {
+                    if matches!(&self.graph.code[entry.position.code], Control::Resource { effect, .. }
+                        if effect.effect.as_ref().is_some_and(|instance| instance.effect().module().is_builtin_generic_cell()))
+                    {
+                        return Err(data.cell_escape_failure(
+                            failure,
+                            None,
+                            entry.position.code,
+                            context,
+                            budget,
+                        )?);
+                    }
+                    return Err(failure);
+                }
             }
             charge(budget, self.candidates.len())?;
             if self
@@ -3162,6 +3373,10 @@ impl<'a> Analysis<'a> {
                 *owner = relocate_provider_resource_occurrence(*owner, &restored_owners, budget)?;
             }
         }
+        for cell in &mut seed.cells {
+            cell.occurrence =
+                relocate_provider_resource_occurrence(cell.occurrence, &restored_owners, budget)?;
+        }
         // Connect the saved continuation graph by result ports. Reusing old
         // value-context equality would replay completed calls and acquisitions.
         for (index, edge) in seed.heap.iter().enumerate() {
@@ -3197,7 +3412,61 @@ impl<'a> Analysis<'a> {
         let Control::Resource { body, .. } = self.graph.code[entry.position.code] else {
             return Err(Failure::Invalid);
         };
+        let fresh_cell = if matches!(&self.graph.code[entry.position.code], Control::Resource { effect, .. } if effect.effect.as_ref().is_some_and(|instance| instance.effect().module().is_builtin_generic_cell()))
+        {
+            let owner = data.resource_key(entry.position.code, context, budget)?;
+            let (_, root) =
+                data.cell_initializer(entry.position.code, entry.value_context, budget)?;
+            let predecessors =
+                data.cell_predecessors(entry.position.code, entry.value_context, budget)?;
+            Some((owner, root, predecessors))
+        } else {
+            None
+        };
+        data.close(budget)?;
         seed.value_context = context;
+        if let Some((owner, root, predecessors)) = fresh_cell {
+            let Control::Resource { effect, .. } = &self.graph.code[entry.position.code] else {
+                return Err(Failure::Invalid);
+            };
+            let source = effect.source;
+            let enclosing = self.cell_enclosing(&seed, seed.stack, budget)?;
+            let initializer_source = self
+                .data
+                .as_ref()
+                .ok_or(Failure::Invalid)?
+                .cell_initializer_source(entry.position.code, budget)?;
+            self.record_cell_retention(
+                CellRetentionSite {
+                    target: owner,
+                    request: None,
+                    root,
+                    source: initializer_source,
+                    acquisition: source,
+                },
+                &enclosing,
+                &predecessors,
+                budget,
+            )?;
+            // Keep an enclosing same-site occurrence, but replace the marker
+            // belonging solely to this not-yet-entered acquisition.
+            charge(budget, seed.cells.len().saturating_mul(seed.heap.len()))?;
+            seed.cells.retain(|cell| seed.heap.iter().any(|edge| matches!(edge.frame,
+                Frame::Resource { code, value_context, .. } if cell.occurrence == ProviderResourceOccurrence { code, value_context })));
+            charge(budget, 1)?;
+            seed.cells.try_reserve(1).map_err(|_| Failure::Resource)?;
+            seed.cells.push(CellContents {
+                occurrence: ProviderResourceOccurrence {
+                    code: entry.position.code,
+                    value_context: context,
+                },
+                owner,
+                roots: copy_slice(&[root], budget)?,
+                enclosing: share_cell_birth_slice(enclosing, budget)?,
+                predecessors: share_cell_birth_slice(predecessors, budget)?,
+                shared: false,
+            });
+        }
         seed.push(
             Frame::Resource {
                 code: entry.position.code,
@@ -3211,7 +3480,6 @@ impl<'a> Analysis<'a> {
             code: body,
             next: 0,
         };
-        data.close(budget)?;
         Ok(seed)
     }
 
@@ -3234,6 +3502,22 @@ impl<'a> Analysis<'a> {
             }
             let mut next = state.copy(budget)?;
             next.stack = edge.next;
+            if let Frame::Resource {
+                code,
+                value_context,
+                ..
+            } = edge.frame
+            {
+                charge(budget, next.cells.len())?;
+                next.cells.retain(|cell| {
+                    cell.shared
+                        || cell.occurrence
+                            != ProviderResourceOccurrence {
+                                code,
+                                value_context,
+                            }
+                });
+            }
             match edge.frame {
                 Frame::Closing {
                     code,
@@ -3494,6 +3778,14 @@ impl<'a> Analysis<'a> {
         Ok((possible, outward))
     }
 
+    fn is_generic_cell_handler(&self, frame: Frame) -> bool {
+        let code = match frame {
+            Frame::Handler { code, .. } | Frame::RemovedHandler { code, .. } => code,
+            _ => return false,
+        };
+        matches!(&self.graph.code[code], Control::Handler { effect, .. } if effect.effect.as_ref().is_some_and(|effect| effect.effect().module().is_builtin_generic_cell()))
+    }
+
     fn boundary_match_key(&self, frame: Frame) -> (usize, usize, Option<Frame>) {
         let (code, context) = match frame {
             Frame::Handler { code, context, .. }
@@ -3507,7 +3799,12 @@ impl<'a> Analysis<'a> {
                 if !effect.members.is_empty());
         // Preserve legacy code/context cache hits. Group permissions additionally
         // depend on the exact owner occurrence and selected active phase.
-        (code, context, grouped.then_some(frame))
+        (
+            code,
+            context,
+            (grouped || self.is_generic_cell(frame) || self.is_generic_cell_handler(frame))
+                .then_some(frame),
+        )
     }
 
     fn requested(
@@ -3533,6 +3830,7 @@ impl<'a> Analysis<'a> {
         // Resolve labels first so selection's callback does not borrow the
         // shared structural work counter a second time.
         let mut matching = HashMap::new();
+        let mut cell_operands = None;
         charge(budget, state.heap.len())?;
         for edge in &state.heap {
             if let Frame::Handler { code, context, .. }
@@ -3581,6 +3879,87 @@ impl<'a> Analysis<'a> {
                         }
                         _ => return Err(Failure::Invalid),
                     }
+                };
+                let relation = if self.is_generic_cell(edge.frame)
+                    && let Control::Request(request) = &self.graph.code[event.code]
+                    && let Some(operation) = request.operation
+                    && operation.owner().module().is_builtin_generic_cell()
+                {
+                    let port = event.port.ok_or(Failure::Invalid)?;
+                    if cell_operands.is_none() {
+                        cell_operands =
+                            Some(self.data.as_mut().ok_or(Failure::Invalid)?.cell_operands(
+                                port,
+                                operation == crate::types::OperationId::new(operation.owner(), 1),
+                                budget,
+                            )?);
+                    }
+                    let operands = cell_operands.as_ref().ok_or(Failure::Invalid)?;
+                    let Frame::Resource {
+                        code,
+                        value_context,
+                        ..
+                    } = edge.frame
+                    else {
+                        return Err(Failure::Invalid);
+                    };
+                    let occurrence = ProviderResourceOccurrence {
+                        code,
+                        value_context,
+                    };
+                    let mut possible = false;
+                    let mut outward = false;
+                    for (targets, _) in operands {
+                        for target in targets {
+                            charge(budget, state.cells.len() + 1)?;
+                            let matches = state
+                                .cells
+                                .iter()
+                                .any(|cell| cell.occurrence == occurrence && cell.owner == *target);
+                            possible |= matches;
+                            outward |= !matches;
+                        }
+                    }
+                    // Label matching may conservatively equate distinct rigid
+                    // owner variables. Actual access targets select the live
+                    // builtin occurrence; every other possible target continues
+                    // outward. Empty operands await the value-queue replay.
+                    (relation.0 && possible, relation.1 || outward)
+                } else if self.is_generic_cell_handler(edge.frame)
+                    && let Control::Request(request) = &self.graph.code[event.code]
+                    && let Some(operation) = request.operation
+                    && operation.owner().module().is_builtin_generic_cell()
+                {
+                    let (Frame::Handler { value_context, .. }
+                    | Frame::RemovedHandler { value_context, .. }) = edge.frame
+                    else {
+                        return Err(Failure::Invalid);
+                    };
+                    let data = self.data.as_mut().ok_or(Failure::Invalid)?;
+                    if let Some(owners) = data.handler_cell_owners(code, value_context, budget)? {
+                        if cell_operands.is_none() {
+                            cell_operands = Some(data.cell_operands(
+                                event.port.ok_or(Failure::Invalid)?,
+                                operation == crate::types::OperationId::new(operation.owner(), 1),
+                                budget,
+                            )?);
+                        }
+                        let mut possible = false;
+                        let mut outward = false;
+                        for (targets, _) in cell_operands.as_ref().ok_or(Failure::Invalid)? {
+                            for target in targets {
+                                charge(budget, owners.len() + 1)?;
+                                let matches = owners.contains(target);
+                                possible |= matches;
+                                outward |= !matches;
+                            }
+                        }
+                        (relation.0 && possible, relation.1 || outward)
+                    } else {
+                        relation
+                    }
+                } else {
+                    relation
                 };
                 matching.try_reserve(1).map_err(|_| Failure::Resource)?;
                 matching.insert(self.boundary_match_key(edge.frame), relation);
@@ -3761,6 +4140,314 @@ impl<'a> Analysis<'a> {
         Ok(())
     }
 
+    fn is_generic_cell(&self, frame: Frame) -> bool {
+        matches!(frame, Frame::Resource { code, .. }
+            if matches!(&self.graph.code[code], Control::Resource { effect, .. }
+                if effect.effect.as_ref().is_some_and(|instance| instance.effect().module().is_builtin_generic_cell())))
+    }
+
+    fn cell_enclosing(
+        &mut self,
+        state: &State,
+        stack: Address,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Vec<(usize, usize)>, Failure> {
+        let mut enclosing = Vec::new();
+        for edge in &state.heap {
+            charge(budget, 1)?;
+            let Frame::Resource {
+                code,
+                value_context,
+                ..
+            } = edge.frame
+            else {
+                continue;
+            };
+            let (_, absent) = selections(
+                state,
+                stack,
+                |frame| {
+                    let selected = matches!(frame, Frame::Resource { code: other, value_context: context, .. }
+                    if code == other && value_context == context);
+                    Ok((selected, !selected))
+                },
+                budget,
+            )?;
+            if !absent && let Some(data) = &mut self.data {
+                let occurrence = ProviderResourceOccurrence {
+                    code,
+                    value_context,
+                };
+                charge(budget, state.cells.len())?;
+                let owners = if let Some(cell) = state
+                    .cells
+                    .iter()
+                    .find(|cell| cell.occurrence == occurrence)
+                {
+                    copy_slice(&[cell.owner], budget)?
+                } else {
+                    data.cell_owner(code, value_context, budget)?
+                };
+                charge(budget, owners.len())?;
+                enclosing
+                    .try_reserve(owners.len())
+                    .map_err(|_| Failure::Resource)?;
+                enclosing.extend(owners);
+            }
+        }
+        Ok(enclosing)
+    }
+
+    fn record_cell_retention(
+        &mut self,
+        site: CellRetentionSite,
+        enclosing: &[(usize, usize)],
+        predecessors: &[usize],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let CellRetentionSite {
+            target,
+            request,
+            root,
+            source,
+            acquisition,
+        } = site;
+        // Normal discovery supplies candidate entries and current contents,
+        // never an ownership proof. Each designated query checks its target;
+        // obligations for other targets belong to their own focused queries.
+        if self
+            .data
+            .as_ref()
+            .and_then(super::value::Analysis::cell_focus)
+            != Some(target)
+        {
+            return Ok(());
+        }
+        let enclosing = copy_slice(enclosing, budget)?;
+        let predecessors = copy_slice(predecessors, budget)?;
+        charge(budget, 1)?;
+        self.cell_retentions
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        self.cell_retentions.push(CellRetention {
+            target,
+            request,
+            root,
+            enclosing,
+            predecessors,
+            source,
+            acquisition,
+        });
+        Ok(())
+    }
+
+    fn initialize_cell(
+        &mut self,
+        state: &mut State,
+        code: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let occurrence = ProviderResourceOccurrence {
+            code,
+            value_context: state.value_context,
+        };
+        let frame = Frame::Resource {
+            code,
+            value_context: state.value_context,
+            context: state.context,
+            focused: false,
+        };
+        if !self.is_generic_cell(frame) {
+            return Ok(());
+        }
+        let Control::Resource { effect, .. } = &self.graph.code[code] else {
+            return Err(Failure::Invalid);
+        };
+        let source = effect.source;
+        let (owner, root) = self
+            .data
+            .as_mut()
+            .ok_or(Failure::Invalid)?
+            .cell_initializer(code, state.value_context, budget)?;
+        let enclosing = self.cell_enclosing(state, state.stack, budget)?;
+        let predecessors = self
+            .data
+            .as_ref()
+            .ok_or(Failure::Invalid)?
+            .cell_predecessors(code, state.value_context, budget)?;
+        let initializer_source = self
+            .data
+            .as_ref()
+            .ok_or(Failure::Invalid)?
+            .cell_initializer_source(code, budget)?;
+        self.record_cell_retention(
+            CellRetentionSite {
+                target: owner,
+                request: None,
+                root,
+                source: initializer_source,
+                acquisition: source,
+            },
+            &enclosing,
+            &predecessors,
+            budget,
+        )?;
+        charge(budget, state.cells.len() + 1)?;
+        if let Some(cell) = state
+            .cells
+            .iter_mut()
+            .find(|cell| cell.occurrence == occurrence)
+        {
+            cell.intersect_birth(&enclosing, &predecessors, budget)?;
+            cell.shared = true;
+            cell.insert_root(root, budget)?;
+        } else {
+            state.cells.try_reserve(1).map_err(|_| Failure::Resource)?;
+            state.cells.push(CellContents {
+                occurrence,
+                owner,
+                roots: copy_slice(&[root], budget)?,
+                enclosing: share_cell_birth_slice(enclosing, budget)?,
+                predecessors: share_cell_birth_slice(predecessors, budget)?,
+                shared: false,
+            });
+        }
+        if !self.focusing {
+            charge(budget, 1)?;
+            self.candidates
+                .try_reserve(1)
+                .map_err(|_| Failure::Resource)?;
+            self.candidates.insert(owner);
+        }
+        Ok(())
+    }
+
+    fn requested_cell(
+        &mut self,
+        state: &State,
+        event: Event,
+        selected: &Selection,
+        pending: &mut VecDeque<State>,
+        visited: &mut HashSet<State>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let Frame::Resource {
+            code,
+            value_context,
+            ..
+        } = selected.boundary.frame
+        else {
+            return Err(Failure::Invalid);
+        };
+        let occurrence = ProviderResourceOccurrence {
+            code,
+            value_context,
+        };
+        let Control::Resource { effect, .. } = &self.graph.code[code] else {
+            return Err(Failure::Invalid);
+        };
+        let acquisition = effect.source;
+        // Labels intern exact effect instances and intentionally erase operation
+        // identity. Only the original request selects read versus write.
+        let Control::Request(request) = &self.graph.code[event.code] else {
+            return Err(Failure::Invalid);
+        };
+        let operation = request.operation.ok_or(Failure::Invalid)?;
+        let source = request.source;
+        let api = crate::resolved::ResourceApi::for_module(operation.owner().module())
+            .ok_or(Failure::Invalid)?;
+        let write = operation == crate::types::OperationId::new(api.ops(), 1);
+        if !write && operation != crate::types::OperationId::new(api.ops(), 0) {
+            return Err(Failure::Invalid);
+        }
+        let request = event.port.ok_or(Failure::Invalid)?;
+        let operands = self
+            .data
+            .as_mut()
+            .ok_or(Failure::Invalid)?
+            .cell_operands(request, write, budget)?;
+        for (targets, replacement) in operands {
+            for owner in targets {
+                charge(budget, state.cells.len() + 1)?;
+                let Some(index) = state
+                    .cells
+                    .iter()
+                    .position(|cell| cell.occurrence == occurrence && cell.owner == owner)
+                else {
+                    // This alternative belongs to another builtin occurrence;
+                    // boundary selection retained its independent outward path.
+                    continue;
+                };
+                let mut next = state.copy(budget)?;
+                if let Some(root) = replacement {
+                    self.record_cell_retention(
+                        CellRetentionSite {
+                            target: owner,
+                            request: Some(request),
+                            root,
+                            source,
+                            acquisition,
+                        },
+                        &state.cells[index].enclosing,
+                        &state.cells[index].predecessors,
+                        budget,
+                    )?;
+                    if !next.cells[index].shared {
+                        next.cells[index].roots.clear();
+                    }
+                    next.cells[index].insert_root(root, budget)?;
+                    self.data
+                        .as_mut()
+                        .ok_or(Failure::Invalid)?
+                        .external_result(request, budget)?;
+                } else {
+                    for root in &state.cells[index].roots {
+                        charge(budget, 1)?;
+                        self.data
+                            .as_mut()
+                            .ok_or(Failure::Invalid)?
+                            .cell_read(request, *root, budget)?;
+                    }
+                }
+                self.returned(next, pending, visited, budget)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn check_cell_retentions(&mut self, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        let Some(data) = &mut self.data else {
+            return Ok(());
+        };
+        // Symbolic recurring occurrences cannot prove strict ownership. Every
+        // actual acquisition entry is checked with its fresh designated marker.
+        let Some(focus) = data.cell_focus() else {
+            return Ok(());
+        };
+        for retention in &self.cell_retentions {
+            charge(budget, 1)?;
+            if retention.target != focus {
+                continue;
+            }
+            if let Err(mut failure) = data.cell_retention(
+                retention.root,
+                &retention.enclosing,
+                &retention.predecessors,
+                (retention.source, retention.acquisition),
+                budget,
+            ) {
+                if let Failure::Dependency { source, causes, .. } = &mut failure
+                    && let Some(request) = retention.request
+                {
+                    (*source, causes[1]) =
+                        data.cell_request_site(request, *source, retention.acquisition, budget)?;
+                }
+                return Err(failure);
+            }
+        }
+        Ok(())
+    }
+
     #[inline(never)]
     fn requested_native(
         &mut self,
@@ -3771,6 +4458,9 @@ impl<'a> Analysis<'a> {
         visited: &mut HashSet<State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
+        if self.is_generic_cell(selected.boundary.frame) {
+            return self.requested_cell(state, event, selected, pending, visited, budget);
+        }
         if matches!(
             &self.graph.code[event.code],
             Control::Request(Request {
@@ -4585,6 +5275,18 @@ impl<'a> Analysis<'a> {
                         .map_err(|_| Failure::Resource)?;
                     self.candidates.insert(candidate);
                 } else {
+                    if self.focusing
+                        && matches!(&self.graph.code[code], Control::Resource { effect, .. }
+                        if effect.effect.as_ref().is_some_and(|instance| instance.effect().module().is_builtin_generic_cell()))
+                    {
+                        return Err(data.cell_escape_failure(
+                            failure,
+                            Some(port),
+                            code,
+                            context,
+                            budget,
+                        )?);
+                    }
                     return Err(failure);
                 }
             }
@@ -4595,6 +5297,213 @@ impl<'a> Analysis<'a> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn generic_cell_copied_birth_intersection_is_atomic_and_keeps_snapshot_roots() {
+        let original = State {
+            position: Position { code: 0, next: 0 },
+            context: 0,
+            value_context: 0,
+            stack: Address::Empty,
+            heap: Vec::new(),
+            abandoned: None,
+            cells: vec![CellContents {
+                occurrence: ProviderResourceOccurrence {
+                    code: 1,
+                    value_context: 2,
+                },
+                owner: (3, 4),
+                roots: vec![7],
+                enclosing: vec![(1, 1), (2, 2)].into(),
+                predecessors: vec![11, 13].into(),
+                shared: true,
+            }],
+        };
+        let run = |work: &mut TypeWorkBudget| {
+            let mut copied = original.copy(&mut TypeWorkBudget::default()).unwrap();
+            assert!(Arc::ptr_eq(
+                &copied.cells[0].enclosing,
+                &original.cells[0].enclosing
+            ));
+            assert!(Arc::ptr_eq(
+                &copied.cells[0].predecessors,
+                &original.cells[0].predecessors
+            ));
+            let result = copied.cells[0].intersect_birth(&[(1, 1)], &[13], work);
+            (result, copied)
+        };
+        let mut measured = TypeWorkBudget::default();
+        let (result, mut copied) = run(&mut measured);
+        result.unwrap();
+        assert_eq!(&*copied.cells[0].enclosing, &[(1, 1)]);
+        assert_eq!(&*copied.cells[0].predecessors, &[13]);
+        copied.cells[0]
+            .insert_root(9, &mut TypeWorkBudget::default())
+            .unwrap();
+        assert_eq!(copied.cells[0].roots, [7, 9]);
+        assert_eq!(original.cells[0].roots, [7]);
+        assert_eq!(&*original.cells[0].enclosing, &[(1, 1), (2, 2)]);
+        assert_eq!(&*original.cells[0].predecessors, &[11, 13]);
+        let (result, refused) = run(&mut TypeWorkBudget::with_limit(measured.used() - 1));
+        assert!(matches!(result, Err(Failure::Resource)));
+        assert_eq!(
+            refused, original,
+            "intersection refusal publishes neither replacement slice"
+        );
+        for _ in 0..2 {
+            let mut exact = TypeWorkBudget::with_limit(measured.used());
+            let (result, copied) = run(&mut exact);
+            result.unwrap();
+            assert_eq!(&*copied.cells[0].enclosing, &[(1, 1)]);
+            assert_eq!(&*copied.cells[0].predecessors, &[13]);
+            assert_eq!(exact.used(), measured.used());
+        }
+    }
+
+    #[test]
+    fn generic_cell_wide_state_replay_hits_pay_complete_keys_and_retry() {
+        for width in [0, 1, 64] {
+            let make = || State {
+                position: Position { code: 0, next: 0 },
+                context: 0,
+                value_context: 0,
+                stack: Address::Empty,
+                abandoned: None,
+                heap: (0..width)
+                    .map(|code| Edge {
+                        address: Address::Slot {
+                            region: Region::Active,
+                            site: Site::Resource(code),
+                            allocation_context: code,
+                            old: false,
+                        },
+                        frame: Frame::Resource {
+                            code,
+                            context: 0,
+                            value_context: code,
+                            focused: false,
+                        },
+                        next: Address::Empty,
+                    })
+                    .collect(),
+                cells: vec![CellContents {
+                    occurrence: ProviderResourceOccurrence {
+                        code: 1,
+                        value_context: 2,
+                    },
+                    owner: (3, 4),
+                    roots: (0..width).collect(),
+                    enclosing: (0..width)
+                        .map(|code| (code, code))
+                        .collect::<Vec<_>>()
+                        .into(),
+                    predecessors: (0..width).collect::<Vec<_>>().into(),
+                    shared: true,
+                }],
+            };
+            let state = make();
+            let set = HashSet::from([make()]);
+            let map = HashMap::from([(make(), 7)]);
+            let hit = |work: &mut TypeWorkBudget| -> Result<(), Failure> {
+                state.charge_key(work)?;
+                assert!(set.contains(&state));
+                state.charge_key(work)?;
+                assert_eq!(map.get(&state), Some(&7));
+                Ok(())
+            };
+            let mut measured = TypeWorkBudget::default();
+            hit(&mut measured).unwrap();
+            assert!(measured.used() >= 2 * (5 * width + 5));
+            assert!(matches!(
+                hit(&mut TypeWorkBudget::with_limit(measured.used() - 1)),
+                Err(Failure::Resource)
+            ));
+            assert_eq!((set.len(), map.len()), (1, 1));
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(measured.used());
+                hit(&mut exact).unwrap();
+                assert_eq!(exact.used(), measured.used());
+            }
+        }
+    }
+
+    #[test]
+    fn generic_cell_state_insertion_pays_nested_roots_before_publication() {
+        let make = || State {
+            position: Position { code: 0, next: 0 },
+            context: 0,
+            value_context: 0,
+            stack: Address::Empty,
+            heap: Vec::new(),
+            abandoned: None,
+            cells: vec![CellContents {
+                occurrence: ProviderResourceOccurrence {
+                    code: 1,
+                    value_context: 2,
+                },
+                owner: (3, 4),
+                roots: (0..64).collect(),
+                enclosing: vec![(1, 2)].into(),
+                predecessors: (64..96).collect::<Vec<_>>().into(),
+                shared: true,
+            }],
+        };
+        let run = |work: &mut TypeWorkBudget| {
+            let mut pending = VecDeque::new();
+            let mut visited = HashSet::new();
+            let result = Analysis::enqueue(make(), &mut pending, &mut visited, work);
+            (result, pending.len(), visited.len())
+        };
+        let mut measured = TypeWorkBudget::default();
+        let (result, pending, visited) = run(&mut measured);
+        result.unwrap();
+        assert_eq!((pending, visited), (1, 1));
+        let (result, pending, visited) = run(&mut TypeWorkBudget::with_limit(measured.used() - 1));
+        assert!(matches!(result, Err(Failure::Resource)));
+        assert_eq!((pending, visited), (0, 0));
+        for _ in 0..2 {
+            let mut exact = TypeWorkBudget::with_limit(measured.used());
+            let (result, pending, visited) = run(&mut exact);
+            result.unwrap();
+            assert_eq!((pending, visited, exact.used()), (1, 1, measured.used()));
+        }
+    }
+
+    #[test]
+    fn generic_cell_root_join_refusal_preserves_current_roots_and_retries() {
+        let make = || super::CellContents {
+            occurrence: super::ProviderResourceOccurrence {
+                code: 1,
+                value_context: 2,
+            },
+            owner: (3, 4),
+            roots: vec![7, 11],
+            enclosing: vec![(1, 2)].into(),
+            predecessors: vec![5].into(),
+            shared: true,
+        };
+        let mut measured = crate::types::TypeWorkBudget::default();
+        let mut joined = make();
+        joined.insert_root(9, &mut measured).unwrap();
+        assert_eq!(joined.roots, [7, 9, 11]);
+        let mut refused = make();
+        assert!(
+            refused
+                .insert_root(
+                    9,
+                    &mut crate::types::TypeWorkBudget::with_limit(measured.used() - 1)
+                )
+                .is_err()
+        );
+        assert_eq!(refused.roots, [7, 11]);
+        for _ in 0..2 {
+            let mut fresh = make();
+            let mut exact = crate::types::TypeWorkBudget::with_limit(measured.used());
+            fresh.insert_root(9, &mut exact).unwrap();
+            assert_eq!(fresh.roots, joined.roots);
+            assert_eq!(exact.used(), measured.used());
+        }
+    }
+
     use super::super::CallableSlots;
     use super::*;
     use crate::core::capture::Callable;
@@ -4622,6 +5531,7 @@ mod tests {
             context: 0,
             value_context,
             stack: address,
+            cells: Vec::new(),
             heap: vec![Edge {
                 address,
                 frame,
@@ -4700,6 +5610,7 @@ mod tests {
                 context: 0,
                 value_context: 0,
                 stack: address,
+                cells: Vec::new(),
                 heap: vec![Edge {
                     address,
                     frame: clause,
@@ -4758,6 +5669,7 @@ mod tests {
             context: 0,
             value_context: 0,
             stack: address(removed),
+            cells: Vec::new(),
             heap: vec![
                 Edge {
                     address: address(removed),
@@ -5301,6 +6213,7 @@ mod tests {
                     value_context: 0,
                     stack: inner,
                     abandoned: None,
+                    cells: Vec::new(),
                     heap: vec![
                         Edge {
                             address: inner,
@@ -5426,6 +6339,7 @@ mod tests {
                 value_context: 0,
                 stack: root,
                 abandoned: None,
+                cells: Vec::new(),
                 heap: vec![
                     Edge {
                         address: root,
@@ -5533,6 +6447,7 @@ mod tests {
                             context: 3,
                             value_context: 4,
                             stack: address,
+                            cells: Vec::new(),
                             heap: vec![Edge {
                                 address,
                                 frame,
@@ -5590,6 +6505,7 @@ mod tests {
                 value_context: 0,
                 stack: heap[0].address,
                 heap,
+                cells: Vec::new(),
                 abandoned: Some((7, event)),
             };
             let run = |budget: &mut TypeWorkBudget| {
@@ -5668,6 +6584,7 @@ mod tests {
                 context: 2,
                 value_context: 3,
                 stack,
+                cells: Vec::new(),
                 heap: vec![
                     Edge {
                         address: stack,
@@ -5704,6 +6621,7 @@ mod tests {
                         value_context: 5,
                         stack: Address::Empty,
                         heap: Vec::new(),
+                        cells: Vec::new(),
                         abandoned: port.map(|port| {
                             (
                                 7,
@@ -5762,6 +6680,7 @@ mod tests {
                 context: 4,
                 value_context: 5,
                 stack: root,
+                cells: Vec::new(),
                 heap: vec![Edge {
                     address: root,
                     frame,
@@ -5812,6 +6731,7 @@ mod tests {
                 value_context: 0,
                 stack: Address::Empty,
                 heap: Vec::new(),
+                cells: Vec::new(),
                 abandoned: None,
             };
             state.push(frame(3), budget)?;
@@ -5884,6 +6804,7 @@ mod tests {
                 context: 0,
                 value_context: 0,
                 stack: root,
+                cells: Vec::new(),
                 heap: vec![
                     Edge {
                         address: root,
@@ -5968,6 +6889,7 @@ mod tests {
                 value_context: 0,
                 stack: Address::Empty,
                 heap: Vec::new(),
+                cells: Vec::new(),
                 abandoned: None,
             };
             state.stack = state.copy_segment(
@@ -6065,6 +6987,7 @@ mod tests {
             value_context: 0,
             stack: Address::Empty,
             heap: Vec::new(),
+            cells: Vec::new(),
             abandoned: None,
         };
         let crossed = [Edge {
@@ -6163,6 +7086,7 @@ mod tests {
                 value_context: 0,
                 stack: Address::Empty,
                 heap: Vec::new(),
+                cells: Vec::new(),
                 abandoned: None,
             };
             let result = state.copy_segment(
@@ -6286,6 +7210,7 @@ mod tests {
                 value_context: 0,
                 stack: root,
                 heap,
+                cells: Vec::new(),
                 abandoned: None,
             };
             state.normalize(&mut TypeWorkBudget::unbounded()).unwrap();
@@ -6346,6 +7271,7 @@ mod tests {
                 value_context: 0,
                 stack: Address::Empty,
                 heap,
+                cells: Vec::new(),
                 abandoned: None,
             };
             for target in [
@@ -6489,6 +7415,7 @@ mod tests {
                 value_context: 0,
                 stack: root,
                 heap: heap.clone(),
+                cells: Vec::new(),
                 abandoned: None,
             };
             let mut expected = state.copy(&mut TypeWorkBudget::unbounded()).unwrap();

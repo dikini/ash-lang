@@ -1669,6 +1669,61 @@ and its operation payloads. An action may access an enclosing cell while that
 cell remains live, but cleanup does not authorize exporting its dependencies.
 An escaping dependency remains `type.resource-escape`.
 
+## Generic cell foundation
+
+`@builtin.generic_cell` supplies the separate opaque `Cell<R,T>` family, sealed
+`Provider<R,T>` relation and exact `Ops<R,T>` effect. Its methods have rank-1
+schemes `Cell<R,T> -> T ! {Ops<R,T>}` and
+`(Cell<R,T>, T) -> Unit ! {Ops<R,T>}`, both requiring `Provider<R,T>`.
+The legacy integer API below retains its independent identities and behavior.
+
+Named acquisition checks its initializer against the fixed monomorphic `T` in
+the preceding scope. The body receives a fresh rigid kind-`Type` owner, access
+`Cell<R,T>` and exact provider evidence. Ordinary checking computes the union
+of initializer effects with body effects minus exactly `Ops<R,T>`. Other
+instances remain outward. Reads are applications and do not generalize their
+results. Existing ordinary kind, type, row, sealed-evidence, State/view transport
+and continuation restrictions apply before dependency admission. In particular,
+restricted native State and views cannot become cell payloads through wrappers.
+
+`R` identifies the cell's logical owner, not an allocation region. The cell's
+lifetime is exactly its resource scope. Longer-lived backing storage cannot
+extend access, return a live-reader closure beyond that scope or defer its
+required completion.
+
+Dependency admission tracks the current contents of each possible activation
+separately from its access values and previous read results. Initialization and
+actual builtin replacements require every retained resource owner to strictly
+enclose the target activation. Self-retention, indirect resource cycles and
+younger or incomparable retention reject, including hidden captures, selected
+evidence and indexed operation metadata. A later clearing replacement cannot
+repair an earlier invalid retention. Ordinary immutable cycles remain subject
+to the existing data rules.
+
+A read snapshot retains the dependencies of the value returned at that point;
+later replacements do not change it. A closure capturing live access retains
+that owner. A closure capturing only an independent earlier snapshot may escape.
+These relationships survive aliases, selected fields, imported helper summaries,
+Type/Row instantiation, joins and recursive calls. Every possible target and
+payload must satisfy the relation. Recursive activations of one lexical site
+remain distinct; an enclosing activation's capture may initialize its child.
+
+Exact source handlers retain ordinary precedence. An intercepted request uses
+its actual reply dependencies and contributes no builtin replacement itself.
+Writes from clauses, other handlers and resumed computations update contents
+in control order. Capturing and resuming preserves established acquisition
+relations; placing a younger scope outside a restored frame does not make it
+an enclosing owner of that older activation. Existing payload crossing, scoped
+escape, native retention and structural completion checks continue to apply.
+
+Ordinary errors retain precedence. Unproved retention or escape reports
+`type.resource-escape` at the initializer, replacement or escaping expression,
+with acquisition and known capture/call causes. No module, helper summary or
+linked Core permission is published without the dependency proof. Canonical
+metadata imports and conditional helpers remain admissible. Execution requires
+this source/Core proof and the separate runtime operation, complete type and
+activation checks described in the dynamic semantics.
+
 ## Scoped cells and resource dependencies
 
 The compiler-owned `@builtin.cell` module supplies one sealed API. The import

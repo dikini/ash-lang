@@ -665,8 +665,12 @@ fn sqlite_input_extent_refusal_precedes_binding_and_preserves_owner_release() {
         NativeLinkInput::StaticArchive(archive),
         NativeLinkInput::SharedLibrary(PathBuf::from("/usr/lib/x86_64-linux-gnu/libsqlite3.so.0")),
     ];
-    configuration.cargo_target_directory =
-        Some(PathBuf::from(std::env::var_os("CARGO_TARGET_DIR").unwrap()).join("ffi-native-hosts"));
+    configuration.cargo_target_directory = Some(
+        std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"))
+            .join("ffi-native-hosts"),
+    );
     let prepared = prepare_program(&compiled, configuration).unwrap();
     for name in ["entry.ash", "sqlite.ash"] {
         fs::remove_file(fixture.0.join(name)).unwrap();
@@ -865,8 +869,12 @@ fn real_column_copy_probe_with_key(bind_blob: bool, dynamic_key: Option<i32>) {
             .native_inputs
             .insert(0, NativeLinkInput::StaticArchive(archive));
     }
-    configuration.cargo_target_directory =
-        Some(PathBuf::from(std::env::var_os("CARGO_TARGET_DIR").unwrap()).join("ffi-native-hosts"));
+    configuration.cargo_target_directory = Some(
+        std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"))
+            .join("ffi-native-hosts"),
+    );
     // Optional local failure observation only. The fixture, budgets and
     // generated host are unchanged; retain exact inputs before normal disposal.
     let diagnostic = std::env::var_os("ASH_SQLITE_DIAGNOSTIC_DIR").map(PathBuf::from);
@@ -1013,6 +1021,60 @@ fn declared_sqlite_access_views_cannot_be_hidden_in_private_payloads() {
 }
 
 #[test]
+fn generic_cell_n11_declared_views_cannot_be_payloads_or_hidden_in_wrappers() {
+    use ash::{
+        driver::{FileFailure, PipelineFailure},
+        elaborate::TypeError,
+    };
+    let fixture = Fixture::new();
+    let library = CONNECTION.replace(
+        "    symbol Initialize",
+        &format!("{STATEMENT_DECLARATIONS}{COLUMN_VIEW_DECLARATIONS}    symbol Initialize"),
+    );
+    fs::write(fixture.0.join("sqlite.ash"), library).unwrap();
+    for (payload, initial) in [("Int", "41"), ("Wrapped<Int>", "Wrap(41)")] {
+        fs::write(fixture.0.join("entry.ash"), format!("import @ffi.sqlite as Sqlite\nimport @builtin.generic_cell as Cell\ntype Wrapped<T> = Wrap(T)\nmain : Unit -> Int\nmain () = resource Cell.Cell<R,{payload}> c = ({initial}) {{\n42\n}}\n")).unwrap();
+        let compiled = compile_path(RunConfiguration {
+            entry: fixture.0.join("entry.ash"),
+            roots: ModuleRoots::new([("ffi", &fixture.0)]).unwrap(),
+        })
+        .unwrap();
+        assert_eq!(
+            ash::driver::execute(&compiled).unwrap().value_display(),
+            "42"
+        );
+    }
+    for payload in [
+        "Sqlite.ColumnView<Unit,Unit,Unit>",
+        "(Int,Sqlite.ColumnView<Unit,Unit,Unit>)",
+        "Wrapped<Sqlite.ColumnView<Unit,Unit,Unit>>",
+    ] {
+        fs::write(fixture.0.join("entry.ash"), format!("import @ffi.sqlite as Sqlite\nimport @builtin.generic_cell as Cell\ntype Wrapped<T> = Wrap(T)\nmain : Unit -> Int\nmain () = resource Cell.Cell<R,{payload}> c = 41 {{\n42\n}}\n")).unwrap();
+        let failure = compile_path(RunConfiguration {
+            entry: fixture.0.join("entry.ash"),
+            roots: ModuleRoots::new([("ffi", &fixture.0)]).unwrap(),
+        })
+        .unwrap_err();
+        assert_eq!(
+            failure.reason_code(),
+            "type.argument",
+            "{payload}: {failure:?}"
+        );
+        let FileFailure::Pipeline(context) = failure else {
+            panic!("checked public payload refusal")
+        };
+        let PipelineFailure::Typing(TypeError::Source(diagnostic)) = context.failure() else {
+            panic!("source payload refusal: {:?}", context.failure())
+        };
+        assert_eq!(
+            diagnostic.primary.message(),
+            "controlled native state is unavailable in ordinary callable types or captures",
+            "{payload}: {diagnostic:?}"
+        );
+    }
+}
+
+#[test]
 fn pure_nul_preflight_has_an_explicit_ordinary_result() {
     for (input, expected) in [("", "true"), ("é/name", "true"), ("bad\0name", "false")] {
         let fixture = Fixture::new();
@@ -1051,8 +1113,12 @@ fn imported_connection_diagnostic_is_a_nonconsuming_guarded_native_call() {
     configuration.native_inputs = vec![NativeLinkInput::SharedLibrary(PathBuf::from(
         "/usr/lib/x86_64-linux-gnu/libsqlite3.so.0",
     ))];
-    configuration.cargo_target_directory =
-        Some(PathBuf::from(std::env::var_os("CARGO_TARGET_DIR").unwrap()).join("ffi-native-hosts"));
+    configuration.cargo_target_directory = Some(
+        std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"))
+            .join("ffi-native-hosts"),
+    );
     let prepared = prepare_program(&compiled, configuration).unwrap();
     fs::remove_file(fixture.0.join("entry.ash")).unwrap();
     fs::remove_file(fixture.0.join("sqlite.ash")).unwrap();
@@ -1084,8 +1150,12 @@ fn canonical_string_operations_restore_from_embedded_image_after_source_erasure(
     .unwrap();
     let executable = fixture.0.join("program");
     let mut configuration = BuildConfiguration::new(executable.clone());
-    configuration.cargo_target_directory =
-        Some(PathBuf::from(std::env::var_os("CARGO_TARGET_DIR").unwrap()).join("ffi-native-hosts"));
+    configuration.cargo_target_directory = Some(
+        std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"))
+            .join("ffi-native-hosts"),
+    );
     let prepared = prepare_program(&compiled, configuration).unwrap();
     fs::remove_file(entry).unwrap();
     let built = build_prepared(prepared).unwrap();
@@ -1288,8 +1358,12 @@ fn nested_statement_probe(dynamic_index: bool, protocol: bool, offset_first: boo
     configuration
         .native_inputs
         .insert(0, NativeLinkInput::StaticArchive(archive));
-    configuration.cargo_target_directory =
-        Some(PathBuf::from(std::env::var_os("CARGO_TARGET_DIR").unwrap()).join("ffi-native-hosts"));
+    configuration.cargo_target_directory = Some(
+        std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"))
+            .join("ffi-native-hosts"),
+    );
     let prepared = prepare_program(&compiled, configuration).unwrap();
     fs::remove_file(fixture.0.join("entry.ash")).unwrap();
     fs::remove_file(fixture.0.join("sqlite.ash")).unwrap();
@@ -1432,8 +1506,12 @@ fn connection_program_probe(
             .native_inputs
             .insert(0, NativeLinkInput::StaticArchive(archive));
     }
-    configuration.cargo_target_directory =
-        Some(PathBuf::from(std::env::var_os("CARGO_TARGET_DIR").unwrap()).join("ffi-native-hosts"));
+    configuration.cargo_target_directory = Some(
+        std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"))
+            .join("ffi-native-hosts"),
+    );
     let prepared = prepare_program(&compiled, configuration).unwrap();
     fs::remove_file(fixture.0.join("entry.ash")).unwrap();
     fs::remove_file(fixture.0.join("sqlite.ash")).unwrap();

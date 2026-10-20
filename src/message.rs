@@ -1296,6 +1296,10 @@ messages! {
     resource_escape => "resource-escape" {},
     /// The acquisition that owns the escaping resource dependency.
     resource_acquisition => "resource-acquisition" {},
+    /// The captured value that carries the unproved resource dependency.
+    resource_dependency_capture => "resource-dependency-capture" {},
+    /// The call that propagates the resource-dependent value.
+    resource_dependency_call => "resource-dependency-call" {},
     /// A recursive function member requires a direct anonymous function.
     recursion_initializer => "recursion-initializer" {},
     /// A recursive data member requires a constructor root.

@@ -30,3 +30,43 @@ fn resource_programs_execute_after_independent_ownership_validation() {
     }
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn generic_cell_dependency_checked_program_executes_and_prepares_for_build() {
+    let path = std::env::temp_dir().join(format!(
+        "ash-generic-cell-admission-{}.ash",
+        SourceFile::new("identity", "").unwrap().id().value()
+    ));
+    std::fs::write(&path, "import @builtin.generic_cell as Cell\nmain : Unit -> Int\nmain () = resource Cell.Cell<R, Int> c = 41 {\nlet _ = Cell.write (c, 42)\nCell.read c\n}\n").unwrap();
+    let compiled = ash::driver::compile_path(RunConfiguration {
+        entry: path.clone(),
+        roots: ModuleRoots::empty(),
+    })
+    .expect("source and independent Core dependency proof should succeed");
+    let output = path.with_extension("executable");
+    assert_eq!(
+        ash::driver::execute(&compiled).unwrap().value().to_string(),
+        "42"
+    );
+    let prepared = ash::build::prepare_program(
+        &compiled,
+        ash::build::BuildConfiguration::new(output.clone()),
+    )
+    .expect("connected generic runtime build preparation");
+    assert!(prepared.preparation_work() > 0);
+    assert!(
+        !output.exists(),
+        "preparation alone publishes no executable"
+    );
+    assert_eq!(
+        run_path(RunConfiguration {
+            entry: path.clone(),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap()
+        .value()
+        .to_string(),
+        "42"
+    );
+    std::fs::remove_file(path).unwrap();
+}

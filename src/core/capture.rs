@@ -1267,12 +1267,17 @@ pub(crate) fn selection_targets<'a>(
     values.remove(&selection.root()).ok_or(Failure::Invalid)
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub(crate) enum Failure {
     Resource,
     Escape {
         source: Span,
         acquisition: Span,
+    },
+    Dependency {
+        source: Span,
+        acquisition: Span,
+        causes: Box<[Option<Span>; 2]>,
     },
     Invalid,
     Unsafe(UnsafeDiscard),
@@ -1285,6 +1290,31 @@ pub(crate) enum Failure {
         node: usize,
         source: Span,
     },
+}
+
+impl Failure {
+    /// Keep shared Result frames bounded while retaining exact optional causes.
+    pub(crate) fn dependency(
+        source: Span,
+        acquisition: Span,
+        capture: Option<Span>,
+        call: Option<Span>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, Self> {
+        charge(budget, 2)?;
+        let mut causes = Vec::new();
+        causes.try_reserve_exact(2).map_err(|_| Self::Resource)?;
+        causes.extend([capture, call]);
+        let causes = causes
+            .into_boxed_slice()
+            .try_into()
+            .map_err(|_| Self::Invalid)?;
+        Ok(Self::Dependency {
+            source,
+            acquisition,
+            causes,
+        })
+    }
 }
 
 fn charge(budget: &mut TypeWorkBudget, count: usize) -> Result<(), Failure> {
@@ -2826,14 +2856,14 @@ fn compile_source_resource_capture_control<F: CoreOperationFamily>(
             .ok_or(Failure::Resource)?,
     )?;
     graph.code.try_reserve(7).map_err(|_| Failure::Resource)?;
-    let positions = if matches!(
-        scope.header().codec.report,
-        super::source_resource::SourceResourceReportCodec::AcquiredOnly { .. }
-    ) {
-        Some(data.source_resource_positions(id, budget)?)
-    } else {
-        None
-    };
+    let positions = data.source_resource_positions(
+        id,
+        matches!(
+            scope.header().codec.report,
+            super::source_resource::SourceResourceReportCodec::Scope { .. }
+        ),
+        budget,
+    )?;
     let mut clauses = Vec::new();
     clauses
         .try_reserve_exact(scope.handler.clauses().len())
@@ -2849,11 +2879,7 @@ fn compile_source_resource_capture_control<F: CoreOperationFamily>(
         });
     }
     let handler = graph.code.len();
-    if let Some(positions) = positions {
-        data.position(handler, positions.handler, budget)?;
-    } else {
-        data.position_provider_handler(handler, id, true, budget)?;
-    }
+    data.position(handler, positions.handler, budget)?;
     graph.code.push(Control::Handler {
         body: index(scope.handler.body()) + 1,
         effect: Request::effect(scope.handler.effect(), source, budget)?,
@@ -2874,7 +2900,7 @@ fn compile_source_resource_capture_control<F: CoreOperationFamily>(
         effects.push(effect);
     }
     let native_handler = graph.code.len();
-    data.position(native_handler, positions.map_or(id, |p| p.handler), budget)?;
+    data.position(native_handler, positions.handler, budget)?;
     graph.code.push(Control::NativeInterpret {
         body: handler,
         effects,
@@ -2882,8 +2908,8 @@ fn compile_source_resource_capture_control<F: CoreOperationFamily>(
     let mut phases = Vec::new();
     phases.try_reserve_exact(2).map_err(|_| Failure::Resource)?;
     for (root, value) in [
-        (scope.acquire.body, positions.map_or(id, |p| p.acquire)),
-        (scope.finish.body, positions.map_or(id, |p| p.finish)),
+        (scope.acquire.body, positions.acquire),
+        (scope.finish.body, positions.finish),
     ] {
         let mut effects = Vec::new();
         charge(budget, scope.native_interpretations().len())?;
@@ -2904,7 +2930,7 @@ fn compile_source_resource_capture_control<F: CoreOperationFamily>(
         phases.push(position);
     }
     let successful = graph.code.len();
-    data.position(successful, positions.map_or(id, |p| p.cleanup), budget)?;
+    data.position(successful, positions.cleanup, budget)?;
     // Finish is an armed structural obligation, not a body suffix that
     // discard may skip. Its running frame is nonabandonable under the
     // same independent capture rules as an ordinary cleanup action.
@@ -2941,12 +2967,12 @@ fn compile_source_resource_capture_control<F: CoreOperationFamily>(
         source,
     });
     let outcome = graph.code.len();
-    data.position(outcome, positions.map_or(id, |p| p.body), budget)?;
+    data.position(outcome, positions.completed, budget)?;
     graph
         .code
         .push(Control::Choice(copy_slice(&[0, successful], budget)?));
     let acquisition = graph.code.len();
-    data.position(acquisition, positions.map_or(id, |p| p.body), budget)?;
+    data.position(acquisition, positions.body, budget)?;
     graph.code.push(Control::Sequence(copy_slice(
         &[phases[0], outcome],
         budget,
@@ -3080,11 +3106,17 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
             graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
             let scope = graph.code.len();
             data.position(scope, id, budget)?;
-            let mut arguments = Vec::new();
-            charge(budget, 1)?;
-            arguments.try_reserve(1).map_err(|_| Failure::Resource)?;
-            arguments.push(Type::Variable(resource.acquisition.identity));
-            let effect = EffectInstance::new(api.ops(), arguments.into_boxed_slice());
+            let effect = if api.generic() {
+                resource
+                    .instance_with_budget(budget)
+                    .map_err(|_| Failure::Resource)?
+            } else {
+                let mut arguments = Vec::new();
+                charge(budget, 1)?;
+                arguments.try_reserve(1).map_err(|_| Failure::Resource)?;
+                arguments.push(Type::Variable(resource.acquisition.identity));
+                EffectInstance::new(api.ops(), arguments.into_boxed_slice())
+            };
             graph.code.push(Control::Resource {
                 body: index(resource.body) + 1,
                 effect: Request::effect(&effect, resource.acquisition.span, budget)?,
@@ -6394,6 +6426,46 @@ mod tests {
     };
 
     #[test]
+    fn dependency_failure_storage_is_charged_exact_and_retryable() {
+        let source =
+            SourceFile::new("dependency-causes.ash", "source acquisition capture call").unwrap();
+        let span = |start, end| source.span(ByteRange::new(start, end).unwrap()).unwrap();
+        for capture in [None, Some(span(19, 26))] {
+            for call in [None, Some(span(27, 31))] {
+                assert!(matches!(
+                    Failure::dependency(
+                        span(0, 6),
+                        span(7, 18),
+                        capture,
+                        call,
+                        &mut TypeWorkBudget::with_limit(1)
+                    ),
+                    Err(Failure::Resource)
+                ));
+                for _ in 0..2 {
+                    let mut budget = TypeWorkBudget::with_limit(2);
+                    let Failure::Dependency {
+                        source: actual,
+                        acquisition,
+                        causes,
+                    } = Failure::dependency(span(0, 6), span(7, 18), capture, call, &mut budget)
+                        .unwrap()
+                    else {
+                        panic!("dependency failure");
+                    };
+                    assert_eq!(
+                        (actual, acquisition, *causes),
+                        (span(0, 6), span(7, 18), [capture, call])
+                    );
+                    assert_eq!(budget.used(), 2);
+                }
+            }
+        }
+        // Optional diagnostic storage must not widen every shared Result frame.
+        assert!(std::mem::size_of::<Failure>() <= 48);
+    }
+
+    #[test]
     fn request_copy_retains_exact_legacy_and_group_work_boundaries() {
         use crate::{module::ModuleId, types::EffectId};
         let source = SourceFile::new("request-copy.ash", "x").unwrap();
@@ -8160,6 +8232,117 @@ mod tests {
         let mut retry = TypeWorkBudget::with_limit(measured.used());
         check_nodes(&core.nodes, &[], &[], operation, &mut retry).unwrap();
         assert_eq!(retry.used(), measured.used());
+    }
+
+    #[test]
+    fn generic_cell_body_free_write_summary_authenticates_contents_graph_and_return() {
+        use crate::{
+            elaborate::check_module,
+            interface::InterfaceConstraintBudget,
+            module::{ModuleRoots, load_module_graph},
+            resolve::{DependencyExports, resolve_module},
+            resolved::{
+                CheckedModule, ImportedGlobalScheme, same_imported_global_fact_with_budget,
+            },
+        };
+        let unique = SourceFile::new("generic-summary-id", "")
+            .unwrap()
+            .id()
+            .value();
+        let path = std::env::temp_dir().join(format!(
+            "ash-generic-summary-{}-{unique}.ash",
+            std::process::id()
+        ));
+        std::fs::write(&path, "import @builtin.generic_cell as Cell\npub put<R,T> : (Cell.Cell<R,T>,T) -> Unit ! {Cell.Ops<R,T>} where Cell.Provider<R,T>\nput pair = Cell.write pair\n").unwrap();
+        let loaded = load_module_graph(&path, &ModuleRoots::empty());
+        std::fs::remove_file(path).unwrap();
+        let graph = loaded.unwrap();
+        let mut checked: Vec<CheckedModule> = Vec::new();
+        for module in graph.modules() {
+            let dependencies = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    DependencyExports::new(
+                        edge,
+                        checked
+                            .iter()
+                            .find(|value| value.module() == edge.target())
+                            .unwrap()
+                            .exports(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            checked.push(check_module(resolve_module(module, &dependencies).unwrap()).unwrap());
+        }
+        let exported = checked
+            .iter()
+            .find(|value| value.module() == graph.entry())
+            .unwrap()
+            .exports()
+            .term("put")
+            .unwrap();
+        let retained = exported.capture.graph.as_ref().unwrap();
+        assert!(
+            retained.data.is_some(),
+            "actual generic stored-value equations are retained"
+        );
+        assert!(
+            retained.code.iter().any(|control| match control {
+                Control::Call { ty, .. } => crate::resolved::generic_cell_dependency_type(
+                    &retained.types.0[*ty],
+                    &mut TypeWorkBudget::default()
+                )
+                .unwrap(),
+                _ => false,
+            }),
+            "the checked Cell.write call retains its generic indexed type"
+        );
+        let canonical = || ImportedGlobalScheme {
+            scalar_preflight: exported.scalar_preflight.clone(),
+            binder: exported.binder,
+            scheme: exported
+                .scheme
+                .clone_with_budget(&mut TypeWorkBudget::unbounded())
+                .unwrap(),
+            origin: exported.origin.clone(),
+            capture: exported.capture.clone(),
+        };
+        let matches = |imported: &ImportedGlobalScheme| {
+            same_imported_global_fact_with_budget(
+                imported,
+                exported,
+                &mut TypeWorkBudget::unbounded(),
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .unwrap()
+        };
+        assert!(matches(&canonical()));
+        for mutation in 0..3 {
+            let mut imported = canonical();
+            match mutation {
+                0 => imported.capture.graph = None,
+                1 => {
+                    imported.capture.graph = Some(Arc::new(SummaryGraph {
+                        effects: true,
+                        data: None,
+                        types: TypeArguments(Vec::new()),
+                        callables: CallableSlots::default(),
+                        code: Vec::new(),
+                    }))
+                }
+                2 => {
+                    assert!(!imported.capture.value.targets.is_empty());
+                    imported.capture.value.targets.clear();
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                !matches(&imported),
+                "forged generic contents/returned-value carrier {mutation}"
+            );
+        }
     }
 
     #[test]

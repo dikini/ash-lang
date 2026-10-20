@@ -4821,7 +4821,59 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         )?;
         self.validate_scopes()?;
         self.validate_type_scopes()?;
-        self.reject_pure_byte_applications()
+        self.reject_pure_byte_applications()?;
+        // All ordinary structural checks above independently authenticate the
+        // closed Pure registry. With no external/abstract authority, an absent
+        // generic identity cannot occur in any admitted type. Contextual and
+        // provider preparations retain their complete discovery path.
+        if F::REQUIRES_EMPTY_ROWS
+            && !F::ALLOWS_EFFECTFUL_TYPES
+            && self.source_resource_context == SourceResourceValidationContext::FinalProgram
+            && self.contextual_registry.is_none()
+            && self.source_original_provider.is_none()
+            && self.provider_external_types.is_none()
+            && self.authenticated_abstract_nominals.borrow().is_empty()
+        {
+            let mut work = TypeWorkBudget::with_limit(
+                self.type_work_limit.saturating_sub(self.type_work.get()),
+            );
+            let present = self
+                .program
+                .registry
+                .has_generic_cell_type_identity(&mut work);
+            self.charge_type_work(work.used())?;
+            if !present.map_err(|()| ValidationError::new(ValidationReason::Resource, None))? {
+                return Ok(());
+            }
+        }
+        self.generic_cell_computations().map(|_| ())
+    }
+
+    fn generic_cell_computations(&self) -> Result<bool, ValidationError> {
+        let mut generic = false;
+        for node in &self.program.nodes {
+            self.charge_type_work(1)?;
+            generic |= F::resource_scope(&node.kind)
+                .is_some_and(|scope| scope.acquisition.api().is_some_and(|api| api.generic()));
+            let row = F::effect_row(&node.effects);
+            self.charge_type_work(row.known().len())?;
+            generic |= row
+                .known()
+                .iter()
+                .any(|effect| effect.effect().module().is_builtin_generic_cell());
+            let mut work = TypeWorkBudget::with_limit(
+                self.type_work_limit.saturating_sub(self.type_work.get()),
+            );
+            let typed = crate::resolved::generic_cell_dependency_type(&node.ty, &mut work);
+            self.charge_type_work(work.used())?;
+            generic |=
+                typed.map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
+        }
+        for anchor in &self.program.method_evidence_anchors {
+            self.charge_type_work(1)?;
+            generic |= anchor.method.interface().module().is_builtin_generic_cell();
+        }
+        Ok(generic)
     }
 
     fn validate_method_evidence_type_owners(
@@ -5635,7 +5687,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     || acquisition.methods.get(ordinal) != Some(&owner.binder)
                     || !owner.source_parameters.is_empty()
                     || !owner.captures.is_empty()
-                    || !matches!(owner.application.arguments(), [crate::types::KindedArgument::TypeArg(Type::Variable(identity))] if *identity == acquisition.identity)
+                    || owner.application.arguments().len() != api.argument_count()
+                    || !matches!(owner.application.arguments().first(), Some(crate::types::KindedArgument::TypeArg(Type::Variable(identity))) if *identity == acquisition.identity)
                 {
                     return Err(ValidationError::new(ValidationReason::NodeType, None));
                 }
@@ -6653,6 +6706,24 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             )?;
             if owner.source_parameters.contains(&id) {
                 return Ok(true);
+            }
+            // Resource identities are allocated while resolving bodies, after
+            // global declaration parameters. Their source position can therefore
+            // precede an earlier registry ID without changing header ordering.
+            // A catalog claim alone is insufficient: require the actual complete
+            // acquisition carrier, whose authority is checked later as well.
+            if let Some(super::dialect::MethodEvidenceResourceOwner::Builtin(acquisition)) =
+                &owner.resource
+                && acquisition.identity == id
+            {
+                for node in &self.program.nodes {
+                    self.charge_type_work(1)?;
+                    if F::resource_scope(&node.kind)
+                        .is_some_and(|scope| scope.acquisition == *acquisition)
+                    {
+                        return Ok(true);
+                    }
+                }
             }
             if let Some(super::dialect::MethodEvidenceResourceOwner::Provider(resource)) =
                 &owner.resource
@@ -16026,6 +16097,10 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         self.validate_effect_abstraction_shapes(&authenticated_method_evidence)?;
         self.validate_scopes()?;
         self.validate_type_scopes()?;
+        // Ordinary authentication precedes dependency reconstruction. Generic
+        // computations force that proof even in private provider preparations.
+        let has_generic = self.generic_cell_computations()?;
+
         let mut has_resource = false;
         for node in &self.program.nodes {
             self.charge_type_work(1)?;
@@ -16042,11 +16117,12 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 has_resource = true;
             }
         }
-        if (!has_discard && !has_resource)
-            || self
-                .provider_handler_entry
-                .is_some_and(|entry| entry.row_recipe.is_some())
-            || self.source_handler_graph.is_some()
+        if !has_generic
+            && ((!has_discard && !has_resource)
+                || self
+                    .provider_handler_entry
+                    .is_some_and(|entry| entry.row_recipe.is_some())
+                || self.source_handler_graph.is_some())
         {
             return Ok(());
         }
@@ -16089,6 +16165,11 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             super::capture::Failure::Escape {
                 source,
                 acquisition,
+            }
+            | super::capture::Failure::Dependency {
+                source,
+                acquisition,
+                ..
             } => ValidationError::with_cause(
                 ValidationCause::CapturedResourceEscape {
                     source,
@@ -16493,16 +16574,40 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         Ok(api)
     }
 
+    fn same_resource_arguments(
+        &self,
+        left: &[crate::types::KindedArgument],
+        right: &[crate::types::KindedArgument],
+    ) -> Result<bool, ValidationError> {
+        if left.len() != right.len() {
+            return Ok(false);
+        }
+        for (left, right) in left.iter().zip(right) {
+            if !self.same_owner_argument_charged(left, right)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     fn resource_outward_row(
         &self,
         body: &EffectRow,
-        acquisition: crate::resolved::ResourceAcquisition,
+        resource: &super::effect::ResourceScopeNode,
         id: NodeId,
     ) -> Result<EffectRow, ValidationError> {
-        let api = self.resource_api(acquisition, id)?;
-        self.charge_type_work(2)?;
-        let instance =
-            EffectInstance::new(api.ops(), Box::new([Type::Variable(acquisition.identity)]));
+        let mut budget =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let instance = resource
+            .instance_with_budget(&mut budget)
+            .map_err(|error| match error {
+                super::BuildError::TypeWorkExceeded => {
+                    ValidationError::new(ValidationReason::Resource, Some(id))
+                }
+                _ => ValidationError::new(ValidationReason::NodeType, Some(id)),
+            });
+        self.charge_type_work(budget.used())?;
+        let instance = instance?;
         let mut budget =
             TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let result = body.remove_exact_with_budget(&instance, &mut budget);
@@ -16524,19 +16629,72 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
     ) -> Result<(), ValidationError> {
         let authority = resource.acquisition;
         let api = self.resource_api(authority, id)?;
+        let mut budget =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let instance = resource.instance_with_budget(&mut budget);
+        self.charge_type_work(budget.used())?;
+        let instance = instance.map_err(|error| match error {
+            super::BuildError::TypeWorkExceeded => {
+                ValidationError::new(ValidationReason::Resource, Some(id))
+            }
+            _ => ValidationError::new(ValidationReason::NodeType, Some(id)),
+        })?;
+        let payload = if api.generic() {
+            let crate::types::KindedArgument::TypeArg(payload) = &instance.arguments()[1] else {
+                return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+            };
+            payload
+        } else {
+            &Type::Int
+        };
+        if api.generic() {
+            if self.function_contains_source_owner_state(payload)? {
+                return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+            }
+            let mut foreign_work = 0usize;
+            for module in self.program.registry.foreign_modules() {
+                self.charge_type_work(1)?;
+                foreign_work = foreign_work
+                    .checked_add(1)
+                    .and_then(|count| count.checked_add(module.states.len()))
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+            }
+            if foreign_work != 0 {
+                let mut work = TypeWorkBudget::with_limit(
+                    self.type_work_limit.saturating_sub(self.type_work.get()),
+                );
+                let restricted = crate::types::visit_type_structure_with_budget(
+                    payload,
+                    &mut work,
+                    |node, work| {
+                        if let crate::types::TypeStructureNode::Type(Type::Nominal(nominal)) = node
+                        {
+                            work.charge(foreign_work)?;
+                            return Ok(self.program.registry.foreign_state(*nominal).is_some());
+                        }
+                        Ok(false)
+                    },
+                );
+                self.charge_type_work(work.used())?;
+                if restricted
+                    .map_err(|()| ValidationError::new(ValidationReason::Resource, Some(id)))?
+                {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                }
+            }
+        }
         let initializer = self.node(resource.initializer)?;
         let body = self.node(resource.body)?;
         if authority.handle != resource.handle.id()
             || authority.handle.module() != Some(authority.provider.module())
             || authority.identity.module() != Some(authority.provider.module())
             || Some(authority.span) != node.origin.as_ref().map(Origin::primary_span)
-            || !matches!(resource.handle.ty(), Type::Application(head, argument) if **head == Type::Nominal(api.handle()) && **argument == Type::Variable(authority.identity))
-            || !self.same_type_charged(&initializer.ty, &Type::Int)?
+            || !self.same_type_charged(&initializer.ty, payload)?
             || !self.same_type_charged(&body.ty, &node.ty)?
         {
             return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
         }
-        let outward = self.resource_outward_row(&body.effects, authority, id)?;
+        let outward = self.resource_outward_row(&body.effects, resource, id)?;
         let expected = self.union_effect_rows_charged(&initializer.effects, &outward, id)?;
         if !self.same_effect_row_charged(&node.effects, &expected, id)? {
             return Err(ValidationError::with_cause(
@@ -16561,6 +16719,11 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     .as_ref()
                     .and_then(super::dialect::MethodEvidenceResourceOwner::builtin)
                     == Some(authority)
+                    && owner.application.interface() == api.provider()
+                    && self.same_resource_arguments(
+                        owner.application.arguments(),
+                        instance.arguments(),
+                    )?
                     && owner.binder == *binder
                     && owner.method
                         == crate::interface::MethodId::new(api.provider(), ordinal as u32)
@@ -16603,7 +16766,10 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 };
                 if request.operation() != OperationId::new(api.ops(), ordinal as u32)
                     || request.effect().effect() != api.ops()
-                    || !matches!(request.effect().arguments(), [crate::types::KindedArgument::TypeArg(Type::Variable(identity))] if *identity == authority.identity)
+                    || !self.same_resource_arguments(
+                        request.effect().arguments(),
+                        instance.arguments(),
+                    )?
                     || operand.binder() != function.parameter().id()
                     || binding.binder().origin().primary_span() != authority.span
                 {
@@ -17868,11 +18034,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                             self.union_effect_rows_charged(child_row(scope.initializer)?, &row, id)?
                         }
                         EffectExprKind::Operation(EffectOperation::Resource(resource)) => {
-                            let outward = self.resource_outward_row(
-                                child_row(resource.body)?,
-                                resource.acquisition,
-                                id,
-                            )?;
+                            let outward =
+                                self.resource_outward_row(child_row(resource.body)?, resource, id)?;
                             self.union_effect_rows_charged(
                                 child_row(resource.initializer)?,
                                 &outward,
@@ -18526,6 +18689,45 @@ fn node_id(arena: super::dialect::ArenaId, index: usize) -> Result<NodeId, Valid
     u32::try_from(index)
         .map(|index| NodeId::new(arena, index))
         .map_err(|_| ValidationError::with_cause(ValidationCause::NodeIdentityRange, None))
+}
+
+#[cfg(test)]
+pub(crate) fn generic_cell_core_fixture_for_test()
+-> (super::effect::UnvalidatedEffectProgram, Vec<SourceFile>) {
+    tests::cell_core_fixture_with_generic(true)
+}
+
+#[cfg(test)]
+pub(crate) fn generic_cell_validated_fixture_for_test()
+-> (super::effect::ValidatedEffectProgram, Vec<SourceFile>) {
+    let (core, sources) = generic_cell_core_fixture_for_test();
+    let refs = sources.iter().collect::<Vec<_>>();
+    let relation = core
+        .registry
+        .type_variables()
+        .map(|parameter| {
+            (
+                parameter.id.module().unwrap(),
+                parameter.origin.primary_span().source(),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let program = super::validate_effect_modules(core, &refs, &relation).unwrap();
+    (program, sources)
+}
+
+#[cfg(test)]
+pub(crate) fn generic_cell_source_fixture_for_test(
+    source: &str,
+    helper: Option<&str>,
+) -> (
+    super::effect::ValidatedEffectProgram,
+    Vec<SourceFile>,
+    Vec<(ModuleId, SourceId)>,
+) {
+    tests::generic_cell_source_fixture(source, helper)
 }
 
 #[cfg(test)]
@@ -22749,20 +22951,35 @@ mod tests {
         super::super::effect::UnvalidatedEffectProgram,
         Vec<crate::source::SourceFile>,
     ) {
+        cell_core_fixture_with_generic(false)
+    }
+
+    pub(crate) fn cell_core_fixture_with_generic(
+        generic: bool,
+    ) -> (
+        super::super::effect::UnvalidatedEffectProgram,
+        Vec<crate::source::SourceFile>,
+    ) {
         use super::super::dialect::{
             MethodEvidenceAnchor, MethodEvidenceAnchorRole, MethodEvidenceCatalog,
             MethodEvidenceExpectation, MethodEvidenceExpectedRole, MethodEvidenceLexicalOwner,
             MethodEvidenceMethod,
         };
         use super::super::effect::{EffectExprKind, EffectOperation};
-        let (mut core, module, sources, registry) =
-            crate::elaborate::cell_resource_core_fixture_for_test();
+        let (mut core, module, sources, registry) = if generic {
+            crate::elaborate::generic_cell_resource_core_fixture_for_test()
+        } else {
+            crate::elaborate::cell_resource_core_fixture_for_test()
+        };
         core.registry = registry;
         let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
             &core.nodes[core.root.index().unwrap()].kind
         else {
             panic!("resource root")
         };
+        let instance = resource
+            .instance_with_budget(&mut crate::types::TypeWorkBudget::default())
+            .unwrap();
         let authority = resource.acquisition;
         let interface = module
             .imported_facts()
@@ -22802,9 +23019,7 @@ mod tests {
                 binder: *binder,
                 application: crate::interface::InterfaceApplication::new_kinded(
                     interface.id,
-                    Box::new([crate::types::KindedArgument::TypeArg(
-                        crate::types::Type::Variable(authority.identity),
-                    )]),
+                    instance.arguments().to_vec().into_boxed_slice(),
                 ),
                 captures: Box::new([]),
             })
@@ -22836,6 +23051,954 @@ mod tests {
         core.method_evidence = std::sync::Arc::new(catalog);
         core.method_evidence_anchors = anchors;
         (core, sources)
+    }
+
+    #[test]
+    fn builtin_resource_source_order_classification_requires_actual_complete_carrier() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        for missing in [false, true] {
+            let (mut core, sources) = cell_core_fixture_with_generic(true);
+            let EffectExprKind::Operation(EffectOperation::Resource(scope)) =
+                &core.nodes[core.root.index().unwrap()].kind
+            else {
+                panic!("resource root");
+            };
+            let identity = scope.acquisition.identity;
+            let refs = sources.iter().collect::<Vec<_>>();
+            assert!(
+                Validator::new(&core, &refs)
+                    .is_lexical_source_parameter(identity)
+                    .unwrap()
+            );
+            if missing {
+                core.nodes[core.root.index().unwrap()].kind = EffectExprKind::Pure(
+                    PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
+                );
+            } else {
+                let catalog = Arc::make_mut(&mut core.method_evidence);
+                let mut owners = catalog.lexical_owners().to_vec();
+                for owner in &mut owners {
+                    let Some(super::super::dialect::MethodEvidenceResourceOwner::Builtin(
+                        acquisition,
+                    )) = &mut owner.resource
+                    else {
+                        panic!("builtin owner");
+                    };
+                    acquisition.handle = acquisition.methods[0];
+                }
+                catalog.set_lexical_owners(owners);
+            }
+            assert!(
+                !Validator::new(&core, &refs)
+                    .is_lexical_source_parameter(identity)
+                    .unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn module_registry_still_rejects_reversed_header_parameter_source_order() {
+        let file = SourceFile::new("reversed-headers.ash", "AA BB").unwrap();
+        let module = ModuleId::new(0);
+        let registry = crate::resolved::ResolvedRegistry::default().with_additional_type_variables(
+            [4u32, 1]
+                .into_iter()
+                .enumerate()
+                .map(|(index, start)| ResolvedTypeVariable {
+                    id: crate::types::TypeVariableId::resolved(module, index as u32),
+                    spelling: if index == 0 { "A" } else { "B" }.into(),
+                    kind: Kind::Type,
+                    origin: Origin::Source(
+                        file.span(crate::source::ByteRange::new(start, start + 1).unwrap())
+                            .unwrap(),
+                    ),
+                }),
+        );
+        let mut builder = super::super::CoreBuilder::with_registry(Arc::new(registry));
+        let root = builder
+            .unit(
+                Type::Unit,
+                Origin::Source(
+                    file.span(crate::source::ByteRange::new(0, 5).unwrap())
+                        .unwrap(),
+                ),
+            )
+            .unwrap();
+        let core = builder.finish(root).unwrap();
+        let refs = [&file];
+        let validator = Validator::new_modules(&core, &refs, &[(module, file.id())]).unwrap();
+        assert_eq!(
+            validator.validate_registry().unwrap_err().reason(),
+            ValidationReason::Registry
+        );
+    }
+
+    #[test]
+    fn generic_cell_actual_core_rejects_discard_of_running_cleanup() {
+        use super::super::{
+            capture,
+            effect::{DiscardNode, EffectExprKind, EffectOperation},
+        };
+        let source = "import @builtin.generic_cell as Cell\neffect Stop {\nstop : Unit -> Unit\n}\nmain : Unit -> Unit\nmain () = resource Cell.Cell<R,Int> c = 41 {\nhandle (cleanup fn(ignored) {\nperform Stop.stop ()\n} {\n()\n}) with Stop {\nstop ignored => resume ()\n}\n}\n";
+        let (valid, _, _) = generic_cell_source_fixture(source, None);
+        for transform in [
+            crate::core::transform::identity_effect_traversal,
+            crate::core::transform::fold_effect_literal_primitives,
+        ] {
+            let mut core = transform(&valid).unwrap();
+            let resume = core
+                .nodes
+                .iter_mut()
+                .find(|node| {
+                    matches!(
+                        node.kind,
+                        EffectExprKind::Operation(EffectOperation::Resume(_))
+                    )
+                })
+                .unwrap();
+            let EffectExprKind::Operation(EffectOperation::Resume(node)) = &resume.kind else {
+                unreachable!()
+            };
+            resume.kind = EffectExprKind::Operation(EffectOperation::Discard(DiscardNode::new(
+                node.handler(),
+                node.owner(),
+                node.use_state(),
+            )));
+            // Probe the independent completion proof directly: the unused
+            // former resume argument is intentionally still in this raw arena.
+            // No altered arena is admitted or executed.
+            let result = capture::check_nodes(
+                &core.nodes,
+                &[],
+                &[],
+                |kind| match kind {
+                    EffectExprKind::Operation(operation) => Some(operation),
+                    _ => None,
+                },
+                &mut TypeWorkBudget::default(),
+            );
+            assert!(
+                matches!(
+                    result,
+                    Err(capture::Failure::Unsafe(capture::UnsafeDiscard {
+                        owner: Some(capture::CompletionOwner::Cleanup(_)),
+                        ..
+                    }))
+                ),
+                "{result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn generic_cell_discovery_absence_does_not_admit_unregistered_core_identity() {
+        let (donor, _) = cell_core_fixture_with_generic(true);
+        let scope = donor
+            .nodes
+            .iter()
+            .find_map(|node| {
+                if let super::super::effect::EffectExprKind::Operation(
+                    super::super::effect::EffectOperation::Resource(scope),
+                ) = &node.kind
+                {
+                    Some(scope)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        let access = Type::Application(
+            Box::new(Type::Application(
+                Box::new(Type::Nominal(scope.acquisition.api().unwrap().handle())),
+                Box::new(Type::Int),
+            )),
+            Box::new(Type::Bool),
+        );
+        let source = crate::source::SourceFile::new("unregistered-cell.ash", "x").unwrap();
+        let span = source
+            .span(crate::source::ByteRange::new(0, 1).unwrap())
+            .unwrap();
+        let origin = crate::source::Origin::Source(span);
+        let mut builder = super::super::CoreBuilder::new();
+        let parameter = builder.binder(access.clone(), origin.clone()).unwrap();
+        let body = builder
+            .variable(parameter.id(), access.clone(), origin.clone())
+            .unwrap();
+        let root = builder
+            .function(
+                parameter,
+                body,
+                Type::Function(Box::new(access.clone()), Box::new(access)),
+                origin,
+            )
+            .unwrap();
+        // Source discovery relies on a closed authenticated registry. A raw
+        // builder does not supply that source proof or admit its finished Core.
+        assert_eq!(
+            builder
+                .generic_cell_dependency_origin(&mut TypeWorkBudget::with_limit(1))
+                .unwrap(),
+            None
+        );
+        let core = builder.finish(root).unwrap();
+        let failure = super::super::validate(core, &[&source]).unwrap_err();
+        assert_eq!(failure.reason(), ValidationReason::NodeType);
+    }
+
+    #[test]
+    fn generic_cell_scanner_sees_scope_without_typed_uses_or_method_anchors() {
+        let (mut core, sources) = cell_core_fixture_with_generic(true);
+        core.method_evidence_anchors = Box::new([]);
+        for node in &mut core.nodes {
+            node.ty = Type::Unit;
+            node.effects = EffectRow::empty();
+        }
+        let refs = sources.iter().collect::<Vec<_>>();
+        let validator = Validator::new(&core, &refs);
+        assert!(validator.generic_cell_computations().unwrap());
+    }
+
+    #[test]
+    fn generic_cell_scanner_sees_known_ops_in_nested_owner_row_arguments() {
+        let (core, _) = cell_core_fixture_with_generic(true);
+        let super::super::effect::EffectExprKind::Operation(
+            super::super::effect::EffectOperation::Resource(scope),
+        ) = &core.nodes[core.root.index().unwrap()].kind
+        else {
+            panic!("donor");
+        };
+        let api = scope.acquisition.api().unwrap();
+        let nested = crate::types::KindedArgument::RowArg(EffectRow::singleton(
+            EffectInstance::new(api.ops(), Box::new([Type::Int, Type::Bool])),
+        ));
+        for ty in [
+            Type::ResourceApply(
+                crate::resolved::ResourceDefinitionId::new(scope.acquisition.provider.module(), 0),
+                Box::new([nested.clone()]),
+            ),
+            Type::ForeignOwnerApply(api.handle(), Box::new([nested.clone()])),
+            Type::ForeignOwnerApply(
+                api.handle(),
+                Box::new([crate::types::KindedArgument::RowArg(EffectRow::singleton(
+                    EffectInstance::new_kinded(
+                        crate::types::EffectId::new(scope.acquisition.provider.module(), 0),
+                        Box::new([nested]),
+                    ),
+                ))]),
+            ),
+        ] {
+            let ty = crate::types::IterativeTypeOwner::new(ty);
+            let mut work = TypeWorkBudget::default();
+            assert!(crate::resolved::generic_cell_dependency_type(&ty, &mut work).unwrap());
+            let mut short = TypeWorkBudget::with_limit(work.used() - 1);
+            assert!(crate::resolved::generic_cell_dependency_type(&ty, &mut short).is_err());
+            let mut retry = TypeWorkBudget::with_limit(work.used());
+            assert!(crate::resolved::generic_cell_dependency_type(&ty, &mut retry).unwrap());
+        }
+    }
+
+    #[test]
+    fn generic_cell_pure_core_identity_preserves_conditional_access() {
+        use super::super::dialect::MethodEvidenceCatalog;
+        let (donor, sources) = cell_core_fixture_with_generic(true);
+        let super::super::effect::EffectExprKind::Operation(
+            super::super::effect::EffectOperation::Resource(scope),
+        ) = &donor.nodes[donor.root.index().unwrap()].kind
+        else {
+            panic!("resource donor");
+        };
+        let access = Type::Application(
+            Box::new(Type::Application(
+                Box::new(Type::Nominal(scope.acquisition.api().unwrap().handle())),
+                Box::new(Type::Int),
+            )),
+            Box::new(Type::Bool),
+        );
+        let catalog = MethodEvidenceCatalog::new(
+            donor.method_evidence.methods().to_vec(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        let mut builder = super::super::CoreBuilder::<super::super::dialect::PureOperationFamily>::with_registry_and_method_evidence(std::sync::Arc::clone(&donor.registry), std::sync::Arc::new(catalog)).unwrap();
+        let origin = donor.nodes[donor.root.index().unwrap()]
+            .origin
+            .clone()
+            .unwrap();
+        let parameter = builder.binder(access.clone(), origin.clone()).unwrap();
+        let body = builder
+            .variable(parameter.id(), access.clone(), origin.clone())
+            .unwrap();
+        let root = builder
+            .function(
+                parameter,
+                body,
+                Type::Function(Box::new(access.clone()), Box::new(access)),
+                origin,
+            )
+            .unwrap();
+        let core = builder.finish(root).unwrap();
+        let refs = sources.iter().collect::<Vec<_>>();
+        let relation = core
+            .registry
+            .type_variables()
+            .map(|parameter| {
+                (
+                    parameter.id.module().unwrap(),
+                    parameter.origin.primary_span().source(),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        super::super::validate_modules(core, &refs, &relation).unwrap();
+    }
+
+    #[test]
+    fn generic_cell_indexed_callable_core_retains_conditional_rows() {
+        use super::super::dialect::MethodEvidenceCatalog;
+        let (donor, sources) = cell_core_fixture_with_generic(true);
+        let super::super::effect::EffectExprKind::Operation(
+            super::super::effect::EffectOperation::Resource(scope),
+        ) = &donor.nodes[donor.root.index().unwrap()].kind
+        else {
+            panic!("resource donor");
+        };
+        let api = scope.acquisition.api().unwrap();
+        let callback = Type::function_computation(
+            Type::Unit,
+            crate::types::ComputationType::new(
+                Type::Int,
+                EffectRow::singleton(EffectInstance::new(
+                    api.ops(),
+                    Box::new([Type::Int, Type::Int]),
+                )),
+            ),
+        );
+        let catalog = MethodEvidenceCatalog::new(
+            donor.method_evidence.methods().to_vec(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        let mut builder = super::super::EffectCoreBuilder::with_registry_and_method_evidence(
+            std::sync::Arc::clone(&donor.registry),
+            std::sync::Arc::new(catalog),
+        )
+        .unwrap();
+        let origin = donor.nodes[donor.root.index().unwrap()]
+            .origin
+            .clone()
+            .unwrap();
+        let parameter = builder.binder(callback.clone(), origin.clone()).unwrap();
+        let body = builder
+            .variable(parameter.id(), callback.clone(), origin.clone())
+            .unwrap();
+        let root = builder
+            .function(
+                parameter,
+                body,
+                Type::Function(Box::new(callback.clone()), Box::new(callback)),
+                origin,
+            )
+            .unwrap();
+        let core = builder.finish(root).unwrap();
+        // There is no acquisition, request or selected-method anchor here.
+        assert!(core.method_evidence_anchors.is_empty());
+        assert_eq!(cell_core_reason(&core, &sources, 0).0, None);
+    }
+
+    #[test]
+    fn generic_cell_copied_and_transformed_core_reconstructs_dependency_proof() {
+        let (donor, sources) = super::generic_cell_validated_fixture_for_test();
+        for transform in [
+            crate::core::transform::identity_effect_traversal,
+            crate::core::transform::fold_effect_literal_primitives,
+        ] {
+            let copied = transform(&donor).unwrap();
+            assert_eq!(cell_core_reason(&copied, &sources, 0).0, None);
+        }
+    }
+
+    pub(super) fn generic_cell_source_fixture(
+        source: &str,
+        helper: Option<&str>,
+    ) -> (
+        super::super::ValidatedEffectProgram,
+        Vec<SourceFile>,
+        Vec<(ModuleId, SourceId)>,
+    ) {
+        let tree = LinkedValidationDirectory::create();
+        if let Some(helper) = helper {
+            tree.write("helper.ash", helper);
+        }
+        let entry = tree.write("entry.ash", source);
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry,
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source.as_ref().clone())
+            .collect::<Vec<_>>();
+        let relation = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        let copy = crate::core::transform::identity_effect_traversal(program).unwrap();
+        let refs = sources.iter().collect::<Vec<_>>();
+        let donor = super::super::validate_effect_modules(copy, &refs, &relation).unwrap();
+        (donor, sources, relation)
+    }
+
+    #[test]
+    fn generic_cell_exact_handler_owner_ports_survive_independent_core_transforms() {
+        for (source, helper) in [
+            (
+                include_str!("../../tests/fixtures/generic-cell/exact-handler-entry.ash"),
+                None,
+            ),
+            (
+                include_str!("../../tests/fixtures/generic-cell/handler-select-entry.ash"),
+                Some(include_str!(
+                    "../../tests/fixtures/generic-cell/handler-select-helper.ash"
+                )),
+            ),
+            (
+                include_str!("../../tests/fixtures/generic-cell/intercept-entry.ash"),
+                Some(include_str!(
+                    "../../tests/fixtures/generic-cell/intercept-helper.ash"
+                )),
+            ),
+        ] {
+            let (donor, sources, relation) = generic_cell_source_fixture(source, helper);
+            let refs = sources.iter().collect::<Vec<_>>();
+            for transform in [
+                crate::core::transform::identity_effect_traversal,
+                crate::core::transform::fold_effect_literal_primitives,
+            ] {
+                let copied = transform(&donor).unwrap();
+                let executable =
+                    super::super::validate_effect_modules(copied, &refs, &relation).unwrap();
+                assert_eq!(
+                    crate::eval::evaluate_effect(&executable)
+                        .unwrap()
+                        .value
+                        .to_string(),
+                    "7"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn generic_cell_stateful_handler_results_survive_actual_core_transforms() {
+        for (source, expected) in [
+            (
+                include_str!("../../tests/fixtures/generic-cell/tick-entry.ash"),
+                "99",
+            ),
+            (
+                include_str!("../../tests/fixtures/generic-cell/reply-mutation-entry.ash"),
+                "(7, 42)",
+            ),
+            (
+                include_str!("../../tests/fixtures/generic-cell/handler-read-entry.ash"),
+                "99",
+            ),
+            (
+                include_str!("../../tests/fixtures/generic-cell/handler-write-entry.ash"),
+                "41",
+            ),
+            (
+                include_str!("../../tests/fixtures/generic-cell/handler-forward-entry.ash"),
+                "42",
+            ),
+        ] {
+            let (donor, sources, relation) = generic_cell_source_fixture(source, None);
+            assert_eq!(
+                crate::eval::evaluate_effect(&donor)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                expected
+            );
+            let refs = sources.iter().collect::<Vec<_>>();
+            for (pass, transform) in [
+                crate::core::transform::identity_effect_traversal,
+                crate::core::transform::fold_effect_literal_primitives,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let copied = transform(&donor).unwrap();
+                if pass == 1 && source.contains("90 + 9") {
+                    let before = donor
+                        .nodes()
+                        .iter()
+                        .filter(|node| {
+                            matches!(
+                                &node.kind,
+                                super::super::effect::EffectExprKind::Pure(
+                                    PureExprKind::Computation(PureComputation::Primitive(_))
+                                )
+                            )
+                        })
+                        .count();
+                    let after = copied
+                        .nodes
+                        .iter()
+                        .filter(|node| {
+                            matches!(
+                                &node.kind,
+                                super::super::effect::EffectExprKind::Pure(
+                                    PureExprKind::Computation(PureComputation::Primitive(_))
+                                )
+                            )
+                        })
+                        .count();
+                    assert!(
+                        before > 0 && after < before,
+                        "literal fold must actually optimize the stateful program"
+                    );
+                }
+                let executable =
+                    super::super::validate_effect_modules(copied, &refs, &relation).unwrap();
+                assert_eq!(
+                    crate::eval::evaluate_effect(&executable)
+                        .unwrap()
+                        .value
+                        .to_string(),
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn generic_cell_linked_hidden_retention_is_reconstructed_after_transforms() {
+        use super::super::{
+            effect::{EffectExprKind, EffectOperation},
+            variable::VariableNode,
+        };
+        let source = "import @builtin.generic_cell as Cell\nimport helper (put)\nindependent : Unit -> Int\nindependent () = 7\nmain : Unit -> Int\nmain () = resource Cell.Cell<A,Int> a = 41 {\nresource Cell.Cell<B,(Unit -> Int)> b = independent {\nlet safe : Unit -> Int = fn(ignored) {\nlet held = a\n42\n}\nlet _ = put (b,safe)\n42\n}\n}\n";
+        let helper = "import @builtin.generic_cell as Cell\npub put<R,T> : (Cell.Cell<R,T>,T) -> Unit ! {Cell.Ops<R,T>} where Cell.Provider<R,T>\nput pair = Cell.write pair\n";
+        let (donor, sources, relation) = generic_cell_source_fixture(source, Some(helper));
+        let refs = sources.iter().collect::<Vec<_>>();
+        for transform in [
+            crate::core::transform::identity_effect_traversal,
+            crate::core::transform::fold_effect_literal_primitives,
+        ] {
+            let mut copied = transform(&donor).unwrap();
+            let handles = copied
+                .nodes
+                .iter()
+                .filter_map(|node| match &node.kind {
+                    EffectExprKind::Operation(EffectOperation::Resource(scope)) => {
+                        Some(scope.handle.clone())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(handles.len(), 2);
+            let scalar = handles
+                .iter()
+                .find(|handle| {
+                    handle.ty().to_string().contains("Int")
+                        && !handle.ty().to_string().contains("->")
+                })
+                .unwrap();
+            let function = handles
+                .iter()
+                .find(|handle| handle.id() != scalar.id())
+                .unwrap();
+            let changed = copied.nodes.iter().enumerate().filter_map(|(index,node)| {
+                matches!(&node.kind, EffectExprKind::Pure(PureExprKind::Variable(value)) if value.binder() == scalar.id()).then_some(index)
+            }).collect::<Vec<_>>();
+            assert_eq!(
+                changed.len(),
+                1,
+                "only the original hidden capture uses the scalar access"
+            );
+            let changed = changed[0];
+            copied.nodes[changed].kind =
+                EffectExprKind::Pure(PureExprKind::Variable(VariableNode::new(function.id())));
+            copied.nodes[changed].ty = function.ty().clone();
+            let changed = node_id(copied.arena, changed).unwrap();
+            let mut binders = 0;
+            for node in &mut copied.nodes {
+                if let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                    binding,
+                ))) = &mut node.kind
+                    && binding.initializer() == changed
+                {
+                    binding.binder_mut().replace_type(function.ty().clone());
+                    binders += 1;
+                }
+            }
+            assert_eq!(binders, 1);
+            // The arrow, rows, selected helper evidence and acquisition facts
+            // remain well typed; only the hidden capture now retains its slot.
+            let error =
+                super::super::validate_effect_modules(copied, &refs, &relation).unwrap_err();
+            assert_eq!(error.reason(), ValidationReason::ResourceEscape);
+        }
+    }
+
+    #[test]
+    fn generic_cell_possible_target_owners_rebuild_after_transforms() {
+        use super::super::{
+            effect::{EffectExprKind, EffectOperation},
+            variable::VariableNode,
+        };
+        let helper = "import @builtin.generic_cell as Cell\npub put<R,T> : (Cell.Cell<R,T>,T) -> Unit ! {Cell.Ops<R,T>} where Cell.Provider<R,T>\nput pair = Cell.write pair\n";
+        for outer_target in [false, true] {
+            let first = if outer_target { "a" } else { "b" };
+            let source = format!(
+                "import @builtin.generic_cell as Cell\nimport helper (put)\nindependent : Unit -> Int\nindependent () = 7\nmain : Unit -> Int\nmain () = resource Cell.Cell<A,(Unit -> Int)> a = independent {{\nresource Cell.Cell<B,(Unit -> Int)> b = independent {{\nlet candidate : Unit -> Int = fn(ignored) {{\nlet held = 9999\n42\n}}\nlet choose : Bool -> Unit ! {{Cell.Ops<A,(Unit -> Int)>,Cell.Ops<B,(Unit -> Int)>}} = fn(flag) {{\nmatch flag {{\ntrue => put (b,candidate)\nfalse => put ({first},candidate)\n}}\n}}\nlet _ = choose true\nlet _ = choose false\n42\n}}\n}}\n"
+            );
+            let (donor, sources, relation) = generic_cell_source_fixture(&source, Some(helper));
+            let refs = sources.iter().collect::<Vec<_>>();
+            for transform in [
+                crate::core::transform::identity_effect_traversal,
+                crate::core::transform::fold_effect_literal_primitives,
+            ] {
+                let mut copied = transform(&donor).unwrap();
+                let outer = copied
+                    .nodes
+                    .iter()
+                    .find_map(|node| match &node.kind {
+                        EffectExprKind::Operation(EffectOperation::Resource(scope))
+                            if copied
+                                .registry
+                                .type_variable(scope.acquisition.identity)
+                                .unwrap()
+                                .spelling
+                                == "A" =>
+                        {
+                            Some(scope.handle.clone())
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                let changed = copied.nodes.iter().enumerate().find_map(|(index,node)| {
+                    matches!(&node.kind, EffectExprKind::Pure(PureExprKind::Value(PureValue::Integer(value))) if value.value().to_string()=="9999").then_some(index)
+                }).unwrap();
+                copied.nodes[changed].kind =
+                    EffectExprKind::Pure(PureExprKind::Variable(VariableNode::new(outer.id())));
+                copied.nodes[changed].ty = outer.ty().clone();
+                let changed = node_id(copied.arena, changed).unwrap();
+                let mut bindings = 0;
+                for node in &mut copied.nodes {
+                    if let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                        binding,
+                    ))) = &mut node.kind
+                        && binding.initializer() == changed
+                    {
+                        binding.binder_mut().replace_type(outer.ty().clone());
+                        bindings += 1;
+                    }
+                }
+                assert_eq!(bindings, 1);
+                // Only the closure's hidden value changes. Its arrow, operation
+                // arguments, provider evidence and rows remain ordinarily valid.
+                let result = super::super::validate_effect_modules(copied, &refs, &relation);
+                if outer_target {
+                    assert_eq!(
+                        result.unwrap_err().reason(),
+                        ValidationReason::ResourceEscape
+                    );
+                } else {
+                    assert_eq!(
+                        crate::eval::evaluate_effect(&result.unwrap())
+                            .unwrap()
+                            .value
+                            .to_string(),
+                        "42"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn generic_cell_imported_snapshot_recursive_and_handler_core_work_is_retryable() {
+        for (source, helper) in [
+            (
+                include_str!("../../tests/fixtures/generic-cell/snapshot-entry.ash"),
+                include_str!("../../tests/fixtures/generic-cell/dependency-helper.ash"),
+            ),
+            (
+                include_str!("../../tests/fixtures/generic-cell/recursive-entry.ash"),
+                include_str!("../../tests/fixtures/generic-cell/recursive-helper.ash"),
+            ),
+            (
+                include_str!("../../tests/fixtures/generic-cell/handler-snapshot-entry.ash"),
+                include_str!("../../tests/fixtures/generic-cell/dependency-helper.ash"),
+            ),
+        ] {
+            let (donor, sources, relation) = generic_cell_source_fixture(source, Some(helper));
+            let refs = sources.iter().collect::<Vec<_>>();
+            for transform in [
+                crate::core::transform::identity_effect_traversal,
+                crate::core::transform::fold_effect_literal_primitives,
+            ] {
+                let copied = transform(&donor).unwrap();
+                let check = |used| {
+                    let mut validator =
+                        super::Validator::new_modules(&copied, &refs, &relation).unwrap();
+                    validator.type_work.set(used);
+                    let result = validator.run_effect().err().map(|error| error.reason());
+                    (result, validator.type_work.get() - used)
+                };
+                let (reason, work) = check(0);
+                assert_eq!(reason, None);
+                assert!(work > 0);
+                assert_eq!(
+                    check(CORE_VALIDATION_TYPE_WORK_LIMIT - work + 1).0,
+                    Some(ValidationReason::Resource)
+                );
+                for _ in 0..2 {
+                    assert_eq!(check(CORE_VALIDATION_TYPE_WORK_LIMIT - work).0, None);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn generic_cell_core_rebuilds_escape_crossing_and_later_read_dependencies() {
+        use super::super::{
+            effect::{EffectExprKind, EffectOperation},
+            variable::VariableNode,
+        };
+        let candidate = "let candidate : Unit -> Int = fn(ignored) {\nlet held = 9999\n42\n}\n";
+        for body in [
+            format!(
+                "{{\nlet saved = resource Cell.Cell<R,Int> c = 41 {{\n{candidate}candidate\n}}\nsaved ()\n}}"
+            ),
+            format!(
+                "handle (resource Cell.Cell<R,Int> c = 41 {{\n{candidate}let _ = perform Send.send candidate\n42\n}}) with Send {{\nsend payload => resume ()\n}}"
+            ),
+            format!(
+                "{{\nlet saved = resource Cell.Cell<R,Int> c = 41 {{\nresource Cell.Cell<B,(Unit -> Int)> b = independent {{\n{candidate}let _ = Cell.write (b,candidate)\nCell.read b\n}}\n}}\nsaved ()\n}}"
+            ),
+        ] {
+            let source = format!(
+                "import @builtin.generic_cell as Cell\neffect Send {{\nsend : (Unit -> Int) -> Unit\n}}\nindependent : Unit -> Int\nindependent () = 7\nmain : Unit -> Int\nmain () = {body}\n"
+            );
+            let (donor, sources, relation) = generic_cell_source_fixture(&source, None);
+            let refs = sources.iter().collect::<Vec<_>>();
+            for transform in [
+                crate::core::transform::identity_effect_traversal,
+                crate::core::transform::fold_effect_literal_primitives,
+            ] {
+                let mut copied = transform(&donor).unwrap();
+                let handle = copied
+                    .nodes
+                    .iter()
+                    .find_map(|node| match &node.kind {
+                        EffectExprKind::Operation(EffectOperation::Resource(scope))
+                            if !scope.handle.ty().to_string().contains("->") =>
+                        {
+                            Some(scope.handle.clone())
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                let changed = copied.nodes.iter().enumerate().find_map(|(index,node)| {
+                    matches!(&node.kind, EffectExprKind::Pure(PureExprKind::Value(PureValue::Integer(value))) if value.value().to_string()=="9999").then_some(index)
+                }).unwrap();
+                copied.nodes[changed].kind =
+                    EffectExprKind::Pure(PureExprKind::Variable(VariableNode::new(handle.id())));
+                copied.nodes[changed].ty = handle.ty().clone();
+                let changed = node_id(copied.arena, changed).unwrap();
+                let mut count = 0;
+                for node in &mut copied.nodes {
+                    if let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                        binding,
+                    ))) = &mut node.kind
+                        && binding.initializer() == changed
+                    {
+                        binding.binder_mut().replace_type(handle.ty().clone());
+                        count += 1;
+                    }
+                }
+                assert_eq!(count, 1);
+                let error =
+                    super::super::validate_effect_modules(copied, &refs, &relation).unwrap_err();
+                assert_eq!(error.reason(), ValidationReason::ResourceEscape);
+            }
+        }
+    }
+
+    #[test]
+    fn generic_cell_direct_recursive_core_work_is_measured_and_retryable() {
+        let (core, sources, relation) = hook_source_fixture(include_str!(
+            "../../tests/fixtures/generic-cell/recursive-direct-entry.ash"
+        ));
+        let refs = sources.iter().collect::<Vec<_>>();
+        let check = |used| {
+            let mut validator = super::Validator::new_modules(&core, &refs, &relation).unwrap();
+            validator.type_work.set(used);
+            let reason = validator.run_effect().err().map(|error| error.reason());
+            (reason, validator.type_work.get() - used)
+        };
+        let (reason, required) = check(0);
+        assert_eq!(reason, None);
+        println!("generic direct recursive independent Core work={required}");
+        assert_eq!(
+            check(CORE_VALIDATION_TYPE_WORK_LIMIT - required + 1).0,
+            Some(ValidationReason::Resource)
+        );
+        for _ in 0..2 {
+            assert_eq!(check(CORE_VALIDATION_TYPE_WORK_LIMIT - required).0, None);
+        }
+    }
+
+    #[test]
+    fn generic_cell_core_checks_ordinary_facts_before_dependency_proof() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let (core, sources) = cell_core_fixture_with_generic(true);
+        assert_eq!(cell_core_reason(&core, &sources, 0).0, None);
+        for mutation in 0..5 {
+            let (mut core, sources) = cell_core_fixture_with_generic(true);
+            let root = core.root.index().unwrap();
+            let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
+                &mut core.nodes[root].kind
+            else {
+                panic!("resource");
+            };
+            match mutation {
+                0 => {
+                    let initial = resource.initializer.index().unwrap();
+                    core.nodes[initial].ty = Type::Int;
+                }
+                1 => resource.acquisition.identity = crate::types::TypeVariableId::new(u32::MAX),
+                2 => {
+                    resource.acquisition.provider = crate::interface::LexicalEvidenceId::new(
+                        resource.acquisition.provider.module(),
+                        u32::MAX,
+                    )
+                }
+                3 => resource.acquisition.methods.swap(0, 1),
+                4 => {
+                    core.nodes[root].effects = EffectRow::singleton(EffectInstance::new(
+                        resource.acquisition.api().unwrap().ops(),
+                        Box::new([Type::Int, Type::Bool]),
+                    ));
+                }
+                _ => unreachable!(),
+            }
+            let reason = cell_core_reason(&core, &sources, 0).0;
+            assert!(
+                reason.is_some() && reason != Some(ValidationReason::ResourceEscape),
+                "mutation={mutation}: {reason:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn generic_cell_full_payload_and_ordered_owner_vectors_are_authenticated() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        for mutation in 0..6 {
+            let (mut core, sources) = cell_core_fixture_with_generic(true);
+            let root = core.root.index().unwrap();
+            let EffectExprKind::Operation(EffectOperation::Resource(scope)) =
+                &mut core.nodes[root].kind
+            else {
+                panic!("scope")
+            };
+            let instance = scope
+                .instance_with_budget(&mut TypeWorkBudget::default())
+                .unwrap();
+            assert_eq!(instance.arguments().len(), 2);
+            assert_eq!(
+                instance.arguments()[0],
+                crate::types::KindedArgument::TypeArg(Type::Variable(scope.acquisition.identity))
+            );
+            assert_eq!(
+                instance.arguments()[1],
+                crate::types::KindedArgument::TypeArg(Type::Bool)
+            );
+            match mutation {
+                0 | 1 => {
+                    let owner = Type::Variable(scope.acquisition.identity);
+                    let (first, second) = if mutation == 0 {
+                        (owner, Type::Int)
+                    } else {
+                        (Type::Bool, owner)
+                    };
+                    scope.handle.replace_type(Type::Application(
+                        Box::new(Type::Application(
+                            Box::new(Type::Nominal(scope.acquisition.api().unwrap().handle())),
+                            Box::new(first),
+                        )),
+                        Box::new(second),
+                    ));
+                }
+                2 | 3 => {
+                    let request = core
+                        .nodes
+                        .iter_mut()
+                        .find_map(|node| match &mut node.kind {
+                            EffectExprKind::Operation(EffectOperation::Request(request))
+                                if request.effect.effect().module().is_builtin_generic_cell() =>
+                            {
+                                Some(request)
+                            }
+                            _ => None,
+                        })
+                        .unwrap();
+                    assert_eq!(request.effect.effect(), instance.effect());
+                    let mut arguments = request.effect.arguments().to_vec();
+                    assert_eq!(arguments.len(), 2);
+                    if mutation == 2 {
+                        arguments[1] = crate::types::KindedArgument::TypeArg(Type::Int);
+                    } else {
+                        arguments.swap(0, 1);
+                    }
+                    request.effect = EffectInstance::new_kinded(
+                        request.effect.effect(),
+                        arguments.into_boxed_slice(),
+                    );
+                }
+                4 | 5 => {
+                    let catalog = Arc::make_mut(&mut core.method_evidence);
+                    let mut owners = catalog.lexical_owners().to_vec();
+                    for owner in &mut owners {
+                        let mut arguments = owner.application.arguments().to_vec();
+                        assert_eq!(arguments.len(), 2);
+                        if mutation == 4 {
+                            arguments[1] = crate::types::KindedArgument::TypeArg(Type::Int);
+                        } else {
+                            arguments.swap(0, 1);
+                        }
+                        owner.application = crate::interface::InterfaceApplication::new_kinded(
+                            owner.application.interface(),
+                            arguments.into_boxed_slice(),
+                        );
+                    }
+                    catalog.set_lexical_owners(owners);
+                }
+                _ => unreachable!(),
+            }
+            let reason = cell_core_reason(&core, &sources, 0).0;
+            let expected = if matches!(mutation, 2 | 3) {
+                ValidationReason::EffectRow
+            } else {
+                ValidationReason::NodeType
+            };
+            assert_eq!(reason, Some(expected), "full vector mutation{mutation}");
+            println!("generic complete-vector mutation{mutation}: {reason:?}");
+        }
     }
 
     #[test]
@@ -23067,54 +24230,62 @@ mod tests {
 
     #[test]
     fn cell_core_rejects_detached_brand_provider_and_source_authority() {
-        use super::super::effect::{EffectExprKind, EffectOperation};
-        for corruption in 0..5 {
-            let (mut core, sources) = cell_core_fixture();
-            let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
-                &mut core.nodes[core.root.index().unwrap()].kind
-            else {
-                panic!("resource")
-            };
-            match corruption {
-                0 => resource.acquisition.identity = crate::types::TypeVariableId::generated(999),
-                1 => {
-                    resource.acquisition.provider = crate::interface::LexicalEvidenceId::new(
-                        resource.acquisition.provider.module(),
-                        u32::MAX,
-                    )
+        for generic in [false, true] {
+            use super::super::effect::{EffectExprKind, EffectOperation};
+            for corruption in 0..5 {
+                let (mut core, sources) = cell_core_fixture_with_generic(generic);
+                let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
+                    &mut core.nodes[core.root.index().unwrap()].kind
+                else {
+                    panic!("resource")
+                };
+                match corruption {
+                    0 => {
+                        resource.acquisition.identity = crate::types::TypeVariableId::generated(999)
+                    }
+                    1 => {
+                        resource.acquisition.provider = crate::interface::LexicalEvidenceId::new(
+                            resource.acquisition.provider.module(),
+                            u32::MAX,
+                        )
+                    }
+                    2 => {
+                        resource.acquisition.builtin = resource.acquisition.handle.module().unwrap()
+                    }
+                    3 => {
+                        resource.acquisition.span =
+                            sources[0].span(ByteRange::new(0, 1).unwrap()).unwrap()
+                    }
+                    4 => resource.acquisition.handle = resource.acquisition.methods[0],
+                    _ => unreachable!(),
                 }
-                2 => resource.acquisition.builtin = resource.acquisition.handle.module().unwrap(),
-                3 => {
-                    resource.acquisition.span =
-                        sources[0].span(ByteRange::new(0, 1).unwrap()).unwrap()
-                }
-                4 => resource.acquisition.handle = resource.acquisition.methods[0],
-                _ => unreachable!(),
+                let reason = cell_core_reason(&core, &sources, 0).0;
+                assert_ne!(reason, None, "corruption {corruption}");
+                assert_ne!(
+                    reason,
+                    Some(ValidationReason::Resource),
+                    "corruption {corruption}"
+                );
             }
-            let reason = cell_core_reason(&core, &sources, 0).0;
-            assert_ne!(reason, None, "corruption {corruption}");
-            assert_ne!(
-                reason,
-                Some(ValidationReason::Resource),
-                "corruption {corruption}"
-            );
         }
     }
 
     #[test]
     fn cell_core_rejects_a_request_with_the_wrong_operation_fact() {
-        use super::super::effect::{EffectExprKind, EffectOperation};
-        let (mut core, sources) = cell_core_fixture();
-        let request = core
-            .nodes
-            .iter_mut()
-            .find_map(|node| match &mut node.kind {
-                EffectExprKind::Operation(EffectOperation::Request(request)) => Some(request),
-                _ => None,
-            })
-            .unwrap();
-        request.operation = crate::types::OperationId::new(request.effect.effect(), u32::MAX);
-        assert_ne!(cell_core_reason(&core, &sources, 0).0, None);
+        for generic in [false, true] {
+            use super::super::effect::{EffectExprKind, EffectOperation};
+            let (mut core, sources) = cell_core_fixture_with_generic(generic);
+            let request = core
+                .nodes
+                .iter_mut()
+                .find_map(|node| match &mut node.kind {
+                    EffectExprKind::Operation(EffectOperation::Request(request)) => Some(request),
+                    _ => None,
+                })
+                .unwrap();
+            request.operation = crate::types::OperationId::new(request.effect.effect(), u32::MAX);
+            assert_ne!(cell_core_reason(&core, &sources, 0).0, None);
+        }
     }
 
     #[test]
@@ -23137,6 +24308,23 @@ mod tests {
             cell_core_reason(&core, &sources, 0).0,
             Some(ValidationReason::TypeScope)
         );
+    }
+
+    #[test]
+    fn generic_cell_core_dependency_work_is_exact_and_retryable() {
+        let (core, sources) = cell_core_fixture_with_generic(true);
+        let (reason, work) = cell_core_reason(&core, &sources, 0);
+        assert_eq!(reason, None);
+        assert_eq!(
+            cell_core_reason(&core, &sources, CORE_VALIDATION_TYPE_WORK_LIMIT - work + 1).0,
+            Some(ValidationReason::Resource)
+        );
+        for _ in 0..2 {
+            assert_eq!(
+                cell_core_reason(&core, &sources, CORE_VALIDATION_TYPE_WORK_LIMIT - work).0,
+                None
+            );
+        }
     }
 
     #[test]
