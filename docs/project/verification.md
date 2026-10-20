@@ -154,3 +154,7 @@ For a before/after measurement, `cargo xtask inputs [--input FILE]...` prints
 the same input fingerprint as JSON without running verification stages or
 writing receipts. Capture and compare it across both plans. An input dump is
 provenance only; it establishes no verification result.
+
+The [2026-10-20 performance record](verification-performance-2026-10-20.md)
+retains the controlled command-plan comparison, fresh checkpoint, native proof
+and measurement limits that completed TASK-0042.
