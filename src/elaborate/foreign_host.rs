@@ -48,8 +48,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         span: Span,
         values: &mut TypedNodeBuffer,
     ) -> Result<(), TypeError> {
-        #[cfg(test)]
-        eprintln!("checked lifecycle host finish entered");
         let body = values.pop().ok_or_else(invalid_state)?;
         let row = self.zonk_effect_row(&body.effects)?;
         let ty = IterativeTypeOwner::new(self.zonk(&body.ty)?);
@@ -112,14 +110,33 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 Arc::clone(symbol),
             ));
         }
-        #[cfg(test)]
-        eprintln!("checked lifecycle host interpretations={}", interpretations.len());
-        let effects = crate::core::effect::foreign_host_outward_row(
-            &row,
-            &interpretations,
-            Some(host),
-            &mut self.type_work,
-        )?;
+        let pending = self.cleanup_row_pending(&row);
+        let effects = if pending {
+            let mut residual = clone_effect_row_with_budget(&row, &mut self.type_work)
+                .map_err(|()| type_resource())?;
+            self.type_work
+                .charge(interpretations.len())
+                .map_err(|()| type_resource())?;
+            for interpretation in &interpretations {
+                residual =
+                    self.provider_native_phase_row(&residual, interpretation.effect(), span)?;
+            }
+            self.type_work.charge(3).map_err(|()| type_resource())?;
+            let selected = crate::types::EffectInstance::new_kinded(
+                host.effect(),
+                Box::new([crate::types::KindedArgument::TypeArg(Type::Variable(
+                    host.identity(),
+                ))]),
+            );
+            self.remove_cleanup_effect(&residual, &selected, span, true)?
+        } else {
+            crate::core::effect::foreign_host_outward_row(
+                &row,
+                &interpretations,
+                Some(host),
+                &mut self.type_work,
+            )?
+        };
         let row_type = IterativeTypeOwner::new(Type::function_computation(
             Type::Unit,
             crate::types::ComputationType::new(
@@ -133,6 +150,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }).map_err(|()| type_resource())? {
             return Err(inference_failure(TypeReason::Argument, span, "checked host identity escapes in the result or outward row"));
         }
+        if pending {
+            self.defer_resource_escape(host.identity(), &row_type, span, span)?;
+        }
         let provenance = self.at_span_provenance(&ty, span)?;
         let core_ty = self.pure_core_type(&ty)?;
         let core_effects = self.core_effect_row(&effects)?;
@@ -145,8 +165,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             Origin::Source(span),
             EffectOperation::NativeInterpret(boundary),
         )?;
-        #[cfg(test)]
-        eprintln!("checked lifecycle host finish complete");
         values.push(TypedNode {
             node,
             ty: ty.into_inner(),

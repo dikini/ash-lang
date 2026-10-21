@@ -1,0 +1,19 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 1 test
+checked host exact pending diagnostic row=EffectRow { known: [], tail: Some(EffectRowTail { variable: Inference(InferenceVariableId(20)), lacks: [] }) } pending=true
+
+thread 'elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_latest_completion_e_retains_only_the_outer_owner' (81) panicked at src/elaborate/checked_owner_lifecycle_tests.rs:458:65:
+replacement E is usable while its distinct outer ordinary owner C remains live: Internal(Core(InvalidPayload))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_latest_completion_e_retains_only_the_outer_owner ... FAILED
+
+failures:
+
+failures:
+    elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_latest_completion_e_retains_only_the_outer_owner
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2069 filtered out; finished in 0.16s
+
+error: test failed, to rerun pass `--lib`

@@ -1,0 +1,46 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 30 tests
+test core::source_resource::tests::ordinary_header_payloads_pay_for_all_passive_owner_candidates_and_retry_exactly ... ok
+initialized byte header admission: acquired_only=false, work=93
+test core::source_resource::tests::destruction_capture_copied_scope_keeps_exact_producer_and_full_row_originals ... ok
+test core::source_resource::tests::acquired_only_header_admission_preserves_exact_budget_refusal_and_fresh_retry ... ok
+payload helper registry context: first=37637, same=3298, moved=37645; missing-loan refusal and two retries
+test core::source_resource::tests::payload_helper_registry_proof_is_bound_to_its_immutable_scheme_context ... ok
+test core::source_resource::tests::final_core_rejects_owner_state_in_an_unused_ordinary_function ... ok
+test core::source_resource::tests::final_source_scope_rejects_reordered_duplicate_or_missing_native_interpretations ... ok
+test core::source_resource::tests::private_data_rejects_native_state_after_substitution_with_exact_scan_budget ... ok
+test core::source_resource::tests::dependent_source_scope_rejects_current_identity_and_changed_copy_actuals ... ok
+test core::source_resource::tests::independently_revalidated_source_scope_rejects_incomplete_or_forged_claims ... ok
+byte access independent Core: acquired_only=false, work=39670
+test core::source_resource::tests::independently_revalidated_acquired_only_scope_rejects_incomplete_or_forged_claims ... ok
+initialized byte header admission: acquired_only=true, work=87
+test core::source_resource::tests::initialized_byte_header_admission_preserves_exact_budget_refusal_and_fresh_retry ... ok
+test core::source_resource::tests::payload_helper_same_type_donor_cannot_replace_a_copied_call ... ok
+test core::source_resource::tests::source_control_handler_call_proof_preserves_prior_value_flow ... ok
+test core::source_resource::tests::source_forwarding_borrowed_projection_preserves_fields_and_rejects_changed_type ... ok
+test core::source_resource::tests::source_forwarding_same_typed_application_cannot_donate_other_activation_authority ... ok
+payload helper independent Core exact work=67928; one-short, prefix, two fresh retries and copied Row refusal
+source control independent Core work=23828; exact/one-short/prefix/two fresh retries and three original-claim refusals
+test core::source_resource::tests::source_control_core_retains_exact_continuation_rows_and_budget ... ok
+test core::source_resource::tests::payload_helper_complete_rows_and_core_budget_are_preserved ... ok
+test core::source_resource::tests::source_forwarding_complete_row_metadata_is_frozen_before_late_normalization ... ok
+test core::source_resource::tests::source_forwarding_scope_rejects_a_real_other_scope_lexical_source ... ok
+test core::source_resource::tests::inherited_row_owner_copies_preserve_phantom_order_identity_and_state_barriers ... ok
+test core::source_resource::tests::source_forwarding_scope_rejects_changed_request_operand_effect_and_operation ... ok
+test core::source_resource::tests::initialized_byte_scope_revalidation_rejects_forged_claims_for_both_report_codecs ... ok
+test core::source_resource::tests::lexical_window_declarations_match_exact_original_phase_inventory_and_budget ... ok
+source forwarding independent Core: acquired_only=false, work=31153
+byte access independent Core: acquired_only=true, work=39427
+test core::source_resource::tests::byte_access_independent_core_has_exact_budget_prefix_and_fresh_retry ... ok
+test core::source_resource::tests::status_owner_scope_copies_preserve_phantom_rows_and_reject_changed_original_claims ... ok
+test core::source_resource::tests::source_forwarding_scope_rejects_missing_duplicate_and_swapped_method_binder_claims ... ok
+test core::source_resource::tests::source_control_copy_window_recipe_keeps_state_and_exact_direct_claim ... ok
+test core::source_resource::tests::byte_access_original_copies_and_complete_rows_reject_independent_forgeries ... ok
+source forwarding independent Core: acquired_only=true, work=30884
+test core::source_resource::tests::source_forwarding_independent_core_has_exact_budget_and_fresh_retry ... ok
+test core::source_resource::tests::source_control_complete_client_residual_is_distinct_from_direct_demand ... ok
+
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 2051 filtered out; finished in 1.97s
+

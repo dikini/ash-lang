@@ -1,5 +1,4 @@
 import @builtin.foreign as Foreign
-import @builtin.cell as Cell
 foreign checked library Memory {
     profile "x86_64-unknown-linux-gnu"
     repr Size = size_t
@@ -35,11 +34,11 @@ foreign checked library Memory {
 pub type Acquire<S, D, I> = Acquired(S, D)
     | Refused(I)
 
-effect Trace {
+pub effect Trace {
     note : Unit -> Unit
 }
 
-interface ProbeProvider<Access> {
+pub interface ProbeProvider<Access> {
     store : (Access, Unit -> Int) -> Unit ! {ProbeOps<Access>}
     read : Access -> Int ! {ProbeOps<Access>}
 }
@@ -47,7 +46,7 @@ effect ProbeOps<Access> {
     store : (Access, Unit -> Int) -> Unit
     read : Access -> Int
 }
-resource Probe<H, R> {
+pub resource Probe<H, R> {
     owned R
     host H
     input (Unit -> Int)
@@ -75,11 +74,11 @@ resource Probe<H, R> {
             Foreign.CheckedReturned(Foreign.Retained(())) => Foreign.FinishedRetained(state, data)
             Foreign.BoundaryFailed(reason) => Foreign.FinishedBoundary reason
             Foreign.CheckedReturned(Foreign.BlockedDependent) => {
-                let ignored = "candidate impossible path; not witness; refinement awaiting CP assessment"
+                let ignored = "unreachable for an authenticated State-only void teardown; supplies no finish witness"
                 Foreign.FinishedConsumed Foreign.FinishOk
             }
             Foreign.CheckedConversionFailed(_) => {
-                let ignored = "candidate impossible path; not witness; refinement awaiting CP assessment"
+                let ignored = "unreachable for an authenticated State-only void teardown; supplies no finish witness"
                 Foreign.FinishedConsumed Foreign.FinishOk
             }
         }
@@ -92,7 +91,3 @@ resource Probe<H, R> {
         }
     }
 }
-
-
-initial : Unit -> Int
-initial () = 7

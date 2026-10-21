@@ -187,11 +187,14 @@ an export summary neither contains that code nor grants execution permission.
 Private header dependencies retain checking identity without becoming public
 source names.
 
-The current publication checkpoint requires a provider interface declared
-beside a public source resource to be public. Its shared-interface closure can
-retain imported hidden interface facts, but cannot yet retain a same-module
-private provider interface. This is an implementation limitation, not a new
-visibility rule for resource declarations.
+A private provider interface declared beside a source resource retains its
+original shared checking fact in the hidden dependency closure. Its interface
+and method names remain unavailable to imports. Required hidden facts must keep
+their exact defining identity, source annotations and method correspondence;
+a missing fact or another module's fact cannot replace them. Referenced private
+foreign State families likewise retain hidden identity and complete ordered
+formals without constructor access. Unreferenced private declarations need not
+be retained.
 
 ## Imports and namespaces
 

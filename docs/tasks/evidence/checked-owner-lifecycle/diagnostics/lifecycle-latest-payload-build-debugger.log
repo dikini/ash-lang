@@ -1,0 +1,23 @@
+warning: Missing auto-load script at offset 0 in section .debug_gdb_scripts
+of file /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168.
+Use `info auto-load python-scripts [REGEXP]' to list them.
+Breakpoint 1 at 0x65e6f7d: file src/elaborate.rs, line 793.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/x86_64-linux-gnu/libthread_db.so.1".
+
+running 1 test
+[Switching to Thread 0x7ffff7bff6c0 (LWP 1475774)]
+
+Thread 2 "elaborate::chec" hit Breakpoint 1, ash::elaborate::{impl#7}::from (error=ash::core::dialect::BuildError::InvalidPayload) at src/elaborate.rs:793
+793	            Self::Core(error)
+$1 = ash::core::dialect::BuildError::InvalidPayload
+#0  ash::elaborate::{impl#7}::from (error=ash::core::dialect::BuildError::InvalidPayload) at src/elaborate.rs:793
+#1  0x000055555af05a6b in core::convert::{impl#3}::into<ash::core::dialect::BuildError, ash::elaborate::ElaborationFailure> (self=ash::core::dialect::BuildError::InvalidPayload) at /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/convert/mod.rs:779
+#2  0x000055555bb3be98 in ash::elaborate::{impl#15}::from (error=ash::core::dialect::BuildError::InvalidPayload) at src/elaborate.rs:1194
+#3  0x00005555576cb785 in core::result::{impl#28}::from_residual<(), ash::core::dialect::BuildError, ash::elaborate::TypeError> (residual=...) at /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:2189
+#4  0x000055555c0f9cbe in ash::elaborate::CoreElaborator<ash::core::effect::EffectOperationFamily>::finish_foreign_host<ash::core::effect::EffectOperationFamily> (self=0x7ffff7bf0430, source=0x7ffff00301b0, span=..., values=0x7ffff7bd9c30) at src/elaborate/foreign_host.rs:113
+#5  0x000055555c150532 in ash::elaborate::CoreElaborator<ash::core::effect::EffectOperationFamily>::step_expression_task<ash::core::effect::EffectOperationFamily> (self=0x7ffff7bf0430, task=..., context=0x7ffff7be4e78, tasks=0x7ffff7bd9a10, values=0x7ffff7bd9c30, declarations=0x7ffff7bd9c60) at src/elaborate.rs:16070
+#6  0x000055555c1b0191 in ash::elaborate::CoreElaborator<ash::core::effect::EffectOperationFamily>::elaborate_expression_work<ash::core::effect::EffectOperationFamily> (self=0x7ffff7bf0430, initial=..., context=0x7ffff7be4e78) at src/elaborate.rs:15183
+#7  0x000055555c2044d2 in ash::elaborate::CoreElaborator<ash::core::effect::EffectOperationFamily>::elaborate_expression_with_context<ash::core::effect::EffectOperationFamily> (self=0x7ffff7bf0430, initial=..., context=0x7ffff7be4e78) at src/elaborate.rs:15024
+#8  0x000055555c14605c in ash::elaborate::CoreElaborator<ash::core::effect::EffectOperationFamily>::elaborate_equations<ash::core::effect::EffectOperationFamily> (self=0x7ffff7bf0430, equations=&[ash::resolved::ResolvedEquation](size=1) = {...}, function_type=..., context=0x7ffff7be4e78, definition_span=..., presentation=0x7ffff7bde800) at src/elaborate.rs:19269
+#9  0x000055555c188de9 in ash::elaborate::CoreElaborator<ash::core::effect::EffectOperationFamily>::elaborate_equation_group<ash::core::effect::EffectOperationFamily> (self=0x7ffff7bf0430, equational=0x7ffff0092258, function_type=..., context=0x7ffff7be4e78, definition_span=...) at src/elaborate.rs:19242

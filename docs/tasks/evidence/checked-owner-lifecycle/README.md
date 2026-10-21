@@ -1,5 +1,34 @@
 # Connected static checked-owner lifecycle
 
+The candidate connects the dependency-free static checked owner lifecycle
+through source checking, hidden declaration closure, body-free consumer, linking
+and independent Core/identity/fold. The final verification record is in
+[final](final/verification.json), with complete source/configuration maps and raw
+command logs. The frozen batch passes all ten commands: 399 distinct tests
+(430 passing lines), source-resource 30/30, images 16/16 and Clippy with warnings
+denied. All complete before/after maps equal the delivered 584 inputs, aggregate
+`3dc38d13a3aaa208e15a39c1e8bbb2b168336a6a552a0ebd57846b7fdd44f4a1`
+(SHA-256 of sorted-key compact JSON UTF-8 without a newline). Default startup
+work is 318936 for the buffer and 314929 for dependent discard, each below
+unchanged 327680. Independent exact-head review and integration remain pending;
+no historical pass transfers across source changes.
+
+The exact retained-base [deep-fixture comparison](baseline/deep-baseline-one.receipt.json)
+proves the old 6-cell assertion already observed 16 cells before parameter
+cloning. Its test-only correction preserves the missing-authority refusal,
+32,768-level input and 256 KiB stack. Source/archive/Git correspondence and the
+archive-path qualification remain in the baseline receipts; disposable source
+and tar were removed only after independent audit.
+
+This is static correspondence, not checked execution, K discharge, deployment
+or whole F3/F-core acceptance. Private local acquisition-codec closure,
+combined producer/Cell original contexts, general witness helper transport,
+declared owner dependencies and broader declaration closure remain visible
+limitations. The following diagnostic history describes prior snapshots; its
+pending statements do not describe the final candidate.
+
+## Diagnostic history
+
 The first source fixture uses exact checked State<H,R>, Probe<H,R> with explicit
 host H, canonical checked_scope and direct finish-boundary payload forwarding.
 It fails parsing at the resource's new host member before any lifecycle check.
@@ -139,3 +168,33 @@ correctly typed post-discard report with exact DiscardUnsafe refusal. No whole
 F3, runtime, image execution, K, deployment or F-core gate follows from the
 connected static positive. Temporary phase traces remain and must be removed
 before final delivered-source verification.
+
+## Final delivery verification
+
+[The verifier result](final/verification.json) indexes the uniform final batch.
+Run `python3 docs/tasks/evidence/checked-owner-lifecycle/final/verify.py` to
+reproduce input-map, raw-log and result checks without executing Ash. The frozen
+[runner](final/run.py) retains each command, configuration and artifact digest.
+The ten final receipts cover checked controls, foreign contracts, imports,
+source-resource validation, capture, images, owner records, deep freeze refusal,
+five integration targets and Clippy. Exact/prefix/one-short/spent/fresh controls
+retain the separate type and constraint ledgers at their applicable boundaries.
+
+The [pre-lint snapshot](diagnostics/pre-lint/clippy.receipt.json) is historical: its
+nine test commands passed, while Clippy rejected ten test-only `err().expect`
+expressions. The delivered tests use `expect_err`; all ten commands were rerun
+on the final uniform inputs. No product change or warning suppression followed
+that lint result.
+
+Latest-data consumed/retained controls pass within the enclosing ordinary owner
+and with an independent replacement escaping it; a replacement capturing that
+owner refuses escape through completion E. Both positive modes also pass linked
+Core and identity/fold validation. The finalizer control uses an empty host
+interpretation vector, drains exact pending Host removal equations, then reaches
+actual publication with no equations remaining: a late unlisted same-H native
+residual still refuses with ResourceEscape. Its injected timing is component
+evidence; the separate source latest-data positives exercise real pending rows.
+
+The last full F-core gate is not rerun by this static checkpoint. Its existing
+generated-host connected F3/F4/F6 trigger is unchanged. Checked runtime/native
+and image execution remain refused, and no whole-F3 criterion is accepted here.

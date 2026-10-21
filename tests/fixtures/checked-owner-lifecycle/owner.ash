@@ -72,11 +72,11 @@ resource Probe<H, R> {
             Foreign.CheckedReturned(Foreign.Retained(())) => Foreign.FinishedRetained(state, ())
             Foreign.BoundaryFailed(reason) => Foreign.FinishedBoundary reason
             Foreign.CheckedReturned(Foreign.BlockedDependent) => {
-                let ignored = "candidate impossible path; not witness; refinement awaiting CP assessment"
+                let ignored = "unreachable for an authenticated State-only void teardown; supplies no finish witness"
                 Foreign.FinishedConsumed Foreign.FinishOk
             }
             Foreign.CheckedConversionFailed(_) => {
-                let ignored = "candidate impossible path; not witness; refinement awaiting CP assessment"
+                let ignored = "unreachable for an authenticated State-only void teardown; supplies no finish witness"
                 Foreign.FinishedConsumed Foreign.FinishOk
             }
         }

@@ -2601,33 +2601,15 @@ impl<'a> Analysis<'a> {
         self.entries.clear();
         self.candidates.clear();
         self.payloads.clear();
-        self.discover(roots, None, budget).map_err(|failure| {
-            #[cfg(test)]
-            eprintln!("checked lifecycle strict discovery failed: {failure:?}");
-            failure
-        })?;
-        #[cfg(test)]
-        eprintln!("checked lifecycle strict discovery complete");
+        self.discover(roots, None, budget)?;
         // Passive row records describe the whole original discovery. Focused
         // safety queries remain strict and do not invent additional row sites.
         self.collect_cleanup_rows = false;
         if self.infer_cleanup_rows {
             return Ok(());
         }
-        self.check_payloads(budget).map_err(|failure| {
-            #[cfg(test)]
-            eprintln!("checked lifecycle strict payload failed: {failure:?}");
-            failure
-        })?;
-        #[cfg(test)]
-        eprintln!("checked lifecycle strict payload complete");
-        self.check_cell_retentions(budget).map_err(|failure| {
-            #[cfg(test)]
-            eprintln!("checked lifecycle strict cell retention failed: {failure:?}");
-            failure
-        })?;
-        #[cfg(test)]
-        eprintln!("checked lifecycle strict cell retention complete");
+        self.check_payloads(budget)?;
+        self.check_cell_retentions(budget)?;
         if let Some(data) = &mut self.data {
             data.close(budget)?;
             for candidate in data.resource_candidates(budget)? {
@@ -2638,11 +2620,7 @@ impl<'a> Analysis<'a> {
                 self.candidates.insert(candidate);
             }
         }
-        self.check_focused_entries(budget).map_err(|failure| {
-            #[cfg(test)]
-            eprintln!("checked lifecycle strict focused failed: {failure:?}");
-            failure
-        })
+        self.check_focused_entries(budget)
     }
 
     fn discover(
@@ -2697,11 +2675,7 @@ impl<'a> Analysis<'a> {
                 let code = state.position.code;
                 match &self.graph.code[code] {
                     Control::Return => self.returned(state, &mut pending, &mut visited, budget)?,
-                    Control::Unavailable => {
-                        #[cfg(test)]
-                        eprintln!("checked lifecycle unavailable control {code}");
-                        return Err(Failure::Invalid);
-                    },
+                    Control::Unavailable => return Err(Failure::Invalid),
                     Control::Sequence(children) => {
                         self.discover_sequence(
                             state,

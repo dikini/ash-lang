@@ -993,8 +993,8 @@ main () = true + 1
 
 Foreign declarations are passive. The explicit static checked foreign profile
 admits `foreign checked library` declarations with owner-free scalar or void
-calls, and passive dependency-free opaque owner acquisition and void teardown
-bindings with the canonical checked result codec. Default source resolution,
+calls, dependency-free opaque owner acquisition and void teardown bindings,
+and the static checked source lifecycle described below. Default source resolution,
 program building and running refuse this checked closure before legacy foreign
 ABI preparation. Erasing the marker is not an available source operation;
 static checked binding grants no native execution or executable image permission. Assumption declarations and `host`/`assumes` metadata cannot be
@@ -1041,14 +1041,42 @@ A same-shaped user type, display alias, copied flag or replayed module identity
 with rewritten source cannot supply that authority. Static Core and its ordinary
 transforms preserve the lexical host binder.
 
-Passive checked owners retain distinct original host and owned formals, exact
-State identity, nullable acquisition and consumed/retained void teardown
-relations. The explicit static profile binds these declarations without creating
-or finishing a source owner. Legacy binding still refuses checked contracts.
-Source resources using either `scope` or `acquired_only` refuse a checked State
-owner; those codecs cannot activate a checked lifecycle. Checked owner lifecycles,
-`checked_scope`, checked byte/copy primitives and executable checked host images
-remain outside this checkpoint and refuse explicitly.
+Checked owners retain distinct original host and owned formals, exact State
+identity, nullable acquisition and consumed/retained void teardown relations.
+Passive binding creates no source owner. Legacy binding and source resources
+using `scope` or `acquired_only` still refuse checked contracts.
+
+The explicit static profile admits a dependency-free opaque State<H,R> without
+retained dependencies in a source resource with `owned R`, `host H` and
+`codec checked_scope`. The exact original Type formal H differs from R and
+occupies the State owner's original host position. Acquisition retains the
+structural Acquired(State,D)/Refused(I) relation. Completion uses canonical
+`Foreign.CheckedFinish<State,E>` and the report uses canonical
+`Foreign.CheckedScope<Answer,I,E>` in that order. Same-shaped user types supply
+no codec authority. The resource interprets only its listed exact native
+instances and keeps `NativeHost<H>` through acquisition, calls and completion;
+the lexical host removes that exact obligation and never interprets owner calls.
+
+The admitted checked finish request is a void teardown whose sole native operand
+is the exact Current State. It has no scalar/NUL operand conversion or native
+result decoding. Symbolic checking follows its declared consumed or retained
+outcome and its authenticated boundary-failure alternative; generic source arms
+remain typed and exhaustive. A fallible additional operand cannot borrow this
+refinement. Every returning finish branch must account for one exact request
+and its matching outcome. FinishedConsumed, FinishedRetained and FinishedBoundary
+cannot substitute for one another. FinishedBoundary requires that request's
+private failure-payload lineage, not public constructor shape, attempted=true,
+a previous call or rebuilt equal data. Independent diagnostics may be inspected
+while the original whole reason is forwarded; reconstruction grants no witness.
+
+After that checked attempt, ordinary Current access and a second native attempt
+are unavailable. Current may occur only in the matching FinishedRetained report
+transport. Required independent source effects and the post-request continuation
+remain; native outcome classification grants no discard permission. Report E
+retains the dependencies of the latest private data, including handler updates.
+This is static correspondence: checked evaluator/native/image execution,
+K realization, checked bytes/copy and declared owner dependencies remain outside
+this subset and refuse explicitly.
 
 Each symbol has one outer pure source arrow and a complete ordered parameter
 vector containing only `Type` and `EffectRow` parameters. Omitted kinds are
@@ -1243,7 +1271,8 @@ permission.
 
 ## Source resource declarations
 
-A source resource declaration retains its explicit owned position, complete
+A source resource declaration retains its explicit owned position, optional
+checked host selector, complete
 ordered Type/Row formals, input, native state, private data, acquisition,
 completion and body-result report types. Its provider application, provided
 effect, complete native interpretation list, codec and all lifecycle and handler
@@ -1287,7 +1316,7 @@ Independent Core checking authenticates the source occurrence, generated binders
 and request forest against their original association. Copying a claim or taking
 evidence from another activation cannot grant authority.
 
-Both report codecs authenticate ordinary library ADTs by their exact constructor
+The two ordinary report codecs authenticate library ADTs by their exact constructor
 order and field types. Acquisition has `Acquired(State, D)` then `Refused(I)`;
 completion has `Consumed`, `ConsumedFailure(E)` then `Retained(State, E)`.
 The `scope` report has `NotAcquired(I)` then `Completed(Answer, Completion<E>)`, where
@@ -1295,6 +1324,14 @@ completion status has `Closed`, `ConsumedError(E)` then `RetainedError(E)`.
 Constructor spellings alone grant no authority. The single result binder
 `Answer` is replaced by the checked body type; independent `I` and `E` are
 ordinary source types rather than fixed `Unit` errors.
+
+The static `checked_scope` codec instead requires the canonical builtin
+CheckedFinish/CheckedScope roles described under
+[source foreign declarations](#source-foreign-declarations). Its host selector
+must match the original checked owner's H through every complete State/native
+vector. Original source coordinates authenticate the selector's presence,
+occurrence, formal position and codec spelling independently of a projected
+header. Neither ordinary codec may ignore a host selector.
 
 The `acquired_only` report has `Success(Answer)` then `Failure(I)`, with no
 completion-status field. Checking substitutes the report's actual type arguments

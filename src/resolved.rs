@@ -8438,8 +8438,6 @@ fn authenticate_identity_order<K: Copy + Eq + Hash, V>(
 }
 
 fn map_summary_kind_failure(failure: KindFailure) -> ResolvedBuildFailure {
-    #[cfg(test)]
-    eprintln!("checked lifecycle summary kind failure: {failure:?}");
     match failure {
         KindFailure::Resource(_) => ResolvedBuildFailure::TypeResource,
         KindFailure::Internal(_) | KindFailure::Source(_) => ResolvedBuildFailure::InvalidState,
@@ -12797,18 +12795,8 @@ impl ExportSummary {
             providers,
             type_work,
             constraint_work,
-        ).map_err(|failure| {
-            #[cfg(test)]
-            eprintln!("checked lifecycle summary collection failed: {failure:?}");
-            failure
-        })?;
-        #[cfg(test)]
-        eprintln!("checked lifecycle summary collection complete");
-        summary.authenticate_with_provider_commit(false, type_work, constraint_work).map_err(|failure| {
-            #[cfg(test)]
-            eprintln!("checked lifecycle summary authentication failed: {failure:?}");
-            failure
-        })?;
+        )?;
+        summary.authenticate_with_provider_commit(false, type_work, constraint_work)?;
         Ok(summary)
     }
 
@@ -13776,8 +13764,6 @@ impl ExportSummary {
             }
         }
 
-        #[cfg(test)]
-        eprintln!("checked lifecycle hidden interface collection complete");
         summary
             .nominals
             .try_reserve(resolved.export_candidate.nominals.len())
@@ -14847,8 +14833,6 @@ impl ExportSummary {
         type_work
             .charge(resolved.export_candidate.hidden_nominals.len())
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-        #[cfg(test)]
-        eprintln!("checked lifecycle hidden nominal collection start");
         for identity in &resolved.export_candidate.hidden_nominal_order {
             let candidate = resolved
                 .export_candidate
@@ -14861,19 +14845,11 @@ impl ExportSummary {
             let source_parameters = resolved
                 .registry
                 .nominal_parameters(candidate.id)
-                .ok_or_else(|| {
-                    #[cfg(test)]
-                    eprintln!("checked lifecycle missing nominal params {:?} {}", candidate.id, candidate.spelling);
-                    ResolvedBuildFailure::InvalidState
-                })?;
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
             let nominal = resolved
                 .registry
                 .nominal(candidate.id)
-                .ok_or_else(|| {
-                    #[cfg(test)]
-                    eprintln!("checked lifecycle missing nominal row {:?} {}", candidate.id, candidate.spelling);
-                    ResolvedBuildFailure::InvalidState
-                })?;
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
             let constructor_count = nominal.constructors.len();
             type_work
                 .charge(2)
@@ -25249,14 +25225,6 @@ impl ResolvedRegistry {
     ) -> Result<(), ResolvedBuildFailure> {
         work.charge(1)
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-        #[cfg(test)]
-        eprintln!(
-            "checked lifecycle original provider slot present={} exact={}",
-            self.provider_contracts.contains_key(&original.module()),
-            self.provider_contracts
-                .get(&original.module())
-                .is_some_and(|certificate| Arc::ptr_eq(certificate, original.code().contracts()))
-        );
         if self
             .provider_contracts
             .get(&original.module())
@@ -25275,32 +25243,16 @@ impl ResolvedRegistry {
     ) -> Result<(), ResolvedBuildFailure> {
         work.charge(self.provider_contracts.len())
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-        #[cfg(test)]
-        eprintln!(
-            "checked lifecycle category counts provider={} source={} foreign={} native={} preflight={} kinds={}",
-            self.provider_contracts.len(),
-            self.source_resource_facts.len(),
-            self.source_foreign_nominals.len(),
-            self.native_symbols.len(),
-            self.scalar_preflights.len(),
-            self.abstract_nominal_kinds.len()
-        );
         for (module, certificate) in &self.provider_contracts {
             if *module != certificate.module() {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
             if let Some(original) = original.filter(|original| original.module() == *module) {
-                let diagnostic = original.authenticate(certificate, work);
-                #[cfg(test)]
-                eprintln!("checked lifecycle original provider certificate: {diagnostic:?}");
-                diagnostic?;
+                original.authenticate(certificate, work)?;
             } else {
                 certificate.authenticate(true, work)?;
             }
-            let diagnostic = certificate.authenticate_linked_native_facts(self, work);
-            #[cfg(test)]
-            eprintln!("checked lifecycle linked native certificate: {diagnostic:?}");
-            diagnostic?;
+            certificate.authenticate_linked_native_facts(self, work)?;
             work.charge(certificate.resource_count())
                 .map_err(|()| ResolvedBuildFailure::TypeResource)?;
             families
@@ -25372,8 +25324,6 @@ impl ResolvedRegistry {
                 }
             }
         }
-        #[cfg(test)]
-        eprintln!("checked lifecycle category provider contracts complete");
         work.charge(self.source_resource_facts.len())
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
         families
@@ -25454,8 +25404,6 @@ impl ResolvedRegistry {
                 }
             }
         }
-        #[cfg(test)]
-        eprintln!("checked lifecycle category source resource kinds complete");
         work.charge(self.source_foreign_nominals.len())
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
         for candidate in &self.source_foreign_nominals {
@@ -25550,8 +25498,6 @@ impl ResolvedRegistry {
                 }
             }
         }
-        #[cfg(test)]
-        eprintln!("checked lifecycle category source foreign kinds complete");
         // Only the exact common opaque role carried by an independently
         // reconstructed native call codec belongs to this category. Other
         // ordinary frozen nominals require their own original authority.
@@ -25628,13 +25574,6 @@ impl ResolvedRegistry {
                     std::collections::hash_map::Entry::Occupied(entry) => {
                         let codec = entry.get();
                         if codec.source() != original.source() || codec.ids() != original.ids() {
-                            #[cfg(test)]
-                            eprintln!(
-                                "checked lifecycle codec collision module={:?} retained={:?} incoming={:?}",
-                                original.module(),
-                                codec.ids(),
-                                original.ids()
-                            );
                             return Err(ResolvedBuildFailure::InvalidState);
                         }
                     }
@@ -25655,13 +25594,6 @@ impl ResolvedRegistry {
                 families.insert(extent);
             }
         }
-        #[cfg(test)]
-        eprintln!(
-            "checked lifecycle category inventories family={} names={} kinds={}",
-            families.len(),
-            self.abstract_nominal_names.len(),
-            self.abstract_nominal_kinds.len()
-        );
         if families.len() != self.abstract_nominal_names.len()
             || families.len() != self.abstract_nominal_kinds.len()
         {
@@ -39348,9 +39280,9 @@ mod tests {
     #[test]
     fn freeze_rejects_missing_local_hidden_nominal_before_cloning_deep_parameters() {
         const DEPTH: usize = 32_768;
-        // Checked-global index + public order + one cloned nominal + collector
-        // root and unique-identity index + hidden-candidate scan.
-        const PRECLONE_TYPE_WORK: usize = 6;
+        // Shallow global publication and closure bookkeeping precede the
+        // missing nominal lookup; no deep parameter-clone cell is included.
+        const PRECLONE_TYPE_WORK: usize = 16;
 
         std::thread::Builder::new()
             .name("freeze-missing-local-hidden-nominal".to_owned())
@@ -39454,25 +39386,39 @@ mod tests {
                     },
                     origin: Origin::Source(span),
                 }];
-                let mut type_work = TypeWorkBudget::default();
-                let mut constraint_work = crate::interface::InterfaceConstraintBudget::default();
-                assert_eq!(
+                let run = |work: &mut TypeWorkBudget| {
                     ExportSummary::freeze(
                         &resolved,
                         &checked,
                         &[],
                         &[],
                         &[],
-                        &mut type_work,
-                        &mut constraint_work,
-                    ),
-                    Err(ResolvedBuildFailure::InvalidState),
-                );
+                        work,
+                        &mut crate::interface::InterfaceConstraintBudget::default(),
+                    )
+                };
+                let mut measured = TypeWorkBudget::default();
+                assert_eq!(run(&mut measured), Err(ResolvedBuildFailure::InvalidState));
                 assert_eq!(
-                    type_work.used(),
+                    measured.used(),
                     PRECLONE_TYPE_WORK,
-                    "missing local authority must reject before any parameter clone cell",
+                    "missing local authority must reject before any parameter clone cell"
                 );
+                for prefix in [0, 7] {
+                    let mut exact = TypeWorkBudget::with_limit(prefix + PRECLONE_TYPE_WORK);
+                    exact.charge(prefix).unwrap();
+                    assert_eq!(run(&mut exact), Err(ResolvedBuildFailure::InvalidState));
+                    assert_eq!(exact.used(), prefix + PRECLONE_TYPE_WORK);
+                    assert_eq!(run(&mut exact), Err(ResolvedBuildFailure::TypeResource));
+                    let mut short = TypeWorkBudget::with_limit(prefix + PRECLONE_TYPE_WORK - 1);
+                    short.charge(prefix).unwrap();
+                    assert_eq!(run(&mut short), Err(ResolvedBuildFailure::TypeResource));
+                }
+                for _ in 0..2 {
+                    let mut fresh = TypeWorkBudget::with_limit(PRECLONE_TYPE_WORK);
+                    assert_eq!(run(&mut fresh), Err(ResolvedBuildFailure::InvalidState));
+                    assert_eq!(fresh.used(), PRECLONE_TYPE_WORK);
+                }
                 drop(resolved);
                 drop(checked);
             })

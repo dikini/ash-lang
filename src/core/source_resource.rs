@@ -1300,7 +1300,7 @@ impl CheckedSourceResourceTemplate {
             if !Arc::ptr_eq(&program.registry, &acquire.registry) {
                 return Err(invalid());
             }
-            let diagnostic = session.check_with_handler_graph(
+            session.check_with_handler_graph(
                 program,
                 &header.original,
                 answer,
@@ -1309,10 +1309,7 @@ impl CheckedSourceResourceTemplate {
                 &globals,
                 if answer { handler_graph.as_ref() } else { None },
                 work,
-            );
-            #[cfg(test)]
-            eprintln!("checked lifecycle original structure answer={answer}: {diagnostic:?}");
-            diagnostic?;
+            )?;
         }
         let canonical =
             CheckedSourceResourceHeader::admit(&header.original, &acquire.registry, work)?;
@@ -1325,11 +1322,7 @@ impl CheckedSourceResourceTemplate {
         {
             return Err(invalid());
         }
-        #[cfg(test)]
-        eprintln!("checked lifecycle header complete");
         let methods = check_provider_association(&header, &handler, work)?;
-        #[cfg(test)]
-        eprintln!("checked lifecycle association complete");
         let acquire_entry = entry(&acquire, &header.original, false, work)?;
         let finish_entry = entry(&finish, &header.original, false, work)?;
         let handler_entry = entry(&handler, &header.original, true, work)?;
@@ -1406,8 +1399,6 @@ impl CheckedSourceResourceTemplate {
             return Err(invalid());
         }
         let handler_body = answer.body();
-        #[cfg(test)]
-        eprintln!("checked lifecycle entries complete");
         let acquire_calls = check_flow(
             &acquire,
             &header,
@@ -1894,7 +1885,7 @@ impl<'a> FlowFacts<'a> {
         Ok(selected)
     }
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 enum CheckedFinishOutcome {
     Consumed(NodeId),
     Retained(NodeId),
@@ -2142,11 +2133,15 @@ fn bind_pattern<'a>(
                     _ => Impossible,
                 }
             }
-            FlowFact::Independent => {
+            FlowFact::Independent | FlowFact::FinishBoundary(_) => {
                 if let Some(payload) = payload {
                     Possible.and(bind_pattern(
                         payload,
-                        value,
+                        if matches!(facts.fact(value)?, FlowFact::FinishBoundary(_)) {
+                            0
+                        } else {
+                            value
+                        },
                         path,
                         facts,
                         registry,
@@ -3538,27 +3533,7 @@ fn check_flow(
     if results.is_empty() {
         return Err(invalid());
     }
-    #[cfg(test)]
-    if matches!(
-        header.codec.report,
-        SourceResourceReportCodec::CheckedScope { .. }
-    ) {
-        eprintln!("checked lifecycle flow {phase:?} results={}", results.len());
-    }
     for (value, path) in results {
-        #[cfg(test)]
-        if matches!(
-            header.codec.report,
-            SourceResourceReportCodec::CheckedScope { .. }
-        ) {
-            eprintln!(
-                "checked lifecycle result {phase:?} acquired={} consumed={} request={:?} value={:?}",
-                path.acquired,
-                path.consumed,
-                path.checked_finish_outcome,
-                facts.fact(value)?
-            );
-        }
         if phase == SourceResourcePhase::Finish
             && matches!(
                 header.codec.report,
@@ -8750,3 +8725,7 @@ main () = resource Owner.Probe<{}, Outer, {}> outer = 64 {
 #[cfg(test)]
 #[path = "source_resource/checked_owner_tests.rs"]
 mod checked_owner_tests;
+
+#[cfg(test)]
+#[path = "source_resource/checked_lifecycle_core_tests.rs"]
+pub(crate) mod checked_lifecycle_core_tests;

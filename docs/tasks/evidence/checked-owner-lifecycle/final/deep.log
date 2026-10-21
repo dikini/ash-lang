@@ -1,0 +1,11 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 4 tests
+test resolved::tests::freeze_rejects_coherently_forged_checked_method_binder_before_publication ... ok
+test resolved::tests::freeze_rejects_forged_monomorphic_method_source_mirror_before_publication ... ok
+test resolved::tests::freeze_rejects_unbacked_foreign_opaque_owner_before_publication ... ok
+test resolved::tests::freeze_rejects_missing_local_hidden_nominal_before_cloning_deep_parameters ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 2077 filtered out; finished in 0.01s
+

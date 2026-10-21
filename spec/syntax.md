@@ -145,6 +145,7 @@ string_literal ::= /double-quoted-UTF-8-with-defined-escapes/ ;
 resource_declaration ::=
   [ "pub" ] "resource" upper_identifier type_parameters
   "{" line_end "owned" upper_identifier line_end
+  [ "host" upper_identifier line_end ]
   "input" type line_end "state" type line_end "data" type line_end
   "acquisition" type line_end "completion" type line_end
   "result" type "for" type_parameters line_end "codec" report_codec line_end
@@ -155,7 +156,7 @@ resource_declaration ::=
   "handlers" pattern "{" line_end
   handler_clause { line_end handler_clause } [ line_end ] "}"
   [ line_end ] "}" ;
-report_codec ::= "scope" | "acquired_only" ;
+report_codec ::= "scope" | "acquired_only" | "checked_scope" ;
 
 interface_declaration ::=
   [ "pub" ] "interface" upper_identifier interface_parameters
@@ -559,10 +560,14 @@ A source resource declaration retains its complete header and the patterns for
 acquisition, completion and handlers. `result` introduces one body-result
 parameter for that type only. `codec` selects declared library ADT roles;
 [static semantics](static-semantics.md#source-resource-declarations) defines
-their admission. Declaration alone performs no acquisition and introduces no
-first-class acquisition function. This checkpoint executes both `scope` and
-`acquired_only` codecs for the admitted owner lifecycle, including declared
-dependencies and unconditional consumed or retained `void` contracts.
+their admission. Optional `host H` follows `owned R` and selects a distinct
+existing Type formal. The explicit static checked profile uses this field with
+`checked_scope`, canonical `Foreign.CheckedFinish<State,E>` and
+`Foreign.CheckedScope<Answer,I,E>`. Declaration alone performs no acquisition and
+introduces no first-class acquisition function. Execution admits `scope` and
+`acquired_only` for the ordinary owner lifecycle, including declared dependencies
+and unconditional consumed or retained `void` contracts. `checked_scope` remains
+static-only and grants no evaluator, native or image execution permission.
 
 A hook expression names an exact effect instance followed by a block. A
 registration expression names an exact effect instance, one primary-expression

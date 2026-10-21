@@ -3171,8 +3171,6 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
             }) {
                 graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
                 let host_request = Request::effect(host, source, budget)?;
-                #[cfg(test)]
-                eprintln!("checked lifecycle synthetic host control {} for {host:?}", graph.code.len());
                 data.position_independent_request(graph.code.len(), source, budget)?;
                 steps.push(graph.code.len());
                 graph.code.push(Control::Request(host_request));
@@ -3734,8 +3732,6 @@ fn analyze_nodes_with_methods<F: CoreOperationFamily>(
     else {
         return Ok(Vec::new());
     };
-    #[cfg(test)]
-    eprintln!("checked lifecycle capture graph complete");
     if let Some(rows) = rows {
         *rows = cleanup_requirements(&graph, &roots, budget)?;
     } else if summary_roots.is_none() {
@@ -6030,8 +6026,6 @@ fn build_capture_graph<F: CoreOperationFamily>(
         budget,
     )?;
 
-    #[cfg(test)]
-    eprintln!("checked lifecycle capture finite values complete");
     // Canonical source roots and unproved raw producer roots both retain
     // their actual value ports. The latter are subsequently Unknown; neither
     // may be replaced by a canonical binder capture from below the cut.
@@ -6090,8 +6084,6 @@ fn build_capture_graph<F: CoreOperationFamily>(
         summary_roots.and_then(|(_, _, _, _, _, declared)| declared),
         budget,
     )?;
-    #[cfg(test)]
-    eprintln!("checked lifecycle capture typed data complete");
     if let Some((_, lexical, _, _, dictionary_variables, _)) = summary_roots {
         data.retain_provider_lexical(nodes, lexical, budget)?;
         data.refuse_provider_dictionary_variables(nodes, dictionary_variables, budget)?;
@@ -6109,8 +6101,6 @@ fn build_capture_graph<F: CoreOperationFamily>(
         provider_phase,
         budget,
     )?;
-    #[cfg(test)]
-    eprintln!("checked lifecycle capture control compilation complete");
     graph.data = Some(Arc::new(data));
     Ok(Some(BuiltCaptureGraph {
         graph,
@@ -6452,11 +6442,7 @@ fn check_control_roots_with_rows(
                 queries.push(root);
             }
         }
-        #[cfg(test)]
-        eprintln!("checked lifecycle strict query roots complete");
         let mut analysis = Analysis::new(graph, None, budget)?;
-        #[cfg(test)]
-        eprintln!("checked lifecycle strict analysis constructed");
         analysis.collect_cleanup_rows = collect_cleanup_rows;
         analysis.check(&queries, budget)?;
         return Ok(std::mem::take(&mut analysis.cleanup_rows));

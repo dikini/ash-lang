@@ -188,15 +188,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         span: Span,
         tasks: &mut ElaborationTaskBuffer<'a>,
     ) -> Result<(), TypeError> {
-        #[cfg(test)]
-        eprintln!("checked lifecycle instance schedule entered");
         let template = self.source_template(resource)?;
-        #[cfg(test)]
-        eprintln!("checked lifecycle instance template selected");
         let (arguments, replacements) =
             self.source_actuals(resource, &template.header().original)?;
-        #[cfg(test)]
-        eprintln!("checked lifecycle instance actuals complete");
         let input = IterativeTypeOwner::new(
             replacements.substitute(&template.header().original.input.ty, &mut self.type_work)?,
         );
@@ -348,8 +342,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         body: TypedNodeOwner,
         context: &mut TypeContext,
     ) -> Result<TypedNode, TypeError> {
-        #[cfg(test)]
-        eprintln!("checked lifecycle instance finish entered");
         self.leave_provider_instance_body(progress.resource, progress.previous, context)?;
         let header = &progress.template.header().original;
         let mut associated = SourceArguments(Vec::new());
@@ -489,8 +481,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         );
         let empty_pending = HashMap::new();
         let empty_nodes = HashMap::new();
-        #[cfg(test)]
-        eprintln!("checked lifecycle instance rows complete");
         let phases = self.prepare_source_resource_copies(
             &progress.template,
             &progress.arguments.0,
@@ -514,8 +504,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 .unwrap_or(progress.resource.definition.module()),
             progress.span,
         )?;
-        #[cfg(test)]
-        eprintln!("checked lifecycle instance copies prepared");
         let mut body_node = body.node;
         while let Some((binder, function)) = progress.members.pop() {
             let binder_id = binder.id();
@@ -577,8 +565,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             body_node,
             &mut self.type_work,
         )?;
-        #[cfg(test)]
-        eprintln!("checked lifecycle instance copies lowered");
         let claims =
             std::array::from_fn(
                 |index| crate::core::source_resource::SourceResourceCopyClaim {
@@ -619,8 +605,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             &mut self.type_work,
         )
         .map_err(validation)?;
-        #[cfg(test)]
-        eprintln!("checked lifecycle instance scope admitted");
         let core_type = self.clone_type(&report)?;
         let core_effects = self.core_effect_row(&effects)?;
         let provenance = self.at_span_provenance(&report, progress.span)?;
@@ -1387,8 +1371,6 @@ pub(super) fn compile(
                 .map_err(|error| template_validation(error, definition.span))?,
             ));
         }
-        #[cfg(test)]
-        eprintln!("checked lifecycle all admitted template records complete");
         CheckedSourceResourceTemplates::new(records, &mut compiler.type_work)
             .map(Arc::new)
             .map(Some)

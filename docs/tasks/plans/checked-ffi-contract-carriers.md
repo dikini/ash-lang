@@ -534,3 +534,40 @@ Checked runtime/native/image execution, K/quarantine implementation, bytes/copy,
 SQLite, deployment, F4/F6 and F-core remain excluded. AD-0015 remains owner-free.
 Declared enclosing C-to-S dependencies and remaining declaration-closure cases
 remain visible. No Main integration or whole F3 acceptance follows.
+
+### Bounded static lifecycle delivery record
+
+The delivered carrier uses the existing immutable source header/templates and
+source-code publication. Finish admission records exact request/outcome/payload
+lineage; independent Core authenticates the flow-checked template and every
+specialized copy rather than replaying symbolic flow at each scope. Native
+consumed, retained and boundary alternatives preserve the actual post-request
+source continuation. Pattern inspection preserves the original whole witness;
+reconstructing diagnostic data does not remint it.
+
+The connected closure required three existing-fact repairs: coexistence of
+canonical legacy preflight Call and checked native CheckedCall in one builtin
+module; hidden same-module provider-interface retention/import; and referenced
+private foreign State metadata without constructor or source-name access. The
+sealed Host control event now has its own paid independent value port. Pending
+provider rows use existing exact subtraction equations and deferred result/row
+H-escape checks; no unknown-row absence assumption or owner interpretation is
+added to the host.
+
+The [delivery evidence](../evidence/checked-owner-lifecycle/README.md) separates
+historical red/setup receipts from the final uniform source/configuration
+verification. It includes source/body-free consumer/Core/identity/fold controls,
+exact copied completion-H and required-continuation mutations, both latest-D E
+contract variants, refusal/budget controls, and the retained-base deep-fixture
+comparison. Standalone default limits remain unchanged; source checking keeps
+its separate established input-derived allowance.
+
+This remains a bounded static subset. The acquisition codec in the connected
+fixture is public; private local acquisition-codec constructor closure remains
+unsupported. The earlier combined producer/Cell original-template context and
+multi-checked-library lifecycle fixtures remain unaccepted broader cases, not
+proofs of new support. General failure-witness helper/reconstruction transport,
+checked Borrow/byte/window roles, declared C-to-S owner dependencies and broader
+declaration closure remain outside the delivery. Runtime/native/image execution,
+K realization, F4/F6, deployment, Main and whole-F3 acceptance remain pending.
+The F-core trigger remains the connected generated-host F3/F4/F6 path.

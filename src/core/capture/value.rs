@@ -5258,11 +5258,7 @@ impl<'a> Analysis<'a> {
         budget: &mut TypeWorkBudget,
     ) -> Result<usize, Failure> {
         charge(budget, 1)?;
-        let expression = *self.graph.positions.get(&code).ok_or_else(|| {
-            #[cfg(test)]
-            eprintln!("checked lifecycle missing value position for control {code}");
-            Failure::Invalid
-        })?;
+        let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
         self.slot(expression, context, budget)
     }
 

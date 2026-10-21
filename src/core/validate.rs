@@ -8712,14 +8712,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         &self,
         original: Option<&source_declarations::OriginalDeclarationProvenance>,
     ) -> Result<RegistryParameterOwners, ValidationError> {
-        let result = self.validate_reserved_builtin_sources();
-        #[cfg(test)]
-        eprintln!("checked lifecycle builtin bytes: {result:?}");
-        result?;
-        let result = self.validate_scalar_preflight_registry();
-        #[cfg(test)]
-        eprintln!("checked lifecycle scalar originals: {result:?}");
-        result?;
+        self.validate_reserved_builtin_sources()?;
+        self.validate_scalar_preflight_registry()?;
         if let Some(canonical) = self.contextual_registry {
             let mut work = TypeWorkBudget::with_limit(
                 self.type_work_limit.saturating_sub(self.type_work.get()),
@@ -9162,8 +9156,6 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         } else {
             registry.authenticate_provider_contracts(&mut contract_work)
         };
-        #[cfg(test)]
-        eprintln!("checked lifecycle provider categories: {contract_result:?}");
         let authenticated_abstract_inventory = contract_result.is_ok();
         self.charge_type_work(contract_work.used())?;
         // Contextual provider checking has its separately admitted defining
@@ -9223,8 +9215,6 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     &mut owner_work,
                 );
             self.charge_type_work(owner_work.used())?;
-            #[cfg(test)]
-            eprintln!("checked lifecycle foreign nominal {nominal:?}: {result:?}");
             result.map_err(|error| {
                 ValidationError::new(
                     if matches!(
@@ -9338,15 +9328,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             let nominal_range = nominal_span.range();
             if let Some(original) = original {
                 self.charge_type_work(1)?;
-                let (defining_position, defining_origin) =
-                    original.nominal_positions.get(&nominal.id).ok_or_else(|| {
-                        #[cfg(test)]
-                        eprintln!(
-                            "checked lifecycle missing nominal original {:?} {}",
-                            nominal.id, nominal.spelling
-                        );
-                        ValidationError::new(ValidationReason::Registry, None)
-                    })?;
+                let (defining_position, defining_origin) = original
+                    .nominal_positions
+                    .get(&nominal.id)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
                 if *defining_origin != nominal_span {
                     return Err(ValidationError::new(ValidationReason::Registry, None));
                 }
@@ -9371,18 +9356,6 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         .get(&module)
                         .is_some_and(|previous| nominal_range.start() < *previous)
             {
-                #[cfg(test)]
-                eprintln!(
-                    "checked lifecycle nominal census failed {:?} {} expected={} origin={:?} source={:?} previous={:?} sourceowner={} ctors={}",
-                    nominal.id,
-                    nominal.spelling,
-                    expected,
-                    nominal_span,
-                    source,
-                    previous_nominal_end.get(&module),
-                    source_owners.contains(&nominal.id),
-                    nominal.constructors.len()
-                );
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
             *expected = expected
@@ -9452,8 +9425,6 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             return Err(ValidationError::new(ValidationReason::Registry, None));
         }
 
-        #[cfg(test)]
-        eprintln!("checked lifecycle registry pre-variable inventory complete");
         let mut type_variables = registry.type_variables().collect::<Vec<_>>();
         type_variables.sort_unstable_by_key(|parameter| {
             (
@@ -9504,11 +9475,6 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     || !valid_upper_spelling(&parameter.spelling)
                     || parameter_range.start() >= parameter_range.end()
                 {
-                    #[cfg(test)]
-                    eprintln!(
-                        "checked lifecycle invalid variable {:?} expected={} span={:?} source={:?}",
-                        parameter.id, expected, parameter_span, source
-                    );
                     return Err(ValidationError::new(ValidationReason::Registry, None));
                 }
                 if self.contextual_registry.is_none()
@@ -9517,13 +9483,6 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         .get(&module)
                         .is_some_and(|previous| parameter_range.start() <= *previous)
                 {
-                    #[cfg(test)]
-                    eprintln!(
-                        "checked lifecycle variable ordering {:?} span={:?} previous={:?}",
-                        parameter.id,
-                        parameter_span,
-                        previous_type_variable_start.get(&module)
-                    );
                     if foreign_host_parameters.is_some() {
                         return Err(ValidationError::new(ValidationReason::Registry, None));
                     }
@@ -9545,8 +9504,6 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             break;
         }
 
-        #[cfg(test)]
-        eprintln!("checked lifecycle registry variables complete");
         let mut parameter_owners = HashMap::new();
         for nominal in registry.nominals() {
             let nominal_range = nominal.origin.primary_span().range();
@@ -9589,8 +9546,6 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             self.validate_nominal_representation(nominal, source, &parameter_owners)?;
         }
 
-        #[cfg(test)]
-        eprintln!("checked lifecycle registry nominal formals complete");
         let mut constructor_ids = HashSet::new();
         let mut constructor_names = HashMap::<ModuleId, HashSet<&str>>::new();
         let mut previous_constructor_start = HashMap::new();
@@ -16253,11 +16208,6 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 )
             };
             self.charge_type_work(work.used())?;
-            #[cfg(test)]
-            eprintln!(
-                "checked lifecycle original-source proof: {:?}",
-                result.as_ref().map(|_| ())
-            );
             let original = result?;
             let unused = self.unused_ordering_candidates(&original.ordering_candidates)?;
             self.charge_type_work(unused.len())?;
@@ -16270,17 +16220,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         } else {
             None
         };
-        let result = self.validate_registry_with_original_provenance(original.as_ref());
-        #[cfg(test)]
-        eprintln!(
-            "checked lifecycle registry proof: {:?}",
-            result.as_ref().map(|_| ())
-        );
-        let mut owners = result?;
-        let result = self.validate_effect_registry(self.module_sources.as_ref(), &mut owners);
-        #[cfg(test)]
-        eprintln!("checked lifecycle effect registry proof: {result:?}");
-        result?;
+        let mut owners = self.validate_registry_with_original_provenance(original.as_ref())?;
+        self.validate_effect_registry(self.module_sources.as_ref(), &mut owners)?;
         let empty_type_binders = CoreTypeBinders::new();
         for nominal in self
             .program
