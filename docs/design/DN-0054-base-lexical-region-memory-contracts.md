@@ -1,4 +1,4 @@
-# DN-0054: Base Lexical Region Memory Contracts
+# DN-0054: Region Allocation and Lexical Ownership Contracts
 
 - ID: `DN-0054`
 - Status: exploring
@@ -9,19 +9,25 @@
   [DN-0037](DN-0037-ash-authored-foreign-library-interfaces.md),
   [DN-0044](DN-0044-no-default-runtime.md),
   [DN-0053](DN-0053-scoped-generic-cells-without-native-owners.md),
+  [DN-0055](DN-0055-algebra-of-regions-lifetimes-and-ownership.md),
   [AD-0007](../decisions/AD-0007-typed-core-dialects.md)
 
-> This note proposes a base region contract compatible with the agreed scoped
-> Cell candidate. Explicit region access is the agreed initial call boundary;
-> the remaining refinements are proposed design rules. This note defines no
+> This note separates region placement and allocation from ownership, lifetimes,
+> and reclamation. Lexical scope is the first ownership scheme: the scope owns
+> the region and its objects and determines the region's lifetime. Region
+> reclamation reclaims every remaining object together. Explicit region access
+> is the agreed initial call boundary; the remaining refinements are proposed
+> design rules compatible with the scoped Cell candidate. This note defines no
 > current Ash semantics, selects no source grammar or implementation
 > architecture, and authorizes no product implementation or prototype.
 
 ## Question
 
-What minimum region rules settle allocation, value validity, sharing, closure
-capture, publication, and completion without changing the resource-scope
-lifetime or cycle restrictions of `Cell<R,T>`?
+What minimum placement and allocation contract can compose first with lexical
+ownership, and later with other ownership schemes and reclamation policies?
+How do those compositions establish value validity, sharing, closure capture,
+publication, and completion without changing the resource-scope lifetime or
+cycle restrictions of `Cell<R,T>`?
 
 ## Context
 
@@ -33,9 +39,10 @@ provide scoped access and completion, but no selectable storage policy for
 ordinary construction. The current ordinary heap, mathematical integers,
 immutable sharing, recursive data, and lexical closures remain the baseline.
 
-[DN-0035](DN-0035-region-memory-management-and-verified-providers.md) proposes
-regions as storage-providing resources, with nearest applicable allocation as
-a future default and separate policies for reclamation.
+[DN-0035](DN-0035-region-memory-management-and-verified-providers.md) assigns
+placement and allocation to regions, with ownership, lifetimes, and reclamation
+as separate concepts composed with them. Lexical ownership comes first;
+nearest applicable allocation remains a possible future convenience.
 [DN-0044](DN-0044-no-default-runtime.md) separates application policy selection,
 state acquisition, construction lowering, and service requirements.
 [DN-0037](DN-0037-ash-authored-foreign-library-interfaces.md) distinguishes
@@ -49,12 +56,27 @@ capabilities. The generic Cell candidate in
 [DN-0053](DN-0053-scoped-generic-cells-without-native-owners.md) needs only valid
 payload dependencies, not successful completion of all this region work.
 
+[DN-0055](DN-0055-algebra-of-regions-lifetimes-and-ownership.md) develops the
+candidate algebra and proof obligations behind the placement, ownership,
+lifetime, and reclamation relationships explored here.
+
 ## Constraints
 
-- Keep lexical name scope, physical storage lifetime, value validity, access
-  permission, and completion authority distinct.
-- Keep region owners scoped and nontransportable. No owner-plus-dependent
-  package or reference count extends a whole region beyond its resource scope.
+- Keep region placement and allocation, ownership, lifetimes, reclamation,
+  mutation, and completion authority distinct, with checked composition rules.
+  Region ownership includes its allocated objects; their lifetimes cannot
+  exceed the region's, and region reclamation reclaims all remaining objects
+  together.
+- Preserve the relation between region lifetime and object ownership: the
+  region must remain valid for every permitted use of its objects. Neither
+  earlier object reclamation nor whole-region reclamation may invalidate
+  objects still required by admitted ownership or access. The first lexical
+  scheme rejects escapes beyond the owning scope.
+- Use lexical scope as the first ownership scheme: the enclosing scope owns
+  the region and determines its lifetime. Keep owners nontransportable within
+  this scheme; no package or reference count extends that lexical lifetime.
+  Other ownership schemes need separate contracts rather than this restriction
+  becoming part of the region definition.
 - Reject cycles of resource ownership dependencies. Preserve ordinary sharing
   and cyclic immutable graphs within their checked validity.
 - Keep `Cell<R,T>` access tied to R's resource scope. Its retained payload
@@ -73,9 +95,11 @@ payload dependencies, not successful completion of all this region work.
   its region lowering, effects, failure, and entry-result contract.
 - Keep checked operations and provider assumptions explicit. An interface
   implementation, numeric offset, or compatible type grants no memory authority.
-- Begin sequentially with immutable region objects and a fixed-arena comparison.
-  Generic Cell supplies mediated mutable state; exclusive views, moving
-  collection, owner transport, and concurrency are separate extensions.
+- Begin sequentially with lexical ownership, immutable region objects, and a
+  fixed arena using bulk reclamation. Generic Cell supplies mediated mutable
+  state. Region-specific collection is a separate reclamation composition;
+  exclusive views, moving collection, other ownership schemes, and concurrency
+  remain later comparisons.
 
 ## Candidate directions
 
@@ -86,31 +110,84 @@ The base logical model distinguishes the following roles. Names such as
 
 | Role | Proposed responsibility |
 | --- | --- |
-| Region identity A | Relate one owner's storage, access, effects, and completion. Each successful execution has its own activation. |
-| Region access | Reusable non-owning permission to request the admitted allocation operations while A is live. |
-| Region owner | Retain backing storage and required completion; aliases cannot close it. |
-| Provider contract | State admitted representations, capacity units, acquisition and allocation outcomes, and reclamation guarantees. |
-| Allocation record | Identify an initialized object and its extent, representation, and access provenance. It is not ownership of A. |
-| Value dependency facts | Retain the storage and capability owners required to use the particular value. |
+| Region identity A | Relate allocation placement, storage, and dependencies, independently of the ownership scheme. |
+| Region access | Reusable permission to request admitted allocations under the selected ownership and lifetime contract. |
+| Ownership scheme | Determine who owns A and its objects, the region's lifetime, and associated completion authority. |
+| Lifetime and validity rules | Preserve A for every permitted object use, bound object lifetimes by A's lifetime, and retain their other dependencies. |
+| Region type and reclamation policy | A region type may specify earlier object reclamation through counting, tracing, or another policy. Region reclamation reclaims every remaining object together, after required completion. |
+| Provider contract | State admitted representations, capacity units, initialization and allocation outcomes, and obligations required by the selected composition. |
+| Allocation record | Identify an initialized object and its extent, representation, and access provenance; allocation access alone grants no ownership of A. |
+| Value dependency facts | Retain required storage validity and capability owners for the particular value. |
 | Completion obligations | Identify cleanup that must run before backing storage is released. |
 
 Start by exposing explicit region allocation without rewriting all existing
-ordinary values. The first provider comparison uses fixed storage and bulk
-release. Static selection fixes the discipline; capacity and success can still
-depend on execution. Storage can come from foreign allocation, caller backing,
-or another admitted primitive. No native owner is intrinsic to the logical
-region contract.
-
-Acquisition evaluates its configuration in the preceding scope, then creates
-fresh A and its access only on success. Refusal enters no body and publishes no
-partial owner. A provider must state its acquisition and body-result report
-contract; there is no universal implicit outcome flattening. Required backing
-release is established before successful access is published.
+ordinary values. Storage can come from foreign allocation, caller backing,
+static backing, or another admitted primitive. No native owner, resource
+declaration, or runtime acquisition is intrinsic to the region contract.
 
 This is a staged refinement of DN-0035, not a replacement default heap policy.
 Its proposed nearest-region convenience remains a later elaboration question.
 One managed ordinary heap and individually owned storage remain comparison
 alternatives with the tradeoffs recorded there.
+
+### First ownership scheme: lexical scope
+
+In the first composition, the enclosing scope owns region A and its allocated
+objects and determines the region's lifetime. Resource machinery can establish
+the associated ownership and completion obligations. This scope may manage
+many allocations; allocating a value does not automatically create another
+resource owner. Immutable objects
+and mutable cells retain their own access and dependency rules.
+
+The first allocation comparison uses fixed arena storage with bulk reclamation
+at owner completion. Static selection fixes these policies; capacity and
+success can still depend on execution. The scope's acquisition evaluates its
+configuration in the preceding scope, then publishes a fresh activation and
+region access only on success. Refusal enters no body and publishes no partial
+owner. Required backing release is established before access is published.
+The composition states its acquisition and body-result report contract; there
+is no universal implicit outcome flattening.
+
+The lexical scheme governs the owner dependencies and completion cases below.
+Their nontransportable ownership rules do not define every possible region.
+Using caller or static backing still requires the scheme to establish who owns
+the region and its lifetime; it need not allocate or free that backing at each
+scope entry and exit.
+
+### Separate reclamation compositions
+
+Each region type may specify its own object reclamation policy. The initial
+arena type retains allocations until bulk release. Counted or traced region
+types could offer earlier reclamation under their own contracts. Keeping
+reclamation separate from placement, allocation, ownership, and lifetimes does
+not require it to be selected independently of the region type.
+
+All of these policies leave object lifetimes bounded by the region's lifetime.
+Reclaiming the region reclaims every remaining object en masse, including
+objects not reclaimed earlier. References to objects in another region do not
+transfer their ownership or include them in this reclamation.
+
+Earlier reclamation must preserve objects still required by valid ownership or
+access. A collection policy must establish their liveness; an enclosing lexical
+scope alone is not a substitute for tracing or reference accounting. Region
+reclamation must also wait until admitted object uses and required completion
+no longer need the storage. The lexical ownership scheme enforces this through
+escape and dependency checks, rather than silently extending the region or
+shortening a required object lifetime.
+
+A region-specific collector could reclaim unreachable objects while the region
+remains live and accepts allocations. Its reclamation contract must account
+for roots, references from other regions, closures, and captured control; moving
+collection also needs an update contract for every retained reference. Merely
+remaining inside the owning scope does not establish that every allocation is
+live or that a reference is a registered root.
+
+Lexical ownership could still determine that region's owner and lifetime while
+collection determines individual object reclamation. Other ownership schemes
+need their own rules for region lifetime and completion. Neither collection nor
+physical retention silently extends the scoped Cell candidate's access.
+These are future compositions, not capabilities established by the fixed-arena
+comparison or current scalar Arena evidence.
 
 ### Explicit allocation and call boundaries
 
@@ -208,10 +285,12 @@ bounded encoding needs checked conversion and its own refusal behavior.
 
 ### Storage lifetime and value validity
 
-The owners required by a value include the owner of storage needed to observe
-it and every capability or stored reference actually needed by its use.
-Access requires all those owners to remain valid. The fact that A's bytes are
-live proves only A's storage contribution, not every captured dependency.
+Value validity combines the region's storage and reclamation guarantees with
+every capability or stored reference actually needed by use. Under the initial
+lexical scheme, required owners must remain valid. A collector would also need
+to preserve the allocation through its rooting contract. The fact that
+A's backing bytes are live proves only its storage contribution, not every
+captured dependency or an individual allocation's continued validity.
 
 The reservation and local-initialization route can place a local immutable
 closure in longer-lived storage A while it captures scoped cell R. Its usable
@@ -238,11 +317,11 @@ a longer-lived mutable root.
 
 ### Owner dependencies and ordinary cycles
 
-An owner dependency records authority or backing that must remain protected
-until the dependent owner's consumption is established. Ending its source scope
-alone does not discharge an outstanding edge. The initial model admits such
-edges only to already established
-enclosing owners. Edges point from dependent to longer-lived owner;
+Under the lexical ownership scheme, an owner dependency records authority or
+backing that must remain protected until the dependent owner's consumption is
+established. Ending its source scope alone does not discharge an outstanding
+edge. The initial model admits such edges only to already established enclosing
+owners. Edges point from dependent to longer-lived owner;
 self-dependency and owner cycles reject. Capture/resume preserves this relation
 through inactive periods rather than recomputing it from the currently visible
 textual block. A retained disposition keeps the same edges after ordinary
@@ -254,12 +333,12 @@ completion authority and drops the payload root even if an enclosing arena
 retains the storage. For a foreign owner, only the recorded native disposition
 establishes consumption; returning from source finish does not.
 
-An allocation owned by A referring to another ordinary allocation in A is not
-an owner-dependency edge from A to itself. Cyclic immutable graphs can therefore
-remain valid. References and captured access add value dependencies; retaining
-them in another owner's operational state requires that owner's stricter
-outlives check. This distinction preserves DN-0035's ordinary cyclic data while
-keeping the Cell restriction explicit.
+An ordinary allocation in region A referring to another ordinary allocation in
+A is not a resource-owner dependency on itself. Cyclic immutable graphs can
+therefore remain valid. References and captured access add value dependencies;
+retaining them in another owner's operational state requires that owner's
+stricter outlives check. This distinction preserves DN-0035's ordinary cyclic
+data while keeping the Cell restriction explicit.
 
 A cell's logical owner R also remains distinct from a region A backing its
 slot. Choosing A does not change R's closing point. A region object's pointer
@@ -293,14 +372,16 @@ Bounds must include backing, metadata, initialization scratch, closure records,
 captured control, and cleanup state where promised. A payload bound alone is
 not a bound on execution memory or reclamation work.
 
-### Completion, control, and reclamation
+### Lexical completion, control, and bulk reclamation
 
-Normal scope completion checks the body result and outward dependencies and
-performs required inner completion and scheduled cleanup. Backing release is
-permitted only when dependent consumption and the backing owner's disposition
-authorize it. Successful consumption releases once; a completed source scope
-does not by itself establish that consumption. Cleanup using A's storage runs
-while A is live. Ordinary unreachable-data reclamation invokes no arbitrary
+In the first ownership scheme, the owning scope determines the region's
+lifetime. Before ending source access, normal completion checks the body result
+and outward dependencies and performs required inner completion and scheduled
+cleanup while A is live. Backing release is permitted only when dependent
+consumption and the backing owner's disposition authorize it. Reclaiming the
+region then reclaims all remaining objects together. Successful consumption
+releases once; a completed source scope does not by itself establish that
+consumption. Ordinary unreachable-data reclamation invokes no arbitrary
 effectful source cleanup.
 
 Composition with foreign owners preserves the existing
@@ -340,17 +421,20 @@ physical protection remains in force.
 Consumed failures during owned discard keep their existing terminal behavior
 as well; a failure report is not permission to repeat physical consumption.
 
-The fixed arena supplies no individual free, compaction, resize invalidation,
-or earlier reclamation guarantee. Repeated aliases do not duplicate release.
-Region-local counting, tracing, and moving providers require additional root,
-update, overflow, cycle, and failure contracts. They do not extend the owner
-beyond its lexical resource lifetime. Internal termination and divergence keep
-their existing limits on source cleanup and eventual release.
+The fixed-arena composition supplies no individual free, compaction, resize
+invalidation, or earlier reclamation guarantee. Repeated aliases do not
+duplicate release. Region-specific counting, tracing, and moving collection
+require separate root, update, overflow, cycle, and failure contracts. Composing
+them with lexical ownership preserves its region lifetime; choosing another
+ownership scheme needs a separate account. Internal termination and divergence
+keep their existing limits on source cleanup and eventual release.
 
 ### Preservation of earlier boundaries
 
 | Earlier rule | How this base proposal preserves it |
 | --- | --- |
+| Regions provide placement and allocation. | Ownership determines the region owner and lifetime; reclamation and access rules compose separately. |
+| Lexical scope is the first ownership scheme. | Its resource and completion rules govern the initial arena comparison without defining all regions. |
 | Bindings do not relocate values. | Allocation is explicit; aliases preserve original storage. |
 | Nearest applicable region is a proposed future default. | Initial explicit access settles the base call contract without selecting implicit elaboration. |
 | Cell lifetime is its resource scope. | Backing-region lifetime and closure record placement grant no extension. |
@@ -381,9 +465,14 @@ These are proposed requirements, not completed experiments or proofs:
 | Fixed capacity | Exact fit succeeds; refused construction preserves earlier objects and accounting. | Partial readable publication, overflow, hidden backing fallback, or corruption. |
 | Captured control | Resume preserves allocation identity; discard closes owned storage once. | Premature release or skipped outside/running completion. |
 | Independent validation | Source summaries, Core copying/transforms, and runtime agree on regions and dependencies. | Same-shaped types, copied claims, or changed provenance grant storage authority. |
+| Separate placement and management | One region holds immutable objects and mutable cells under lexical ownership without changing their access rules. | Placement alone grants mutation, owner completion, or a longer cell lifetime. |
+| Region type policy | Each compared region type states its object reclamation policy separately from the lexical scheme that determines its owner and lifetime. | Type selection silently changes ownership or a collector's guarantees are attributed to the fixed arena. |
+| Whole-region reclamation | The region owner owns the allocated objects; permitted region reclamation releases all remaining objects together. | Object access survives region reclamation, required completion is skipped, or a referenced object from another region is reclaimed. |
+| Ownership and lifetime preservation | The region remains valid for every owned object's admitted uses; lexical escape checks and reclamation rules preserve this relation. | Region or object reclamation invalidates a use still permitted by ownership or access. |
 
 A later bounded study should compare explicit fixed-region allocation with the
-ordinary managed-heap baseline on these cases, using the same results,
+ordinary managed-heap baseline on these cases, stating each one's ownership,
+lifetime, and reclamation contract and using the same results,
 dependencies, failure and completion observations. The local-closure case must
 exercise actual access provenance, not only a scalar result. Record payload and
 metadata storage, copies, peak retention, work, and rejected useful programs.
@@ -398,6 +487,10 @@ workflow plus matching surface/Core semantics and evidence.
 
 ## Open questions
 
+- Which minimum region allocation facts can be reused by other ownership and
+  reclamation schemes after the first lexical composition?
+- How should a region-specific collector expose rooting and cross-region
+  references while keeping region lifetime distinct from object reclamation?
 - Which retained construction and representation facts implement the reservation
   and local-initialization boundary with the least new machinery?
 - How should independent validation retain value validity that can be shorter
