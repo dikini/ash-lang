@@ -414,9 +414,9 @@ image/runtime activation, deployment and Main integration remain pending.
 Start from PR #95 retained `2532f528795e5cdc3974685d10313e6cb4b778a9`
 after its independent retained-result audit and PM-confirmed partial #59 record.
 Accepted CP-0024 selects explicit exact H for owners and symbols, and requires
-ordinary lifecycle handling to retain H until the lexical host closes it. Current
-static checked resolution only binds scalar symbols; the legacy owner binder
-refuses checked contracts. Resource host/checked_scope admission is a later,
+ordinary lifecycle handling to retain H until the lexical host closes it. At this checkpoint’s baseline,
+static checked resolution only bound scalar symbols; the legacy owner binder
+refused checked contracts. Resource host/checked_scope admission is a later,
 separate boundary. No binding fact supplies executable or lifecycle permission.
 
 The first individual PR is the dependency-ordered binding prerequisite:
@@ -474,3 +474,11 @@ complete source/summary/Core/image behavior and independent review. F-core waits
 for connected F4/F6 and accepted F2 prerequisites; one build operator owns that
 frozen full gate. Current Main remains the original specification until separate
 verified integration.
+
+PR #96 prerequisite result: passive exact original owner/acquire/teardown facts
+now bind under the explicit static profile, and actual body-free selected imports
+preserve them. Legacy binding and both legacy resource codecs remain refusals.
+The [uniform evidence](../evidence/checked-owner-binding/README.md#final-delivery-verification)
+passes 223 distinct tests and Clippy, including source-resource 30/30 and default
+images 16/16. Independent review and root-assigned integration remain next;
+connected checked_scope/lifecycle and all whole-criterion gates remain pending.

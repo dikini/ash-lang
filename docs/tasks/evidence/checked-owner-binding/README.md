@@ -12,7 +12,7 @@ have equal before/after 564-file manifests, compact sorted-JSON aggregate
 The raw expected failure and passing controls are in `test-first`; the failure
 is not passing delivery verification. No product change is present at this
 snapshot. Body-free owner imports, checked_scope and connected lifecycle/Core
-remain pending.
+were pending at that test-first snapshot.
 
 ## Shared header boundary
 
@@ -42,7 +42,7 @@ this is not evidence that an owner operation reached host lowering.
 The integration setup originally inspected the unused imported effects in the
 consumer's local registry. The real imported facts are in ImportedFacts; that
 lookup and two compile-only test API errors were corrected without a production
-change. The final uniform affected regression/Clippy batch remains pending.
+change. The final uniform affected regression/Clippy results appear below.
 Neither passive imports nor these refusals establish connected resource
 host/checked_scope, lifecycle, independent owner Core or runtime permission.
 
@@ -71,4 +71,44 @@ request node. The test-only correction keeps exact Registry refusal and the
 unchanged copied-full-scope positive, removes only the unsupported node-location
 promise, and requires each of the four preserved scope mutations to reject with
 a non-Resource error. It changes no product validation, provenance or allowance.
-Fresh verification after this test correction remains pending.
+The final batch below refreshes verification after this test correction.
+
+## Final delivery verification
+
+All nine final commands pass on the same 571-input before/after/current manifest,
+aggregate `f0f8e98014212afd675c0c3311b3307c85e5661941a03eb9a6b05f9f54372848`.
+The [verifier report](final/verification.json) records 223 distinct passing test
+names (231 raw pass lines) and Clippy exit zero. Source-resource controls pass
+30/30, including all four independent mutations in each corrected scope case;
+images pass 16/16. Original buffer and dependent-discard startup consume
+318857 and 314727 respectively under the unchanged standalone limit 327680.
+
+The final [runner](final/run.py) and [verifier](final/verify.py) are themselves
+pinned inputs and stayed frozen throughout this batch. The manifest includes
+actual bundled `libraries/*.ash` inputs and the path dependency's source/config.
+Historical 562/564/566-input maps describe their exact recorded scopes: they
+already included the adapter path dependency, but omitted the three library Ash
+files. The expanded cached-command refresh adds those libraries and the two
+scripts; it changes no product or test code. Aggregate encoding is sorted-key
+compact JSON UTF-8 without a newline. Final metadata lives outside those scripts.
+The [delivery record](final/delivery.json) identifies the source checkpoint and
+changed source/spec pins; documentation updates are outside the command manifests.
+
+The audited disposable baseline archive and tar were removed after retention;
+[cleanup](baseline/cleanup.json) preserves their identities and removal scope.
+Raw receipts, source pins and the shared cache remain. The archive-path qualifier
+above still applies.
+
+Delivered behavior is passive exact-owner binding and body-free imported
+metadata, plus fail-closed legacy Scope/AcquiredOnly admission. Exact/prefixed/
+one-short/spent/fresh binding and header controls, original/formal/host donor
+refusals, scalar/owner/import/capture regressions and default images pass. The
+binding APIs do not grant resource lifecycle authority: direct owner operations
+remain source-phase refusals and checked owners cannot use either legacy codec.
+No generated checked host or foreign-library callee was executed. Existing
+regressions may use inert values or injected Rust callbacks.
+
+Connected checked_scope, exact-H lifecycle and private finish-outcome lineage,
+independent checked-owner Core transforms, declared owner dependencies, bytes/
+copy, runtime/images and whole F3/F-core remain pending. AD-0015 and Main are
+unchanged. Independent exact-head review and root-assigned integration are next.

@@ -1,0 +1,12 @@
+{
+  "result": "removed only disposable baseline source archive/directory after reviewer verified Git/archive pins and raw receipt",
+  "directory": "/tmp/ash-pr96-base-esuhu_m2",
+  "archive": "/tmp/ash-pr96/baseline-source.tar",
+  "archive_sha256": "032f81ea810a7e3ea3e7bb577e050699814d2bb9f8add823e04b5ffa967a8e73",
+  "archived_file_count": 2277,
+  "tar_bytes_removed": 73379840,
+  "durable_receipts_retained": true,
+  "shared_target_untouched": true,
+  "directory_absent": true,
+  "tar_absent": true
+}

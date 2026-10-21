@@ -1,0 +1,14 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 7 tests
+test foreign::source_owner::checked_binding_tests::checked_owner_binding_rejects_parameter_order_identity_kind_and_origins ... ok
+test foreign::source_owner::checked_binding_tests::checked_owner_preparation_rejects_host_selected_as_owned_identity ... ok
+test foreign::source_owner::checked_binding_tests::checked_owner_binding_rejects_donor_library_nominal_registry_and_index ... ok
+test foreign::source_owner::checked_binding_tests::checked_owner_binding_and_legacy_binding_do_not_cross_profiles ... ok
+test foreign::source_owner::checked_binding_tests::checked_owner_binding_preserves_original_and_exact_prefixed_work ... ok
+test core::source_resource::checked_owner_tests::checked_owner_legacy_acquired_only_refuses_at_independent_header_admission ... ok
+test core::source_resource::checked_owner_tests::checked_owner_legacy_scope_refuses_at_independent_header_admission ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 2026 filtered out; finished in 0.23s
+
