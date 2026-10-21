@@ -118,3 +118,35 @@ deliberately require separate admission.
 
 None. A semantic or architectural gap returns to its governing artifact rather
 than becoming an allowance increase or local permission.
+
+
+## Remaining dependent-discard slice
+
+PR #92 retained the bounded original-startup repair at
+`f6a2647a03a2172823f38e332c744eba5edeed06`; its independently audited partial
+acceptance keeps this task and issue #91 open. Start this slice from that exact
+commit in the same worktree. The named dependent-discard test reconstructs
+separate Parent and Child template contexts and final copied scopes without
+native execution. The earlier baseline establishes an existing named failure;
+it does not establish that its bare `Resource` arose in the candidate's later
+`Validation(Resource)` phase.
+
+1. Open an individual draft PR before long implementation. Measure decode,
+   expected-fact authentication, original template admission, main reconstruction
+   and final independent Core on the current test's unchanged cumulative default
+   of 327680. Record failures as well as completed phases. Keep optional probes
+   test-only and preserve the original result and meter.
+2. Measure repeated declaration-coordinate work and context-specific checks
+   before selecting a repair. Parent/Child registries, original forests and copied
+   substitutions retain their independent authority. Reuse only demonstrated
+   context-independent work within an immutable operation; no broader proof cache,
+   scheduling change, limit increase or prior-context acceptance transfers.
+3. Require the complete image filter to pass 16/16, including dependent-discard
+   and the original imported-buffer default test. Retain exact/one-short/prefix/
+   retry and tamper/context controls, plus affected owner/import/capture and
+   Clippy checks on the final delivered inputs. Remove broad disposable probes
+   before the final fresh verification.
+4. Obtain independent exact-head review and GitHub squash/merge retention with
+   exact tree/ref and acceptance readback. Whole task and F-core acceptance remain
+   pending until their original obligations are met. Nominal/resource work waits
+   for this repair.
