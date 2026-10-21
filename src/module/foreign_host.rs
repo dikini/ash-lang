@@ -4,7 +4,12 @@
 //! declaration shapes, ordered formals and provenance. Matching these numbers or
 //! a string in ordinary source cannot grant host or checked codec authority.
 
-use super::{FOREIGN_SOURCE, ModuleFailure, ModuleReason, ModuleResource};
+#[cfg(test)]
+use super::foreign_coordinates::foreign_nominal_coordinates;
+use super::{
+    FOREIGN_SOURCE, ModuleFailure, ModuleReason, ModuleResource,
+    foreign_coordinates::{FORMAL_RANGES, HOST_FORMAL, HOST_NAME},
+};
 use crate::{
     source::{ByteRange, SourceFile, Span},
     surface::{
@@ -78,26 +83,14 @@ fn complete_source(source: Span) -> bool {
         && usize::try_from(source.range().end()).ok() == Some(FOREIGN_SOURCE.len())
 }
 
-fn range(start: usize, end: usize) -> Option<ByteRange> {
-    ByteRange::new(u32::try_from(start).ok()?, u32::try_from(end).ok()?).ok()
-}
-
 /// Canonical declaration coordinates only; callers authenticate original roles.
 #[cfg(test)]
 pub(crate) fn foreign_checked_nominal_range(
     source: Span,
     role: ForeignCheckedNominalRole,
 ) -> Option<ByteRange> {
-    if !complete_source(source) {
-        return None;
-    }
-    let start = FOREIGN_SOURCE.find(role.declaration())?;
-    let rest = &FOREIGN_SOURCE[start..];
-    let end = rest
-        .find("\npub ")
-        .or_else(|| rest.find("\nnative_host_metadata :"))
-        .unwrap_or(rest.len());
-    range(start, start + rest[..end].trim_end().len())
+    complete_source(source)
+        .then(|| foreign_nominal_coordinates()[role.local() as usize].declaration)
 }
 
 /// Full source anchor, name and H coordinates for synthesized builtin metadata.
@@ -107,19 +100,12 @@ pub(crate) fn foreign_native_host_ranges(
     if !complete_source(source) {
         return None;
     }
-    let start = FOREIGN_SOURCE.find("pub effect NativeHost<H>")?;
-    let name = start + "pub effect ".len();
-    let formal = name + "NativeHost<".len();
-    Some((
-        source.range(),
-        range(name, name + "NativeHost".len())?,
-        range(formal, formal + 1)?,
-    ))
+    Some((source.range(), HOST_NAME, HOST_FORMAL))
 }
 
 // These canonical headers deliberately preserve legacy TypeVariableId locals
 // 0..13 even though resolution prepares nominal formals before global formals.
-const FORMALS: &[(&str, &[u32])] = &[
+pub(super) const FORMALS: &[(&str, &[u32])] = &[
     ("pub type Call<T>", &[0]),
     ("pub type Output<T>", &[1]),
     ("pub type Nullable<T>", &[2]),
@@ -145,19 +131,10 @@ pub(crate) fn foreign_type_formal_local(source: Span, formal: Span) -> Option<u3
     if !complete_source(source) || source.source() != formal.source() {
         return None;
     }
-    for (header, locals) in FORMALS {
-        let start = FOREIGN_SOURCE.find(header)?;
-        let parameters = header.find('<')? + 1;
-        for (position, local) in locals.iter().enumerate() {
-            // Every immutable canonical formal is one ASCII letter, separated
-            // by comma-space. This is not parsing of caller-provided spelling.
-            let offset = start + parameters + position * 3;
-            if formal.range() == range(offset, offset + 1)? {
-                return Some(*local);
-            }
-        }
-    }
-    None
+    FORMAL_RANGES
+        .iter()
+        .position(|range| *range == formal.range())
+        .and_then(|local| u32::try_from(local).ok())
 }
 
 /// Prepay retained synthetic nodes and copied names on the existing syntax meter.
@@ -253,6 +230,140 @@ mod tests {
         )
         .unwrap();
         staged.pop().unwrap()
+    }
+
+    // Keep the pre-const runtime algorithm independent of descriptor derivation.
+    fn scanned_nominals() -> Vec<(ByteRange, Vec<ByteRange>, Vec<ByteRange>)> {
+        let coordinate = |start, end| ByteRange::new(start as u32, end as u32).unwrap();
+        let mut rows = Vec::new();
+        let mut offset = 0;
+        while offset < FOREIGN_SOURCE.len() {
+            let rest = &FOREIGN_SOURCE[offset..];
+            if !rest.starts_with("pub type ") && !rest.starts_with("pub opaque type ") {
+                offset += rest.find('\n').map_or(rest.len(), |end| end + 1);
+                continue;
+            }
+            let end = rest
+                .find("\npub ")
+                .or_else(|| rest.find("\nnative_host_metadata :"))
+                .unwrap_or(rest.len());
+            let declaration = rest[..end].trim_end();
+            let equal = declaration.find('=').unwrap();
+            let header = &declaration[..equal];
+            let formals = if let Some(open) = header.find('<') {
+                let close = header.find('>').unwrap();
+                header[open + 1..close]
+                    .split(", ")
+                    .enumerate()
+                    .map(|(position, name)| {
+                        assert_eq!(name.len(), 1);
+                        let start = offset + open + 1 + position * 3;
+                        coordinate(start, start + name.len())
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let mut start = offset + equal + 1;
+            let constructors = declaration[equal + 1..]
+                .split('|')
+                .map(|raw| {
+                    let trimmed = raw.trim();
+                    let leading = raw.len() - raw.trim_start().len();
+                    let result = coordinate(start + leading, start + leading + trimmed.len());
+                    start += raw.len() + 1;
+                    result
+                })
+                .collect();
+            rows.push((
+                coordinate(offset, offset + declaration.len()),
+                formals,
+                constructors,
+            ));
+            offset += end;
+        }
+        rows
+    }
+
+    #[test]
+    fn checked_foreign_const_coordinates_match_runtime_scan_and_parsed_origins() {
+        let module = admitted();
+        let scanned = scanned_nominals();
+        let coordinates = foreign_nominal_coordinates();
+        assert_eq!(scanned.len(), 18);
+        assert_eq!(module.surface.type_declarations.len(), 18);
+        for ((coordinate, (declaration, formals, constructors)), parsed) in coordinates
+            .iter()
+            .zip(&scanned)
+            .zip(&module.surface.type_declarations)
+        {
+            assert_eq!(coordinate.declaration, *declaration);
+            assert_eq!(coordinate.formals(), formals);
+            assert_eq!(coordinate.constructors(), constructors);
+            assert_eq!(coordinate.declaration, parsed.span.range());
+            assert_eq!(
+                coordinate.formals(),
+                parsed
+                    .parameters
+                    .iter()
+                    .map(|formal| formal.name.span.range())
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                coordinate.constructors(),
+                parsed
+                    .constructors
+                    .iter()
+                    .map(|constructor| constructor.span.range())
+                    .collect::<Vec<_>>()
+            );
+        }
+        // Independently retain the old header-find algorithm for all reserved
+        // locals, including globals 5..13 and compiler-only host formal 22.
+        let mut expected = [None; 23];
+        for (header, locals) in FORMALS {
+            let start = FOREIGN_SOURCE.find(header).unwrap();
+            let parameters = header.find('<').unwrap() + 1;
+            for (position, local) in locals.iter().enumerate() {
+                let offset = start + parameters + position * 3;
+                let range = ByteRange::new(offset as u32, offset as u32 + 1).unwrap();
+                assert!(expected[*local as usize].replace(range).is_none());
+            }
+        }
+        for (local, expected) in expected.into_iter().enumerate() {
+            let expected = expected.unwrap();
+            assert_eq!(FORMAL_RANGES[local], expected);
+            assert_eq!(
+                foreign_type_formal_local(
+                    module.surface.span,
+                    module.source.span(expected).unwrap()
+                ),
+                Some(local as u32)
+            );
+        }
+        let start = FOREIGN_SOURCE.find("pub effect NativeHost<H>").unwrap();
+        let name = start + "pub effect ".len();
+        let formal = name + "NativeHost<".len();
+        assert_eq!(
+            HOST_NAME,
+            ByteRange::new(name as u32, (name + 10) as u32).unwrap()
+        );
+        assert_eq!(
+            HOST_FORMAL,
+            ByteRange::new(formal as u32, formal as u32 + 1).unwrap()
+        );
+        assert_eq!(
+            foreign_native_host_ranges(module.surface.span),
+            Some((module.surface.span.range(), HOST_NAME, HOST_FORMAL))
+        );
+        let short = module
+            .source
+            .span(ByteRange::new(0, module.surface.span.range().end() - 1).unwrap())
+            .unwrap();
+        assert!(foreign_native_host_ranges(short).is_none());
+        assert!(
+            foreign_type_formal_local(short, module.source.span(HOST_FORMAL).unwrap()).is_none()
+        );
     }
 
     #[test]
@@ -418,6 +529,11 @@ mod tests {
         for role in roles {
             let declaration = &module.surface.type_declarations[role.local() as usize];
             assert_eq!(declaration.constructors.len(), role.constructor_count());
+            let range = foreign_checked_nominal_range(module.surface.span, role).unwrap();
+            assert!(
+                FOREIGN_SOURCE[range.start() as usize..range.end() as usize]
+                    .starts_with(role.declaration())
+            );
             assert_eq!(
                 Some(declaration.span.range()),
                 foreign_checked_nominal_range(module.surface.span, role)

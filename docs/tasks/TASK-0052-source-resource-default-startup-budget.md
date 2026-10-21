@@ -96,7 +96,10 @@ the capture query exhausts the remaining allowance. Capture graph construction
 itself completes. The first repair removes an exactly duplicated same-call builtin check by
 populating the existing omitted-formal provenance immediately after its one
 complete authentication. This saves15536 units and preserves both provenance
-controls; the original startup test remains red. Further reduction is pending.
+controls. Const-derived expected coordinates then remove repeated scans of the
+compiler-owned builtin string, preserving live original checks. The instrumented
+startup passes at318794/327680. Broad probes are removed and final delivered-source
+verification is pending; no result transfers across that source cleanup.
 
 Existing session reuse is bound to exact immutable registry/source/module/global
 and unused-ordering-footprint context; conditional, provider and lexical contexts

@@ -20,6 +20,8 @@ use crate::{
     syntax_resource::SyntaxBudget,
 };
 
+mod foreign_coordinates;
+pub(crate) use foreign_coordinates::{ForeignNominalCoordinates, foreign_nominal_coordinates};
 mod foreign_host;
 pub(crate) use foreign_host::{
     FOREIGN_NATIVE_HOST_LOCAL, ForeignCheckedNominalRole, foreign_native_host_ranges,
