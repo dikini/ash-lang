@@ -11,6 +11,12 @@
 > This design note is informative. It defines no current Ash semantics,
 > accepts no architecture and authorizes no product implementation.
 
+The narrow owner-free scalar GNU in-process realization is now selected by
+[AD-0015](../decisions/AD-0015-linux-scalar-inprocess-whole-images.md), under
+explicit trusted closure and refusal obligations. That accepted non-language
+choice does not adopt the remaining exploration here, approve an executable or
+complete isolated/SQLite/owner deployment evidence.
+
 ## Question
 
 How can an FFI module export checked Ash values and operations when declarations

@@ -9,6 +9,14 @@ resolve this blocker's policy at design level, subject to review and delivery
 evidence. They accept no architecture, define no current Ash semantics and
 select no source syntax.
 
+The accepted narrow owner-free scalar GNU in-process architecture is
+[AD-0015](../../decisions/AD-0015-linux-scalar-inprocess-whole-images.md). It
+selects exact-closure receipt/independent approval, protected deployment context
+and immutable fd execution under explicit trusted runtime/native premises.
+It supplies no strict per-image approval, product implementation or isolated,
+SQLite or owner/resource acceptance. The remaining exploration below retains
+its design status; current language truth still comes from the specification.
+
 ## Common obligations and platform mechanisms
 
 The common FFI contract requires approved artifact provenance, binding to exact

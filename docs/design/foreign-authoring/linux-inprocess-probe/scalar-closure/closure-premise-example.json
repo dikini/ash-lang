@@ -1,0 +1,151 @@
+{
+  "approval_requirements": [
+    "Producer receipt and this exact versioned addendum are data, not authority.",
+    "Independent protected approval must bind exact receipt/image/addendum hashes, policy/premise/context/target/mode versions and explicitly accept premise/applicability.",
+    "Existing diagnostic root approval ba8df9e905b149784dd6e50b574c48f0d55ecb001a253b34846e6a37e1973f20 accepts possible loading and is never applicable to this strict policy.",
+    "Absent, unknown, mismatched, malformed or over-budget policy/premise/context/version/association refuses before native startup.",
+    "No approved record, configured store or established host context is supplied by this proposal."
+  ],
+  "bounds": {
+    "admission_work_budget": "F6 must define finite charged record/source/context/image association budget; missing or exhausted budget refuses",
+    "child_deadline_seconds": 30,
+    "combined_output_bytes": 16384,
+    "control_record_bytes": 262144,
+    "elf_program_headers": 64,
+    "image_bytes": 100663296
+  },
+  "evidence_categories": {
+    "residual_trusted": "Full pinned startup/runtime/error/shutdown/native closure conformity, matching source/build provenance, and no direct/indirect alternate loading routes remain explicitly trusted premises, not a formal whole-libc proof.",
+    "source_conditional": "Source initial C locale and gettext C branch exclude that catalog/conversion route only while the locale invariant holds.",
+    "structural_observed": "Exact image ET_EXEC/no PT_INTERP/PT_DYNAMIC; immutable same-fd pinning and actual diagnostic Returned(7) with reaping; no all-path loading observation."
+  },
+  "fixed_launch_context": {
+    "administrator_context_association": null,
+    "argv": [
+      "ash-generated-scalar-diagnostic"
+    ],
+    "context_status": "not provisioned or implemented; F6 must establish protected configured host user/mount/filesystem association before startup",
+    "environment": {},
+    "host_identity": "configured ordinary nonzero host identity; trusted context association must be established",
+    "image": "same finally hashed executable memfd; flags19 mode0500 seals15",
+    "stdin": "/dev/null",
+    "stdout_stderr": "single bounded pipe"
+  },
+  "image": {
+    "sha256": "45417a6db6fc41bd17b372b47423e06c57ecf55973a0a848c51a14f456537405",
+    "size_bytes": 70880176
+  },
+  "kind": "proposed-exact-closure-premise-addendum",
+  "policy_version": "ash-linux-gnu-scalar-closure-v1-proposed",
+  "producer_binding": {
+    "checked_contract_operation_wrapper_closure": "Not supplied by this existing-profile baseline; future checked images require complete CP0024 closure in their own producer receipt.",
+    "generated_inputs": {
+      "sha256": "43daf66d38b76e80e378ce5f2c23d4fb011f11900c781e5d21032fd225c10ddb",
+      "size_bytes": 684
+    },
+    "receipt": {
+      "sha256": "4de5fe79b42c88fd3dc269a1438a0d5c24f190f199021c76ea3337178ff77d4c",
+      "size_bytes": 5932
+    },
+    "source_commit": "83d050b40c92572b98b2d337f04126311373cd22",
+    "source_configuration_sha256": "0a042cd9ffceb29b394b8f92c8ab6c91c3abf35e21c8c7d15d1756596538b8c5",
+    "source_tree": "b22c8e6378b054e0c866faf5b2a171e89e06f16e"
+  },
+  "provenance_limits": [
+    "Nine compiler temporary map inputs are unavailable; census is incomplete.",
+    "Ubuntu import is patches-unapplied; selected patch/source audit is not a reconstructed distribution build.",
+    "Local Rust source pages are not a reproducible proof of precompiled std correspondence.",
+    "Current existing-profile producer receipt is immutable and retains its original inspection-only status; this addendum cannot rewrite it."
+  ],
+  "record_version": 1,
+  "required_premises": {
+    "failure_and_completion": "Pinned runtime conforms on normal/error/panic/allocation/IO/unwind paths, source return, native return and process shutdown; these do not imply native truth or source completion.",
+    "locale": "Built-in C locale initialized and preserved in global and every thread locale across the entire admitted closure. No setlocale/uselocale/newlocale-based replacement or ambient locale selection.",
+    "native_calls": "No direct or indirect runtime code loading, plugins, NSS dispatch, arbitrary charset conversion, or unreviewed native entry points.",
+    "registrations": "Every callback, signal/thread entry, finalizer and dynamically registered cleanup is part of reviewed runtime closure; unknown or additional registrations are outside applicability.",
+    "startup": "Pinned runtime and producers conform through _start, _init, _fini, all preinit/init/fini arrays, IFUNC resolution, TLS initialization and destructors, libc/Rust startup and known constructors.",
+    "trust": "Producer/source/build correspondence and runtime/native memory integrity are trusted; exact digests bind this premise, they do not prove it."
+  },
+  "runtime_and_native_binding": {
+    "cargo_version": {
+      "sha256": "2c97e98dc885dca3222f3d89cc82868f7e3bad5405cf7a8a0b6603fdfd9dde1b",
+      "size_bytes": 338
+    },
+    "cc_version": {
+      "sha256": "f6ab9d76ae8dcab3e133254944fbc77f41e0ba766287e289345c1ab77df09c45",
+      "size_bytes": 238
+    },
+    "compiler_binary_sha256": "a6068524ee48775391f72c3e49234c46becff06da68541bf4126e9537ed56dab",
+    "generated_artifacts": {
+      ".ash-build/ash-host-9-0/Cargo.lock": {
+        "sha256": "ed35efe81e41d4a43cac29f9c1751f74c70d89c12a30632afd2593902d70ad7c",
+        "size_bytes": 10121
+      },
+      ".ash-build/ash-host-9-0/Cargo.toml": {
+        "sha256": "4eebcef1d6245aa626bfa91680f20a290b957040880c6d2e74b1f670acb26af7",
+        "size_bytes": 253
+      },
+      ".ash-build/ash-host-9-0/native-build.log": {
+        "sha256": "3f6495146d41eda8eb9ed5870ac74e67d2cffc320622c321cff4718982601f54",
+        "size_bytes": 2080
+      },
+      ".ash-build/ash-host-9-0/rust-toolchain.toml": {
+        "sha256": "cdb9bea833b62d4c26fbba417000b2929746d667ba25ad4eee40dfa61aa75a89",
+        "size_bytes": 103
+      },
+      ".ash-build/ash-host-9-0/src/expected-facts.bin": {
+        "sha256": "d336689c4c7204996f9488fb8c134864b80c755ff4c250d3882d4ccf15236802",
+        "size_bytes": 6955
+      },
+      ".ash-build/ash-host-9-0/src/main.rs": {
+        "sha256": "5385e329cff8ccb607d843da0b66f1c9f7987fb5c46dd59253ea22c47107db91",
+        "size_bytes": 2793
+      },
+      ".ash-build/ash-host-9-0/src/program-image.bin": {
+        "sha256": "790599b7cecf17af18f263cd0f3b1b539c655895673680242521ea555cc888c3",
+        "size_bytes": 7833
+      }
+    },
+    "glibc_source_import_commit": "bcb78c375b4d83d05825482edc665379b01f0c96",
+    "glibc_source_package": "2.43-2ubuntu2.4",
+    "ld_version": {
+      "sha256": "90619b44f5e33d31b24e5eaefa374736e4db86d56a01e8b1f6ceb0b4c2cab821",
+      "size_bytes": 281
+    },
+    "libc_archive_sha256": "2a277b999268f100c5f838689704b7432e9b1fdac76bf0cbda83cdbbaecc89e2",
+    "native_and_runtime_input_census": {
+      "sha256": "3425ae51c95246304e6ca701d4f7becfd29304474bd3ca36468a86876ad9453a",
+      "size_bytes": 32001
+    },
+    "rustc_version": {
+      "sha256": "b2bdf493bcf6d1dc55181a0efc2774b6d9cf7bf5c8dcc5bed592c994b2ad38c4",
+      "size_bytes": 196
+    },
+    "static_build_receipt": {
+      "sha256": "db59e9c850d895bbff5d26905bb07ad10d82777d7362ab9066c35dd126eb81bd",
+      "size_bytes": 2855
+    },
+    "whole_static_link_map": {
+      "sha256": "37f513443d247c81d2ee08cc172e363bd8227dcd47e157a55d99d76e83caba51",
+      "size_bytes": 223228495
+    }
+  },
+  "scope": {
+    "baseline_role": "existing-profile packaging feasibility only; not a checked-host runtime approval",
+    "format": "ELF64 little-endian x86-64 ET_EXEC",
+    "mode": "in-process",
+    "native_operation": "libc abs: signed32(-7) -> signed32(7)",
+    "target": "x86_64-unknown-linux-gnu"
+  },
+  "source_audit": {
+    "conclusion": {
+      "sha256": "767f78b2fe7babb1059051b2502ecf32b986e35f472aff3b346c172b2c468d3e",
+      "size_bytes": 6601
+    },
+    "input_manifest": {
+      "sha256": "41cca9ea17cbe9666024e1ea8bf242ed73de41a8ce7040f8e3bd2f62c9819bce",
+      "size_bytes": 12995
+    }
+  },
+  "status": "PROPOSED; not approved; no startup authority"
+}
