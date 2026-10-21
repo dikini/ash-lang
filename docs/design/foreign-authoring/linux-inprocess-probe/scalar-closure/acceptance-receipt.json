@@ -1,0 +1,24 @@
+{
+  "date": "2026-10-21",
+  "decision": "AD-0015",
+  "delivery_base": "284e6046499a43dcf48b600ecb3e61fd55286483",
+  "delivery_status": "Author receipt of explicit owner decision; repository candidate still requires independent final-head review and GitHub retention.",
+  "excluded": [
+    "Per-image strict approval",
+    "Checked runtime or native startup authority",
+    "Provisioned protected approval store or established deployment context",
+    "Owner/resource/SQLite/isolated-worker acceptance",
+    "Whole F2 or M1 completion",
+    "Main integration or current language semantics"
+  ],
+  "independent_preparation_review": {
+    "premise_example_sha256": "f5fc7deeb7104fa9f564786f6c13a3c0ef9602a0d9af0f91dbb574128192d48d",
+    "proposal_sha256": "8cb5dd047de4eb11b13ee4d3d97a17634505ee0aa34a82d4cbf5fd9ec5e319e6",
+    "verdict": "clear for conditional scalar architecture choice; no remaining preparation finding"
+  },
+  "kind": "architecture-owner-acceptance-readback",
+  "owner": "root orchestrator acting under explicit user delegation to choose recommended answers and proceed autonomously",
+  "owner_decision": "Accept narrow owner-free scalar GNU in-process architecture mechanisms, explicit trust premises and refusal obligations.",
+  "record_is_execution_approval": false,
+  "version": 1
+}

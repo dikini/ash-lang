@@ -1,0 +1,329 @@
+{
+  "files": {
+    "conclusion.md": {
+      "sha256": "767f78b2fe7babb1059051b2502ecf32b986e35f472aff3b346c172b2c468d3e",
+      "size_bytes": 6601
+    },
+    "constructor-arrays.txt": {
+      "sha256": "64b92ce59277c3e3b71da30664c292fbd3f4f40e76385fd0c20ebc409b458469",
+      "size_bytes": 264
+    },
+    "csu/init-first.c": {
+      "sha256": "8b60e4964310b0f2f46ba253b13d3d65e3781c0c808643d071381f5a65439dbc",
+      "size_bytes": 2507
+    },
+    "csu/libc-start.c": {
+      "sha256": "3c4cc113498e2bdc4edf7bc3a805e025cb9f7ce0fabe07b53a9459be5383b154",
+      "size_bytes": 12524
+    },
+    "debian/changelog": {
+      "sha256": "9a7e13dbefa083eef9dbbdea426a69d6df1bf2204db6ed2790a15b1b8f399e35",
+      "size_bytes": 1066287
+    },
+    "debian/patches/CVE-2026-19499.patch": {
+      "sha256": "d02811ff0ae63d1bd0bfe5be00c1e6788417b1bd17504dbfa11635ca5cf9f856",
+      "size_bytes": 3550
+    },
+    "debian/patches/CVE-2026-19542.patch": {
+      "sha256": "1ce9ffe72975a72160c32fd6dbc830c198b1e9ab412f26b8807ab05c6e392a20",
+      "size_bytes": 3299
+    },
+    "debian/patches/CVE-2026-4046.patch": {
+      "sha256": "d667852515f655a5d58cef8172387a8c4de8420dca35ff0eb69b9637ab4c1f4f",
+      "size_bytes": 11612
+    },
+    "debian/patches/CVE-2026-5435.patch": {
+      "sha256": "69c72861f5ae95e625cad532a4a93ad3ce95921da32936a77712992c33ad0c81",
+      "size_bytes": 3594
+    },
+    "debian/patches/CVE-2026-5450.patch": {
+      "sha256": "71b3a5beba7369a34f502d48ca30cb6c3ecb71607158db9182b5c6c02a5d4ae6",
+      "size_bytes": 4262
+    },
+    "debian/patches/CVE-2026-5928.patch": {
+      "sha256": "e1771c94ed8556d2a69303a7460e6f09d225d4d072628e2723edacec139ed2fa",
+      "size_bytes": 3512
+    },
+    "debian/patches/CVE-2026-6238-1.patch": {
+      "sha256": "4c267d10ae7723d980dbb0d83a64c0da7cc5a76fe0c85075cf6cec7f52a0b45f",
+      "size_bytes": 2148
+    },
+    "debian/patches/CVE-2026-6238-2.patch": {
+      "sha256": "856232fa7a337dc23ae144aaeb5466ce6d3b6a77b87f3d5d7f986a47eb5bc2dd",
+      "size_bytes": 14952
+    },
+    "debian/patches/CVE-2026-6238-pre1.patch": {
+      "sha256": "92f54f6c26fbff287ed4ffee485a6b78b2da086e272c6bea3666902be03ead96",
+      "size_bytes": 2105
+    },
+    "debian/patches/CVE-2026-6238-pre2.patch": {
+      "sha256": "6987b50e0fe955c6f5deaf69a52b6f92754880f06170eebef8038fe84b2f55db",
+      "size_bytes": 2492
+    },
+    "debian/patches/CVE-2026-6238-pre3.patch": {
+      "sha256": "c4cb1b054c03ebfc986c7cd563474fe7933ac15c5e0870bf0aef81922f1b30eb",
+      "size_bytes": 1474
+    },
+    "debian/patches/CVE-2026-6238-pre4.patch": {
+      "sha256": "bf2ba64aae5d36e334cd6a89e6191829aa72caf40796f91d7fae029896254495",
+      "size_bytes": 2139
+    },
+    "debian/patches/CVE-2026-6368.patch": {
+      "sha256": "6dcc7e87a926b620079446dc9a1c8394e21d9856b736f6177e98fd2ada2e1320",
+      "size_bytes": 18124
+    },
+    "debian/patches/CVE-2026-6791.patch": {
+      "sha256": "90be4c575f909fb8b8fa61cc705af9f03ef948c2cd947dd8e79bb66559e0a17f",
+      "size_bytes": 10265
+    },
+    "debian/patches/CVE-2026-77117-1.patch": {
+      "sha256": "2a178f49e7845d4100bf407a7e08fffe0f3c20b5e07b5a352bbaab4cb2400618",
+      "size_bytes": 984
+    },
+    "debian/patches/CVE-2026-77117-2.patch": {
+      "sha256": "f05b1659bc2c532a22bac878e23ac1d03ff9efd5c612d426283a01e15b156b03",
+      "size_bytes": 5702
+    },
+    "debian/patches/CVE-2026-80489.patch": {
+      "sha256": "553e815f67d22dfd496e6b0b7d9c7c0a7409743044359c841e7ec6e353cef5e4",
+      "size_bytes": 972
+    },
+    "debian/patches/any/local-asserth-decls.diff": {
+      "sha256": "2aacb4700daeca26d43a1f853589591bfa70450ac909cce7cb7085b316e732e3",
+      "size_bytes": 1161
+    },
+    "debian/patches/any/local-bootstrap-headers.diff": {
+      "sha256": "4651f6bfd4bb62bd7e8372f970a1f5c4a6f4753c96d3577c29a35f123792469b",
+      "size_bytes": 3245
+    },
+    "debian/patches/any/local-cross.patch": {
+      "sha256": "bc6ee0c521a5e705ad4745820563a15a33645e5358a86254beb8a350c9dbd98c",
+      "size_bytes": 722
+    },
+    "debian/patches/any/local-disable-libnss-db.diff": {
+      "sha256": "3d9654f23dc0b65f5f91a06e07a9bbee188e1f47317351058a9f3078bc811ba3",
+      "size_bytes": 478
+    },
+    "debian/patches/any/local-fhs-linux-paths.diff": {
+      "sha256": "c1c2eff1d40d6913adfcb928176e1a9d9bb63a14a23a84dc576010fd1999b5b8",
+      "size_bytes": 1026
+    },
+    "debian/patches/any/local-fhs-nscd.diff": {
+      "sha256": "9756e24882ac856b01bc9c9d3f2f5a19b41524970f4f918173e3255787fe0beb",
+      "size_bytes": 855
+    },
+    "debian/patches/any/local-ld-multiarch.diff": {
+      "sha256": "f7c72262826010174c8e432e93bee93254bf60beb96d0294f0418dfc9472b51a",
+      "size_bytes": 1355
+    },
+    "debian/patches/any/local-ldconfig-ignore-ld.so.diff": {
+      "sha256": "d7f3513bf212a124f085bded16f012933c164fe3c500fc54b51b9d4a8787f613",
+      "size_bytes": 1810
+    },
+    "debian/patches/any/local-ldconfig-multiarch.diff": {
+      "sha256": "214e510b8ac7624f2dac8983f2abc7db0a0c72e18f8c2abd0af0bb63d633ee58",
+      "size_bytes": 1558
+    },
+    "debian/patches/any/local-nss-overflow.diff": {
+      "sha256": "17e5e2d97e30f27e8bcc2d891650cb68dce20827018a179a0a706d6c24f053fc",
+      "size_bytes": 1991
+    },
+    "debian/patches/any/local-revert-bz13979.diff": {
+      "sha256": "f10c9b712b83b9430b22bc0b8a4d7553a94122f1e67d960b4270b5a5e2a4fc72",
+      "size_bytes": 1205
+    },
+    "debian/patches/any/local-stubs_h.diff": {
+      "sha256": "37b1bfd845bdc7317b585c7bfc07079c18212a4c26f7ab70fcfdbf4f2066482c",
+      "size_bytes": 432
+    },
+    "debian/patches/any/local-tcsetaddr.diff": {
+      "sha256": "a8ab148887b0dc44bb8d37813bc6669ae99f3e1d785644860e292cdeeecf3e5f",
+      "size_bytes": 3002
+    },
+    "debian/patches/any/local-test-install.diff": {
+      "sha256": "ecea70be891e06f0961f713b3dcd8851bc010db8b0c17bb336de00724fc7f167",
+      "size_bytes": 641
+    },
+    "debian/patches/any/submitted-missing-etc-hosts.diff": {
+      "sha256": "1a7d9783b9270b97dbe6df55441f8a47d0cab7ae443720259c75e8ce53f5b477",
+      "size_bytes": 306
+    },
+    "debian/patches/any/unsubmitted-ldso-machine-mismatch.diff": {
+      "sha256": "5e79fa2421af1a2c6d9a055c7e6d2b0351eea5bf9a40c7ec5d3387f2f533ed63",
+      "size_bytes": 556
+    },
+    "debian/patches/git-updates.diff": {
+      "sha256": "41f2f0c9d3d60260aa2e74d5335652240fdf30787f7007125402455530b38307",
+      "size_bytes": 361837
+    },
+    "debian/patches/locale/LC_IDENTIFICATION-optional-fields.diff": {
+      "sha256": "0d34232f355bcef85e0dbb2cd989b05b256338512b7d4f9955b3da2cd2143c1e",
+      "size_bytes": 1052
+    },
+    "debian/patches/locale/check-unknown-symbols.diff": {
+      "sha256": "1e012e5e754684ace8d1906e350598a68e481bf04bae23721d114ea37f9a5860",
+      "size_bytes": 1136
+    },
+    "debian/patches/locale/locale-print-LANGUAGE.diff": {
+      "sha256": "7380447b8f845724bb7aa66e6a5b30098e3aecad6d1c748d0391218891ecf033",
+      "size_bytes": 1131
+    },
+    "debian/patches/series": {
+      "sha256": "ddfa628857044ce19272076147aa390cf68ddae5fff73815ed8c9e17159c0368",
+      "size_bytes": 3257
+    },
+    "debian/patches/ubuntu/apparmor/0002-tests-handle-AppArmor-userns-mitigation.patch": {
+      "sha256": "9ddcfa6e3506ec5f6dec4bedbe75ac902b25d49eb3ebed515273cd05a170462f",
+      "size_bytes": 6661
+    },
+    "debian/patches/ubuntu/local-altlocaledir.diff": {
+      "sha256": "9b205091df89a729fddbc3500ed1b2986e2f00f1fdf4ae59ed91604416529792",
+      "size_bytes": 1410
+    },
+    "debian/patches/ubuntu/local-disable-ld_audit.diff": {
+      "sha256": "975571647e44c102713cf79f47caaf3deed189701787e453b997597a058ac77a",
+      "size_bytes": 710
+    },
+    "debian/patches/ubuntu/local-disable-nscd-netgroup-caching.diff": {
+      "sha256": "26128cc569981e1dea5ce106febf9ac9e14e1932f483a1201c7799ff02a0dda3",
+      "size_bytes": 451
+    },
+    "debian/patches/ubuntu/local-pldd-root.diff": {
+      "sha256": "92904b0dda1c4f3b5bef7e809d5b26aa839343d16eee45c57c697e3e5670b766",
+      "size_bytes": 278
+    },
+    "debian/patches/ubuntu/localedata/en_IE-am_pm.diff": {
+      "sha256": "1149b1022d5649e32ae9ff2a0818a9898aca0f44bafef63d41912d711a67e1d8",
+      "size_bytes": 426
+    },
+    "debian/patches/ubuntu/localedata/eo_US.diff": {
+      "sha256": "827c9f2c7325ad5ffe8d170d489f5be1a3da9126eaf37c9ff822184c671966ee",
+      "size_bytes": 7660
+    },
+    "debian/patches/ubuntu/localedata/es_DO-am_pm.diff": {
+      "sha256": "c4315bc923bc801c57c0954d3de62cba635ec48684b17e7c46023416dbc46cf5",
+      "size_bytes": 503
+    },
+    "debian/patches/ubuntu/localedata/sd_PK.diff": {
+      "sha256": "f0a7b6ca6093596a1a370207d26728c99faf917298d4a766942aa5a4bde98918",
+      "size_bytes": 6629
+    },
+    "debian/patches/ubuntu/localedata/ug_CN@latin.diff": {
+      "sha256": "87457c46dbe407ad8598f9267412bc20e24a2c9f46a974fcab424f376e033c90",
+      "size_bytes": 4611
+    },
+    "debian/patches/ubuntu/open-tree-redefined.patch": {
+      "sha256": "f3078c4e78b85c7ff6d809374b51e4db9d69109a99efaf785626e26dba954d26",
+      "size_bytes": 1589
+    },
+    "debug/backtrace.c": {
+      "sha256": "faa8701b9c890cb7b1046debe6b96b39282847112aba947f8dc7f3e257d75036",
+      "size_bytes": 4224
+    },
+    "elf/dl-libc.c": {
+      "sha256": "af612020e513eacfcb6bcda4c686176bfc353ba05bc6da66aeee8901673b706a",
+      "size_bytes": 5950
+    },
+    "elf/libc_early_init.c": {
+      "sha256": "5b6f59159eed94b3ced5d839c1a3fea7ccafa284ab573a290d74b8ef7014f36a",
+      "size_bytes": 1579
+    },
+    "fetch-followup.py": {
+      "sha256": "4dd1e983cc495b8d13a50a4c37e424c41f840a7e0d7ff579d5e0701e201974b8",
+      "size_bytes": 1032
+    },
+    "fetch-relevant-patches.py": {
+      "sha256": "4698b9f60f4c304a24f11c3ed1edfefa4c59170481e99071b5c5f81f71c0271f",
+      "size_bytes": 1375
+    },
+    "fetch-sources.py": {
+      "sha256": "4e3423ce4486ea1b1dc7b04d88aaba31167d3e203afc851220dd8a492539d19c",
+      "size_bytes": 1130
+    },
+    "followup-pages.json": {
+      "sha256": "e8f8c33f41f2f281d1403529ec8c9d54baf6be87e2aa5b64f8773e4713ed492a",
+      "size_bytes": 2726
+    },
+    "iconv/gconv_dl.c": {
+      "sha256": "87224bee6a6b89359dacd3e1887c4122431766aed8982658a0262b2a767c8c50",
+      "size_bytes": 6635
+    },
+    "iconv/gconv_open.c": {
+      "sha256": "fc2aaeec21d09d5567e935f544a1c3e3d1122359123237d3e5dd61e71fc5ae47",
+      "size_bytes": 4654
+    },
+    "installed-archive-pins.json": {
+      "sha256": "66577ea5d6c6fd87cc0ee1053944f5f04c26a7cc4e040a6ab4bc96f02306f187",
+      "size_bytes": 643
+    },
+    "intl/dcigettext.c": {
+      "sha256": "60e20644b6acfd8f9f48dd40e6d15be38ecc546e43028c27cdb3ddcfc59f4859",
+      "size_bytes": 46551
+    },
+    "link-census-glibc.json": {
+      "sha256": "7a548e1ddbc9834a4c37e68d00e9ecbe26f1429784573efb7f33b5ce99152b19",
+      "size_bytes": 792
+    },
+    "locale/findlocale.c": {
+      "sha256": "813a8d07433d82a26d56b709a4c137d717b58053b94eca734bbc0c70fdc31e30",
+      "size_bytes": 12233
+    },
+    "locale/global-locale.c": {
+      "sha256": "df537107ae398f43722d8736441c40fd6f4ddcd8449c15fa2de3294e54802b20",
+      "size_bytes": 2390
+    },
+    "locale/setlocale.c": {
+      "sha256": "8b2370a4245679bfdaf02fa2bd2978e5611ddbb6b0234c9f59a19490273ca0fa",
+      "size_bytes": 15387
+    },
+    "locale/uselocale.c": {
+      "sha256": "70cad4bdd07099d168c6b222978ecc03fcef4c096bc47aa46d332939f6a8dff9",
+      "size_bytes": 2962
+    },
+    "package-identity.txt": {
+      "sha256": "e05fb79dbb114a7f23fd489cc125a5d65f72c57454645cb78420b59cb30a4175",
+      "size_bytes": 200
+    },
+    "relevant-patches.json": {
+      "sha256": "8387386e7b6f7a28e1ddfd8acdc9931dceb4347cbdf60cf5f97f4ff5fb1df80d",
+      "size_bytes": 20627
+    },
+    "source-pages.json": {
+      "sha256": "c51e74a110732484da2129b99a32ad28fd424cdaed09b16bde5f44ef7a604669",
+      "size_bytes": 4600
+    },
+    "stdlib/abs.c": {
+      "sha256": "621775d0a9f49b1d207fd9a75d261a01099f054ea3a0dbcf897c8da0f276b12a",
+      "size_bytes": 907
+    },
+    "stdlib/cxa_finalize.c": {
+      "sha256": "23390aa737095d06fb5bba3767778f98dc072c99d749b39af5558f2798267271",
+      "size_bytes": 5416
+    },
+    "stdlib/exit.c": {
+      "sha256": "29b39dbc1274c0c6a1e1ede70e8c43f0ec87815ff0b6b0bbfee0b2c7f6b5a93b",
+      "size_bytes": 4630
+    },
+    "string/_strerror.c": {
+      "sha256": "69bf60445a3c8a867ba1f4f2f75297954d031cd9e5e58d4d8009f106bc76790e",
+      "size_bytes": 1265
+    },
+    "string/strerror_l.c": {
+      "sha256": "9e658bf117d6bc203fad967f9b38f6f9dd1560e39322a36ec40b5e1e1937d6a8",
+      "size_bytes": 2215
+    },
+    "string/xpg-strerror.c": {
+      "sha256": "26a6c9a7e205cc62c8da64df712cd9b2f3843c3a6bf8d7c8758af6b74ed6d55f",
+      "size_bytes": 1546
+    },
+    "sysdeps/nptl/libc_start_call_main.h": {
+      "sha256": "ecbb5e5364a0e2eb84dff2d13d4fac2fbbd37224ce056332ed8250d3e97de361",
+      "size_bytes": 3011
+    },
+    "wcsmbs/wcsmbsload.c": {
+      "sha256": "92756051a634bf18285050417e9e9f7c76392ba1f54b7d79ceb0b9a93d9627f8",
+      "size_bytes": 8129
+    }
+  },
+  "scope": "read-only source audit; not source applied build or no-loading proof"
+}
