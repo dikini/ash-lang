@@ -169,6 +169,46 @@ without source-body inference, opaque/re-exported origins, complete Type/Row
 instantiation, hidden captured S/C/H, branch/recursive joins and forged assumption
 or dependency removal. Nearest ordinary-handler precedence remains unchanged.
 
+### Next body-free wrapper checkpoint
+
+Start from retained PR #85 at `bdae57436e33158c931b740886f05ad335b98106`.
+Publish this plan as an early draft PR before implementation. The previous
+checkpoint supplies static scalar hosts and canonical symbol facts, with runtime
+and image refusal. This checkpoint must connect those facts through ordinary
+wrappers rather than infer authority from retained source bodies or effect names.
+
+Use the existing export/import, global scheme, capture and contract carriers.
+Preserve original operation/assumption identities and full Type/Row substitutions
+through generic wrappers, aliases and re-exports. An internal host may remove
+native/H effects from a wrapper's outward row; that cannot erase its required
+native contracts or assumptions. A body-free consumer must retain that dependency
+and the explicit checked-profile requirement. Empty authored assumption sets
+continue to retain automatic native premises. No parallel registry, source-name
+special case or serialized checked flag may supply authority.
+
+Write positive and negative cases before changing behavior:
+
+- Direct and generic imported scalar wrappers, preserving unused Type/Row actuals
+  and exact H selection, lower through independently validated Core.
+- A wrapper with an internal checked host exposes its transitive contracts after
+  its outward row closes; a body-free default-profile consumer refuses it.
+- Namespace aliases and re-exports preserve original identities; opaque views
+  retain required contract facts without exposing hidden constructors or bodies.
+- Wrong H, reordered complete vectors, hidden/captured host dependencies and
+  erased or substituted assumption/contract metadata reject independently.
+- New summary/capture reconstruction work has exact, one-short, cumulative and
+  fresh sufficient-budget controls. Existing legacy exports remain valid.
+
+Freeze and independently review each coherent subset. Preserve the scalar and
+legacy image/owner regressions; select focused checks for changed boundaries and
+retain exact raw results. Keep the active worktree committed and clean between
+handoffs. Continue using one Cargo job and the existing shared target.
+
+Checked owner lifecycle execution, checked byte/copy operations and launch/image
+admission are excluded from this wrapper checkpoint. They remain original F3 or
+connected F4/F6 obligations; this subset cannot close TASK-0051. Missing proposed
+semantics return to CP-0024 rather than becoming local implementation choices.
+
 ## Slice 5: Independently validate retained Core and private images
 
 Extend existing Core and private-image reconstruction with canonical checked
