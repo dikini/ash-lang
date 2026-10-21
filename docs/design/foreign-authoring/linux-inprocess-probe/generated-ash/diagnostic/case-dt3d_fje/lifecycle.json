@@ -1,0 +1,11 @@
+{
+  "child_created": true,
+  "elapsed_seconds": 0.006559,
+  "exit_code": 125,
+  "failure": null,
+  "output_bytes": 42,
+  "output_utf8": "trusted child setup/exec refusal errno=13\n",
+  "pid": 60,
+  "reaped": true,
+  "stage": "child-reaped"
+}

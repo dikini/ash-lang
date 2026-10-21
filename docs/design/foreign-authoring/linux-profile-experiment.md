@@ -66,6 +66,17 @@ keeps those questions separate from isolated-worker prerequisites and downstream
 F6 product admission/runtime evidence. Missing SQLite and worker group-clearing
 authority do not automatically block every scalar-only in-process profile.
 
+The actual [generated Ash static packaging comparison](linux-inprocess-probe/generated-ash/README.md)
+links the retained evaluator, signed32 `abs` bridge and private payloads without
+changing fingerprint guards. The resulting ET_EXEC has no interpreter/dynamic
+section, but retained libc loading paths leave the proposed no-loading requirement
+unmet. Packaging performed no image execution. Any separately reviewed trusted
+diagnostic needs a distinct exact policy/approval/addendum and cannot convert
+this unresolved requirement into architecture acceptance. The subsequent
+[exactly approved scalar diagnostic](linux-inprocess-probe/generated-ash/diagnostic-addendum.md)
+records host `Returned(7)` and sandbox EACCES under explicit known-loading and
+host-authority premises; it leaves that requirement unmet.
+
 ## Proposed architecture requirements awaiting evidence
 
 These requirements refine design questions; they are not an accepted AD.

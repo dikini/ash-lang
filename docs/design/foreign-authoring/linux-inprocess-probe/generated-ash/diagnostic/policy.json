@@ -1,0 +1,49 @@
+{
+  "approval_store_provisioned": false,
+  "architecture_accepted": false,
+  "argv": [
+    "ash-generated-scalar-diagnostic"
+  ],
+  "checked_runtime_authority": false,
+  "diagnostic_premises": [
+    "Trust the exact approved existing-profile generated Ash evaluator/bridge and libc abs input -7 under host authority.",
+    "Known retained libc localization/gconv to dlopen paths and broader runtime-loading uncertainty are accepted diagnostic premises, not excluded or proven unreachable.",
+    "The trusted diagnostic has no authored process/thread creation or fault injection; no hostile-code process-domain containment is claimed.",
+    "Kernel/launcher/Python/toolchain correctness and the trusted manual approval session remain assumptions."
+  ],
+  "environment": {},
+  "expected_output_utf8": "Returned(7)\n",
+  "image": {
+    "path": "/tmp/ash-generated-scalar.d771qtm9/static-host",
+    "sha256": "45417a6db6fc41bd17b372b47423e06c57ecf55973a0a848c51a14f456537405",
+    "size_bytes": 70880176
+  },
+  "kind": "trusted-generated-static-diagnostic",
+  "limits": {
+    "child_deadline_seconds": 30,
+    "combined_output_bytes": 16384,
+    "image_bytes": 100663296,
+    "program_headers": 64,
+    "receipt_bytes": 262144
+  },
+  "memfd": {
+    "create_flags": 19,
+    "mode_octal": "0500",
+    "required_seals": 15
+  },
+  "reaping_policy": "30 seconds is the child deadline to request termination; SIGKILL and observed waitpid reaping follow under a cleanup region covering all post-fork parent setup and failures. Reaping may be delayed by the kernel; persist pending lifecycle before waiting and never report success until reaped.",
+  "receipt": {
+    "path": "/tmp/ash-generated-scalar.d771qtm9/producer-receipt.json",
+    "sha256": "4de5fe79b42c88fd3dc269a1438a0d5c24f190f199021c76ea3337178ff77d4c"
+  },
+  "replacement": {
+    "path": "/tmp/ash-checked-ffi-inprocess/reporter-B",
+    "role": "previously separately approved trusted inert pathname replacement; never executed",
+    "sha256": "c338f484f853f1f8706ace538269a68c51cd5625c6cfc189f36211e534b76798",
+    "size_bytes": 821296
+  },
+  "source_commit": "83d050b40c92572b98b2d337f04126311373cd22",
+  "status": "PREPARED; execution requires separate exact root approval",
+  "strict_no_runtime_loading_profile_accepted": false,
+  "version": 1
+}

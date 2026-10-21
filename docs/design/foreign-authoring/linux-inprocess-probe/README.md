@@ -108,8 +108,13 @@ requires its normal tool approval. No new execution accompanied this packaging.
 
 The [requirement split](requirements.md) separates narrow in-process architecture
 readiness, worker-only prerequisites and downstream F6 implementation evidence.
-A real generated Ash evaluator/bridge static whole-image comparison remains a
-key feasibility step; reporter success does not supply that evidence. No static
+The [generated Ash packaging comparison](generated-ash/README.md) now retains a
+real evaluator/bridge static-link result and exact provenance. Its retained libc
+loader paths leave the proposed no-loading requirement unmet. The separately approved
+[trusted scalar diagnostic](generated-ash/diagnostic-addendum.md) observes
+`Returned(7)` from the sealed generated image after pathname replacement, with
+sandbox EACCES retained. Its known-loading/host-trust premises do not accept the
+static runtime closure. No static
 SQLite archive was found in the recorded standard/conda search paths, but SQLite
 absence and the worker group-clearing blocker do not automatically block a
 separately scoped scalar-only in-process architecture. No AD, F2 checkbox or F6
