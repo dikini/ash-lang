@@ -1,6 +1,8 @@
 //! Name-resolved, source-spanned syntax passed to typed elaboration.
 
 #[cfg(test)]
+mod checked_declaration_closure_tests;
+#[cfg(test)]
 mod checked_selected_tests;
 #[cfg(test)]
 mod checked_wrapper_tests;

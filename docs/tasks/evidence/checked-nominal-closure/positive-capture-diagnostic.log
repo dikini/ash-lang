@@ -1,0 +1,20 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi/foreign-adapter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 18s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 1 test
+
+thread 'resolved::checked_declaration_closure_tests::checked_declaration_closure_global_capture_only_control' (727) panicked at src/resolved/checked_declaration_closure_tests.rs:38:9:
+capture-only Held missing; hidden=[("Extent", NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, owner: Module, declaration: 5 }), ("Call", NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, owner: Module, declaration: 1 }), ("CheckedCall", NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, owner: Module, declaration: 12 })], capture-types=[Int -> <type:builtin.foreign:1:1:12><Int>, Unit -> <type:builtin.foreign:1:1:12><Int>, Int -> Unit -> <type:builtin.foreign:1:1:12><Int>, Int -> <type:builtin.foreign:1:1:1><Int>, Int -> <type:builtin.foreign:1:1:1><Int>, (<type-variable:builtin.foreign:1:1:5>, Int) -> <type:builtin.foreign:1:1:1><Int>, (<type-variable:builtin.foreign:1:1:6>, Int, Int) -> <type:builtin.foreign:1:1:1><Unit>, String -> <type:builtin.foreign:1:1:1><Unit>, <type-variable:builtin.foreign:1:1:7> -> <type-variable:builtin.foreign:1:1:8>, (<type-variable:builtin.foreign:1:1:9>, <type-variable:builtin.foreign:1:1:10>) -> Unit, (<type-variable:builtin.foreign:1:1:11>, <type:builtin.foreign:1:1:5><<type-variable:builtin.foreign:1:1:11>>) -> <type:builtin.foreign:1:1:1><Bytes>, (<type-variable:builtin.foreign:1:1:12>, Int) -> <type:builtin.foreign:1:1:1><Bytes>, <type:builtin.foreign:1:1:5><<type-variable:builtin.foreign:1:1:13>> -> Int, Unit -> String, Unit, Int -> <type:builtin.foreign:1:1:12><Int>, <type-variable:1:0:1>, <type-variable:1:0:1>, <type-variable:1:0:1>, <type-variable:1:0:1>]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test resolved::checked_declaration_closure_tests::checked_declaration_closure_global_capture_only_control ... FAILED
+
+failures:
+
+failures:
+    resolved::checked_declaration_closure_tests::checked_declaration_closure_global_capture_only_control
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2000 filtered out; finished in 0.04s
+
+error: test failed, to rerun pass `--lib`

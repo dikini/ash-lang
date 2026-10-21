@@ -307,13 +307,17 @@ all durable startup evidence. No separate TASK-0052 plan exists.
 
 1. Establish an actual private `type Held = Held(Int)` captured intact by a
    closure returned from an exported wrapper. Destructure Held inside that
-   closure and call the existing closed checked scalar wrapper. Its public scheme
-   must omit Held. Assert the real callable graph reaches Held, that only hidden
-   nominal/constructor metadata supplies it, and that exact native/assumption
+   closure and pass Held as an ABI-unused Type actual through the existing closed
+   generic checked scalar wrapper. A data-only captured value need not produce a
+   callable type edge; that rejected fixture is not a product defect. The public
+   scheme must omit Held. Assert the real callable graph reaches Held, that only
+   hidden identity/kind metadata supplies it, and that exact native/assumption
    identities remain. Require explicit-profile source, unchanged summary,
    body-free DependencyExports consumer, separate producer linkage/independent
    Core and valid identity/fold transforms to pass before mutation.
-2. Erase Held's complete hidden nominal/order and constructor/order mirrors while
+2. Erase Held's complete hidden nominal/order mirrors, and constructor/order
+   mirrors only if the valid fixture retains them. Hidden constructor access
+   remains unavailable. Perform the erasure while
    preserving completed global publication, callable graph, resident provenance,
    public scheme and native/effect facts. Test summary authentication, actual
    consumer and independent linked Core separately; name the first failing

@@ -238,6 +238,19 @@ Its `checked_source` module name denotes existing validation, not the new checke
 execution profile. The current parser recognizes contextual `foreign library`;
 `checked` must remain contextual and preserve legacy declaration recognition.
 
+The initial PR #94 data-only Held fixture parsed and checked after a constructor
+pattern correction, but its actual callable inventory contained no Held type
+edge. This is rejected fixture evidence, not an observed product defect. The
+revised control passes Held through an ABI-unused native Type actual in the
+existing generic closed wrapper. The [test-first checkpoint](evidence/checked-nominal-closure/README.md)
+passes the actual capture/hidden-kind and unrelated Spare controls plus body-free
+consumer, linking, independent Core and identity/fold revalidation. Coherent
+required Held hidden-row erasure still authenticates successfully, exposing a
+summary-admission gap. Product repair and independently mutated consumer/Core
+controls remain pending.
+Hidden identity/kind metadata carries no constructor access, so the control uses
+the metadata actually retained by that route.
+
 ## Deviations
 
 None. A semantic gap returns to CP-0024; an unsupported partial route refuses.
