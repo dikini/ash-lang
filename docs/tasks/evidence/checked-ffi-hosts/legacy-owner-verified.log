@@ -1,17 +1,17 @@
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
      Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
 
 running 10 tests
 test build::source_owner_post_record_tests::initialized_byte_extent_work_refusal_precedes_acquisition_and_creates_no_owner ... ok
 test build::source_owner_post_record_tests::initialized_byte_owner_records_unmapped_source_extent_before_post_return_failure ... ok
-test build::source_owner_post_record_tests::zero_initialized_extent_keeps_a_nonnull_owner_and_its_destruction_obligation ... ok
 test build::source_owner_post_record_tests::injected_owner_post_record_refusal_destroys_once_and_fresh_activation_does_not_replay ... ok
 test build::source_owner_post_record_tests::blocked_owner_scalar_borrow_refuses_before_callback_with_completion_address_retained ... ok
 test build::source_owner_post_record_tests::initialized_byte_extent_refusal_precedes_acquisition_and_creates_no_owner ... ok
+test build::source_owner_post_record_tests::zero_initialized_extent_keeps_a_nonnull_owner_and_its_destruction_obligation ... ok
+test build::source_owner_post_record_tests::destruction_capture_recording_and_terminal_cleanup_keep_only_native_snapshot ... ok
 test build::source_owner_post_record_tests::injected_status_owner_post_call_extraction_failure_is_terminal_after_each_disposition ... ok
 test build::source_owner_post_record_tests::injected_status_owner_complete_report_admission_precedes_callback_and_recording_survives_zero_work ... ok
-test build::source_owner_post_record_tests::destruction_capture_recording_and_terminal_cleanup_keep_only_native_snapshot ... ok
 test build::source_owner_post_record_tests::initialized_byte_admission_prepays_length_release_and_report_before_native_entry ... ok
 
-test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 1956 filtered out; finished in 1.92s
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 1956 filtered out; finished in 1.95s
 

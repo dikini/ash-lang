@@ -1,3 +1,2 @@
-   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
-    Checking ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi/foreign-adapter)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 45.38s
+    Checking ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.35s

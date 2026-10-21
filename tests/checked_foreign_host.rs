@@ -344,3 +344,67 @@ fn checked_foreign_host_does_not_discharge_a_same_kind_unrelated_actual() {
         check_static_graph(&fixture.graph()).expect_err("Int is not the lexical host identity");
     assert!(error.starts_with("checking:"), "{error}");
 }
+
+#[test]
+fn checked_foreign_host_preserves_an_unrelated_effect_for_its_ordinary_handler() {
+    use ash::core::effect::{EffectExprKind, EffectOperation};
+    let text = CHECKED_SCALAR
+        .replace("main : Unit", "effect Ping {\n    tick : Unit -> Unit\n}\nmain : Unit")
+        .replace("main () = foreign host H {", "main () = handle (foreign host H {")
+        .replace("    perform Abs<H>.call 1\n}", "    let ignored = perform Ping.tick ()\n    perform Abs<H>.call 1\n}) with Ping {\n    tick ignored => resume ()\n}");
+    let fixture = Fixture::new(&text);
+    let graph = fixture.graph();
+    let core = checked_effect_core(&graph);
+    let ping = core
+        .registry()
+        .effects()
+        .iter()
+        .find(|effect| effect.spelling == "Ping")
+        .unwrap()
+        .id;
+    let mut pending = vec![core.root()];
+    let mut found = false;
+    while let Some(id) = pending.pop() {
+        let node = core.node(id).unwrap();
+        if let EffectExprKind::Operation(EffectOperation::NativeInterpret(host)) = &node.kind
+            && host.host().is_some()
+        {
+            assert_eq!(node.effects().known().len(), 1);
+            assert_eq!(node.effects().known()[0].effect(), ping);
+            assert!(node.effects().tail().is_none());
+            found = true;
+        }
+        pending.extend((0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)));
+    }
+    assert!(
+        found,
+        "the ordinary handler must enclose a real checked host"
+    );
+    assert!(core.node(core.root()).unwrap().effects().is_empty());
+}
+
+#[test]
+fn checked_foreign_unexecuted_branch_still_refuses_default_resolution_and_runtime() {
+    use ash::driver::{PipelineFailure, RunConfiguration, run_path};
+    let start = CHECKED_SCALAR.find("main : Unit").unwrap();
+    let text = format!(
+        "{}main : Unit -> Int\nmain () = match false {{\n    true => {{\n        let ignored = foreign host H {{\n            perform Abs<H>.call 1\n        }}\n        0\n    }}\n    false => 42\n}}\n",
+        &CHECKED_SCALAR[..start]
+    );
+    let fixture = Fixture::new(&text);
+    let graph = fixture.graph();
+    let core = checked_effect_core(&graph);
+    assert!(
+        ash::eval::evaluate_effect(&core).is_err(),
+        "admission must reject before selecting the false branch"
+    );
+    let failure = run_path(RunConfiguration {
+        entry: fixture.0.join("entry.ash"),
+        roots: ash::module::ModuleRoots::empty(),
+    })
+    .unwrap_err();
+    assert!(
+        matches!(failure.pipeline_failure(), Some(PipelineFailure::Resolution(error)) if error.reason == ash::resolve::ResolveReason::ForeignContract),
+        "the public route must refuse during resolution, before native binding or callbacks: {failure:?}"
+    );
+}

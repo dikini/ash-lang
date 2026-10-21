@@ -1,19 +1,21 @@
    Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.60s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.52s
      Running tests/checked_foreign_host.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/checked_foreign_host-411266a04b37db48)
 
-running 11 tests
+running 13 tests
 test checked_foreign_host_syntax_preserves_nested_lexical_boundaries ... ok
 test checked_foreign_core_rejects_replayed_reserved_module_with_rewritten_bytes ... ok
 test checked_foreign_host_builtin_legacy_resolved_formals_do_not_shift ... ok
 test checked_foreign_default_resolution_refuses_required_host_closure ... ok
 test checked_foreign_host_does_not_discharge_a_same_kind_unrelated_actual ... ok
-test checked_foreign_host_identity_cannot_escape_as_a_latent_call ... ok
 test checked_foreign_closed_scalar_host_checks_through_explicit_static_api ... ok
+test checked_foreign_host_identity_cannot_escape_as_a_latent_call ... ok
 test checked_foreign_empty_host_core_is_static_and_refuses_runtime ... ok
 test checked_foreign_host_identity_is_unavailable_outside_or_in_a_sibling_scope ... ok
-test checked_foreign_nested_hosts_select_only_their_exact_fresh_identity ... ok
+test checked_foreign_host_preserves_an_unrelated_effect_for_its_ordinary_handler ... ok
 test checked_foreign_scalar_host_core_reconstructs_and_survives_transforms ... ok
+test checked_foreign_nested_hosts_select_only_their_exact_fresh_identity ... ok
+test checked_foreign_unexecuted_branch_still_refuses_default_resolution_and_runtime ... ok
 
-test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
 

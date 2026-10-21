@@ -7,10 +7,10 @@
     "CARGO_BUILD_JOBS": "1"
   },
   "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.97.1\nLLVM version: 22.1.6\n",
-  "focused_tests_passed": 44,
+  "focused_tests_passed": 46,
   "source_configuration_before_after_equal": true,
   "source_configuration_file_count": 518,
-  "source_configuration_tree_sha256": "50e7ac8536ad742964be639d46a2da9fd2a2f1939a303b11e53d851b0feff1ea",
+  "source_configuration_tree_sha256": "90a950105f06dd3ff47b5d6258e5e200548f48c44c1ee8a1b4852fece3798f15",
   "manifest": "docs/tasks/evidence/checked-ffi-hosts/source-configuration.json",
   "manifest_algorithm": "SHA256(UTF8(json.dumps(path_to_exact_file_SHA256,sort_keys=True,separators=(comma,colon)))) with no trailing newline; README defines path inventory.",
   "changed_source_specification_configuration_sha256": {
@@ -54,7 +54,7 @@
     "src/resolved.rs": "620dbb0074c4296ba2ae52f41284921443f4851ebfe1fca41cb0387a057af6c9",
     "src/resolved/image_subset_tests.rs": "523d8951832be1c04b86da100e6a1b804a7a67d7b3c1d9323517533f8c9990ee",
     "src/surface.rs": "17a05c5644733eebb49d55c8446bdcf13474ce95eb20e2aa72d508a312d0b458",
-    "tests/checked_foreign_host.rs": "3b7358f42cace5f98967735f7d70f23f161bc656fd632ca79eaacfa605524760",
+    "tests/checked_foreign_host.rs": "5fda53a60960a4cf320e0ea1021e2771f4c92a998a566d523fe4e578d5e62f09",
     "tests/interface_selection.rs": "4772a5229bcff18f33bb94f9c98b3432160376fcccdd8284b60cf17954a26409",
     "tests/interfaces.rs": "ed4480ff8dcd076a4a4bf12d801d2cabbdd1f895c10636244e3d69800c0d2eee",
     "Cargo.toml": "2d1a3d056418f5feb2e36d3ff99924e30f6a9136900b7aa2bb73ead902a1395c",
@@ -77,11 +77,11 @@
         "--nocapture"
       ],
       "exit": 0,
-      "elapsed_seconds": 0.464,
+      "elapsed_seconds": 0.436,
       "source_configuration_before_after_equal": true,
       "file_count": 518,
-      "source_configuration_tree_sha256": "50e7ac8536ad742964be639d46a2da9fd2a2f1939a303b11e53d851b0feff1ea",
-      "log_sha256": "50fc31fc5180f8d6b68a321739b3623074dd62a6e17a8695098bb0c8991a09c5",
+      "source_configuration_tree_sha256": "90a950105f06dd3ff47b5d6258e5e200548f48c44c1ee8a1b4852fece3798f15",
+      "log_sha256": "aff3f700179c915e7dbd70c72121f409a7a727bfcb9b23a436d9fc19be5d86c8",
       "log": "docs/tasks/evidence/checked-ffi-hosts/host-verified.log"
     },
     {
@@ -97,11 +97,11 @@
         "--nocapture"
       ],
       "exit": 0,
-      "elapsed_seconds": 53.724,
+      "elapsed_seconds": 0.386,
       "source_configuration_before_after_equal": true,
       "file_count": 518,
-      "source_configuration_tree_sha256": "50e7ac8536ad742964be639d46a2da9fd2a2f1939a303b11e53d851b0feff1ea",
-      "log_sha256": "09c821d05a452e6abfcefb1f5e18ddc55e40e18b96a5498130e461a518912ac9",
+      "source_configuration_tree_sha256": "90a950105f06dd3ff47b5d6258e5e200548f48c44c1ee8a1b4852fece3798f15",
+      "log_sha256": "b165be034f5f59532758f9c65cf33ad5da43a2599eec1ccc0b85c006c344a335",
       "log": "docs/tasks/evidence/checked-ffi-hosts/builtin-verified.log"
     },
     {
@@ -117,11 +117,11 @@
         "--nocapture"
       ],
       "exit": 0,
-      "elapsed_seconds": 0.283,
+      "elapsed_seconds": 0.349,
       "source_configuration_before_after_equal": true,
       "file_count": 518,
-      "source_configuration_tree_sha256": "50e7ac8536ad742964be639d46a2da9fd2a2f1939a303b11e53d851b0feff1ea",
-      "log_sha256": "74952e0520903f6560dad2247f691872d005e2cfdda61938f1a7ae7d9cdb3528",
+      "source_configuration_tree_sha256": "90a950105f06dd3ff47b5d6258e5e200548f48c44c1ee8a1b4852fece3798f15",
+      "log_sha256": "c4cc290c3094c8befd7b51c58099b3d930db806bae278f207f8713192cff3168",
       "log": "docs/tasks/evidence/checked-ffi-hosts/module-verified.log"
     },
     {
@@ -138,11 +138,11 @@
         "--nocapture"
       ],
       "exit": 0,
-      "elapsed_seconds": 0.519,
+      "elapsed_seconds": 0.509,
       "source_configuration_before_after_equal": true,
       "file_count": 518,
-      "source_configuration_tree_sha256": "50e7ac8536ad742964be639d46a2da9fd2a2f1939a303b11e53d851b0feff1ea",
-      "log_sha256": "fadbe4f7901e1754619ea181066d94d04adf400cc1f2b2aed727b9cd1f3b97f5",
+      "source_configuration_tree_sha256": "90a950105f06dd3ff47b5d6258e5e200548f48c44c1ee8a1b4852fece3798f15",
+      "log_sha256": "eea080af9b49d3b1aa23da61e05df3073745eefc2830c38b52d1fbbc197ee9d4",
       "log": "docs/tasks/evidence/checked-ffi-hosts/legacy-image-verified.log"
     },
     {
@@ -158,11 +158,11 @@
         "--nocapture"
       ],
       "exit": 0,
-      "elapsed_seconds": 2.32,
+      "elapsed_seconds": 2.325,
       "source_configuration_before_after_equal": true,
       "file_count": 518,
-      "source_configuration_tree_sha256": "50e7ac8536ad742964be639d46a2da9fd2a2f1939a303b11e53d851b0feff1ea",
-      "log_sha256": "0039c539c396d6c98a356319c8bbf4a31c3215d07f4b551c21e9a390bd9672fc",
+      "source_configuration_tree_sha256": "90a950105f06dd3ff47b5d6258e5e200548f48c44c1ee8a1b4852fece3798f15",
+      "log_sha256": "06227b0f8965e997b04b1407061590978776e20793ee918529012526a6ac6275",
       "log": "docs/tasks/evidence/checked-ffi-hosts/legacy-owner-verified.log"
     },
     {
@@ -178,11 +178,11 @@
         "--nocapture"
       ],
       "exit": 0,
-      "elapsed_seconds": 5.816,
+      "elapsed_seconds": 4.81,
       "source_configuration_before_after_equal": true,
       "file_count": 518,
-      "source_configuration_tree_sha256": "50e7ac8536ad742964be639d46a2da9fd2a2f1939a303b11e53d851b0feff1ea",
-      "log_sha256": "8201c1b96a093802a359ca8a8a98124a680269213f70bd2649b218a8ff4bbd53",
+      "source_configuration_tree_sha256": "90a950105f06dd3ff47b5d6258e5e200548f48c44c1ee8a1b4852fece3798f15",
+      "log_sha256": "36a5bdb7cb95c1ea71748f4fd7a7f8866619be76351b39f031c47f421225ce6b",
       "log": "docs/tasks/evidence/checked-ffi-hosts/source-verified.log"
     },
     {
@@ -200,11 +200,11 @@
         "--nocapture"
       ],
       "exit": 0,
-      "elapsed_seconds": 32.154,
+      "elapsed_seconds": 3.665,
       "source_configuration_before_after_equal": true,
       "file_count": 518,
-      "source_configuration_tree_sha256": "50e7ac8536ad742964be639d46a2da9fd2a2f1939a303b11e53d851b0feff1ea",
-      "log_sha256": "3a7e22912c9c6a518bc7a6b48f9faedc446f2839439ac244d7dde1d9079834cb",
+      "source_configuration_tree_sha256": "90a950105f06dd3ff47b5d6258e5e200548f48c44c1ee8a1b4852fece3798f15",
+      "log_sha256": "645b06a3f30b520721460827aa0e652f269bfbd8fdbd28d75188b4facab92288",
       "log": "docs/tasks/evidence/checked-ffi-hosts/generated-legacy.log"
     },
     {
@@ -228,11 +228,11 @@
         "warnings"
       ],
       "exit": 0,
-      "elapsed_seconds": 45.552,
+      "elapsed_seconds": 0.596,
       "source_configuration_before_after_equal": true,
       "file_count": 518,
-      "source_configuration_tree_sha256": "50e7ac8536ad742964be639d46a2da9fd2a2f1939a303b11e53d851b0feff1ea",
-      "log_sha256": "3ed5b2f33c0b50ec33474a08b2173817aca1a79da60bed00ee210abb98d31a81",
+      "source_configuration_tree_sha256": "90a950105f06dd3ff47b5d6258e5e200548f48c44c1ee8a1b4852fece3798f15",
+      "log_sha256": "434ba53e50d29a48cf1ea2bd4b71f01cb360c03aa833abb22fbfdaddcdb9d933",
       "log": "docs/tasks/evidence/checked-ffi-hosts/clippy.log"
     }
   ],
@@ -251,5 +251,9 @@
     "markdown": "MD013-disabled lint of six changed Markdown files and evidence README",
     "whitespace": "Source/spec/docs/JSON pass; raw Cargo .log bytes excluded, including EOF blanks."
   },
-  "acceptance": "Candidate verification only. Independent exact-head review, GitHub integration and author acceptance readback remain pending; all whole-F3 criteria stay open."
+  "acceptance": "Candidate verification only. Independent exact-head review, GitHub integration and author acceptance readback remain pending; all whole-F3 criteria stay open.",
+  "review_findings_addressed": [
+    "Actual checked scalar host preserves ordinary Ping through source and independent Core; its ordinary outer handler removes Ping.",
+    "Unexecuted checked branch statically checks, but runtime admission refuses before branch selection; public default driver fails ForeignContract during resolution before native binding."
+  ]
 }

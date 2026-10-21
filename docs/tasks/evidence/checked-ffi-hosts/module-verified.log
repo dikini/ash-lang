@@ -1,9 +1,9 @@
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
      Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
 
 running 5 tests
-test module::foreign_host::tests::checked_foreign_inventory_appends_without_changing_legacy_ordinals ... ok
 test module::foreign_host::tests::checked_foreign_host_metadata_requires_exact_bytes_and_reserves_before_publication ... ok
+test module::foreign_host::tests::checked_foreign_inventory_appends_without_changing_legacy_ordinals ... ok
 test module::foreign_host::tests::checked_foreign_nominal_coordinates_match_original_inventory ... ok
 test module::foreign_host::tests::checked_foreign_coordinates_preserve_all_canonical_formal_locals ... ok
 test module::foreign_host::tests::checked_foreign_builtin_admission_exact_work_and_one_short_publish_atomically ... ok

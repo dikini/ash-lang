@@ -109,7 +109,7 @@ contextual lexical hosts and appended canonical checked builtin codecs. Source
 and linked Core checks cover scalar native/host correspondence, lexical escape,
 transforms, independent role reconstruction and sealed-handler/mode mutations.
 Legacy image compatibility admits only exact inert builtin metadata; actual
-checked hosts still refuse runtime and image admission. The subset passes 44 focused tests, including legacy owner regressions and an
+checked hosts still refuse runtime and image admission. The subset passes 46 focused tests, including legacy owner regressions and an
 actual generated legacy build/run, plus targeted Clippy. The
 [verification receipt](evidence/checked-ffi-hosts/verification.json) and
 [capture notes](evidence/checked-ffi-hosts/README.md) retain final source/configuration

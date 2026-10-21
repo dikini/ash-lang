@@ -161,7 +161,7 @@
   "tests/bytes_strings.rs": "c7a10dabd788b747506739649aedf9bc3a8d0df5196dc76e019d0656294a204e",
   "tests/check_ffi.rs": "2039ea476faf3f6717d3abbb34b8b35721db33bc5748d109990679b3371822f7",
   "tests/checked_foreign_contracts.rs": "bd4f54278d3c32f4287617c075da2c0fb1f6635b2596206fd4692fdd0f10e431",
-  "tests/checked_foreign_host.rs": "3b7358f42cace5f98967735f7d70f23f161bc656fd632ca79eaacfa605524760",
+  "tests/checked_foreign_host.rs": "5fda53a60960a4cf320e0ea1021e2771f4c92a998a566d523fe4e578d5e62f09",
   "tests/cleanup_abandonment.rs": "de710a923c917ed6342693ed9536a26bcc775a8b10d0b1f284d8cea938b6d087",
   "tests/cleanup_interactions.rs": "424635df20facb583ed7cd558d396c14cd3323586c4ff54757ad23d39b322014",
   "tests/cleanup_partial_acquisition.rs": "3da219c3256daad9198ce9af4de6e1201209473bcb16ca2e308654c211e7f68e",
