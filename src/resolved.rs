@@ -5145,6 +5145,25 @@ impl ImportedFacts {
         self.implementations.iter()
     }
 
+    pub(crate) fn authenticate_implementation_publications(
+        &self,
+        type_work: &mut TypeWorkBudget,
+        constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+    ) -> Result<(), ResolvedBuildFailure> {
+        type_work
+            .charge(self.implementations.len())
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        for imported in &self.implementations {
+            authenticate_implementation_publication(
+                &imported.fact,
+                imported.publication.as_ref(),
+                type_work,
+                constraint_work,
+            )?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn insert_global(
         &mut self,
         fact: ImportedGlobalScheme,
@@ -31664,8 +31683,8 @@ mod tests {
         // original owner-kind and inherited-role checks remain independently
         // charged. Canonical kind records, borrowed permission IDs and the
         // intrinsic function result avoid duplicate storage and a root walk.
-        const EXACT: usize = 35 + 4;
-        const TYPE_WORK: usize = 52;
+        const EXACT: usize = 35 + 4 + 12; // completed original whole-fact comparison
+        const TYPE_WORK: usize = 52 + 1; // original presence/capture header
         // The last ordinary value-kind comparison costs one Type cell;
         // the final nonoverlap index then admits two Constraint cells
         // atomically. Constraint refusal therefore follows all Type work,
@@ -31708,7 +31727,7 @@ mod tests {
         // Before method-shape checking, the two new aggregate cells and the
         // authorization cell are all charged. A malformed position then owns
         // InvalidState; one-short cannot reach that semantic check.
-        const BAD_POSITION_EXACT: usize = 18;
+        const BAD_POSITION_EXACT: usize = 18 + 12;
         let malformed = interface_summary_with_local_implementation(true);
         let mut short =
             crate::interface::InterfaceConstraintBudget::with_limit(BAD_POSITION_EXACT - 1);
@@ -34796,11 +34815,11 @@ mod tests {
         // kind and inherited-role cells remain: 5 + 22 + 5 + 10 + 9 = 51.
         // Constraint admission owns the original twenty-two-cell semantic
         // prefix before prerequisite pair storage or comparison.
-        const TYPE_WORK: usize = 5 + 22 + 5 + 10 + 9;
-        const CONSTRAINT_WORK: usize = 21 + 1;
+        const TYPE_WORK: usize = 5 + 22 + 5 + 10 + 9 + 1;
+        const CONSTRAINT_WORK: usize = 21 + 1 + 36; // original head/prerequisite/method comparison
         // Five environment cells, the fifteen-cell Relation method walk and
         // three independent original/inherited metadata cells precede refusal.
-        const CONSTRAINT_SHORT_TYPE_PREFIX: usize = 5 + 15 + 3;
+        const CONSTRAINT_SHORT_TYPE_PREFIX: usize = 5 + 15 + 3 + 1;
         for (label, dependents) in [
             ("complete duplicate", [Type::Bool, Type::Bool]),
             ("determined-key conflict", [Type::Bool, Type::Unit]),
@@ -39321,8 +39340,8 @@ mod tests {
         // Authentication adds nineteen identity, route, binder, substitution,
         // and implementation-index cells before publication. Complete owner
         // arguments and inherited-role retention/authentication add six cells.
-        const STAGING_WORK: usize = 2 + 1 + 3 + 12 + 1 + 13;
-        const EXACT_WORK: usize = STAGING_WORK + 19 + 6;
+        const STAGING_WORK: usize = 2 + 1 + 3 + 12 + 1 + 13 + 12; // imported original authentication
+        const EXACT_WORK: usize = STAGING_WORK + 19 + 6 + 12; // final original authentication
         let (empty, empty_used) = freeze_public_implementation_summary_with_limit(false, 0);
         let empty = empty.expect("an unused imported interface should require no constraint work");
         assert_eq!(empty_used, 0);
@@ -39355,7 +39374,7 @@ mod tests {
     fn linked_public_authorization_move_has_an_exact_preflight_budget() {
         // The producer's staging (32), authentication (19), and complete owner
         // argument/role checks (6) precede this independent move preflight.
-        const SUMMARY_FREEZE_WORK: usize = 32 + 19 + 6;
+        const SUMMARY_FREEZE_WORK: usize = 32 + 19 + 6 + 2 * 12;
         let (short_summary, _) =
             freeze_public_implementation_summary_with_limit(true, SUMMARY_FREEZE_WORK);
         let mut short_summary = short_summary.expect("the public summary should freeze");

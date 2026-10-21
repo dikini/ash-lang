@@ -168,8 +168,17 @@ pending. The early draft publishes this plan before long implementation. The
 [first retained controls](evidence/checked-ffi-selected/README.md) pass direct
 module-level selection and a generic prerequisite chain through independent
 Core. They expose accepted capture/table erasure in a canonical selected summary
-and a source-order-dependent host registry refusal; both remain unrepaired at
-this test-first checkpoint.
+and a source-order-dependent host registry refusal. Checkpoint `458d848`
+repairs the two summary erasures with completed implementation publications and
+passes four actual-host ordering controls. Its later checker-boundary mutation
+still exposes acceptance after an imported original is erased following real
+resolution. The next frozen batch authenticates imported originals before
+checker use, preserves bounded prerequisite provenance, and adds selected
+method union, opaque/re-export, complete native row and independent Core controls.
+The repaired batch passes 14 selected private/Core controls; 58 affected
+implementation regressions pass after refreshing their exact publication-work
+ledgers. Body-free integration and final verification remain pending; no new
+partial acceptance is claimed.
 
 ## Verification
 

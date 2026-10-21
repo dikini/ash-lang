@@ -242,6 +242,9 @@ fn checked_selected_publication_deep_origins_clone_refuse_replace_and_drop_itera
             fact.origin = deep(fact.span);
             fact.methods[0].origin = deep(fact.methods[0].span);
             fact.prerequisites[0].origin = deep(fact.prerequisites[0].span);
+            assert_eq!(fact.methods[0].scheme.requirements.len(), 1);
+            fact.methods[0].scheme.requirements[0].origin =
+                deep(fact.methods[0].scheme.requirements[0].span);
             let mut work = TypeWorkBudget::unbounded();
             let cloned = clone_checked_implementation_fact(
                 &fact,
@@ -250,7 +253,7 @@ fn checked_selected_publication_deep_origins_clone_refuse_replace_and_drop_itera
             )
             .unwrap();
             let required = work.used();
-            assert!(required > 3 * 32768);
+            assert!(required > 4 * 32768);
             let mut short = TypeWorkBudget::with_limit(required - 1);
             assert!(matches!(
                 clone_checked_implementation_fact(
@@ -387,10 +390,109 @@ fn checked_selected_import_routes_share_original_and_reject_same_fact_reminting(
 fn checked_selected_resolved_import_still_requires_the_completed_original() {
     let canonical = selected_route_consumer(false).unwrap();
     crate::elaborate::check_module(canonical).expect("real body-free selected consumer must check");
-    let mut missing = selected_route_consumer(false).unwrap();
-    missing.imported.implementations[0].publication = None;
+    for mutation in 0..4 {
+        let mut changed = selected_route_consumer(false).unwrap();
+        match mutation {
+            0 => changed.imported.implementations[0].publication = None,
+            1 => {
+                changed.imported.implementations[0].publication = selected_summary().implementations
+                    [0]
+                .publication
+                .as_ref()
+                .map(Arc::clone)
+            }
+            2 => {
+                let mut stale = clone_checked_implementation_fact(
+                    &changed.imported.implementations[0].fact,
+                    &mut TypeWorkBudget::unbounded(),
+                    &mut crate::interface::InterfaceConstraintBudget::with_limit(usize::MAX),
+                )
+                .unwrap();
+                stale.methods[0].capture = crate::core::capture::CaptureValueSummary::default();
+                changed.imported.implementations[0].publication = Some(Arc::new(stale));
+            }
+            3 => {
+                changed.imported.implementations[0].fact.methods[0].capture =
+                    crate::core::capture::CaptureValueSummary::default();
+                changed.imported.native_symbols.clear();
+                changed
+                    .imported
+                    .effects
+                    .retain(|effect| effect.native_contract.is_none());
+                changed.imported.effect_positions = changed
+                    .imported
+                    .effects
+                    .iter()
+                    .enumerate()
+                    .map(|(index, effect)| (effect.id, index))
+                    .collect();
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            crate::elaborate::check_module(changed).is_err(),
+            "post-resolution imported original mutation {mutation} was accepted"
+        );
+    }
+}
+
+#[test]
+fn checked_selected_method_union_retains_two_original_contracts_and_assumptions() {
+    let summary = wrapper_summary_from_source(include_str!(
+        "../../tests/fixtures/checked-foreign-selected/native.ash"
+    ));
+    authenticate(&summary).unwrap();
+    assert_eq!(summary.implementations.len(), 2);
+    assert_eq!(summary.native_symbols.len(), 2);
+    let crate::types::KindedArgument::TypeArg(Type::Tuple(expected)) =
+        &summary.implementations[0].fact.arguments()[0]
+    else {
+        panic!("base head retains two distinct row-bearing function Types");
+    };
+    assert_eq!(expected.len(), 2);
+    assert_ne!(expected[0], expected[1]);
+    let actuals = summary.implementations[0].fact.methods[0]
+        .capture
+        .types(&mut TypeWorkBudget::unbounded())
+        .unwrap()
+        .collect::<Vec<_>>();
+    let forward = Type::Tuple(expected.clone());
+    let reverse = Type::Tuple(Box::new([expected[1].clone(), expected[0].clone()]));
     assert!(
-        crate::elaborate::check_module(missing).is_err(),
-        "post-resolution imported original erasure was accepted"
+        actuals.contains(&&forward) && actuals.contains(&&reverse),
+        "both complete native Type actuals must retain the distinct latent rows"
     );
+    let native_ids = summary
+        .native_symbols
+        .keys()
+        .map(|operation| operation.owner())
+        .collect::<HashSet<_>>();
+    let mut work = TypeWorkBudget::unbounded();
+    let captured = summary.implementations[0].fact.methods[0]
+        .capture
+        .effects(&mut work)
+        .unwrap()
+        .collect::<HashSet<_>>();
+    assert!(
+        native_ids.is_subset(&captured),
+        "both native branch contracts must survive the selected method graph"
+    );
+    let mut authored_members = HashSet::new();
+    for symbol in summary.native_symbols.values() {
+        let checked = symbol.prepared().checked_contract().unwrap();
+        let role = checked
+            .symbols()
+            .iter()
+            .find(|role| role.member_index() == symbol.symbol().member_index())
+            .unwrap();
+        assert_eq!(role.assumption_members().len(), 1);
+        assert!(!role.minimum_assumptions().is_empty());
+        authored_members.insert(role.assumption_members()[0]);
+    }
+    assert_eq!(
+        authored_members.len(),
+        2,
+        "distinct authored assumptions cannot collapse"
+    );
+    assert_eq!(summary.implementations[1].fact.prerequisites.len(), 1);
 }

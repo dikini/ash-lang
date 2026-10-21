@@ -316,6 +316,16 @@ callable graph cannot turn checked native work into an ordinary pure dependency.
 Resident declaration provenance distinguishes native operations from ordinary
 effects even when both have the same apparent signature.
 
+Each exported ordinary implementation view retains its completed defining
+implementation fact through imports and re-exports. Admission compares the
+original implementation and method identities, method binders, complete head,
+head-parameter boundary, prerequisite applications, method schemes, provenance
+and callable summaries. Alternate import routes retain the same original;
+route authorization alone does not establish completed method facts. Independent
+module checking authenticates retained imported implementations again before
+using them as checked evidence. These facts do not supply executable methods;
+linking and Core still authenticate producer correspondence separately.
+
 Summary admission authenticates every retained type-variable identity against
 one defining kinded binder record and derives each nominal constructor kind
 from its ordered parameter records before the dependency facts enter local

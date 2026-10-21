@@ -50,3 +50,23 @@ ordinary ordering rejection, and exact/one-short/prefixed/fresh budgets.
 [Output](selected-core-repaired.log) and [receipt](selected-core-repaired.receipt.json)
 share the same unchanged 522-file source/configuration snapshot. Later complete
 substitution/union/opaque/Core evidence and final checks remain pending.
+
+The later checker-entry repair rejects missing/reminted/stale imported originals
+and coordinated projected capture/table removal after actual consumer resolution.
+The repaired selected batch passes fourteen private/Core controls, including two
+native contracts with distinct authored assumptions, row-bearing Type actuals,
+opaque heads, generic method adapter/prerequisite mutations and identity/fold
+reconstruction. Its final evidence refresh is pending. The
+[affected implementation run](selected-implementation-regressions2.log) passes
+58 tests, including final-unit import refusal without committed route state.
+Its [receipt](selected-implementation-regressions2.receipt.json) and
+[523-file snapshot](implementation-repair-source-configuration.json) retain exact
+inputs. Four preexisting ledger expectations were refreshed for the independently
+paid completed-original comparison; no production check was removed.
+
+Ordinary interface/implementation head arguments remain Type-only. Distinct
+latent rows occur inside the Type actual, and native calls retain their existing
+complete Type/Row vectors. An attempted method-local EffectRow fixture was
+rejected by the existing MethodRowBinder check; this delivery does not enable it.
+Final integration, regressions, Clippy, independent review and acceptance remain
+pending.

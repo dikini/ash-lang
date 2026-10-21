@@ -243,3 +243,50 @@ fn checked_selected_host_ordering_does_not_exempt_unrelated_header_parameters() 
         ValidationReason::Registry
     );
 }
+
+#[test]
+fn checked_selected_core_preserves_transforms_and_rejects_catalog_substitutions() {
+    use crate::core::dialect::MethodEvidenceCatalogMutationForTest as Mutation;
+    let source = format!(
+        "{}\nmain : Unit -> Foreign.CheckedCall<Int>\nmain () = invoke (wrap (wrap (before, after)))\n",
+        include_str!("../../../tests/fixtures/checked-foreign-selected/native.ash")
+    );
+    let (program, graph) = super::foreign_host_tests::original(&source);
+    assert_eq!(validation_work(&program, &graph, None).0, None);
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let modules = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let validated = crate::core::validate_effect_modules(program, &sources, &modules).unwrap();
+    for transform in [
+        crate::core::transform::identity_effect_traversal,
+        crate::core::transform::fold_effect_literal_primitives,
+    ] {
+        let unchanged = transform(&validated).unwrap();
+        assert_eq!(validation_work(&unchanged, &graph, None).0, None);
+    }
+    for mutation in [
+        Mutation::WrongAdapterBinder,
+        Mutation::WrongHeadCount,
+        Mutation::WrongHeadArgument,
+        Mutation::MissingPrerequisite,
+        Mutation::WrongPrerequisiteProducer,
+        Mutation::WrongMethodScheme,
+    ] {
+        let mut changed = crate::core::transform::identity_effect_traversal(&validated).unwrap();
+        assert!(
+            Arc::make_mut(&mut changed.method_evidence).corrupt_for_core_test(mutation),
+            "the selected fixture must contain the mutated role: {mutation:?}"
+        );
+        assert!(
+            validation_work(&changed, &graph, None).0.is_some(),
+            "changed selected method catalog was accepted: {mutation:?}"
+        );
+    }
+}

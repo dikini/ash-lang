@@ -22591,6 +22591,10 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
     resolved
         .authenticate_owner_definitions(type_work)
         .map_err(resolved_build_error)?;
+    resolved
+        .imported_facts()
+        .authenticate_implementation_publications(type_work, constraint_work)
+        .map_err(resolved_build_error)?;
     let checked_interfaces = check_interface_declarations(&resolved, constraint_work)?;
     check_global_requirements(&resolved, &checked_interfaces, constraint_work)?;
     let registry = Arc::new(

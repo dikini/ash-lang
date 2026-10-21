@@ -1,0 +1,67 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi/foreign-adapter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 53.40s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 58 tests
+test evidence::tests::relational_local_implementation_is_admitted_as_one_complete_application ... ok
+test evidence::tests::generic_implementation_parameter_ingress_has_exact_retryable_boundaries ... ok
+test evidence_audit::tests::rejects_unfilled_evidence_nested_in_an_implementation_method_body ... ok
+test evidence::tests::local_and_imported_implementation_ingress_have_exact_atomic_boundaries ... ok
+test evidence::tests::higher_kinded_implementation_ingress_has_exact_atomic_and_scope_boundaries ... ok
+test elaborate::tests::implementation_pair_messages_preserve_import_route_roles ... ok
+test evidence::tests::generic_implementation_instantiates_prerequisites_in_order ... ok
+test evidence::tests::exact_current_implementation_uses_declared_abstract_prerequisites ... ok
+test elaborate::tests::distinct_reexported_implementations_conflict_at_the_first_combined_closure ... ok
+test evidence_validation::tests::rejects_hidden_implementation_method_binder_reused_by_a_global ... ok
+test evidence_validation::tests::generic_implementation_validation_excludes_discarded_head_scope_buffer_work ... ok
+test evidence_validation::tests::rejects_implementation_identity_with_a_non_source_declaration_ordinal ... ok
+test evidence_validation::tests::accepts_exact_current_implementation_with_multiple_distinct_prerequisites ... ok
+test evidence_validation::tests::linked_selection_accepts_a_specific_closed_effectful_implementation_head ... ok
+test evidence_validation::tests::rejects_dependency_private_implementation_forged_into_importer_availability ... ok
+test evidence_validation::tests::accepts_exact_current_implementation_when_no_abstract_requirement_matches_its_head ... ok
+test evidence_validation::tests::exact_current_implementation_authentication_has_an_exact_constraint_limit ... ok
+test evidence_validation::tests::rejects_freshly_instantiated_current_implementation_below_another_node ... ok
+test interface::tests::implementation_and_method_identities_preserve_their_components ... ok
+test interface::tests::implementation_evidence_retains_ordered_substitution_prerequisites_and_methods ... ok
+test evidence_validation::tests::rejects_freshly_instantiated_current_implementation_at_the_selection_root ... ok
+test kind::tests::implementation_prerequisite_only_parameters_reject_effect_rows_during_preflight ... ok
+test evidence_validation::tests::rejects_implementation_method_parameter_kind_mirror_before_core ... ok
+test evidence_validation::tests::rejects_missing_and_reordered_same_typed_implementation_method_slots ... ok
+test parser::project::tests::implementation_shape_requires_logical_lines_between_equations ... ok
+test kind::tests::implementation_head_and_wide_prerequisite_shape_prefixes_are_exact ... ok
+test evidence_validation::tests::rejects_two_hidden_implementation_methods_reusing_one_binder ... ok
+test evidence_validation::tests::rejects_forged_implementation_head_method_partition_before_capability ... ok
+test evidence_validation::tests::rejects_imported_implementation_route_without_its_exact_direct_edge ... ok
+test evidence_validation::tests::rejects_reordered_implementation_head_then_method_binder_relationship ... ok
+test resolve::tests::duplicate_implementation_routes_stage_precedence_without_recloning_the_fact ... ok
+test resolve::module_tests::unselected_implementation_method_corruption_fails_summary_admission ... ok
+test resolved::tests::detached_implementation_prerequisite_index_has_exact_ordered_resource_boundaries ... ok
+test evidence_validation::tests::rejects_linked_implementation_type_scheme_and_provenance_corruption ... ok
+test resolved::tests::detached_implementation_kind_preflight_precedes_prerequisite_pair_classification ... ok
+test resolved::tests::detached_implementation_summary_rejects_both_invalid_prerequisite_relations ... ok
+test resolved::tests::implementation_authorization_comparison_charges_each_visited_hop_pair ... ok
+test resolved::tests::implementation_authorization_order_excludes_source_identity ... ok
+test resolved::tests::freeze_local_implementation_filter_has_exact_constraint_precharge ... ok
+test resolved::tests::implementation_authorization_prepend_has_an_exact_limit ... ok
+test evidence_validation::tests::rejects_unused_inline_and_implementation_registry_binder_mirrors_before_core ... ok
+test resolved::tests::implementation_summary_authentication_has_exact_independent_ledgers ... ok
+test resolve::tests::implementation_selector_index_probes_use_exact_constraint_budgets ... ok
+test resolved::tests::implementation_summary_storage_charges_before_both_reserves ... ok
+test resolved::tests::public_implementation_summary_charges_storage_and_closure_inspection ... ok
+test core::validate::tests::zero_parameter_implementation_domains_have_exact_owner_envelopes ... ok
+test resolved::tests::implementation_authorization_clone_has_an_exact_flat_small_stack_boundary ... ok
+test elaborate::tests::capture_failure_keeps_staged_implementation_selections_private ... ok
+test resolve::module_tests::interface_and_implementation_only_diamonds_compare_hidden_nominal_closure ... ok
+test resolve::tests::wide_implementation_selector_expansion_has_an_exact_constraint_limit ... ok
+test elaborate::provider::tests::external::provider_external_constrained_alias_requires_separate_implementation_imports ... ok
+test elaborate::tests::implementation_capture_abstraction_failure_is_stack_safe_and_retryable ... ok
+test resolved::tests::checker_view_implementation_head_binders_have_an_exact_atomic_budget ... ok
+test resolve::tests::imported_implementation_kinded_head_retention_is_exact_and_atomic ... ok
+test resolve::tests::late_implementation_errors_discard_deep_groups_on_a_small_stack ... ok
+test resolve::module_tests::globals_and_implementation_methods_share_capture_scans_per_import_edge ... ok
+test resolved::tests::implementation_prerequisite_binder_containment_is_linear_exact_and_retryable ... ok
+test evidence::tests::wide_local_and_imported_implementation_closures_have_exact_retryable_boundaries ... ok
+
+test result: ok. 58 passed; 0 failed; 0 ignored; 0 measured; 1932 filtered out; finished in 0.88s
+

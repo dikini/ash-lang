@@ -17481,11 +17481,11 @@ mod tests {
         // canonical Token definition is header+Source-Origin 2. Two one-hop
         // prepends and the effective/public hop comparisons complete the route.
         const PUBLIC_DUPLICATE_CONSTRAINT_WORK: usize =
-            1 + 1 + (2 + 2 + 2 + 1 + 7 + 6) + 2 + 1 + 1 + 1 + 1;
+            1 + 1 + (2 + 2 + 2 + 1 + 7 + 6) + 2 + 1 + 1 + 1 + 1 + 18;
         // A private-to-public promotion replaces the public hop comparison with
         // one public-order/rank reservation cell, so its exact total is equal.
         const PUBLIC_PROMOTION_CONSTRAINT_WORK: usize =
-            1 + 1 + (2 + 2 + 2 + 1 + 7 + 6) + 2 + 1 + 1 + 1 + 1;
+            1 + 1 + (2 + 2 + 2 + 1 + 7 + 6) + 2 + 1 + 1 + 1 + 1 + 18;
 
         let fixture = ImportBudgetFixture::create(ENTRY, DEPENDENCY);
         let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
@@ -17520,6 +17520,8 @@ mod tests {
             );
         }
         let capture_work = capture_work.used();
+        // One completed-original header and two independent capture comparisons.
+        let comparison_type_work = 1 + 2 * capture_work;
         assert!(capture_work > 0);
         let token = summary
             .nominal("Token")
@@ -17591,7 +17593,7 @@ mod tests {
             public_baseline.1,
             vec![(token, ImportedTypeAccess::Hidden, Vec::new())],
         );
-        duplicate.type_work = TypeWorkBudget::with_limit(capture_work - 1);
+        duplicate.type_work = TypeWorkBudget::with_limit(comparison_type_work - 1);
         duplicate.constraint_work =
             InterfaceConstraintBudget::with_limit(PUBLIC_DUPLICATE_CONSTRAINT_WORK);
         let error = duplicate
@@ -17605,7 +17607,7 @@ mod tests {
         assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
         assert_eq!(snapshot(&duplicate), public_baseline);
 
-        duplicate.type_work = TypeWorkBudget::with_limit(capture_work);
+        duplicate.type_work = TypeWorkBudget::with_limit(comparison_type_work);
         duplicate.constraint_work =
             InterfaceConstraintBudget::with_limit(PUBLIC_DUPLICATE_CONSTRAINT_WORK - 1);
         let error = duplicate
@@ -17621,10 +17623,10 @@ mod tests {
             duplicate.constraint_work.used(),
             PUBLIC_DUPLICATE_CONSTRAINT_WORK - 1,
         );
-        assert_eq!(duplicate.type_work.used(), capture_work);
+        assert_eq!(duplicate.type_work.used(), comparison_type_work);
         assert_eq!(snapshot(&duplicate), public_baseline);
 
-        duplicate.type_work = TypeWorkBudget::with_limit(capture_work);
+        duplicate.type_work = TypeWorkBudget::with_limit(comparison_type_work);
         duplicate.constraint_work =
             InterfaceConstraintBudget::with_limit(PUBLIC_DUPLICATE_CONSTRAINT_WORK);
         duplicate
@@ -17639,7 +17641,7 @@ mod tests {
             duplicate.constraint_work.used(),
             PUBLIC_DUPLICATE_CONSTRAINT_WORK,
         );
-        assert_eq!(duplicate.type_work.used(), capture_work);
+        assert_eq!(duplicate.type_work.used(), comparison_type_work);
         assert_eq!(snapshot(&duplicate), public_baseline);
 
         let mut promotion = Resolver::new(entry.id());
@@ -17654,7 +17656,7 @@ mod tests {
         let private_baseline = snapshot(&promotion);
         assert!(private_baseline.0[0].2.is_none());
         assert!(private_baseline.4.is_empty());
-        promotion.type_work = TypeWorkBudget::with_limit(capture_work);
+        promotion.type_work = TypeWorkBudget::with_limit(comparison_type_work);
         promotion.constraint_work =
             InterfaceConstraintBudget::with_limit(PUBLIC_PROMOTION_CONSTRAINT_WORK - 1);
         let error = promotion
@@ -17670,10 +17672,10 @@ mod tests {
             promotion.constraint_work.used(),
             PUBLIC_PROMOTION_CONSTRAINT_WORK - 1,
         );
-        assert_eq!(promotion.type_work.used(), capture_work);
+        assert_eq!(promotion.type_work.used(), comparison_type_work);
         assert_eq!(snapshot(&promotion), private_baseline);
 
-        promotion.type_work = TypeWorkBudget::with_limit(capture_work);
+        promotion.type_work = TypeWorkBudget::with_limit(comparison_type_work);
         promotion.constraint_work =
             InterfaceConstraintBudget::with_limit(PUBLIC_PROMOTION_CONSTRAINT_WORK);
         promotion
@@ -17688,7 +17690,7 @@ mod tests {
             promotion.constraint_work.used(),
             PUBLIC_PROMOTION_CONSTRAINT_WORK,
         );
-        assert_eq!(promotion.type_work.used(), capture_work);
+        assert_eq!(promotion.type_work.used(), comparison_type_work);
         let promoted = snapshot(&promotion);
         assert_eq!(promoted.0.len(), 1);
         assert_eq!(promoted.1, private_baseline.1);
@@ -20467,7 +20469,8 @@ mod tests {
             + (HEAD_RECORDS + KIND_NODES + VALUE_CELLS)
             + ARGUMENT_CELLS
             + 1 // retained head spelling
-            + 2 * (DEPTH + 1); // full retained head provenance
+            + 2 * (DEPTH + 1) // full retained head provenance
+            + 2; // completed original authentication and retained Arc reference
         const ENTRY: &str = "import dependency (impl Marker)\n";
         const DEPENDENCY: &str = "pub interface Marker<A> {\nmark : A -> A\n}\n";
 
