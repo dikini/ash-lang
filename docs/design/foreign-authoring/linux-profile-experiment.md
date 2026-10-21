@@ -6,6 +6,13 @@ F2 in its [plan](../../tasks/plans/checked-ffi-regions-control.md#f2-validate-th
 The 2026-10-21 launch authorizes local preparation and nonprivileged probes.
 It accepts no architecture or semantics and permits no product implementation.
 
+The later independently reviewed scalar architecture choice is
+[AD-0015](../../decisions/AD-0015-linux-scalar-inprocess-whole-images.md), with
+[conditional source/provenance evidence](linux-inprocess-probe/scalar-closure/README.md).
+This is partial F2 architecture acceptance only. These experiment records remain
+bounded evidence; strict per-image approval and production enforcement are
+pending, and isolated/SQLite/owner scope remains open.
+
 ## Question and comparison
 
 Can the proposed [Linux launch profile](minimal-ffi-launch-and-artifacts.md)

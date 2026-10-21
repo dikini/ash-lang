@@ -59,7 +59,7 @@ and [F2 experiment contract](../design/foreign-authoring/linux-profile-experimen
 with [Stage A observations](../design/foreign-authoring/linux-profile-probe/README.md).
 P0 confirms the pinned Main foundations; the original source planning tree remains unsuitable as
 a product restart point. IDs were checked against available full Git history;
-CP-0024 is new. No AD was created or accepted.
+CP-0024 was new. That initial preparation created or accepted no AD.
 
 Independent review repairs now specify exact checked-native subtraction, concrete
 checked call/finish/report codecs, explicit H-selected byte/copy primitives,
@@ -83,12 +83,23 @@ and linked-input provenance. No image execution accompanied packaging. Retained
 libc loader paths leave the proposed no-loading requirement unmet. A separately
 [approved diagnostic](../design/foreign-authoring/linux-inprocess-probe/generated-ash/diagnostic-addendum.md)
 observes host `Returned(7)` and sandbox EACCES with reaping under explicit
-known-loading/host-trust premises. Final evidence review remains pending. This accepts no AD,
-F2 checkbox or product execution authority.
+known-loading/host-trust premises. Independent evidence review cleared that
+bounded scope; those observations supply no strict per-image approval or product
+execution authority.
 
-Remaining: current PR retention/review, concrete delegated Linux controls and
-Stage B enforcement evidence, F2 architecture acceptance, product implementation
-and all product gates. Stage A is environmental evidence,
+On 2026-10-21 the orchestrator accepted independently reviewed
+[AD-0015](../decisions/AD-0015-linux-scalar-inprocess-whole-images.md) under the
+user's delegation: owner-free scalar GNU in-process mechanisms, explicit trusted
+closure premises and before-startup refusal obligations. The
+[acceptance readback](../design/foreign-authoring/linux-inprocess-probe/scalar-closure/acceptance-receipt.json)
+pins the reviewed proposal/example. This is partial F2 architecture acceptance;
+strict per-image approval, protected store/context enforcement and connected
+F4/F6 product evidence remain pending. Isolated, owner/resource and SQLite scope
+are excluded, and whole F2 criteria remain unchecked.
+
+Remaining: concrete delegated Linux controls and Stage B enforcement evidence,
+isolated/SQLite/owner scope, product implementation and all product gates.
+Stage A is environmental evidence,
 not isolated-profile validation. F-core (F3/F4/F6 connected) remains the next full
 workspace checkpoint; the orchestrator owns scheduling and build serialization.
 No full product gate is claimed for these project-management documents.

@@ -1,0 +1,95 @@
+# Exact GNU runtime closure audit — conditional finding
+
+**PROPOSED; strict no-runtime-loading gate remains open.** The current evidence
+supports a narrower C-locale exclusion argument for gettext/gconv, not a complete
+all-path no-loading proof for this generated Ash image. No new build or execution
+was performed. Retained loader code is not evidence that a module was loaded.
+
+## Installed build and source correspondence
+
+Installed libc6, libc6-dev and libc-bin identify source `glibc 2.43-2ubuntu2.4`.
+The actual linked libc.a is SHA256
+`2a277b999268f100c5f838689704b7432e9b1fdac76bf0cbda83cdbbaecc89e2`;
+crt1.o is `7b5004088b875754a5cd83f92fa7149c95f807c6d4663330828970c4c84e660e`.
+Both match the previously retained link-input census and installed package MD5
+records. This establishes local package/link correspondence, not a reproducible
+source-to-binary build or independent package authenticity proof.
+
+The [official Ubuntu source index](https://packages.ubuntu.com/en/source/resolute-updates/i386/glibc)
+lists that exact revision. Its [source import](https://git.launchpad.net/ubuntu/+source/glibc/tag/?h=import/2.43-2ubuntu2.4)
+is commit `bcb78c375b4d83d05825482edc665379b01f0c96`, explicitly **patches unapplied**.
+Bounded source pages, common/Ubuntu/security/locale patches, series and changelog
+are retained locally. Patch-header review found no direct changes to the audited
+global-locale, setlocale/uselocale, dcigettext, strerror, abs, or exit files.
+Ubuntu's alternate locale-directory patch changes intl/l10nflist.c. git-updates
+changes loader startup/tunables and static-PIE support; these require build-path
+review even though they do not directly alter the C-locale gettext branch.
+No patched tree was assembled. Architecture-specific and localedata patches were
+not exhaustively assessed; no claim covers all generated configuration/build
+choices or transitive source behavior.
+
+## What the source supports
+
+- [global-locale.c](https://git.launchpad.net/ubuntu/+source/glibc/plain/locale/global-locale.c?id=bcb78c375b4d83d05825482edc665379b01f0c96)
+  initializes global categories to built-in C objects and thread locale to that
+  global object. Empty environment prevents environment-selected tunables/locale
+  values at the reviewed launch; it does not prevent later code changing state.
+- [dcigettext.c](https://git.launchpad.net/ubuntu/+source/glibc/plain/intl/dcigettext.c?id=bcb78c375b4d83d05825482edc665379b01f0c96)
+  uses current category locale; in C it ignores LANGUAGE and stops before domain
+  lookup. Therefore its downstream catalog conversion/gconv loader route is
+  excluded **if current locale remains C throughout those calls**. This is a
+  source conditional, not a premise established for every runtime path.
+- Rust 1.97.1 std error_string calls __xpg_strerror_r. The exact map connects that
+  symbol to xpg-strerror.o, _strerror.o and localization. _strerror.c translates
+  known and unknown error messages through gettext, so IO/error paths can use
+  the C-locale branch; ignoring error paths would be incorrect.
+- setlocale can mutate the global locale; newlocale can construct locale objects
+  and uselocale can select a thread locale. Direct iconv/gconv requests and wide-character conversion are
+  separate routes: C-locale gettext does not exclude arbitrary explicit charset
+  conversion. abs(-7) itself is a simple integer operation with no loader call.
+- libc-start performs tunables, IFUNC/TLS/early init and constructor processing
+  before main. Early init includes ctype, pthread, randomness and malloc setup.
+  The actual image has no .preinit_array; its three .init_array entries resolve
+  to Rust argv initialization, frame_dummy, and _IO_stdfiles_init. argv wrapper
+  disassembly only stores argc/argv. The two .fini_array entries are global
+  destructor and registered-frame cleanup. These arrays narrow the audit but
+  do not enumerate every runtime registration or indirect callback.
+- exit.c invokes registered callbacks/TLS destructors and stdio cleanup. Those
+  registrations and Rust panic/drop/unwind paths still need closure review.
+  The image uses static libgcc_eh. Exact libc backtrace/unwind-link and NSS entry
+  names checked in nm are absent; Rust backtrace code is retained. Name absence
+  and existing direct-call scans do not prove absence of alias/indirect routes.
+  Rust weak dlsym lookup for pthread_get_minstack is symbol lookup, not itself
+  loading a module, and should not be conflated with dlopen.
+
+## Smallest justified outcome and remaining obligations
+
+Keep the proposed GNU scalar profile and strict gate pending. A promising fixed
+closure policy could require preserved built-in C locale, no explicit loading,
+no locale replacement, no arbitrary charset conversion or NSS/native extension,
+reviewed startup/finalizers, and exact pinned runtime/native inputs. These are
+additional review obligations inside the existing no-loading requirement; they
+cannot be declared sufficient because the happy path returned 7. Approval must
+bind the reviewed closure and launch correspondence; an unreviewed or changed
+image/context must refuse. Native integrity remains a trusted in-process premise.
+
+The next useful unit of work is an independent review of this finite closure
+claim, including (1) exact distribution patch/configuration and precompiled Rust
+source correspondence; (2) all relevant constructor, runtime registration,
+error/panic/unwind/shutdown and indirect calls preserving C locale and excluding
+other loader entry routes; (3) an auditable admission/approval predicate for the
+reviewed artifact class. Missing nine compiler intermediate objects limit the
+current correspondence census. This audit has not discharged those obligations.
+Do not demand a new build before establishing which missing artifact or runtime
+change a reviewer actually needs. If the closure cannot be justified, keep it
+blocked and propose a separately approved runtime/toolchain experiment.
+
+A syscall trace can expose an actual load in a selected run, but absence in a
+trace cannot complete this proof. No trace, host restriction, linker interposer,
+seccomp change, package installation or profile relaxation is proposed here.
+SQLite, isolated-worker controls, F4/F6 enforcement and whole F2 remain separate
+pending obligations. The previous architecture draft remains unchanged.
+
+`audit-input-manifest.json` pins the local pages, metadata and inspection inputs.
+Some intentionally failed URL probes are recorded in page manifests; neither a
+404 nor an unapplied source file is silently treated as the installed final source.

@@ -205,7 +205,12 @@ explicit delegation on 2026-10-21. Product evidence remains pending.
 
 Current preparation: [bounded experiment contract](../../design/foreign-authoring/linux-profile-experiment.md)
 and [Stage A evidence](../../design/foreign-authoring/linux-profile-probe/README.md).
-Stage B, accepted architecture and production realization remain pending.
+[AD-0015](../../decisions/AD-0015-linux-scalar-inprocess-whole-images.md) accepts
+only owner-free scalar GNU in-process mechanisms, explicit trusted closure and
+refusal obligations after reviewed packaging/source/diagnostic evidence. Strict
+per-image approval, protected store/context/F6 enforcement, isolated Stage B,
+SQLite and owner/resource evidence remain pending. No whole F2 criterion is
+completed by this partial architecture decision.
 
 - Outcome: a tested, accepted Linux x86-64 executor architecture and explicit
   deployment prerequisites for in-process and isolated checked images.
