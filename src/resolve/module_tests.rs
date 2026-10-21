@@ -1438,7 +1438,7 @@ fn fused_constructor_payload_clone_preserves_first_nominal_occurrence_order() {
     // nominal insertions cost two each. Three prepared nominal actions and one
     // staged constructor action cost four, while the four-cell payload,
     // six-cell physical scheme, and constructor-map record cost eleven.
-    const EXACT_TYPE_WORK: usize = 22;
+    const EXACT_TYPE_WORK: usize = 23;
     // The owner shape and one family-plan action cost three Constraint cells.
     // The six-cell scheme observes three unique nominal identities for twelve;
     // the four-cell payload observes no new identity. Two absent foreign

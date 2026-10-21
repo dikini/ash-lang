@@ -5186,6 +5186,11 @@ impl ImportedFacts {
                 work,
                 constraints,
             )?;
+            authenticate_constructor_domain(
+                constructor.payload.as_ref(),
+                &constructor.scheme,
+                constraints,
+            )?;
             authenticate_constructor_scheme_parts(
                 constructor.id,
                 constructor.payload.as_ref(),
@@ -10210,6 +10215,28 @@ fn authenticate_constructor_scheme(
     )
 }
 
+// Summary admission authenticates this exact mirror in its paid fused
+// kind walk. The independent imported checker entry has no such walk, so it
+// compares the domain separately before retaining the same scheme invariant.
+fn authenticate_constructor_domain(
+    payload: Option<&Type>,
+    scheme: &ConstrainedScheme,
+    constraints: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<(), ResolvedBuildFailure> {
+    match (payload, scheme.value_type()) {
+        (Some(payload), Type::Function(domain, _)) => {
+            if !same_type_with_constraint_budget(payload, domain, constraints)
+                .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+        }
+        (Some(_), _) => return Err(ResolvedBuildFailure::InvalidState),
+        (None, _) => {}
+    }
+    Ok(())
+}
+
 fn authenticate_constructor_scheme_parts(
     id: ConstructorId,
     payload: Option<&Type>,
@@ -10223,14 +10250,7 @@ fn authenticate_constructor_scheme_parts(
         return Err(ResolvedBuildFailure::InvalidState);
     }
     let result = match (&payload, scheme.value_type()) {
-        (Some(payload), Type::Function(domain, result)) => {
-            if !same_type_with_constraint_budget(payload, domain, constraint_work)
-                .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
-            {
-                return Err(ResolvedBuildFailure::InvalidState);
-            }
-            result.as_ref()
-        }
+        (Some(_), Type::Function(_, result)) => result.as_ref(),
         (None, result) => result,
         (Some(_), _) => return Err(ResolvedBuildFailure::InvalidState),
     };
@@ -15705,6 +15725,29 @@ impl ExportSummary {
             return self.constructors.get(spelling);
         }
         self.hidden_constructors.get(&id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn share_constructor_original_for_test(
+        &mut self,
+        original: &Self,
+        id: ConstructorId,
+    ) {
+        let retained = original
+            .constructor_by_id(id)
+            .unwrap()
+            .original
+            .as_ref()
+            .unwrap()
+            .retain(&mut TypeWorkBudget::default())
+            .unwrap();
+        let projection = self
+            .constructors
+            .values_mut()
+            .chain(self.hidden_constructors.values_mut())
+            .find(|fact| fact.id == id)
+            .unwrap();
+        projection.original = Some(retained);
     }
 
     #[cfg(test)]

@@ -83,3 +83,34 @@ and has unequal input maps; it is not a frozen receipt or transferred evidence.
 The retained repeat has equal before/after inputs. A faithful fused row guard
 must precede removing any overlapping comparison; empty-row equivalence and the
 independent checker-entry comparison must remain.
+
+## Repair and verification checkpoint
+
+The fused guard rejects a mixed pure/effectful mirror when the effectful row is
+nonempty, including an open tail. Empty-row function presentations remain
+equivalent; two effectful presentations keep their existing complete paid row
+comparison. Summary admission always runs this fused kind/domain proof on a
+unique constructor, while aliases compare complete schemes against it.
+Imported checker entry separately pays exact domain comparison. The original
+payload correspondence is independent in both paths. Defaults are unchanged.
+
+Original references use pointer identity and bounded debug output. Local
+completed publication retains the defining registry; import/re-export only
+forwards it. The backing never supplies absent projected kinds or constructor
+access. The reference unit is prepaid in the complete import transaction before
+staging or route commits. Existing iterative registry teardown covers its last
+owner. Injected ledger fixtures share one explicitly constructed original;
+unchanged sibling projections reuse it so late-conflict tests reach their
+intended second witness rather than a first unrelated original.
+
+The `intermediate-original` records preserve the earlier 12+4 controls,
+constructor 78/89 and image 16/16 observations with their uniform input map.
+Applying `source.patch` to `e4569dc` reconstructs every one of those 562 input
+hashes; `reconstruction.json` records that verification. These records precede
+the fused-row and fixture corrections and are not final passes.
+
+At the later `6194ac5c...` snapshot, all eight test commands pass with 331
+distinct test names, including constructor 90/90 and images 16/16. The Clippy
+command still fails solely on a needless Box replacement in the test-only
+scheme mutation. Its raw refusal/map is in `pre-lint-fix`. Final uniform
+verification after that allocation cleanup remains pending.

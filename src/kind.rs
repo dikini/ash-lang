@@ -5156,6 +5156,27 @@ impl<'a> KindEnvironments<'a> {
                                     ));
                                 }
                             };
+                            // Pure and effectful function presentations agree
+                            // only when the latter has an empty latent row.
+                            // The enclosing synthesis cell owns this fixed
+                            // shape/empty-row check; actual row pairs below
+                            // still pay their complete comparison traversal.
+                            match (ty, type_mirror) {
+                                (
+                                    Type::Function(_, _),
+                                    Some(Type::EffectfulFunction(_, mirror)),
+                                )
+                                | (
+                                    Type::EffectfulFunction(_, mirror),
+                                    Some(Type::Function(_, _)),
+                                ) if !mirror.effects().is_empty() => {
+                                    return Err(KindFailure::internal_cause(
+                                        span,
+                                        KindInternalCause::LinkedComputationRow,
+                                    ));
+                                }
+                                _ => {}
+                            }
                             if let Type::EffectfulFunction(_, computation) = ty {
                                 if let Some(Type::EffectfulFunction(_, mirror)) = type_mirror {
                                     let equal = same_effect_rows_with_charge(
