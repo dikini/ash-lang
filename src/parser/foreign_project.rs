@@ -65,6 +65,9 @@ pub(super) fn validate_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<()
         NodeKind::ForeignLibrary => {
             shape.optional_token(&TokenKind::Pub)?;
             word(&mut shape, "foreign")?;
+            if at_word(&shape, "checked") {
+                word(&mut shape, "checked")?;
+            }
             word(&mut shape, "library")?;
             upper(&mut shape)?;
             shape.token(&TokenKind::LeftBrace)?;
@@ -544,6 +547,9 @@ pub(super) fn library(
     require_kind(node, NodeKind::ForeignLibrary)?;
     Ok(SurfaceForeignLibrary {
         public: direct_tokens(node, tokens).any(|token| token.kind == TokenKind::Pub),
+        checked: direct_tokens(node, tokens)
+            .find(|token| matches!(&token.kind, TokenKind::Identifier(word) if word == "checked"))
+            .map(|token| token.span),
         name: first_name(node, tokens)?,
         members: child_nodes(node)
             .map(|child| member(source, child, tokens))

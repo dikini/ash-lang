@@ -65,7 +65,7 @@ effect_declaration ::=
 effect_operation ::= identifier ":" type ;
 
 foreign_library_declaration ::=
-  [ "pub" ] "foreign" "library" upper_identifier
+  [ "pub" ] "foreign" [ "checked" ] "library" upper_identifier
   "{" line_end foreign_member
   { line_end foreign_member } [ line_end ] "}" ;
 foreign_member ::=
@@ -324,6 +324,11 @@ boolean ::= "true" | "false" ;
 unit ::= "(" ")" ;
 line_end ::= /logical-newline-in-module-or-block-context/ ;
 ```
+
+The contextual `checked` library marker records explicit checked-profile intent.
+This implementation checkpoint retains its source span but refuses the declaration
+before legacy foreign ABI preparation. It grants no checked host or native
+execution authority; the remaining checked profile forms are not yet admitted.
 
 `line_end` is the logical boundary defined by [lexical
 structure](lexical-structure.md#whitespace-and-logical-lines). Imports must

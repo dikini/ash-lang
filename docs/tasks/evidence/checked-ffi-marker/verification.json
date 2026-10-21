@@ -1,0 +1,67 @@
+{
+  "scope": "TASK-0051 initial marker/refusal subset only; F3 and product full gates pending",
+  "date": "2026-10-21",
+  "reviewed_preparation_head": "df62557aafddc9f987fbe5b692d15de57d76b0af",
+  "retained_preparation": "7f65e3139ca752711304181e90958805954ded38",
+  "preparation_tree": "fe0faa84fb3dc4ce6db6c20378af352db66ec8ee",
+  "source_equality": "Retained preparation and reviewed head have identical trees; dirty tracked/index/untracked content unchanged by branch-ref synchronization.",
+  "compiler": "rustc 1.97.1 (8bab26f4f68e0e26f0bb7960be334d5b520ea452), LLVM22.1.6, x86_64-unknown-linux-gnu",
+  "environment": {
+    "RUSTC_WRAPPER": "",
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target"
+  },
+  "cache": "Reuse compatible prior artifacts; no source mutation in older product checkout, no cargo clean.",
+  "observed_red": [
+    {
+      "test": "checked_library_prefix_parses_without_changing_legacy_declaration_words",
+      "result": "Unsupported parser token before implementation; exit101."
+    },
+    {
+      "test": "checked_library_cannot_enter_legacy_abi_preparation",
+      "result": "After parser-only change legacy preparation incorrectly returned PreparedForeignLibrary; exit101."
+    },
+    {
+      "test": "checked_library_is_rejected_before_legacy_module_admission",
+      "result": "After parser-only change run_path incorrectly returned integer42; exit101."
+    }
+  ],
+  "green_checks": [
+    {
+      "command": "cargo test -p ash --locked --test foreign_source_syntax --test foreign_source_contracts --test foreign_source_admission",
+      "result": "exit0; 35 passed (10 syntax,12 contract,13 admission); test profile compile28.83s."
+    },
+    {
+      "command": "cargo clippy -p ash --locked --lib --test foreign_source_syntax --test foreign_source_contracts --test foreign_source_admission -- -D warnings",
+      "result": "exit0; dev profile49.75s."
+    },
+    {
+      "command": "cargo fmt --all --check",
+      "result": "exit0."
+    },
+    {
+      "command": "markdownlint --disable MD013 -- spec/syntax.md spec/static-semantics.md docs/tasks/TASK-0051-checked-ffi-contract-carriers.md docs/tasks/plans/checked-ffi-contract-carriers.md",
+      "result": "exit0 after removing added blank line."
+    },
+    {
+      "command": "git diff --check",
+      "result": "exit0."
+    }
+  ],
+  "setup_failure": "Initial Cargo attempt with configured sccache wrapper refused before rustc with sandbox EPERM; retried with empty RUSTC_WRAPPER, without changing global configuration.",
+  "files_sha256": {
+    "src/parser/foreign_grammar.rs": "e1953dc4def083fe8d096d4711074143725f704ceeb3fda13e0957b3777769ee",
+    "src/parser/foreign_project.rs": "2c50fb7419b2da8040cc105c23749d47c29cf88969801845371bdffdd58d7722",
+    "src/surface/foreign.rs": "cb2e5fd5c92dd843d6838941bac3b4542e90a733501c27fc7f231ade82c80495",
+    "src/foreign/source_contract.rs": "ec8146d12f8db35d351fa540bfcbd9ce69576dbf4d18a45196f666a61d79b48b",
+    "tests/foreign_source_syntax.rs": "212b348e92e4d1badf00f42125c591434a972e5f7b78f0c81b48962157b0f1c1",
+    "tests/foreign_source_contracts.rs": "54e61fca67985fe31606d003ff32a145914239f3b8c57d2bf6821efdde90ca60",
+    "tests/foreign_source_admission.rs": "31fa881f79d7ccff70fdf53a44656621b7920251905a2356525ef216f574e630",
+    "spec/syntax.md": "0bd32a7d6304f58da050e9864036653921846ce1b6df84727f0dec0accc6c781",
+    "spec/static-semantics.md": "954666faa6b5b099d10b68d6015f96c75247be74e0a45f6c59d43acc66b2dfff",
+    "Cargo.toml": "2d1a3d056418f5feb2e36d3ff99924e30f6a9136900b7aa2bb73ead902a1395c",
+    "Cargo.lock": "26be4499e4330e8146d024cfbf6950f6e711edc5909c9a700ec0f2ed58749e08",
+    "rust-toolchain.toml": "cdb9bea833b62d4c26fbba417000b2929746d667ba25ad4eee40dfa61aa75a89",
+    ".cargo/config.toml": "2eb887744ac35113f513a449e09d637cf4ae0e08e8361bd7b3401e41e37051f9"
+  }
+}

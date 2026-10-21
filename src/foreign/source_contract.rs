@@ -924,6 +924,12 @@ pub(crate) fn prepare_foreign_library_with_budget(
     work: &mut TypeWorkBudget,
 ) -> Result<PreparedForeignLibrary, ForeignContractError> {
     charge(work, source.members.len(), source.span)?;
+    if let Some(checked) = source.checked {
+        return Err(failure(
+            ForeignContractReason::UnimplementedContract,
+            checked,
+        ));
+    }
     let mut profile = false;
     let mut representation_count = 0;
     let mut constant_count = 0;
