@@ -100,3 +100,12 @@ private root and exclusive quota-backed storage, reviewed default-deny syscall
 policy, actual limits, termination/reaping under faults, and real SQLite cases.
 Root/storage access, capabilities in the namespace, and an available cgroup
 hierarchy do not discharge those obligations. No F2 architecture is accepted.
+
+## Separate in-process pinning evidence
+
+A later [trusted static reporter comparison](../linux-inprocess-probe/README.md)
+tests exact approved immutable image execution independently of this worker
+preflight. It does not clear the worker credential blocker or establish isolated
+Stage B, SQLite, generated Ash packaging or an accepted architecture. The
+[scope split](../linux-inprocess-probe/requirements.md) records narrow in-process
+architecture prerequisites and downstream product evidence separately.

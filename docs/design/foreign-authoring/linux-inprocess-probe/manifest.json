@@ -1,0 +1,76 @@
+{
+  "base_commit": "bdae57436e33158c931b740886f05ad335b98106",
+  "derived_artifacts": {
+    "docs/design/foreign-authoring/linux-inprocess-probe/elf-report.txt": {
+      "source_report_sha256": "709074a9254762133e011c90379b39e894a76a25158cdff330d664070cff0b57",
+      "transformation": "Removed trailing whitespace from each line and added an explicit provenance header; no ELF field changed."
+    }
+  },
+  "execution_inputs": "All recorded source/receipt/approval/observation bytes preserved from frozen experiment. Later packaging/addendum/prose is distinguished. No new execution for packaging.",
+  "files": {
+    "docs/design/foreign-authoring/linux-inprocess-probe/README.md": {
+      "sha256": "db3e238828a8e387c0b548973c09a6a14da5d453ec972af083295fd9945dc482",
+      "size": 6995
+    },
+    "docs/design/foreign-authoring/linux-inprocess-probe/approval-addendum.json": {
+      "sha256": "acc36f2365b5ba19419955f944954ffb4038abd20fcffed1760cc36e2dfefc5a",
+      "size": 1538
+    },
+    "docs/design/foreign-authoring/linux-inprocess-probe/elf-report.txt": {
+      "sha256": "8389b14d112fcac0963d8b14f74ab0eba365717ae137fa9f50fd44518f1df970",
+      "size": 3132
+    },
+    "docs/design/foreign-authoring/linux-inprocess-probe/link-map-inputs.txt": {
+      "sha256": "deb0ee6d564165d8722ad63c5043b24811c9a203baf996c957f52272affa2cb4",
+      "size": 1313
+    },
+    "docs/design/foreign-authoring/linux-inprocess-probe/recorded/build.sh": {
+      "sha256": "391924aa60ae12764b3458176afc6d58d0c64fab4aa3c8fda7aace391fcc4487",
+      "size": 532
+    },
+    "docs/design/foreign-authoring/linux-inprocess-probe/recorded/host-observation.json": {
+      "sha256": "ad7a297f0c3b756b835c09e39c566dafa65166feee7572515aa0fac3ca69dc7f",
+      "size": 2941
+    },
+    "docs/design/foreign-authoring/linux-inprocess-probe/recorded/make_receipt.py": {
+      "sha256": "d4b3ede045032897f6e387941c9c26bec7d72d0c1cc8c55faa5479f158183184",
+      "size": 1884
+    },
+    "docs/design/foreign-authoring/linux-inprocess-probe/recorded/operator-approval.json": {
+      "sha256": "35bb4b2e53c1114d6becf715698926ddf5431e3cf20e7f22867a362e97e004e0",
+      "size": 939
+    },
+    "docs/design/foreign-authoring/linux-inprocess-probe/recorded/pin_probe.py": {
+      "sha256": "18f436df469383d91d9c2403036b836a42fabf045825994e8031ea3179abf29c",
+      "size": 8774
+    },
+    "docs/design/foreign-authoring/linux-inprocess-probe/recorded/producer-receipt.json": {
+      "sha256": "a380fb87183305c4f31e5f5b15ce3f91dee88b6b78906a5752d633550e424c8b",
+      "size": 11928
+    },
+    "docs/design/foreign-authoring/linux-inprocess-probe/recorded/reporter.c": {
+      "sha256": "88dfecf08c04f2806077c762213c805e8a407f6bd94cdf9b17a6929ee4ce233c",
+      "size": 486
+    },
+    "docs/design/foreign-authoring/linux-inprocess-probe/recorded/sandbox-observation.json": {
+      "sha256": "99530811e8f61fa2c7f0895119a443022e0a39a88aaf1ec96baa67a480341cb2",
+      "size": 2938
+    },
+    "docs/design/foreign-authoring/linux-inprocess-probe/requirements.md": {
+      "sha256": "58990cf7a6db355a8af80a9f188a0232c4d5bcf640a049c634f8df738d3fe522",
+      "size": 4576
+    },
+    "docs/design/foreign-authoring/linux-profile-experiment.md": {
+      "sha256": "ed5917561091392fdc5269b7a28759d0ea398066c2739e8f18d82fbd9b800103",
+      "size": 8224
+    },
+    "docs/design/foreign-authoring/linux-profile-probe/README.md": {
+      "sha256": "90e9f298089143f2c95dcfaee2efb122efa5a40d13b6bdd98b34163ac7cf35e4",
+      "size": 6714
+    }
+  },
+  "frozen_experiment_manifest_sha256": "9c8e747a32b4410791cad774f64ba0be18d751ce35fb089f183f5e2d1b197388",
+  "omitted_artifacts": "Original raw readelf report, binaries, objects, system headers and complete link maps omitted; original hashes are retained, with compact LOAD records and exact rebuild commands. Missing original bytes cannot be recovered from hashes alone.",
+  "scope": "F2 trusted static reporter/pinning evidence only; no architecture or runtime acceptance",
+  "version": 1
+}

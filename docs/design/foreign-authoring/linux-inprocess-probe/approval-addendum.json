@@ -1,0 +1,18 @@
+{
+  "authority": "root task, acting under user autonomous recommended-choice delegation",
+  "authorization_readback": "Root independently inspected reporter source and hashes, explicitly approved the exact receipt and images for the bounded trusted pinning experiment, and authorized normal host-tool escalation of the same exact artifacts outside the filesystem sandbox. No isolation, policy modification or other executable was authorized.",
+  "correction": "The original approval limitation sandbox local evidence only is incomplete for the subsequent separately authorized host observation. The original record was used by both recorded harness runs; it is retained unchanged, not replaced or backdated.",
+  "images": {
+    "A": "4fa38655bf249a6e9a10c37da914f00ca391160261cf8eaa3c7b6f407e3eb248",
+    "B": "c338f484f853f1f8706ace538269a68c51cd5625c6cfc189f36211e534b76798"
+  },
+  "observed_files": {
+    "host-observation.json": "ad7a297f0c3b756b835c09e39c566dafa65166feee7572515aa0fac3ca69dc7f",
+    "sandbox-observation.json": "99530811e8f61fa2c7f0895119a443022e0a39a88aaf1ec96baa67a480341cb2"
+  },
+  "original_approval_sha256": "35bb4b2e53c1114d6becf715698926ddf5431e3cf20e7f22867a362e97e004e0",
+  "receipt_sha256": "a380fb87183305c4f31e5f5b15ce3f91dee88b6b78906a5752d633550e424c8b",
+  "record_kind": "later authorization readback; preserves original approval bytes",
+  "reproduction": "Historical approval does not authorize a new receipt or execution. Obtain separate exact approval before a new reporter run.",
+  "version": 1
+}

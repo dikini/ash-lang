@@ -1,0 +1,24 @@
+# Extracted LOAD records from the frozen link maps; not complete link maps.
+# Original full-map hashes remain in recorded/producer-receipt.json.
+
+reporter-A.map sha256=23c1c729f99a1ac2725666c652bf3e095a150f802aaa17e9848536e41b6e9004
+LOAD /usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/crt1.o
+LOAD /usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/crti.o
+LOAD /usr/lib/gcc/x86_64-linux-gnu/15/crtbeginT.o
+LOAD reporter-A.o
+LOAD /usr/lib/gcc/x86_64-linux-gnu/15/libgcc.a
+LOAD /usr/lib/gcc/x86_64-linux-gnu/15/libgcc_eh.a
+LOAD /usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/libc.a
+LOAD /usr/lib/gcc/x86_64-linux-gnu/15/crtend.o
+LOAD /usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/crtn.o
+
+reporter-B.map sha256=0c1117b504ed87ca2f9b8f8ac12f8069d837cfc3aa78ab4e8051ca475c496d72
+LOAD /usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/crt1.o
+LOAD /usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/crti.o
+LOAD /usr/lib/gcc/x86_64-linux-gnu/15/crtbeginT.o
+LOAD reporter-B.o
+LOAD /usr/lib/gcc/x86_64-linux-gnu/15/libgcc.a
+LOAD /usr/lib/gcc/x86_64-linux-gnu/15/libgcc_eh.a
+LOAD /usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/libc.a
+LOAD /usr/lib/gcc/x86_64-linux-gnu/15/crtend.o
+LOAD /usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/crtn.o
