@@ -1,0 +1,18 @@
+{
+  "commands": [
+    "capture",
+    "checked",
+    "clippy",
+    "deep",
+    "foreign",
+    "images",
+    "imports",
+    "integrations",
+    "owners",
+    "resource"
+  ],
+  "input_count": 584,
+  "aggregate": "cf38e22be85c0121783148642b765acaa9646d48928abf8ec6a26fb3077e68e7",
+  "reconstruction": "../prelint-checked-reconstruction.json",
+  "qualification": "Nine passing test commands,399 distinct tests/430 passing lines; Clippy refused10 err_expect test-only style cases. Not final delivery evidence."
+}

@@ -1,0 +1,73 @@
+warning: Missing auto-load script at offset 0 in section .debug_gdb_scripts
+of file /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168.
+Use `info auto-load python-scripts [REGEXP]' to list them.
+Breakpoint 1 at 0x55e41d1: /home/dikini/Projects/ash-lang/.worktree/checked-ffi/src/core/validate.rs:4780. (2 locations)
+Breakpoint 2 at 0x55e489a: /home/dikini/Projects/ash-lang/.worktree/checked-ffi/src/core/validate.rs:4792. (2 locations)
+Breakpoint 3 at 0x55e4a86: /home/dikini/Projects/ash-lang/.worktree/checked-ffi/src/core/validate.rs:4797. (2 locations)
+Breakpoint 4 at 0x55e4ae5: /home/dikini/Projects/ash-lang/.worktree/checked-ffi/src/core/validate.rs:4805. (2 locations)
+Breakpoint 5 at 0x55e4680: /home/dikini/Projects/ash-lang/.worktree/checked-ffi/src/core/validate.rs:4809. (2 locations)
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/x86_64-linux-gnu/libthread_db.so.1".
+
+running 1 test
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 1 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 2 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 3 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 4 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 5 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 6 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 7 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 8 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 9 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 10 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle finish module bodies entered
+checked lifecycle module result complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle capture finite values complete
+checked lifecycle capture typed data complete
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle module bodies complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle hidden interface collection complete
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle finish module bodies entered
+checked lifecycle module result complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle module bodies complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle hidden interface collection complete
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle capture finite values complete
+checked lifecycle capture typed data complete
+checked lifecycle capture control compilation complete
+[Switching to Thread 0x7ffff7bff6c0 (LWP 1462437)]
+
+Thread 2 "elaborate::chec" hit Breakpoint 1.1, ash::core::validate::Validator<ash::core::effect::EffectOperationFamily>::new_modules<ash::core::effect::EffectOperationFamily> (program=0x7ffff7be0ea0, sources=&[&ash::source::SourceFile](size=3) = {...}, module_sources=&[(ash::module::ModuleId, ash::source::SourceId)](size=3) = {...}) at src/core/validate.rs:4781
+4781	        let mut relation = HashMap::new();
+#0  ash::core::validate::Validator<ash::core::effect::EffectOperationFamily>::new_modules<ash::core::effect::EffectOperationFamily> (program=0x7ffff7be0ea0, sources=&[&ash::source::SourceFile](size=3) = {...}, module_sources=&[(ash::module::ModuleId, ash::source::SourceId)](size=3) = {...}) at src/core/validate.rs:4781
+#1  0x000055555a2b2405 in ash::core::validate::SourceResourceStructureSession::check_with_handler_graph (self=0x7ffff7be1010, program=0x7ffff7be0ea0, original=0x7ffff00b65c0, answer=false, sources=&[&ash::source::SourceFile](size=3) = {...}, module_sources=&[(ash::module::ModuleId, ash::source::SourceId)](size=3) = {...}, globals=0x7ffff7bd7c48, handler_graph=..., work=0x7ffff7be35e0) at src/core/validate.rs:3931
+#2  0x000055555cbf10cf in ash::core::source_resource::CheckedSourceResourceTemplate::admit_with_globals (header=Arc(strong=1, weak=0) = {...}, acquire=..., finish=..., handler=..., handler_inputs=..., globals=Arc(strong=2, weak=0) = {...}, sources=&[&ash::source::SourceFile](size=3) = {...}, module_sources=&[(ash::module::ModuleId, ash::source::SourceId)](size=3) = {...}, work=0x7ffff7be35e0, session=0x7ffff7be1010) at src/core/source_resource.rs:1303
+#3  0x000055555ade720a in ash::elaborate::source_resource::compile::{closure#1} () at src/elaborate/source_resource.rs:1375
+#4  0x000055555cd3d7b3 in ash::elaborate::source_resource::compile (module=0x7ffff7bf8fb0, registry=0x7ffff7be7728, interfaces=&[ash::resolved::SharedCheckedInterfaceFact](size=1) = {...}, schemes=&[ash::resolved::CheckedGlobalScheme](size=2) = {...}, work=0x7ffff7bf0d70, coverage=0x7ffff7bf0d90, constraints=0x7ffff7bfa150, original_provider=..., rewrite_work_limit=111520) at src/elaborate/source_resource.rs:1285
+#5  0x000055555c0c44b6 in ash::elaborate::check_module_with_budget_family::{closure#0}<ash::core::effect::EffectOperationFamily> () at src/elaborate.rs:22767
+validator = ash::core::validate::Validator<ash::core::effect::EffectOperationFamily> {program: 0x7ffff7be0ea0, sources: HashMap(size=3) = {[ash::source::SourceId (1)] = 0x7ffff002b390, [ash::source::SourceId (0)] = 0x7ffff003c060, [ash::source::SourceId (2)] = 0x7ffff003a620}, module_sources: core::option::Option<std::collections::hash::map::HashMap<ash::module::ModuleId, ash::source::SourceId, std::hash::random::RandomState, alloc::alloc::Global>>::None, contextual_registry: core::option::Option<&ash::resolved::ResolvedRegistry>::None, contextual_native_authentication: core::option::Option<&core::cell::RefCell<ash::foreign::NativeAuthenticationMemo>>::None, source_original_provider: core::option::Option<&ash::elaborate::provider::SourceOriginalProviderContext>::None, binders: HashMap(size=0), provider_external_types: core::option::Option<&std::collections::hash::map::HashMap<ash::resolved::BinderId, ash::types::IterativeTypeOwner, std::hash::random::RandomState, alloc::alloc::Global>>::None, provider_method_evidence: core::option::Option<&ash::core::provider::external::AuthenticatedProviderMethodEvidence>::None, provider_state_accesses: core::option::Option<&ash::core::provider::external::AuthenticatedProviderStateAccesses>::None, provider_handler_entry: core::option::Option<&ash::core::provider::handler::HandlerFragmentEntry>::None, source_handler_graph: core::option::Option<&ash::core::source_resource::handler_rows::SourceHandlerGraph>::None, provider_fragment_locals: core::option::Option<&[ash::types::NominalTypeId]>::None, source_resource_context: ash::core::validate::SourceResourceValidationContext::FinalProgram, source_coordinate_loan: core::option::Option<&ash::core::validate::source_declarations::coordinate_loan::DeclarationCoordinateLoan>::None, authenticated_abstract_nominals: RefCell(borrow=0) = {value = HashSet(size=0), borrow = 0}, unused_ordering: RefCell(borrow=0) = {value = HashSet(size=0), borrow = 0}, type_work: Cell = {value = 0}, capture_layouts: RefCell(borrow=0) = {value = Vec(size=0), borrow = 0}, type_work_limit: 983040, owner_parameter_index_work: Cell = {value = 0}, newtype_conversion_parameter_work: Cell = {value = 0}, type_validation_pending_peak: Cell = {value = 0}}

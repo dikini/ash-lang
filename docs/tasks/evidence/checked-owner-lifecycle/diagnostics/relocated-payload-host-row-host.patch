@@ -1,0 +1,2365 @@
+--- a/src/core/capture.rs
++++ b/src/core/capture.rs
+@@ -3171,6 +3171,7 @@
+             }) {
+                 graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
+                 let host_request = Request::effect(host, source, budget)?;
++                data.position_independent_request(graph.code.len(), source, budget)?;
+                 steps.push(graph.code.len());
+                 graph.code.push(Control::Request(host_request));
+             }
+--- a/src/core/capture/value.rs
++++ b/src/core/capture/value.rs
+@@ -3441,6 +3441,27 @@
+             .map_err(|_| Failure::Resource)?;
+         self.positions.insert(code, expression);
+         Ok(())
++    }
++
++    /// A sealed Host control event has independent Unit payload and reply.
++    /// Its native request retains its separate real operand/value equation.
++    pub(super) fn position_independent_request(
++        &mut self,
++        code: usize,
++        source: Span,
++        budget: &mut TypeWorkBudget,
++    ) -> Result<(), Failure> {
++        let scalar = self.push(Expr::Scalar, source, budget)?;
++        let request = self.push(
++            Expr::Request {
++                operand: scalar,
++                scalar: true,
++                reply: Some(scalar),
++            },
++            source,
++            budget,
++        )?;
++        self.position(code, request, budget)
+     }
+ 
+     /// Distinct existing value equations for authenticated source-control
+@@ -13845,3 +13866,7 @@
+     }
+     // ASH_INPUT169_END_TESTS
+ }
++
++#[cfg(test)]
++#[path = "value/host_request_tests.rs"]
++mod host_request_tests;
+--- /dev/null
++++ b/src/core/capture/value/host_request_tests.rs
+@@ -0,0 +1,187 @@
++//! Synthetic control obligations retain independent request value ports.
++//! These graph-only fixtures grant no host, native contract or owner authority.
++
++use super::*;
++
++const OWNER_CODE: usize = 20;
++const NATIVE_CODE: usize = 30;
++const HOST_CODE: usize = 40;
++
++fn graph() -> Graph {
++    let source = crate::source::SourceFile::new("host-port.ash", "x").unwrap();
++    let span = source
++        .span(crate::source::ByteRange::new(0, 1).unwrap())
++        .unwrap();
++    let expressions = vec![
++        Expr::Slot,
++        Expr::Scalar,
++        Expr::Resource {
++            success: None,
++            failure: None,
++            failure_payload: None,
++            handle: 0,
++            identity: 0,
++            initializer: 1,
++            body: 1,
++            source: span,
++        },
++        Expr::Request {
++            operand: 0,
++            scalar: false,
++            reply: None,
++        },
++    ];
++    Graph {
++        sources: vec![span; expressions.len()],
++        expressions,
++        globals: Vec::new(),
++        provider: Vec::new(),
++        exports: Vec::new(),
++        positions: HashMap::from([(OWNER_CODE, 2), (NATIVE_CODE, 3)]),
++        targets: HashMap::new(),
++        metadata: HashMap::new(),
++        evidence: Vec::new(),
++        evidence_index: Vec::new(),
++    }
++}
++
++fn assert_independent_mapping(graph: &Graph) {
++    assert_eq!(graph.positions[&NATIVE_CODE], 3);
++    assert!(matches!(
++        graph.expressions[3],
++        Expr::Request {
++            operand: 0,
++            scalar: false,
++            reply: None
++        }
++    ));
++    let host = graph.positions[&HOST_CODE];
++    assert_ne!(
++        host, 3,
++        "host obligation must not alias the State-bearing native request"
++    );
++    let Expr::Request {
++        operand,
++        scalar: true,
++        reply: Some(reply),
++    } = graph.expressions[host]
++    else {
++        panic!("independent synthetic request and explicit reply");
++    };
++    assert_ne!(operand, 0);
++    assert!(matches!(graph.expressions[operand], Expr::Scalar));
++    assert!(matches!(graph.expressions[reply], Expr::Scalar));
++    assert_eq!(graph.sources[host], graph.sources[3]);
++}
++
++#[test]
++fn checked_host_request_port_preserves_native_payload_rejection_and_independent_reply() {
++    let mut graph = graph();
++    let source = graph.sources[3];
++    let mut budget = TypeWorkBudget::default();
++    graph
++        .position_independent_request(HOST_CODE, source, &mut budget)
++        .unwrap();
++    assert_independent_mapping(&graph);
++    let mut analysis = Analysis::new(&graph, &mut budget).unwrap();
++    let state = analysis.slot(0, 0, &mut budget).unwrap();
++    // Inject a symbolic owner dependency only; this is not a native State fact.
++    analysis
++        .atom(state, Atom::Resource(2, 0), &mut budget)
++        .unwrap();
++    let native = analysis.port(NATIVE_CODE, 0, &mut budget).unwrap();
++    let host = analysis.port(HOST_CODE, 0, &mut budget).unwrap();
++    analysis.close(&mut budget).unwrap();
++    assert!(
++        matches!(
++            analysis.check_payload(native, OWNER_CODE, 0, &mut budget),
++            Err(Failure::Escape { .. })
++        ),
++        "original native payload must keep its owner escape check"
++    );
++    analysis
++        .check_payload(host, OWNER_CODE, 0, &mut budget)
++        .expect("independent host payload contains no State dependency");
++    analysis.external_result(host, &mut budget).unwrap();
++    analysis.close(&mut budget).unwrap();
++    assert!(analysis.slots[host].atoms.contains(&Atom::Free));
++    assert!(!analysis.slots[host].atoms.contains(&Atom::Unknown));
++    assert!(
++        !analysis
++            .dependencies(host, &mut budget)
++            .unwrap()
++            .contains(&Atom::Resource(2, 0))
++    );
++    assert!(
++        matches!(
++            analysis.check_payload(native, OWNER_CODE, 0, &mut budget),
++            Err(Failure::Escape { .. })
++        ),
++        "independent reply cannot launder the native payload"
++    );
++}
++
++#[test]
++fn checked_host_request_missing_value_mapping_still_refuses() {
++    let graph = graph();
++    let mut budget = TypeWorkBudget::default();
++    let mut analysis = Analysis::new(&graph, &mut budget).unwrap();
++    assert!(matches!(
++        analysis.port(HOST_CODE, 0, &mut budget),
++        Err(Failure::Invalid)
++    ));
++    assert!(!graph.positions.contains_key(&HOST_CODE));
++    assert_eq!(graph.positions.len(), 2);
++}
++
++#[test]
++fn checked_host_request_mapping_has_exact_prefix_short_spent_and_fresh_limits() {
++    let mut measured_graph = graph();
++    let source = measured_graph.sources[3];
++    let mut measured = TypeWorkBudget::default();
++    measured_graph
++        .position_independent_request(HOST_CODE, source, &mut measured)
++        .unwrap();
++    let cost = measured.used();
++    assert!(cost > 0);
++    for prefix in [0, 7] {
++        let mut exact_graph = graph();
++        let source = exact_graph.sources[3];
++        let mut exact = TypeWorkBudget::with_limit(prefix + cost);
++        exact.charge(prefix).unwrap();
++        exact_graph
++            .position_independent_request(HOST_CODE, source, &mut exact)
++            .unwrap();
++        assert_independent_mapping(&exact_graph);
++        assert_eq!(exact.used(), prefix + cost);
++        assert!(matches!(
++            exact_graph.position_independent_request(HOST_CODE + 1, source, &mut exact),
++            Err(Failure::Resource)
++        ));
++        assert!(!exact_graph.positions.contains_key(&(HOST_CODE + 1)));
++
++        let mut short_graph = graph();
++        let source = short_graph.sources[3];
++        let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
++        short.charge(prefix).unwrap();
++        assert!(matches!(
++            short_graph.position_independent_request(HOST_CODE, source, &mut short),
++            Err(Failure::Resource)
++        ));
++        assert!(
++            !short_graph.positions.contains_key(&HOST_CODE),
++            "unpaid mapping must not become a completed value port"
++        );
++        assert_eq!(short_graph.positions[&NATIVE_CODE], 3);
++    }
++    for _ in 0..2 {
++        let mut fresh_graph = graph();
++        let source = fresh_graph.sources[3];
++        let mut fresh = TypeWorkBudget::with_limit(cost);
++        fresh_graph
++            .position_independent_request(HOST_CODE, source, &mut fresh)
++            .unwrap();
++        assert_independent_mapping(&fresh_graph);
++        assert_eq!(fresh.used(), cost);
++    }
++}
+--- a/src/core/source_resource.rs
++++ b/src/core/source_resource.rs
+@@ -1885,12 +1885,26 @@
+         Ok(selected)
+     }
+ }
++#[derive(Clone, Copy)]
++enum CheckedFinishOutcome {
++    Consumed(NodeId),
++    Retained(NodeId),
++    Boundary(NodeId),
++}
++impl CheckedFinishOutcome {
++    fn request(self) -> NodeId {
++        match self {
++            Self::Consumed(request) | Self::Retained(request) | Self::Boundary(request) => request,
++        }
++    }
++}
++
+ struct FlowPath {
+     locals: HashMap<crate::resolved::BinderId, usize>,
+     acquired: bool,
+     consumed: bool,
+     attempted_teardown: bool,
+-    checked_finish_request: Option<NodeId>,
++    checked_finish_outcome: Option<CheckedFinishOutcome>,
+     blocked: bool,
+     windows: Vec<(NodeId, usize)>,
+     ordinary_owners: Vec<(super::HandlerId, crate::resolved::ResumeId)>,
+@@ -1903,7 +1917,7 @@
+             acquired: false,
+             consumed: false,
+             attempted_teardown: false,
+-            checked_finish_request: None,
++            checked_finish_outcome: None,
+             blocked: false,
+             windows: Vec::new(),
+             ordinary_owners: Vec::new(),
+@@ -1944,7 +1958,7 @@
+             acquired: self.acquired,
+             consumed: self.consumed,
+             attempted_teardown: self.attempted_teardown,
+-            checked_finish_request: self.checked_finish_request,
++            checked_finish_outcome: self.checked_finish_outcome,
+             blocked: self.blocked,
+             windows,
+             ordinary_owners,
+@@ -2119,11 +2133,15 @@
+                     _ => Impossible,
+                 }
+             }
+-            FlowFact::Independent => {
++            FlowFact::Independent | FlowFact::FinishBoundary(_) => {
+                 if let Some(payload) = payload {
+                     Possible.and(bind_pattern(
+                         payload,
+-                        value,
++                        if matches!(facts.fact(value)?, FlowFact::FinishBoundary(_)) {
++                            0
++                        } else {
++                            value
++                        },
+                         path,
+                         facts,
+                         registry,
+@@ -2491,7 +2509,10 @@
+                                 .scalar_preflight(function)
+                                 .ok_or_else(invalid)?;
+                             if fact.role().data_parameter(fact.module()).is_some() {
+-                                if phase == SourceResourcePhase::Acquire || path.consumed {
++                                if phase == SourceResourcePhase::Acquire
++                                    || path.consumed
++                                    || path.checked_finish_outcome.is_some()
++                                {
+                                     return Err(invalid());
+                                 }
+                                 let replace = fact.role() == crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ReplaceData;
+@@ -2742,7 +2763,10 @@
+                             && !path.blocked
+                     }
+                     FlowFact::Current => {
+-                        phase != SourceResourcePhase::Acquire && !path.consumed && !path.blocked
++                        phase != SourceResourcePhase::Acquire
++                            && !path.consumed
++                            && !path.blocked
++                            && path.checked_finish_outcome.is_none()
+                     }
+                     FlowFact::Enclosing(identity) => {
+                         charge(work, header.dependencies.len())?;
+@@ -2882,7 +2906,7 @@
+                     current_operand, ..
+                 }) = expected.owner_role()
+                 {
+-                    if path.consumed || path.blocked {
++                    if path.consumed || path.blocked || path.checked_finish_outcome.is_some() {
+                         return Err(invalid());
+                     }
+                     let crate::foreign::source_contract::PreparedOperandSource::Current(selection) =
+@@ -3033,12 +3057,17 @@
+                             return Err(invalid());
+                         };
+                         charge(work, 1)?;
+-                        path.checked_finish_request = Some(id);
++                        path.checked_finish_outcome = Some(CheckedFinishOutcome::Boundary(id));
+                         let boundary = facts.add(FlowFact::FinishBoundary(id), work)?;
+                         let outcome =
+                             facts.wrapped(ConstructorId::new(call.call, 2), boundary, work)?;
+                         push(&mut results, (outcome, path.copy(work)?), work)?;
+                         path.consumed = *consumes;
++                        path.checked_finish_outcome = Some(if *consumes {
++                            CheckedFinishOutcome::Consumed(id)
++                        } else {
++                            CheckedFinishOutcome::Retained(id)
++                        });
+                         let disposition = facts.wrapped(
+                             codec.disposition_constructors()[usize::from(!consumes)],
+                             0,
+@@ -3511,19 +3540,24 @@
+                 SourceResourceReportCodec::CheckedScope { .. }
+             )
+         {
+-            let request = path.checked_finish_request.ok_or_else(invalid)?;
++            let outcome = path.checked_finish_outcome.ok_or_else(invalid)?;
++            let request = outcome.request();
+             let FlowFact::Constructor(constructor, Some(payload)) = facts.fact(value)? else {
+                 return Err(invalid());
+             };
+             if *constructor == header.codec.finish[0] {
+-                if !path.consumed || !facts.independent(*payload, work)? {
++                if !matches!(outcome, CheckedFinishOutcome::Consumed(_))
++                    || !path.consumed
++                    || !facts.independent(*payload, work)?
++                {
+                     return Err(invalid());
+                 }
+             } else if *constructor == header.codec.finish[1] {
+                 let FlowFact::Tuple(fields) = facts.fact(*payload)? else {
+                     return Err(invalid());
+                 };
+-                if path.consumed
++                if !matches!(outcome, CheckedFinishOutcome::Retained(_))
++                    || path.consumed
+                     || fields.len() != 2
+                     || !matches!(facts.fact(fields[0])?, FlowFact::Current)
+                     || !facts.independent(fields[1], work)?
+@@ -3531,7 +3565,8 @@
+                     return Err(invalid());
+                 }
+             } else if *constructor == header.codec.finish[2] {
+-                if path.consumed
++                if !matches!(outcome, CheckedFinishOutcome::Boundary(_))
++                    || path.consumed
+                     || !matches!(facts.fact(*payload)?, FlowFact::FinishBoundary(original) if *original == request)
+                 {
+                     return Err(invalid());
+@@ -8690,3 +8725,7 @@
+ #[cfg(test)]
+ #[path = "source_resource/checked_owner_tests.rs"]
+ mod checked_owner_tests;
++
++#[cfg(test)]
++#[path = "source_resource/checked_lifecycle_core_tests.rs"]
++pub(crate) mod checked_lifecycle_core_tests;
+--- /dev/null
++++ b/src/core/source_resource/checked_lifecycle_core_tests.rs
+@@ -0,0 +1,248 @@
++//! Hostile mutations of genuine independently admitted checked lifecycle Core.
++//! Caller supplies a fresh actual program for each mutation; no authority is minted.
++
++use super::*;
++
++#[derive(Clone, Copy, Debug)]
++pub(crate) enum Mutation {
++    HostActual,
++    InterpretationActual,
++    FinishContinuation,
++}
++
++fn selected(program: &UnvalidatedEffectProgram) -> (usize, NodeId) {
++    let mut matching = program
++        .nodes
++        .iter()
++        .enumerate()
++        .filter_map(|(index, stored)| {
++            let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
++                &stored.kind
++            else {
++                return None;
++            };
++            matches!(
++                scope.header().codec.report,
++                SourceResourceReportCodec::CheckedScope { .. }
++            )
++            .then_some(index)
++        });
++    let index = matching
++        .next()
++        .expect("actual connected checked resource scope");
++    assert!(
++        matching.next().is_none(),
++        "control fixture must select exactly one checked scope"
++    );
++    (
++        index,
++        NodeId::new(program.arena, u32::try_from(index).unwrap()),
++    )
++}
++
++fn scope(program: &UnvalidatedEffectProgram, index: usize) -> &SourceResourceScopeNode {
++    let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
++        &program.nodes[index].kind
++    else {
++        panic!("selected checked scope remains present");
++    };
++    scope
++}
++
++pub(crate) fn mutate_and_authenticate(
++    program: &mut UnvalidatedEffectProgram,
++    mutation: Mutation,
++) -> ValidationError {
++    let (index, id) = selected(program);
++    scope(program, index)
++        .authenticate(id, program, &mut TypeWorkBudget::default())
++        .expect("genuine canonical scope authenticates before hostile mutation");
++    let template = Arc::clone(scope(program, index).original());
++    let changed;
++    match mutation {
++        Mutation::HostActual => {
++            let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
++                &mut program.nodes[index].kind
++            else {
++                unreachable!()
++            };
++            let host = scope
++                .header()
++                .original
++                .host
++                .expect("original authored host selector")
++                .position;
++            let owned = scope.header().original.owned_position;
++            assert_ne!(host, owned);
++            let descriptor = Arc::get_mut(&mut scope.descriptor)
++                .expect("fresh actual program owns the scope descriptor exclusively");
++            assert!(matches!(
++                descriptor.arguments[host],
++                KindedArgument::TypeArg(Type::Variable(_))
++            ));
++            let original = std::mem::replace(
++                &mut descriptor.arguments[host],
++                KindedArgument::TypeArg(Type::Int),
++            );
++            crate::types::discard_kinded_argument_iteratively(original);
++            assert!(
++                matches!(descriptor.arguments[owned], KindedArgument::TypeArg(Type::Variable(actual)) if actual == descriptor.identity)
++            );
++            changed = true;
++        }
++        Mutation::InterpretationActual => {
++            let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
++                &mut program.nodes[index].kind
++            else {
++                unreachable!()
++            };
++            let descriptor = Arc::get_mut(&mut scope.descriptor)
++                .expect("fresh actual program owns the scope descriptor exclusively");
++            let interpretation = descriptor
++                .interpretations
++                .first_mut()
++                .expect("actual native lifecycle interpretation");
++            let symbol = interpretation.symbol();
++            let contract = symbol.prepared().checked_contract().unwrap();
++            let host = contract.symbols()[symbol.symbol_index()].host_parameter();
++            let effect = interpretation.effect();
++            assert!(matches!(
++                effect.arguments()[host],
++                KindedArgument::TypeArg(Type::Variable(_))
++            ));
++            let mut work = TypeWorkBudget::default();
++            let mut arguments = effect
++                .arguments()
++                .iter()
++                .map(|argument| {
++                    crate::types::clone_kinded_argument_with_budget(argument, &mut work).unwrap()
++                })
++                .collect::<Vec<_>>();
++            let original =
++                std::mem::replace(&mut arguments[host], KindedArgument::TypeArg(Type::Int));
++            crate::types::discard_kinded_argument_iteratively(original);
++            let replacement = crate::types::EffectInstance::new_kinded(
++                effect.effect(),
++                arguments.into_boxed_slice(),
++            );
++            assert_eq!(replacement.arguments().len(), effect.arguments().len());
++            interpretation.effect = replacement;
++            changed = true;
++        }
++        Mutation::FinishContinuation => {
++            let selected = scope(program, index);
++            let original = &selected.original().finish;
++            let mut free = None;
++            let mut trace = None;
++            for (position, stored) in original.nodes.iter().enumerate() {
++                let EffectExprKind::Operation(EffectOperation::Request(request)) = &stored.kind
++                else {
++                    continue;
++                };
++                let original_id = NodeId::new(original.arena, u32::try_from(position).unwrap());
++                if request.operation() == selected.header().teardown.operation() {
++                    assert!(free.replace(original_id).is_none());
++                } else if original
++                    .registry
++                    .effect(request.effect().effect())
++                    .is_some_and(|effect| effect.spelling == "Trace")
++                {
++                    assert!(trace.replace(original_id).is_none());
++                }
++            }
++            let free = free.expect("actual original native finish request");
++            let trace = trace.expect("actual required original finish Trace request");
++            let free_span = node(original, free)
++                .unwrap()
++                .origin
++                .as_ref()
++                .unwrap()
++                .primary_span();
++            let trace_span = node(original, trace)
++                .unwrap()
++                .origin
++                .as_ref()
++                .unwrap()
++                .primary_span();
++            assert_eq!(free_span.source(), trace_span.source());
++            assert!(
++                trace_span.range().start() >= free_span.range().end(),
++                "selected Trace is the original post-request continuation"
++            );
++            let mut targets = selected.descriptor.copies[1]
++                .nodes
++                .iter()
++                .filter_map(|(source, target)| (*source == trace).then_some(*target));
++            let target = targets
++                .next()
++                .expect("exact copied finish Trace correspondence");
++            assert!(targets.next().is_none());
++            let target_index = node(program, target).unwrap();
++            assert_eq!(target_index.ty, Type::Unit);
++            let EffectExprKind::Operation(EffectOperation::Request(copied)) = &target_index.kind
++            else {
++                panic!("actual copied continuation request");
++            };
++            let EffectExprKind::Operation(EffectOperation::Request(original_request)) =
++                &node(original, trace).unwrap().kind
++            else {
++                unreachable!()
++            };
++            assert_eq!(copied.operation(), original_request.operation());
++            assert!(!target_index.effects.known().is_empty());
++            // Keep NodeId, type, origin, claimed row, original/template and all
++            // copy maps untouched. Only the executable continuation kind goes.
++            program.nodes[target.index().unwrap()].kind = EffectExprKind::Pure(
++                PureExprKind::Value(PureValue::Unit(crate::core::literal::UnitNode)),
++            );
++            changed = true;
++        }
++    }
++    assert!(changed, "a real selected scope occurrence was mutated");
++    let selected = scope(program, index);
++    assert!(Arc::ptr_eq(selected.original(), &template));
++    let error = selected
++        .authenticate(id, program, &mut TypeWorkBudget::default())
++        .expect_err("independent scope authentication must reject the actual hostile mutation");
++    assert_eq!(
++        error.reason(),
++        ValidationReason::Registry,
++        "mutation must refuse semantically before whole-Core checks, not exhaust a budget"
++    );
++    error
++}
++
++pub(crate) fn assert_budget_controls(program: &UnvalidatedEffectProgram) {
++    let (index, id) = selected(program);
++    let selected = scope(program, index);
++    let template = Arc::clone(selected.original());
++    let run = |work: &mut TypeWorkBudget| selected.authenticate(id, program, work);
++    let mut measured = TypeWorkBudget::default();
++    run(&mut measured)
++        .expect("actual canonical scope authentication fits the unchanged default allowance");
++    let cost = measured.used();
++    assert!(cost > 0);
++    for prefix in [0, 7] {
++        let mut exact = TypeWorkBudget::with_limit(prefix + cost);
++        exact.charge(prefix).unwrap();
++        run(&mut exact).unwrap();
++        assert_eq!(exact.used(), prefix + cost);
++        assert_eq!(
++            run(&mut exact).unwrap_err().reason(),
++            ValidationReason::Resource
++        );
++        let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
++        short.charge(prefix).unwrap();
++        assert_eq!(
++            run(&mut short).unwrap_err().reason(),
++            ValidationReason::Resource
++        );
++    }
++    for _ in 0..2 {
++        let mut fresh = TypeWorkBudget::with_limit(cost);
++        run(&mut fresh).unwrap();
++        assert_eq!(fresh.used(), cost);
++    }
++    assert!(Arc::ptr_eq(selected.original(), &template));
++    run(&mut TypeWorkBudget::default()).unwrap();
++}
+--- a/src/elaborate.rs
++++ b/src/elaborate.rs
+@@ -43036,3 +43036,7 @@
+             .map_err(|failure| (Elaboration(failure.into()), used))
+     }
+ }
++
++#[cfg(test)]
++#[path = "elaborate/checked_owner_lifecycle_tests.rs"]
++mod checked_owner_lifecycle_tests;
+--- /dev/null
++++ b/src/elaborate/checked_owner_lifecycle_tests.rs
+@@ -0,0 +1,561 @@
++//! Connected static checked lifecycle controls; no evaluator or native execution.
++
++use super::*;
++use crate::{
++    module::{ModuleGraph, ModuleRoots},
++    resolved::CheckedModule,
++};
++use std::sync::{
++    Arc,
++    atomic::{AtomicU64, Ordering},
++};
++
++const PRODUCER: &str = include_str!("../../tests/fixtures/checked-owner-lifecycle/owner.ash");
++
++fn graph(producer: &str, consumer: bool) -> ModuleGraph {
++    graph_with_entry(producer, consumer.then_some("import @builtin.foreign as Foreign\nimport producer as Producer\nmain : Unit -> Foreign.CheckedScope<Int, Unit, Unit>\nmain () = Producer.run ()\n"))
++}
++
++fn graph_with_entry(producer: &str, consumer: Option<&str>) -> ModuleGraph {
++    static IDS: AtomicU64 = AtomicU64::new(0);
++    let directory = std::env::temp_dir().join(format!(
++        "ash-checked-owner-lifecycle-{}-{}",
++        std::process::id(),
++        IDS.fetch_add(1, Ordering::Relaxed)
++    ));
++    std::fs::create_dir(&directory).unwrap();
++    std::fs::write(directory.join("producer.ash"), producer).unwrap();
++    let entry = if let Some(consumer) = consumer {
++        std::fs::write(directory.join("entry.ash"), consumer).unwrap();
++        directory.join("entry.ash")
++    } else {
++        directory.join("producer.ash")
++    };
++    let graph = crate::module::load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
++    std::fs::remove_dir_all(&directory).unwrap();
++    graph
++}
++
++fn check_graph(graph: &ModuleGraph) -> Result<Vec<CheckedModule>, TypeError> {
++    let mut checked = Vec::<CheckedModule>::new();
++    let mut availability = ProviderCodeAvailability::default();
++    // This is the established modular source-phase funding, separate from the
++    // unchanged standalone Core/image allowance. Resolution retains its own API.
++    let (mut checking, source_bytes) = crate::compiler_work::source_work(graph).unwrap();
++    let source_limit = checking.limit();
++    checking
++        .finish_sizing(crate::calibration::limit(
++            source_limit,
++            crate::calibration::DiagnosticOwner::Structural,
++        ))
++        .unwrap();
++    let rewrite_limit = crate::calibration::limit(
++        crate::compiler_work::rewrite_total(source_bytes).unwrap(),
++        crate::calibration::DiagnosticOwner::Structural,
++    );
++    let mut coverage = crate::pattern::UsefulnessBudget::default();
++    let mut constraints = crate::interface::InterfaceConstraintBudget::default();
++    for loaded in graph.modules() {
++        let dependencies = loaded
++            .dependencies()
++            .iter()
++            .map(|edge| {
++                crate::resolve::DependencyExports::new(
++                    edge,
++                    checked
++                        .iter()
++                        .find(|module| module.module() == edge.target())
++                        .unwrap()
++                        .exports(),
++                )
++                .unwrap()
++            })
++            .collect::<Vec<_>>();
++        let resolved = crate::resolve::resolve_checked_foreign_module(loaded, &dependencies)
++            .expect("canonical checked lifecycle source resolves before source checking");
++        let module = check_module_with_budget_and_provider_codes_and_rewrite_work(
++            resolved,
++            &availability,
++            &mut checking,
++            &mut coverage,
++            &mut constraints,
++            Some(TypeWorkBudget::with_limit(rewrite_limit)),
++        )?;
++        module.exports().authenticate(&mut TypeWorkBudget::default(), &mut crate::interface::InterfaceConstraintBudget::default())
++            .expect("completed body-free checked lifecycle summary authenticates under the default allowance");
++        if let Some(code) = module.provider_code() {
++            availability
++                .retain(module.module(), code, &mut checking)
++                .unwrap();
++        }
++        if let Some(code) = module.source_resource_code() {
++            availability
++                .retain_source(module.module(), code, &mut checking)
++                .unwrap();
++        }
++        checked.push(module);
++    }
++    Ok(checked)
++}
++
++fn assert_producer_originals(checked: &[CheckedModule]) {
++    let producer = checked
++        .iter()
++        .find(|module| {
++            module
++                .registry()
++                .source_resource_facts()
++                .any(|fact| fact.id.module() == module.module() && fact.spelling == "Probe")
++        })
++        .expect("actual checked producer retains Probe metadata");
++    let header = producer
++        .registry()
++        .source_resource_facts()
++        .find(|fact| fact.id.module() == producer.module() && fact.spelling == "Probe")
++        .unwrap();
++    assert_eq!(header.host.unwrap().position, 0);
++    assert_eq!(header.parameters[0].spelling, "H");
++    assert_eq!(header.owned_position, 1);
++    assert_eq!(header.parameters[1].spelling, "R");
++    assert_ne!(header.parameters[0].id, header.parameters[1].id);
++    assert_eq!(
++        header.codec.kind,
++        crate::surface::SurfaceResourceReportCodecKind::CheckedScope
++    );
++    let code = producer
++        .source_resource_code()
++        .expect("checked original lifecycle code");
++    assert!(
++        code.headers()
++            .any(|actual| Arc::ptr_eq(&actual.original, header))
++    );
++    assert!(
++        producer
++            .exports()
++            .source_resource_facts()
++            .any(|actual| Arc::ptr_eq(actual, header)),
++        "the body-free publication retains the exact required hidden header"
++    );
++    for name in ["Allocate", "Free"] {
++        let effect = producer
++            .registry()
++            .effects()
++            .iter()
++            .find(|effect| effect.id.module() == producer.module() && effect.spelling == name)
++            .unwrap();
++        let original = producer
++            .registry()
++            .native_symbol(crate::types::OperationId::new(effect.id, 0))
++            .unwrap();
++        assert!(original.owner().is_some());
++        let contract = original.prepared().checked_contract().unwrap();
++        let selected = &contract.symbols()[original.symbol_index()];
++        assert_eq!(selected.host_parameter(), 0);
++        let callee = contract
++            .assumptions()
++            .iter()
++            .find(|assumption| assumption.name() == "Callee")
++            .unwrap();
++        assert_eq!(
++            callee.description(),
++            "the admitted native owner contract holds"
++        );
++        assert!(
++            selected
++                .assumption_members()
++                .contains(&callee.member_index())
++        );
++    }
++}
++
++#[test]
++fn checked_owner_lifecycle_canonical_source_retains_originals() {
++    let graph = graph(PRODUCER, false);
++    let checked = check_graph(&graph).expect(
++        "canonical checked lifecycle source must pass before any negative control receives credit",
++    );
++    assert_producer_originals(&checked);
++}
++
++#[test]
++fn checked_owner_lifecycle_body_free_consumer_links_core_and_transforms() {
++    let graph = graph(PRODUCER, true);
++    let checked = check_graph(&graph)
++        .expect("real body-free consumer checks the canonical checked lifecycle publication");
++    assert_producer_originals(&checked);
++    let producer = checked
++        .iter()
++        .find(|module| module.source_resource_code().is_some())
++        .unwrap();
++    let producer_id = producer.module();
++    let original_code = Arc::clone(producer.source_resource_code().unwrap());
++    let original_header = Arc::clone(original_code.headers().next().unwrap());
++    let originals = [
++        Arc::clone(&original_header.acquire),
++        Arc::clone(&original_header.teardown),
++    ];
++    for original in &originals {
++        assert!(Arc::ptr_eq(
++            original_code
++                .resource(0)
++                .unwrap()
++                .original_registry()
++                .native_symbol(original.operation())
++                .unwrap(),
++            original,
++        ));
++    }
++    let linked =
++        link_modules(checked, graph.entry()).expect("canonical lifecycle module closure links");
++    for original in &originals {
++        assert!(Arc::ptr_eq(
++            linked
++                .registry()
++                .native_symbol(original.operation())
++                .unwrap(),
++            original
++        ));
++    }
++    assert!(Arc::ptr_eq(
++        linked
++            .registry()
++            .source_resource_fact(original_header.original.id)
++            .unwrap(),
++        &original_header.original
++    ));
++    let producer_group = linked
++        .groups()
++        .iter()
++        .find(|group| group.module() == producer_id)
++        .unwrap();
++    assert!(Arc::ptr_eq(
++        producer_group.source_resource_code().unwrap(),
++        &original_code
++    ));
++    let linked = crate::evidence_validation::validate_interface_evidence(linked)
++        .expect("canonical lifecycle evidence authenticates");
++    let mut elaborator =
++        EffectElaborator::for_module_program(&linked).expect("default final elaboration allowance");
++    let typed = elaborator
++        .synthesize_effect_module_program(&linked)
++        .expect("canonical checked lifecycle lowers to Effect Core under the default allowance");
++    let program = elaborator.finish(typed.node).unwrap();
++    let sources = graph
++        .modules()
++        .iter()
++        .map(|module| module.source())
++        .collect::<Vec<_>>();
++    let modules = graph
++        .modules()
++        .iter()
++        .map(|module| (module.id(), module.source().id()))
++        .collect::<Vec<_>>();
++    let core = crate::core::validate_effect_modules(program, &sources, &modules)
++        .expect("independent canonical checked lifecycle Core under the default allowance");
++    {
++        use crate::core::source_resource::checked_lifecycle_core_tests::{
++            Mutation, assert_budget_controls, mutate_and_authenticate,
++        };
++        let canonical = crate::core::transform::identity_effect_traversal(&core).unwrap();
++        assert_budget_controls(&canonical);
++        for mutation in [
++            Mutation::HostActual,
++            Mutation::InterpretationActual,
++            Mutation::FinishContinuation,
++        ] {
++            let mut candidate = crate::core::transform::identity_effect_traversal(&core).unwrap();
++            mutate_and_authenticate(&mut candidate, mutation);
++            let error = crate::core::validate_effect_modules(candidate, &sources, &modules)
++                .err()
++                .expect("independent whole Core rejects the hostile copied scope");
++            assert_ne!(
++                error.reason(),
++                crate::core::ValidationReason::Resource,
++                "hostile scope must fail semantically rather than exhaust work: {error:?}"
++            );
++        }
++    }
++    for transformed in [
++        crate::core::transform::identity_effect_traversal(&core).unwrap(),
++        crate::core::transform::fold_effect_literal_primitives(&core).unwrap(),
++    ] {
++        crate::core::validate_effect_modules(transformed, &sources, &modules).expect(
++            "transformed checked lifecycle independently revalidates under the default allowance",
++        );
++    }
++}
++
++fn source_refusal_after_canonical(replacement: &str) {
++    check_graph(&graph(PRODUCER, false))
++        .expect("canonical source must pass before mutation rejection is meaningful");
++    let arm = "Foreign.BoundaryFailed(reason) => Foreign.FinishedBoundary reason";
++    assert_eq!(PRODUCER.matches(arm).count(), 1);
++    let changed = PRODUCER.replace(arm, replacement);
++    let error = check_graph(&graph(&changed, false))
++        .err()
++        .expect("changed checked finish must be rejected");
++    assert!(
++        matches!(error, TypeError::Source(_)),
++        "expected semantic source refusal, not resource exhaustion or an internal failure: {error:?}"
++    );
++}
++
++#[test]
++fn checked_owner_lifecycle_boundary_failure_cannot_claim_retention() {
++    source_refusal_after_canonical(
++        "Foreign.BoundaryFailed(reason) => Foreign.FinishedRetained(state, ())",
++    );
++}
++
++#[test]
++fn checked_owner_lifecycle_boundary_failure_retires_ordinary_state_access() {
++    source_refusal_after_canonical(
++        "Foreign.BoundaryFailed(reason) => {\n                let ignored : Unit = Foreign.data_of state\n                Foreign.FinishedBoundary reason\n            }",
++    );
++}
++
++#[test]
++fn checked_owner_lifecycle_default_profile_refuses_the_same_source() {
++    let graph = graph(PRODUCER, false);
++    let mut checked = Vec::<CheckedModule>::new();
++    for loaded in graph.modules() {
++        let dependencies = loaded
++            .dependencies()
++            .iter()
++            .map(|edge| {
++                crate::resolve::DependencyExports::new(
++                    edge,
++                    checked
++                        .iter()
++                        .find(|module| module.module() == edge.target())
++                        .unwrap()
++                        .exports(),
++                )
++                .unwrap()
++            })
++            .collect::<Vec<_>>();
++        match crate::resolve::resolve_module(loaded, &dependencies) {
++            Ok(resolved) => checked.push(check_module(resolved).unwrap()),
++            Err(_) => {
++                assert_eq!(loaded.id(), graph.entry());
++                return;
++            }
++        }
++    }
++    panic!("default profile must refuse checked lifecycle source");
++}
++
++fn retained_void_teardown_source() -> String {
++    let consumed = "outcome otherwise { consumed 0 }";
++    assert_eq!(PRODUCER.matches(consumed).count(), 1);
++    PRODUCER.replace(consumed, "outcome otherwise { retained 0 }")
++}
++
++fn assert_retained_void_teardown_source(source: &str) {
++    let checked = check_graph(&graph(source, false))
++        .expect("genuine retained void teardown source must pass before retained-outcome controls");
++    assert_producer_originals(&checked);
++    let producer = checked
++        .iter()
++        .find(|module| module.source_resource_code().is_some())
++        .unwrap();
++    let free = producer
++        .registry()
++        .effects()
++        .iter()
++        .find(|effect| effect.id.module() == producer.module() && effect.spelling == "Free")
++        .unwrap();
++    let original = producer
++        .registry()
++        .native_symbol(crate::types::OperationId::new(free.id, 0))
++        .unwrap();
++    assert!(
++        matches!(
++            original.owner_role(),
++            Some(
++                crate::foreign::source_contract::PreparedOwnerCall::Teardown {
++                    consumes: false,
++                    ..
++                }
++            )
++        ),
++        "the actual prepared teardown outcome must be retained, not a source-only result relabel"
++    );
++}
++
++fn source_refusal_after_retained_canonical(arm: &str, replacement: &str) {
++    let canonical = retained_void_teardown_source();
++    assert_retained_void_teardown_source(&canonical);
++    assert_eq!(canonical.matches(arm).count(), 1);
++    let changed = canonical.replace(arm, replacement);
++    let error = check_graph(&graph(&changed, false))
++        .err()
++        .expect("changed retained teardown finish must be rejected");
++    assert!(
++        matches!(error, TypeError::Source(_)),
++        "expected semantic source refusal after canonical retained source, not setup/resource failure: {error:?}"
++    );
++}
++
++#[test]
++fn checked_owner_lifecycle_boundary_failure_cannot_claim_consumption() {
++    source_refusal_after_canonical(
++        "Foreign.BoundaryFailed(reason) => Foreign.FinishedConsumed Foreign.FinishOk",
++    );
++}
++
++#[test]
++fn checked_owner_lifecycle_retained_void_teardown_has_a_genuine_canonical_source() {
++    assert_retained_void_teardown_source(&retained_void_teardown_source());
++}
++
++#[test]
++fn checked_owner_lifecycle_retained_native_outcome_cannot_claim_consumption() {
++    source_refusal_after_retained_canonical(
++        "Foreign.CheckedReturned(Foreign.Retained(())) => Foreign.FinishedRetained(state, ())",
++        "Foreign.CheckedReturned(Foreign.Retained(())) => Foreign.FinishedConsumed Foreign.FinishOk",
++    );
++}
++
++#[test]
++fn checked_owner_lifecycle_boundary_failure_cannot_borrow_retained_native_outcome() {
++    source_refusal_after_retained_canonical(
++        "Foreign.BoundaryFailed(reason) => Foreign.FinishedBoundary reason",
++        "Foreign.BoundaryFailed(reason) => Foreign.FinishedRetained(state, ())",
++    );
++}
++
++#[test]
++fn checked_owner_lifecycle_constructed_boundary_record_cannot_replace_request_witness() {
++    source_refusal_after_canonical(
++        "Foreign.BoundaryFailed(reason) => {\n                let forged = Foreign.SessionLost (Foreign.BoundaryRecord(Foreign.NoNativeStatus, Foreign.NativeUnknown, false, Foreign.DiagnosticUnavailable Foreign.NotRequested))\n                Foreign.FinishedBoundary forged\n            }",
++    );
++}
++
++// Intended as a staged extension of the existing private lifecycle tests.
++// The fragment uses existing graph(source, false) and check_graph helpers.
++#[test]
++fn checked_owner_lifecycle_latest_completion_e_retains_only_the_outer_owner() {
++    let producer =
++        include_str!("../../tests/fixtures/checked-owner-lifecycle/latest_payload_producer.ash");
++    let within =
++        include_str!("../../tests/fixtures/checked-owner-lifecycle/latest_payload_within.ash");
++    let escape =
++        include_str!("../../tests/fixtures/checked-owner-lifecycle/latest_payload_escape.ash");
++    for retained in [false, true] {
++        let producer = if retained {
++            assert_eq!(
++                producer.matches("outcome otherwise { consumed 0 }").count(),
++                1
++            );
++            producer.replace(
++                "outcome otherwise { consumed 0 }",
++                "outcome otherwise { retained 0 }",
++            )
++        } else {
++            producer.to_owned()
++        };
++        check_graph(&graph_with_entry(&producer, Some(within))).expect(
++            "replacement E is usable while its distinct outer ordinary owner C remains live",
++        );
++        assert_eq!(escape.matches("let retained = outer").count(), 1);
++        let independent = escape.replace("let retained = outer", "let retained = 1");
++        check_graph(&graph_with_entry(&producer, Some(&independent)))
++            .expect("an independent latest callback permits the report to leave C");
++        let error = check_graph(&graph_with_entry(&producer, Some(escape)))
++            .expect_err("the latest callback must not escape C through CheckedCompletion E");
++        assert!(
++            matches!(error, TypeError::Source(ref diagnostic) if diagnostic.reason == TypeReason::ResourceEscape),
++            "expected actual outer-owner capture refusal after both source positives: {error:?}"
++        );
++    }
++}
++
++#[test]
++fn checked_owner_lifecycle_boundary_data_can_be_inspected_while_forwarding_original() {
++    check_graph(&graph(PRODUCER, false)).unwrap();
++    let arm = "Foreign.BoundaryFailed(reason) => Foreign.FinishedBoundary reason";
++    let changed = PRODUCER.replace(arm, "Foreign.BoundaryFailed(reason) => {\n                let ignored = match reason {\n                    Foreign.SessionLost(_) => ()\n                    Foreign.DependencyBlocked(_) => ()\n                    Foreign.Quarantined(_) => ()\n                }\n                Foreign.FinishedBoundary reason\n            }");
++    check_graph(&graph(&changed, false)).expect("independent boundary data can be inspected while forwarding the original whole witnessed reason");
++}
++
++#[test]
++fn checked_owner_lifecycle_required_trace_survives_resource_and_host_boundaries() {
++    let source = PRODUCER.replace(
++        "pub run : Unit -> Foreign.CheckedScope<Int, Unit, Unit>\nrun () = handle (foreign host H {",
++        "pub run : Unit -> Foreign.CheckedScope<Int, Unit, Unit> ! {Trace}\nrun () = foreign host H {",
++    ).replace("}) with Trace {\n    note ignored => resume ()\n}", "}");
++    assert_ne!(source, PRODUCER);
++    let checked = check_graph(&graph(&source, false))
++        .expect("required source Trace remains an outward effect after resource/host subtraction");
++    let producer = checked
++        .iter()
++        .find(|module| module.source_resource_code().is_some())
++        .unwrap();
++    let trace = producer
++        .effects()
++        .iter()
++        .find(|effect| effect.spelling == "Trace")
++        .unwrap()
++        .id;
++    let template = producer
++        .source_resource_code()
++        .unwrap()
++        .resource(0)
++        .unwrap();
++    let row = template
++        .lifecycle_row(false, &mut TypeWorkBudget::default())
++        .unwrap();
++    assert!(
++        row.known()
++            .iter()
++            .any(|instance| instance.effect() == trace)
++    );
++    assert!(
++        row.known()
++            .iter()
++            .any(|instance| instance.effect().declaration()
++                == crate::module::FOREIGN_NATIVE_HOST_LOCAL
++                && instance.effect().module().is_builtin_foreign())
++    );
++    let run = producer
++        .schemes()
++        .iter()
++        .find(|global| global.spelling == "run")
++        .unwrap();
++    let outward = run
++        .scheme
++        .value_type
++        .function_view()
++        .unwrap()
++        .effects()
++        .unwrap();
++    assert_eq!(outward.known().len(), 1);
++    assert_eq!(outward.known()[0].effect(), trace);
++}
++
++#[test]
++fn checked_owner_lifecycle_required_postrequest_source_continuation_cannot_be_discarded() {
++    check_graph(&graph(PRODUCER, false)).unwrap();
++    let source = PRODUCER.replace(
++        "note ignored => resume ()",
++        "note ignored => {
++    let done = discard
++    Foreign.CheckedNotAcquired ()
++}",
++    );
++    let error = check_graph(&graph(&source, false))
++        .err()
++        .expect("required post-finish source continuation cannot be abandoned");
++    assert!(
++        matches!(error, TypeError::Source(ref diagnostic) if diagnostic.reason == TypeReason::DiscardUnsafe),
++        "exact unsafe-discard refusal required: {error:?}"
++    );
++}
++
++#[test]
++fn checked_owner_lifecycle_inspected_boundary_fields_cannot_reconstruct_witness() {
++    source_refusal_after_canonical(
++        "Foreign.BoundaryFailed(reason) => match reason {\n                Foreign.SessionLost(record) => Foreign.FinishedBoundary (Foreign.SessionLost record)\n                Foreign.DependencyBlocked(record) => Foreign.FinishedBoundary (Foreign.DependencyBlocked record)\n                Foreign.Quarantined(record) => Foreign.FinishedBoundary (Foreign.Quarantined record)\n            }",
++    );
++}
+--- a/src/resolve.rs
++++ b/src/resolve.rs
+@@ -2248,6 +2248,35 @@
+                             )
+                         })?;
+                 } else {
++                    type_work.charge(1).map_err(|_| {
++                        export_candidate_resource_error(
++                            span,
++                            "private source foreign nominal parameter lookup exceeded its budget",
++                        )
++                    })?;
++                    let parameters = registry.nominal_parameters(resolved.id).ok_or_else(|| {
++                        error(
++                            ResolveReason::InternalState,
++                            span,
++                            "original source foreign nominal parameters are missing",
++                        )
++                    })?;
++                    candidate
++                        .try_insert_hidden_nominal(
++                            CandidateHiddenNominal {
++                                id: resolved.id,
++                                parameter_count: parameters.len(),
++                                spelling: name.text.clone(),
++                                origin: resolved.origin.clone(),
++                            },
++                            type_work,
++                        )
++                        .map_err(|()| {
++                            export_candidate_resource_error(
++                                span,
++                                "private source foreign nominal retention exceeded its budget",
++                            )
++                        })?;
+                     candidate
+                         .try_insert_withheld(
+                             WithheldNamespace::Nominal,
+@@ -5127,18 +5156,6 @@
+                 "imported interface route retention exceeded its work budget",
+             )
+         })?;
+-        let owner_is_summary = exported.id.module() == summary.module();
+-        if access == ImportedInterfaceAccess::HiddenSummaryClosure && owner_is_summary {
+-            return Err(error(
+-                ResolveReason::InternalState,
+-                span,
+-                "an interface summary contains an identity at the wrong visibility boundary",
+-            )
+-            .with_context(ResolveContext::WorkState {
+-                part: "interface-visibility",
+-                problem: "wrong",
+-            }));
+-        }
+         if let Some(existing) = self.imported.interface(exported.id) {
+             let mut nominal_identities = MatchedNominalIdentities::default();
+             let matches = same_checked_interface_fact_observing_nominals_with_budget(
+--- a/src/resolved.rs
++++ b/src/resolved.rs
+@@ -11794,10 +11794,9 @@
+                 .map_err(map_summary_kind_failure)?;
+         }
+         for interface in &self.hidden_interfaces {
+-            if interface.id.module() == self.module
+-                || interface_facts
+-                    .insert(interface.id, interface.as_ref())
+-                    .is_some()
++            if interface_facts
++                .insert(interface.id, interface.as_ref())
++                .is_some()
+             {
+                 {
+                     return Err(ResolvedBuildFailure::InvalidState);
+@@ -11831,6 +11830,14 @@
+                     type_work,
+                 )
+                 .map_err(map_summary_kind_failure)?;
++        }
++        type_work
++            .charge(self.source_resource_facts.len())
++            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
++        for fact in self.source_resource_facts.values() {
++            if !interface_facts.contains_key(&fact.provider.interface.id) {
++                return Err(ResolvedBuildFailure::InvalidState);
++            }
+         }
+         constraint_work
+             .charge(self.interface_names.len())
+@@ -13732,18 +13739,25 @@
+                 .try_reserve(referenced_interface_order.len())
+                 .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+             for interface in referenced_interface_order {
+-                let fact = resolved
+-                    .imported
+-                    .shared_interface(interface)
+-                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+-                if fact.id.module() == resolved.module {
+-                    {
+-                        return Err(ResolvedBuildFailure::InvalidState);
+-                    }
++                let (source, fact) = if interface.module() == resolved.module {
++                    checked_interfaces_by_id
++                        .get(&interface)
++                        .map(|(source, fact)| (Some(*source), *fact))
++                } else {
++                    resolved
++                        .imported
++                        .shared_interface(interface)
++                        .map(|fact| (None, fact))
++                }
++                .ok_or(ResolvedBuildFailure::InvalidState)?;
++                if fact.id != interface
++                    || (source.is_some() != (fact.id.module() == resolved.module))
++                {
++                    return Err(ResolvedBuildFailure::InvalidState);
+                 }
+                 summary.hidden_interfaces.push(share_checked_interface_fact(
+                     fact,
+-                    None,
++                    source,
+                     type_work,
+                     constraint_work,
+                 )?);
+@@ -25535,7 +25549,10 @@
+                 {
+                     return Err(ResolvedBuildFailure::InvalidState);
+                 }
+-                match codecs.entry(original.module()) {
++                // Legacy pure preflights retain Call while checked natives use
++                // CheckedCall in the same common module. Reconstruct each exact
++                // role independently; both authenticate the same opaque error.
++                match codecs.entry(original.ids().call) {
+                     std::collections::hash_map::Entry::Vacant(entry) => {
+                         let codec =
+                             crate::foreign::checked_source::CheckedForeignCallCodec::authenticate(
+@@ -43251,3 +43268,11 @@
+         self
+     }
+ }
++
++#[cfg(test)]
++#[path = "resolved/checked_codec_category_tests.rs"]
++mod checked_codec_category_tests;
++
++#[cfg(test)]
++#[path = "resolved/checked_hidden_provider_interface_tests.rs"]
++mod checked_hidden_provider_interface_tests;
+--- /dev/null
++++ b/src/resolved/checked_codec_category_tests.rs
+@@ -0,0 +1,151 @@
++//! Real original-checker views may contain both legacy and checked call codecs.
++//! The view and its authentication remain passive; no native call is evaluated.
++
++use super::*;
++use crate::{
++    module::{ModuleGraph, ModuleRoots},
++    resolve::{DependencyExports, ResolveModuleError, ResolveReason},
++};
++use std::sync::atomic::{AtomicU64, Ordering};
++
++const SOURCE: &str = include_str!("../../tests/fixtures/checked-owner-lifecycle/owner.ash");
++
++fn graph(source: &str) -> ModuleGraph {
++    static IDS: AtomicU64 = AtomicU64::new(0);
++    let directory = std::env::temp_dir().join(format!(
++        "ash-checked-codec-category-{}-{}",
++        std::process::id(),
++        IDS.fetch_add(1, Ordering::Relaxed)
++    ));
++    std::fs::create_dir(&directory).unwrap();
++    std::fs::write(directory.join("entry.ash"), source).unwrap();
++    let graph =
++        crate::module::load_module_graph(&directory.join("entry.ash"), &ModuleRoots::empty())
++            .unwrap();
++    std::fs::remove_dir_all(directory).unwrap();
++    graph
++}
++
++fn resolve_entry(graph: &ModuleGraph) -> Result<ResolvedModule, ResolveModuleError> {
++    let mut dependencies_checked = Vec::<CheckedModule>::new();
++    for loaded in graph.modules() {
++        let dependencies = loaded
++            .dependencies()
++            .iter()
++            .map(|edge| {
++                DependencyExports::new(
++                    edge,
++                    dependencies_checked
++                        .iter()
++                        .find(|module| module.module() == edge.target())
++                        .unwrap()
++                        .exports(),
++                )
++                .unwrap()
++            })
++            .collect::<Vec<_>>();
++        let resolved = crate::resolve::resolve_checked_foreign_module(loaded, &dependencies)?;
++        if loaded.id() == graph.entry() {
++            return Ok(resolved);
++        }
++        dependencies_checked.push(crate::elaborate::check_module(resolved).unwrap());
++    }
++    panic!("fixture entry");
++}
++
++fn original_view() -> ResolvedRegistry {
++    let graph = graph(SOURCE);
++    let resolved = resolve_entry(&graph).expect(
++        "canonical lifecycle source resolves without checking or executing lifecycle bodies",
++    );
++    resolved
++        .registry()
++        .source_original_checker_view(resolved.imported_facts(), &mut TypeWorkBudget::default())
++        .unwrap()
++}
++
++fn assert_distinct_original_codecs(view: &ResolvedRegistry) {
++    assert_eq!(view.native_symbols.len(), 2);
++    assert_eq!(view.scalar_preflights.len(), 10);
++    let checked = view.native_symbols.values().next().unwrap().call_codec();
++    let legacy = view.scalar_preflights.values().next().unwrap().call_codec();
++    assert_eq!(
++        checked.module(),
++        legacy.module(),
++        "both exact codec originals originate in the same builtin Foreign module"
++    );
++    assert_eq!(checked.ids().call, NominalTypeId::new(checked.module(), 12));
++    assert_eq!(legacy.ids().call, NominalTypeId::new(legacy.module(), 1));
++    assert_ne!(checked.ids().call, legacy.ids().call);
++    for symbol in view.native_symbols.values() {
++        assert_eq!(symbol.call_codec().ids(), checked.ids());
++    }
++    for preflight in view.scalar_preflights.values() {
++        assert_eq!(preflight.call_codec().ids(), legacy.ids());
++    }
++}
++
++#[test]
++fn checked_codec_category_real_original_view_accepts_both_call_identities() {
++    let view = original_view();
++    assert_distinct_original_codecs(&view);
++    view.authenticate_provider_contracts(&mut TypeWorkBudget::default())
++        .expect("real original view must authenticate legacy preflight and checked native codecs independently");
++}
++
++#[test]
++fn checked_codec_category_authentication_has_exact_prefix_spent_and_fresh_limits() {
++    let view = original_view();
++    assert_distinct_original_codecs(&view);
++    let mut measured = TypeWorkBudget::default();
++    view.authenticate_provider_contracts(&mut measured)
++        .expect("canonical category authentication before budget controls");
++    let cost = measured.used();
++    assert!(cost > 0);
++    for prefix in [0, 7] {
++        let mut exact = TypeWorkBudget::with_limit(prefix + cost);
++        exact.charge(prefix).unwrap();
++        view.authenticate_provider_contracts(&mut exact).unwrap();
++        assert_eq!(exact.used(), prefix + cost);
++        assert_eq!(
++            view.authenticate_provider_contracts(&mut exact),
++            Err(ResolvedBuildFailure::TypeResource)
++        );
++        let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
++        short.charge(prefix).unwrap();
++        assert_eq!(
++            view.authenticate_provider_contracts(&mut short),
++            Err(ResolvedBuildFailure::TypeResource)
++        );
++    }
++    for _ in 0..2 {
++        let mut fresh = TypeWorkBudget::with_limit(cost);
++        view.authenticate_provider_contracts(&mut fresh).unwrap();
++        assert_eq!(fresh.used(), cost);
++    }
++}
++
++#[test]
++fn checked_codec_category_does_not_accept_a_legacy_outer_call_for_checked_teardown() {
++    resolve_entry(&graph(SOURCE))
++        .expect("unchanged checked symbol must bind before testing its outer codec mutation");
++    let before = "State<H, R> -> Foreign.CheckedCall<Foreign.Disposition<Unit>>";
++    assert_eq!(SOURCE.matches(before).count(), 1);
++    let changed = SOURCE.replace(
++        before,
++        "State<H, R> -> Foreign.Call<Foreign.Disposition<Unit>>",
++    );
++    let graph = graph(&changed);
++    let entry = graph.module(graph.entry()).unwrap();
++    crate::foreign::source_contract::prepare_checked_foreign_library(
++        entry.id(),
++        &entry.surface().foreign_libraries[0],
++    )
++    .expect("passive ABI preparation alone cannot establish the resolved outer codec identity");
++    let error = resolve_entry(&graph)
++        .expect_err("checked source binding must reject the parsed legacy outer Call");
++    assert!(
++        matches!(error, ResolveModuleError::Resolution(ref diagnostic) if diagnostic.reason == ResolveReason::ForeignContract),
++        "expected exact binding refusal, not a resource or syntax failure: {error:?}"
++    );
++}
+--- /dev/null
++++ b/src/resolved/checked_hidden_provider_interface_tests.rs
+@@ -0,0 +1,532 @@
++//! Real hidden source-resource provider interfaces, without native execution.
++
++use super::*;
++use crate::{
++    module::{ModuleGraph, ModuleRoots},
++    resolve::{DependencyExports, ResolveModuleError, ResolveReason},
++};
++use std::sync::atomic::{AtomicU64, Ordering};
++
++const SOURCE: &str = include_str!("../../tests/fixtures/checked-owner-lifecycle/owner.ash");
++
++fn graph_for_source(source: &str, consumer: Option<&str>) -> ModuleGraph {
++    static IDS: AtomicU64 = AtomicU64::new(0);
++    let directory = std::env::temp_dir().join(format!(
++        "ash-hidden-checked-provider-{}-{}",
++        std::process::id(),
++        IDS.fetch_add(1, Ordering::Relaxed)
++    ));
++    std::fs::create_dir(&directory).unwrap();
++    std::fs::write(directory.join("producer.ash"), source).unwrap();
++    let entry = if let Some(consumer) = consumer {
++        std::fs::write(directory.join("entry.ash"), consumer).unwrap();
++        directory.join("entry.ash")
++    } else {
++        directory.join("producer.ash")
++    };
++    let graph = crate::module::load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
++    std::fs::remove_dir_all(directory).unwrap();
++    graph
++}
++
++fn graph(consumer: Option<&str>) -> ModuleGraph {
++    graph_for_source(SOURCE, consumer)
++}
++
++fn check_graph(graph: &ModuleGraph) -> Result<Vec<CheckedModule>, ResolveModuleError> {
++    let mut checked = Vec::<CheckedModule>::new();
++    let mut availability = crate::elaborate::ProviderCodeAvailability::default();
++    let (mut checking, bytes) = crate::compiler_work::source_work(graph).unwrap();
++    let limit = checking.limit();
++    checking
++        .finish_sizing(crate::calibration::limit(
++            limit,
++            crate::calibration::DiagnosticOwner::Structural,
++        ))
++        .unwrap();
++    let rewrite = crate::calibration::limit(
++        crate::compiler_work::rewrite_total(bytes).unwrap(),
++        crate::calibration::DiagnosticOwner::Structural,
++    );
++    let mut coverage = crate::pattern::UsefulnessBudget::default();
++    let mut constraints = crate::interface::InterfaceConstraintBudget::default();
++    for loaded in graph.modules() {
++        let dependencies = loaded
++            .dependencies()
++            .iter()
++            .map(|edge| {
++                DependencyExports::new(
++                    edge,
++                    checked
++                        .iter()
++                        .find(|module| module.module() == edge.target())
++                        .unwrap()
++                        .exports(),
++                )
++                .unwrap()
++            })
++            .collect::<Vec<_>>();
++        let resolved = crate::resolve::resolve_checked_foreign_module(loaded, &dependencies)?;
++        let module = crate::elaborate::check_module_with_budget_and_provider_codes_and_rewrite_work(resolved, &availability, &mut checking, &mut coverage, &mut constraints, Some(TypeWorkBudget::with_limit(rewrite)))
++            .expect("real checked lifecycle source completes under normal source-phase funding before summary mutation");
++        if let Some(code) = module.provider_code() {
++            availability
++                .retain(module.module(), code, &mut checking)
++                .unwrap();
++        }
++        if let Some(code) = module.source_resource_code() {
++            availability
++                .retain_source(module.module(), code, &mut checking)
++                .unwrap();
++        }
++        checked.push(module);
++    }
++    Ok(checked)
++}
++
++fn producer() -> CheckedModule {
++    check_graph(&graph(None)).unwrap().pop().unwrap()
++}
++
++fn authenticate(
++    summary: &ExportSummary,
++    work: &mut TypeWorkBudget,
++) -> Result<(), ResolvedBuildFailure> {
++    summary.authenticate(
++        work,
++        &mut crate::interface::InterfaceConstraintBudget::default(),
++    )
++}
++
++fn assert_hidden_provider(module: &CheckedModule) -> InterfaceId {
++    let summary = module.exports();
++    authenticate(summary, &mut TypeWorkBudget::default())
++        .expect("canonical hidden-provider summary authenticates under the default allowance");
++    let header = summary
++        .source_resource_facts
++        .values()
++        .find(|fact| fact.id.module() == module.module() && fact.spelling == "Probe")
++        .expect("real retained private resource header");
++    let id = header.provider.interface.id;
++    assert_eq!(id.module(), module.module());
++    let mut facts = summary
++        .hidden_interfaces
++        .iter()
++        .filter(|fact| fact.id == id);
++    let hidden = facts
++        .next()
++        .expect("exact private provider interface is retained");
++    assert!(facts.next().is_none());
++    assert_eq!(hidden.spelling, "ProbeProvider");
++    let checked = module
++        .interface_facts()
++        .iter()
++        .find(|fact| fact.id == id)
++        .unwrap();
++    assert!(
++        std::ptr::eq(hidden.as_ref(), checked.as_ref()),
++        "publication forwards the immutable actual checked interface fact"
++    );
++    assert!(!summary.interface_names.contains_key("ProbeProvider"));
++    assert!(
++        !summary
++            .interface_names
++            .values()
++            .any(|candidate| *candidate == id)
++    );
++    assert!(!summary.interface_positions.contains_key(&id));
++    assert!(!summary.interfaces.iter().any(|fact| fact.id == id));
++    for method in &hidden.methods {
++        assert!(!summary.method_names.contains_key(&method.spelling));
++        assert!(
++            !summary
++                .method_names
++                .values()
++                .any(|candidate| *candidate == method.id)
++        );
++    }
++    id
++}
++
++#[test]
++fn checked_hidden_provider_interface_is_retained_without_public_names() {
++    assert_hidden_provider(&producer());
++}
++
++#[test]
++fn checked_hidden_provider_interface_missing_exact_fact_refuses() {
++    let module = producer();
++    let required = assert_hidden_provider(&module);
++    let mut summary = module.into_exports();
++    let before = summary.hidden_interfaces.len();
++    summary.hidden_interfaces.retain(|fact| fact.id != required);
++    assert_eq!(summary.hidden_interfaces.len() + 1, before);
++    assert_eq!(
++        authenticate(&summary, &mut TypeWorkBudget::default()),
++        Err(ResolvedBuildFailure::InvalidState)
++    );
++}
++
++#[test]
++fn checked_hidden_provider_interface_genuine_donor_cannot_replace_required_identity() {
++    let module = producer();
++    let required = assert_hidden_provider(&module);
++    let donor = producer();
++    let donor_id = assert_hidden_provider(&donor);
++    assert_ne!(required.module(), donor_id.module());
++    let donor_fact = donor
++        .exports()
++        .hidden_interfaces
++        .iter()
++        .find(|fact| fact.id == donor_id)
++        .unwrap();
++    let mut summary = module.into_exports();
++    let slot = summary
++        .hidden_interfaces
++        .iter()
++        .position(|fact| fact.id == required)
++        .unwrap();
++    let original = &summary.hidden_interfaces[slot];
++    assert_eq!(original.spelling, donor_fact.spelling);
++    assert_eq!(original.parameters.len(), donor_fact.parameters.len());
++    assert_eq!(original.methods.len(), donor_fact.methods.len());
++    // Forward a genuine immutable fact from another completed producer; never
++    // rewrite its admitted ID or mint a same-shaped checked fact in the test.
++    summary.hidden_interfaces[slot] = donor_fact.clone();
++    assert_eq!(
++        authenticate(&summary, &mut TypeWorkBudget::default()),
++        Err(ResolvedBuildFailure::InvalidState)
++    );
++}
++
++#[test]
++fn checked_hidden_provider_interface_summary_has_exact_prefix_short_spent_fresh_limits() {
++    let module = producer();
++    assert_hidden_provider(&module);
++    let summary = module.exports();
++    let mut measured = TypeWorkBudget::default();
++    authenticate(summary, &mut measured).unwrap();
++    let cost = measured.used();
++    assert!(cost > 0);
++    for prefix in [0, 7] {
++        let mut exact = TypeWorkBudget::with_limit(prefix + cost);
++        exact.charge(prefix).unwrap();
++        authenticate(summary, &mut exact).unwrap();
++        assert_eq!(exact.used(), prefix + cost);
++        assert_eq!(
++            authenticate(summary, &mut exact),
++            Err(ResolvedBuildFailure::TypeResource)
++        );
++        let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
++        short.charge(prefix).unwrap();
++        assert_eq!(
++            authenticate(summary, &mut short),
++            Err(ResolvedBuildFailure::TypeResource)
++        );
++    }
++    for _ in 0..2 {
++        let mut fresh = TypeWorkBudget::with_limit(cost);
++        authenticate(summary, &mut fresh).unwrap();
++        assert_eq!(fresh.used(), cost);
++    }
++}
++
++#[test]
++fn checked_hidden_provider_interface_cannot_be_imported_by_private_spelling() {
++    assert_hidden_provider(&producer());
++    let graph = graph(Some(
++        "import producer (ProbeProvider)\nmain : Unit -> Int\nmain () = 42\n",
++    ));
++    let error = check_graph(&graph)
++        .expect_err("hidden provider retention must not publish the private interface name");
++    assert!(
++        matches!(error, ResolveModuleError::Resolution(ref diagnostic) if diagnostic.reason == ResolveReason::UnavailableExport),
++        "expected private export refusal after genuine producer checking: {error:?}"
++    );
++}
++
++#[test]
++fn checked_hidden_provider_interface_local_share_rejects_source_method_mirrors() {
++    let module = producer();
++    let id = assert_hidden_provider(&module);
++    let fact = module
++        .interface_facts()
++        .iter()
++        .find(|fact| fact.id == id)
++        .unwrap();
++    let source = module
++        .interfaces()
++        .iter()
++        .find(|source| source.id == id)
++        .unwrap();
++    let share = |source: &ResolvedInterfaceDeclaration| {
++        share_checked_interface_fact(
++            fact,
++            Some(source),
++            &mut TypeWorkBudget::default(),
++            &mut crate::interface::InterfaceConstraintBudget::default(),
++        )
++    };
++    let canonical = share(source)
++        .expect("genuine same-graph source and checked local provider fact share canonically");
++    assert!(std::ptr::eq(canonical.as_ref(), fact.as_ref()));
++    let mut wrong_annotation = source.clone();
++    assert_ne!(wrong_annotation.methods[0].annotation.span, source.span);
++    wrong_annotation.methods[0].annotation.span = source.span;
++    assert_eq!(
++        share(&wrong_annotation),
++        Err(ResolvedBuildFailure::InvalidState)
++    );
++    let mut wrong_origin = source.clone();
++    assert_ne!(wrong_origin.methods[0].origin.primary_span(), source.span);
++    wrong_origin.methods[0].origin = Origin::Source(source.span);
++    assert_eq!(
++        share(&wrong_origin),
++        Err(ResolvedBuildFailure::InvalidState)
++    );
++    let mut wrong_method_type = source.clone();
++    assert_ne!(wrong_method_type.methods[0].annotation.ty, Type::Unit);
++    wrong_method_type.methods[0].annotation.ty = Type::Unit;
++    assert_eq!(
++        share(&wrong_method_type),
++        Err(ResolvedBuildFailure::InvalidState)
++    );
++    // Only cloned source claims changed; the admitted shared fact was never
++    // detached, rewritten or reminted, and remains usable with its real source.
++    let again = share(source).unwrap();
++    assert!(std::ptr::eq(again.as_ref(), fact.as_ref()));
++}
++
++#[test]
++fn checked_hidden_provider_interface_local_share_has_exact_constraint_limits() {
++    let module = producer();
++    let id = assert_hidden_provider(&module);
++    let fact = module
++        .interface_facts()
++        .iter()
++        .find(|fact| fact.id == id)
++        .unwrap();
++    let source = module
++        .interfaces()
++        .iter()
++        .find(|source| source.id == id)
++        .unwrap();
++    let share = |constraints: &mut crate::interface::InterfaceConstraintBudget| {
++        share_checked_interface_fact(
++            fact,
++            Some(source),
++            &mut TypeWorkBudget::default(),
++            constraints,
++        )
++    };
++    let mut measured = crate::interface::InterfaceConstraintBudget::default();
++    let canonical = share(&mut measured)
++        .expect("canonical local source authentication before exact constraint controls");
++    assert!(std::ptr::eq(canonical.as_ref(), fact.as_ref()));
++    let cost = measured.used();
++    assert!(cost > 0);
++    for prefix in [0, 7] {
++        let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(prefix + cost);
++        exact.charge(prefix).unwrap();
++        let retained = share(&mut exact).unwrap();
++        assert!(std::ptr::eq(retained.as_ref(), fact.as_ref()));
++        assert_eq!(exact.used(), prefix + cost);
++        assert_eq!(
++            share(&mut exact),
++            Err(ResolvedBuildFailure::ConstraintResource)
++        );
++        let mut short = crate::interface::InterfaceConstraintBudget::with_limit(prefix + cost - 1);
++        short.charge(prefix).unwrap();
++        assert_eq!(
++            share(&mut short),
++            Err(ResolvedBuildFailure::ConstraintResource)
++        );
++    }
++    for _ in 0..2 {
++        let mut fresh = crate::interface::InterfaceConstraintBudget::with_limit(cost);
++        let retained = share(&mut fresh).unwrap();
++        assert!(std::ptr::eq(retained.as_ref(), fact.as_ref()));
++        assert_eq!(fresh.used(), cost);
++    }
++}
++
++fn assert_hidden_state(module: &CheckedModule) -> NominalTypeId {
++    assert_hidden_provider(module);
++    let summary = module.exports();
++    let header = summary
++        .source_resource_facts
++        .values()
++        .find(|fact| fact.id.module() == module.module() && fact.spelling == "Probe")
++        .unwrap();
++    let state = header
++        .state
++        .ty
++        .outer_nominal()
++        .expect("actual original owner State application");
++    let nominal = module
++        .registry()
++        .nominal(state)
++        .expect("actual canonical passive owner nominal");
++    assert_eq!(nominal.spelling, "State");
++    let hidden = summary
++        .hidden_nominals
++        .get(&state)
++        .expect("required private State has ordinary hidden metadata");
++    assert_eq!(hidden.id, state);
++    assert_eq!(hidden.spelling, "State");
++    assert!(hidden.display_is_private);
++    assert_eq!(hidden.access, ImportedTypeAccess::Hidden);
++    assert_eq!(hidden.constructor_count, 0);
++    assert!(hidden.constructors.is_empty());
++    assert_eq!(
++        hidden.parameters.as_ref(),
++        module.registry().nominal_parameters(state).unwrap()
++    );
++    assert_eq!(hidden.parameter_count, 2);
++    assert!(
++        hidden
++            .parameters
++            .iter()
++            .all(|parameter| parameter.kind == Kind::Type)
++    );
++    assert!(summary.hidden_nominal_order.contains(&state));
++    assert!(!summary.nominal_names_by_id.contains_key(&state));
++    assert!(!summary.nominals.values().any(|fact| fact.id == state));
++    assert!(
++        !summary
++            .constructors
++            .values()
++            .any(|fact| fact.id.owner() == state)
++    );
++    assert!(
++        !summary
++            .hidden_constructors
++            .keys()
++            .any(|id| id.owner() == state)
++    );
++    state
++}
++
++#[test]
++fn checked_hidden_private_state_retains_exact_owner_parameters_without_names() {
++    assert_hidden_state(&producer());
++}
++
++#[test]
++fn checked_hidden_private_state_missing_row_and_order_refuses() {
++    let module = producer();
++    let state = assert_hidden_state(&module);
++    let mut summary = module.into_exports();
++    let original_headers = summary
++        .source_resource_facts
++        .values()
++        .cloned()
++        .collect::<Vec<_>>();
++    let original_native = summary.native_symbols.values().cloned().collect::<Vec<_>>();
++    assert!(summary.hidden_nominals.remove(&state).is_some());
++    summary.hidden_nominal_order.retain(|id| *id != state);
++    assert!(original_headers.iter().all(|original| {
++        summary
++            .source_resource_facts
++            .values()
++            .any(|fact| Arc::ptr_eq(original, fact))
++    }));
++    assert!(original_native.iter().all(|original| {
++        summary
++            .native_symbols
++            .values()
++            .any(|fact| Arc::ptr_eq(original, fact))
++    }));
++    assert_eq!(
++        authenticate(&summary, &mut TypeWorkBudget::default()),
++        Err(ResolvedBuildFailure::InvalidState)
++    );
++}
++
++#[test]
++fn checked_hidden_private_state_same_kind_donor_parameters_refuse() {
++    let module = producer();
++    let state = assert_hidden_state(&module);
++    let donor = producer();
++    let donor_state = assert_hidden_state(&donor);
++    assert_ne!(state.module(), donor_state.module());
++    let donor_parameters = &donor.exports().hidden_nominals[&donor_state].parameters;
++    let mut summary = module.into_exports();
++    let hidden = summary.hidden_nominals.get_mut(&state).unwrap();
++    assert_eq!(hidden.parameters.len(), donor_parameters.len());
++    assert!(
++        hidden
++            .parameters
++            .iter()
++            .zip(donor_parameters.iter())
++            .all(|(original, donor)| original.kind == donor.kind
++                && original.spelling == donor.spelling
++                && original.id != donor.id)
++    );
++    // Only the projected hidden parameter vector changes. The exact owner,
++    // lifecycle, source header and native operation originals remain intact.
++    hidden.parameters = donor_parameters.clone();
++    assert_eq!(
++        authenticate(&summary, &mut TypeWorkBudget::default()),
++        Err(ResolvedBuildFailure::InvalidState)
++    );
++}
++
++#[test]
++fn checked_hidden_private_state_name_remains_unavailable_to_consumers() {
++    assert_hidden_state(&producer());
++    let graph = graph(Some(
++        "import producer (State)\nmain : Unit -> Int\nmain () = 42\n",
++    ));
++    let error = check_graph(&graph)
++        .expect_err("hidden State metadata cannot publish the private owner spelling");
++    assert!(
++        matches!(error, ResolveModuleError::Resolution(ref diagnostic) if diagnostic.reason == ResolveReason::UnavailableExport),
++        "expected private State export refusal after genuine producer checking: {error:?}"
++    );
++}
++
++#[test]
++fn checked_hidden_private_state_does_not_retain_an_unreferenced_passive_owner() {
++    assert_hidden_state(&producer());
++    let prefix = SOURCE.split("\npub type Acquire").next().unwrap();
++    let library = prefix
++        .strip_prefix("import @builtin.foreign as Foreign\n")
++        .unwrap()
++        .replace("Memory", "UnusedMemory")
++        .replace("Size", "UnusedSize")
++        .replace("Address", "UnusedAddress")
++        .replace("Callee", "UnusedCallee")
++        .replace("State", "UnusedState")
++        .replace("Allocate", "UnusedAllocate")
++        .replace("Free", "UnusedFree");
++    let source = format!(
++        "import @builtin.foreign as Foreign\n{library}\npub idle : Unit -> Int\nidle () = 42\n"
++    );
++    let mut checked = check_graph(&graph_for_source(&source, None)).unwrap();
++    let module = checked.pop().unwrap();
++    let unused = module
++        .registry()
++        .nominals()
++        .iter()
++        .find(|nominal| nominal.id.module() == module.module() && nominal.spelling == "UnusedState")
++        .expect("valid unrelated passive private owner was actually resolved");
++    assert!(unused.constructors.is_empty());
++    assert!(
++        module
++            .registry()
++            .source_owner_candidates()
++            .any(|(_, _, nominal, _)| nominal == unused.id)
++    );
++    let summary = module.exports();
++    assert!(!summary.hidden_nominals.contains_key(&unused.id));
++    assert!(!summary.hidden_nominal_order.contains(&unused.id));
++    assert!(
++        !summary
++            .nominals
++            .values()
++            .any(|nominal| nominal.id == unused.id)
++    );
++    assert!(!summary.nominal_names_by_id.contains_key(&unused.id));
++    authenticate(summary, &mut TypeWorkBudget::default()).unwrap();
++}
+--- a/tests/checked_foreign_lifecycle.rs
++++ b/tests/checked_foreign_lifecycle.rs
+@@ -40,3 +40,130 @@
+     }
+     assert_eq!(checked.len(), graph.modules().len());
+ }
++
++struct TemporarySource(std::path::PathBuf);
++impl TemporarySource {
++    fn new(source: &str) -> Self {
++        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
++        let directory = std::env::temp_dir().join(format!(
++            "ash-checked-lifecycle-{}-{}",
++            std::process::id(),
++            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
++        ));
++        std::fs::create_dir_all(&directory).unwrap();
++        let path = directory.join("owner.ash");
++        std::fs::write(&path, source).unwrap();
++        Self(path)
++    }
++    fn graph(&self) -> ash::module::ModuleGraph {
++        ash::module::load_module_graph(&self.0, &ash::module::ModuleRoots::empty()).unwrap()
++    }
++}
++impl Drop for TemporarySource {
++    fn drop(&mut self) {
++        std::fs::remove_dir_all(self.0.parent().unwrap()).unwrap();
++    }
++}
++
++#[test]
++fn checked_owner_lifecycle_fallible_scalar_finish_does_not_borrow_void_refinement() {
++    let source = include_str!("fixtures/checked-owner-lifecycle/owner.ash");
++    let original = source.split("\npub type Acquire").next().unwrap();
++    let fallible = original
++        .replace(
++            "symbol Free<H, R> : State<H, R> ->",
++            "symbol Free<H, R> : (State<H, R>, Int) ->",
++        )
++        .replace(
++            "abi (pointer(Address)) -> void",
++            "abi (pointer(Address), Size) -> void",
++        )
++        .replace(
++            "operand 0 from 0 current",
++            "operand 0 from 0 current\n        operand 1 from 1 scalar",
++        )
++        .replace(
++            "output result as owner(State<H, R>)",
++            "destruction_operand 1 from 0 scalar\n        output result as owner(State<H, R>)",
++        );
++    assert_ne!(fallible, original);
++    let passive = TemporarySource::new(&format!(
++        "{fallible}\npub idle : Unit -> Int\nidle () = 42\n"
++    ));
++    let graph = passive.graph();
++    let producer = graph.module(graph.entry()).unwrap();
++    let prepared = ash::foreign::source_contract::prepare_checked_foreign_library(
++        producer.id(),
++        &producer.surface().foreign_libraries[0],
++    )
++    .expect("the actual fallible scalar teardown prepares canonically");
++    assert_eq!(prepared.symbols()[1].operands().len(), 2);
++    let mut checked: Vec<ash::resolved::CheckedModule> = Vec::new();
++    for loaded in graph.modules() {
++        let dependencies = loaded
++            .dependencies()
++            .iter()
++            .map(|edge| {
++                ash::resolve::DependencyExports::new(
++                    edge,
++                    checked
++                        .iter()
++                        .find(|module| module.module() == edge.target())
++                        .unwrap()
++                        .exports(),
++                )
++                .unwrap()
++            })
++            .collect::<Vec<_>>();
++        let resolved = ash::resolve::resolve_checked_foreign_module(loaded, &dependencies)
++            .expect("fallible scalar teardown originals bind before lifecycle use");
++        checked.push(
++            ash::elaborate::check_module(resolved).expect("passive fallible contract checks"),
++        );
++    }
++    let lifecycle = source.replacen(original, &fallible, 1).replace(
++        "perform Free<H, R>.call state",
++        "perform Free<H, R>.call (state, 7)",
++    );
++    let fixture = TemporarySource::new(&lifecycle);
++    let graph = fixture.graph();
++    let mut checked: Vec<ash::resolved::CheckedModule> = Vec::new();
++    for loaded in graph.modules() {
++        let dependencies = loaded
++            .dependencies()
++            .iter()
++            .map(|edge| {
++                ash::resolve::DependencyExports::new(
++                    edge,
++                    checked
++                        .iter()
++                        .find(|module| module.module() == edge.target())
++                        .unwrap()
++                        .exports(),
++                )
++                .unwrap()
++            })
++            .collect::<Vec<_>>();
++        let resolved = ash::resolve::resolve_checked_foreign_module(loaded, &dependencies).expect(
++            "the real scalar conversion contract resolves before its unsupported lifecycle",
++        );
++        match ash::elaborate::check_module(resolved) {
++            Ok(module) => checked.push(module),
++            Err(ash::elaborate::TypeError::Source(error)) => {
++                assert_eq!(loaded.id(), graph.entry());
++                assert_eq!(error.reason, ash::elaborate::TypeReason::Argument);
++                let message = format!("{error:?}");
++                assert!(
++                    message.contains("source resource header requires matching owned state"),
++                    "{message}"
++                );
++                assert!(!message.contains("ResourceExhausted"), "{message}");
++                return;
++            }
++            Err(error) => {
++                panic!("unsupported scalar lifecycle must reject semantically: {error:?}")
++            }
++        }
++    }
++    panic!("fallible scalar conversion cannot use the State-only void finish refinement");
++}
+--- /dev/null
++++ b/tests/fixtures/checked-owner-lifecycle/latest_payload_escape.ash
+@@ -0,0 +1,24 @@
++import @builtin.foreign as Foreign
++import @builtin.cell as Cell
++import producer as Producer
++
++initial : Unit -> Int
++initial () = 7
++
++main : Unit -> Foreign.CheckedScope<Unit, Unit, Unit -> Int>
++main () = foreign host H {
++    resource cell<C> outer = 0 {
++        let report = handle (
++            resource Producer.Probe<H, R> owner = initial {
++            let replacement : Unit -> Int = fn(ignored) {
++                let retained = outer
++                42
++            }
++            Producer.store (owner, replacement)
++            }
++        ) with Producer.Trace {
++            note ignored => resume ()
++        }
++        report
++    }
++}
+--- /dev/null
++++ b/tests/fixtures/checked-owner-lifecycle/latest_payload_producer.ash
+@@ -0,0 +1,93 @@
++import @builtin.foreign as Foreign
++foreign checked library Memory {
++    profile "x86_64-unknown-linux-gnu"
++    repr Size = size_t
++    repr Address = opaque
++    assumption Callee "the admitted native owner contract holds"
++    owner State<H, R> {
++        representation Address
++        owned R
++        host H
++        teardown Free
++    }
++    symbol Allocate<H, R> : Int -> Foreign.CheckedCall<Foreign.Output<Foreign.Nullable<State<H, R>>>> {
++        name "malloc"
++        abi (Size) -> pointer(Address)
++        host H
++        assumes { Callee }
++        operand 0 from 0 scalar
++        output result as owner(State<H, R>)
++        outcome result nonnull { readable result }
++        outcome otherwise { readable result }
++    }
++    symbol Free<H, R> : State<H, R> -> Foreign.CheckedCall<Foreign.Disposition<Unit>> {
++        name "free"
++        abi (pointer(Address)) -> void
++        host H
++        assumes { Callee }
++        operand 0 from 0 current
++        retained_dependents block
++        outcome otherwise { consumed 0 }
++    }
++}
++
++pub type Acquire<S, D, I> = Acquired(S, D)
++    | Refused(I)
++
++pub effect Trace {
++    note : Unit -> Unit
++}
++
++pub interface ProbeProvider<Access> {
++    store : (Access, Unit -> Int) -> Unit ! {ProbeOps<Access>}
++    read : Access -> Int ! {ProbeOps<Access>}
++}
++effect ProbeOps<Access> {
++    store : (Access, Unit -> Int) -> Unit
++    read : Access -> Int
++}
++pub resource Probe<H, R> {
++    owned R
++    host H
++    input (Unit -> Int)
++    state State<H, R>
++    data (Unit -> Int)
++    acquisition Acquire<State<H, R>, Unit -> Int, Unit>
++    completion Foreign.CheckedFinish<State<H, R>, Unit -> Int>
++    result Foreign.CheckedScope<Answer, Unit, Unit -> Int> for <Answer>
++    codec checked_scope
++    provider ProbeProvider<Probe<H, R>>
++    effect ProbeOps<Probe<H, R>>
++    interpret Allocate<H, R>, Free<H, R>
++    acquire initial => match perform Allocate<H, R>.call 8 {
++        Foreign.CheckedReturned(Foreign.Readable(Foreign.NonNull(state))) => Acquired(state, initial)
++        Foreign.CheckedReturned(Foreign.Readable(Foreign.Null)) => Refused ()
++        Foreign.CheckedReturned(Foreign.Unreadable) => Refused ()
++        Foreign.CheckedConversionFailed(_) => Refused ()
++        Foreign.BoundaryFailed(_) => Refused ()
++    }
++    finish (state, data) => {
++        let outcome = perform Free<H, R>.call state
++        let ignored = perform Trace.note ()
++        match outcome {
++            Foreign.CheckedReturned(Foreign.Consumed(())) => Foreign.FinishedConsumed (Foreign.FinishError data)
++            Foreign.CheckedReturned(Foreign.Retained(())) => Foreign.FinishedRetained(state, data)
++            Foreign.BoundaryFailed(reason) => Foreign.FinishedBoundary reason
++            Foreign.CheckedReturned(Foreign.BlockedDependent) => {
++                let ignored = "candidate impossible path; not witness; refinement awaiting CP assessment"
++                Foreign.FinishedConsumed Foreign.FinishOk
++            }
++            Foreign.CheckedConversionFailed(_) => {
++                let ignored = "candidate impossible path; not witness; refinement awaiting CP assessment"
++                Foreign.FinishedConsumed Foreign.FinishOk
++            }
++        }
++    }
++    handlers (state, data) {
++        read access => resume 42
++        store (access, replacement) => {
++            let ignored = Foreign.replace_data (state, replacement)
++            resume ()
++        }
++    }
++}
+--- /dev/null
++++ b/tests/fixtures/checked-owner-lifecycle/latest_payload_within.ash
+@@ -0,0 +1,32 @@
++import @builtin.foreign as Foreign
++import @builtin.cell as Cell
++import producer as Producer
++
++initial : Unit -> Int
++initial () = 7
++
++main : Unit -> Int
++main () = foreign host H {
++    resource cell<C> outer = 0 {
++        let report = handle (
++            resource Producer.Probe<H, R> owner = initial {
++            let replacement : Unit -> Int = fn(ignored) {
++                let retained = outer
++                42
++            }
++            Producer.store (owner, replacement)
++            }
++        ) with Producer.Trace {
++            note ignored => resume ()
++        }
++        match report {
++            Foreign.CheckedNotAcquired(_) => 0
++            Foreign.CheckedCompleted(_, completion) => match completion {
++                Foreign.NativeConsumed(Foreign.FinishOk, _) => 0
++                Foreign.NativeConsumed(Foreign.FinishError(callback), _) => callback ()
++                Foreign.NativeRetained(callback, _) => callback ()
++                Foreign.LocalBoundary(_) => 0
++            }
++        }
++    }
++}
+--- a/tests/fixtures/checked-owner-lifecycle/owner.ash
++++ b/tests/fixtures/checked-owner-lifecycle/owner.ash
+@@ -31,7 +31,7 @@
+     }
+ }
+ 
+-type Acquire<S, D, I> = Acquired(S, D)
++pub type Acquire<S, D, I> = Acquired(S, D)
+     | Refused(I)
+ 
+ effect Trace {

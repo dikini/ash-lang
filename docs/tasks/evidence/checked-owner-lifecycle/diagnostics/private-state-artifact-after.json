@@ -1,0 +1,8 @@
+{
+  "binary": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168",
+  "sha256": "0867646d31105d90e7bbf0baa78ca2ee2a6dc8379e057a5a49b5155801a0b52b",
+  "same_as_before": true,
+  "compilation_receipt": "lifecycle-private-state-candidate.receipt.json",
+  "source_aggregate": "837f91ea4add37a10121b12786e86b2ba3a4c9852ba3fd65bcb97a39e5579695",
+  "scope": "Existing Rust source-checking unit tests and stopped read-only GDB diagnostics only; debugger zero exit is not source success."
+}

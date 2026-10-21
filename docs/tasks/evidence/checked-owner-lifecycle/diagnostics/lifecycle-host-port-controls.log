@@ -1,0 +1,11 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 3 tests
+checked lifecycle missing value position for control 40
+test core::capture::value::host_request_tests::checked_host_request_missing_value_mapping_still_refuses ... ok
+test core::capture::value::host_request_tests::checked_host_request_mapping_has_exact_prefix_short_spent_and_fresh_limits ... ok
+test core::capture::value::host_request_tests::checked_host_request_port_preserves_native_payload_rejection_and_independent_reply ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 2045 filtered out; finished in 0.00s
+

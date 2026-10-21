@@ -305,5 +305,46 @@ legacy codecs. [Final evidence](evidence/checked-owner-binding/README.md#final-d
 records 223 distinct passes, source-resource 30/30, images 16/16 and Clippy;
 startup 318857/314727 remains below unchanged 327680. A baseline-confirmed
 node-location assertion was corrected without weakening standalone Registry
-refusal or the four independent scope mutations. Review/integration are pending.
+refusal or the four independent scope mutations. PR #96 review and GitHub
+integration completed at `91e6dee0`.
 This accepts no whole F3 criterion or connected lifecycle/Core/runtime authority.
+
+PR #96 is retained at `91e6dee0` after independent audit and PM-confirmed partial
+acceptance. Its passive binding/import and legacy-codec refusal prerequisite is
+complete; connected lifecycle was not accepted. The next authorized
+[plan checkpoint](plans/checked-ffi-contract-carriers.md#connected-static-checked-owner-lifecycle-checkpoint)
+connects dependency-free Probe<H,R> under an exact lexical host and canonical
+checked_scope, with private owner/request/outcome finish lineage and separately
+retained source continuation. Actual source/body-free consumer/Core/transforms
+precede negative and paid-budget evidence. Broader witness transport returns to
+CP-0024 if ambiguous. Whole F3, runtime/images, owner dependencies and F-core
+remain incomplete.
+
+PR #97 connects the bounded dependency-free static checked-owner lifecycle.
+Actual source and summary publication, a body-free consumer and linked
+Core/identity/fold controls precede its hostile mutations. The immutable
+flow-checked template carries exact finish request/outcome/payload lineage;
+Core independently authenticates headers, specialization and copied forests.
+Boundary inspection keeps only the original whole payload's witness, and
+post-attempt Current access does not regain native permission. Source continuation
+and latest private-data E dependencies remain separately checked.
+
+The connected path also repairs the existing mixed preflight/checked codec memo,
+hidden local provider publication/import, referenced private foreign State
+metadata and synthetic Host value ports. Internal pending provider rows retain
+paid exact H subtraction and late result/row escape obligations. No owner
+interpretation is added to the host. The
+[delivery record](evidence/checked-owner-lifecycle/README.md) separates authentic
+red cases, rejected fixture setups, the retained-base deep-work assertion
+comparison and final uniform checks. The final uniform 584-input batch records 399 distinct passes (430 passing
+lines), source-resource 30/30, images 16/16 and Clippy with warnings denied.
+Buffer/dependent-discard startup work is 318936/314929 under unchanged 327680.
+Exact-head review and integration remain pending; these final receipts are
+separate from the historical checkpoints above.
+
+This accepts no whole-F3 criterion. Private local acquisition-codec constructor
+closure, combined producer/Cell original-template and multi-library lifecycle
+cases, broader witness helper transport, declared C-to-S owner dependencies and
+remaining declaration closure stay visible. Checked runtime/native/image
+execution, K realization, deployment, F4/F6, Main and F-core remain separate.
+The existing generated-host connected F3/F4/F6 trigger still schedules F-core.

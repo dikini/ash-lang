@@ -1,0 +1,1675 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 12 tests
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 7, value: 1 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 5, value: 1 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 2, value: 1 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle source templates compile complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 11, value: 1 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 7, value: 1 }, local: 1 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 5, value: 1 }, local: 1 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 2, value: 1 }, local: 1 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle source code retention complete
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 11, value: 1 }, local: 1 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 7, value: 1 }, local: 2 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 5, value: 1 }, local: 2 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 2, value: 1 }, local: 2 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 11, value: 1 }, local: 2 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 10, value: 1 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 7, value: 1 }, local: 3 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 5, value: 1 }, local: 3 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 7, value: 1 }, local: 4 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 5, value: 1 }, local: 4 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 2, value: 1 }, local: 3 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 11, value: 1 }, local: 3 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 2, value: 1 }, local: 4 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 11, value: 1 }, local: 4 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 11, value: 1 }, local: 5 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 9, value: 1 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 7, value: 1 }, local: 5 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 6, value: 1 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 3, value: 1 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 5, value: 1 }, local: 5 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 10, value: 1 }, local: 1 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 2, value: 1 }, local: 5 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 10, value: 1 }, local: 2 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 12, value: 1 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 11, value: 1 }, local: 6 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 9, value: 1 }, local: 1 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 11, value: 1 }, local: 7 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 6, value: 1 }, local: 1 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 3, value: 1 }, local: 1 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 5, value: 1 }, local: 6 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 4, value: 1 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 2, value: 1 }, local: 6 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 10, value: 1 }, local: 3 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 12, value: 1 }, local: 1 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 7, value: 1 }, local: 6 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 12, value: 1 }, local: 2 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 11, value: 1 }, local: 8 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 12, value: 1 }, local: 3 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 11, value: 1 }, local: 9 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 5, value: 1 }, local: 7 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 4, value: 1 }, local: 1 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 2, value: 1 }, local: 7 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 10, value: 1 }, local: 4 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 2, value: 1 }, local: 8 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 7, value: 1 }, local: 7 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 2, value: 1 }, local: 9 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 3, value: 1 }, local: 2 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 12, value: 1 }, local: 4 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 5, value: 1 }, local: 8 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 3, value: 1 }, local: 3 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 5, value: 1 }, local: 9 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 9, value: 1 }, local: 2 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 10, value: 1 }, local: 5 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 5, value: 1 }, local: 10 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle finish module bodies entered
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 6, value: 1 }, local: 2 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 7, value: 1 }, local: 8 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 2, value: 1 }, local: 10 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 12, value: 1 }, local: 5 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 4, value: 1 }, local: 2 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 3, value: 1 }, local: 4 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 11, value: 1 }, local: 10 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 3, value: 1 }, local: 5 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle module result complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 10, value: 1 }, local: 6 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 3, value: 1 }, local: 6 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle finish module bodies entered
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 10, value: 1 }, local: 7 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 12, value: 1 }, local: 6 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 10, value: 1 }, local: 8 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle finish module bodies entered
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 12, value: 1 }, local: 7 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle completed capture cleanup start
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 6, value: 1 }, local: 3 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 12, value: 1 }, local: 8 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 7, value: 1 }, local: 9 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 8, value: 1 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 3, value: 1 }, local: 7 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 4, value: 1 }, local: 3 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle module result complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 9, value: 1 }, local: 3 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 10, value: 1 }, local: 9 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 9, value: 1 }, local: 4 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle module result complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 9, value: 1 }, local: 5 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 12, value: 1 }, local: 9 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 8, value: 1 }, local: 1 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 7, value: 1 }, local: 10 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle finish module bodies entered
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 3, value: 1 }, local: 8 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 4, value: 1 }, local: 4 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle capture finite values complete
+checked lifecycle completed capture check start
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 4, value: 1 }, local: 5 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 9, value: 1 }, local: 6 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 4, value: 1 }, local: 6 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 8, value: 1 }, local: 2 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 12, value: 1 }, local: 10 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle finish module bodies entered
+checked lifecycle module result complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle capture typed data complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 8, value: 1 }, local: 3 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 3, value: 1 }, local: 9 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 6, value: 1 }, local: 4 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle capture finite values complete
+checked lifecycle capture finite values complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 10, value: 1 }, local: 10 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle finish module bodies entered
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 9, value: 1 }, local: 7 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 4, value: 1 }, local: 7 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle module result complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 9, value: 1 }, local: 8 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle capture typed data complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 1 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 8, value: 1 }, local: 4 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 6, value: 1 }, local: 5 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle module result complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 3, value: 1 }, local: 10 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle module evidence and zonk complete
+checked lifecycle finish module bodies entered
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle capture typed data complete
+checked lifecycle module result complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 4, value: 1 }, local: 8 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 9, value: 1 }, local: 9 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 4, value: 1 }, local: 9 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle module bodies complete
+checked lifecycle module bodies complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 8, value: 1 }, local: 5 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle capture finite values complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 6, value: 1 }, local: 6 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 4, value: 1 }, local: 10 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle capture finite values complete
+checked lifecycle module bodies complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 6, value: 1 }, local: 7 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle body evidence audit complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 8, value: 1 }, local: 6 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 9, value: 1 }, local: 10 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 8, value: 1 }, local: 7 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle capture finite values complete
+checked lifecycle finish module bodies entered
+checked lifecycle hidden interface collection complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 2 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle provider group complete
+checked lifecycle capture typed data complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle completed capture cleanup start
+checked lifecycle finish module bodies entered
+checked lifecycle capture typed data complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 8, value: 1 }, local: 8 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle module result complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 6, value: 1 }, local: 8 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 8, value: 1 }, local: 9 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 6, value: 1 }, local: 9 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 3 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle hidden interface collection complete
+checked lifecycle completed capture check start
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 4 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle hidden interface collection complete
+checked lifecycle module bodies complete
+checked lifecycle module result complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 5 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle capture finite values complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 6, value: 1 }, local: 10 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 8, value: 1 }, local: 10 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle module bodies complete
+checked lifecycle capture finite values complete
+checked lifecycle capture typed data complete
+checked lifecycle body evidence audit complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle body evidence audit complete
+checked lifecycle completed capture cleanup start
+checked lifecycle provider group complete
+checked lifecycle completed capture check start
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 6 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle capture typed data complete
+checked lifecycle finish module bodies entered
+checked lifecycle finish module bodies entered
+checked lifecycle provider group complete
+checked lifecycle capture finite values complete
+checked lifecycle capture control compilation complete
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle capture graph complete
+checked lifecycle hidden interface collection complete
+checked lifecycle module result complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 7 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle module result complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle completed capture cleanup start
+checked lifecycle module bodies complete
+checked lifecycle completed capture check start
+checked lifecycle module bodies complete
+checked lifecycle capture finite values complete
+checked lifecycle hidden interface collection complete
+checked lifecycle body evidence audit complete
+checked lifecycle capture finite values complete
+checked lifecycle provider group complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle capture typed data complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 8 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle capture typed data complete
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 9 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle capture typed data complete
+checked lifecycle module bodies complete
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+checked lifecycle hidden nominal collection start
+checked lifecycle hidden interface collection complete
+checked lifecycle summary collection complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle module bodies complete
+checked lifecycle hidden interface collection complete
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle capture typed data complete
+checked lifecycle module bodies complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 10 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle hidden nominal collection start
+checked lifecycle finish module bodies entered
+checked lifecycle summary collection complete
+checked lifecycle hidden interface collection complete
+checked lifecycle module bodies complete
+checked lifecycle hidden interface collection complete
+checked lifecycle module result complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle body evidence audit complete
+checked lifecycle completed capture cleanup start
+checked lifecycle provider group complete
+checked lifecycle completed capture check start
+checked lifecycle hidden interface collection complete
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+checked lifecycle capture finite values complete
+checked lifecycle hidden interface collection complete
+checked lifecycle capture typed data complete
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+checked lifecycle module bodies complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+checked lifecycle hidden interface collection complete
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle original-source proof: Ok(())
+checked lifecycle builtin bytes: Ok(())
+checked lifecycle scalar originals: Ok(())
+checked lifecycle category counts provider=0 source=1 foreign=1 native=2 preflight=10 kinds=3
+checked lifecycle category provider contracts complete
+checked lifecycle category source resource kinds complete
+checked lifecycle category source foreign kinds complete
+checked lifecycle original-source proof: Ok(())
+checked lifecycle builtin bytes: Ok(())
+checked lifecycle category inventories family=3 names=3 kinds=3
+checked lifecycle provider categories: Ok(())
+checked lifecycle foreign nominal NominalTypeId { module: ModuleId { namespace: Admitted, graph: 7, value: 0 }, owner: Module, declaration: 2 }: Ok(())
+checked lifecycle scalar originals: Ok(())
+checked lifecycle category counts provider=0 source=1 foreign=1 native=2 preflight=10 kinds=3
+checked lifecycle category provider contracts complete
+checked lifecycle original-source proof: Ok(())
+checked lifecycle builtin bytes: Ok(())
+checked lifecycle category source resource kinds complete
+checked lifecycle category source foreign kinds complete
+checked lifecycle registry pre-variable inventory complete
+checked lifecycle scalar originals: Ok(())
+checked lifecycle category counts provider=0 source=1 foreign=1 native=2 preflight=10 kinds=3
+checked lifecycle category provider contracts complete
+checked lifecycle category source resource kinds complete
+checked lifecycle category source foreign kinds complete
+checked lifecycle registry variables complete
+checked lifecycle category inventories family=3 names=3 kinds=3
+checked lifecycle provider categories: Ok(())
+checked lifecycle foreign nominal NominalTypeId { module: ModuleId { namespace: Admitted, graph: 9, value: 0 }, owner: Module, declaration: 2 }: Ok(())
+checked lifecycle registry nominal formals complete
+checked lifecycle category inventories family=3 names=3 kinds=3
+checked lifecycle provider categories: Ok(())
+checked lifecycle foreign nominal NominalTypeId { module: ModuleId { namespace: Admitted, graph: 10, value: 0 }, owner: Module, declaration: 2 }: Ok(())
+checked lifecycle registry pre-variable inventory complete
+checked lifecycle registry pre-variable inventory complete
+checked lifecycle registry variables complete
+checked lifecycle registry proof: Ok(())
+checked lifecycle registry variables complete
+checked lifecycle registry nominal formals complete
+checked lifecycle registry nominal formals complete
+checked lifecycle original-source proof: Ok(())
+checked lifecycle builtin bytes: Ok(())
+checked lifecycle registry proof: Ok(())
+checked lifecycle effect registry proof: Ok(())
+checked lifecycle scalar originals: Ok(())
+checked lifecycle category counts provider=0 source=1 foreign=1 native=2 preflight=10 kinds=3
+checked lifecycle registry proof: Ok(())
+checked lifecycle category provider contracts complete
+checked lifecycle category source resource kinds complete
+checked lifecycle category source foreign kinds complete
+checked lifecycle effect registry proof: Ok(())
+checked lifecycle category inventories family=3 names=3 kinds=3
+checked lifecycle provider categories: Ok(())
+checked lifecycle foreign nominal NominalTypeId { module: ModuleId { namespace: Admitted, graph: 8, value: 0 }, owner: Module, declaration: 2 }: Ok(())
+checked lifecycle registry pre-variable inventory complete
+checked lifecycle effect registry proof: Ok(())
+checked lifecycle registry variables complete
+checked lifecycle registry nominal formals complete
+checked lifecycle registry proof: Ok(())
+checked lifecycle effect registry proof: Ok(())
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle original-source proof: Ok(())
+checked lifecycle builtin bytes: Ok(())
+checked lifecycle original-source proof: Ok(())
+checked lifecycle builtin bytes: Ok(())
+checked lifecycle scalar originals: Ok(())
+checked lifecycle category counts provider=0 source=1 foreign=1 native=2 preflight=10 kinds=3
+checked lifecycle category provider contracts complete
+checked lifecycle scalar originals: Ok(())
+checked lifecycle category counts provider=0 source=1 foreign=1 native=2 preflight=10 kinds=3
+checked lifecycle category provider contracts complete
+checked lifecycle category source resource kinds complete
+checked lifecycle category source foreign kinds complete
+checked lifecycle category source resource kinds complete
+checked lifecycle category source foreign kinds complete
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle category inventories family=3 names=3 kinds=3
+checked lifecycle provider categories: Ok(())
+checked lifecycle foreign nominal NominalTypeId { module: ModuleId { namespace: Admitted, graph: 5, value: 0 }, owner: Module, declaration: 2 }: Ok(())
+checked lifecycle category inventories family=3 names=3 kinds=3
+checked lifecycle provider categories: Ok(())
+checked lifecycle foreign nominal NominalTypeId { module: ModuleId { namespace: Admitted, graph: 2, value: 0 }, owner: Module, declaration: 2 }: Ok(())
+checked lifecycle original-source proof: Ok(())
+checked lifecycle builtin bytes: Ok(())
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle registry pre-variable inventory complete
+checked lifecycle scalar originals: Ok(())
+checked lifecycle category counts provider=0 source=1 foreign=1 native=2 preflight=10 kinds=3
+checked lifecycle category provider contracts complete
+checked lifecycle registry pre-variable inventory complete
+checked lifecycle category source resource kinds complete
+checked lifecycle category source foreign kinds complete
+checked lifecycle registry variables complete
+checked lifecycle registry variables complete
+checked lifecycle registry nominal formals complete
+checked lifecycle original-source proof: Ok(())
+checked lifecycle builtin bytes: Ok(())
+checked lifecycle registry nominal formals complete
+checked lifecycle category inventories family=3 names=3 kinds=3
+checked lifecycle provider categories: Ok(())
+checked lifecycle foreign nominal NominalTypeId { module: ModuleId { namespace: Admitted, graph: 12, value: 0 }, owner: Module, declaration: 2 }: Ok(())
+checked lifecycle scalar originals: Ok(())
+checked lifecycle category counts provider=0 source=1 foreign=1 native=2 preflight=10 kinds=3
+checked lifecycle category provider contracts complete
+checked lifecycle category source resource kinds complete
+checked lifecycle original-source proof: Ok(())
+checked lifecycle builtin bytes: Ok(())
+checked lifecycle category source foreign kinds complete
+checked lifecycle registry pre-variable inventory complete
+checked lifecycle scalar originals: Ok(())
+checked lifecycle category counts provider=0 source=1 foreign=1 native=2 preflight=10 kinds=3
+checked lifecycle category provider contracts complete
+checked lifecycle original-source proof: Ok(())
+checked lifecycle builtin bytes: Ok(())
+checked lifecycle category source resource kinds complete
+checked lifecycle category source foreign kinds complete
+checked lifecycle registry variables complete
+checked lifecycle registry proof: Ok(())
+checked lifecycle category inventories family=3 names=3 kinds=3
+checked lifecycle provider categories: Ok(())
+checked lifecycle scalar originals: Ok(())
+checked lifecycle foreign nominal NominalTypeId { module: ModuleId { namespace: Admitted, graph: 3, value: 0 }, owner: Module, declaration: 2 }: Ok(())
+checked lifecycle original structure answer=true: Ok(())
+checked lifecycle registry nominal formals complete
+checked lifecycle registry proof: Ok(())
+checked lifecycle original structure answer=true: Ok(())
+checked lifecycle category counts provider=0 source=1 foreign=1 native=2 preflight=10 kinds=3
+checked lifecycle category provider contracts complete
+checked lifecycle category inventories family=3 names=3 kinds=3
+checked lifecycle provider categories: Ok(())
+checked lifecycle category source resource kinds complete
+checked lifecycle category source foreign kinds complete
+checked lifecycle foreign nominal NominalTypeId { module: ModuleId { namespace: Admitted, graph: 6, value: 0 }, owner: Module, declaration: 2 }: Ok(())
+checked lifecycle header complete
+checked lifecycle registry pre-variable inventory complete
+checked lifecycle header complete
+checked lifecycle association complete
+checked lifecycle association complete
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle entries complete
+checked lifecycle entries complete
+checked lifecycle registry variables complete
+checked lifecycle registry pre-variable inventory complete
+checked lifecycle original-source proof: Ok(())
+checked lifecycle builtin bytes: Ok(())
+checked lifecycle category inventories family=3 names=3 kinds=3
+checked lifecycle provider categories: Ok(())
+checked lifecycle registry nominal formals complete
+checked lifecycle foreign nominal NominalTypeId { module: ModuleId { namespace: Admitted, graph: 4, value: 0 }, owner: Module, declaration: 2 }: Ok(())
+checked lifecycle flow Acquire results=4
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 7, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 7, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 7, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=true consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 7, value: 0 }, owner: Module, declaration: 0 }, constructor: 0 }, Some(18))
+checked lifecycle original-source proof: Ok(())
+checked lifecycle effect registry proof: Ok(())
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle flow Finish results=2
+checked lifecycle registry proof: Ok(())
+checked lifecycle effect registry proof: Ok(())
+checked lifecycle registry variables complete
+checked lifecycle scalar originals: Ok(())
+checked lifecycle category counts provider=0 source=1 foreign=1 native=2 preflight=10 kinds=3
+checked lifecycle category provider contracts complete
+checked lifecycle flow Acquire results=4
+checked lifecycle category source resource kinds complete
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 9, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 9, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 9, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=true consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 9, value: 0 }, owner: Module, declaration: 0 }, constructor: 0 }, Some(18))
+checked lifecycle builtin bytes: Ok(())
+checked lifecycle registry nominal formals complete
+checked lifecycle result Finish acquired=false consumed=false request=Some(Boundary(NodeId { arena: ArenaId(19), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 7, value: 1 }, owner: Module, declaration: 14 }, constructor: 2 }, Some(4))
+checked lifecycle result Finish acquired=false consumed=true request=Some(Consumed(NodeId { arena: ArenaId(19), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 7, value: 1 }, owner: Module, declaration: 14 }, constructor: 0 }, Some(11))
+checked lifecycle scalar originals: Ok(())
+checked lifecycle category counts provider=0 source=1 foreign=1 native=2 preflight=10 kinds=3
+checked lifecycle category provider contracts complete
+checked lifecycle all admitted template records complete
+checked lifecycle original structure answer=true: Ok(())
+checked lifecycle category source resource kinds complete
+checked lifecycle category source foreign kinds complete
+checked lifecycle flow Finish results=2
+checked lifecycle result Finish acquired=false consumed=false request=Some(Boundary(NodeId { arena: ArenaId(18), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 9, value: 1 }, owner: Module, declaration: 14 }, constructor: 2 }, Some(4))
+checked lifecycle result Finish acquired=false consumed=true request=Some(Consumed(NodeId { arena: ArenaId(18), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 9, value: 1 }, owner: Module, declaration: 14 }, constructor: 0 }, Some(11))
+checked lifecycle category source foreign kinds complete
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle registry pre-variable inventory complete
+checked lifecycle registry proof: Ok(())
+checked lifecycle header complete
+checked lifecycle effect registry proof: Ok(())
+checked lifecycle all admitted template records complete
+checked lifecycle association complete
+checked lifecycle category inventories family=3 names=3 kinds=3
+checked lifecycle provider categories: Ok(())
+checked lifecycle source templates compile complete
+checked lifecycle entries complete
+checked lifecycle source code retention complete
+checked lifecycle foreign nominal NominalTypeId { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, owner: Module, declaration: 2 }: Ok(())
+checked lifecycle registry variables complete
+checked lifecycle category inventories family=3 names=3 kinds=3
+checked lifecycle provider categories: Ok(())
+checked lifecycle instance schedule entered
+checked lifecycle instance template selected
+checked lifecycle foreign nominal NominalTypeId { module: ModuleId { namespace: Admitted, graph: 11, value: 0 }, owner: Module, declaration: 2 }: Ok(())
+checked lifecycle instance actuals complete
+checked lifecycle flow Acquire results=4
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 8, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 8, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 8, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=true consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 8, value: 0 }, owner: Module, declaration: 0 }, constructor: 0 }, Some(18))
+checked lifecycle instance schedule entered
+checked lifecycle instance template selected
+checked lifecycle instance actuals complete
+checked lifecycle registry nominal formals complete
+checked lifecycle registry proof: Ok(())
+checked lifecycle original structure answer=true: Ok(())
+checked lifecycle registry pre-variable inventory complete
+checked lifecycle registry pre-variable inventory complete
+checked lifecycle effect registry proof: Ok(())
+checked lifecycle flow Finish results=2
+checked lifecycle result Finish acquired=false consumed=false request=Some(Boundary(NodeId { arena: ArenaId(27), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 8, value: 1 }, owner: Module, declaration: 14 }, constructor: 2 }, Some(4))
+checked lifecycle result Finish acquired=false consumed=true request=Some(Consumed(NodeId { arena: ArenaId(27), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 8, value: 1 }, owner: Module, declaration: 14 }, constructor: 0 }, Some(11))
+checked lifecycle header complete
+checked lifecycle registry variables complete
+checked lifecycle registry variables complete
+checked lifecycle instance finish entered
+checked lifecycle all admitted template records complete
+checked lifecycle registry nominal formals complete
+checked lifecycle association complete
+checked lifecycle entries complete
+checked lifecycle registry nominal formals complete
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle instance finish entered
+checked lifecycle registry proof: Ok(())
+checked lifecycle flow Acquire results=4
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 10, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 10, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 10, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=true consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 10, value: 0 }, owner: Module, declaration: 0 }, constructor: 0 }, Some(18))
+checked lifecycle registry proof: Ok(())
+checked lifecycle instance schedule entered
+checked lifecycle instance template selected
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle instance actuals complete
+checked lifecycle flow Finish results=2
+checked lifecycle result Finish acquired=false consumed=false request=Some(Boundary(NodeId { arena: ArenaId(20), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 10, value: 1 }, owner: Module, declaration: 14 }, constructor: 2 }, Some(4))
+checked lifecycle result Finish acquired=false consumed=true request=Some(Consumed(NodeId { arena: ArenaId(20), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 10, value: 1 }, owner: Module, declaration: 14 }, constructor: 0 }, Some(11))
+checked lifecycle registry proof: Ok(())
+checked lifecycle instance rows complete
+checked lifecycle all admitted template records complete
+checked lifecycle instance rows complete
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle effect registry proof: Ok(())
+checked lifecycle effect registry proof: Ok(())
+checked lifecycle instance schedule entered
+checked lifecycle instance template selected
+checked lifecycle instance actuals complete
+checked lifecycle instance finish entered
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle instance copies prepared
+checked lifecycle instance copies prepared
+checked lifecycle instance finish entered
+checked lifecycle effect registry proof: Ok(())
+checked lifecycle effect registry proof: Ok(())
+checked lifecycle instance rows complete
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle instance rows complete
+checked lifecycle instance copies prepared
+checked lifecycle instance copies prepared
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle instance copies lowered
+checked lifecycle instance copies lowered
+checked lifecycle instance scope admitted
+checked lifecycle instance scope admitted
+checked lifecycle host finish entered
+checked lifecycle host finish entered
+checked lifecycle host interpretations=0
+checked lifecycle host interpretations=0
+checked lifecycle host finish complete
+checked lifecycle host finish complete
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle instance copies lowered
+checked lifecycle instance scope admitted
+checked lifecycle host finish entered
+checked lifecycle host interpretations=0
+checked lifecycle host finish complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: Admitted, graph: 9, value: 0 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: Admitted, graph: 7, value: 0 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle finish module bodies entered
+checked lifecycle finish module bodies entered
+checked lifecycle module result complete
+checked lifecycle module result complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: Admitted, graph: 10, value: 0 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle finish module bodies entered
+checked lifecycle module result complete
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle module evidence and zonk complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle completed capture check start
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle instance copies lowered
+checked lifecycle capture finite values complete
+checked lifecycle capture finite values complete
+checked lifecycle capture finite values complete
+checked lifecycle instance scope admitted
+checked lifecycle host finish entered
+checked lifecycle host interpretations=0
+checked lifecycle host finish complete
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: Admitted, graph: 8, value: 0 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle finish module bodies entered
+checked lifecycle module result complete
+checked lifecycle original structure answer=true: Ok(())
+checked lifecycle module evidence and zonk complete
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle header complete
+checked lifecycle capture finite values complete
+checked lifecycle association complete
+checked lifecycle entries complete
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle capture typed data complete
+checked lifecycle synthetic host control 113 for <effect:builtin.foreign:10:1:0><<type-variable:10:0:14>>
+checked lifecycle original structure answer=true: Ok(())
+checked lifecycle flow Acquire results=4
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 2, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 2, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 2, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=true consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 2, value: 0 }, owner: Module, declaration: 0 }, constructor: 0 }, Some(18))
+checked lifecycle capture typed data complete
+checked lifecycle synthetic host control 117 for <effect:builtin.foreign:10:1:0><<type-variable:10:0:14>>
+checked lifecycle capture typed data complete
+checked lifecycle header complete
+checked lifecycle synthetic host control 113 for <effect:builtin.foreign:9:1:0><<type-variable:9:0:14>>
+checked lifecycle association complete
+checked lifecycle flow Finish results=2
+checked lifecycle result Finish acquired=false consumed=false request=Some(Boundary(NodeId { arena: ArenaId(28), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 2, value: 1 }, owner: Module, declaration: 14 }, constructor: 2 }, Some(4))
+checked lifecycle capture control compilation complete
+checked lifecycle result Finish acquired=false consumed=true request=Some(Consumed(NodeId { arena: ArenaId(28), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 2, value: 1 }, owner: Module, declaration: 14 }, constructor: 0 }, Some(11))
+checked lifecycle original structure answer=true: Ok(())
+checked lifecycle entries complete
+checked lifecycle synthetic host control 117 for <effect:builtin.foreign:9:1:0><<type-variable:9:0:14>>
+checked lifecycle all admitted template records complete
+checked lifecycle original structure answer=true: Ok(())
+checked lifecycle capture graph complete
+checked lifecycle synthetic host control 113 for <effect:builtin.foreign:7:1:0><<type-variable:7:0:14>>
+checked lifecycle strict query roots complete
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle synthetic host control 117 for <effect:builtin.foreign:7:1:0><<type-variable:7:0:14>>
+checked lifecycle header complete
+checked lifecycle flow Acquire results=4
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 5, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 5, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 5, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=true consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 5, value: 0 }, owner: Module, declaration: 0 }, constructor: 0 }, Some(18))
+checked lifecycle association complete
+checked lifecycle capture control compilation complete
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle instance schedule entered
+checked lifecycle capture control compilation complete
+checked lifecycle instance template selected
+checked lifecycle entries complete
+checked lifecycle capture graph complete
+checked lifecycle header complete
+checked lifecycle instance actuals complete
+checked lifecycle capture graph complete
+checked lifecycle strict query roots complete
+checked lifecycle strict query roots complete
+checked lifecycle original structure answer=true: Ok(())
+checked lifecycle capture typed data complete
+checked lifecycle association complete
+checked lifecycle flow Finish results=2
+checked lifecycle result Finish acquired=false consumed=false request=Some(Boundary(NodeId { arena: ArenaId(29), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 5, value: 1 }, owner: Module, declaration: 14 }, constructor: 2 }, Some(4))
+checked lifecycle result Finish acquired=false consumed=true request=Some(Consumed(NodeId { arena: ArenaId(29), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 5, value: 1 }, owner: Module, declaration: 14 }, constructor: 0 }, Some(11))
+checked lifecycle entries complete
+checked lifecycle flow Acquire results=4
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=true consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, owner: Module, declaration: 0 }, constructor: 0 }, Some(18))
+checked lifecycle strict analysis constructed
+checked lifecycle synthetic host control 113 for <effect:builtin.foreign:8:1:0><<type-variable:8:0:14>>
+checked lifecycle header complete
+checked lifecycle all admitted template records complete
+checked lifecycle flow Acquire results=4
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 3, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 3, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 3, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=true consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 3, value: 0 }, owner: Module, declaration: 0 }, constructor: 0 }, Some(18))
+checked lifecycle instance finish entered
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle association complete
+checked lifecycle flow Finish results=2
+checked lifecycle result Finish acquired=false consumed=false request=Some(Boundary(NodeId { arena: ArenaId(39), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, owner: Module, declaration: 14 }, constructor: 2 }, Some(4))
+checked lifecycle result Finish acquired=false consumed=true request=Some(Consumed(NodeId { arena: ArenaId(39), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, owner: Module, declaration: 14 }, constructor: 0 }, Some(11))
+checked lifecycle synthetic host control 117 for <effect:builtin.foreign:8:1:0><<type-variable:8:0:14>>
+checked lifecycle all admitted template records complete
+checked lifecycle entries complete
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle strict analysis constructed
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle strict analysis constructed
+checked lifecycle flow Finish results=2
+checked lifecycle result Finish acquired=false consumed=false request=Some(Boundary(NodeId { arena: ArenaId(34), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 3, value: 1 }, owner: Module, declaration: 14 }, constructor: 2 }, Some(4))
+checked lifecycle result Finish acquired=false consumed=true request=Some(Consumed(NodeId { arena: ArenaId(34), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 3, value: 1 }, owner: Module, declaration: 14 }, constructor: 0 }, Some(11))
+checked lifecycle instance schedule entered
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle instance template selected
+checked lifecycle instance actuals complete
+checked lifecycle flow Acquire results=4
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 6, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 6, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 6, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=true consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 6, value: 0 }, owner: Module, declaration: 0 }, constructor: 0 }, Some(18))
+checked lifecycle capture control compilation complete
+checked lifecycle all admitted template records complete
+checked lifecycle instance rows complete
+checked lifecycle instance schedule entered
+checked lifecycle instance template selected
+checked lifecycle capture graph complete
+checked lifecycle instance actuals complete
+checked lifecycle strict query roots complete
+checked lifecycle source templates compile complete
+checked lifecycle original structure answer=true: Ok(())
+checked lifecycle source code retention complete
+checked lifecycle flow Finish results=2
+checked lifecycle result Finish acquired=false consumed=false request=Some(Boundary(NodeId { arena: ArenaId(36), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 6, value: 1 }, owner: Module, declaration: 14 }, constructor: 2 }, Some(4))
+checked lifecycle result Finish acquired=false consumed=true request=Some(Consumed(NodeId { arena: ArenaId(36), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 6, value: 1 }, owner: Module, declaration: 14 }, constructor: 0 }, Some(11))
+checked lifecycle header complete
+checked lifecycle instance finish entered
+checked lifecycle instance schedule entered
+checked lifecycle instance template selected
+checked lifecycle instance actuals complete
+checked lifecycle all admitted template records complete
+checked lifecycle association complete
+checked lifecycle entries complete
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle instance finish entered
+checked lifecycle instance copies prepared
+checked lifecycle flow Acquire results=4
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 4, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 4, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 4, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle original structure answer=true: Ok(())
+checked lifecycle original structure answer=true: Ok(())
+checked lifecycle instance schedule entered
+checked lifecycle instance finish entered
+checked lifecycle result Acquire acquired=true consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 4, value: 0 }, owner: Module, declaration: 0 }, constructor: 0 }, Some(18))
+checked lifecycle instance template selected
+checked lifecycle instance rows complete
+checked lifecycle instance actuals complete
+checked lifecycle strict analysis constructed
+checked lifecycle header complete
+checked lifecycle header complete
+checked lifecycle instance rows complete
+checked lifecycle flow Finish results=2
+checked lifecycle result Finish acquired=false consumed=false request=Some(Boundary(NodeId { arena: ArenaId(38), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 4, value: 1 }, owner: Module, declaration: 14 }, constructor: 2 }, Some(4))
+checked lifecycle result Finish acquired=false consumed=true request=Some(Consumed(NodeId { arena: ArenaId(38), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 4, value: 1 }, owner: Module, declaration: 14 }, constructor: 0 }, Some(11))
+checked lifecycle association complete
+checked lifecycle association complete
+checked lifecycle all admitted template records complete
+checked lifecycle entries complete
+checked lifecycle entries complete
+checked lifecycle instance finish entered
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle instance copies prepared
+checked lifecycle instance rows complete
+checked lifecycle flow Acquire results=4
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 11, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 11, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 11, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=true consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 11, value: 0 }, owner: Module, declaration: 0 }, constructor: 0 }, Some(18))
+checked lifecycle instance copies prepared
+checked lifecycle flow Acquire results=4
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 12, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 12, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 12, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=true consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 12, value: 0 }, owner: Module, declaration: 0 }, constructor: 0 }, Some(18))
+checked lifecycle instance schedule entered
+checked lifecycle flow Finish results=2
+checked lifecycle result Finish acquired=false consumed=false request=Some(Boundary(NodeId { arena: ArenaId(35), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 11, value: 1 }, owner: Module, declaration: 14 }, constructor: 2 }, Some(4))
+checked lifecycle instance copies lowered
+checked lifecycle instance template selected
+checked lifecycle instance copies prepared
+checked lifecycle result Finish acquired=false consumed=true request=Some(Consumed(NodeId { arena: ArenaId(35), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 11, value: 1 }, owner: Module, declaration: 14 }, constructor: 0 }, Some(11))
+checked lifecycle instance rows complete
+checked lifecycle instance actuals complete
+checked lifecycle all admitted template records complete
+checked lifecycle instance scope admitted
+checked lifecycle flow Finish results=2
+checked lifecycle result Finish acquired=false consumed=false request=Some(Boundary(NodeId { arena: ArenaId(33), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 12, value: 1 }, owner: Module, declaration: 14 }, constructor: 2 }, Some(4))
+checked lifecycle result Finish acquired=false consumed=true request=Some(Consumed(NodeId { arena: ArenaId(33), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 12, value: 1 }, owner: Module, declaration: 14 }, constructor: 0 }, Some(11))
+checked lifecycle host finish entered
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle host interpretations=0
+checked lifecycle all admitted template records complete
+checked lifecycle host finish complete
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle instance finish entered
+checked lifecycle instance copies prepared
+checked lifecycle instance schedule entered
+checked lifecycle instance template selected
+checked lifecycle instance actuals complete
+checked lifecycle instance schedule entered
+checked lifecycle instance template selected
+checked lifecycle definition Resolved { module: ModuleId { namespace: Admitted, graph: 2, value: 0 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle instance actuals complete
+checked lifecycle finish module bodies entered
+checked lifecycle module result complete
+checked lifecycle instance copies lowered
+checked lifecycle instance scope admitted
+checked lifecycle instance finish entered
+checked lifecycle module evidence and zonk complete
+checked lifecycle host finish entered
+checked lifecycle host interpretations=0
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle host finish complete
+checked lifecycle instance copies lowered
+checked lifecycle instance scope admitted
+checked lifecycle capture finite values complete
+checked lifecycle instance rows complete
+checked lifecycle host finish entered
+checked lifecycle host interpretations=0
+checked lifecycle strict discovery complete
+checked lifecycle strict discovery complete
+checked lifecycle host finish complete
+checked lifecycle instance finish entered
+checked lifecycle strict payload complete
+checked lifecycle strict payload complete
+checked lifecycle strict cell retention complete
+checked lifecycle strict cell retention complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: Admitted, graph: 5, value: 0 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle module bodies complete
+checked lifecycle finish module bodies entered
+checked lifecycle instance copies lowered
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle module bodies complete
+checked lifecycle module result complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle instance rows complete
+checked lifecycle instance scope admitted
+checked lifecycle hidden interface collection complete
+checked lifecycle hidden interface collection complete
+checked lifecycle host finish entered
+checked lifecycle module evidence and zonk complete
+checked lifecycle host interpretations=0
+checked lifecycle definition Resolved { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle finish module bodies entered
+checked lifecycle host finish complete
+checked lifecycle module result complete
+checked lifecycle instance copies prepared
+checked lifecycle capture finite values complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle strict discovery complete
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle strict payload complete
+checked lifecycle strict cell retention complete
+checked lifecycle instance rows complete
+checked lifecycle capture finite values complete
+checked lifecycle module bodies complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle instance copies lowered
+checked lifecycle definition Resolved { module: ModuleId { namespace: Admitted, graph: 3, value: 0 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle instance scope admitted
+checked lifecycle finish module bodies entered
+checked lifecycle instance copies prepared
+checked lifecycle hidden interface collection complete
+checked lifecycle module result complete
+checked lifecycle hidden nominal collection start
+checked lifecycle host finish entered
+checked lifecycle host interpretations=0
+checked lifecycle hidden nominal collection start
+checked lifecycle host finish complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle summary collection complete
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle summary collection complete
+checked lifecycle instance copies prepared
+checked lifecycle capture finite values complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: Admitted, graph: 6, value: 0 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle finish module bodies entered
+checked lifecycle capture typed data complete
+checked lifecycle module result complete
+checked lifecycle hidden nominal collection start
+checked lifecycle synthetic host control 113 for <effect:builtin.foreign:2:1:0><<type-variable:2:0:14>>
+checked lifecycle module evidence and zonk complete
+checked lifecycle summary collection complete
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle synthetic host control 117 for <effect:builtin.foreign:2:1:0><<type-variable:2:0:14>>
+checked lifecycle capture finite values complete
+checked lifecycle instance copies lowered
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle instance copies lowered
+checked lifecycle strict query roots complete
+checked lifecycle instance scope admitted
+checked lifecycle instance scope admitted
+checked lifecycle capture typed data complete
+checked lifecycle strict discovery complete
+checked lifecycle strict payload complete
+checked lifecycle strict cell retention complete
+checked lifecycle host finish entered
+checked lifecycle host finish entered
+checked lifecycle host interpretations=0
+checked lifecycle host interpretations=0
+checked lifecycle host finish complete
+checked lifecycle host finish complete
+checked lifecycle capture typed data complete
+checked lifecycle synthetic host control 113 for <effect:builtin.foreign:5:1:0><<type-variable:5:0:14>>
+checked lifecycle module bodies complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle synthetic host control 117 for <effect:builtin.foreign:5:1:0><<type-variable:5:0:14>>
+checked lifecycle synthetic host control 113 for <effect:builtin.foreign:1:1:0><<type-variable:1:0:14>>
+checked lifecycle hidden interface collection complete
+checked lifecycle synthetic host control 117 for <effect:builtin.foreign:1:1:0><<type-variable:1:0:14>>
+checked lifecycle definition Resolved { module: ModuleId { namespace: Admitted, graph: 11, value: 0 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle finish module bodies entered
+checked lifecycle module result complete
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: Admitted, graph: 4, value: 0 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle strict query roots complete
+checked lifecycle finish module bodies entered
+checked lifecycle module evidence and zonk complete
+checked lifecycle module result complete
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle strict query roots complete
+checked lifecycle capture finite values complete
+checked lifecycle instance copies lowered
+checked lifecycle module evidence and zonk complete
+checked lifecycle capture typed data complete
+checked lifecycle instance scope admitted
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle host finish entered
+checked lifecycle host interpretations=0
+checked lifecycle synthetic host control 113 for <effect:builtin.foreign:3:1:0><<type-variable:3:0:14>>
+checked lifecycle capture finite values complete
+checked lifecycle strict analysis constructed
+checked lifecycle host finish complete
+checked lifecycle synthetic host control 117 for <effect:builtin.foreign:3:1:0><<type-variable:3:0:14>>
+checked lifecycle hidden nominal collection start
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle summary collection complete
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle capture typed data complete
+checked lifecycle strict query roots complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: Admitted, graph: 12, value: 0 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle finish module bodies entered
+checked lifecycle module result complete
+checked lifecycle synthetic host control 113 for <effect:builtin.foreign:6:1:0><<type-variable:6:0:14>>
+checked lifecycle strict analysis constructed
+checked lifecycle synthetic host control 117 for <effect:builtin.foreign:6:1:0><<type-variable:6:0:14>>
+checked lifecycle module evidence and zonk complete
+checked lifecycle strict analysis constructed
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle capture finite values complete
+checked lifecycle exports frozen
+checked lifecycle capture control compilation complete
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle capture graph complete
+checked lifecycle strict query roots complete
+checked lifecycle capture typed data complete
+checked lifecycle synthetic host control 113 for <effect:builtin.foreign:11:1:0><<type-variable:11:0:14>>
+checked lifecycle synthetic host control 117 for <effect:builtin.foreign:11:1:0><<type-variable:11:0:14>>
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle strict query roots complete
+checked lifecycle strict analysis constructed
+checked lifecycle capture typed data complete
+checked lifecycle synthetic host control 113 for <effect:builtin.foreign:4:1:0><<type-variable:4:0:14>>
+checked lifecycle synthetic host control 117 for <effect:builtin.foreign:4:1:0><<type-variable:4:0:14>>
+checked lifecycle strict analysis constructed
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle strict query roots complete
+checked lifecycle strict analysis constructed
+checked lifecycle capture typed data complete
+checked lifecycle exports frozen
+checked lifecycle synthetic host control 113 for <effect:builtin.foreign:12:1:0><<type-variable:12:0:14>>
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle synthetic host control 117 for <effect:builtin.foreign:12:1:0><<type-variable:12:0:14>>
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle strict query roots complete
+checked lifecycle strict analysis constructed
+checked lifecycle strict analysis constructed
+checked lifecycle strict discovery complete
+checked lifecycle strict payload complete
+checked lifecycle strict cell retention complete
+test resolved::checked_hidden_provider_interface_tests::checked_hidden_provider_interface_is_retained_without_public_names ... ok
+checked lifecycle module bodies complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle hidden interface collection complete
+checked lifecycle strict discovery complete
+checked lifecycle strict payload complete
+checked lifecycle strict cell retention complete
+checked lifecycle strict discovery complete
+checked lifecycle strict payload complete
+checked lifecycle strict cell retention complete
+checked lifecycle module bodies complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle hidden interface collection complete
+checked lifecycle module bodies complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle hidden interface collection complete
+checked lifecycle hidden nominal collection start
+checked lifecycle strict discovery complete
+checked lifecycle strict payload complete
+checked lifecycle strict cell retention complete
+checked lifecycle summary collection complete
+checked lifecycle module bodies complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle hidden interface collection complete
+checked lifecycle strict discovery complete
+checked lifecycle strict payload complete
+checked lifecycle strict cell retention complete
+test resolved::checked_hidden_provider_interface_tests::checked_hidden_provider_interface_local_share_has_exact_constraint_limits ... ok
+checked lifecycle module bodies complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle hidden nominal collection start
+checked lifecycle hidden interface collection complete
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+checked lifecycle strict discovery complete
+checked lifecycle strict payload complete
+checked lifecycle strict cell retention complete
+checked lifecycle summary collection complete
+checked lifecycle hidden nominal collection start
+checked lifecycle module bodies complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle summary collection complete
+checked lifecycle hidden interface collection complete
+checked lifecycle hidden nominal collection start
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+checked lifecycle summary collection complete
+checked lifecycle strict discovery complete
+checked lifecycle strict payload complete
+checked lifecycle strict cell retention complete
+checked lifecycle module bodies complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle hidden interface collection complete
+test resolved::checked_hidden_provider_interface_tests::checked_hidden_provider_interface_local_share_rejects_source_method_mirrors ... ok
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle strict discovery complete
+checked lifecycle exports frozen
+checked lifecycle strict payload complete
+checked lifecycle strict cell retention complete
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle hidden nominal collection start
+checked lifecycle module bodies complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle summary collection complete
+checked lifecycle hidden interface collection complete
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 13, value: 1 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 13, value: 1 }, local: 1 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 13, value: 1 }, local: 2 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 13, value: 1 }, local: 3 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 13, value: 1 }, local: 4 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 13, value: 1 }, local: 5 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 13, value: 1 }, local: 6 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 13, value: 1 }, local: 7 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 13, value: 1 }, local: 8 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 13, value: 1 }, local: 9 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 13, value: 1 }, local: 10 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle finish module bodies entered
+checked lifecycle module result complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle capture finite values complete
+checked lifecycle capture typed data complete
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle module bodies complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle hidden interface collection complete
+test resolved::checked_hidden_provider_interface_tests::checked_hidden_private_state_retains_exact_owner_parameters_without_names ... ok
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+checked lifecycle summary kind failure: Resource(KindStageFailure { cause: None, span: Span { source: SourceId(4), range: ByteRange { start: 339, end: 720 } }, message: "retained effect authority exceeded its type-work budget" })
+test resolved::checked_hidden_provider_interface_tests::checked_hidden_private_state_missing_row_and_order_refuses ... ok
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle summary kind failure: Resource(KindStageFailure { cause: None, span: Span { source: SourceId(21), range: ByteRange { start: 1381, end: 1395 } }, message: "body-free constructor kind checking exceeded its owning work budget" })
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+test resolved::checked_hidden_provider_interface_tests::checked_hidden_provider_interface_missing_exact_fact_refuses ... ok
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 14, value: 2 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 14, value: 2 }, local: 1 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 14, value: 2 }, local: 2 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 14, value: 2 }, local: 3 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 14, value: 2 }, local: 4 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 14, value: 2 }, local: 5 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 14, value: 2 }, local: 6 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 14, value: 2 }, local: 7 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 14, value: 2 }, local: 8 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 14, value: 2 }, local: 9 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 14, value: 2 }, local: 10 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle finish module bodies entered
+checked lifecycle module result complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle capture finite values complete
+checked lifecycle summary kind failure: Resource(KindStageFailure { cause: None, span: Span { source: SourceId(4), range: ByteRange { start: 339, end: 720 } }, message: "retained effect authority exceeded its type-work budget" })
+checked lifecycle capture typed data complete
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle module bodies complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle hidden interface collection complete
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 15, value: 2 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 16, value: 1 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 15, value: 2 }, local: 1 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 16, value: 1 }, local: 1 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 15, value: 2 }, local: 2 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 16, value: 1 }, local: 2 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle summary kind failure: Resource(KindStageFailure { cause: None, span: Span { source: SourceId(21), range: ByteRange { start: 1381, end: 1395 } }, message: "body-free constructor kind checking exceeded its owning work budget" })
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 15, value: 2 }, local: 3 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 16, value: 1 }, local: 3 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 15, value: 2 }, local: 4 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 16, value: 1 }, local: 4 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 15, value: 2 }, local: 5 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 16, value: 1 }, local: 5 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 15, value: 2 }, local: 6 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 16, value: 1 }, local: 6 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle source finalization complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 15, value: 2 }, local: 7 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 16, value: 1 }, local: 7 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 15, value: 2 }, local: 8 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 16, value: 1 }, local: 8 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 15, value: 2 }, local: 9 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 16, value: 1 }, local: 9 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 16, value: 1 }, local: 10 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 15, value: 2 }, local: 10 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle finish module bodies entered
+checked lifecycle finish module bodies entered
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle module result complete
+checked lifecycle module result complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle completed capture check start
+checked lifecycle capture finite values complete
+checked lifecycle capture finite values complete
+checked lifecycle capture typed data complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 17, value: 1 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle capture control compilation complete
+checked lifecycle capture typed data complete
+checked lifecycle capture graph complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 17, value: 1 }, local: 1 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle module bodies complete
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 17, value: 1 }, local: 2 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle module bodies complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 17, value: 1 }, local: 3 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle hidden interface collection complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 17, value: 1 }, local: 4 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 17, value: 1 }, local: 5 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 17, value: 1 }, local: 6 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle hidden interface collection complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 17, value: 1 }, local: 7 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 17, value: 1 }, local: 8 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 17, value: 1 }, local: 9 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 17, value: 1 }, local: 10 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle finish module bodies entered
+checked lifecycle module result complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle capture finite values complete
+checked lifecycle capture typed data complete
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+checked lifecycle module bodies complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle hidden interface collection complete
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+test resolved::checked_hidden_provider_interface_tests::checked_hidden_provider_interface_summary_has_exact_prefix_short_spent_fresh_limits ... ok
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: Admitted, graph: 16, value: 0 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle finish module bodies entered
+checked lifecycle module result complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle capture finite values complete
+checked lifecycle capture typed data complete
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle module bodies complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle hidden interface collection complete
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+test resolved::checked_hidden_provider_interface_tests::checked_hidden_private_state_does_not_retain_an_unreferenced_passive_owner ... ok
+checked lifecycle original-source proof: Ok(())
+checked lifecycle builtin bytes: Ok(())
+checked lifecycle scalar originals: Ok(())
+checked lifecycle category counts provider=0 source=1 foreign=1 native=2 preflight=10 kinds=3
+checked lifecycle category provider contracts complete
+checked lifecycle category source resource kinds complete
+checked lifecycle category source foreign kinds complete
+checked lifecycle category inventories family=3 names=3 kinds=3
+checked lifecycle provider categories: Ok(())
+checked lifecycle foreign nominal NominalTypeId { module: ModuleId { namespace: Admitted, graph: 13, value: 0 }, owner: Module, declaration: 2 }: Ok(())
+checked lifecycle registry pre-variable inventory complete
+checked lifecycle registry variables complete
+checked lifecycle registry nominal formals complete
+checked lifecycle registry proof: Ok(())
+checked lifecycle effect registry proof: Ok(())
+checked lifecycle original-source proof: Ok(())
+checked lifecycle builtin bytes: Ok(())
+checked lifecycle scalar originals: Ok(())
+checked lifecycle category counts provider=0 source=1 foreign=1 native=2 preflight=10 kinds=3
+checked lifecycle category provider contracts complete
+checked lifecycle category source resource kinds complete
+checked lifecycle category source foreign kinds complete
+checked lifecycle category inventories family=3 names=3 kinds=3
+checked lifecycle provider categories: Ok(())
+checked lifecycle foreign nominal NominalTypeId { module: ModuleId { namespace: Admitted, graph: 14, value: 1 }, owner: Module, declaration: 2 }: Ok(())
+checked lifecycle registry pre-variable inventory complete
+checked lifecycle registry variables complete
+checked lifecycle registry nominal formals complete
+checked lifecycle registry proof: Ok(())
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle effect registry proof: Ok(())
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle original-source proof: Ok(())
+checked lifecycle builtin bytes: Ok(())
+checked lifecycle scalar originals: Ok(())
+checked lifecycle category counts provider=0 source=1 foreign=1 native=2 preflight=10 kinds=3
+checked lifecycle category provider contracts complete
+checked lifecycle category source resource kinds complete
+checked lifecycle category source foreign kinds complete
+checked lifecycle original structure answer=true: Ok(())
+checked lifecycle category inventories family=3 names=3 kinds=3
+checked lifecycle provider categories: Ok(())
+checked lifecycle foreign nominal NominalTypeId { module: ModuleId { namespace: Admitted, graph: 17, value: 0 }, owner: Module, declaration: 2 }: Ok(())
+checked lifecycle header complete
+checked lifecycle registry pre-variable inventory complete
+checked lifecycle association complete
+checked lifecycle entries complete
+checked lifecycle registry variables complete
+checked lifecycle original-source proof: Ok(())
+checked lifecycle builtin bytes: Ok(())
+checked lifecycle flow Acquire results=4
+checked lifecycle registry nominal formals complete
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 13, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 13, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 13, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle result Acquire acquired=true consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 13, value: 0 }, owner: Module, declaration: 0 }, constructor: 0 }, Some(18))
+checked lifecycle scalar originals: Ok(())
+checked lifecycle category counts provider=0 source=1 foreign=1 native=2 preflight=10 kinds=3
+checked lifecycle category provider contracts complete
+checked lifecycle category source resource kinds complete
+checked lifecycle category source foreign kinds complete
+checked lifecycle flow Finish results=2
+checked lifecycle result Finish acquired=false consumed=false request=Some(Boundary(NodeId { arena: ArenaId(66), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 13, value: 1 }, owner: Module, declaration: 14 }, constructor: 2 }, Some(4))
+checked lifecycle result Finish acquired=false consumed=true request=Some(Consumed(NodeId { arena: ArenaId(66), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 13, value: 1 }, owner: Module, declaration: 14 }, constructor: 0 }, Some(11))
+checked lifecycle registry proof: Ok(())
+checked lifecycle all admitted template records complete
+checked lifecycle category inventories family=3 names=3 kinds=3
+checked lifecycle provider categories: Ok(())
+checked lifecycle foreign nominal NominalTypeId { module: ModuleId { namespace: Admitted, graph: 15, value: 1 }, owner: Module, declaration: 2 }: Ok(())
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle registry pre-variable inventory complete
+checked lifecycle registry variables complete
+checked lifecycle registry nominal formals complete
+checked lifecycle instance schedule entered
+checked lifecycle instance template selected
+checked lifecycle instance actuals complete
+checked lifecycle effect registry proof: Ok(())
+checked lifecycle original structure answer=true: Ok(())
+checked lifecycle registry proof: Ok(())
+checked lifecycle header complete
+checked lifecycle association complete
+checked lifecycle entries complete
+checked lifecycle instance finish entered
+checked lifecycle flow Acquire results=4
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 14, value: 1 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 14, value: 1 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 14, value: 1 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=true consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 14, value: 1 }, owner: Module, declaration: 0 }, constructor: 0 }, Some(18))
+checked lifecycle effect registry proof: Ok(())
+checked lifecycle flow Finish results=2
+checked lifecycle result Finish acquired=false consumed=false request=Some(Boundary(NodeId { arena: ArenaId(69), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 14, value: 2 }, owner: Module, declaration: 14 }, constructor: 2 }, Some(4))
+checked lifecycle result Finish acquired=false consumed=true request=Some(Consumed(NodeId { arena: ArenaId(69), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 14, value: 2 }, owner: Module, declaration: 14 }, constructor: 0 }, Some(11))
+checked lifecycle all admitted template records complete
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle instance rows complete
+checked lifecycle instance schedule entered
+checked lifecycle instance template selected
+checked lifecycle instance actuals complete
+checked lifecycle instance finish entered
+checked lifecycle instance copies prepared
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle instance rows complete
+checked lifecycle instance copies prepared
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle instance copies lowered
+checked lifecycle instance scope admitted
+checked lifecycle host finish entered
+checked lifecycle host interpretations=0
+checked lifecycle host finish complete
+checked lifecycle instance copies lowered
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle instance scope admitted
+checked lifecycle host finish entered
+checked lifecycle host interpretations=0
+checked lifecycle host finish complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: Admitted, graph: 13, value: 0 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle finish module bodies entered
+checked lifecycle module result complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: Admitted, graph: 14, value: 1 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle finish module bodies entered
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle module result complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle capture finite values complete
+checked lifecycle capture finite values complete
+checked lifecycle original structure answer=true: Ok(())
+checked lifecycle header complete
+checked lifecycle association complete
+checked lifecycle entries complete
+checked lifecycle flow Acquire results=4
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 17, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 17, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 17, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=true consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 17, value: 0 }, owner: Module, declaration: 0 }, constructor: 0 }, Some(18))
+checked lifecycle flow Finish results=2
+checked lifecycle result Finish acquired=false consumed=false request=Some(Boundary(NodeId { arena: ArenaId(74), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 17, value: 1 }, owner: Module, declaration: 14 }, constructor: 2 }, Some(4))
+checked lifecycle result Finish acquired=false consumed=true request=Some(Consumed(NodeId { arena: ArenaId(74), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 17, value: 1 }, owner: Module, declaration: 14 }, constructor: 0 }, Some(11))
+checked lifecycle capture typed data complete
+checked lifecycle all admitted template records complete
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle synthetic host control 113 for <effect:builtin.foreign:14:2:0><<type-variable:14:1:14>>
+checked lifecycle synthetic host control 117 for <effect:builtin.foreign:14:2:0><<type-variable:14:1:14>>
+checked lifecycle capture typed data complete
+checked lifecycle synthetic host control 113 for <effect:builtin.foreign:13:1:0><<type-variable:13:0:14>>
+checked lifecycle instance schedule entered
+checked lifecycle capture control compilation complete
+checked lifecycle instance template selected
+checked lifecycle capture graph complete
+checked lifecycle instance actuals complete
+checked lifecycle strict query roots complete
+checked lifecycle synthetic host control 117 for <effect:builtin.foreign:13:1:0><<type-variable:13:0:14>>
+checked lifecycle original structure answer=true: Ok(())
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle strict query roots complete
+checked lifecycle header complete
+checked lifecycle association complete
+checked lifecycle entries complete
+checked lifecycle flow Acquire results=4
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 15, value: 1 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 15, value: 1 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 15, value: 1 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=true consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 15, value: 1 }, owner: Module, declaration: 0 }, constructor: 0 }, Some(18))
+checked lifecycle instance finish entered
+checked lifecycle strict analysis constructed
+checked lifecycle flow Finish results=2
+checked lifecycle result Finish acquired=false consumed=false request=Some(Boundary(NodeId { arena: ArenaId(75), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 15, value: 2 }, owner: Module, declaration: 14 }, constructor: 2 }, Some(4))
+checked lifecycle result Finish acquired=false consumed=true request=Some(Consumed(NodeId { arena: ArenaId(75), index: 2 })) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 15, value: 2 }, owner: Module, declaration: 14 }, constructor: 0 }, Some(11))
+checked lifecycle strict analysis constructed
+checked lifecycle all admitted template records complete
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle instance rows complete
+checked lifecycle instance schedule entered
+checked lifecycle instance template selected
+checked lifecycle instance actuals complete
+checked lifecycle instance copies prepared
+checked lifecycle instance finish entered
+checked lifecycle instance rows complete
+checked lifecycle instance copies prepared
+checked lifecycle instance copies lowered
+checked lifecycle instance scope admitted
+checked lifecycle host finish entered
+checked lifecycle host interpretations=0
+checked lifecycle host finish complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: Admitted, graph: 17, value: 0 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle finish module bodies entered
+checked lifecycle module result complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle instance copies lowered
+checked lifecycle strict discovery complete
+checked lifecycle strict payload complete
+checked lifecycle strict cell retention complete
+checked lifecycle capture finite values complete
+checked lifecycle instance scope admitted
+checked lifecycle host finish entered
+checked lifecycle host interpretations=0
+checked lifecycle module bodies complete
+checked lifecycle host finish complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle hidden interface collection complete
+checked lifecycle strict discovery complete
+checked lifecycle strict payload complete
+checked lifecycle strict cell retention complete
+checked lifecycle module bodies complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: Admitted, graph: 15, value: 1 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle hidden interface collection complete
+checked lifecycle finish module bodies entered
+checked lifecycle module result complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle hidden nominal collection start
+checked lifecycle capture finite values complete
+checked lifecycle summary collection complete
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+checked lifecycle capture typed data complete
+checked lifecycle synthetic host control 113 for <effect:builtin.foreign:17:1:0><<type-variable:17:0:14>>
+checked lifecycle synthetic host control 117 for <effect:builtin.foreign:17:1:0><<type-variable:17:0:14>>
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle strict query roots complete
+checked lifecycle capture typed data complete
+checked lifecycle synthetic host control 113 for <effect:builtin.foreign:15:2:0><<type-variable:15:1:14>>
+checked lifecycle synthetic host control 117 for <effect:builtin.foreign:15:2:0><<type-variable:15:1:14>>
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle strict query roots complete
+checked lifecycle strict analysis constructed
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle strict analysis constructed
+checked lifecycle strict discovery complete
+checked lifecycle strict payload complete
+checked lifecycle strict cell retention complete
+checked lifecycle module bodies complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle strict discovery complete
+checked lifecycle strict payload complete
+checked lifecycle strict cell retention complete
+checked lifecycle hidden interface collection complete
+checked lifecycle module bodies complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle hidden interface collection complete
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+test resolved::checked_hidden_provider_interface_tests::checked_hidden_private_state_name_remains_unavailable_to_consumers ... ok
+test resolved::checked_hidden_provider_interface_tests::checked_hidden_provider_interface_genuine_donor_cannot_replace_required_identity ... ok
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+test resolved::checked_hidden_provider_interface_tests::checked_hidden_provider_interface_cannot_be_imported_by_private_spelling ... ok
+test resolved::checked_hidden_provider_interface_tests::checked_hidden_private_state_same_kind_donor_parameters_refuse ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 2057 filtered out; finished in 0.16s
+

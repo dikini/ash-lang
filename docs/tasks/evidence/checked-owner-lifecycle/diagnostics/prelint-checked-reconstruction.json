@@ -1,0 +1,33 @@
+{
+  "base": "fb73289",
+  "inputs": 584,
+  "all_expected_source_bytes_reconstructed": true,
+  "changed_overlay_paths": [
+    "docs/tasks/evidence/checked-owner-lifecycle/final/run.py",
+    "docs/tasks/evidence/checked-owner-lifecycle/final/verify.py",
+    "docs/tasks/plans/checked-ffi-contract-carriers.md",
+    "spec/dynamic-semantics.md",
+    "spec/elaboration.md",
+    "spec/name-resolution.md",
+    "spec/static-semantics.md",
+    "spec/syntax.md",
+    "src/core/capture.rs",
+    "src/core/capture/value.rs",
+    "src/core/capture/value/host_request_tests.rs",
+    "src/core/source_resource.rs",
+    "src/core/source_resource/checked_lifecycle_core_tests.rs",
+    "src/elaborate.rs",
+    "src/elaborate/checked_owner_lifecycle_tests.rs",
+    "src/elaborate/foreign_host.rs",
+    "src/resolve.rs",
+    "src/resolved.rs",
+    "src/resolved/checked_codec_category_tests.rs",
+    "src/resolved/checked_hidden_provider_interface_tests.rs",
+    "tests/checked_foreign_lifecycle.rs",
+    "tests/fixtures/checked-owner-lifecycle/latest_payload_escape.ash",
+    "tests/fixtures/checked-owner-lifecycle/latest_payload_producer.ash",
+    "tests/fixtures/checked-owner-lifecycle/latest_payload_within.ash",
+    "tests/fixtures/checked-owner-lifecycle/owner.ash"
+  ],
+  "patch_sha256": "74f9def2f546ea74cb623a20339f47b07f434aa73493736e1e43543ed64d49ba"
+}

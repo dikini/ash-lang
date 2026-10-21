@@ -11794,10 +11794,9 @@ impl ExportSummary {
                 .map_err(map_summary_kind_failure)?;
         }
         for interface in &self.hidden_interfaces {
-            if interface.id.module() == self.module
-                || interface_facts
-                    .insert(interface.id, interface.as_ref())
-                    .is_some()
+            if interface_facts
+                .insert(interface.id, interface.as_ref())
+                .is_some()
             {
                 {
                     return Err(ResolvedBuildFailure::InvalidState);
@@ -11831,6 +11830,14 @@ impl ExportSummary {
                     type_work,
                 )
                 .map_err(map_summary_kind_failure)?;
+        }
+        type_work
+            .charge(self.source_resource_facts.len())
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        for fact in self.source_resource_facts.values() {
+            if !interface_facts.contains_key(&fact.provider.interface.id) {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
         }
         constraint_work
             .charge(self.interface_names.len())
@@ -13732,18 +13739,25 @@ impl ExportSummary {
                 .try_reserve(referenced_interface_order.len())
                 .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
             for interface in referenced_interface_order {
-                let fact = resolved
-                    .imported
-                    .shared_interface(interface)
-                    .ok_or(ResolvedBuildFailure::InvalidState)?;
-                if fact.id.module() == resolved.module {
-                    {
-                        return Err(ResolvedBuildFailure::InvalidState);
-                    }
+                let (source, fact) = if interface.module() == resolved.module {
+                    checked_interfaces_by_id
+                        .get(&interface)
+                        .map(|(source, fact)| (Some(*source), *fact))
+                } else {
+                    resolved
+                        .imported
+                        .shared_interface(interface)
+                        .map(|fact| (None, fact))
+                }
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+                if fact.id != interface
+                    || (source.is_some() != (fact.id.module() == resolved.module))
+                {
+                    return Err(ResolvedBuildFailure::InvalidState);
                 }
                 summary.hidden_interfaces.push(share_checked_interface_fact(
                     fact,
-                    None,
+                    source,
                     type_work,
                     constraint_work,
                 )?);
@@ -25535,7 +25549,10 @@ impl ResolvedRegistry {
                 {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
-                match codecs.entry(original.module()) {
+                // Legacy pure preflights retain Call while checked natives use
+                // CheckedCall in the same common module. Reconstruct each exact
+                // role independently; both authenticate the same opaque error.
+                match codecs.entry(original.ids().call) {
                     std::collections::hash_map::Entry::Vacant(entry) => {
                         let codec =
                             crate::foreign::checked_source::CheckedForeignCallCodec::authenticate(
@@ -39263,9 +39280,9 @@ mod tests {
     #[test]
     fn freeze_rejects_missing_local_hidden_nominal_before_cloning_deep_parameters() {
         const DEPTH: usize = 32_768;
-        // Checked-global index + public order + one cloned nominal + collector
-        // root and unique-identity index + hidden-candidate scan.
-        const PRECLONE_TYPE_WORK: usize = 6;
+        // Shallow global publication and closure bookkeeping precede the
+        // missing nominal lookup; no deep parameter-clone cell is included.
+        const PRECLONE_TYPE_WORK: usize = 16;
 
         std::thread::Builder::new()
             .name("freeze-missing-local-hidden-nominal".to_owned())
@@ -39369,25 +39386,39 @@ mod tests {
                     },
                     origin: Origin::Source(span),
                 }];
-                let mut type_work = TypeWorkBudget::default();
-                let mut constraint_work = crate::interface::InterfaceConstraintBudget::default();
-                assert_eq!(
+                let run = |work: &mut TypeWorkBudget| {
                     ExportSummary::freeze(
                         &resolved,
                         &checked,
                         &[],
                         &[],
                         &[],
-                        &mut type_work,
-                        &mut constraint_work,
-                    ),
-                    Err(ResolvedBuildFailure::InvalidState),
-                );
+                        work,
+                        &mut crate::interface::InterfaceConstraintBudget::default(),
+                    )
+                };
+                let mut measured = TypeWorkBudget::default();
+                assert_eq!(run(&mut measured), Err(ResolvedBuildFailure::InvalidState));
                 assert_eq!(
-                    type_work.used(),
+                    measured.used(),
                     PRECLONE_TYPE_WORK,
-                    "missing local authority must reject before any parameter clone cell",
+                    "missing local authority must reject before any parameter clone cell"
                 );
+                for prefix in [0, 7] {
+                    let mut exact = TypeWorkBudget::with_limit(prefix + PRECLONE_TYPE_WORK);
+                    exact.charge(prefix).unwrap();
+                    assert_eq!(run(&mut exact), Err(ResolvedBuildFailure::InvalidState));
+                    assert_eq!(exact.used(), prefix + PRECLONE_TYPE_WORK);
+                    assert_eq!(run(&mut exact), Err(ResolvedBuildFailure::TypeResource));
+                    let mut short = TypeWorkBudget::with_limit(prefix + PRECLONE_TYPE_WORK - 1);
+                    short.charge(prefix).unwrap();
+                    assert_eq!(run(&mut short), Err(ResolvedBuildFailure::TypeResource));
+                }
+                for _ in 0..2 {
+                    let mut fresh = TypeWorkBudget::with_limit(PRECLONE_TYPE_WORK);
+                    assert_eq!(run(&mut fresh), Err(ResolvedBuildFailure::InvalidState));
+                    assert_eq!(fresh.used(), PRECLONE_TYPE_WORK);
+                }
                 drop(resolved);
                 drop(checked);
             })
@@ -41311,6 +41342,14 @@ pub(crate) struct SourceWindowDeclaration {
     pub(crate) span: Span,
 }
 
+/// Written host selector into a source resource's complete formal vector.
+/// This syntax fact grants neither host nor lifecycle authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourceResourceHost {
+    pub position: usize,
+    pub span: Span,
+}
+
 /// Body-free product source resource header. It grants no lifecycle permission.
 #[derive(Debug, Eq, PartialEq)]
 pub struct SourceResourceTypeFact {
@@ -41328,6 +41367,8 @@ pub struct SourceResourceTypeFact {
     pub owned_position: usize,
     /// Original owned-selector occurrence.
     pub owned_origin: Origin,
+    /// Optional exact host formal selection for the checked codec.
+    pub host: Option<SourceResourceHost>,
     /// Preceding-scope initializer type.
     pub input: ResolvedType,
     /// Native state type template.
@@ -43241,3 +43282,11 @@ impl ImportedGlobalScheme {
         self
     }
 }
+
+#[cfg(test)]
+#[path = "resolved/checked_codec_category_tests.rs"]
+mod checked_codec_category_tests;
+
+#[cfg(test)]
+#[path = "resolved/checked_hidden_provider_interface_tests.rs"]
+mod checked_hidden_provider_interface_tests;

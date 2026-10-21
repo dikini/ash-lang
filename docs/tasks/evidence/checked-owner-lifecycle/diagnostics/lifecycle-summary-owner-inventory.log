@@ -1,0 +1,114 @@
+warning: Missing auto-load script at offset 0 in section .debug_gdb_scripts
+of file /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168.
+Use `info auto-load python-scripts [REGEXP]' to list them.
+Breakpoint 1 at 0x8808d0f: file src/resolved.rs, line 12821.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/x86_64-linux-gnu/libthread_db.so.1".
+
+running 1 test
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 1 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 2 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 3 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 4 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 5 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 6 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 7 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 8 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 9 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 10 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle finish module bodies entered
+checked lifecycle module result complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle capture finite values complete
+checked lifecycle capture typed data complete
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle module bodies complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle hidden interface collection complete
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle original-source proof: Ok(())
+checked lifecycle builtin bytes: Ok(())
+checked lifecycle scalar originals: Ok(())
+checked lifecycle category counts provider=0 source=1 foreign=1 native=2 preflight=10 kinds=3
+checked lifecycle category provider contracts complete
+checked lifecycle category source resource kinds complete
+checked lifecycle category source foreign kinds complete
+checked lifecycle category inventories family=3 names=3 kinds=3
+checked lifecycle provider categories: Ok(())
+checked lifecycle foreign nominal NominalTypeId { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, owner: Module, declaration: 2 }: Ok(())
+checked lifecycle registry pre-variable inventory complete
+checked lifecycle registry variables complete
+checked lifecycle registry nominal formals complete
+checked lifecycle registry proof: Ok(())
+checked lifecycle effect registry proof: Ok(())
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle original structure answer=true: Ok(())
+checked lifecycle header complete
+checked lifecycle association complete
+checked lifecycle entries complete
+checked lifecycle flow Acquire results=4
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=true consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, owner: Module, declaration: 0 }, constructor: 0 }, Some(18))
+checked lifecycle flow Finish results=2
+checked lifecycle result Finish acquired=false consumed=false request=Some(NodeId { arena: ArenaId(2), index: 2 }) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, owner: Module, declaration: 14 }, constructor: 2 }, Some(4))
+checked lifecycle result Finish acquired=false consumed=true request=Some(NodeId { arena: ArenaId(2), index: 2 }) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, owner: Module, declaration: 14 }, constructor: 0 }, Some(11))
+checked lifecycle all admitted template records complete
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle instance schedule entered
+checked lifecycle instance template selected
+checked lifecycle instance actuals complete
+checked lifecycle instance finish entered
+checked lifecycle instance rows complete
+checked lifecycle instance copies prepared
+checked lifecycle instance copies lowered
+checked lifecycle instance scope admitted
+checked lifecycle host finish entered
+checked lifecycle host interpretations=0
+checked lifecycle host finish complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle finish module bodies entered
+checked lifecycle module result complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle capture finite values complete
+checked lifecycle capture typed data complete
+checked lifecycle synthetic host control 113 for <effect:builtin.foreign:1:1:0><<type-variable:1:0:14>>
+checked lifecycle synthetic host control 117 for <effect:builtin.foreign:1:1:0><<type-variable:1:0:14>>
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle strict query roots complete
+checked lifecycle strict analysis constructed
+checked lifecycle strict discovery complete
+checked lifecycle strict payload complete
+checked lifecycle strict cell retention complete
+checked lifecycle module bodies complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+[Switching to Thread 0x7ffff7bff6c0 (LWP 1401423)]
+
+Thread 2 "elaborate::chec" hit Breakpoint 1, ash::resolved::ExportSummary::collect_with_providers (resolved=0x7ffff7bf9490, checked_globals=&[ash::resolved::CheckedGlobalScheme](size=1) = {...}, checked_interfaces=&[ash::resolved::SharedCheckedInterfaceFact](size=1) = {...}, admitted_implementations=&[ash::interface::CheckedImplementation](size=0), checked_implementations=&[ash::resolved::CheckedImplementationFact](size=0), providers=..., type_work=0x7ffff7bf1250, constraint_work=0x7ffff7bfa630) at src/resolved.rs:12821
+12821	        type_work
+checked lifecycle hidden interface collection complete
+checked lifecycle hidden nominal collection start
+ash::resolved::ExportSummary::collect_with_providers (resolved=0x7ffff7bf9490, checked_globals=&[ash::resolved::CheckedGlobalScheme](size=1) = {...}, checked_interfaces=&[ash::resolved::SharedCheckedInterfaceFact](size=1) = {...}, admitted_implementations=&[ash::interface::CheckedImplementation](size=0), checked_implementations=&[ash::resolved::CheckedImplementationFact](size=0), providers=..., type_work=0x7ffff7bf1250, constraint_work=0x7ffff7bfa630) at src/resolved.rs:14850
+14850	            if !referenced_nominals.contains(&candidate.id) {
+$1 = Vec(size=1) = {ash::types::NominalTypeId {module: ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::Admitted, graph: 1, value: 0}, owner: ash::types::NominalOwner::Module, declaration: 0}}
+$2 = HashSet(size=19) = {ash::types::NominalTypeId {module: ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::BuiltinForeign, graph: 1, value: 1}, owner: ash::types::NominalOwner::Module, declaration: 9}, ash::types::NominalTypeId {module: ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::BuiltinForeign, graph: 1, value: 1}, owner: ash::types::NominalOwner::Module, declaration: 14}, ash::types::NominalTypeId {module: ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::BuiltinForeign, graph: 1, value: 1}, owner: ash::types::NominalOwner::Module, declaration: 1}, ash::types::NominalTypeId {module: ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::BuiltinForeign, graph: 1, value: 1}, owner: ash::types::NominalOwner::Module, declaration: 12}, ash::types::NominalTypeId {module: ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::BuiltinForeign, graph: 1, value: 1}, owner: ash::types::NominalOwner::Module, declaration: 10}, ash::types::NominalTypeId {module: ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::Admitted, graph: 1, value: 0}, owner: ash::types::NominalOwner::Module, declaration: 0}, ash::types::NominalTypeId {module: ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::Admitted, graph: 1, value: 0}, owner: ash::types::NominalOwner::Module, declaration: 1}, ash::types::NominalTypeId {module: ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::BuiltinForeign, graph: 1, value: 1}, owner: ash::types::NominalOwner::Module, declaration: 8}, ash::types::NominalTypeId {module: ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::BuiltinForeign, graph: 1, value: 1}, owner: ash::types::NominalOwner::Module, declaration: 3}, ash::types::NominalTypeId {module: ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::BuiltinForeign, graph: 1, value: 1}, owner: ash::types::NominalOwner::Module, declaration: 6}, ash::types::NominalTypeId {module: ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::BuiltinForeign, graph: 1, value: 1}, owner: ash::types::NominalOwner::Module, declaration: 5}, ash::types::NominalTypeId {module: ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::BuiltinForeign, graph: 1, value: 1}, owner: ash::types::NominalOwner::Module, declaration: 11}, ash::types::NominalTypeId {module: ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::BuiltinForeign, graph: 1, value: 1}, owner: ash::types::NominalOwner::Module, declaration: 2}, ash::types::NominalTypeId {module: ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::BuiltinForeign, graph: 1, value: 1}, owner: ash::types::NominalOwner::Module, declaration: 13}, ash::types::NominalTypeId {module: ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::Admitted, graph: 1, value: 0}, owner: ash::types::NominalOwner::Module, declaration: 2}, ash::types::NominalTypeId {module: ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::BuiltinForeign, graph: 1, value: 1}, owner: ash::types::NominalOwner::Module, declaration: 16}, ash::types::NominalTypeId {module: ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::BuiltinForeign, graph: 1, value: 1}, owner: ash::types::NominalOwner::Module, declaration: 4}, ash::types::NominalTypeId {module: ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::BuiltinForeign, graph: 1, value: 1}, owner: ash::types::NominalOwner::Module, declaration: 15}, ash::types::NominalTypeId {module: ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::BuiltinForeign, graph: 1, value: 1}, owner: ash::types::NominalOwner::Module, declaration: 7}}
+$3 = ash::types::NominalTypeId {module: ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::Admitted, graph: 1, value: 0}, owner: ash::types::NominalOwner::Module, declaration: 0}
+$4 = "Acquire"

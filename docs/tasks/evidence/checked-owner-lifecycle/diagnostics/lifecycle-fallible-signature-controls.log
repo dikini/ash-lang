@@ -1,0 +1,21 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.54s
+     Running tests/checked_foreign_lifecycle.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/checked_foreign_lifecycle-84ad89226c52295f)
+
+running 3 tests
+
+thread 'checked_owner_lifecycle_fallible_scalar_finish_does_not_borrow_void_refinement' (1442359) panicked at tests/checked_foreign_lifecycle.rs:95:6:
+the actual fallible scalar teardown prepares canonically: ForeignContractError { reason: OperandCoverage, span: Span { source: SourceId(0), range: ByteRange { start: 339, end: 720 } } }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test checked_owner_lifecycle_fallible_scalar_finish_does_not_borrow_void_refinement ... FAILED
+test checked_owner_lifecycle_source_fixture_loads ... ok
+test checked_owner_lifecycle_source_checks_under_exact_host ... ok
+
+failures:
+
+failures:
+    checked_owner_lifecycle_fallible_scalar_finish_does_not_borrow_void_refinement
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+error: test failed, to rerun pass `-p ash --test checked_foreign_lifecycle`

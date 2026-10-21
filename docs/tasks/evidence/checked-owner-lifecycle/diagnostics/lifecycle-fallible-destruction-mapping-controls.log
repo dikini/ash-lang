@@ -1,0 +1,11 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.42s
+     Running tests/checked_foreign_lifecycle.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/checked_foreign_lifecycle-84ad89226c52295f)
+
+running 3 tests
+test checked_owner_lifecycle_source_fixture_loads ... ok
+test checked_owner_lifecycle_fallible_scalar_finish_does_not_borrow_void_refinement ... ok
+test checked_owner_lifecycle_source_checks_under_exact_host ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+

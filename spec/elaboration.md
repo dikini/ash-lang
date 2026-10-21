@@ -184,6 +184,27 @@ signatures and source origins before the source resource proof checks its phases
 Dependency summaries retain body-free headers; linking retains the checked
 defining code rather than recompiling imported lifecycle bodies.
 
+The static checked codec additionally retains the authored host selector and
+canonical CheckedFinish/CheckedScope roles. Original declaration coordinates
+recheck the selector and codec against the defining source; the syntax-only loan
+stores no accepted header or lifecycle proof. Each template's charged symbolic
+flow reconstructs exact finish-request, outcome-class and boundary-payload
+lineage at template admission. Independent Core reauthenticates the original
+header and forests, then checks each specialization and copied occurrence
+against the same immutable flow-checked template. It does not rerun the symbolic
+flow checker at every scope. Public tags or copied flags cannot replace that
+admitted template and correspondence. Identity and fold transformations retain
+the same originals, full vectors and required completion rows.
+
+Capture analysis keeps the actual finish cleanup and latest private payload
+when projecting independent CheckedCompletion error dependencies. A synthetic
+payload-free NativeHost control event has its own independent request/reply
+value port; the original native request keeps its real State operand and checks.
+For an internal pending provider row, host elaboration records paid exact native
+and `Host<H>` removal equations and checks result/residual H escape again after
+solving. An arbitrary open row gains no absence assumption, and a late unlisted
+native instance is not added to the host interpretation vector.
+
 The current executable source profile admits opaque and initialized byte owners
 with declared dependencies and complete ordered Type/Row state families. It
 retains one

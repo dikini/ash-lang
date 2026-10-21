@@ -1,0 +1,664 @@
+--- a/src/core/source_resource.rs
++++ b/src/core/source_resource.rs
+@@ -1300,7 +1300,7 @@
+             if !Arc::ptr_eq(&program.registry, &acquire.registry) {
+                 return Err(invalid());
+             }
+-            session.check_with_handler_graph(
++            let diagnostic = session.check_with_handler_graph(
+                 program,
+                 &header.original,
+                 answer,
+@@ -1309,7 +1309,10 @@
+                 &globals,
+                 if answer { handler_graph.as_ref() } else { None },
+                 work,
+-            )?;
++            );
++            #[cfg(test)]
++            eprintln!("checked lifecycle original structure answer={answer}: {diagnostic:?}");
++            diagnostic?;
+         }
+         let canonical =
+             CheckedSourceResourceHeader::admit(&header.original, &acquire.registry, work)?;
+@@ -1322,7 +1325,11 @@
+         {
+             return Err(invalid());
+         }
++        #[cfg(test)]
++        eprintln!("checked lifecycle header complete");
+         let methods = check_provider_association(&header, &handler, work)?;
++        #[cfg(test)]
++        eprintln!("checked lifecycle association complete");
+         let acquire_entry = entry(&acquire, &header.original, false, work)?;
+         let finish_entry = entry(&finish, &header.original, false, work)?;
+         let handler_entry = entry(&handler, &header.original, true, work)?;
+@@ -1399,6 +1406,8 @@
+             return Err(invalid());
+         }
+         let handler_body = answer.body();
++        #[cfg(test)]
++        eprintln!("checked lifecycle entries complete");
+         let acquire_calls = check_flow(
+             &acquire,
+             &header,
+@@ -3504,7 +3513,27 @@
+     if results.is_empty() {
+         return Err(invalid());
+     }
++    #[cfg(test)]
++    if matches!(
++        header.codec.report,
++        SourceResourceReportCodec::CheckedScope { .. }
++    ) {
++        eprintln!("checked lifecycle flow {phase:?} results={}", results.len());
++    }
+     for (value, path) in results {
++        #[cfg(test)]
++        if matches!(
++            header.codec.report,
++            SourceResourceReportCodec::CheckedScope { .. }
++        ) {
++            eprintln!(
++                "checked lifecycle result {phase:?} acquired={} consumed={} request={:?} value={:?}",
++                path.acquired,
++                path.consumed,
++                path.checked_finish_request,
++                facts.fact(value)?
++            );
++        }
+         if phase == SourceResourcePhase::Finish
+             && matches!(
+                 header.codec.report,
+--- a/src/core/validate.rs
++++ b/src/core/validate.rs
+@@ -8712,8 +8712,14 @@
+         &self,
+         original: Option<&source_declarations::OriginalDeclarationProvenance>,
+     ) -> Result<RegistryParameterOwners, ValidationError> {
+-        self.validate_reserved_builtin_sources()?;
+-        self.validate_scalar_preflight_registry()?;
++        let result = self.validate_reserved_builtin_sources();
++        #[cfg(test)]
++        eprintln!("checked lifecycle builtin bytes: {result:?}");
++        result?;
++        let result = self.validate_scalar_preflight_registry();
++        #[cfg(test)]
++        eprintln!("checked lifecycle scalar originals: {result:?}");
++        result?;
+         if let Some(canonical) = self.contextual_registry {
+             let mut work = TypeWorkBudget::with_limit(
+                 self.type_work_limit.saturating_sub(self.type_work.get()),
+@@ -9156,6 +9162,8 @@
+         } else {
+             registry.authenticate_provider_contracts(&mut contract_work)
+         };
++        #[cfg(test)]
++        eprintln!("checked lifecycle provider categories: {contract_result:?}");
+         let authenticated_abstract_inventory = contract_result.is_ok();
+         self.charge_type_work(contract_work.used())?;
+         // Contextual provider checking has its separately admitted defining
+@@ -9215,6 +9223,8 @@
+                     &mut owner_work,
+                 );
+             self.charge_type_work(owner_work.used())?;
++            #[cfg(test)]
++            eprintln!("checked lifecycle foreign nominal {nominal:?}: {result:?}");
+             result.map_err(|error| {
+                 ValidationError::new(
+                     if matches!(
+@@ -9328,10 +9338,15 @@
+             let nominal_range = nominal_span.range();
+             if let Some(original) = original {
+                 self.charge_type_work(1)?;
+-                let (defining_position, defining_origin) = original
+-                    .nominal_positions
+-                    .get(&nominal.id)
+-                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
++                let (defining_position, defining_origin) =
++                    original.nominal_positions.get(&nominal.id).ok_or_else(|| {
++                        #[cfg(test)]
++                        eprintln!(
++                            "checked lifecycle missing nominal original {:?} {}",
++                            nominal.id, nominal.spelling
++                        );
++                        ValidationError::new(ValidationReason::Registry, None)
++                    })?;
+                 if *defining_origin != nominal_span {
+                     return Err(ValidationError::new(ValidationReason::Registry, None));
+                 }
+@@ -9356,6 +9371,18 @@
+                         .get(&module)
+                         .is_some_and(|previous| nominal_range.start() < *previous)
+             {
++                #[cfg(test)]
++                eprintln!(
++                    "checked lifecycle nominal census failed {:?} {} expected={} origin={:?} source={:?} previous={:?} sourceowner={} ctors={}",
++                    nominal.id,
++                    nominal.spelling,
++                    expected,
++                    nominal_span,
++                    source,
++                    previous_nominal_end.get(&module),
++                    source_owners.contains(&nominal.id),
++                    nominal.constructors.len()
++                );
+                 return Err(ValidationError::new(ValidationReason::Registry, None));
+             }
+             *expected = expected
+@@ -9425,6 +9452,8 @@
+             return Err(ValidationError::new(ValidationReason::Registry, None));
+         }
+ 
++        #[cfg(test)]
++        eprintln!("checked lifecycle registry pre-variable inventory complete");
+         let mut type_variables = registry.type_variables().collect::<Vec<_>>();
+         type_variables.sort_unstable_by_key(|parameter| {
+             (
+@@ -9475,6 +9504,11 @@
+                     || !valid_upper_spelling(&parameter.spelling)
+                     || parameter_range.start() >= parameter_range.end()
+                 {
++                    #[cfg(test)]
++                    eprintln!(
++                        "checked lifecycle invalid variable {:?} expected={} span={:?} source={:?}",
++                        parameter.id, expected, parameter_span, source
++                    );
+                     return Err(ValidationError::new(ValidationReason::Registry, None));
+                 }
+                 if self.contextual_registry.is_none()
+@@ -9483,6 +9517,13 @@
+                         .get(&module)
+                         .is_some_and(|previous| parameter_range.start() <= *previous)
+                 {
++                    #[cfg(test)]
++                    eprintln!(
++                        "checked lifecycle variable ordering {:?} span={:?} previous={:?}",
++                        parameter.id,
++                        parameter_span,
++                        previous_type_variable_start.get(&module)
++                    );
+                     if foreign_host_parameters.is_some() {
+                         return Err(ValidationError::new(ValidationReason::Registry, None));
+                     }
+@@ -9504,6 +9545,8 @@
+             break;
+         }
+ 
++        #[cfg(test)]
++        eprintln!("checked lifecycle registry variables complete");
+         let mut parameter_owners = HashMap::new();
+         for nominal in registry.nominals() {
+             let nominal_range = nominal.origin.primary_span().range();
+@@ -9546,6 +9589,8 @@
+             self.validate_nominal_representation(nominal, source, &parameter_owners)?;
+         }
+ 
++        #[cfg(test)]
++        eprintln!("checked lifecycle registry nominal formals complete");
+         let mut constructor_ids = HashSet::new();
+         let mut constructor_names = HashMap::<ModuleId, HashSet<&str>>::new();
+         let mut previous_constructor_start = HashMap::new();
+@@ -16208,6 +16253,11 @@
+                 )
+             };
+             self.charge_type_work(work.used())?;
++            #[cfg(test)]
++            eprintln!(
++                "checked lifecycle original-source proof: {:?}",
++                result.as_ref().map(|_| ())
++            );
+             let original = result?;
+             let unused = self.unused_ordering_candidates(&original.ordering_candidates)?;
+             self.charge_type_work(unused.len())?;
+@@ -16220,8 +16270,17 @@
+         } else {
+             None
+         };
+-        let mut owners = self.validate_registry_with_original_provenance(original.as_ref())?;
+-        self.validate_effect_registry(self.module_sources.as_ref(), &mut owners)?;
++        let result = self.validate_registry_with_original_provenance(original.as_ref());
++        #[cfg(test)]
++        eprintln!(
++            "checked lifecycle registry proof: {:?}",
++            result.as_ref().map(|_| ())
++        );
++        let mut owners = result?;
++        let result = self.validate_effect_registry(self.module_sources.as_ref(), &mut owners);
++        #[cfg(test)]
++        eprintln!("checked lifecycle effect registry proof: {result:?}");
++        result?;
+         let empty_type_binders = CoreTypeBinders::new();
+         for nominal in self
+             .program
+--- a/src/elaborate.rs
++++ b/src/elaborate.rs
+@@ -43036,3 +43036,7 @@
+             .map_err(|failure| (Elaboration(failure.into()), used))
+     }
+ }
++
++#[cfg(test)]
++#[path = "elaborate/checked_owner_lifecycle_tests.rs"]
++mod checked_owner_lifecycle_tests;
+--- /dev/null
++++ b/src/elaborate/checked_owner_lifecycle_tests.rs
+@@ -0,0 +1,289 @@
++//! Connected static checked lifecycle controls; no evaluator or native execution.
++
++use super::*;
++use crate::{
++    module::{ModuleGraph, ModuleRoots},
++    resolved::CheckedModule,
++};
++use std::sync::{
++    Arc,
++    atomic::{AtomicU64, Ordering},
++};
++
++const PRODUCER: &str = include_str!("../../tests/fixtures/checked-owner-lifecycle/owner.ash");
++
++fn graph(producer: &str, consumer: bool) -> ModuleGraph {
++    static IDS: AtomicU64 = AtomicU64::new(0);
++    let directory = std::env::temp_dir().join(format!(
++        "ash-checked-owner-lifecycle-{}-{}",
++        std::process::id(),
++        IDS.fetch_add(1, Ordering::Relaxed)
++    ));
++    std::fs::create_dir(&directory).unwrap();
++    std::fs::write(directory.join("producer.ash"), producer).unwrap();
++    let entry = if consumer {
++        std::fs::write(directory.join("entry.ash"), "import @builtin.foreign as Foreign\nimport producer as Producer\nmain : Unit -> Foreign.CheckedScope<Int, Unit, Unit>\nmain () = Producer.run ()\n").unwrap();
++        directory.join("entry.ash")
++    } else {
++        directory.join("producer.ash")
++    };
++    let graph = crate::module::load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
++    std::fs::remove_dir_all(&directory).unwrap();
++    graph
++}
++
++fn check_graph(graph: &ModuleGraph) -> Result<Vec<CheckedModule>, TypeError> {
++    let mut checked = Vec::<CheckedModule>::new();
++    let mut availability = ProviderCodeAvailability::default();
++    // This is the established modular source-phase funding, separate from the
++    // unchanged standalone Core/image allowance. Resolution retains its own API.
++    let (mut checking, source_bytes) = crate::compiler_work::source_work(graph).unwrap();
++    let source_limit = checking.limit();
++    checking
++        .finish_sizing(crate::calibration::limit(
++            source_limit,
++            crate::calibration::DiagnosticOwner::Structural,
++        ))
++        .unwrap();
++    let rewrite_limit = crate::calibration::limit(
++        crate::compiler_work::rewrite_total(source_bytes).unwrap(),
++        crate::calibration::DiagnosticOwner::Structural,
++    );
++    let mut coverage = crate::pattern::UsefulnessBudget::default();
++    let mut constraints = crate::interface::InterfaceConstraintBudget::default();
++    for loaded in graph.modules() {
++        let dependencies = loaded
++            .dependencies()
++            .iter()
++            .map(|edge| {
++                crate::resolve::DependencyExports::new(
++                    edge,
++                    checked
++                        .iter()
++                        .find(|module| module.module() == edge.target())
++                        .unwrap()
++                        .exports(),
++                )
++                .unwrap()
++            })
++            .collect::<Vec<_>>();
++        let resolved = crate::resolve::resolve_checked_foreign_module(loaded, &dependencies)
++            .expect("canonical checked lifecycle source resolves before source checking");
++        let module = check_module_with_budget_and_provider_codes_and_rewrite_work(
++            resolved,
++            &availability,
++            &mut checking,
++            &mut coverage,
++            &mut constraints,
++            Some(TypeWorkBudget::with_limit(rewrite_limit)),
++        )?;
++        module.exports().authenticate(&mut TypeWorkBudget::default(), &mut crate::interface::InterfaceConstraintBudget::default())
++            .expect("completed body-free checked lifecycle summary authenticates under the default allowance");
++        if let Some(code) = module.provider_code() {
++            availability
++                .retain(module.module(), code, &mut checking)
++                .unwrap();
++        }
++        if let Some(code) = module.source_resource_code() {
++            availability
++                .retain_source(module.module(), code, &mut checking)
++                .unwrap();
++        }
++        checked.push(module);
++    }
++    Ok(checked)
++}
++
++fn assert_producer_originals(checked: &[CheckedModule]) {
++    let producer = checked
++        .iter()
++        .find(|module| {
++            module
++                .registry()
++                .source_resource_facts()
++                .any(|fact| fact.id.module() == module.module() && fact.spelling == "Probe")
++        })
++        .expect("actual checked producer retains Probe metadata");
++    let header = producer
++        .registry()
++        .source_resource_facts()
++        .find(|fact| fact.id.module() == producer.module() && fact.spelling == "Probe")
++        .unwrap();
++    assert_eq!(header.host.unwrap().position, 0);
++    assert_eq!(header.parameters[0].spelling, "H");
++    assert_eq!(header.owned_position, 1);
++    assert_eq!(header.parameters[1].spelling, "R");
++    assert_ne!(header.parameters[0].id, header.parameters[1].id);
++    assert_eq!(
++        header.codec.kind,
++        crate::surface::SurfaceResourceReportCodecKind::CheckedScope
++    );
++    let code = producer
++        .source_resource_code()
++        .expect("checked original lifecycle code");
++    assert!(
++        code.headers()
++            .any(|actual| Arc::ptr_eq(&actual.original, header))
++    );
++    assert!(
++        producer
++            .exports()
++            .source_resource_facts()
++            .any(|actual| Arc::ptr_eq(actual, header)),
++        "the body-free publication retains the exact required hidden header"
++    );
++    for name in ["Allocate", "Free"] {
++        let effect = producer
++            .registry()
++            .effects()
++            .iter()
++            .find(|effect| effect.id.module() == producer.module() && effect.spelling == name)
++            .unwrap();
++        let original = producer
++            .registry()
++            .native_symbol(crate::types::OperationId::new(effect.id, 0))
++            .unwrap();
++        assert!(original.owner().is_some());
++        let contract = original.prepared().checked_contract().unwrap();
++        let selected = &contract.symbols()[original.symbol_index()];
++        assert_eq!(selected.host_parameter(), 0);
++        let callee = contract
++            .assumptions()
++            .iter()
++            .find(|assumption| assumption.name() == "Callee")
++            .unwrap();
++        assert_eq!(
++            callee.description(),
++            "the admitted native owner contract holds"
++        );
++        assert!(
++            selected
++                .assumption_members()
++                .contains(&callee.member_index())
++        );
++        for consumer in checked.iter().filter(|module| {
++            module.module() != producer.module()
++                && module
++                    .direct_dependencies()
++                    .iter()
++                    .any(|edge| edge.target() == producer.module())
++        }) {
++            let imported = consumer
++                .registry()
++                .native_symbol(original.operation())
++                .expect("real passive consumer retains the captured native original");
++            assert!(Arc::ptr_eq(imported, original));
++            let retained = consumer
++                .registry()
++                .source_resource_fact(header.id)
++                .expect("real passive consumer retains the required resource header");
++            assert!(Arc::ptr_eq(retained, header));
++        }
++    }
++}
++
++#[test]
++fn checked_owner_lifecycle_canonical_source_retains_originals() {
++    let graph = graph(PRODUCER, false);
++    let checked = check_graph(&graph).expect(
++        "canonical checked lifecycle source must pass before any negative control receives credit",
++    );
++    assert_producer_originals(&checked);
++}
++
++#[test]
++fn checked_owner_lifecycle_body_free_consumer_links_core_and_transforms() {
++    let graph = graph(PRODUCER, true);
++    let checked = check_graph(&graph)
++        .expect("real body-free consumer checks the canonical checked lifecycle publication");
++    assert_producer_originals(&checked);
++    let linked =
++        link_modules(checked, graph.entry()).expect("canonical lifecycle module closure links");
++    let linked = crate::evidence_validation::validate_interface_evidence(linked)
++        .expect("canonical lifecycle evidence authenticates");
++    let mut elaborator =
++        EffectElaborator::for_module_program(&linked).expect("default final elaboration allowance");
++    let typed = elaborator
++        .synthesize_effect_module_program(&linked)
++        .expect("canonical checked lifecycle lowers to Effect Core under the default allowance");
++    let program = elaborator.finish(typed.node).unwrap();
++    let sources = graph
++        .modules()
++        .iter()
++        .map(|module| module.source())
++        .collect::<Vec<_>>();
++    let modules = graph
++        .modules()
++        .iter()
++        .map(|module| (module.id(), module.source().id()))
++        .collect::<Vec<_>>();
++    let core = crate::core::validate_effect_modules(program, &sources, &modules)
++        .expect("independent canonical checked lifecycle Core under the default allowance");
++    for transformed in [
++        crate::core::transform::identity_effect_traversal(&core).unwrap(),
++        crate::core::transform::fold_effect_literal_primitives(&core).unwrap(),
++    ] {
++        crate::core::validate_effect_modules(transformed, &sources, &modules).expect(
++            "transformed checked lifecycle independently revalidates under the default allowance",
++        );
++    }
++}
++
++fn source_refusal_after_canonical(replacement: &str) {
++    check_graph(&graph(PRODUCER, false))
++        .expect("canonical source must pass before mutation rejection is meaningful");
++    let arm = "Foreign.BoundaryFailed(reason) => Foreign.FinishedBoundary reason";
++    assert_eq!(PRODUCER.matches(arm).count(), 1);
++    let changed = PRODUCER.replace(arm, replacement);
++    let error =
++        check_graph(&graph(&changed, false)).expect_err("changed checked finish must be rejected");
++    assert!(
++        matches!(error, TypeError::Source(_)),
++        "expected semantic source refusal, not resource exhaustion or an internal failure: {error:?}"
++    );
++}
++
++#[test]
++fn checked_owner_lifecycle_boundary_failure_cannot_claim_retention() {
++    source_refusal_after_canonical(
++        "Foreign.BoundaryFailed(reason) => Foreign.FinishedRetained(state, ())",
++    );
++}
++
++#[test]
++fn checked_owner_lifecycle_boundary_failure_retires_ordinary_state_access() {
++    source_refusal_after_canonical(
++        "Foreign.BoundaryFailed(reason) => {\n                let ignored = Foreign.data_of<State<H, R>, Unit> state\n                Foreign.FinishedBoundary reason\n            }",
++    );
++}
++
++#[test]
++fn checked_owner_lifecycle_default_profile_refuses_the_same_source() {
++    let graph = graph(PRODUCER, false);
++    let mut checked = Vec::<CheckedModule>::new();
++    for loaded in graph.modules() {
++        let dependencies = loaded
++            .dependencies()
++            .iter()
++            .map(|edge| {
++                crate::resolve::DependencyExports::new(
++                    edge,
++                    checked
++                        .iter()
++                        .find(|module| module.module() == edge.target())
++                        .unwrap()
++                        .exports(),
++                )
++                .unwrap()
++            })
++            .collect::<Vec<_>>();
++        match crate::resolve::resolve_module(loaded, &dependencies) {
++            Ok(resolved) => checked.push(check_module(resolved).unwrap()),
++            Err(_) => {
++                assert_eq!(loaded.id(), graph.entry());
++                return;
++            }
++        }
++    }
++    panic!("default profile must refuse checked lifecycle source");
++}
+--- a/tests/checked_foreign_lifecycle.rs
++++ b/tests/checked_foreign_lifecycle.rs
+@@ -40,3 +40,126 @@
+     }
+     assert_eq!(checked.len(), graph.modules().len());
+ }
++
++struct TemporarySource(std::path::PathBuf);
++impl TemporarySource {
++    fn new(source: &str) -> Self {
++        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
++        let directory = std::env::temp_dir().join(format!(
++            "ash-checked-lifecycle-{}-{}",
++            std::process::id(),
++            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
++        ));
++        std::fs::create_dir_all(&directory).unwrap();
++        let path = directory.join("owner.ash");
++        std::fs::write(&path, source).unwrap();
++        Self(path)
++    }
++    fn graph(&self) -> ash::module::ModuleGraph {
++        ash::module::load_module_graph(&self.0, &ash::module::ModuleRoots::empty()).unwrap()
++    }
++}
++impl Drop for TemporarySource {
++    fn drop(&mut self) {
++        std::fs::remove_dir_all(self.0.parent().unwrap()).unwrap();
++    }
++}
++
++#[test]
++fn checked_owner_lifecycle_fallible_scalar_finish_does_not_borrow_void_refinement() {
++    let source = include_str!("fixtures/checked-owner-lifecycle/owner.ash");
++    let original = source.split("\ntype Acquire").next().unwrap();
++    let fallible = original
++        .replace(
++            "symbol Free<H, R> : State<H, R> ->",
++            "symbol Free<H, R> : (State<H, R>, Int) ->",
++        )
++        .replace(
++            "abi (pointer(Address)) -> void",
++            "abi (pointer(Address), Size) -> void",
++        )
++        .replace(
++            "operand 0 from 0 current",
++            "operand 0 from 0 current\n        operand 1 from 1 scalar",
++        );
++    assert_ne!(fallible, original);
++    let passive = TemporarySource::new(&format!(
++        "{fallible}\npub idle : Unit -> Int\nidle () = 42\n"
++    ));
++    let graph = passive.graph();
++    let producer = graph.module(graph.entry()).unwrap();
++    let prepared = ash::foreign::source_contract::prepare_checked_foreign_library(
++        producer.id(),
++        &producer.surface().foreign_libraries[0],
++    )
++    .expect("the actual fallible scalar teardown prepares canonically");
++    assert_eq!(prepared.symbols()[1].operands().len(), 2);
++    let mut checked: Vec<ash::resolved::CheckedModule> = Vec::new();
++    for loaded in graph.modules() {
++        let dependencies = loaded
++            .dependencies()
++            .iter()
++            .map(|edge| {
++                ash::resolve::DependencyExports::new(
++                    edge,
++                    checked
++                        .iter()
++                        .find(|module| module.module() == edge.target())
++                        .unwrap()
++                        .exports(),
++                )
++                .unwrap()
++            })
++            .collect::<Vec<_>>();
++        let resolved = ash::resolve::resolve_checked_foreign_module(loaded, &dependencies)
++            .expect("fallible scalar teardown originals bind before lifecycle use");
++        checked.push(
++            ash::elaborate::check_module(resolved).expect("passive fallible contract checks"),
++        );
++    }
++    let lifecycle = source.replacen(original, &fallible, 1).replace(
++        "perform Free<H, R>.call state",
++        "perform Free<H, R>.call (state, 7)",
++    );
++    let fixture = TemporarySource::new(&lifecycle);
++    let graph = fixture.graph();
++    let mut checked: Vec<ash::resolved::CheckedModule> = Vec::new();
++    for loaded in graph.modules() {
++        let dependencies = loaded
++            .dependencies()
++            .iter()
++            .map(|edge| {
++                ash::resolve::DependencyExports::new(
++                    edge,
++                    checked
++                        .iter()
++                        .find(|module| module.module() == edge.target())
++                        .unwrap()
++                        .exports(),
++                )
++                .unwrap()
++            })
++            .collect::<Vec<_>>();
++        let resolved = ash::resolve::resolve_checked_foreign_module(loaded, &dependencies).expect(
++            "the real scalar conversion contract resolves before its unsupported lifecycle",
++        );
++        match ash::elaborate::check_module(resolved) {
++            Ok(module) => checked.push(module),
++            Err(ash::elaborate::TypeError::Source(error)) => {
++                assert_eq!(loaded.id(), graph.entry());
++                assert_eq!(error.reason, ash::elaborate::TypeReason::Argument);
++                let message = format!("{error:?}");
++                assert!(
++                    message.contains("source resource header requires matching owned state"),
++                    "{message}"
++                );
++                assert!(!message.contains("ResourceExhausted"), "{message}");
++                return;
++            }
++            Err(error) => {
++                panic!("unsupported scalar lifecycle must reject semantically: {error:?}")
++            }
++        }
++    }
++    panic!("fallible scalar conversion cannot use the State-only void finish refinement");
++}

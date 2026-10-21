@@ -2861,6 +2861,7 @@ fn compile_source_resource_capture_control<F: CoreOperationFamily>(
         matches!(
             scope.header().codec.report,
             super::source_resource::SourceResourceReportCodec::Scope { .. }
+                | super::source_resource::SourceResourceReportCodec::CheckedScope { .. }
         ),
         budget,
     )?;
@@ -3170,6 +3171,7 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
             }) {
                 graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
                 let host_request = Request::effect(host, source, budget)?;
+                data.position_independent_request(graph.code.len(), source, budget)?;
                 steps.push(graph.code.len());
                 graph.code.push(Control::Request(host_request));
             }

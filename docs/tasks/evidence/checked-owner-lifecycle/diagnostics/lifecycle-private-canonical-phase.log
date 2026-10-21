@@ -1,0 +1,19 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 1 test
+checked lifecycle original structure answer=false: Err(ValidationError { reason: Registry, node: None, cause: None })
+
+thread 'elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_canonical_source_retains_originals' (1273631) panicked at src/elaborate/checked_owner_lifecycle_tests.rs:188:39:
+canonical checked lifecycle source must pass before any negative control receives credit: Source(TypeDiagnostic { diagnostic: Diagnostic { reason: Argument, primary: SourceLabel { span: Span { source: SourceId(0), range: ByteRange { start: 1261, end: 3066 } }, message: "source resource lifecycle and handlers must preserve the admitted owner flow" }, related: [], expected: None, found: None, help: None }, context: Plain })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_canonical_source_retains_originals ... FAILED
+
+failures:
+
+failures:
+    elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_canonical_source_retains_originals
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2041 filtered out; finished in 0.05s
+
+error: test failed, to rerun pass `-p ash --lib`

@@ -2248,6 +2248,35 @@ fn build_export_candidate(
                             )
                         })?;
                 } else {
+                    type_work.charge(1).map_err(|_| {
+                        export_candidate_resource_error(
+                            span,
+                            "private source foreign nominal parameter lookup exceeded its budget",
+                        )
+                    })?;
+                    let parameters = registry.nominal_parameters(resolved.id).ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            span,
+                            "original source foreign nominal parameters are missing",
+                        )
+                    })?;
+                    candidate
+                        .try_insert_hidden_nominal(
+                            CandidateHiddenNominal {
+                                id: resolved.id,
+                                parameter_count: parameters.len(),
+                                spelling: name.text.clone(),
+                                origin: resolved.origin.clone(),
+                            },
+                            type_work,
+                        )
+                        .map_err(|()| {
+                            export_candidate_resource_error(
+                                span,
+                                "private source foreign nominal retention exceeded its budget",
+                            )
+                        })?;
                     candidate
                         .try_insert_withheld(
                             WithheldNamespace::Nominal,
@@ -5127,18 +5156,6 @@ impl Resolver {
                 "imported interface route retention exceeded its work budget",
             )
         })?;
-        let owner_is_summary = exported.id.module() == summary.module();
-        if access == ImportedInterfaceAccess::HiddenSummaryClosure && owner_is_summary {
-            return Err(error(
-                ResolveReason::InternalState,
-                span,
-                "an interface summary contains an identity at the wrong visibility boundary",
-            )
-            .with_context(ResolveContext::WorkState {
-                part: "interface-visibility",
-                problem: "wrong",
-            }));
-        }
         if let Some(existing) = self.imported.interface(exported.id) {
             let mut nominal_identities = MatchedNominalIdentities::default();
             let matches = same_checked_interface_fact_observing_nominals_with_budget(
@@ -21764,6 +21781,41 @@ impl Resolver {
                     "owned must select a kind-Type resource parameter",
                 ));
             }
+            let host = source
+                .host
+                .as_ref()
+                .map(|host| {
+                    self.type_work.charge(parameters.0.len()).map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            host.span,
+                            "resource host selection exceeded its budget",
+                        )
+                    })?;
+                    let position = parameters
+                        .0
+                        .iter()
+                        .position(|parameter| parameter.spelling == host.text)
+                        .ok_or_else(|| {
+                            error(
+                                ResolveReason::TypeKind,
+                                host.span,
+                                "host must select a declared resource parameter",
+                            )
+                        })?;
+                    if position == owned_position || parameters.0[position].kind != Kind::Type {
+                        return Err(error(
+                            ResolveReason::TypeKind,
+                            host.span,
+                            "host must select a distinct kind-Type resource parameter",
+                        ));
+                    }
+                    Ok(crate::resolved::SourceResourceHost {
+                        position,
+                        span: host.span,
+                    })
+                })
+                .transpose()?;
             validate_explicit_type_parameters(Some(&source.result_parameters))?;
             if source.result_parameters.len() != 1 {
                 return Err(error(
@@ -21956,6 +22008,7 @@ impl Resolver {
                             parameters: parameters.into_vec().into_boxed_slice(),
                             owned_position,
                             owned_origin: Origin::Source(source.owned.span),
+                            host,
                             input: input.into_inner(),
                             state: state.into_inner(),
                             data: data.into_inner(),

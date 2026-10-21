@@ -1,0 +1,55 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi/foreign-adapter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 07s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 1 test
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle module bodies complete
+checked lifecycle original-source proof: Ok(())
+checked lifecycle builtin bytes: Ok(())
+checked lifecycle scalar originals: Ok(())
+checked lifecycle category counts provider=0 source=1 foreign=1 native=2 preflight=10 kinds=3
+checked lifecycle category provider contracts complete
+checked lifecycle category source resource kinds complete
+checked lifecycle category source foreign kinds complete
+checked lifecycle category inventories family=3 names=3 kinds=3
+checked lifecycle provider categories: Ok(())
+checked lifecycle foreign nominal NominalTypeId { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, owner: Module, declaration: 2 }: Ok(())
+checked lifecycle registry pre-variable inventory complete
+checked lifecycle registry variables complete
+checked lifecycle registry nominal formals complete
+checked lifecycle registry proof: Ok(())
+checked lifecycle effect registry proof: Ok(())
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle original structure answer=true: Ok(())
+checked lifecycle header complete
+checked lifecycle association complete
+checked lifecycle entries complete
+checked lifecycle flow Acquire results=4
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=true consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, owner: Module, declaration: 0 }, constructor: 0 }, Some(18))
+checked lifecycle flow Finish results=2
+checked lifecycle result Finish acquired=false consumed=false request=Some(NodeId { arena: ArenaId(2), index: 2 }) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, owner: Module, declaration: 14 }, constructor: 2 }, Some(4))
+checked lifecycle result Finish acquired=false consumed=true request=Some(NodeId { arena: ArenaId(2), index: 2 }) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, owner: Module, declaration: 14 }, constructor: 0 }, Some(11))
+checked lifecycle all admitted template records complete
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+
+thread 'elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_canonical_source_retains_originals' (1321659) panicked at src/elaborate/checked_owner_lifecycle_tests.rs:188:39:
+canonical checked lifecycle source must pass before any negative control receives credit: Internal(InvalidState)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_canonical_source_retains_originals ... FAILED
+
+failures:
+
+failures:
+    elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_canonical_source_retains_originals
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2044 filtered out; finished in 0.05s
+
+error: test failed, to rerun pass `-p ash --lib`

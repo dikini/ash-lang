@@ -1,0 +1,8 @@
+warning: Missing auto-load script at offset 0 in section .debug_gdb_scripts
+of file /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168.
+Use `info auto-load python-scripts [REGEXP]' to list them.
+Breakpoint 1 at 0x6b98450: /home/dikini/Projects/ash-lang/.worktree/checked-ffi/src/elaborate/foreign_host.rs:113. (4 locations)
+warning: Could not trace the inferior process.
+warning: ptrace: Operation not permitted
+/tmp/ash-pr97/relocated-payload-host-row.gdb:10: Error in sourced command file:
+During startup program exited with code 127.

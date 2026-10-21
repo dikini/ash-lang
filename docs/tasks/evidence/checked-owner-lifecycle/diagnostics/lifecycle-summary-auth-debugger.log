@@ -1,0 +1,205 @@
+warning: Missing auto-load script at offset 0 in section .debug_gdb_scripts
+of file /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168.
+Use `info auto-load python-scripts [REGEXP]' to list them.
+Breakpoint 1 at 0x8805928: file src/resolved.rs, line 10894.
+Breakpoint 2 at 0x87f261b: file src/resolved.rs, line 10903.
+Breakpoint 3 at 0x88055fe: file src/resolved.rs, line 10918.
+Breakpoint 4 at 0x8805884: file src/resolved.rs, line 10931.
+Breakpoint 5 at 0x87f29f6: file src/resolved.rs, line 10939.
+Breakpoint 6 at 0x88052ec: file src/resolved.rs, line 10964.
+Breakpoint 7 at 0x87f2cdc: file src/resolved.rs, line 10977.
+Breakpoint 8 at 0x87f3428: file src/resolved.rs, line 11014.
+Breakpoint 9 at 0x87f3945: file src/resolved.rs, line 11043.
+Breakpoint 10 at 0x87f4108: file src/resolved.rs, line 11074.
+Breakpoint 11 at 0x8804bdd: file src/resolved.rs, line 11084.
+Breakpoint 12 at 0x8804e17: file src/resolved.rs, line 11108.
+Breakpoint 13 at 0x88041db: file src/resolved.rs, line 11211.
+Breakpoint 14 at 0x8804055: file src/resolved.rs, line 11222.
+Breakpoint 15 at 0x8802eed: file src/resolved.rs, line 11232.
+Breakpoint 16 at 0x8802fd3: file src/resolved.rs, line 11277.
+Breakpoint 17 at 0x8803b8d: file src/resolved.rs, line 11288.
+Breakpoint 18 at 0x8803e1a: file src/resolved.rs, line 11309.
+Breakpoint 19 at 0x87f4c6e: file src/resolved.rs, line 11323.
+Breakpoint 20 at 0x8801a7f: file src/resolved.rs, line 11368.
+Breakpoint 21 at 0x8801bf4: file src/resolved.rs, line 11415.
+Breakpoint 22 at 0x8802d70: file src/resolved.rs, line 11423.
+Breakpoint 23 at 0x88023a3: file src/resolved.rs, line 11461.
+Breakpoint 24 at 0x8800ba0: file src/resolved.rs, line 11528.
+Breakpoint 25 at 0x8800bfd: file src/resolved.rs, line 11565.
+Breakpoint 26 at 0x880192d: file src/resolved.rs, line 11573.
+Breakpoint 27 at 0x880085b: file src/resolved.rs, line 11666.
+Breakpoint 28 at 0x8800653: file src/resolved.rs, line 11698.
+Breakpoint 29 at 0x880060c: file src/resolved.rs, line 11712.
+Breakpoint 30 at 0x87f5940: file src/resolved.rs, line 11736.
+Breakpoint 31 at 0x87f59bd: file src/resolved.rs, line 11744.
+Breakpoint 32 at 0x87ff8c6: file src/resolved.rs, line 11766.
+Breakpoint 33 at 0x87ff1b1: file src/resolved.rs, line 11804.
+Breakpoint 34 at 0x87ff0a4: file src/resolved.rs, line 11846.
+Breakpoint 35 at 0x87f63ef: file src/resolved.rs, line 11865.
+Breakpoint 36 at 0x87ff061: file src/resolved.rs, line 11874.
+Breakpoint 37 at 0x87fe569: file src/resolved.rs, line 11930.
+Breakpoint 38 at 0x87fe377: file src/resolved.rs, line 11938.
+Breakpoint 39 at 0x87fe86f: file src/resolved.rs, line 11944.
+Breakpoint 40 at 0x87fea01: file src/resolved.rs, line 11969.
+Breakpoint 41 at 0x87fde0c: file src/resolved.rs, line 12002.
+Breakpoint 42 at 0x87fdf5b: file src/resolved.rs, line 12013.
+Breakpoint 43 at 0x87fe287: file src/resolved.rs, line 12027.
+Breakpoint 44 at 0x87fd7c9: file src/resolved.rs, line 12075.
+Breakpoint 45 at 0x87fc643: file src/resolved.rs, line 12111.
+Breakpoint 46 at 0x87fc777: file src/resolved.rs, line 12116.
+Breakpoint 47 at 0x87fcdcc: file src/resolved.rs, line 12138.
+Breakpoint 48 at 0x87fb0d8: file src/resolved.rs, line 12198.
+Breakpoint 49 at 0x87fb1d7: file src/resolved.rs, line 12205.
+Breakpoint 50 at 0x87fb8a2: file src/resolved.rs, line 12271.
+Breakpoint 51 at 0x87fbf6a: file src/resolved.rs, line 12312.
+Breakpoint 52 at 0x87fc416: file src/resolved.rs, line 12332.
+Breakpoint 53 at 0x87fb011: file src/resolved.rs, line 12350.
+Breakpoint 54 at 0x87faee9: file src/resolved.rs, line 12369.
+Breakpoint 55 at 0x87faf40: file src/resolved.rs, line 12378.
+Breakpoint 56 at 0x87f7b0d: file src/resolved.rs, line 12385.
+Breakpoint 57 at 0x87fadb2: file src/resolved.rs, line 12395.
+Breakpoint 58 at 0x87fae09: file src/resolved.rs, line 12404.
+Breakpoint 59 at 0x87f7d7c: file src/resolved.rs, line 12411.
+Breakpoint 60 at 0x87f825c: file src/resolved.rs, line 12422.
+Breakpoint 61 at 0x87fa7f0: file src/resolved.rs, line 12441.
+Breakpoint 62 at 0x87fa9da: file src/resolved.rs, line 12449.
+Breakpoint 63 at 0x87f89af: file src/resolved.rs, line 12496.
+Breakpoint 64 at 0x87f8be0: file src/resolved.rs, line 12508.
+Breakpoint 65 at 0x87f8e99: file src/resolved.rs, line 12529.
+Breakpoint 66 at 0x87fa549: file src/resolved.rs, line 12560.
+Breakpoint 67 at 0x87f9227: file src/resolved.rs, line 12569.
+Breakpoint 68 at 0x87f9476: file src/resolved.rs, line 12579.
+Breakpoint 69 at 0x87f96f8: file src/resolved.rs, line 12590.
+Breakpoint 70 at 0x87f9e8c: file src/resolved.rs, line 12638.
+Breakpoint 71 at 0x8833971: file src/resolved.rs, line 15117.
+Breakpoint 72 at 0x8833393: file src/resolved.rs, line 15153.
+Breakpoint 73 at 0x8831b5e: file src/resolved.rs, line 15230.
+Breakpoint 74 at 0x88321a9: file src/resolved.rs, line 15246.
+Breakpoint 75 at 0x8832025: file src/resolved.rs, line 15256.
+Breakpoint 76 at 0x8832137: file src/resolved.rs, line 15262.
+Breakpoint 77 at 0x8830f0c: file src/resolved.rs, line 15278.
+Breakpoint 78 at 0x8830de4: file src/resolved.rs, line 15292.
+Breakpoint 79 at 0x8830a3a: file src/resolved.rs, line 15336.
+Breakpoint 80 at 0x88304e9: file src/resolved.rs, line 15363.
+Breakpoint 81 at 0x882ff3f: file src/resolved.rs, line 15390.
+Breakpoint 82 at 0x8830263: file src/resolved.rs, line 15399.
+Breakpoint 83 at 0x8831037: file src/resolved.rs, line 15444.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/x86_64-linux-gnu/libthread_db.so.1".
+
+running 1 test
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 1 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 2 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 3 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 4 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 5 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 6 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 7 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 8 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 9 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 10 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle finish module bodies entered
+checked lifecycle module result complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle capture finite values complete
+checked lifecycle capture typed data complete
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle module bodies complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle hidden interface collection complete
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle original-source proof: Ok(())
+checked lifecycle builtin bytes: Ok(())
+checked lifecycle scalar originals: Ok(())
+checked lifecycle category counts provider=0 source=1 foreign=1 native=2 preflight=10 kinds=3
+checked lifecycle category provider contracts complete
+checked lifecycle category source resource kinds complete
+checked lifecycle category source foreign kinds complete
+checked lifecycle category inventories family=3 names=3 kinds=3
+checked lifecycle provider categories: Ok(())
+checked lifecycle foreign nominal NominalTypeId { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, owner: Module, declaration: 2 }: Ok(())
+checked lifecycle registry pre-variable inventory complete
+checked lifecycle registry variables complete
+checked lifecycle registry nominal formals complete
+checked lifecycle registry proof: Ok(())
+checked lifecycle effect registry proof: Ok(())
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle original structure answer=true: Ok(())
+checked lifecycle header complete
+checked lifecycle association complete
+checked lifecycle entries complete
+checked lifecycle flow Acquire results=4
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=true consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, owner: Module, declaration: 0 }, constructor: 0 }, Some(18))
+checked lifecycle flow Finish results=2
+checked lifecycle result Finish acquired=false consumed=false request=Some(NodeId { arena: ArenaId(2), index: 2 }) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, owner: Module, declaration: 14 }, constructor: 2 }, Some(4))
+checked lifecycle result Finish acquired=false consumed=true request=Some(NodeId { arena: ArenaId(2), index: 2 }) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, owner: Module, declaration: 14 }, constructor: 0 }, Some(11))
+checked lifecycle all admitted template records complete
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle instance schedule entered
+checked lifecycle instance template selected
+checked lifecycle instance actuals complete
+checked lifecycle instance finish entered
+checked lifecycle instance rows complete
+checked lifecycle instance copies prepared
+checked lifecycle instance copies lowered
+checked lifecycle instance scope admitted
+checked lifecycle host finish entered
+checked lifecycle host interpretations=0
+checked lifecycle host finish complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle finish module bodies entered
+checked lifecycle module result complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle capture finite values complete
+checked lifecycle capture typed data complete
+checked lifecycle synthetic host control 113 for <effect:builtin.foreign:1:1:0><<type-variable:1:0:14>>
+checked lifecycle synthetic host control 117 for <effect:builtin.foreign:1:1:0><<type-variable:1:0:14>>
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle strict query roots complete
+checked lifecycle strict analysis constructed
+checked lifecycle strict discovery complete
+checked lifecycle strict payload complete
+checked lifecycle strict cell retention complete
+checked lifecycle module bodies complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle hidden interface collection complete
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+checked lifecycle summary authentication failed: InvalidState
+checked lifecycle export freeze failure: InvalidState
+
+thread 'elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_canonical_source_retains_originals' (1396179) panicked at src/elaborate/checked_owner_lifecycle_tests.rs:188:39:
+canonical checked lifecycle source must pass before any negative control receives credit: Internal(InvalidState)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_canonical_source_retains_originals ... FAILED
+
+failures:
+
+failures:
+    elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_canonical_source_retains_originals
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2054 filtered out; finished in 0.08s
+
+[Inferior 1 (process 1396140) exited with code 0145]
+/tmp/ash-pr97/summary-auth.gdb:90: Error in sourced command file:
+No stack.

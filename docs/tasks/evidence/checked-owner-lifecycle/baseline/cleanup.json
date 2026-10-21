@@ -1,0 +1,11 @@
+{
+  "removed_source_directory": "/tmp/ash-pr97-deep-base-eihfwm0m",
+  "removed_archive": "/tmp/ash-pr97/deep-baseline-source.tar",
+  "source_removed": true,
+  "archive_removed": true,
+  "retained_evidence": "docs/tasks/evidence/checked-owner-lifecycle/baseline",
+  "retained_log_sha256": "f82f732149e31006361971108ebfdfa160cfbe38ff1049ccec30e5672b77a2f8",
+  "retained_baseline_unit_sha256": "863089312381fb0a1e5aa7fe24af5e80e0bd16a84d8992d262f2e0912373cd1b",
+  "shared_cache_preserved": true,
+  "basis": "Exact-base source/archive/Git/raw audit complete; only disposable owned sources removed."
+}

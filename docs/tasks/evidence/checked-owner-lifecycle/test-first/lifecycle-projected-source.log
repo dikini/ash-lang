@@ -1,0 +1,21 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi/foreign-adapter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 52s
+     Running tests/checked_foreign_lifecycle.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/checked_foreign_lifecycle-84ad89226c52295f)
+
+running 2 tests
+test checked_owner_lifecycle_source_fixture_loads ... ok
+
+thread 'checked_owner_lifecycle_source_checks_under_exact_host' (1243765) panicked at tests/checked_foreign_lifecycle.rs:38:18:
+canonical checked owner lifecycle must pass source phase checking: Source(TypeDiagnostic { diagnostic: Diagnostic { reason: Argument, primary: SourceLabel { span: Span { source: SourceId(0), range: ByteRange { start: 1261, end: 3066 } }, message: "source resource header requires matching owned state, lifecycle symbols, and scope codecs" }, related: [], expected: None, found: None, help: None }, context: Plain })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test checked_owner_lifecycle_source_checks_under_exact_host ... FAILED
+
+failures:
+
+failures:
+    checked_owner_lifecycle_source_checks_under_exact_host
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+error: test failed, to rerun pass `-p ash --test checked_foreign_lifecycle`

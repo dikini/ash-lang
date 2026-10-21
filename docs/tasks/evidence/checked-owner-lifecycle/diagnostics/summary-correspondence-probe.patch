@@ -1,0 +1,3086 @@
+--- a/src/core/capture.rs
++++ b/src/core/capture.rs
+@@ -3171,6 +3171,9 @@
+             }) {
+                 graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
+                 let host_request = Request::effect(host, source, budget)?;
++                #[cfg(test)]
++                eprintln!("checked lifecycle synthetic host control {} for {host:?}", graph.code.len());
++                data.position_independent_request(graph.code.len(), source, budget)?;
+                 steps.push(graph.code.len());
+                 graph.code.push(Control::Request(host_request));
+             }
+@@ -3731,6 +3734,8 @@
+     else {
+         return Ok(Vec::new());
+     };
++    #[cfg(test)]
++    eprintln!("checked lifecycle capture graph complete");
+     if let Some(rows) = rows {
+         *rows = cleanup_requirements(&graph, &roots, budget)?;
+     } else if summary_roots.is_none() {
+@@ -6025,6 +6030,8 @@
+         budget,
+     )?;
+ 
++    #[cfg(test)]
++    eprintln!("checked lifecycle capture finite values complete");
+     // Canonical source roots and unproved raw producer roots both retain
+     // their actual value ports. The latter are subsequently Unknown; neither
+     // may be replaced by a canonical binder capture from below the cut.
+@@ -6083,6 +6090,8 @@
+         summary_roots.and_then(|(_, _, _, _, _, declared)| declared),
+         budget,
+     )?;
++    #[cfg(test)]
++    eprintln!("checked lifecycle capture typed data complete");
+     if let Some((_, lexical, _, _, dictionary_variables, _)) = summary_roots {
+         data.retain_provider_lexical(nodes, lexical, budget)?;
+         data.refuse_provider_dictionary_variables(nodes, dictionary_variables, budget)?;
+@@ -6100,6 +6109,8 @@
+         provider_phase,
+         budget,
+     )?;
++    #[cfg(test)]
++    eprintln!("checked lifecycle capture control compilation complete");
+     graph.data = Some(Arc::new(data));
+     Ok(Some(BuiltCaptureGraph {
+         graph,
+@@ -6441,7 +6452,11 @@
+                 queries.push(root);
+             }
+         }
++        #[cfg(test)]
++        eprintln!("checked lifecycle strict query roots complete");
+         let mut analysis = Analysis::new(graph, None, budget)?;
++        #[cfg(test)]
++        eprintln!("checked lifecycle strict analysis constructed");
+         analysis.collect_cleanup_rows = collect_cleanup_rows;
+         analysis.check(&queries, budget)?;
+         return Ok(std::mem::take(&mut analysis.cleanup_rows));
+--- a/src/core/capture/control.rs
++++ b/src/core/capture/control.rs
+@@ -2601,15 +2601,33 @@
+         self.entries.clear();
+         self.candidates.clear();
+         self.payloads.clear();
+-        self.discover(roots, None, budget)?;
++        self.discover(roots, None, budget).map_err(|failure| {
++            #[cfg(test)]
++            eprintln!("checked lifecycle strict discovery failed: {failure:?}");
++            failure
++        })?;
++        #[cfg(test)]
++        eprintln!("checked lifecycle strict discovery complete");
+         // Passive row records describe the whole original discovery. Focused
+         // safety queries remain strict and do not invent additional row sites.
+         self.collect_cleanup_rows = false;
+         if self.infer_cleanup_rows {
+             return Ok(());
+         }
+-        self.check_payloads(budget)?;
+-        self.check_cell_retentions(budget)?;
++        self.check_payloads(budget).map_err(|failure| {
++            #[cfg(test)]
++            eprintln!("checked lifecycle strict payload failed: {failure:?}");
++            failure
++        })?;
++        #[cfg(test)]
++        eprintln!("checked lifecycle strict payload complete");
++        self.check_cell_retentions(budget).map_err(|failure| {
++            #[cfg(test)]
++            eprintln!("checked lifecycle strict cell retention failed: {failure:?}");
++            failure
++        })?;
++        #[cfg(test)]
++        eprintln!("checked lifecycle strict cell retention complete");
+         if let Some(data) = &mut self.data {
+             data.close(budget)?;
+             for candidate in data.resource_candidates(budget)? {
+@@ -2620,7 +2638,11 @@
+                 self.candidates.insert(candidate);
+             }
+         }
+-        self.check_focused_entries(budget)
++        self.check_focused_entries(budget).map_err(|failure| {
++            #[cfg(test)]
++            eprintln!("checked lifecycle strict focused failed: {failure:?}");
++            failure
++        })
+     }
+ 
+     fn discover(
+@@ -2675,7 +2697,11 @@
+                 let code = state.position.code;
+                 match &self.graph.code[code] {
+                     Control::Return => self.returned(state, &mut pending, &mut visited, budget)?,
+-                    Control::Unavailable => return Err(Failure::Invalid),
++                    Control::Unavailable => {
++                        #[cfg(test)]
++                        eprintln!("checked lifecycle unavailable control {code}");
++                        return Err(Failure::Invalid);
++                    },
+                     Control::Sequence(children) => {
+                         self.discover_sequence(
+                             state,
+--- a/src/core/capture/value.rs
++++ b/src/core/capture/value.rs
+@@ -3443,6 +3443,27 @@
+         Ok(())
+     }
+ 
++    /// A sealed Host control event has independent Unit payload and reply.
++    /// Its native request retains its separate real operand/value equation.
++    pub(super) fn position_independent_request(
++        &mut self,
++        code: usize,
++        source: Span,
++        budget: &mut TypeWorkBudget,
++    ) -> Result<(), Failure> {
++        let scalar = self.push(Expr::Scalar, source, budget)?;
++        let request = self.push(
++            Expr::Request {
++                operand: scalar,
++                scalar: true,
++                reply: Some(scalar),
++            },
++            source,
++            budget,
++        )?;
++        self.position(code, request, budget)
++    }
++
+     /// Distinct existing value equations for authenticated source-control
+     /// phases. No cut may substitute the enclosing report for a completed
+     /// acquisition or for a still-live cleanup/handler result.
+@@ -5237,7 +5258,11 @@
+         budget: &mut TypeWorkBudget,
+     ) -> Result<usize, Failure> {
+         charge(budget, 1)?;
+-        let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
++        let expression = *self.graph.positions.get(&code).ok_or_else(|| {
++            #[cfg(test)]
++            eprintln!("checked lifecycle missing value position for control {code}");
++            Failure::Invalid
++        })?;
+         self.slot(expression, context, budget)
+     }
+ 
+@@ -13845,3 +13870,7 @@
+     }
+     // ASH_INPUT169_END_TESTS
+ }
++
++#[cfg(test)]
++#[path = "value/host_request_tests.rs"]
++mod host_request_tests;
+--- /dev/null
++++ b/src/core/capture/value/host_request_tests.rs
+@@ -0,0 +1,187 @@
++//! Synthetic control obligations retain independent request value ports.
++//! These graph-only fixtures grant no host, native contract or owner authority.
++
++use super::*;
++
++const OWNER_CODE: usize = 20;
++const NATIVE_CODE: usize = 30;
++const HOST_CODE: usize = 40;
++
++fn graph() -> Graph {
++    let source = crate::source::SourceFile::new("host-port.ash", "x").unwrap();
++    let span = source
++        .span(crate::source::ByteRange::new(0, 1).unwrap())
++        .unwrap();
++    let expressions = vec![
++        Expr::Slot,
++        Expr::Scalar,
++        Expr::Resource {
++            success: None,
++            failure: None,
++            failure_payload: None,
++            handle: 0,
++            identity: 0,
++            initializer: 1,
++            body: 1,
++            source: span,
++        },
++        Expr::Request {
++            operand: 0,
++            scalar: false,
++            reply: None,
++        },
++    ];
++    Graph {
++        sources: vec![span; expressions.len()],
++        expressions,
++        globals: Vec::new(),
++        provider: Vec::new(),
++        exports: Vec::new(),
++        positions: HashMap::from([(OWNER_CODE, 2), (NATIVE_CODE, 3)]),
++        targets: HashMap::new(),
++        metadata: HashMap::new(),
++        evidence: Vec::new(),
++        evidence_index: Vec::new(),
++    }
++}
++
++fn assert_independent_mapping(graph: &Graph) {
++    assert_eq!(graph.positions[&NATIVE_CODE], 3);
++    assert!(matches!(
++        graph.expressions[3],
++        Expr::Request {
++            operand: 0,
++            scalar: false,
++            reply: None
++        }
++    ));
++    let host = graph.positions[&HOST_CODE];
++    assert_ne!(
++        host, 3,
++        "host obligation must not alias the State-bearing native request"
++    );
++    let Expr::Request {
++        operand,
++        scalar: true,
++        reply: Some(reply),
++    } = graph.expressions[host]
++    else {
++        panic!("independent synthetic request and explicit reply");
++    };
++    assert_ne!(operand, 0);
++    assert!(matches!(graph.expressions[operand], Expr::Scalar));
++    assert!(matches!(graph.expressions[reply], Expr::Scalar));
++    assert_eq!(graph.sources[host], graph.sources[3]);
++}
++
++#[test]
++fn checked_host_request_port_preserves_native_payload_rejection_and_independent_reply() {
++    let mut graph = graph();
++    let source = graph.sources[3];
++    let mut budget = TypeWorkBudget::default();
++    graph
++        .position_independent_request(HOST_CODE, source, &mut budget)
++        .unwrap();
++    assert_independent_mapping(&graph);
++    let mut analysis = Analysis::new(&graph, &mut budget).unwrap();
++    let state = analysis.slot(0, 0, &mut budget).unwrap();
++    // Inject a symbolic owner dependency only; this is not a native State fact.
++    analysis
++        .atom(state, Atom::Resource(2, 0), &mut budget)
++        .unwrap();
++    let native = analysis.port(NATIVE_CODE, 0, &mut budget).unwrap();
++    let host = analysis.port(HOST_CODE, 0, &mut budget).unwrap();
++    analysis.close(&mut budget).unwrap();
++    assert!(
++        matches!(
++            analysis.check_payload(native, OWNER_CODE, 0, &mut budget),
++            Err(Failure::Escape { .. })
++        ),
++        "original native payload must keep its owner escape check"
++    );
++    analysis
++        .check_payload(host, OWNER_CODE, 0, &mut budget)
++        .expect("independent host payload contains no State dependency");
++    analysis.external_result(host, &mut budget).unwrap();
++    analysis.close(&mut budget).unwrap();
++    assert!(analysis.slots[host].atoms.contains(&Atom::Free));
++    assert!(!analysis.slots[host].atoms.contains(&Atom::Unknown));
++    assert!(
++        !analysis
++            .dependencies(host, &mut budget)
++            .unwrap()
++            .contains(&Atom::Resource(2, 0))
++    );
++    assert!(
++        matches!(
++            analysis.check_payload(native, OWNER_CODE, 0, &mut budget),
++            Err(Failure::Escape { .. })
++        ),
++        "independent reply cannot launder the native payload"
++    );
++}
++
++#[test]
++fn checked_host_request_missing_value_mapping_still_refuses() {
++    let graph = graph();
++    let mut budget = TypeWorkBudget::default();
++    let mut analysis = Analysis::new(&graph, &mut budget).unwrap();
++    assert!(matches!(
++        analysis.port(HOST_CODE, 0, &mut budget),
++        Err(Failure::Invalid)
++    ));
++    assert!(!graph.positions.contains_key(&HOST_CODE));
++    assert_eq!(graph.positions.len(), 2);
++}
++
++#[test]
++fn checked_host_request_mapping_has_exact_prefix_short_spent_and_fresh_limits() {
++    let mut measured_graph = graph();
++    let source = measured_graph.sources[3];
++    let mut measured = TypeWorkBudget::default();
++    measured_graph
++        .position_independent_request(HOST_CODE, source, &mut measured)
++        .unwrap();
++    let cost = measured.used();
++    assert!(cost > 0);
++    for prefix in [0, 7] {
++        let mut exact_graph = graph();
++        let source = exact_graph.sources[3];
++        let mut exact = TypeWorkBudget::with_limit(prefix + cost);
++        exact.charge(prefix).unwrap();
++        exact_graph
++            .position_independent_request(HOST_CODE, source, &mut exact)
++            .unwrap();
++        assert_independent_mapping(&exact_graph);
++        assert_eq!(exact.used(), prefix + cost);
++        assert!(matches!(
++            exact_graph.position_independent_request(HOST_CODE + 1, source, &mut exact),
++            Err(Failure::Resource)
++        ));
++        assert!(!exact_graph.positions.contains_key(&(HOST_CODE + 1)));
++
++        let mut short_graph = graph();
++        let source = short_graph.sources[3];
++        let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
++        short.charge(prefix).unwrap();
++        assert!(matches!(
++            short_graph.position_independent_request(HOST_CODE, source, &mut short),
++            Err(Failure::Resource)
++        ));
++        assert!(
++            !short_graph.positions.contains_key(&HOST_CODE),
++            "unpaid mapping must not become a completed value port"
++        );
++        assert_eq!(short_graph.positions[&NATIVE_CODE], 3);
++    }
++    for _ in 0..2 {
++        let mut fresh_graph = graph();
++        let source = fresh_graph.sources[3];
++        let mut fresh = TypeWorkBudget::with_limit(cost);
++        fresh_graph
++            .position_independent_request(HOST_CODE, source, &mut fresh)
++            .unwrap();
++        assert_independent_mapping(&fresh_graph);
++        assert_eq!(fresh.used(), cost);
++    }
++}
+--- a/src/core/source_resource.rs
++++ b/src/core/source_resource.rs
+@@ -1300,7 +1300,7 @@
+             if !Arc::ptr_eq(&program.registry, &acquire.registry) {
+                 return Err(invalid());
+             }
+-            session.check_with_handler_graph(
++            let diagnostic = session.check_with_handler_graph(
+                 program,
+                 &header.original,
+                 answer,
+@@ -1309,7 +1309,10 @@
+                 &globals,
+                 if answer { handler_graph.as_ref() } else { None },
+                 work,
+-            )?;
++            );
++            #[cfg(test)]
++            eprintln!("checked lifecycle original structure answer={answer}: {diagnostic:?}");
++            diagnostic?;
+         }
+         let canonical =
+             CheckedSourceResourceHeader::admit(&header.original, &acquire.registry, work)?;
+@@ -1322,7 +1325,11 @@
+         {
+             return Err(invalid());
+         }
++        #[cfg(test)]
++        eprintln!("checked lifecycle header complete");
+         let methods = check_provider_association(&header, &handler, work)?;
++        #[cfg(test)]
++        eprintln!("checked lifecycle association complete");
+         let acquire_entry = entry(&acquire, &header.original, false, work)?;
+         let finish_entry = entry(&finish, &header.original, false, work)?;
+         let handler_entry = entry(&handler, &header.original, true, work)?;
+@@ -1399,6 +1406,8 @@
+             return Err(invalid());
+         }
+         let handler_body = answer.body();
++        #[cfg(test)]
++        eprintln!("checked lifecycle entries complete");
+         let acquire_calls = check_flow(
+             &acquire,
+             &header,
+@@ -3504,7 +3513,27 @@
+     if results.is_empty() {
+         return Err(invalid());
+     }
++    #[cfg(test)]
++    if matches!(
++        header.codec.report,
++        SourceResourceReportCodec::CheckedScope { .. }
++    ) {
++        eprintln!("checked lifecycle flow {phase:?} results={}", results.len());
++    }
+     for (value, path) in results {
++        #[cfg(test)]
++        if matches!(
++            header.codec.report,
++            SourceResourceReportCodec::CheckedScope { .. }
++        ) {
++            eprintln!(
++                "checked lifecycle result {phase:?} acquired={} consumed={} request={:?} value={:?}",
++                path.acquired,
++                path.consumed,
++                path.checked_finish_request,
++                facts.fact(value)?
++            );
++        }
+         if phase == SourceResourcePhase::Finish
+             && matches!(
+                 header.codec.report,
+--- a/src/core/validate.rs
++++ b/src/core/validate.rs
+@@ -8712,8 +8712,14 @@
+         &self,
+         original: Option<&source_declarations::OriginalDeclarationProvenance>,
+     ) -> Result<RegistryParameterOwners, ValidationError> {
+-        self.validate_reserved_builtin_sources()?;
+-        self.validate_scalar_preflight_registry()?;
++        let result = self.validate_reserved_builtin_sources();
++        #[cfg(test)]
++        eprintln!("checked lifecycle builtin bytes: {result:?}");
++        result?;
++        let result = self.validate_scalar_preflight_registry();
++        #[cfg(test)]
++        eprintln!("checked lifecycle scalar originals: {result:?}");
++        result?;
+         if let Some(canonical) = self.contextual_registry {
+             let mut work = TypeWorkBudget::with_limit(
+                 self.type_work_limit.saturating_sub(self.type_work.get()),
+@@ -9156,6 +9162,8 @@
+         } else {
+             registry.authenticate_provider_contracts(&mut contract_work)
+         };
++        #[cfg(test)]
++        eprintln!("checked lifecycle provider categories: {contract_result:?}");
+         let authenticated_abstract_inventory = contract_result.is_ok();
+         self.charge_type_work(contract_work.used())?;
+         // Contextual provider checking has its separately admitted defining
+@@ -9215,6 +9223,8 @@
+                     &mut owner_work,
+                 );
+             self.charge_type_work(owner_work.used())?;
++            #[cfg(test)]
++            eprintln!("checked lifecycle foreign nominal {nominal:?}: {result:?}");
+             result.map_err(|error| {
+                 ValidationError::new(
+                     if matches!(
+@@ -9328,10 +9338,15 @@
+             let nominal_range = nominal_span.range();
+             if let Some(original) = original {
+                 self.charge_type_work(1)?;
+-                let (defining_position, defining_origin) = original
+-                    .nominal_positions
+-                    .get(&nominal.id)
+-                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
++                let (defining_position, defining_origin) =
++                    original.nominal_positions.get(&nominal.id).ok_or_else(|| {
++                        #[cfg(test)]
++                        eprintln!(
++                            "checked lifecycle missing nominal original {:?} {}",
++                            nominal.id, nominal.spelling
++                        );
++                        ValidationError::new(ValidationReason::Registry, None)
++                    })?;
+                 if *defining_origin != nominal_span {
+                     return Err(ValidationError::new(ValidationReason::Registry, None));
+                 }
+@@ -9356,6 +9371,18 @@
+                         .get(&module)
+                         .is_some_and(|previous| nominal_range.start() < *previous)
+             {
++                #[cfg(test)]
++                eprintln!(
++                    "checked lifecycle nominal census failed {:?} {} expected={} origin={:?} source={:?} previous={:?} sourceowner={} ctors={}",
++                    nominal.id,
++                    nominal.spelling,
++                    expected,
++                    nominal_span,
++                    source,
++                    previous_nominal_end.get(&module),
++                    source_owners.contains(&nominal.id),
++                    nominal.constructors.len()
++                );
+                 return Err(ValidationError::new(ValidationReason::Registry, None));
+             }
+             *expected = expected
+@@ -9425,6 +9452,8 @@
+             return Err(ValidationError::new(ValidationReason::Registry, None));
+         }
+ 
++        #[cfg(test)]
++        eprintln!("checked lifecycle registry pre-variable inventory complete");
+         let mut type_variables = registry.type_variables().collect::<Vec<_>>();
+         type_variables.sort_unstable_by_key(|parameter| {
+             (
+@@ -9475,6 +9504,11 @@
+                     || !valid_upper_spelling(&parameter.spelling)
+                     || parameter_range.start() >= parameter_range.end()
+                 {
++                    #[cfg(test)]
++                    eprintln!(
++                        "checked lifecycle invalid variable {:?} expected={} span={:?} source={:?}",
++                        parameter.id, expected, parameter_span, source
++                    );
+                     return Err(ValidationError::new(ValidationReason::Registry, None));
+                 }
+                 if self.contextual_registry.is_none()
+@@ -9483,6 +9517,13 @@
+                         .get(&module)
+                         .is_some_and(|previous| parameter_range.start() <= *previous)
+                 {
++                    #[cfg(test)]
++                    eprintln!(
++                        "checked lifecycle variable ordering {:?} span={:?} previous={:?}",
++                        parameter.id,
++                        parameter_span,
++                        previous_type_variable_start.get(&module)
++                    );
+                     if foreign_host_parameters.is_some() {
+                         return Err(ValidationError::new(ValidationReason::Registry, None));
+                     }
+@@ -9504,6 +9545,8 @@
+             break;
+         }
+ 
++        #[cfg(test)]
++        eprintln!("checked lifecycle registry variables complete");
+         let mut parameter_owners = HashMap::new();
+         for nominal in registry.nominals() {
+             let nominal_range = nominal.origin.primary_span().range();
+@@ -9546,6 +9589,8 @@
+             self.validate_nominal_representation(nominal, source, &parameter_owners)?;
+         }
+ 
++        #[cfg(test)]
++        eprintln!("checked lifecycle registry nominal formals complete");
+         let mut constructor_ids = HashSet::new();
+         let mut constructor_names = HashMap::<ModuleId, HashSet<&str>>::new();
+         let mut previous_constructor_start = HashMap::new();
+@@ -16208,6 +16253,11 @@
+                 )
+             };
+             self.charge_type_work(work.used())?;
++            #[cfg(test)]
++            eprintln!(
++                "checked lifecycle original-source proof: {:?}",
++                result.as_ref().map(|_| ())
++            );
+             let original = result?;
+             let unused = self.unused_ordering_candidates(&original.ordering_candidates)?;
+             self.charge_type_work(unused.len())?;
+@@ -16220,8 +16270,17 @@
+         } else {
+             None
+         };
+-        let mut owners = self.validate_registry_with_original_provenance(original.as_ref())?;
+-        self.validate_effect_registry(self.module_sources.as_ref(), &mut owners)?;
++        let result = self.validate_registry_with_original_provenance(original.as_ref());
++        #[cfg(test)]
++        eprintln!(
++            "checked lifecycle registry proof: {:?}",
++            result.as_ref().map(|_| ())
++        );
++        let mut owners = result?;
++        let result = self.validate_effect_registry(self.module_sources.as_ref(), &mut owners);
++        #[cfg(test)]
++        eprintln!("checked lifecycle effect registry proof: {result:?}");
++        result?;
+         let empty_type_binders = CoreTypeBinders::new();
+         for nominal in self
+             .program
+--- a/src/elaborate.rs
++++ b/src/elaborate.rs
+@@ -5159,12 +5159,16 @@
+             return Err(invalid_state());
+         }
+ 
++        #[cfg(test)]
++        eprintln!("checked lifecycle finish module bodies entered");
+         let (globals, mut context) = self.finish_prepared_definitions(globals)?;
+         let result = ResolvedExpr {
+             kind: ResolvedExprKind::Unit,
+             span: module.span(),
+         };
+         self.elaborate_result(&result, &mut context)?;
++        #[cfg(test)]
++        eprintln!("checked lifecycle module result complete");
+         let incoming = self.prepare_evidence_publication()?;
+         let publication = if let Some(mut previous) = previous_publication {
+             previous
+@@ -5180,6 +5184,8 @@
+             self.zonk_builder_types_since(None, false)
+                 .map_err(TypeError::Internal)?;
+         }
++        #[cfg(test)]
++        eprintln!("checked lifecycle module evidence and zonk complete");
+         let generic_type_origin = self
+             .builder
+             .generic_cell_dependency_origin(&mut self.type_work)
+@@ -5265,7 +5271,11 @@
+         }
+         let (method_routes, method_adapters) =
+             self.capture_method_routes(publication, module, facts)?;
++        #[cfg(test)]
++        eprintln!("checked lifecycle completed capture cleanup start");
+         self.solve_cleanup_rows(roots, &imports, &method_routes, &method_adapters)?;
++        #[cfg(test)]
++        eprintln!("checked lifecycle completed capture check start");
+         let captures = crate::core::capture::check_builder(
+             &self.builder,
+             roots,
+@@ -5275,7 +5285,11 @@
+             &method_adapters,
+             &mut self.type_work,
+         )
+-        .map_err(|failure| capture_failure(failure, &mut self.type_work))?;
++        .map_err(|failure| {
++            #[cfg(test)]
++            eprintln!("checked lifecycle capture failure: {failure:?}");
++            capture_failure(failure, &mut self.type_work)
++        })?;
+         Ok(captures)
+     }
+ 
+@@ -11685,6 +11699,8 @@
+             .binders
+             .remove(&fact.binder)
+             .ok_or_else(invalid_state)?;
++        #[cfg(test)]
++        eprintln!("checked lifecycle prepared definition complete");
+         prepared.globals.push(ElaboratedBinding {
+             binder,
+             initializer: function.node,
+@@ -12203,6 +12219,8 @@
+         if !self.monomorphic_recursive.remove(&recursive_binder) {
+             return Err(invalid_state());
+         }
++        #[cfg(test)]
++        eprintln!("checked lifecycle definition {recursive_binder:?} synthesized={:?} close={close_result:?} source_close={source_close:?} leave={leave_result:?}", definition_result.as_ref().map(|_| ()) );
+         let (name, mut function) = definition_result?;
+         close_result?;
+         source_close?;
+@@ -22757,6 +22775,8 @@
+             source_provider.as_ref(),
+             elaborator.builder.rewrite_work_limit(),
+         )?;
++        #[cfg(test)]
++        eprintln!("checked lifecycle source templates compile complete");
+         if let Some(code) = &source_resources {
+             elaborator.provider_codes.retain_source(
+                 resolved.module(),
+@@ -22764,6 +22784,8 @@
+                 &mut elaborator.type_work,
+             )?;
+         }
++        #[cfg(test)]
++        eprintln!("checked lifecycle source code retention complete");
+         let (implementation_facts, mut publication) = elaborator.check_module_bodies(
+             &resolved,
+             &mut schemes,
+@@ -22773,6 +22795,8 @@
+             &mut started_bodies,
+             constraint_work,
+         )?;
++        #[cfg(test)]
++        eprintln!("checked lifecycle module bodies complete");
+         let selector = elaborator.selection.as_ref().ok_or_else(invalid_state)?;
+         audit_checked_body_evidence(
+             resolved.definitions(),
+@@ -22786,6 +22810,8 @@
+             EvidenceAuditFailure::InvalidState => invalid_state(),
+             EvidenceAuditFailure::ConstraintResource => constraint_resource(),
+         })?;
++        #[cfg(test)]
++        eprintln!("checked lifecycle body evidence audit complete");
+         let defining = if F::EFFECTS
+             && !resolved.resources().is_empty()
+             && elaborator.pending_local_provider.is_none()
+@@ -22822,6 +22848,8 @@
+             return Err(unsupported_provider_resource());
+         };
+ 
++        #[cfg(test)]
++        eprintln!("checked lifecycle provider group complete");
+         let exports = ExportSummary::freeze_with_providers(
+             &resolved,
+             &schemes,
+@@ -22832,7 +22860,13 @@
+             &mut elaborator.type_work,
+             constraint_work,
+         )
+-        .map_err(resolved_build_error)?;
++        .map_err(|failure| {
++            #[cfg(test)]
++            eprintln!("checked lifecycle export freeze failure: {failure:?}");
++            resolved_build_error(failure)
++        })?;
++        #[cfg(test)]
++        eprintln!("checked lifecycle exports frozen");
+ 
+         Ok((
+             schemes,
+@@ -22846,7 +22880,11 @@
+         ))
+     })();
+     let result = result.and_then(|checked| {
++        #[cfg(test)]
++        eprintln!("checked lifecycle source finalization entered");
+         elaborator.finalize_source_provider_plans()?;
++        #[cfg(test)]
++        eprintln!("checked lifecycle source finalization complete");
+         #[cfg(test)]
+         if let Some(observer) = source_capture_observer {
+             let builder = F::effect_builder(&mut elaborator.builder).ok_or_else(invalid_state)?;
+@@ -43036,3 +43074,7 @@
+             .map_err(|failure| (Elaboration(failure.into()), used))
+     }
+ }
++
++#[cfg(test)]
++#[path = "elaborate/checked_owner_lifecycle_tests.rs"]
++mod checked_owner_lifecycle_tests;
+--- /dev/null
++++ b/src/elaborate/checked_owner_lifecycle_tests.rs
+@@ -0,0 +1,289 @@
++//! Connected static checked lifecycle controls; no evaluator or native execution.
++
++use super::*;
++use crate::{
++    module::{ModuleGraph, ModuleRoots},
++    resolved::CheckedModule,
++};
++use std::sync::{
++    Arc,
++    atomic::{AtomicU64, Ordering},
++};
++
++const PRODUCER: &str = include_str!("../../tests/fixtures/checked-owner-lifecycle/owner.ash");
++
++fn graph(producer: &str, consumer: bool) -> ModuleGraph {
++    static IDS: AtomicU64 = AtomicU64::new(0);
++    let directory = std::env::temp_dir().join(format!(
++        "ash-checked-owner-lifecycle-{}-{}",
++        std::process::id(),
++        IDS.fetch_add(1, Ordering::Relaxed)
++    ));
++    std::fs::create_dir(&directory).unwrap();
++    std::fs::write(directory.join("producer.ash"), producer).unwrap();
++    let entry = if consumer {
++        std::fs::write(directory.join("entry.ash"), "import @builtin.foreign as Foreign\nimport producer as Producer\nmain : Unit -> Foreign.CheckedScope<Int, Unit, Unit>\nmain () = Producer.run ()\n").unwrap();
++        directory.join("entry.ash")
++    } else {
++        directory.join("producer.ash")
++    };
++    let graph = crate::module::load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
++    std::fs::remove_dir_all(&directory).unwrap();
++    graph
++}
++
++fn check_graph(graph: &ModuleGraph) -> Result<Vec<CheckedModule>, TypeError> {
++    let mut checked = Vec::<CheckedModule>::new();
++    let mut availability = ProviderCodeAvailability::default();
++    // This is the established modular source-phase funding, separate from the
++    // unchanged standalone Core/image allowance. Resolution retains its own API.
++    let (mut checking, source_bytes) = crate::compiler_work::source_work(graph).unwrap();
++    let source_limit = checking.limit();
++    checking
++        .finish_sizing(crate::calibration::limit(
++            source_limit,
++            crate::calibration::DiagnosticOwner::Structural,
++        ))
++        .unwrap();
++    let rewrite_limit = crate::calibration::limit(
++        crate::compiler_work::rewrite_total(source_bytes).unwrap(),
++        crate::calibration::DiagnosticOwner::Structural,
++    );
++    let mut coverage = crate::pattern::UsefulnessBudget::default();
++    let mut constraints = crate::interface::InterfaceConstraintBudget::default();
++    for loaded in graph.modules() {
++        let dependencies = loaded
++            .dependencies()
++            .iter()
++            .map(|edge| {
++                crate::resolve::DependencyExports::new(
++                    edge,
++                    checked
++                        .iter()
++                        .find(|module| module.module() == edge.target())
++                        .unwrap()
++                        .exports(),
++                )
++                .unwrap()
++            })
++            .collect::<Vec<_>>();
++        let resolved = crate::resolve::resolve_checked_foreign_module(loaded, &dependencies)
++            .expect("canonical checked lifecycle source resolves before source checking");
++        let module = check_module_with_budget_and_provider_codes_and_rewrite_work(
++            resolved,
++            &availability,
++            &mut checking,
++            &mut coverage,
++            &mut constraints,
++            Some(TypeWorkBudget::with_limit(rewrite_limit)),
++        )?;
++        module.exports().authenticate(&mut TypeWorkBudget::default(), &mut crate::interface::InterfaceConstraintBudget::default())
++            .expect("completed body-free checked lifecycle summary authenticates under the default allowance");
++        if let Some(code) = module.provider_code() {
++            availability
++                .retain(module.module(), code, &mut checking)
++                .unwrap();
++        }
++        if let Some(code) = module.source_resource_code() {
++            availability
++                .retain_source(module.module(), code, &mut checking)
++                .unwrap();
++        }
++        checked.push(module);
++    }
++    Ok(checked)
++}
++
++fn assert_producer_originals(checked: &[CheckedModule]) {
++    let producer = checked
++        .iter()
++        .find(|module| {
++            module
++                .registry()
++                .source_resource_facts()
++                .any(|fact| fact.id.module() == module.module() && fact.spelling == "Probe")
++        })
++        .expect("actual checked producer retains Probe metadata");
++    let header = producer
++        .registry()
++        .source_resource_facts()
++        .find(|fact| fact.id.module() == producer.module() && fact.spelling == "Probe")
++        .unwrap();
++    assert_eq!(header.host.unwrap().position, 0);
++    assert_eq!(header.parameters[0].spelling, "H");
++    assert_eq!(header.owned_position, 1);
++    assert_eq!(header.parameters[1].spelling, "R");
++    assert_ne!(header.parameters[0].id, header.parameters[1].id);
++    assert_eq!(
++        header.codec.kind,
++        crate::surface::SurfaceResourceReportCodecKind::CheckedScope
++    );
++    let code = producer
++        .source_resource_code()
++        .expect("checked original lifecycle code");
++    assert!(
++        code.headers()
++            .any(|actual| Arc::ptr_eq(&actual.original, header))
++    );
++    assert!(
++        producer
++            .exports()
++            .source_resource_facts()
++            .any(|actual| Arc::ptr_eq(actual, header)),
++        "the body-free publication retains the exact required hidden header"
++    );
++    for name in ["Allocate", "Free"] {
++        let effect = producer
++            .registry()
++            .effects()
++            .iter()
++            .find(|effect| effect.id.module() == producer.module() && effect.spelling == name)
++            .unwrap();
++        let original = producer
++            .registry()
++            .native_symbol(crate::types::OperationId::new(effect.id, 0))
++            .unwrap();
++        assert!(original.owner().is_some());
++        let contract = original.prepared().checked_contract().unwrap();
++        let selected = &contract.symbols()[original.symbol_index()];
++        assert_eq!(selected.host_parameter(), 0);
++        let callee = contract
++            .assumptions()
++            .iter()
++            .find(|assumption| assumption.name() == "Callee")
++            .unwrap();
++        assert_eq!(
++            callee.description(),
++            "the admitted native owner contract holds"
++        );
++        assert!(
++            selected
++                .assumption_members()
++                .contains(&callee.member_index())
++        );
++        for consumer in checked.iter().filter(|module| {
++            module.module() != producer.module()
++                && module
++                    .direct_dependencies()
++                    .iter()
++                    .any(|edge| edge.target() == producer.module())
++        }) {
++            let imported = consumer
++                .registry()
++                .native_symbol(original.operation())
++                .expect("real passive consumer retains the captured native original");
++            assert!(Arc::ptr_eq(imported, original));
++            let retained = consumer
++                .registry()
++                .source_resource_fact(header.id)
++                .expect("real passive consumer retains the required resource header");
++            assert!(Arc::ptr_eq(retained, header));
++        }
++    }
++}
++
++#[test]
++fn checked_owner_lifecycle_canonical_source_retains_originals() {
++    let graph = graph(PRODUCER, false);
++    let checked = check_graph(&graph).expect(
++        "canonical checked lifecycle source must pass before any negative control receives credit",
++    );
++    assert_producer_originals(&checked);
++}
++
++#[test]
++fn checked_owner_lifecycle_body_free_consumer_links_core_and_transforms() {
++    let graph = graph(PRODUCER, true);
++    let checked = check_graph(&graph)
++        .expect("real body-free consumer checks the canonical checked lifecycle publication");
++    assert_producer_originals(&checked);
++    let linked =
++        link_modules(checked, graph.entry()).expect("canonical lifecycle module closure links");
++    let linked = crate::evidence_validation::validate_interface_evidence(linked)
++        .expect("canonical lifecycle evidence authenticates");
++    let mut elaborator =
++        EffectElaborator::for_module_program(&linked).expect("default final elaboration allowance");
++    let typed = elaborator
++        .synthesize_effect_module_program(&linked)
++        .expect("canonical checked lifecycle lowers to Effect Core under the default allowance");
++    let program = elaborator.finish(typed.node).unwrap();
++    let sources = graph
++        .modules()
++        .iter()
++        .map(|module| module.source())
++        .collect::<Vec<_>>();
++    let modules = graph
++        .modules()
++        .iter()
++        .map(|module| (module.id(), module.source().id()))
++        .collect::<Vec<_>>();
++    let core = crate::core::validate_effect_modules(program, &sources, &modules)
++        .expect("independent canonical checked lifecycle Core under the default allowance");
++    for transformed in [
++        crate::core::transform::identity_effect_traversal(&core).unwrap(),
++        crate::core::transform::fold_effect_literal_primitives(&core).unwrap(),
++    ] {
++        crate::core::validate_effect_modules(transformed, &sources, &modules).expect(
++            "transformed checked lifecycle independently revalidates under the default allowance",
++        );
++    }
++}
++
++fn source_refusal_after_canonical(replacement: &str) {
++    check_graph(&graph(PRODUCER, false))
++        .expect("canonical source must pass before mutation rejection is meaningful");
++    let arm = "Foreign.BoundaryFailed(reason) => Foreign.FinishedBoundary reason";
++    assert_eq!(PRODUCER.matches(arm).count(), 1);
++    let changed = PRODUCER.replace(arm, replacement);
++    let error =
++        check_graph(&graph(&changed, false)).expect_err("changed checked finish must be rejected");
++    assert!(
++        matches!(error, TypeError::Source(_)),
++        "expected semantic source refusal, not resource exhaustion or an internal failure: {error:?}"
++    );
++}
++
++#[test]
++fn checked_owner_lifecycle_boundary_failure_cannot_claim_retention() {
++    source_refusal_after_canonical(
++        "Foreign.BoundaryFailed(reason) => Foreign.FinishedRetained(state, ())",
++    );
++}
++
++#[test]
++fn checked_owner_lifecycle_boundary_failure_retires_ordinary_state_access() {
++    source_refusal_after_canonical(
++        "Foreign.BoundaryFailed(reason) => {\n                let ignored = Foreign.data_of<State<H, R>, Unit> state\n                Foreign.FinishedBoundary reason\n            }",
++    );
++}
++
++#[test]
++fn checked_owner_lifecycle_default_profile_refuses_the_same_source() {
++    let graph = graph(PRODUCER, false);
++    let mut checked = Vec::<CheckedModule>::new();
++    for loaded in graph.modules() {
++        let dependencies = loaded
++            .dependencies()
++            .iter()
++            .map(|edge| {
++                crate::resolve::DependencyExports::new(
++                    edge,
++                    checked
++                        .iter()
++                        .find(|module| module.module() == edge.target())
++                        .unwrap()
++                        .exports(),
++                )
++                .unwrap()
++            })
++            .collect::<Vec<_>>();
++        match crate::resolve::resolve_module(loaded, &dependencies) {
++            Ok(resolved) => checked.push(check_module(resolved).unwrap()),
++            Err(_) => {
++                assert_eq!(loaded.id(), graph.entry());
++                return;
++            }
++        }
++    }
++    panic!("default profile must refuse checked lifecycle source");
++}
+--- a/src/elaborate/foreign_host.rs
++++ b/src/elaborate/foreign_host.rs
+@@ -48,6 +48,8 @@
+         span: Span,
+         values: &mut TypedNodeBuffer,
+     ) -> Result<(), TypeError> {
++        #[cfg(test)]
++        eprintln!("checked lifecycle host finish entered");
+         let body = values.pop().ok_or_else(invalid_state)?;
+         let row = self.zonk_effect_row(&body.effects)?;
+         let ty = IterativeTypeOwner::new(self.zonk(&body.ty)?);
+@@ -110,6 +112,8 @@
+                 Arc::clone(symbol),
+             ));
+         }
++        #[cfg(test)]
++        eprintln!("checked lifecycle host interpretations={}", interpretations.len());
+         let effects = crate::core::effect::foreign_host_outward_row(
+             &row,
+             &interpretations,
+@@ -141,6 +145,8 @@
+             Origin::Source(span),
+             EffectOperation::NativeInterpret(boundary),
+         )?;
++        #[cfg(test)]
++        eprintln!("checked lifecycle host finish complete");
+         values.push(TypedNode {
+             node,
+             ty: ty.into_inner(),
+--- a/src/elaborate/source_resource.rs
++++ b/src/elaborate/source_resource.rs
+@@ -188,9 +188,15 @@
+         span: Span,
+         tasks: &mut ElaborationTaskBuffer<'a>,
+     ) -> Result<(), TypeError> {
++        #[cfg(test)]
++        eprintln!("checked lifecycle instance schedule entered");
+         let template = self.source_template(resource)?;
++        #[cfg(test)]
++        eprintln!("checked lifecycle instance template selected");
+         let (arguments, replacements) =
+             self.source_actuals(resource, &template.header().original)?;
++        #[cfg(test)]
++        eprintln!("checked lifecycle instance actuals complete");
+         let input = IterativeTypeOwner::new(
+             replacements.substitute(&template.header().original.input.ty, &mut self.type_work)?,
+         );
+@@ -342,6 +348,8 @@
+         body: TypedNodeOwner,
+         context: &mut TypeContext,
+     ) -> Result<TypedNode, TypeError> {
++        #[cfg(test)]
++        eprintln!("checked lifecycle instance finish entered");
+         self.leave_provider_instance_body(progress.resource, progress.previous, context)?;
+         let header = &progress.template.header().original;
+         let mut associated = SourceArguments(Vec::new());
+@@ -481,6 +489,8 @@
+         );
+         let empty_pending = HashMap::new();
+         let empty_nodes = HashMap::new();
++        #[cfg(test)]
++        eprintln!("checked lifecycle instance rows complete");
+         let phases = self.prepare_source_resource_copies(
+             &progress.template,
+             &progress.arguments.0,
+@@ -504,6 +514,8 @@
+                 .unwrap_or(progress.resource.definition.module()),
+             progress.span,
+         )?;
++        #[cfg(test)]
++        eprintln!("checked lifecycle instance copies prepared");
+         let mut body_node = body.node;
+         while let Some((binder, function)) = progress.members.pop() {
+             let binder_id = binder.id();
+@@ -565,6 +577,8 @@
+             body_node,
+             &mut self.type_work,
+         )?;
++        #[cfg(test)]
++        eprintln!("checked lifecycle instance copies lowered");
+         let claims =
+             std::array::from_fn(
+                 |index| crate::core::source_resource::SourceResourceCopyClaim {
+@@ -605,6 +619,8 @@
+             &mut self.type_work,
+         )
+         .map_err(validation)?;
++        #[cfg(test)]
++        eprintln!("checked lifecycle instance scope admitted");
+         let core_type = self.clone_type(&report)?;
+         let core_effects = self.core_effect_row(&effects)?;
+         let provenance = self.at_span_provenance(&report, progress.span)?;
+@@ -1371,6 +1387,8 @@
+                 .map_err(|error| template_validation(error, definition.span))?,
+             ));
+         }
++        #[cfg(test)]
++        eprintln!("checked lifecycle all admitted template records complete");
+         CheckedSourceResourceTemplates::new(records, &mut compiler.type_work)
+             .map(Arc::new)
+             .map(Some)
+--- a/src/resolved.rs
++++ b/src/resolved.rs
+@@ -10889,7 +10889,7 @@
+             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+         for (module, contracts) in &self.provider_groups {
+             if *module != contracts.module() {
+-                return Err(ResolvedBuildFailure::InvalidState);
++                return Err(checked_lifecycle_summary_invalid());
+             }
+             contracts.authenticate_with_native_memo(
+                 committed || *module != self.module,
+@@ -10898,7 +10898,7 @@
+             )?;
+         }
+         if self.resource_types.len() != self.resource_type_order.len() {
+-            return Err(ResolvedBuildFailure::InvalidState);
++            return Err(checked_lifecycle_summary_invalid());
+         }
+         type_work
+             .charge(self.resource_type_order.len())
+@@ -10911,14 +10911,14 @@
+             let fact = self
+                 .resource_types
+                 .get(spelling)
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
++                .ok_or_else(checked_lifecycle_summary_invalid)?;
+             if !resource_spellings.insert(spelling) {
+-                return Err(ResolvedBuildFailure::InvalidState);
++                return Err(checked_lifecycle_summary_invalid());
+             }
+             let contracts = self
+                 .provider_groups
+                 .get(&fact.id.module())
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
++                .ok_or_else(checked_lifecycle_summary_invalid)?;
+             type_work
+                 .charge(contracts.resource_count())
+                 .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+@@ -10926,7 +10926,7 @@
+                 .resource_contracts()
+                 .any(|(_, public, canonical)| public && Arc::ptr_eq(canonical, fact))
+             {
+-                return Err(ResolvedBuildFailure::InvalidState);
++                return Err(checked_lifecycle_summary_invalid());
+             }
+         }
+ 
+@@ -10934,7 +10934,7 @@
+             .charge(self.source_resource_type_order.len())
+             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+         if self.source_resource_types.len() != self.source_resource_type_order.len() {
+-            return Err(ResolvedBuildFailure::InvalidState);
++            return Err(checked_lifecycle_summary_invalid());
+         }
+         let mut source_spellings = std::collections::HashSet::new();
+         source_spellings
+@@ -10944,11 +10944,11 @@
+             let fact = self
+                 .source_resource_types
+                 .get(spelling)
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
++                .ok_or_else(checked_lifecycle_summary_invalid)?;
+             let original = self
+                 .source_resource_facts
+                 .get(&fact.id)
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
++                .ok_or_else(checked_lifecycle_summary_invalid)?;
+             if !source_spellings.insert(spelling)
+                 || !Arc::ptr_eq(fact, original)
+                 || !fact.public
+@@ -10959,7 +10959,7 @@
+                 || fact.answer.kind != Kind::Type
+                 || fact.interpreted.is_empty()
+             {
+-                return Err(ResolvedBuildFailure::InvalidState);
++                return Err(checked_lifecycle_summary_invalid());
+             }
+         }
+         self.authenticate_resource_facts()?;
+@@ -10972,7 +10972,7 @@
+             || self.effects.len() != self.effect_positions.len()
+         {
+             {
+-                return Err(ResolvedBuildFailure::InvalidState);
++                return Err(checked_lifecycle_summary_invalid());
+             }
+         }
+         authenticate_identity_order(
+@@ -11009,7 +11009,7 @@
+                 || !expression_spellings.insert(spelling.as_str())
+         }) {
+             {
+-                return Err(ResolvedBuildFailure::InvalidState);
++                return Err(checked_lifecycle_summary_invalid());
+             }
+         }
+         let type_count = self
+@@ -11038,7 +11038,7 @@
+                 || !type_spellings.insert(spelling.as_str())
+         }) {
+             {
+-                return Err(ResolvedBuildFailure::InvalidState);
++                return Err(checked_lifecycle_summary_invalid());
+             }
+         }
+ 
+@@ -11069,7 +11069,7 @@
+             .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+         if withheld_count != self.withheld_order.len() {
+             {
+-                return Err(ResolvedBuildFailure::InvalidState);
++                return Err(checked_lifecycle_summary_invalid());
+             }
+         }
+         for entry in &self.withheld_order {
+@@ -11079,7 +11079,7 @@
+                 .and_then(|withheld| withheld.get_ordered(entry))
+             else {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             };
+             let semantics_are_valid = match entry.namespace {
+@@ -11103,11 +11103,11 @@
+             )) || !semantics_are_valid
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             if entry.namespace == WithheldNamespace::Constructor {
+-                let owner = entry.owner.ok_or(ResolvedBuildFailure::InvalidState)?;
++                let owner = entry.owner.ok_or_else(checked_lifecycle_summary_invalid)?;
+                 let count = withheld_constructor_counts
+                     .entry((owner, withheld.kind))
+                     .or_default();
+@@ -11203,10 +11203,10 @@
+             let identity = self
+                 .effect_names
+                 .get(spelling)
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
++                .ok_or_else(checked_lifecycle_summary_invalid)?;
+             if !self.effect_positions.contains_key(identity) {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             named_effects.insert(*identity);
+@@ -11217,7 +11217,7 @@
+             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+         for (nominal, owner) in &self.source_owners {
+             if *nominal != owner.nominal() {
+-                return Err(ResolvedBuildFailure::InvalidState);
++                return Err(checked_lifecycle_summary_invalid());
+             }
+             self.authenticate_source_owner_nominal(owner, type_work)?;
+         }
+@@ -11227,7 +11227,7 @@
+                 && (!api.effect(effect) || !self.has_resource_nominals(api))
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             if self.effect_positions.get(&effect.id) != Some(&position)
+@@ -11240,7 +11240,7 @@
+                         .defining_sources
+                         .iter()
+                         .find(|(module, _)| *module == effect.id.module())
+-                        .ok_or(ResolvedBuildFailure::InvalidState)?;
++                        .ok_or_else(checked_lifecycle_summary_invalid)?;
+                     type_work
+                         .charge(source.1.text().len())
+                         .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+@@ -11253,18 +11253,18 @@
+                                     crate::source::ByteRange::new(
+                                         0,
+                                         u32::try_from(source.1.text().len())
+-                                            .map_err(|_| ResolvedBuildFailure::InvalidState)?,
++                                            .map_err(|_| checked_lifecycle_summary_invalid())?,
+                                     )
+-                                    .map_err(|_| ResolvedBuildFailure::InvalidState)?,
++                                    .map_err(|_| checked_lifecycle_summary_invalid())?,
+                                 )
+-                                .map_err(|_| ResolvedBuildFailure::InvalidState)?,
++                                .map_err(|_| checked_lifecycle_summary_invalid())?,
+                             type_work,
+                         )
+                         .map_err(|failure| {
+                             if failure.is_resource_exhaustion() {
+                                 ResolvedBuildFailure::TypeResource
+                             } else {
+-                                ResolvedBuildFailure::InvalidState
++                                checked_lifecycle_summary_invalid()
+                             }
+                         })?
+                 } else {
+@@ -11272,7 +11272,7 @@
+                 }
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             if let Some(symbol) = &effect.native_contract {
+@@ -11280,10 +11280,10 @@
+                 if let Some(owner) = symbol.owner() {
+                     let original = source_owners
+                         .get(&owner.nominal())
+-                        .ok_or(ResolvedBuildFailure::InvalidState)?;
++                        .ok_or_else(checked_lifecycle_summary_invalid)?;
+                     if !matches!(original, crate::foreign::source_access::CheckedForeignNominal::Owner(original) if Arc::ptr_eq(original, owner))
+                     {
+-                        return Err(ResolvedBuildFailure::InvalidState);
++                        return Err(checked_lifecycle_summary_invalid());
+                     }
+                 }
+                 native_effect_count += 1;
+@@ -11304,7 +11304,7 @@
+                         .is_none_or(|view| view.effects().is_some())
+                 {
+                     {
+-                        return Err(ResolvedBuildFailure::InvalidState);
++                        return Err(checked_lifecycle_summary_invalid());
+                     }
+                 }
+                 authenticate_summary_type_variables(
+@@ -11318,7 +11318,7 @@
+         // Each native tag authenticates its canonical table entry below, so
+         // equal cardinality proves full coverage without another table walk.
+         if native_effect_count != self.native_symbols.len() {
+-            return Err(ResolvedBuildFailure::InvalidState);
++            return Err(checked_lifecycle_summary_invalid());
+         }
+         let mut canonical_nominals = HashMap::<
+             NominalTypeId,
+@@ -11363,7 +11363,7 @@
+                 && !api.exported_nominal(nominal)
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             let canonical_representation = self.canonical_representations.get(&nominal.id);
+@@ -11410,7 +11410,7 @@
+                 }
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             for (index, constructor) in nominal.constructors.iter().enumerate() {
+@@ -11418,7 +11418,7 @@
+                     || usize::try_from(constructor.constructor()) != Ok(index)
+                 {
+                     {
+-                        return Err(ResolvedBuildFailure::InvalidState);
++                        return Err(checked_lifecycle_summary_invalid());
+                     }
+                 }
+             }
+@@ -11456,7 +11456,7 @@
+                     )?
+                 {
+                     {
+-                        return Err(ResolvedBuildFailure::InvalidState);
++                        return Err(checked_lifecycle_summary_invalid());
+                     }
+                 }
+                 continue;
+@@ -11523,7 +11523,7 @@
+                 && !api.hidden_nominal(nominal)
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             if nominal.id.is_lexical()
+@@ -11560,7 +11560,7 @@
+                         || !nominal.display_is_private))
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             for (index, constructor) in nominal.constructors.iter().enumerate() {
+@@ -11568,7 +11568,7 @@
+                     || usize::try_from(constructor.constructor()) != Ok(index)
+                 {
+                     {
+-                        return Err(ResolvedBuildFailure::InvalidState);
++                        return Err(checked_lifecycle_summary_invalid());
+                     }
+                 }
+             }
+@@ -11652,16 +11652,16 @@
+             let spelling = self
+                 .nominal_names_by_id
+                 .get(identity)
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
++                .ok_or_else(checked_lifecycle_summary_invalid)?;
+             let nominal = self
+                 .nominals
+                 .get(spelling)
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
++                .ok_or_else(checked_lifecycle_summary_invalid)?;
+             if nominal.access != ExportedTypeAccess::Opaque
+                 || nominal.declaration_kind != ResolvedNominalDeclarationKind::Newtype
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             environments
+@@ -11693,7 +11693,7 @@
+                 // Source owner families expose no constructor routes. There
+                 // is no hidden zero-length family or fabricated withheld item.
+                 if *constructor_count != 0 || retained_count.is_some() {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+                 continue;
+             }
+@@ -11707,7 +11707,7 @@
+                 && retained_count != Some(*constructor_count)
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+         }
+@@ -11731,7 +11731,7 @@
+         }
+         if matched_withheld_counts != withheld_constructor_counts.len() {
+             {
+-                return Err(ResolvedBuildFailure::InvalidState);
++                return Err(checked_lifecycle_summary_invalid());
+             }
+         }
+ 
+@@ -11739,7 +11739,7 @@
+             || self.implementations.len() != self.implementation_positions.len()
+         {
+             {
+-                return Err(ResolvedBuildFailure::InvalidState);
++                return Err(checked_lifecycle_summary_invalid());
+             }
+         }
+         let interface_fact_count = self
+@@ -11761,7 +11761,7 @@
+                     .is_some()
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             register_summary_parameters(
+@@ -11800,7 +11800,7 @@
+                     .is_some()
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             register_summary_parameters(
+@@ -11842,7 +11842,7 @@
+         for (_, interface) in self.interface_names() {
+             if !self.interface_positions.contains_key(&interface) {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             named_interfaces.insert(interface);
+@@ -11861,7 +11861,7 @@
+             .any(|interface| !named_interfaces.contains(&interface.id))
+         {
+             {
+-                return Err(ResolvedBuildFailure::InvalidState);
++                return Err(checked_lifecycle_summary_invalid());
+             }
+         }
+         for (_, method) in self.method_names() {
+@@ -11870,7 +11870,7 @@
+                 .is_some_and(|interface| interface.method(method).is_some())
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+         }
+@@ -11926,7 +11926,7 @@
+                         || !same_origin_with_budget(&global.origin, fact.origin(), type_work)
+                             .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                     {
+-                        return Err(ResolvedBuildFailure::InvalidState);
++                        return Err(checked_lifecycle_summary_invalid());
+                     }
+                 }
+                 None if global
+@@ -11934,13 +11934,13 @@
+                     .module()
+                     .is_some_and(ModuleId::is_builtin_foreign) =>
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+                 None => {}
+             }
+             if global.binder.module().is_none() {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             if let Some(existing) = canonical_globals.get(&global.binder) {
+@@ -11965,7 +11965,7 @@
+                     )?
+                 {
+                     {
+-                        return Err(ResolvedBuildFailure::InvalidState);
++                        return Err(checked_lifecycle_summary_invalid());
+                     }
+                 }
+                 continue;
+@@ -11998,7 +11998,7 @@
+             )?;
+             if fact.interface().module().is_builtin_resource() {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             let authorization_is_well_formed = implementation
+@@ -12009,7 +12009,7 @@
+                 || !authorization_is_well_formed
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             authenticate_exact_implementation_head_binders(fact, constraint_work)?;
+@@ -12023,7 +12023,7 @@
+                 )?;
+                 if !term_binders.insert(method.binder) {
+                     {
+-                        return Err(ResolvedBuildFailure::InvalidState);
++                        return Err(checked_lifecycle_summary_invalid());
+                     }
+                 }
+             }
+@@ -12071,12 +12071,12 @@
+                     || usize::try_from(requirement.id.declaration()) != Ok(index)
+                 {
+                     {
+-                        return Err(ResolvedBuildFailure::InvalidState);
++                        return Err(checked_lifecycle_summary_invalid());
+                     }
+                 }
+                 let interface = interface_facts
+                     .get(&requirement.interface())
+-                    .ok_or(ResolvedBuildFailure::InvalidState)?;
++                    .ok_or_else(checked_lifecycle_summary_invalid)?;
+                 requirement_index.observe(
+                     requirement,
+                     interface.determination(),
+@@ -12107,12 +12107,12 @@
+                     || !self.effect_positions.contains_key(&api.ops()))
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             if interface.methods.is_empty() {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             constraint_work
+@@ -12134,7 +12134,7 @@
+                     || usize::try_from(method.id.declaration()) != Ok(index)
+                 {
+                     {
+-                        return Err(ResolvedBuildFailure::InvalidState);
++                        return Err(checked_lifecycle_summary_invalid());
+                     }
+                 }
+                 constraint_work
+@@ -12194,14 +12194,14 @@
+                     )
+             }) {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             let Some((parameters, declaration_kind, _, family, access, _, _, _, _)) =
+                 canonical_nominals.get(&constructor.id.owner())
+             else {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             };
+             let spelling_matches_owner = if *declaration_kind
+@@ -12221,7 +12221,7 @@
+                             .get(&constructor.id.owner())
+                             .map(|nominal| nominal.spelling.as_str())
+                     })
+-                    .ok_or(ResolvedBuildFailure::InvalidState)?;
++                    .ok_or_else(checked_lifecycle_summary_invalid)?;
+                 constructor.spelling == owner_spelling
+             } else {
+                 true
+@@ -12244,7 +12244,7 @@
+                             .get(&constructor.id.owner())
+                             .and_then(|nominal| nominal.representation.as_ref())
+                     })
+-                    .ok_or(ResolvedBuildFailure::InvalidState)?;
++                    .ok_or_else(checked_lifecycle_summary_invalid)?;
+                 match constructor.payload.as_ref() {
+                     Some(payload) => {
+                         same_type_with_constraint_budget(representation, payload, constraint_work)
+@@ -12256,7 +12256,7 @@
+                 true
+             };
+             let constructor_position = usize::try_from(constructor.id.constructor())
+-                .map_err(|_| ResolvedBuildFailure::InvalidState)?;
++                .map_err(|_| checked_lifecycle_summary_invalid())?;
+             if *access != ImportedTypeAccess::Transparent
+                 || family.get(constructor_position) != Some(&constructor.id)
+                 || !spelling_matches_owner
+@@ -12267,13 +12267,13 @@
+                     && constructor.id.owner().module() == self.module)
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             let original = constructor
+                 .original
+                 .as_ref()
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
++                .ok_or_else(checked_lifecycle_summary_invalid)?;
+             original.authenticate(
+                 constructor.id,
+                 *declaration_kind,
+@@ -12308,7 +12308,7 @@
+                     )?
+                 {
+                     {
+-                        return Err(ResolvedBuildFailure::InvalidState);
++                        return Err(checked_lifecycle_summary_invalid());
+                     }
+                 }
+                 continue;
+@@ -12328,7 +12328,7 @@
+                 canonical_nominals.get_mut(&constructor.id.owner())
+             else {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             };
+             *physical_count = physical_count
+@@ -12346,7 +12346,7 @@
+             };
+             if *physical_count != expected {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+         }
+@@ -12365,7 +12365,7 @@
+         for (_, constructor) in self.constructors() {
+             let Some(spelling) = self.constructor_names_by_id.get(&constructor.id) else {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             };
+             if !self
+@@ -12374,14 +12374,14 @@
+                 .is_some_and(|indexed| indexed.id == constructor.id)
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             indexed_constructors.insert(constructor.id);
+         }
+         if indexed_constructors.len() != self.constructor_names_by_id.len() {
+             {
+-                return Err(ResolvedBuildFailure::InvalidState);
++                return Err(checked_lifecycle_summary_invalid());
+             }
+         }
+         let mut indexed_nominals = HashSet::new();
+@@ -12391,7 +12391,7 @@
+         for (_, nominal) in self.nominals() {
+             let Some(spelling) = self.nominal_names_by_id.get(&nominal.id) else {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             };
+             if !self
+@@ -12400,14 +12400,14 @@
+                 .is_some_and(|indexed| indexed.id == nominal.id)
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             indexed_nominals.insert(nominal.id);
+         }
+         if indexed_nominals.len() != self.nominal_names_by_id.len() {
+             {
+-                return Err(ResolvedBuildFailure::InvalidState);
++                return Err(checked_lifecycle_summary_invalid());
+             }
+         }
+         for implementation in &self.implementations {
+@@ -12415,10 +12415,10 @@
+             let parameter_ids = fact.head_parameters.iter().map(|parameter| parameter.id);
+             let head_interface = interface_facts
+                 .get(&fact.interface())
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
++                .ok_or_else(checked_lifecycle_summary_invalid)?;
+             if fact.arguments().len() != head_interface.parameters.len() {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             for argument in fact.arguments() {
+@@ -12437,15 +12437,15 @@
+                     || usize::try_from(prerequisite.id.declaration()) != Ok(index)
+                 {
+                     {
+-                        return Err(ResolvedBuildFailure::InvalidState);
++                        return Err(checked_lifecycle_summary_invalid());
+                     }
+                 }
+                 let prerequisite_interface = interface_facts
+                     .get(&prerequisite.interface())
+-                    .ok_or(ResolvedBuildFailure::InvalidState)?;
++                    .ok_or_else(checked_lifecycle_summary_invalid)?;
+                 if prerequisite.arguments().len() != prerequisite_interface.parameters.len() {
+                     {
+-                        return Err(ResolvedBuildFailure::InvalidState);
++                        return Err(checked_lifecycle_summary_invalid());
+                     }
+                 }
+                 for argument in prerequisite.arguments() {
+@@ -12468,7 +12468,7 @@
+             for prerequisite in &fact.prerequisites {
+                 let prerequisite_interface = interface_facts
+                     .get(&prerequisite.interface())
+-                    .ok_or(ResolvedBuildFailure::InvalidState)?;
++                    .ok_or_else(checked_lifecycle_summary_invalid)?;
+                 prerequisite_index.observe(
+                     prerequisite,
+                     prerequisite_interface.determination(),
+@@ -12492,7 +12492,7 @@
+             };
+             if selection_key_is_all_bare || fact.methods.is_empty() {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             authenticate_implementation_prerequisite_binders(fact, &environments, constraint_work)?;
+@@ -12504,7 +12504,7 @@
+                 )?
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             if fact.interface().module() != fact.id.module() {
+@@ -12525,7 +12525,7 @@
+                 };
+                 if !has_local_outer_nominal {
+                     {
+-                        return Err(ResolvedBuildFailure::InvalidState);
++                        return Err(checked_lifecycle_summary_invalid());
+                     }
+                 }
+             }
+@@ -12541,7 +12541,7 @@
+                 )?;
+                 let prerequisite_interface = interface_facts
+                     .get(&prerequisite.interface())
+-                    .ok_or(ResolvedBuildFailure::InvalidState)?;
++                    .ok_or_else(checked_lifecycle_summary_invalid)?;
+                 let prerequisite_key = summary_selection_key_types(
+                     prerequisite_interface,
+                     prerequisite.arguments(),
+@@ -12556,16 +12556,16 @@
+                 .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
+                 {
+                     {
+-                        return Err(ResolvedBuildFailure::InvalidState);
++                        return Err(checked_lifecycle_summary_invalid());
+                     }
+                 }
+             }
+             let interface = interface_facts
+                 .get(&fact.interface())
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
++                .ok_or_else(checked_lifecycle_summary_invalid)?;
+             if fact.methods.len() != interface.methods.len() {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             for (method, interface_method) in fact.methods.iter().zip(interface.methods.iter()) {
+@@ -12575,7 +12575,7 @@
+                     || method.binder.module() != Some(fact.id.module())
+                 {
+                     {
+-                        return Err(ResolvedBuildFailure::InvalidState);
++                        return Err(checked_lifecycle_summary_invalid());
+                     }
+                 }
+                 authenticate_implementation_method_parameter_mirror(
+@@ -12586,7 +12586,7 @@
+                 )?;
+                 if method.scheme.requirements.len() != fact.prerequisites.len() {
+                     {
+-                        return Err(ResolvedBuildFailure::InvalidState);
++                        return Err(checked_lifecycle_summary_invalid());
+                     }
+                 }
+                 for (method_requirement, prerequisite) in method
+@@ -12634,7 +12634,7 @@
+                     constraint_work,
+                 )? {
+                     {
+-                        return Err(ResolvedBuildFailure::InvalidState);
++                        return Err(checked_lifecycle_summary_invalid());
+                     }
+                 }
+                 environments
+@@ -12653,7 +12653,7 @@
+             |interface| {
+                 let interface = interface_facts
+                     .get(&interface)
+-                    .ok_or(ResolvedBuildFailure::InvalidState)?;
++                    .ok_or_else(checked_lifecycle_summary_invalid)?;
+                 Ok(interface.determination())
+             },
+             constraint_work,
+@@ -12789,6 +12789,8 @@
+             type_work,
+             constraint_work,
+         )?;
++        #[cfg(test)]
++        eprintln!("checked lifecycle export collection complete");
+         summary.authenticate_with_provider_commit(false, type_work, constraint_work)?;
+         Ok(summary)
+     }
+@@ -12817,7 +12819,7 @@
+         for scheme in checked_globals {
+             if checked_by_binder.insert(scheme.binder, scheme).is_some() {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+         }
+@@ -12889,7 +12891,7 @@
+         for (module, contracts) in &resolved.imported.provider_groups {
+             match summary.provider_groups.entry(*module) {
+                 std::collections::btree_map::Entry::Occupied(_) => {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+                 std::collections::btree_map::Entry::Vacant(slot) => {
+                     slot.insert(Arc::clone(contracts));
+@@ -12898,11 +12900,11 @@
+         }
+         if let Some(group) = providers {
+             if group.module() != resolved.module {
+-                return Err(ResolvedBuildFailure::InvalidState);
++                return Err(checked_lifecycle_summary_invalid());
+             }
+             match summary.provider_groups.entry(resolved.module) {
+                 std::collections::btree_map::Entry::Occupied(_) => {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+                 std::collections::btree_map::Entry::Vacant(slot) => {
+                     slot.insert(Arc::clone(group.contracts()));
+@@ -12931,7 +12933,7 @@
+                 .insert(resource.id, Arc::clone(&resource.header))
+                 .is_some()
+             {
+-                return Err(ResolvedBuildFailure::InvalidState);
++                return Err(checked_lifecycle_summary_invalid());
+             }
+         }
+         // Preserve original headers through interface-only facades. These
+@@ -12949,7 +12951,7 @@
+                 .get(id)
+                 .is_some_and(|original| !Arc::ptr_eq(original, fact))
+             {
+-                return Err(ResolvedBuildFailure::InvalidState);
++                return Err(checked_lifecycle_summary_invalid());
+             }
+             summary
+                 .source_resource_facts
+@@ -12983,7 +12985,7 @@
+                 .export_candidate
+                 .resource_types
+                 .get(spelling)
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
++                .ok_or_else(checked_lifecycle_summary_invalid)?;
+             if let Some(fact) = resolved
+                 .registry
+                 .source_resource_fact(*identity)
+@@ -12995,16 +12997,16 @@
+             let certificate = summary
+                 .provider_groups
+                 .get(&identity.module())
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
++                .ok_or_else(checked_lifecycle_summary_invalid)?;
+             type_work
+                 .charge(certificate.resource_count())
+                 .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+             let (_, public, fact) = certificate
+                 .resource_contracts()
+                 .find(|(_, _, fact)| fact.id == *identity)
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
++                .ok_or_else(checked_lifecycle_summary_invalid)?;
+             if !public {
+-                return Err(ResolvedBuildFailure::InvalidState);
++                return Err(checked_lifecycle_summary_invalid());
+             }
+             let fact = Arc::clone(fact);
+             summary.retain_resource_alias(spelling, &fact, type_work)?;
+@@ -13028,7 +13030,7 @@
+                     && existing != fact
+                 {
+                     {
+-                        return Err(ResolvedBuildFailure::InvalidState);
++                        return Err(checked_lifecycle_summary_invalid());
+                     }
+                 }
+                 summary.foreign_modules.insert(*id, Arc::clone(fact));
+@@ -13107,20 +13109,20 @@
+                 .withheld
+                 .get(&entry.spelling)
+                 .and_then(|withheld| withheld.get_ordered(entry))
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
++                .ok_or_else(checked_lifecycle_summary_invalid)?;
+             let entries = summary.withheld.entry(entry.spelling.clone()).or_default();
+             entries
+                 .try_reserve(entry.namespace, 1)
+                 .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+             if entries.get_exact(entry.namespace, entry.owner).is_some() {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             let constructor_index = entries.insert_new(entry.namespace, withheld.clone());
+             if constructor_index != entry.constructor_index {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             summary.withheld_order.push(entry.clone());
+@@ -13143,15 +13145,15 @@
+                 .export_candidate
+                 .terms
+                 .get(spelling)
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
++                .ok_or_else(checked_lifecycle_summary_invalid)?;
+             let (binder, scheme, origin, capture) = match candidate.source {
+                 CandidateFactSource::Local => {
+                     let checked = checked_by_binder
+                         .get(&candidate.binder)
+-                        .ok_or(ResolvedBuildFailure::InvalidState)?;
++                        .ok_or_else(checked_lifecycle_summary_invalid)?;
+                     if candidate.binder.module() != Some(resolved.module) {
+                         {
+-                            return Err(ResolvedBuildFailure::InvalidState);
++                            return Err(checked_lifecycle_summary_invalid());
+                         }
+                     }
+                     (
+@@ -13165,10 +13167,10 @@
+                     let imported = resolved
+                         .imported
+                         .global(candidate.binder)
+-                        .ok_or(ResolvedBuildFailure::InvalidState)?;
++                        .ok_or_else(checked_lifecycle_summary_invalid)?;
+                     if candidate.binder.module() == Some(resolved.module) {
+                         {
+-                            return Err(ResolvedBuildFailure::InvalidState);
++                            return Err(checked_lifecycle_summary_invalid());
+                         }
+                     }
+                     (
+@@ -13180,7 +13182,7 @@
+                 }
+             };
+             if binder != candidate.binder {
+-                return Err(ResolvedBuildFailure::InvalidState);
++                return Err(checked_lifecycle_summary_invalid());
+             }
+             let publication = match candidate.source {
+                 CandidateFactSource::Local => {
+@@ -13192,7 +13194,7 @@
+                     } else {
+                         let checked = checked_by_binder
+                             .get(&binder)
+-                            .ok_or(ResolvedBuildFailure::InvalidState)?;
++                            .ok_or_else(checked_lifecycle_summary_invalid)?;
+                         type_work
+                             .charge(1 + checked.spelling.len())
+                             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+@@ -13216,10 +13218,10 @@
+                     resolved
+                         .imported
+                         .global(binder)
+-                        .ok_or(ResolvedBuildFailure::InvalidState)?
++                        .ok_or_else(checked_lifecycle_summary_invalid)?
+                         .publication
+                         .as_ref()
+-                        .ok_or(ResolvedBuildFailure::InvalidState)?,
++                        .ok_or_else(checked_lifecycle_summary_invalid)?,
+                 )),
+             };
+             let scalar_preflight = resolved
+@@ -13255,7 +13257,7 @@
+                 .is_some()
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             if let Some(owner) = preflight_owner {
+@@ -13282,7 +13284,7 @@
+             || checked_implementations.len() != resolved.implementations.len()
+         {
+             {
+-                return Err(ResolvedBuildFailure::InvalidState);
++                return Err(checked_lifecycle_summary_invalid());
+             }
+         }
+         let mut checked_interfaces_by_id = HashMap::new();
+@@ -13295,13 +13297,13 @@
+                 || interface.methods.len() != checked.methods.len()
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             for (method, checked_method) in interface.methods.iter().zip(&checked.methods) {
+                 if method.id != checked_method.id || method.spelling != checked_method.spelling {
+                     {
+-                        return Err(ResolvedBuildFailure::InvalidState);
++                        return Err(checked_lifecycle_summary_invalid());
+                     }
+                 }
+             }
+@@ -13310,7 +13312,7 @@
+                 .is_some()
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+         }
+@@ -13337,7 +13339,7 @@
+                 .export_candidate
+                 .interfaces
+                 .get(spelling)
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
++                .ok_or_else(checked_lifecycle_summary_invalid)?;
+             let (source, checked) = match candidate.source {
+                 CandidateFactSource::Local => checked_interfaces_by_id
+                     .get(&candidate.id)
+@@ -13347,7 +13349,7 @@
+                     .shared_interface(candidate.id)
+                     .map(|checked| (None, checked)),
+             }
+-            .ok_or(ResolvedBuildFailure::InvalidState)?;
++            .ok_or_else(checked_lifecycle_summary_invalid)?;
+             let owner_is_publisher = candidate.id.module() == resolved.module;
+             if checked.id != candidate.id
+                 || owner_is_publisher != (candidate.source == CandidateFactSource::Local)
+@@ -13357,7 +13359,7 @@
+                     .is_some()
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             summary.interface_name_order.push(spelling.clone());
+@@ -13377,7 +13379,7 @@
+                 .is_some()
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+         }
+@@ -13399,7 +13401,7 @@
+                 .export_candidate
+                 .effects
+                 .get(spelling)
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
++                .ok_or_else(checked_lifecycle_summary_invalid)?;
+             let source = match candidate.source {
+                 CandidateFactSource::Local => resolved
+                     .effects
+@@ -13407,7 +13409,7 @@
+                     .find(|effect| effect.id == candidate.id),
+                 CandidateFactSource::Imported => resolved.imported.effect(candidate.id),
+             }
+-            .ok_or(ResolvedBuildFailure::InvalidState)?;
++            .ok_or_else(checked_lifecycle_summary_invalid)?;
+             let owner_is_publisher = candidate.id.module() == resolved.module;
+             if owner_is_publisher != (candidate.source == CandidateFactSource::Local)
+                 || source.id != candidate.id
+@@ -13417,7 +13419,7 @@
+                     .is_some()
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             summary.effect_name_order.push(spelling.clone());
+@@ -13435,7 +13437,7 @@
+                 .is_some()
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+         }
+@@ -13445,7 +13447,7 @@
+                 .export_candidate
+                 .methods
+                 .get(spelling)
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
++                .ok_or_else(checked_lifecycle_summary_invalid)?;
+             let interface = match candidate.source {
+                 CandidateFactSource::Local => checked_interfaces_by_id
+                     .get(&candidate.id.interface())
+@@ -13454,7 +13456,7 @@
+                     resolved.imported.interface(candidate.id.interface())
+                 }
+             }
+-            .ok_or(ResolvedBuildFailure::InvalidState)?;
++            .ok_or_else(checked_lifecycle_summary_invalid)?;
+             let owner_is_publisher = candidate.id.interface().module() == resolved.module;
+             if owner_is_publisher != (candidate.source == CandidateFactSource::Local)
+                 || interface.method(candidate.id).is_none()
+@@ -13464,7 +13466,7 @@
+                     .is_some()
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             summary.method_name_order.push(spelling.clone());
+@@ -13492,7 +13494,7 @@
+             let implementation = resolved
+                 .implementations
+                 .get(admitted.source_index)
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
++                .ok_or_else(checked_lifecycle_summary_invalid)?;
+             if implementation.id != admitted.id
+                 || implementation.head.interface.id != admitted.interface()
+                 || checked.id != admitted.id
+@@ -13501,7 +13503,7 @@
+                 || checked.methods.len() != admitted.methods.len()
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             if !implementation.public {
+@@ -13522,7 +13524,7 @@
+                 .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             let position = summary.implementations.len();
+@@ -13532,7 +13534,7 @@
+                 .is_some()
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             summary.implementations.push(AuthorizedImplementationFact {
+@@ -13545,10 +13547,10 @@
+             let imported = resolved
+                 .imported
+                 .implementation_import(*implementation)
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
++                .ok_or_else(checked_lifecycle_summary_invalid)?;
+             let public_authorization = imported
+                 .public_authorization()
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
++                .ok_or_else(checked_lifecycle_summary_invalid)?;
+             constraint_work
+                 .charge(1)
+                 .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+@@ -13557,7 +13559,7 @@
+                 .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             authenticate_implementation_publication(
+@@ -13573,7 +13575,7 @@
+                 imported
+                     .publication
+                     .as_ref()
+-                    .ok_or(ResolvedBuildFailure::InvalidState)?,
++                    .ok_or_else(checked_lifecycle_summary_invalid)?,
+             );
+             let fact =
+                 clone_checked_implementation_fact(&imported.fact, type_work, constraint_work)?;
+@@ -13587,7 +13589,7 @@
+                 .is_some()
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             summary.implementations.push(AuthorizedImplementationFact {
+@@ -13656,7 +13658,7 @@
+                 let exported = summary
+                     .terms
+                     .get(spelling)
+-                    .ok_or(ResolvedBuildFailure::InvalidState)?;
++                    .ok_or_else(checked_lifecycle_summary_invalid)?;
+                 for requirement in &exported.scheme.requirements {
+                     retain_hidden_interface_reference(
+                         requirement.interface(),
+@@ -13671,7 +13673,7 @@
+                 let method = summary
+                     .method_names
+                     .get(spelling)
+-                    .ok_or(ResolvedBuildFailure::InvalidState)?;
++                    .ok_or_else(checked_lifecycle_summary_invalid)?;
+                 retain_hidden_interface_reference(
+                     method.interface(),
+                     &summary.interface_positions,
+@@ -13735,10 +13737,10 @@
+                 let fact = resolved
+                     .imported
+                     .shared_interface(interface)
+-                    .ok_or(ResolvedBuildFailure::InvalidState)?;
++                    .ok_or_else(checked_lifecycle_summary_invalid)?;
+                 if fact.id.module() == resolved.module {
+                     {
+-                        return Err(ResolvedBuildFailure::InvalidState);
++                        return Err(checked_lifecycle_summary_invalid());
+                     }
+                 }
+                 summary.hidden_interfaces.push(share_checked_interface_fact(
+@@ -13763,7 +13765,7 @@
+                 .export_candidate
+                 .nominals
+                 .get(spelling)
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
++                .ok_or_else(checked_lifecycle_summary_invalid)?;
+             let (
+                 parameters,
+                 constructor_count,
+@@ -13777,14 +13779,14 @@
+                     let nominal = resolved
+                         .registry
+                         .nominal(candidate.id)
+-                        .ok_or(ResolvedBuildFailure::InvalidState)?;
++                        .ok_or_else(checked_lifecycle_summary_invalid)?;
+                     let parameters = resolved
+                         .registry
+                         .nominal_parameters(candidate.id)
+-                        .ok_or(ResolvedBuildFailure::InvalidState)?;
++                        .ok_or_else(checked_lifecycle_summary_invalid)?;
+                     if candidate.id.module() != resolved.module {
+                         {
+-                            return Err(ResolvedBuildFailure::InvalidState);
++                            return Err(checked_lifecycle_summary_invalid());
+                         }
+                     }
+                     (
+@@ -13805,19 +13807,19 @@
+                     let imported = resolved
+                         .imported
+                         .nominal(candidate.id)
+-                        .ok_or(ResolvedBuildFailure::InvalidState)?;
++                        .ok_or_else(checked_lifecycle_summary_invalid)?;
+                     let expected_access = match imported.access {
+                         ImportedTypeAccess::Opaque => ExportedTypeAccess::Opaque,
+                         ImportedTypeAccess::Transparent => ExportedTypeAccess::Transparent,
+                         ImportedTypeAccess::Hidden => {
+-                            return Err(ResolvedBuildFailure::InvalidState);
++                            return Err(checked_lifecycle_summary_invalid());
+                         }
+                     };
+                     if candidate.id.module() == resolved.module
+                         || candidate.access != expected_access
+                     {
+                         {
+-                            return Err(ResolvedBuildFailure::InvalidState);
++                            return Err(checked_lifecycle_summary_invalid());
+                         }
+                     }
+                     (
+@@ -13874,21 +13876,21 @@
+                         .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                     provenance: provenance.clone(),
+                 }),
+-                _ => return Err(ResolvedBuildFailure::InvalidState),
++                _ => return Err(checked_lifecycle_summary_invalid()),
+             };
+             let (representation, representation_provenance) = if candidate.access
+                 == ExportedTypeAccess::Opaque
+                 && declaration_kind == ResolvedNominalDeclarationKind::Newtype
+             {
+                 let representation =
+-                    canonical_representation.ok_or(ResolvedBuildFailure::InvalidState)?;
++                    canonical_representation.ok_or_else(checked_lifecycle_summary_invalid)?;
+                 if let Some(displaced) = summary
+                     .canonical_representations
+                     .insert(candidate.id, representation)
+                 {
+                     discard_canonical_representation_fact(displaced);
+                     {
+-                        return Err(ResolvedBuildFailure::InvalidState);
++                        return Err(checked_lifecycle_summary_invalid());
+                     }
+                 }
+                 (None, None)
+@@ -13920,7 +13922,7 @@
+             if let Some(displaced) = summary.nominals.insert(spelling.clone(), exported) {
+                 displaced.discard_iteratively();
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             summary.nominal_order.push(spelling.clone());
+@@ -13939,24 +13941,24 @@
+                 .export_candidate
+                 .constructors
+                 .get(spelling)
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
++                .ok_or_else(checked_lifecycle_summary_invalid)?;
+             let (defining_spelling, payload, scheme, origin) = match candidate.source {
+                 CandidateFactSource::Local => {
+                     let constructor = resolved
+                         .registry
+                         .constructor(candidate.id)
+-                        .ok_or(ResolvedBuildFailure::InvalidState)?;
++                        .ok_or_else(checked_lifecycle_summary_invalid)?;
+                     let owner = resolved
+                         .registry
+                         .nominal(candidate.id.owner())
+-                        .ok_or(ResolvedBuildFailure::InvalidState)?;
++                        .ok_or_else(checked_lifecycle_summary_invalid)?;
+                     let parameters = resolved
+                         .registry
+                         .nominal_parameters(candidate.id.owner())
+-                        .ok_or(ResolvedBuildFailure::InvalidState)?;
++                        .ok_or_else(checked_lifecycle_summary_invalid)?;
+                     if candidate.id.owner().module() != resolved.module {
+                         {
+-                            return Err(ResolvedBuildFailure::InvalidState);
++                            return Err(checked_lifecycle_summary_invalid());
+                         }
+                     }
+                     let payload =
+@@ -13982,10 +13984,10 @@
+                     let constructor = resolved
+                         .imported
+                         .constructor(candidate.id)
+-                        .ok_or(ResolvedBuildFailure::InvalidState)?;
++                        .ok_or_else(checked_lifecycle_summary_invalid)?;
+                     if candidate.id.owner().module() == resolved.module {
+                         {
+-                            return Err(ResolvedBuildFailure::InvalidState);
++                            return Err(checked_lifecycle_summary_invalid());
+                         }
+                     }
+                     (
+@@ -14007,7 +14009,7 @@
+                     .imported
+                     .constructor(candidate.id)
+                     .and_then(|constructor| constructor.original.as_ref())
+-                    .ok_or(ResolvedBuildFailure::InvalidState)?
++                    .ok_or_else(checked_lifecycle_summary_invalid)?
+                     .retain(type_work)?,
+             };
+             summary
+@@ -14033,7 +14035,7 @@
+                 .is_some()
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             summary.constructor_order.push(spelling.clone());
+@@ -14045,7 +14047,7 @@
+             let exported = summary
+                 .nominals
+                 .get(spelling)
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
++                .ok_or_else(checked_lifecycle_summary_invalid)?;
+             if exported.access == ExportedTypeAccess::Transparent
+                 && !constructor_owners.contains(&exported.id)
+             {
+@@ -14066,7 +14068,7 @@
+             let exported = summary
+                 .constructors
+                 .get(spelling)
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
++                .ok_or_else(checked_lifecycle_summary_invalid)?;
+             let owner = exported.id.owner();
+             if !constructor_owners.contains(&owner) {
+                 type_work
+@@ -14183,14 +14185,14 @@
+                         resolved
+                             .registry
+                             .constructor(*constructor)
+-                            .ok_or(ResolvedBuildFailure::InvalidState)?
++                            .ok_or_else(checked_lifecycle_summary_invalid)?
+                             .payload
+                             .as_ref()
+                     } else {
+                         resolved
+                             .imported
+                             .constructor(*constructor)
+-                            .ok_or(ResolvedBuildFailure::InvalidState)?
++                            .ok_or_else(checked_lifecycle_summary_invalid)?
+                             .payload
+                             .as_ref()
+                     };
+@@ -14240,7 +14242,7 @@
+                     .filter(|nominal| nominal.access == ImportedTypeAccess::Transparent)
+                     .map(|nominal| nominal.constructors.len())
+             }
+-            .ok_or(ResolvedBuildFailure::InvalidState)?;
++            .ok_or_else(checked_lifecycle_summary_invalid)?;
+             constructor_family_capacity = constructor_family_capacity
+                 .checked_add(family_len)
+                 .ok_or(ResolvedBuildFailure::TypeResource)?;
+@@ -14272,7 +14274,7 @@
+                     .filter(|nominal| nominal.access == ImportedTypeAccess::Transparent)
+                     .map(|nominal| nominal.constructors.as_ref())
+             }
+-            .ok_or(ResolvedBuildFailure::InvalidState)?;
++            .ok_or_else(checked_lifecycle_summary_invalid)?;
+             for constructor in family {
+                 if constructor_family_ids.insert(*constructor) {
+                     constructor_family_order.push(*constructor);
+@@ -14283,10 +14285,10 @@
+             let exported = summary
+                 .constructors
+                 .get(spelling)
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
++                .ok_or_else(checked_lifecycle_summary_invalid)?;
+             if !constructor_family_ids.contains(&exported.id) {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+         }
+@@ -14324,15 +14326,15 @@
+                 let constructor = resolved
+                     .registry
+                     .constructor(constructor_id)
+-                    .ok_or(ResolvedBuildFailure::InvalidState)?;
++                    .ok_or_else(checked_lifecycle_summary_invalid)?;
+                 let owner = resolved
+                     .registry
+                     .nominal(constructor_id.owner())
+-                    .ok_or(ResolvedBuildFailure::InvalidState)?;
++                    .ok_or_else(checked_lifecycle_summary_invalid)?;
+                 let parameters = resolved
+                     .registry
+                     .nominal_parameters(constructor_id.owner())
+-                    .ok_or(ResolvedBuildFailure::InvalidState)?;
++                    .ok_or_else(checked_lifecycle_summary_invalid)?;
+                 let payload = if owner.declaration_kind == ResolvedNominalDeclarationKind::Newtype {
+                     owner.representation.as_ref()
+                 } else {
+@@ -14354,7 +14356,7 @@
+                 let constructor = resolved
+                     .imported
+                     .constructor(constructor_id)
+-                    .ok_or(ResolvedBuildFailure::InvalidState)?;
++                    .ok_or_else(checked_lifecycle_summary_invalid)?;
+                 (
+                     constructor.spelling.as_str(),
+                     constructor.payload.as_ref(),
+@@ -14372,7 +14374,7 @@
+                     .imported
+                     .constructor(constructor_id)
+                     .and_then(|constructor| constructor.original.as_ref())
+-                    .ok_or(ResolvedBuildFailure::InvalidState)?
++                    .ok_or_else(checked_lifecycle_summary_invalid)?
+                     .retain(type_work)?
+             };
+             if summary
+@@ -14394,7 +14396,7 @@
+                 .is_some()
+             {
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             summary.hidden_constructor_order.push(constructor_id);
+@@ -14655,7 +14657,7 @@
+                     .is_some()
+                 {
+                     {
+-                        return Err(ResolvedBuildFailure::InvalidState);
++                        return Err(checked_lifecycle_summary_invalid());
+                     }
+                 }
+             }
+@@ -14824,18 +14826,18 @@
+                 .export_candidate
+                 .hidden_nominals
+                 .get(identity)
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
++                .ok_or_else(checked_lifecycle_summary_invalid)?;
+             if !referenced_nominals.contains(&candidate.id) {
+                 continue;
+             }
+             let source_parameters = resolved
+                 .registry
+                 .nominal_parameters(candidate.id)
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
++                .ok_or_else(checked_lifecycle_summary_invalid)?;
+             let nominal = resolved
+                 .registry
+                 .nominal(candidate.id)
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
++                .ok_or_else(checked_lifecycle_summary_invalid)?;
+             let constructor_count = nominal.constructors.len();
+             type_work
+                 .charge(2)
+@@ -14874,7 +14876,7 @@
+             if let Some(displaced) = summary.hidden_nominals.insert(candidate.id, exported) {
+                 displaced.discard_iteratively();
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             summary.hidden_nominal_order.push(candidate.id);
+@@ -14963,7 +14965,7 @@
+             if let Some(displaced) = summary.hidden_nominals.insert(imported.id, exported) {
+                 displaced.discard_iteratively();
+                 {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+             }
+             summary.hidden_nominal_order.push(imported.id);
+@@ -14986,9 +14988,9 @@
+                     .native_symbols
+                     .get(&symbol.operation())
+                     .or_else(|| resolved.imported.native_symbols.get(&symbol.operation()))
+-                    .ok_or(ResolvedBuildFailure::InvalidState)?;
++                    .ok_or_else(checked_lifecycle_summary_invalid)?;
+                 if !Arc::ptr_eq(original, symbol) || symbol.effect() != effect.id {
+-                    return Err(ResolvedBuildFailure::InvalidState);
++                    return Err(checked_lifecycle_summary_invalid());
+                 }
+                 summary
+                     .native_symbols
+@@ -25211,6 +25213,14 @@
+     ) -> Result<(), ResolvedBuildFailure> {
+         work.charge(1)
+             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
++        #[cfg(test)]
++        eprintln!(
++            "checked lifecycle original provider slot present={} exact={}",
++            self.provider_contracts.contains_key(&original.module()),
++            self.provider_contracts
++                .get(&original.module())
++                .is_some_and(|certificate| Arc::ptr_eq(certificate, original.code().contracts()))
++        );
+         if self
+             .provider_contracts
+             .get(&original.module())
+@@ -25229,16 +25239,32 @@
+     ) -> Result<(), ResolvedBuildFailure> {
+         work.charge(self.provider_contracts.len())
+             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
++        #[cfg(test)]
++        eprintln!(
++            "checked lifecycle category counts provider={} source={} foreign={} native={} preflight={} kinds={}",
++            self.provider_contracts.len(),
++            self.source_resource_facts.len(),
++            self.source_foreign_nominals.len(),
++            self.native_symbols.len(),
++            self.scalar_preflights.len(),
++            self.abstract_nominal_kinds.len()
++        );
+         for (module, certificate) in &self.provider_contracts {
+             if *module != certificate.module() {
+                 return Err(ResolvedBuildFailure::InvalidState);
+             }
+             if let Some(original) = original.filter(|original| original.module() == *module) {
+-                original.authenticate(certificate, work)?;
++                let diagnostic = original.authenticate(certificate, work);
++                #[cfg(test)]
++                eprintln!("checked lifecycle original provider certificate: {diagnostic:?}");
++                diagnostic?;
+             } else {
+                 certificate.authenticate(true, work)?;
+             }
+-            certificate.authenticate_linked_native_facts(self, work)?;
++            let diagnostic = certificate.authenticate_linked_native_facts(self, work);
++            #[cfg(test)]
++            eprintln!("checked lifecycle linked native certificate: {diagnostic:?}");
++            diagnostic?;
+             work.charge(certificate.resource_count())
+                 .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+             families
+@@ -25310,6 +25336,8 @@
+                 }
+             }
+         }
++        #[cfg(test)]
++        eprintln!("checked lifecycle category provider contracts complete");
+         work.charge(self.source_resource_facts.len())
+             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+         families
+@@ -25390,6 +25418,8 @@
+                 }
+             }
+         }
++        #[cfg(test)]
++        eprintln!("checked lifecycle category source resource kinds complete");
+         work.charge(self.source_foreign_nominals.len())
+             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+         for candidate in &self.source_foreign_nominals {
+@@ -25484,6 +25514,8 @@
+                 }
+             }
+         }
++        #[cfg(test)]
++        eprintln!("checked lifecycle category source foreign kinds complete");
+         // Only the exact common opaque role carried by an independently
+         // reconstructed native call codec belongs to this category. Other
+         // ordinary frozen nominals require their own original authority.
+@@ -25535,7 +25567,10 @@
+                 {
+                     return Err(ResolvedBuildFailure::InvalidState);
+                 }
+-                match codecs.entry(original.module()) {
++                // Legacy pure preflights retain Call while checked natives use
++                // CheckedCall in the same common module. Reconstruct each exact
++                // role independently; both authenticate the same opaque error.
++                match codecs.entry(original.ids().call) {
+                     std::collections::hash_map::Entry::Vacant(entry) => {
+                         let codec =
+                             crate::foreign::checked_source::CheckedForeignCallCodec::authenticate(
+@@ -25557,6 +25592,13 @@
+                     std::collections::hash_map::Entry::Occupied(entry) => {
+                         let codec = entry.get();
+                         if codec.source() != original.source() || codec.ids() != original.ids() {
++                            #[cfg(test)]
++                            eprintln!(
++                                "checked lifecycle codec collision module={:?} retained={:?} incoming={:?}",
++                                original.module(),
++                                codec.ids(),
++                                original.ids()
++                            );
+                             return Err(ResolvedBuildFailure::InvalidState);
+                         }
+                     }
+@@ -25577,6 +25619,13 @@
+                 families.insert(extent);
+             }
+         }
++        #[cfg(test)]
++        eprintln!(
++            "checked lifecycle category inventories family={} names={} kinds={}",
++            families.len(),
++            self.abstract_nominal_names.len(),
++            self.abstract_nominal_kinds.len()
++        );
+         if families.len() != self.abstract_nominal_names.len()
+             || families.len() != self.abstract_nominal_kinds.len()
+         {
+@@ -43251,3 +43300,14 @@
+         self
+     }
+ }
++
++#[cfg(test)]
++#[path = "resolved/checked_codec_category_tests.rs"]
++mod checked_codec_category_tests;
++
++#[track_caller]
++fn checked_lifecycle_summary_invalid() -> ResolvedBuildFailure {
++    #[cfg(test)]
++    eprintln!("checked lifecycle summary invalid at {}", std::panic::Location::caller());
++    ResolvedBuildFailure::InvalidState
++}
+--- /dev/null
++++ b/src/resolved/checked_codec_category_tests.rs
+@@ -0,0 +1,151 @@
++//! Real original-checker views may contain both legacy and checked call codecs.
++//! The view and its authentication remain passive; no native call is evaluated.
++
++use super::*;
++use crate::{
++    module::{ModuleGraph, ModuleRoots},
++    resolve::{DependencyExports, ResolveModuleError, ResolveReason},
++};
++use std::sync::atomic::{AtomicU64, Ordering};
++
++const SOURCE: &str = include_str!("../../tests/fixtures/checked-owner-lifecycle/owner.ash");
++
++fn graph(source: &str) -> ModuleGraph {
++    static IDS: AtomicU64 = AtomicU64::new(0);
++    let directory = std::env::temp_dir().join(format!(
++        "ash-checked-codec-category-{}-{}",
++        std::process::id(),
++        IDS.fetch_add(1, Ordering::Relaxed)
++    ));
++    std::fs::create_dir(&directory).unwrap();
++    std::fs::write(directory.join("entry.ash"), source).unwrap();
++    let graph =
++        crate::module::load_module_graph(&directory.join("entry.ash"), &ModuleRoots::empty())
++            .unwrap();
++    std::fs::remove_dir_all(directory).unwrap();
++    graph
++}
++
++fn resolve_entry(graph: &ModuleGraph) -> Result<ResolvedModule, ResolveModuleError> {
++    let mut dependencies_checked = Vec::<CheckedModule>::new();
++    for loaded in graph.modules() {
++        let dependencies = loaded
++            .dependencies()
++            .iter()
++            .map(|edge| {
++                DependencyExports::new(
++                    edge,
++                    dependencies_checked
++                        .iter()
++                        .find(|module| module.module() == edge.target())
++                        .unwrap()
++                        .exports(),
++                )
++                .unwrap()
++            })
++            .collect::<Vec<_>>();
++        let resolved = crate::resolve::resolve_checked_foreign_module(loaded, &dependencies)?;
++        if loaded.id() == graph.entry() {
++            return Ok(resolved);
++        }
++        dependencies_checked.push(crate::elaborate::check_module(resolved).unwrap());
++    }
++    panic!("fixture entry");
++}
++
++fn original_view() -> ResolvedRegistry {
++    let graph = graph(SOURCE);
++    let resolved = resolve_entry(&graph).expect(
++        "canonical lifecycle source resolves without checking or executing lifecycle bodies",
++    );
++    resolved
++        .registry()
++        .source_original_checker_view(resolved.imported_facts(), &mut TypeWorkBudget::default())
++        .unwrap()
++}
++
++fn assert_distinct_original_codecs(view: &ResolvedRegistry) {
++    assert_eq!(view.native_symbols.len(), 2);
++    assert_eq!(view.scalar_preflights.len(), 10);
++    let checked = view.native_symbols.values().next().unwrap().call_codec();
++    let legacy = view.scalar_preflights.values().next().unwrap().call_codec();
++    assert_eq!(
++        checked.module(),
++        legacy.module(),
++        "both exact codec originals originate in the same builtin Foreign module"
++    );
++    assert_eq!(checked.ids().call, NominalTypeId::new(checked.module(), 12));
++    assert_eq!(legacy.ids().call, NominalTypeId::new(legacy.module(), 1));
++    assert_ne!(checked.ids().call, legacy.ids().call);
++    for symbol in view.native_symbols.values() {
++        assert_eq!(symbol.call_codec().ids(), checked.ids());
++    }
++    for preflight in view.scalar_preflights.values() {
++        assert_eq!(preflight.call_codec().ids(), legacy.ids());
++    }
++}
++
++#[test]
++fn checked_codec_category_real_original_view_accepts_both_call_identities() {
++    let view = original_view();
++    assert_distinct_original_codecs(&view);
++    view.authenticate_provider_contracts(&mut TypeWorkBudget::default())
++        .expect("real original view must authenticate legacy preflight and checked native codecs independently");
++}
++
++#[test]
++fn checked_codec_category_authentication_has_exact_prefix_spent_and_fresh_limits() {
++    let view = original_view();
++    assert_distinct_original_codecs(&view);
++    let mut measured = TypeWorkBudget::default();
++    view.authenticate_provider_contracts(&mut measured)
++        .expect("canonical category authentication before budget controls");
++    let cost = measured.used();
++    assert!(cost > 0);
++    for prefix in [0, 7] {
++        let mut exact = TypeWorkBudget::with_limit(prefix + cost);
++        exact.charge(prefix).unwrap();
++        view.authenticate_provider_contracts(&mut exact).unwrap();
++        assert_eq!(exact.used(), prefix + cost);
++        assert_eq!(
++            view.authenticate_provider_contracts(&mut exact),
++            Err(ResolvedBuildFailure::TypeResource)
++        );
++        let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
++        short.charge(prefix).unwrap();
++        assert_eq!(
++            view.authenticate_provider_contracts(&mut short),
++            Err(ResolvedBuildFailure::TypeResource)
++        );
++    }
++    for _ in 0..2 {
++        let mut fresh = TypeWorkBudget::with_limit(cost);
++        view.authenticate_provider_contracts(&mut fresh).unwrap();
++        assert_eq!(fresh.used(), cost);
++    }
++}
++
++#[test]
++fn checked_codec_category_does_not_accept_a_legacy_outer_call_for_checked_teardown() {
++    resolve_entry(&graph(SOURCE))
++        .expect("unchanged checked symbol must bind before testing its outer codec mutation");
++    let before = "State<H, R> -> Foreign.CheckedCall<Foreign.Disposition<Unit>>";
++    assert_eq!(SOURCE.matches(before).count(), 1);
++    let changed = SOURCE.replace(
++        before,
++        "State<H, R> -> Foreign.Call<Foreign.Disposition<Unit>>",
++    );
++    let graph = graph(&changed);
++    let entry = graph.module(graph.entry()).unwrap();
++    crate::foreign::source_contract::prepare_checked_foreign_library(
++        entry.id(),
++        &entry.surface().foreign_libraries[0],
++    )
++    .expect("passive ABI preparation alone cannot establish the resolved outer codec identity");
++    let error = resolve_entry(&graph)
++        .expect_err("checked source binding must reject the parsed legacy outer Call");
++    assert!(
++        matches!(error, ResolveModuleError::Resolution(ref diagnostic) if diagnostic.reason == ResolveReason::ForeignContract),
++        "expected exact binding refusal, not a resource or syntax failure: {error:?}"
++    );
++}
+--- a/tests/checked_foreign_lifecycle.rs
++++ b/tests/checked_foreign_lifecycle.rs
+@@ -40,3 +40,126 @@
+     }
+     assert_eq!(checked.len(), graph.modules().len());
+ }
++
++struct TemporarySource(std::path::PathBuf);
++impl TemporarySource {
++    fn new(source: &str) -> Self {
++        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
++        let directory = std::env::temp_dir().join(format!(
++            "ash-checked-lifecycle-{}-{}",
++            std::process::id(),
++            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
++        ));
++        std::fs::create_dir_all(&directory).unwrap();
++        let path = directory.join("owner.ash");
++        std::fs::write(&path, source).unwrap();
++        Self(path)
++    }
++    fn graph(&self) -> ash::module::ModuleGraph {
++        ash::module::load_module_graph(&self.0, &ash::module::ModuleRoots::empty()).unwrap()
++    }
++}
++impl Drop for TemporarySource {
++    fn drop(&mut self) {
++        std::fs::remove_dir_all(self.0.parent().unwrap()).unwrap();
++    }
++}
++
++#[test]
++fn checked_owner_lifecycle_fallible_scalar_finish_does_not_borrow_void_refinement() {
++    let source = include_str!("fixtures/checked-owner-lifecycle/owner.ash");
++    let original = source.split("\ntype Acquire").next().unwrap();
++    let fallible = original
++        .replace(
++            "symbol Free<H, R> : State<H, R> ->",
++            "symbol Free<H, R> : (State<H, R>, Int) ->",
++        )
++        .replace(
++            "abi (pointer(Address)) -> void",
++            "abi (pointer(Address), Size) -> void",
++        )
++        .replace(
++            "operand 0 from 0 current",
++            "operand 0 from 0 current\n        operand 1 from 1 scalar",
++        );
++    assert_ne!(fallible, original);
++    let passive = TemporarySource::new(&format!(
++        "{fallible}\npub idle : Unit -> Int\nidle () = 42\n"
++    ));
++    let graph = passive.graph();
++    let producer = graph.module(graph.entry()).unwrap();
++    let prepared = ash::foreign::source_contract::prepare_checked_foreign_library(
++        producer.id(),
++        &producer.surface().foreign_libraries[0],
++    )
++    .expect("the actual fallible scalar teardown prepares canonically");
++    assert_eq!(prepared.symbols()[1].operands().len(), 2);
++    let mut checked: Vec<ash::resolved::CheckedModule> = Vec::new();
++    for loaded in graph.modules() {
++        let dependencies = loaded
++            .dependencies()
++            .iter()
++            .map(|edge| {
++                ash::resolve::DependencyExports::new(
++                    edge,
++                    checked
++                        .iter()
++                        .find(|module| module.module() == edge.target())
++                        .unwrap()
++                        .exports(),
++                )
++                .unwrap()
++            })
++            .collect::<Vec<_>>();
++        let resolved = ash::resolve::resolve_checked_foreign_module(loaded, &dependencies)
++            .expect("fallible scalar teardown originals bind before lifecycle use");
++        checked.push(
++            ash::elaborate::check_module(resolved).expect("passive fallible contract checks"),
++        );
++    }
++    let lifecycle = source.replacen(original, &fallible, 1).replace(
++        "perform Free<H, R>.call state",
++        "perform Free<H, R>.call (state, 7)",
++    );
++    let fixture = TemporarySource::new(&lifecycle);
++    let graph = fixture.graph();
++    let mut checked: Vec<ash::resolved::CheckedModule> = Vec::new();
++    for loaded in graph.modules() {
++        let dependencies = loaded
++            .dependencies()
++            .iter()
++            .map(|edge| {
++                ash::resolve::DependencyExports::new(
++                    edge,
++                    checked
++                        .iter()
++                        .find(|module| module.module() == edge.target())
++                        .unwrap()
++                        .exports(),
++                )
++                .unwrap()
++            })
++            .collect::<Vec<_>>();
++        let resolved = ash::resolve::resolve_checked_foreign_module(loaded, &dependencies).expect(
++            "the real scalar conversion contract resolves before its unsupported lifecycle",
++        );
++        match ash::elaborate::check_module(resolved) {
++            Ok(module) => checked.push(module),
++            Err(ash::elaborate::TypeError::Source(error)) => {
++                assert_eq!(loaded.id(), graph.entry());
++                assert_eq!(error.reason, ash::elaborate::TypeReason::Argument);
++                let message = format!("{error:?}");
++                assert!(
++                    message.contains("source resource header requires matching owned state"),
++                    "{message}"
++                );
++                assert!(!message.contains("ResourceExhausted"), "{message}");
++                return;
++            }
++            Err(error) => {
++                panic!("unsupported scalar lifecycle must reject semantically: {error:?}")
++            }
++        }
++    }
++    panic!("fallible scalar conversion cannot use the State-only void finish refinement");
++}

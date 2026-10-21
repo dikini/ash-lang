@@ -2830,6 +2830,10 @@ impl Graph {
                 crate::core::source_resource::SourceResourceReportCodec::Scope {
                     report,
                     completion,
+                }
+                | crate::core::source_resource::SourceResourceReportCodec::CheckedScope {
+                    report,
+                    completion,
                 } => (report, completion),
                 crate::core::source_resource::SourceResourceReportCodec::AcquiredOnly {
                     report,
@@ -2855,6 +2859,96 @@ impl Graph {
                 source,
                 budget,
             )?;
+            if matches!(
+                codec.report,
+                crate::core::source_resource::SourceResourceReportCodec::CheckedScope { .. }
+            ) {
+                // This models independent result dependencies only. The record
+                // seed supplies no native disposition or runtime authority.
+                let record = self.push(Expr::Scalar, source, budget)?;
+                let finish_result = self.push(
+                    Expr::Project {
+                        value: finished,
+                        field: 0,
+                        constructor: Some(codec.finish[0]),
+                    },
+                    source,
+                    budget,
+                )?;
+                let retained_pair = self.push(
+                    Expr::Project {
+                        value: finished,
+                        field: 0,
+                        constructor: Some(codec.finish[1]),
+                    },
+                    source,
+                    budget,
+                )?;
+                let error = self.push(
+                    Expr::Project {
+                        value: retained_pair,
+                        field: 1,
+                        constructor: None,
+                    },
+                    source,
+                    budget,
+                )?;
+                let reason = self.push(
+                    Expr::Project {
+                        value: finished,
+                        field: 0,
+                        constructor: Some(codec.finish[2]),
+                    },
+                    source,
+                    budget,
+                )?;
+                let consumed = self.push(
+                    Expr::Tuple(copy_slice(&[finish_result, record], budget)?),
+                    source,
+                    budget,
+                )?;
+                let retained = self.push(
+                    Expr::Tuple(copy_slice(&[error, record], budget)?),
+                    source,
+                    budget,
+                )?;
+                let mut alternatives = Vec::new();
+                charge(budget, 3)?;
+                alternatives
+                    .try_reserve_exact(3)
+                    .map_err(|_| Failure::Resource)?;
+                for (constructor, payload) in
+                    completion.into_iter().zip([consumed, retained, reason])
+                {
+                    let function = self.push(Expr::Constructor(constructor), source, budget)?;
+                    alternatives.push(self.push(
+                        Expr::Call {
+                            function,
+                            arguments: copy_slice(&[payload], budget)?,
+                            scalar: false,
+                            type_application: false,
+                        },
+                        source,
+                        budget,
+                    )?);
+                }
+                let completion = self.push(Expr::Merge(alternatives), source, budget)?;
+                let result = self.push(
+                    Expr::Tuple(copy_slice(&[completed, completion], budget)?),
+                    source,
+                    budget,
+                )?;
+                return Ok(Expr::Resource {
+                    success: Some(report[1]),
+                    failure: Some(report[0]),
+                    failure_payload: Some(failure_payload),
+                    handle,
+                    identity,
+                    initializer: acquired,
+                    body: result,
+                    source,
+                });
+            }
             let closed = self.push(Expr::Constructor(completion[0]), source, budget)?;
             let consumed_error = self.push(
                 Expr::Project {
@@ -3347,6 +3441,27 @@ impl Graph {
             .map_err(|_| Failure::Resource)?;
         self.positions.insert(code, expression);
         Ok(())
+    }
+
+    /// A sealed Host control event has independent Unit payload and reply.
+    /// Its native request retains its separate real operand/value equation.
+    pub(super) fn position_independent_request(
+        &mut self,
+        code: usize,
+        source: Span,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let scalar = self.push(Expr::Scalar, source, budget)?;
+        let request = self.push(
+            Expr::Request {
+                operand: scalar,
+                scalar: true,
+                reply: Some(scalar),
+            },
+            source,
+            budget,
+        )?;
+        self.position(code, request, budget)
     }
 
     /// Distinct existing value equations for authenticated source-control
@@ -13751,3 +13866,7 @@ mod tests {
     }
     // ASH_INPUT169_END_TESTS
 }
+
+#[cfg(test)]
+#[path = "value/host_request_tests.rs"]
+mod host_request_tests;

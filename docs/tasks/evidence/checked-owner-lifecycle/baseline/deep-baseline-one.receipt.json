@@ -1,0 +1,36 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "ash",
+    "--locked",
+    "--lib",
+    "resolved::tests::freeze_rejects_missing_local_hidden_nominal_before_cloning_deep_parameters",
+    "--",
+    "--exact",
+    "--nocapture"
+  ],
+  "cwd": "/tmp/ash-pr97-deep-base-eihfwm0m",
+  "base": "91e6dee036c9728d89f016aee61ff337b8a978e1",
+  "exit_code": 101,
+  "seconds": 410.453,
+  "inputs_equal": true,
+  "all_git_and_archive_pins_equal": true,
+  "count": 566,
+  "aggregate": "1ad88edf8d84155d288042f9072ad26b1479874489a1fee1f2d0e944ec9dedd3",
+  "log_sha256": "f82f732149e31006361971108ebfdfa160cfbe38ff1049ccec30e5672b77a2f8",
+  "environment": {
+    "RUSTC_WRAPPER": "",
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+    "RUSTFLAGS": null,
+    "CARGO_ENCODED_RUSTFLAGS": null
+  },
+  "qualification": "Exact tracked-source Git/archive bytes, separate archive path and CARGO_MANIFEST_DIR; shared target/cache, one job, unchanged default policy. This is not a byte-identical filesystem/path environment. No evaluator/native execution.",
+  "unit_artifact": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168",
+    "bytes": 843095544,
+    "sha256": "863089312381fb0a1e5aa7fe24af5e80e0bd16a84d8992d262f2e0912373cd1b"
+  }
+}

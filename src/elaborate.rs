@@ -43036,3 +43036,7 @@ impl CoreElaborator<EffectOperationFamily> {
             .map_err(|failure| (Elaboration(failure.into()), used))
     }
 }
+
+#[cfg(test)]
+#[path = "elaborate/checked_owner_lifecycle_tests.rs"]
+mod checked_owner_lifecycle_tests;
