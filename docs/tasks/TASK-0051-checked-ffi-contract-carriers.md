@@ -63,6 +63,8 @@ Candidate first-slice behavior is implemented and passes 35 focused tests,
 targeted library/test Clippy, formatting, changed Markdown lint and whitespace.
 The [verification receipt](evidence/checked-ffi-marker/verification.json) records
 source/configuration hashes, compiler/cache settings and the observed red cases.
+[Raw review reproduction](evidence/checked-ffi-marker/review-reproduction.json)
+retains exact final test/Clippy outputs and before/after pin equality.
 Awaiting: independent candidate review and verified milestone retention.
 Remaining: assumptions/H, host scopes, module/Core/image carriers and complete F3
 acceptance. Owner: developer supplies/retains the candidate and updates acceptance;
