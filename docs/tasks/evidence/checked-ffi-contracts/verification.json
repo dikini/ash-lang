@@ -138,5 +138,11 @@
     "Independent checked-owner legacy binding refusal with legacy-positive control",
     "Legacy private reconstruction fixture uses genuine legacy donor",
     "ExecutorIntegrity scoped to trusted roles for eventual mode, excluding faulty isolated worker/monitor"
-  ]
+  ],
+  "source_configuration_tree_algorithm": {
+    "files": "All regular files recursively under src/ and tests/, plus Cargo.toml, Cargo.lock, rust-toolchain.toml, .cargo/config.toml and build.rs. No symlinks are present in these inputs.",
+    "manifest": "Map each repository-relative POSIX path to lowercase SHA-256 hex of its exact file bytes.",
+    "aggregate": "SHA-256 of UTF-8 json.dumps(manifest, sort_keys=True, separators=(comma, colon)), with no newline; comma and colon are literal single-character separators.",
+    "before_after": "The operator materialized and compared both full manifest dictionaries before/after all four commands; equality was asserted. The aggregate is reproducible from the committed source/configuration tree."
+  }
 }
