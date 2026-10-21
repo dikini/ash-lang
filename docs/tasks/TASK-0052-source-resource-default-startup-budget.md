@@ -61,7 +61,7 @@ F-core remains a separate required checkpoint.
 
 - [x] Retain phase/counter measurements under the existing default.
 - [x] Repair only the demonstrated cost without weakening admission.
-- [ ] Original reproducer and affected boundaries pass focused verification.
+- [x] Original reproducer and affected boundaries pass focused verification.
 - [ ] Independent review, GitHub retention and acceptance readback complete.
 
 The [PR #89 baseline comparison](evidence/checked-ffi-selected/README.md#final-focused-verification)
@@ -101,14 +101,14 @@ compiler-owned builtin string, preserving live original checks. The instrumented
 startup passes at 318794/327680. Broad probes are removed; a fresh delivered-source
 run reproduces that result. Coordinate, builtin, original-provenance, owner,
 import, capture and host controls and Clippy pass on the same frozen source inputs.
-The image suite is 15/16: dependent-discard reconstruction still refuses with
+At the PR #92 checkpoint, the image suite was 15/16: dependent-discard reconstruction refused with
 `Resource`. An exact retained-a301 archive shows this test already failed with bare
 `Resource`; the candidate reports `Validation(Resource)`. Internal failure phases
 are not claimed equal. The comparison retains source/configuration equality and
 its path difference. The
 [final evidence](evidence/source-resource-startup-budget/README.md#delivered-source-verification)
-retains both results. A separate follow-up under this task and issue #91 must
-repair that dependent case before whole-task acceptance; F-core remains pending.
+retains both historical results. The remaining slice below repairs the dependent
+case; independent retention and acceptance are still required. F-core remains pending.
 
 Existing session reuse is bound to exact immutable registry/source/module/global
 and unused-ordering-footprint context; conditional, provider and lexical contexts
@@ -165,3 +165,13 @@ live source/module hits establish the measured repetition; every template still
 authenticates its own registry, binders and forests. These results use disposable
 probes. Final acceptance requires fresh verification after probe removal and
 independent review; no instrumented result transfers to cleaned inputs.
+
+The [final delivered-source checks](evidence/dependent-source-resource-startup/README.md#final-delivered-source-verification)
+pass after probe removal: dependent-discard 314687/327680, original imported buffer
+318817/327680, complete image filter 16/16 and 117 distinct focused passing tests.
+Clippy also passes on the same unchanged 525-file source/configuration inputs.
+The final tests include fresh empty-projection provenance after a warm loan,
+coherent bad-registry refusal, exact live source identity and paid cumulative
+bounds. No diagnostic result transfers across cleanup. Independent exact-head
+review, GitHub integration and author/PM acceptance remain pending; F-core and
+later checked-FFI gates remain separate.

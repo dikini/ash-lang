@@ -92,3 +92,39 @@ projection to receive its own empty provenance, then rechecks the full view.
 That strengthening was not part of the earlier instrumented run. Final checks
 must use the cleaned source and record new input manifests; no previous result
 or artifact fingerprint transfers across this cleanup.
+
+## Final delivered-source verification
+
+[The final index](final-verification.json) lists ten commands, raw log digests,
+changed source pins and 117 distinct passing tests. Each command has an identical
+before/after 525-file source/configuration map, aggregate
+`5f91396538c4ea690e4d10d3e24d2188cff7e36e9516556cd91468d0dfdc779d`.
+The source was frozen at cleanup commit `94d4697`; later changes only retain
+documentation/evidence. The full input map still equals the delivered source
+bytes. No instrumented result or artifact fingerprint transfers to this run.
+
+| Final command | Result |
+| --- | --- |
+| Exact dependent-discard default and exact/short/prefix/retry checks | passed; 314687/327680 |
+| Exact original imported-buffer default | passed; 318817/327680 |
+| Coordinate loan and semantic/budget controls | 6 passed |
+| Original declaration provenance | 14 passed |
+| Complete source-resource image filter | 16/16 passed |
+| Owner post-record | 10 passed |
+| Imported boundaries | 34 passed |
+| Capture graph controls | 36 passed |
+| Core host controls | 5 passed |
+| Clippy, library/tests with warnings denied | exit 0 |
+
+The final warm-loan control accepts a valid empty projected registry with empty
+provenance, then independently accepts the complete view. A coherent wrong
+registry still rejects. The live syntax loan never carries either semantic
+result. Existing image controls cover changed registry/global contexts, original
+headers/forests, copied identities, owner data escape, partial claims and bounded
+retries. Broad probes, the isolated fallback and their helper module are absent
+from delivered source; capture code is byte-identical to the retained base.
+
+This verifies the focused repair and its affected boundaries. Exact-head review,
+GitHub retained-tree/ref readback and acceptance remain required. No allowance,
+source semantics, native-call permission or independent validation rule changes.
+F-core and the remaining checked-FFI program gates are separate.

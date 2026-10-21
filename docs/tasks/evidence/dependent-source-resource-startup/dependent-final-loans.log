@@ -1,0 +1,13 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 6 tests
+test core::validate::source_declarations::coordinate_loan::tests::coordinate_loan_constructor_rejects_duplicate_or_incomplete_associations ... ok
+test core::validate::source_declarations::coordinate_loan::tests::coordinate_loan_hits_only_exact_live_source_and_module ... ok
+test core::validate::source_declarations::coordinate_loan::tests::coordinate_loan_failed_extraction_and_retention_never_publish ... ok
+test core::validate::source_declarations::coordinate_loan::tests::coordinate_loan_work_is_cumulative_exact_and_fresh_per_operation ... ok
+test core::validate::source_declarations::tests::coordinate_loan_never_reuses_registry_or_original_binder_authority ... ok
+test core::validate::source_declarations::tests::coordinate_loan_whole_original_admission_keeps_cumulative_work ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 1992 filtered out; finished in 0.01s
+
