@@ -9,6 +9,10 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
+- [TASK-0051: Checked FFI Contract Carriers](TASK-0051-checked-ffi-contract-carriers.md)
+  implements F3 under accepted CP-0024; source/summary/Core/image acceptance remains
+  pending until the complete carrier boundary is independently verified.
+
 - [TASK-0050: Checked FFI, Regions, and Scoped Control Program](TASK-0050-checked-ffi-regions-control-program.md)
   coordinates the staged program. Its [plan](plans/checked-ffi-regions-control.md)
   retains the complete acceptance map and checkpoint ownership. M1 has an accepted
