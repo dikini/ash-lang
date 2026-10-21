@@ -119,7 +119,6 @@ deliberately require separate admission.
 None. A semantic or architectural gap returns to its governing artifact rather
 than becoming an allowance increase or local permission.
 
-
 ## Remaining dependent-discard slice
 
 PR #92 retained the bounded original-startup repair at
@@ -150,3 +149,11 @@ it does not establish that its bare `Resource` arose in the candidate's later
    exact tree/ref and acceptance readback. Whole task and F-core acceptance remain
    pending until their original obligations are met. Nominal/resource work waits
    for this repair.
+
+The [initial dependent measurement](evidence/dependent-source-resource-startup/README.md)
+completes both original templates at 243110 and reaches final Core at 256303.
+Final pre-capture checks complete, then strict capture exhausts the unchanged
+caller allowance. Separate template sessions each correctly authenticate their
+registry, but each repeats pure source-coordinate extraction costing 9172 and
+20442 units. This is measured candidate duplication, not a reusable registry or
+forest proof; no dependent-case repair or acceptance follows yet.

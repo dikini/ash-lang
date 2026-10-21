@@ -11972,6 +11972,12 @@ impl PureImage {
         if !self.effect_dialect || self.sources.is_empty() {
             return Err(ImageFailure::InvalidRecord);
         }
+        #[cfg(test)]
+        crate::core::validate::startup_measurement::record(
+            "restore:windows-enter",
+            work.used(),
+            work.used(),
+        );
         let mut windows = Vec::new();
         charge(work, self.source_windows.len())?;
         windows
@@ -12003,6 +12009,12 @@ impl PureImage {
             modules: CoordinateStorage::Owned(Vec::new()),
             work,
         };
+        #[cfg(test)]
+        crate::core::validate::startup_measurement::record(
+            "restore:sources-enter",
+            decoder.work.used(),
+            decoder.work.used(),
+        );
         let mut seen_common = false;
         let mut seen_cell = false;
         let mut seen_generic_cell = false;
@@ -12052,20 +12064,56 @@ impl PureImage {
             decoder.sources.push(source, decoder.work)?;
             decoder.modules.push(module, decoder.work)?;
         }
+        #[cfg(test)]
+        crate::core::validate::startup_measurement::record(
+            "restore:registry-enter",
+            decoder.work.used(),
+            decoder.work.used(),
+        );
         let RestoredNativeRegistry {
             registry,
             provenance,
             prepared,
             symbols,
         } = decoder.extended_registry()?;
+        #[cfg(test)]
+        crate::core::validate::startup_measurement::record(
+            "restore:registry-exit",
+            decoder.work.used(),
+            decoder.work.used(),
+        );
         charge(decoder.work, 1)?;
         let registry = Arc::new(registry);
+        #[cfg(test)]
+        crate::core::validate::startup_measurement::record(
+            "restore:binders-enter",
+            decoder.work.used(),
+            decoder.work.used(),
+        );
         let binder_ids = decoder.source_binder_reservations()?;
+        #[cfg(test)]
+        crate::core::validate::startup_measurement::record(
+            "restore:templates-enter",
+            decoder.work.used(),
+            decoder.work.used(),
+        );
         let templates = decoder.source_templates(&registry, &symbols, &binder_ids)?;
+        #[cfg(test)]
+        crate::core::validate::startup_measurement::record(
+            "restore:main-enter",
+            decoder.work.used(),
+            decoder.work.used(),
+        );
         let catalog = decoder.method_catalog(
             self.main_method_catalog
                 .ok_or(ImageFailure::InvalidRecord)?,
         )?;
+        #[cfg(test)]
+        crate::core::validate::startup_measurement::record(
+            "restore:main-catalog-exit",
+            decoder.work.used(),
+            decoder.work.used(),
+        );
         let mut builder = crate::core::EffectCoreBuilder::with_registry_and_method_evidence(
             Arc::clone(&registry),
             Arc::clone(&catalog),
@@ -12081,6 +12129,12 @@ impl PureImage {
         nodes
             .try_reserve_exact(self.nodes.len())
             .map_err(|_| ImageFailure::Resource)?;
+        #[cfg(test)]
+        crate::core::validate::startup_measurement::record(
+            "restore:main-nodes-enter",
+            decoder.work.used(),
+            decoder.work.used(),
+        );
         for record in &self.nodes {
             charge(decoder.work, 1)?;
             let ty = decoder.ty(record.ty)?;
@@ -12101,6 +12155,12 @@ impl PureImage {
             )?;
             nodes.push(node);
         }
+        #[cfg(test)]
+        crate::core::validate::startup_measurement::record(
+            "restore:anchors-enter",
+            decoder.work.used(),
+            decoder.work.used(),
+        );
         decoder.source_method_anchors(
             &mut builder,
             &nodes,
@@ -12108,6 +12168,12 @@ impl PureImage {
             self.source_method_anchors
                 .ok_or(ImageFailure::InvalidRecord)?,
         )?;
+        #[cfg(test)]
+        crate::core::validate::startup_measurement::record(
+            "restore:builder-finish-enter",
+            decoder.work.used(),
+            decoder.work.used(),
+        );
         let unchecked = builder.finish_provider_draft(*get(&nodes, self.root)?, decoder.work)?;
         let mut sources = Vec::new();
         let mut module_sources = Vec::new();
@@ -12115,6 +12181,12 @@ impl PureImage {
             push(&mut sources, source, decoder.work)?;
             push(&mut module_sources, (*module, source.id()), decoder.work)?;
         }
+        #[cfg(test)]
+        crate::core::validate::startup_measurement::record(
+            "restore:core-enter",
+            decoder.work.used(),
+            decoder.work.used(),
+        );
         let program = crate::core::validate::validate_effect_modules_with_work(
             unchecked,
             &sources,
@@ -12122,6 +12194,12 @@ impl PureImage {
             decoder.work,
         )
         .map_err(ImageFailure::Validation)?;
+        #[cfg(test)]
+        crate::core::validate::startup_measurement::record(
+            "restore:core-exit",
+            decoder.work.used(),
+            decoder.work.used(),
+        );
         charge(decoder.work, 1)?;
         if !program
             .node(program.root())

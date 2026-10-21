@@ -3705,12 +3705,11 @@ fn analyze_nodes_with_methods<F: CoreOperationFamily>(
     provider_phase: ProviderCapturePhase,
     budget: &mut TypeWorkBudget,
 ) -> Result<Vec<CaptureValueSummary>, Failure> {
-    let Some(BuiltCaptureGraph {
-        graph,
-        roots,
-        values,
-        has_discard,
-    }) = build_capture_graph(
+    #[cfg(test)]
+    let graph_before = budget.used();
+    #[cfg(test)]
+    super::validate::startup_measurement::record("capture.graph.enter", graph_before, graph_before);
+    let built = build_capture_graph(
         nodes,
         globals,
         imports,
@@ -3726,26 +3725,72 @@ fn analyze_nodes_with_methods<F: CoreOperationFamily>(
         source_builder,
         provider_phase,
         budget,
-    )?
+    );
+    #[cfg(test)]
+    super::validate::startup_measurement::record(
+        if built.is_ok() {
+            "capture.graph.ok"
+        } else {
+            "capture.graph.err"
+        },
+        graph_before,
+        budget.used(),
+    );
+    let Some(BuiltCaptureGraph {
+        graph,
+        roots,
+        values,
+        has_discard,
+    }) = built?
     else {
         return Ok(Vec::new());
     };
+    #[cfg(test)]
+    super::validate::startup_measurement::record(
+        "capture.control.enter",
+        budget.used(),
+        budget.used(),
+    );
     if let Some(rows) = rows {
         *rows = cleanup_requirements(&graph, &roots, budget)?;
     } else if summary_roots.is_none() {
+        #[cfg(test)]
+        super::validate::startup_measurement::record(
+            "capture.cleanup-discovery.enter",
+            budget.used(),
+            budget.used(),
+        );
         if has_discard && cleanup_rows_may_be_nonempty(&graph, budget)? {
             // Strict discovery already visits the original control paths. Keep
             // its passive row observations instead of constructing a second
             // inference-only solver; all safety checks still run in strict mode.
+            #[cfg(test)]
+            super::validate::startup_measurement::record(
+                "capture.control-with-rows.enter",
+                budget.used(),
+                budget.used(),
+            );
             let requirements = check_control_roots_with_rows(&graph, roots, true, budget)?;
             check_cleanup_rows(nodes, operation, &requirements, budget)?;
         } else {
             if has_discard {
                 check_cleanup_rows(nodes, operation, &[], budget)?;
             }
+            #[cfg(test)]
+            super::validate::startup_measurement::record(
+                "capture.control-roots.enter",
+                budget.used(),
+                budget.used(),
+            );
             check_control_roots(&graph, roots, budget)?;
         }
     }
+    #[cfg(test)]
+    super::validate::startup_measurement::record(
+        "capture.control.exit",
+        budget.used(),
+        budget.used(),
+    );
     let graph = Arc::new(graph);
     let mut summaries = Vec::new();
     if let Some((roots, _, _, _, _, _)) = summary_roots {
@@ -6440,9 +6485,62 @@ fn check_control_roots_with_rows(
                 queries.push(root);
             }
         }
-        let mut analysis = Analysis::new(graph, None, budget)?;
+        #[cfg(test)]
+        super::validate::startup_measurement::record(
+            "control.queries.ready",
+            budget.used(),
+            budget.used(),
+        );
+        #[cfg(test)]
+        super::validate::startup_measurement::record(
+            "control.query-count",
+            queries.len(),
+            queries.len(),
+        );
+        #[cfg(test)]
+        let analysis_before = budget.used();
+        let analysis = Analysis::new(graph, None, budget);
+        #[cfg(test)]
+        super::validate::startup_measurement::record(
+            if analysis.is_ok() {
+                "control.constructor.ok"
+            } else {
+                "control.constructor.err"
+            },
+            analysis_before,
+            budget.used(),
+        );
+        let mut analysis = analysis?;
         analysis.collect_cleanup_rows = collect_cleanup_rows;
-        analysis.check(&queries, budget)?;
+        let result = analysis.check(&queries, budget);
+        #[cfg(test)]
+        if matches!(&result, Err(Failure::Resource))
+            && super::validate::startup_measurement::is_recording()
+        {
+            // This separately labelled diagnostic supplies no reconstruction
+            // result or caller credit. The original Result and meter survive.
+            let mut isolated = TypeWorkBudget::default();
+            super::validate::startup_measurement::record(
+                "control.isolated.enter",
+                isolated.used(),
+                isolated.used(),
+            );
+            let diagnostic = (|| {
+                let mut separate = Analysis::new(graph, None, &mut isolated)?;
+                separate.collect_cleanup_rows = collect_cleanup_rows;
+                separate.check(&queries, &mut isolated)
+            })();
+            super::validate::startup_measurement::record(
+                if diagnostic.is_ok() {
+                    "control.isolated.ok"
+                } else {
+                    "control.isolated.err"
+                },
+                0,
+                isolated.used(),
+            );
+        }
+        result?;
         return Ok(std::mem::take(&mut analysis.cleanup_rows));
     }
     Ok(Vec::new())
