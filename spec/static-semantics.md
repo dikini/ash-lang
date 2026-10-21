@@ -995,7 +995,9 @@ Foreign declarations are passive. A library with the explicit `checked` marker
 records checked-profile intent but is not admitted by this implementation
 checkpoint. It refuses before legacy foreign ABI preparation; erasing the marker
 is not an available source operation and no checked execution permission is
-published. The admitted subset contains owner-free
+published. Assumption declarations and `host`/`assumes` metadata cannot be
+silently erased by declaring an ordinary library; that legacy path refuses them
+as unsupported. The admitted subset contains owner-free
 calls with scalar or void results, and owner contracts with declared dependencies. Each library
 has exactly one profile, `"x86_64-unknown-linux-gnu"`. Scalar representations
 are signed or unsigned 8-, 32- or 64-bit integers, or `size_t`. These ABI

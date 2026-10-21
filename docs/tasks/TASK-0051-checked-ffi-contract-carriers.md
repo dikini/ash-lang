@@ -51,7 +51,7 @@ Follow the [task-owned implementation plan](plans/checked-ffi-contract-carriers.
 
 ## Progress
 
-- [ ] Explicit checked declaration boundary and safe incomplete-path refusal.
+- [x] Explicit checked declaration boundary and safe incomplete-path refusal.
 - [ ] Original assumptions, exact H and source/wrapper dependency carriers.
 - [ ] Host introduction/elimination and checked owner effect correspondence.
 - [ ] Body-free module/link/specialization correspondence and negatives.
@@ -59,16 +59,36 @@ Follow the [task-owned implementation plan](plans/checked-ffi-contract-carriers.
 - [ ] Charged checking work, exact/one-short bounds and affected regressions.
 - [ ] Independent review and retained verification of complete F3 scope.
 
-Candidate first-slice behavior is implemented and passes 35 focused tests,
-targeted library/test Clippy, formatting, changed Markdown lint and whitespace.
+PR [#83](https://github.com/dikini/ash-lang/pull/83) retains the first slice at
+`0c220ea2a0b16afa21977380173d9fc39b4ee1ba` on the milestone branch after independent
+exact-head review of `196ef7f1a6bd256796ff3d802970e3b9630bf6b7`. Source equality
+with the combined F2/F3 retained tree was verified before synchronizing the clean
+product checkout; all 1,791 file contents/modes matched and no working bytes changed.
+The subset passes 35 focused tests,
+targeted library/test Clippy, formatting, changed Markdown lint and source
+whitespace checks. Captured Cargo logs preserve their exact EOF blank line and
+are excluded from that whitespace claim.
 The [verification receipt](evidence/checked-ffi-marker/verification.json) records
 source/configuration hashes, compiler/cache settings and the observed red cases.
 [Raw review reproduction](evidence/checked-ffi-marker/review-reproduction.json)
 retains exact final test/Clippy outputs and before/after pin equality.
-Awaiting: independent candidate review and verified milestone retention.
+The author applied/read back the partial acceptance in
+[F3 issue #59](https://github.com/dikini/ash-lang/issues/59); whole-issue boxes remain
+unchecked. Reviewer audited the live partial acceptance update; the orchestrator confirmed advancement.
 Remaining: assumptions/H, host scopes, module/Core/image carriers and complete F3
 acceptance. Owner: developer supplies/retains the candidate and updates acceptance;
 reviewer checks the exact head; orchestrator confirms advancement.
+
+The next candidate extends the same canonical prepared library with original
+assumption-member coordinates, exact H selections and automatic role-linked
+native premises. Its explicit authoring preparation API grants no resolved binding
+or execution permission. Library-local assumption names publish no ordinary
+binder. Legacy symbol/owner binding and private reconstruction cannot erase the
+checked projection. The candidate passes 51 focused tests (6 profile unit, 1 resolver collision and
+44 integration/regression cases), targeted Clippy and formatting. The
+[raw verification receipt](evidence/checked-ffi-contracts/verification.json) retains
+exact commands, logs and unchanged source/configuration pins. Independent review
+and retention remain pending; no additional whole-task criterion is accepted yet.
 
 The first slice is deliberately incomplete: it retains the checked marker and
 refuses legacy ABI preparation for that declaration. It grants no checked

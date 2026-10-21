@@ -551,6 +551,10 @@ pub(crate) fn bind_foreign_symbol(
     context: &ForeignBindingContext<'_>,
     work: &mut TypeWorkBudget,
 ) -> Result<CheckedForeignSymbol, ForeignAdmissionError> {
+    if prepared.checked_contract().is_some() {
+        charge(work, 1, effect.span)?;
+        return Err(failure(ForeignAdmissionReason::InvalidLibrary, effect.span));
+    }
     let owner = match prepared
         .symbols()
         .get(symbol_index)
@@ -1326,7 +1330,12 @@ mod tests {
                 })
                 .unwrap();
             let prepared = Arc::new(
-                super::super::source_contract::prepare_foreign_library(module, library).unwrap(),
+                if library.checked.is_some() {
+                    super::super::source_contract::prepare_checked_foreign_library(module, library)
+                } else {
+                    super::super::source_contract::prepare_foreign_library(module, library)
+                }
+                .unwrap(),
             );
             let common = SourceFile::new(
                 "@builtin.foreign",
@@ -1525,6 +1534,28 @@ mod tests {
                 work,
             )
         }
+    }
+
+    #[test]
+    fn checked_profile_preparation_does_not_authenticate_a_legacy_operation() {
+        let text = SCALAR
+            .replace("foreign library", "foreign checked library")
+            .replace(
+                "operand 0 from 0 scalar",
+                "host T\n            assumes {}\n            operand 0 from 0 scalar",
+            );
+        let original = Fixture::new(SCALAR, Mutation::None);
+        assert!(original.bind(&mut TypeWorkBudget::default()).is_ok());
+        // Even matching legacy codec/signature facts cannot erase checked intent.
+        let checked = Fixture::new(&text, Mutation::None);
+        assert!(checked.prepared.checked_contract().is_some());
+        assert_eq!(
+            checked
+                .bind(&mut TypeWorkBudget::default())
+                .unwrap_err()
+                .reason(),
+            ForeignAdmissionReason::InvalidLibrary
+        );
     }
 
     #[test]

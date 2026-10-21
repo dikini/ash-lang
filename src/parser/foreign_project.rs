@@ -90,6 +90,10 @@ pub(super) fn validate_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<()
                 "profile" => {
                     shape.token_matching(|kind| matches!(kind, TokenKind::StringLiteral(_)))?
                 }
+                "assumption" => {
+                    upper(&mut shape)?;
+                    shape.token_matching(|kind| matches!(kind, TokenKind::StringLiteral(_)))?;
+                }
                 "repr" => {
                     upper(&mut shape)?;
                     shape.token(&TokenKind::Equal)?;
@@ -117,6 +121,11 @@ pub(super) fn validate_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<()
                     word(&mut shape, "owned")?;
                     upper(&mut shape)?;
                     shape.token(&TokenKind::LineEnd)?;
+                    while at_word(&shape, "host") {
+                        word(&mut shape, "host")?;
+                        upper(&mut shape)?;
+                        shape.token(&TokenKind::LineEnd)?;
+                    }
                     if at_word(&shape, "retains") {
                         word(&mut shape, "retains")?;
                         upper(&mut shape)?;
@@ -244,6 +253,14 @@ pub(super) fn validate_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<()
             let role = head_word(node, tokens)?;
             word(&mut shape, role)?;
             match role {
+                "host" => upper(&mut shape)?,
+                "assumes" => {
+                    shape.token(&TokenKind::LeftBrace)?;
+                    if shape.peek_node_is(NodeKind::ForeignReference) {
+                        list(&mut shape, NodeKind::ForeignReference)?;
+                    }
+                    shape.token(&TokenKind::RightBrace)?;
+                }
                 "destruction_operand" => {
                     shape.node(NodeKind::ForeignNativePosition)?;
                     word(&mut shape, "from")?;
@@ -574,6 +591,11 @@ fn member(
     }
     let name = first_name(node, tokens)?;
     Ok(match role {
+        "assumption" => SurfaceForeignMember::Assumption(SurfaceForeignAssumption {
+            name,
+            description: literal_string(node, tokens)?,
+            span,
+        }),
         "repr" => SurfaceForeignMember::Representation(SurfaceForeignRepresentationDeclaration {
             name,
             representation: representation(
@@ -613,6 +635,12 @@ fn member(
             let owned = names.next().ok_or(ProjectionError::MalformedTree(
                 InternalReason::UnexpectedShape,
             ))?;
+            let host_count = direct_tokens(node, tokens)
+                .filter(
+                    |token| matches!(&token.kind, TokenKind::Identifier(word) if word == "host"),
+                )
+                .count();
+            let host_bindings = names.by_ref().take(host_count).collect();
             let references = child_nodes(node)
                 .filter(|child| child.kind == NodeKind::ForeignReference)
                 .collect::<Vec<_>>();
@@ -621,6 +649,7 @@ fn member(
             };
             SurfaceForeignMember::Owner(Box::new(SurfaceForeignOwner {
                 name,
+                host_bindings,
                 parameters: project_optional_type_parameters(source, node, tokens)?
                     .unwrap_or_default(),
                 representation: reference(source, repr, tokens)?,
@@ -653,36 +682,55 @@ fn member(
                 span,
             }))
         }
-        "symbol" => SurfaceForeignMember::Symbol(Box::new(SurfaceForeignSymbol {
-            name,
-            parameters: project_optional_type_parameters(source, node, tokens)?.unwrap_or_default(),
-            ty: project_type(source, only_child_of_kind(node, NodeKind::Type)?, tokens)?,
-            native_name: literal_string(node, tokens)?,
-            abi_operands: child_nodes(node)
-                .filter(|child| child.kind == NodeKind::ForeignAbiOperand)
-                .map(|child| {
-                    Ok(SurfaceForeignAbiOperand {
-                        output: direct_tokens(child, tokens).next().is_some(),
-                        representation: abi_representation(
-                            source,
-                            only_child_of_kind(child, NodeKind::ForeignAbiRepresentation)?,
-                            tokens,
-                        )?,
+        "symbol" => {
+            let mut host_bindings = Vec::new();
+            let mut assumption_sets = Vec::new();
+            let mut contracts = Vec::new();
+            for child in
+                child_nodes(node).filter(|child| child.kind == NodeKind::ForeignCallContract)
+            {
+                match head_word(child, tokens)? {
+                    "host" => host_bindings.push(first_name(child, tokens)?),
+                    "assumes" => assumption_sets.push(SurfaceForeignAssumptionSet {
+                        references: child_nodes(child)
+                            .map(|reference_node| reference(source, reference_node, tokens))
+                            .collect::<Result<Vec<_>, _>>()?,
                         span: node_span(source, child, tokens)?,
+                    }),
+                    _ => contracts.push(contract(source, child, tokens)?),
+                }
+            }
+            SurfaceForeignMember::Symbol(Box::new(SurfaceForeignSymbol {
+                name,
+                host_bindings,
+                assumption_sets,
+                parameters: project_optional_type_parameters(source, node, tokens)?
+                    .unwrap_or_default(),
+                ty: project_type(source, only_child_of_kind(node, NodeKind::Type)?, tokens)?,
+                native_name: literal_string(node, tokens)?,
+                abi_operands: child_nodes(node)
+                    .filter(|child| child.kind == NodeKind::ForeignAbiOperand)
+                    .map(|child| {
+                        Ok(SurfaceForeignAbiOperand {
+                            output: direct_tokens(child, tokens).next().is_some(),
+                            representation: abi_representation(
+                                source,
+                                only_child_of_kind(child, NodeKind::ForeignAbiRepresentation)?,
+                                tokens,
+                            )?,
+                            span: node_span(source, child, tokens)?,
+                        })
                     })
-                })
-                .collect::<Result<Vec<_>, ProjectionError>>()?,
-            abi_result: abi_representation(
-                source,
-                only_child_of_kind(node, NodeKind::ForeignAbiRepresentation)?,
-                tokens,
-            )?,
-            contracts: child_nodes(node)
-                .filter(|child| child.kind == NodeKind::ForeignCallContract)
-                .map(|child| contract(source, child, tokens))
-                .collect::<Result<Vec<_>, _>>()?,
-            span,
-        })),
+                    .collect::<Result<Vec<_>, ProjectionError>>()?,
+                abi_result: abi_representation(
+                    source,
+                    only_child_of_kind(node, NodeKind::ForeignAbiRepresentation)?,
+                    tokens,
+                )?,
+                contracts,
+                span,
+            }))
+        }
         _ => return malformed(InternalReason::UnexpectedShape),
     })
 }

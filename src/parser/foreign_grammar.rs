@@ -138,6 +138,11 @@ fn member(parser: &mut Parser<'_>) -> bool {
         let _ = parser.bump();
         string(parser);
         true
+    } else if at_word(parser, "assumption") {
+        let _ = parser.bump();
+        expect_upper_identifier(parser);
+        string(parser);
+        true
     } else if at_word(parser, "repr") {
         let _ = parser.bump();
         expect_upper_identifier(parser);
@@ -216,6 +221,11 @@ fn owner(parser: &mut Parser<'_>) {
     let _ = word(parser, "owned");
     expect_upper_identifier(parser);
     line(parser);
+    while at_word(parser, "host") {
+        let _ = parser.bump();
+        expect_upper_identifier(parser);
+        line(parser);
+    }
     if at_word(parser, "retains") {
         let _ = parser.bump();
         comma_list(parser, expect_upper_identifier);
@@ -313,7 +323,19 @@ fn symbol(parser: &mut Parser<'_>) {
 
 fn contract(parser: &mut Parser<'_>) -> bool {
     parser.start(NodeKind::ForeignCallContract);
-    let result = if at_word(parser, "destruction_operand") {
+    let result = if at_word(parser, "host") {
+        let _ = parser.bump();
+        expect_upper_identifier(parser);
+        true
+    } else if at_word(parser, "assumes") {
+        let _ = parser.bump();
+        let _ = parser.expect(&TokenKind::LeftBrace, ExpectedForm::LeftBrace);
+        if !parser.at(&TokenKind::RightBrace) {
+            comma_list(parser, reference);
+        }
+        let _ = parser.expect(&TokenKind::RightBrace, ExpectedForm::RightBrace);
+        true
+    } else if at_word(parser, "destruction_operand") {
         let _ = parser.bump();
         native_position(parser);
         let _ = word(parser, "from");

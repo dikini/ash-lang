@@ -5,15 +5,16 @@ use crate::{integer::Integer, source::Span};
 mod foreign;
 pub use foreign::{
     SurfaceForeignAbiOperand, SurfaceForeignAbiRepresentation, SurfaceForeignAccess,
-    SurfaceForeignConstant, SurfaceForeignContract, SurfaceForeignExtent,
-    SurfaceForeignInputDiscipline, SurfaceForeignInteger, SurfaceForeignLibrary,
-    SurfaceForeignMember, SurfaceForeignNativePosition, SurfaceForeignOperandRole,
-    SurfaceForeignOperandRoleKind, SurfaceForeignOperandSource, SurfaceForeignOutcomeAtom,
-    SurfaceForeignOutcomeCondition, SurfaceForeignOutcomeFact, SurfaceForeignOutcomeFactKind,
-    SurfaceForeignOutcomeTest, SurfaceForeignOutputRole, SurfaceForeignOutputRoleKind,
-    SurfaceForeignOwner, SurfaceForeignProfile, SurfaceForeignReference,
-    SurfaceForeignRepresentation, SurfaceForeignRepresentationDeclaration, SurfaceForeignSentinel,
-    SurfaceForeignSourcePosition, SurfaceForeignString, SurfaceForeignSymbol,
+    SurfaceForeignAssumption, SurfaceForeignAssumptionSet, SurfaceForeignConstant,
+    SurfaceForeignContract, SurfaceForeignExtent, SurfaceForeignInputDiscipline,
+    SurfaceForeignInteger, SurfaceForeignLibrary, SurfaceForeignMember,
+    SurfaceForeignNativePosition, SurfaceForeignOperandRole, SurfaceForeignOperandRoleKind,
+    SurfaceForeignOperandSource, SurfaceForeignOutcomeAtom, SurfaceForeignOutcomeCondition,
+    SurfaceForeignOutcomeFact, SurfaceForeignOutcomeFactKind, SurfaceForeignOutcomeTest,
+    SurfaceForeignOutputRole, SurfaceForeignOutputRoleKind, SurfaceForeignOwner,
+    SurfaceForeignProfile, SurfaceForeignReference, SurfaceForeignRepresentation,
+    SurfaceForeignRepresentationDeclaration, SurfaceForeignSentinel, SurfaceForeignSourcePosition,
+    SurfaceForeignString, SurfaceForeignSymbol,
 };
 
 /// One parsed Ash module source.

@@ -18,6 +18,7 @@ pub struct SurfaceForeignLibrary {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfaceForeignMember {
     Profile(SurfaceForeignProfile),
+    Assumption(SurfaceForeignAssumption),
     Representation(SurfaceForeignRepresentationDeclaration),
     Constant(SurfaceForeignConstant),
     Sentinel(SurfaceForeignSentinel),
@@ -52,6 +53,21 @@ pub struct SurfaceForeignReference {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SurfaceForeignProfile {
     pub target: SurfaceForeignString,
+    pub span: Span,
+}
+
+/// A named native assumption. Its text states an obligation and proves none.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceForeignAssumption {
+    pub name: SurfaceName,
+    pub description: SurfaceForeignString,
+    pub span: Span,
+}
+
+/// One explicit assumption-reference set in a checked symbol body.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceForeignAssumptionSet {
+    pub references: Vec<SurfaceForeignReference>,
     pub span: Span,
 }
 
@@ -91,6 +107,8 @@ pub struct SurfaceForeignSentinel {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SurfaceForeignOwner {
     pub name: SurfaceName,
+    /// Preserve all authored selections so admission can reject duplicates.
+    pub host_bindings: Vec<SurfaceName>,
     pub parameters: Vec<SurfaceTypeParameter>,
     pub representation: SurfaceForeignReference,
     pub owned: SurfaceName,
@@ -119,6 +137,8 @@ pub enum SurfaceForeignExtent {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SurfaceForeignSymbol {
     pub name: SurfaceName,
+    pub host_bindings: Vec<SurfaceName>,
+    pub assumption_sets: Vec<SurfaceForeignAssumptionSet>,
     pub parameters: Vec<SurfaceTypeParameter>,
     pub ty: SurfaceType,
     pub native_name: SurfaceForeignString,
