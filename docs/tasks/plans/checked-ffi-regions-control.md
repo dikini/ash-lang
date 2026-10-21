@@ -11,7 +11,8 @@ assignment. That assignment permits the bounded F2 probes and candidate contract
 product tasks require accepted governing artifacts. The user later authorized
 autonomous recommended choices, unsigned local commits and a separate worktree.
 The orchestrator adopted reviewed CP-0024 under that delegation; TASK-0050 records
-local M1 delivery roles. GitHub publication and Main integration remain separate.
+local M1 delivery roles. GitHub publication and per-item unsigned squash retention are now authorized
+as recorded below; Main integration retains its separate gate.
 
 ## Baseline and agreed endpoint
 
@@ -50,12 +51,44 @@ Keep these as design pressure without adding implementation issues for them.
 
 ## Authority and GitHub workflow
 
-After separate publication authorization, create one parent tracking issue,
-**Checked FFI, regions, and scoped execution**, with the four milestone issues
-above and the child issues below. Recheck existing issues/PRs before creating
-records. Keys P0, F1-F8, R1-R5, C1-C5, and N1-N6 are local references only;
-replace or map them to actual GitHub links on publication. They are not artifact
-IDs and do not reserve GitHub numbers.
+The user authorized GitHub publication, one PR per work item and unsigned squash
+retention into the milestone branch after successful independent review on
+2026-10-21. The published hierarchy belongs to
+[overall milestone 2](https://github.com/dikini/ash-lang/milestone/2). This table
+maps plan keys to GitHub records; those records own live progress.
+
+| Plan key | Published issue |
+| --- | --- |
+| TASK-0050 | [#51](https://github.com/dikini/ash-lang/issues/51) |
+| M1 | [#52](https://github.com/dikini/ash-lang/issues/52) |
+| M2 | [#53](https://github.com/dikini/ash-lang/issues/53) |
+| M3 | [#54](https://github.com/dikini/ash-lang/issues/54) |
+| M4 | [#55](https://github.com/dikini/ash-lang/issues/55) |
+| P0 | [#56](https://github.com/dikini/ash-lang/issues/56) |
+| F1 | [#57](https://github.com/dikini/ash-lang/issues/57) |
+| F2 | [#58](https://github.com/dikini/ash-lang/issues/58) |
+| F3 | [#59](https://github.com/dikini/ash-lang/issues/59) |
+| F4 | [#60](https://github.com/dikini/ash-lang/issues/60) |
+| F5 | [#61](https://github.com/dikini/ash-lang/issues/61) |
+| F6 | [#62](https://github.com/dikini/ash-lang/issues/62) |
+| F7 | [#63](https://github.com/dikini/ash-lang/issues/63) |
+| F8 | [#64](https://github.com/dikini/ash-lang/issues/64) |
+| R1 | [#65](https://github.com/dikini/ash-lang/issues/65) |
+| R2 | [#66](https://github.com/dikini/ash-lang/issues/66) |
+| R3 | [#67](https://github.com/dikini/ash-lang/issues/67) |
+| R4 | [#68](https://github.com/dikini/ash-lang/issues/68) |
+| R5 | [#70](https://github.com/dikini/ash-lang/issues/70) |
+| C1 | [#71](https://github.com/dikini/ash-lang/issues/71) |
+| C2 | [#72](https://github.com/dikini/ash-lang/issues/72) |
+| C3 | [#73](https://github.com/dikini/ash-lang/issues/73) |
+| C4 | [#74](https://github.com/dikini/ash-lang/issues/74) |
+| C5 | [#75](https://github.com/dikini/ash-lang/issues/75) |
+| N1 | [#76](https://github.com/dikini/ash-lang/issues/76) |
+| N2 | [#77](https://github.com/dikini/ash-lang/issues/77) |
+| N3 | [#78](https://github.com/dikini/ash-lang/issues/78) |
+| N4 | [#79](https://github.com/dikini/ash-lang/issues/79) |
+| N5 | [#80](https://github.com/dikini/ash-lang/issues/80) |
+| N6 | [#81](https://github.com/dikini/ash-lang/issues/81) |
 
 Each milestone issue owns its outcome, dependencies, child links, acceptance
 map, final Main PR, and closure. Child issues use the outcome, dependencies,
@@ -81,8 +114,13 @@ For later delivery, use one integration branch per milestone under `codex/`
 and the checkpoint/worktree lifecycle in
 [AD-0011](../../decisions/AD-0011-milestone-worktree-lifecycle.md).
 Draft slice PRs target the active checkpoint or milestone retaining branch named
-in the assignment. Closed checkpoints are retained by explicit merge commits;
-each milestone has a separately authorized final Main PR. Do not carry forward
+in the assignment. For this run, the user's explicit per-item squash instruction overrides the
+normal AD-0011 merge-commit rule: after successful exact-head review/checks, create
+the unsigned squash commit locally and push it to the milestone branch. Avoid a
+GitHub web-flow merge that creates a signed commit. Retain the PR head, squash
+commit and tree/verification correspondence; close the PR with that receipt if
+GitHub cannot mark the local squash merged automatically. Each milestone still
+has a separately gated final Main PR. Do not carry forward
 a historical unsigned-merge exception as permission for a new delivery.
 
 Every PR identifies its issue criteria, complete or partial coverage, exact

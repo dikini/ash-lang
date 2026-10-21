@@ -14,7 +14,7 @@
 ## Current behavior
 
 The baseline is Main `7949b6d9136b0152ee9104e67bd0451cb9db4727`, not this
-planning checkout's HEAD `af327e31e9f5fccc483d9c24bd7dfc9628e32426`.
+original source planning checkout's HEAD `af327e31e9f5fccc483d9c24bd7dfc9628e32426`.
 Main's [source foreign declarations](https://github.com/dikini/ash-lang/blob/7949b6d9136b0152ee9104e67bd0451cb9db4727/spec/static-semantics.md#source-foreign-declarations)
 already provide passive original contracts, scalar/void calls, opaque/byte owners,
 initialized outputs, dependencies, consumption/retention, complete Type/Row

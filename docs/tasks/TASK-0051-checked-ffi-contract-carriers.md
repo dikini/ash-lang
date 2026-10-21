@@ -2,7 +2,8 @@
 
 - ID: `TASK-0051`
 - Status: active
-- Related: [CP-0024](../proposals/CP-0024-checked-foreign-host-profile.md),
+- Related: [F3 issue #59](https://github.com/dikini/ash-lang/issues/59),
+  [CP-0024](../proposals/CP-0024-checked-foreign-host-profile.md),
   [TASK-0050](TASK-0050-checked-ffi-regions-control-program.md),
   [AD-0007](../decisions/AD-0007-typed-core-dialects.md),
   [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md)

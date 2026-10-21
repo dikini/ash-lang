@@ -25,8 +25,16 @@ delegation and authorized local M1 product delivery. Work proceeds in the separa
 Main-based `.worktree/checked-ffi` checkout, branch `codex/checked-ffi-core`, with
 `codex/checked-ffi-milestone` as retaining anchor. Both started at the pinned Main
 commit below. The planning source checkout and all its unrelated edits remain
-intact. Unsigned local commits are authorized; GitHub publication/push and Main
-integration remain outside the current assignment.
+intact. The user later authorized publishing the planned issues and overall
+milestone, individual work-item PRs, and unsigned squash retention after successful
+review. The [published issue map](plans/checked-ffi-regions-control.md#authority-and-github-workflow)
+links the [parent #51](https://github.com/dikini/ash-lang/issues/51),
+[M1 #52](https://github.com/dikini/ash-lang/issues/52), and remaining work.
+Preparation PR [#69](https://github.com/dikini/ash-lang/pull/69) carries P0/F1
+preparation and the initial F3 task. For this run, create per-item unsigned squash
+commits locally and push to the milestone branch after required review/checks;
+this explicit instruction overrides AD-0011's normal merge-commit method.
+Main integration retains its separate gates.
 
 The developer owns implementation, build serialization, integration and
 acceptance updates; the assigned reviewer checks exact candidate heads; the
@@ -46,7 +54,7 @@ Delivered candidate: [CP-0024](../proposals/CP-0024-checked-foreign-host-profile
 its [63-row evidence map](../design/foreign-authoring/checked-ffi-evidence-map.md),
 and [F2 experiment contract](../design/foreign-authoring/linux-profile-experiment.md)
 with [Stage A observations](../design/foreign-authoring/linux-profile-probe/README.md).
-P0 confirms the pinned Main foundations; this planning tree remains unsuitable as
+P0 confirms the pinned Main foundations; the original source planning tree remains unsuitable as
 a product restart point. IDs were checked against available full Git history;
 CP-0024 is new. No AD was created or accepted.
 
@@ -60,7 +68,12 @@ final preparation review cleared SHA-256
 The orchestrator then adopted CP-0024 under the user's delegation. These accepted
 future semantics are not current Ash before complete product/Main retention.
 
-Remaining: retained-transplant review, concrete delegated Linux controls and
+The retained preparation at `1cf1014` passed independent authority/history review:
+Main parent, all six design pins, unchanged product/spec/old cell evidence,
+no restored retired artifacts, and 453 local committed links/anchors. Two minor
+wording/index findings are repaired in this preparation revision.
+
+Remaining: current PR retention/review, concrete delegated Linux controls and
 Stage B enforcement evidence, F2 architecture acceptance, product implementation
 and all product gates. Stage A is environmental evidence,
 not isolated-profile validation. F-core (F3/F4/F6 connected) remains the next full
