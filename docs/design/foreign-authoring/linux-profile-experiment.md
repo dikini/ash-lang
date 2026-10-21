@@ -72,7 +72,10 @@ changing fingerprint guards. The resulting ET_EXEC has no interpreter/dynamic
 section, but retained libc loading paths leave the proposed no-loading requirement
 unmet. Packaging performed no image execution. Any separately reviewed trusted
 diagnostic needs a distinct exact policy/approval/addendum and cannot convert
-this unresolved requirement into architecture acceptance.
+this unresolved requirement into architecture acceptance. The subsequent
+[exactly approved scalar diagnostic](linux-inprocess-probe/generated-ash/diagnostic-addendum.md)
+records host `Returned(7)` and sandbox EACCES under explicit known-loading and
+host-authority premises; it leaves that requirement unmet.
 
 ## Proposed architecture requirements awaiting evidence
 

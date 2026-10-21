@@ -28,7 +28,9 @@ Any separately authorized trusted diagnostic must have its own exact policy,
 approval and observation addendum, explicitly retain host authority and possible
 runtime-loading premises, and leave this packaging record unchanged. Such a
 diagnostic cannot satisfy the proposed no-loading requirement or accept F2/AD/F6.
-No such execution or approval is claimed by these records.
+No execution or approval is claimed by the original packaging records. A later
+[diagnostic addendum](diagnostic-addendum.md) records separate exact approval and
+observations without changing the frozen packaging receipt.
 
 ## Frozen inputs and commands
 

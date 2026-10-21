@@ -80,8 +80,10 @@ The later F2 [generated Ash packaging comparison](../design/foreign-authoring/li
 retains actual compiler/generated bridge/private-payload digests, the initial
 parser refusal and corrected fixture, successful whole-static linking, ELF data
 and linked-input provenance. No image execution accompanied packaging. Retained
-libc loader paths leave the proposed no-loading requirement unmet; a separately
-bounded diagnostic and final evidence review remain pending. This accepts no AD,
+libc loader paths leave the proposed no-loading requirement unmet. A separately
+[approved diagnostic](../design/foreign-authoring/linux-inprocess-probe/generated-ash/diagnostic-addendum.md)
+observes host `Returned(7)` and sandbox EACCES with reaping under explicit
+known-loading/host-trust premises. Final evidence review remains pending. This accepts no AD,
 F2 checkbox or product execution authority.
 
 Remaining: current PR retention/review, concrete delegated Linux controls and
