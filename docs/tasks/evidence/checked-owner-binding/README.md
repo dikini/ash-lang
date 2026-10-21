@@ -13,3 +13,16 @@ The raw expected failure and passing controls are in `test-first`; the failure
 is not passing delivery verification. No product change is present at this
 snapshot. Body-free owner imports, checked_scope and connected lifecycle/Core
 remain pending.
+
+## Shared header boundary
+
+The binding candidate passes the passive source controls and five original-owner
+identity/work tests. A separate real-source probe first admits the unchanged
+ordinary resource Scope header, then resolves its checked-owner counterpart and
+calls the same independent header admission API. That checked candidate also
+admits: the expected-refusal test fails. Its loop stops at Scope, so the later
+AcquiredOnly case has not yet run in this snapshot. No checked lifecycle success
+is inferred; this exposes an unintended prerequisite bypass to close before
+binding delivery. The header-red commands share a frozen 566-file manifest,
+aggregate `da792bd7bbc2515946f64cec87cd9f90f9290173e575728a407d0903bb5b9541`.
+The separate earlier helper compilation error is not product evidence.

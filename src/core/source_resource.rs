@@ -8503,3 +8503,7 @@ main () = resource Owner.Probe<{}, Outer, {}> outer = 64 {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "source_resource/checked_owner_tests.rs"]
+mod checked_owner_tests;
