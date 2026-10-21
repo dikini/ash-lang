@@ -482,3 +482,55 @@ The [uniform evidence](../evidence/checked-owner-binding/README.md#final-deliver
 passes 223 distinct tests and Clippy, including source-resource 30/30 and default
 images 16/16. Independent review and root-assigned integration remain next;
 connected checked_scope/lifecycle and all whole-criterion gates remain pending.
+
+### Connected static checked-owner lifecycle checkpoint
+
+Start from PR #96 retained `91e6dee036c9728d89f016aee61ff337b8a978e1`,
+with independent retained/partial acceptance audited and PM-confirmed in #59.
+The passive binding prerequisite is complete; it did not admit checked resources.
+Accepted CP-0024 governs this checkpoint, not the current legacy codec behavior.
+
+The connected positive uses one dependency-free opaque State<H,R> and source
+Probe<H,R>, distinct explicit host H and owned R, nullable acquisition and void
+consumed/retained teardown. A lexical foreign host encloses canonical
+`codec checked_scope`, `Foreign.CheckedFinish<State,E>` and
+`Foreign.CheckedScope<Answer,I,E>`. Acquisition keeps existing Acquired/Refused
+rules. Resource handling removes only its exact listed native/resource instances;
+H remains through acquisition, calls and required completion. Host lowering never
+interprets an owner operation. Same-shaped user codecs supply no authority.
+
+1. Establish the real source fixture and its first failing boundary before
+   production changes. Add source header host and checked codec projection using
+   existing surface/resolved/header/codec records. Authenticate original owner,
+   complete actuals, canonical builtin roles and exact H independently.
+2. Extend the existing paid symbolic flow arena with private exact finish-request
+   outcome lineage. Every returning finish branch accounts for one conforming
+   native or synthetic outcome. FinishedBoundary requires that owner's exact
+   attempted-request boundary payload, forwarded directly; public constructors,
+   attempted=true, borrowed/earlier failure, donor owner/H or reconstructed data
+   cannot mint the witness. No separate registry or runtime proof flag.
+3. Preserve required source continuation after the request independently of native
+   disposition and K. Support direct payload forwarding first. Broader helper or
+   decomposition/reconstruction transport remains unsupported until separately
+   proven; concrete CP-0024 O/K ambiguity returns to design, not a local rule.
+4. Require source, summary, body-free consumer, linked independent Core and
+   identity/fold positives before separate mutations: wrong H in acquisition,
+   free, State/resource and nested hosts; donor R/State; fake codec; erased
+   completion Host; missing/duplicate attempt; substituted/borrowed boundary
+   failure; one returning branch without a witness; boundary outcome relabeled
+   consumed/retained; erased required source continuation. Keep each boundary's
+   canonical control and semantic/non-Resource failure independent.
+5. Charge all traversal, clones, comparison and publication. Test exact,
+   nonzero-prefix, one-short, spent and fresh allowances and refusal atomicity.
+   Run affected legacy source-resource/owner/import/capture/Core/transform and
+   default-image controls plus Clippy with one shared cache/job. Preserve
+   unchanged standalone startup limits and separate source input-derived work.
+6. Publish frozen inputs/raw evidence and request independent exact-head review.
+   Root assigns GitHub integration; author partial #59 readback follows actual
+   retained-tree verification. All four whole-F3 boxes remain unchecked.
+
+This is static correspondence, not actual native completion or K discharge.
+Checked runtime/native/image execution, K/quarantine implementation, bytes/copy,
+SQLite, deployment, F4/F6 and F-core remain excluded. AD-0015 remains owner-free.
+Declared enclosing C-to-S dependencies and remaining declaration-closure cases
+remain visible. No Main integration or whole F3 acceptance follows.

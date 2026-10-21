@@ -307,3 +307,14 @@ startup 318857/314727 remains below unchanged 327680. A baseline-confirmed
 node-location assertion was corrected without weakening standalone Registry
 refusal or the four independent scope mutations. Review/integration are pending.
 This accepts no whole F3 criterion or connected lifecycle/Core/runtime authority.
+
+PR #96 is retained at `91e6dee0` after independent audit and PM-confirmed partial
+acceptance. Its passive binding/import and legacy-codec refusal prerequisite is
+complete; connected lifecycle was not accepted. The next authorized
+[plan checkpoint](plans/checked-ffi-contract-carriers.md#connected-static-checked-owner-lifecycle-checkpoint)
+connects dependency-free Probe<H,R> under an exact lexical host and canonical
+checked_scope, with private owner/request/outcome finish lineage and separately
+retained source continuation. Actual source/body-free consumer/Core/transforms
+precede negative and paid-budget evidence. Broader witness transport returns to
+CP-0024 if ambiguous. Whole F3, runtime/images, owner dependencies and F-core
+remain incomplete.
