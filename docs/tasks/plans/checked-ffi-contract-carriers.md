@@ -222,7 +222,9 @@ Write positive and negative cases before changing behavior:
 
 This wrapper checkpoint covers ordinary globals and callable control summaries.
 Selected-evidence carrier/anti-erasure coverage remains pending under the original
-F3 criterion; these controls do not establish it. Checked owner/copy/lifecycle and
+F3 criterion. These controls establish effect references in callable and nested
+Type/Row metadata; they do not establish complete nominal/resource type-closure
+erasure coverage. Checked owner/copy/lifecycle and
 executable-image obligations also remain separate.
 
 Freeze and independently review each coherent subset. Preserve the scalar and

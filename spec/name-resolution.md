@@ -310,8 +310,8 @@ control; they do not import dependency source bodies. Admission authenticates
 their defining function identity and retained type and effect identities.
 Each exported ordinary global view retains the same completed defining fact
 through imports and re-exports. Admission compares its binder, scheme, provenance
-and callable summary against that original and authenticates the summary's
-required effect/type closure. Erasing the view's native table, native tag or
+and callable summary against that original. It authenticates effect identities
+referenced by callable controls and nested Type/Row metadata. Erasing the view's native table, native tag or
 callable graph cannot turn checked native work into an ordinary pure dependency.
 Resident declaration provenance distinguishes native operations from ordinary
 effects even when both have the same apparent signature.

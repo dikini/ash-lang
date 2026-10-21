@@ -1273,7 +1273,9 @@ fn determined_summary_relationship_authentication_has_an_exact_retry_boundary() 
     // sharing four kind-table records and borrowing the two-ID method domain.
     // Complete function synthesis supplies its intrinsic Type without a pair walk.
     // List<X>'s XI installation also scans its one formal's owner kind.
-    const EXACT_TYPE_WORK: usize = 104 + 1;
+    // Method callable-graph closure adds 27 paid visits even though this
+    // fixture's retained types contain no effect identity.
+    const EXACT_TYPE_WORK: usize = 104 + 1 + 27;
     assert_eq!(
         (measured_constraint.used(), measured_type.used()),
         (EXACT_CONSTRAINT_WORK, EXACT_TYPE_WORK),

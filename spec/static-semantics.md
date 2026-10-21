@@ -1018,8 +1018,8 @@ close the outward row without removing those requirements. Default resolution
 refuses a dependency with required checked native contracts after authenticating
 its summary; an outward-pure wrapper does not bypass the explicit static profile.
 Aliases, re-exports and opaque views preserve the original global publication and
-contract identities. Callable effect and nested Type/Row references require exact
-authenticated declaration entries. Resident source snapshots authenticate original
+contract identities. Effect identities referenced by callable controls and nested
+Type/Row metadata require exact authenticated effect declaration entries. Resident source snapshots authenticate original
 declaration classification; consumers do not infer wrapper requirements from
 dependency bodies.
 
