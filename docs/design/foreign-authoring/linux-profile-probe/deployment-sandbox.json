@@ -1,0 +1,595 @@
+{
+  "version": 1,
+  "label": "sandbox",
+  "scope": "deployment discovery; no foreign or static image executed; no host policy/cgroup/mount/storage mutation",
+  "kernel": "7.0.0-38-generic",
+  "pins": {
+    "deployment_preflight.py": "000baa765e623d69a761e909e67fda31e0f88cfea216a82c0da8ace42c413ea7",
+    "setup_probe.py": "d5fb9ba05e43c1e775c75fe98794a7b9ae19f768c7f9378bb3399006aab61c2d",
+    "python": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41"
+  },
+  "self_cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/app-org.chromium.Chromium-11330.scope",
+  "cgroup_ancestors": [
+    {
+      "path": "/sys/fs/cgroup",
+      "files": {
+        "cgroup.controllers": {
+          "uid": 65534,
+          "gid": 65534,
+          "mode": "0o444",
+          "value": "cpuset cpu io memory hugetlb pids rdma misc dmem",
+          "write_open": {
+            "errno": 13,
+            "message": "Permission denied"
+          }
+        },
+        "cgroup.subtree_control": {
+          "uid": 65534,
+          "gid": 65534,
+          "mode": "0o644",
+          "value": "cpuset cpu io memory hugetlb pids rdma misc dmem",
+          "write_open": {
+            "errno": 13,
+            "message": "Permission denied"
+          }
+        },
+        "cgroup.procs": {
+          "uid": 65534,
+          "gid": 65534,
+          "mode": "0o644",
+          "process_count": 267,
+          "write_open": {
+            "errno": 13,
+            "message": "Permission denied"
+          }
+        },
+        "memory.max": {
+          "errno": 2,
+          "message": "No such file or directory"
+        },
+        "memory.swap.max": {
+          "errno": 2,
+          "message": "No such file or directory"
+        },
+        "cpu.max": {
+          "errno": 2,
+          "message": "No such file or directory"
+        },
+        "pids.max": {
+          "errno": 2,
+          "message": "No such file or directory"
+        }
+      }
+    },
+    {
+      "path": "/sys/fs/cgroup/user.slice",
+      "files": {
+        "cgroup.controllers": {
+          "uid": 65534,
+          "gid": 65534,
+          "mode": "0o444",
+          "value": "cpuset cpu io memory hugetlb pids rdma misc dmem",
+          "write_open": {
+            "errno": 13,
+            "message": "Permission denied"
+          }
+        },
+        "cgroup.subtree_control": {
+          "uid": 65534,
+          "gid": 65534,
+          "mode": "0o644",
+          "value": "cpu memory pids",
+          "write_open": {
+            "errno": 13,
+            "message": "Permission denied"
+          }
+        },
+        "cgroup.procs": {
+          "uid": 65534,
+          "gid": 65534,
+          "mode": "0o644",
+          "process_count": 0,
+          "write_open": {
+            "errno": 13,
+            "message": "Permission denied"
+          }
+        },
+        "memory.max": {
+          "uid": 65534,
+          "gid": 65534,
+          "mode": "0o644",
+          "value": "max",
+          "write_open": {
+            "errno": 13,
+            "message": "Permission denied"
+          }
+        },
+        "memory.swap.max": {
+          "uid": 65534,
+          "gid": 65534,
+          "mode": "0o644",
+          "value": "max",
+          "write_open": {
+            "errno": 13,
+            "message": "Permission denied"
+          }
+        },
+        "cpu.max": {
+          "uid": 65534,
+          "gid": 65534,
+          "mode": "0o644",
+          "value": "max 100000",
+          "write_open": {
+            "errno": 13,
+            "message": "Permission denied"
+          }
+        },
+        "pids.max": {
+          "uid": 65534,
+          "gid": 65534,
+          "mode": "0o644",
+          "value": "max",
+          "write_open": {
+            "errno": 13,
+            "message": "Permission denied"
+          }
+        }
+      }
+    },
+    {
+      "path": "/sys/fs/cgroup/user.slice/user-1000.slice",
+      "files": {
+        "cgroup.controllers": {
+          "uid": 65534,
+          "gid": 65534,
+          "mode": "0o444",
+          "value": "cpu memory pids",
+          "write_open": {
+            "errno": 13,
+            "message": "Permission denied"
+          }
+        },
+        "cgroup.subtree_control": {
+          "uid": 65534,
+          "gid": 65534,
+          "mode": "0o644",
+          "value": "cpu memory pids",
+          "write_open": {
+            "errno": 13,
+            "message": "Permission denied"
+          }
+        },
+        "cgroup.procs": {
+          "uid": 65534,
+          "gid": 65534,
+          "mode": "0o644",
+          "process_count": 0,
+          "write_open": {
+            "errno": 13,
+            "message": "Permission denied"
+          }
+        },
+        "memory.max": {
+          "uid": 65534,
+          "gid": 65534,
+          "mode": "0o644",
+          "value": "max",
+          "write_open": {
+            "errno": 13,
+            "message": "Permission denied"
+          }
+        },
+        "memory.swap.max": {
+          "uid": 65534,
+          "gid": 65534,
+          "mode": "0o644",
+          "value": "max",
+          "write_open": {
+            "errno": 13,
+            "message": "Permission denied"
+          }
+        },
+        "cpu.max": {
+          "uid": 65534,
+          "gid": 65534,
+          "mode": "0o644",
+          "value": "max 100000",
+          "write_open": {
+            "errno": 13,
+            "message": "Permission denied"
+          }
+        },
+        "pids.max": {
+          "uid": 65534,
+          "gid": 65534,
+          "mode": "0o644",
+          "value": "56066",
+          "write_open": {
+            "errno": 13,
+            "message": "Permission denied"
+          }
+        }
+      }
+    },
+    {
+      "path": "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service",
+      "files": {
+        "cgroup.controllers": {
+          "uid": 65534,
+          "gid": 65534,
+          "mode": "0o444",
+          "value": "cpu memory pids",
+          "write_open": {
+            "errno": 13,
+            "message": "Permission denied"
+          }
+        },
+        "cgroup.subtree_control": {
+          "uid": 1000,
+          "gid": 1000,
+          "mode": "0o644",
+          "value": "cpu memory pids",
+          "write_open": {
+            "errno": 30,
+            "message": "Read-only file system"
+          }
+        },
+        "cgroup.procs": {
+          "uid": 1000,
+          "gid": 1000,
+          "mode": "0o644",
+          "process_count": 0,
+          "write_open": {
+            "errno": 30,
+            "message": "Read-only file system"
+          }
+        },
+        "memory.max": {
+          "uid": 65534,
+          "gid": 65534,
+          "mode": "0o644",
+          "value": "max",
+          "write_open": {
+            "errno": 13,
+            "message": "Permission denied"
+          }
+        },
+        "memory.swap.max": {
+          "uid": 65534,
+          "gid": 65534,
+          "mode": "0o644",
+          "value": "max",
+          "write_open": {
+            "errno": 13,
+            "message": "Permission denied"
+          }
+        },
+        "cpu.max": {
+          "uid": 65534,
+          "gid": 65534,
+          "mode": "0o644",
+          "value": "max 100000",
+          "write_open": {
+            "errno": 13,
+            "message": "Permission denied"
+          }
+        },
+        "pids.max": {
+          "uid": 65534,
+          "gid": 65534,
+          "mode": "0o644",
+          "value": "max",
+          "write_open": {
+            "errno": 13,
+            "message": "Permission denied"
+          }
+        }
+      }
+    },
+    {
+      "path": "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice",
+      "files": {
+        "cgroup.controllers": {
+          "uid": 1000,
+          "gid": 1000,
+          "mode": "0o444",
+          "value": "cpu memory pids",
+          "write_open": {
+            "errno": 13,
+            "message": "Permission denied"
+          }
+        },
+        "cgroup.subtree_control": {
+          "uid": 1000,
+          "gid": 1000,
+          "mode": "0o644",
+          "value": "cpu memory pids",
+          "write_open": {
+            "errno": 30,
+            "message": "Read-only file system"
+          }
+        },
+        "cgroup.procs": {
+          "uid": 1000,
+          "gid": 1000,
+          "mode": "0o644",
+          "process_count": 0,
+          "write_open": {
+            "errno": 30,
+            "message": "Read-only file system"
+          }
+        },
+        "memory.max": {
+          "uid": 1000,
+          "gid": 1000,
+          "mode": "0o644",
+          "value": "max",
+          "write_open": {
+            "errno": 30,
+            "message": "Read-only file system"
+          }
+        },
+        "memory.swap.max": {
+          "uid": 1000,
+          "gid": 1000,
+          "mode": "0o644",
+          "value": "max",
+          "write_open": {
+            "errno": 30,
+            "message": "Read-only file system"
+          }
+        },
+        "cpu.max": {
+          "uid": 1000,
+          "gid": 1000,
+          "mode": "0o644",
+          "value": "max 100000",
+          "write_open": {
+            "errno": 30,
+            "message": "Read-only file system"
+          }
+        },
+        "pids.max": {
+          "uid": 1000,
+          "gid": 1000,
+          "mode": "0o644",
+          "value": "max",
+          "write_open": {
+            "errno": 30,
+            "message": "Read-only file system"
+          }
+        }
+      }
+    },
+    {
+      "path": "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/app-org.chromium.Chromium-11330.scope",
+      "files": {
+        "cgroup.controllers": {
+          "uid": 1000,
+          "gid": 1000,
+          "mode": "0o444",
+          "value": "cpu memory pids",
+          "write_open": {
+            "errno": 13,
+            "message": "Permission denied"
+          }
+        },
+        "cgroup.subtree_control": {
+          "uid": 1000,
+          "gid": 1000,
+          "mode": "0o644",
+          "value": "",
+          "write_open": {
+            "errno": 30,
+            "message": "Read-only file system"
+          }
+        },
+        "cgroup.procs": {
+          "uid": 1000,
+          "gid": 1000,
+          "mode": "0o644",
+          "process_count": 130,
+          "write_open": {
+            "errno": 30,
+            "message": "Read-only file system"
+          }
+        },
+        "memory.max": {
+          "uid": 1000,
+          "gid": 1000,
+          "mode": "0o644",
+          "value": "max",
+          "write_open": {
+            "errno": 30,
+            "message": "Read-only file system"
+          }
+        },
+        "memory.swap.max": {
+          "uid": 1000,
+          "gid": 1000,
+          "mode": "0o644",
+          "value": "max",
+          "write_open": {
+            "errno": 30,
+            "message": "Read-only file system"
+          }
+        },
+        "cpu.max": {
+          "uid": 1000,
+          "gid": 1000,
+          "mode": "0o644",
+          "value": "max 100000",
+          "write_open": {
+            "errno": 30,
+            "message": "Read-only file system"
+          }
+        },
+        "pids.max": {
+          "uid": 1000,
+          "gid": 1000,
+          "mode": "0o644",
+          "value": "25484",
+          "write_open": {
+            "errno": 30,
+            "message": "Read-only file system"
+          }
+        }
+      }
+    }
+  ],
+  "mounts": [
+    {
+      "mountpoint": "/",
+      "options": "ro,nosuid,nodev,relatime",
+      "filesystem": "ext4",
+      "super_options": "rw"
+    },
+    {
+      "mountpoint": "/sys/fs/cgroup",
+      "options": "ro,nosuid,nodev,noexec,relatime",
+      "filesystem": "cgroup2",
+      "super_options": "rw,nsdelegate,memory_recursiveprot,memory_hugetlb_accounting"
+    },
+    {
+      "mountpoint": "/tmp",
+      "options": "ro,nosuid,nodev,noatime",
+      "filesystem": "tmpfs",
+      "super_options": "rw,inode64"
+    },
+    {
+      "mountpoint": "/tmp",
+      "options": "rw,nosuid,nodev,noatime",
+      "filesystem": "tmpfs",
+      "super_options": "rw,inode64"
+    }
+  ],
+  "helpers": {
+    "newuidmap": null,
+    "newgidmap": null,
+    "setpriv": "/usr/bin/setpriv",
+    "unshare": "/usr/bin/unshare",
+    "cc": "/usr/bin/cc"
+  },
+  "subordinate_ids": {
+    "/etc/subuid": [
+      "dikini:100000:65536"
+    ],
+    "/etc/subgid": [
+      "dikini:100000:65536"
+    ]
+  },
+  "setup": {
+    "scope": "trusted setup capability probe; no foreign code or isolated-profile success",
+    "script_sha256": "d5fb9ba05e43c1e775c75fe98794a7b9ae19f768c7f9378bb3399006aab61c2d",
+    "python_sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41",
+    "kernel": "7.0.0-38-generic",
+    "returncode": 0,
+    "child": {
+      "initial": {
+        "uid": 1000,
+        "gid": 1000,
+        "groups": [
+          65534,
+          65534,
+          65534,
+          65534,
+          65534,
+          65534,
+          65534,
+          65534,
+          65534,
+          1000
+        ],
+        "uid_map": "      1000          0          1\n",
+        "gid_map": "      1000          0          1\n",
+        "setgroups": "deny\n",
+        "status": [
+          "CapInh:\t0000000000000000",
+          "CapPrm:\t0000000000000000",
+          "CapEff:\t0000000000000000",
+          "CapBnd:\t0000000000000000",
+          "CapAmb:\t0000000000000000",
+          "NoNewPrivs:\t1",
+          "Seccomp:\t2"
+        ]
+      },
+      "unshare_user": {
+        "ok": true,
+        "result": null
+      },
+      "empty_groups_before_mapping": {
+        "ok": false,
+        "errno": 1,
+        "message": "Operation not permitted"
+      },
+      "deny_setgroups": {
+        "ok": false,
+        "errno": 13,
+        "message": "Permission denied"
+      },
+      "uid_map": {
+        "ok": false,
+        "errno": 1,
+        "message": "Operation not permitted"
+      },
+      "gid_map": {
+        "ok": false,
+        "errno": 1,
+        "message": "Operation not permitted"
+      },
+      "empty_groups_after_mapping": {
+        "ok": false,
+        "errno": 1,
+        "message": "Operation not permitted"
+      },
+      "unshare_mount": {
+        "ok": false,
+        "errno": 1,
+        "message": "Operation not permitted"
+      },
+      "after": {
+        "uid": 65534,
+        "gid": 65534,
+        "groups": [
+          65534,
+          65534,
+          65534,
+          65534,
+          65534,
+          65534,
+          65534,
+          65534,
+          65534,
+          65534
+        ],
+        "uid_map": "",
+        "gid_map": "",
+        "setgroups": "deny\n",
+        "status": [
+          "CapInh:\t0000000000000000",
+          "CapPrm:\t000001ffffffffff",
+          "CapEff:\t000001ffffffffff",
+          "CapBnd:\t000001ffffffffff",
+          "CapAmb:\t0000000000000000",
+          "NoNewPrivs:\t1",
+          "Seccomp:\t2"
+        ]
+      }
+    },
+    "stderr": "",
+    "reaped": true
+  },
+  "refusal": {
+    "worker_started": false,
+    "reason": "this discovery tool has no complete verified deployment configuration and never authorizes worker startup",
+    "external_requirement": "operator-provided trusted credential setup that clears supplementary groups before foreign startup and supplies non-root mappings; a reviewed configured mapping helper preserving setgroups authority is one possible prerequisite",
+    "remaining": [
+      "post-exec/re-exec configured worker credentials",
+      "private root/exclusive quota-backed storage",
+      "immutable authorized static image and receipt",
+      "reviewed native default-deny syscall policy",
+      "actual per-worker resource enforcement",
+      "native startup faults, termination/reaping and SQLite integration"
+    ]
+  }
+}
