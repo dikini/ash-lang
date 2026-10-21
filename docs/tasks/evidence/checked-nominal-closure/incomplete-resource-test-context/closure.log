@@ -1,0 +1,18 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi/foreign-adapter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3m 04s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 9 tests
+test resolved::checked_declaration_closure_tests::checked_declaration_closure_global_capture_only_control ... ok
+test resolved::checked_declaration_closure_tests::checked_declaration_closure_global_rejects_required_hidden_metadata_erasure ... ok
+test resolved::checked_selected_declaration_closure_tests::checked_selected_declaration_closure_unreferenced_spare_is_not_required ... ok
+test resolved::checked_selected_declaration_closure_tests::checked_selected_declaration_closure_capture_only_control ... ok
+test resolved::checked_declaration_closure_tests::checked_declaration_closure_nominal_roots_are_paid_and_operation_local ... ok
+test resolved::checked_declaration_closure_tests::checked_declaration_closure_unreferenced_private_spare_is_not_required ... ok
+test resolved::checked_selected_declaration_closure_tests::checked_selected_declaration_closure_rejects_required_hidden_metadata_erasure ... ok
+test resolved::checked_declaration_closure_tests::checked_declaration_closure_body_free_consumer_rejects_erased_kind_metadata ... ok
+test core::validate::declaration_closure_tests::checked_declaration_closure_core_independently_rejects_missing_held_metadata ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 2000 filtered out; finished in 0.03s
+

@@ -1,0 +1,20 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 1 test
+
+thread 'resolved::checked_declaration_closure_tests::checked_declaration_closure_global_rejects_required_hidden_metadata_erasure' (80) panicked at src/resolved/checked_declaration_closure_tests.rs:191:5:
+assertion `left == right` failed: a completed global publication/capture cannot replace required hidden nominal/constructor metadata
+  left: Ok(())
+ right: Err(InvalidState)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test resolved::checked_declaration_closure_tests::checked_declaration_closure_global_rejects_required_hidden_metadata_erasure ... FAILED
+
+failures:
+
+failures:
+    resolved::checked_declaration_closure_tests::checked_declaration_closure_global_rejects_required_hidden_metadata_erasure
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2000 filtered out; finished in 0.05s
+
+error: test failed, to rerun pass `--lib`

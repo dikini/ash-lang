@@ -296,6 +296,59 @@ F-core remain pending. Do not infer their delivery from a generic refusal or an
 ordinary resource fixture. A missing semantic rule returns to CP-0024 rather
 than becoming a local permission or method-name special case.
 
+### Capture-only nominal declaration-closure checkpoint
+
+Start from retained `036c366834c839e4f0a503cf63e9db46448bb486` after accepted
+PR #93 and closed issue #91. This supersedes the read-only preparation's older
+PR #89 source pin; its hypotheses are not observed defects. Publish this focused
+plan in an early draft. At this reviewed documentation checkpoint, retire
+completed TASK-0052 and repair inbound links to immutable history while keeping
+all durable startup evidence. No separate TASK-0052 plan exists.
+
+1. Establish an actual private `type Held = Held(Int)` captured intact by a
+   closure returned from an exported wrapper. Destructure Held inside that
+   closure and pass Held as an ABI-unused Type actual through the existing closed
+   generic checked scalar wrapper. A data-only captured value need not produce a
+   callable type edge; that rejected fixture is not a product defect. The public
+   scheme must omit Held. Assert the real callable graph reaches Held, that only
+   hidden identity/kind metadata supplies it, and that exact native/assumption
+   identities remain. Require explicit-profile source, unchanged summary,
+   body-free DependencyExports consumer, separate producer linkage/independent
+   Core and valid identity/fold transforms to pass before mutation.
+2. Erase Held's complete hidden nominal/order mirrors, and constructor/order
+   mirrors only if the valid fixture retains them. Hidden constructor access
+   remains unavailable. Perform the erasure while
+   preserving completed global publication, callable graph, resident provenance,
+   public scheme and native/effect facts. Test summary authentication, actual
+   consumer and independent linked Core separately; name the first failing
+   boundary. Keep an unrelated removable nominal control if a real unchanged
+   fixture establishes it. A missing capture edge or malformed baseline is a
+   fixture problem, not an erasure result.
+3. Repeat through a selected-only module-level `Read<Int>` implementation, with no
+   public term/type/constructor rescue. Retain the completed implementation/method
+   publication, head, prerequisites and exact selected capture edge. Demonstrate
+   alias/opaque/re-export routes only after their supported positives pass.
+4. Repair only a demonstrated closure gap using the existing canonical retained
+   declaration worklist and original facts. Charge every root, lookup, definition
+   edge, memo hit and reservation before traversal/allocation. Preserve exact
+   original identity and complete Type/Row contexts; imports cannot mint authority.
+   Shared or recursive references need bounded operation-local visits, not
+   unbounded monomorphization or a new FFI registry. Source text remains declaration
+   provenance, never wrapper-body inference or constructor access.
+5. Retain distinguishing positive/negative cases and exact/one-short/nonzero-prefix/
+   spent/fresh Type and constraint budget controls. Freeze and run affected
+   ordinary nominal/import/capture/global/selected and Core-transform regressions,
+   both startup defaults/image suite and targeted Clippy as the changed boundary
+   requires. Preserve raw outputs and source/configuration pins. Independent
+   exact-head review precedes root-authorized GitHub integration/acceptance.
+
+Constructor-payload transitive/donor, generic actual, deeper resource and broad
+nominal/resource graphs remain subsequent red-driven controls unless essential
+to this exact checkpoint. ResourceApply already has resolver and contract
+traversal; do not patch its visitor based on appearance alone. Checked owners,
+copy/lifecycle, executable image/runtime activation, whole F3 and F-core remain
+pending. A genuine semantic gap returns to CP-0024.
+
 ## Slice 5: Independently validate retained Core and private images
 
 Extend existing Core and private-image reconstruction with canonical checked

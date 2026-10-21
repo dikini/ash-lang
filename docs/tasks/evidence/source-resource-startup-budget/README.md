@@ -1,6 +1,6 @@
 # Source Resource Startup Budget Measurements
 
-These are measurements and focused controls for [TASK-0052](../../TASK-0052-source-resource-default-startup-budget.md)
+These are measurements and focused controls for [historical TASK-0052](https://github.com/dikini/ash-lang/blob/036c366834c839e4f0a503cf63e9db46448bb486/docs/tasks/TASK-0052-source-resource-default-startup-budget.md)
 and [issue #91](https://github.com/dikini/ash-lang/issues/91). The existing test
 reconstructs a two-owner native-buffer image without entering native code.
 Each startup reconstruction command uses the unchanged cumulative standalone/

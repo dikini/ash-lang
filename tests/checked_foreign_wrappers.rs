@@ -467,3 +467,97 @@ fn checked_selected_method_only_requires_body_free_consumer_opt_in() {
     }
     panic!("consumer module missing");
 }
+
+#[test]
+fn checked_capture_only_private_nominal_survives_body_free_consumer_and_core() {
+    let fixture = Fixture::new(
+        include_str!("fixtures/checked-declaration-closure/global.ash"),
+        "import @builtin.foreign as Foreign\nimport native as Native\nmain : Unit -> Foreign.CheckedCall<Int>\nmain () = {\n    let call = Native.select 7\n    call ()\n}\n",
+    );
+    let graph = fixture.graph();
+    let mut producers: Vec<CheckedModule> = Vec::new();
+    let mut consumer_checked = false;
+    for loaded in graph.modules() {
+        // Consumer resolution receives summaries alone; executable producer
+        // code is supplied independently by core() below.
+        let dependencies = loaded
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                ash::resolve::DependencyExports::new(
+                    edge,
+                    producers
+                        .iter()
+                        .find(|module| module.module() == edge.target())
+                        .unwrap()
+                        .exports(),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        if loaded.id() == graph.entry() {
+            assert!(matches!(
+                ash::resolve::resolve_module(loaded, &dependencies),
+                Err(ash::resolve::ResolveModuleError::Resolution(error))
+                    if error.reason == ash::resolve::ResolveReason::ForeignContract
+            ));
+            consumer_checked = true;
+        }
+        let resolved = ash::resolve::resolve_checked_foreign_module(loaded, &dependencies).unwrap();
+        producers.push(ash::elaborate::check_module(resolved).unwrap());
+    }
+    assert!(consumer_checked);
+    let validated = core(&graph);
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let modules = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let identity = ash::core::transform::identity_effect_traversal(&validated).unwrap();
+    let identity = ash::core::validate_effect_modules(identity, &sources, &modules).unwrap();
+    let folded = ash::core::transform::fold_effect_literal_primitives(&identity).unwrap();
+    ash::core::validate_effect_modules(folded, &sources, &modules).unwrap();
+}
+
+#[test]
+fn checked_capture_only_private_nominal_survives_hidden_reexport() {
+    let fixture = Fixture::new(
+        include_str!("fixtures/checked-declaration-closure/global.ash"),
+        "import @builtin.foreign as Foreign\nimport facade as Facade\nmain : Unit -> Foreign.CheckedCall<Int>\nmain () = {\n    let call = Facade.wrapped 7\n    call ()\n}\n",
+    );
+    std::fs::write(
+        fixture.0.join("facade.ash"),
+        "pub import native (select as wrapped)\n",
+    )
+    .unwrap();
+    let _ = core(&fixture.graph());
+}
+
+#[test]
+fn checked_selected_capture_only_private_nominal_survives_body_free_core() {
+    let fixture = Fixture::new(
+        include_str!("fixtures/checked-declaration-closure/selected.ash"),
+        "import @builtin.foreign as Foreign\nimport native as Native\nimport native (impl Read)\nmain : Unit -> Foreign.CheckedCall<Int>\nmain () = {\n    let call = Native.read 7\n    call ()\n}\n",
+    );
+    let graph = fixture.graph();
+    let valid = core(&graph);
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let modules = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let identity = ash::core::transform::identity_effect_traversal(&valid).unwrap();
+    let identity = ash::core::validate_effect_modules(identity, &sources, &modules).unwrap();
+    let folded = ash::core::transform::fold_effect_literal_primitives(&identity).unwrap();
+    ash::core::validate_effect_modules(folded, &sources, &modules).unwrap();
+}

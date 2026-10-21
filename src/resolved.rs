@@ -1,6 +1,12 @@
 //! Name-resolved, source-spanned syntax passed to typed elaboration.
 
 #[cfg(test)]
+mod checked_declaration_closure_tests;
+#[cfg(test)]
+mod checked_resource_kind_closure_tests;
+#[cfg(test)]
+mod checked_selected_declaration_closure_tests;
+#[cfg(test)]
 mod checked_selected_tests;
 #[cfg(test)]
 mod checked_wrapper_tests;
@@ -11867,6 +11873,7 @@ impl ExportSummary {
             authenticate_global_publication(global, type_work, constraint_work)?;
             self.authenticate_capture_effect_closure(
                 &global.capture,
+                &environments,
                 &mut capture_effect_visits,
                 &mut original_effects,
                 type_work,
@@ -11909,6 +11916,7 @@ impl ExportSummary {
             for method in &fact.methods {
                 self.authenticate_capture_effect_closure(
                     &method.capture,
+                    &environments,
                     &mut capture_effect_visits,
                     &mut original_effects,
                     type_work,
@@ -14896,6 +14904,7 @@ impl ExportSummary {
     fn authenticate_capture_effect_closure<'a>(
         &'a self,
         capture: &'a crate::core::capture::CaptureValueSummary,
+        kinds: &KindEnvironments<'_>,
         visits: &mut crate::core::capture::CaptureGraphVisits<'a>,
         original_effects: &mut OriginalEffectMemo<'a>,
         work: &mut TypeWorkBudget,
@@ -14907,6 +14916,7 @@ impl ExportSummary {
             return Ok(());
         }
         let mut required = HashSet::new();
+        let mut required_nominals = HashSet::new();
         for effect in capture
             .effects(work)
             .map_err(|()| ResolvedBuildFailure::TypeResource)?
@@ -14924,6 +14934,20 @@ impl ExportSummary {
         {
             collect_effect_identities(ty, &mut required, work)
                 .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            collect_capture_external_nominals(ty, &mut required_nominals, work)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        }
+        work.charge(required_nominals.len())
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        for nominal in required_nominals {
+            // This operation's kind environment already authenticated ordinary
+            // declarations and kind-only resource families. Callable metadata
+            // must resolve there too; its publication cannot replace those facts.
+            work.charge(2)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            if !kinds.contains_nominal(nominal) {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
         }
         work.charge(required.len())
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
