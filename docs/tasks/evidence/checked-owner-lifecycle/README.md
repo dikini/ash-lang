@@ -33,3 +33,42 @@ not a connected lifecycle positive. Independent inspection also identified that
 request identity alone must be strengthened with an exact outcome category:
 BoundaryFailed must not be reported as native retention. The required source
 mutation and independently reconstructed Core control remain pending.
+
+Private phase diagnostics prove original source, builtin bytes and scalar
+original authentication succeed. The registry's provider-category check then
+rejects a legitimate mixed inventory: two checked native symbols carry canonical
+CheckedCall12 while ten pure preflight facts retain legacy Call1, both sharing
+ConversionError0. Its memo keyed only by common module conflates these roles.
+The narrow candidate keys that same operation-local memo by exact call nominal,
+reconstructs each canonical role independently with paid work, and keeps occupied
+source/full-ID consistency plus the shared opaque identity set unchanged. It
+rewrites no symbol/preflight result or mode. The three focused controls pass: real mixed canonical roles, exact/prefixed/
+one-short/spent/fresh work, and a parsed checked teardown using legacy Call
+that prepares but fails checked resolution. Their 577-input receipt is separate
+from earlier diagnostic maps.
+
+`diagnostics` preserves phase logs/maps and source overlays on `fb73289` for
+reconstruction. The initial misspelled private selector ran zero tests and is
+only compilation evidence. The correctly named canonical selector still failed;
+six parser/selector/resource-kind controls passed independently. Temporary
+cfg(test) stage prints are diagnostic inputs, not final delivery code or proof.
+
+The canonical role-repaired source passes all three original forests, complete
+template admission and publication, exact H/R specialization, copied-forest and
+scope-node admission, host completion with zero native interpretations, global
+synthesis, evidence/source closure and cleanup-row solving. Completed-root
+capture checking then returns `Invalid`, mapped to `Internal(InvalidState)`.
+This remains an expected-positive refusal; no connected source, consumer or Core
+acceptance is claimed. Post-template, specialization, host and capture-publication
+probes retain separate equal before/after maps and reconstructible source overlays.
+Their temporary phase prints change no check, charge, default, result or permission.
+
+The strict-control diagnostic narrows this refusal to discovery. A subsequent
+exact-code probe identifies generated Host controls 113 and 117 for the selected
+H; value-port lookup fails at 113. Those synthetic control requests had no
+corresponding typed-data request equation. The original native request keeps its
+real State-bearing operand. The proposed correction adds a separate, paid
+independent request/reply equation for each payload-free Host event, preserving
+its exact H control label, sequence and continuation. It does not reuse the native
+operand, omit the event or introduce a missing-position fallback. This correction
+and connected acceptance remain pending at this diagnostic checkpoint.

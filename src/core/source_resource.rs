@@ -1300,7 +1300,7 @@ impl CheckedSourceResourceTemplate {
             if !Arc::ptr_eq(&program.registry, &acquire.registry) {
                 return Err(invalid());
             }
-            session.check_with_handler_graph(
+            let diagnostic = session.check_with_handler_graph(
                 program,
                 &header.original,
                 answer,
@@ -1309,7 +1309,10 @@ impl CheckedSourceResourceTemplate {
                 &globals,
                 if answer { handler_graph.as_ref() } else { None },
                 work,
-            )?;
+            );
+            #[cfg(test)]
+            eprintln!("checked lifecycle original structure answer={answer}: {diagnostic:?}");
+            diagnostic?;
         }
         let canonical =
             CheckedSourceResourceHeader::admit(&header.original, &acquire.registry, work)?;
@@ -1322,7 +1325,11 @@ impl CheckedSourceResourceTemplate {
         {
             return Err(invalid());
         }
+        #[cfg(test)]
+        eprintln!("checked lifecycle header complete");
         let methods = check_provider_association(&header, &handler, work)?;
+        #[cfg(test)]
+        eprintln!("checked lifecycle association complete");
         let acquire_entry = entry(&acquire, &header.original, false, work)?;
         let finish_entry = entry(&finish, &header.original, false, work)?;
         let handler_entry = entry(&handler, &header.original, true, work)?;
@@ -1399,6 +1406,8 @@ impl CheckedSourceResourceTemplate {
             return Err(invalid());
         }
         let handler_body = answer.body();
+        #[cfg(test)]
+        eprintln!("checked lifecycle entries complete");
         let acquire_calls = check_flow(
             &acquire,
             &header,
@@ -3504,7 +3513,27 @@ fn check_flow(
     if results.is_empty() {
         return Err(invalid());
     }
+    #[cfg(test)]
+    if matches!(
+        header.codec.report,
+        SourceResourceReportCodec::CheckedScope { .. }
+    ) {
+        eprintln!("checked lifecycle flow {phase:?} results={}", results.len());
+    }
     for (value, path) in results {
+        #[cfg(test)]
+        if matches!(
+            header.codec.report,
+            SourceResourceReportCodec::CheckedScope { .. }
+        ) {
+            eprintln!(
+                "checked lifecycle result {phase:?} acquired={} consumed={} request={:?} value={:?}",
+                path.acquired,
+                path.consumed,
+                path.checked_finish_request,
+                facts.fact(value)?
+            );
+        }
         if phase == SourceResourcePhase::Finish
             && matches!(
                 header.codec.report,

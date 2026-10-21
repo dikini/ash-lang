@@ -48,6 +48,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         span: Span,
         values: &mut TypedNodeBuffer,
     ) -> Result<(), TypeError> {
+        #[cfg(test)]
+        eprintln!("checked lifecycle host finish entered");
         let body = values.pop().ok_or_else(invalid_state)?;
         let row = self.zonk_effect_row(&body.effects)?;
         let ty = IterativeTypeOwner::new(self.zonk(&body.ty)?);
@@ -110,6 +112,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 Arc::clone(symbol),
             ));
         }
+        #[cfg(test)]
+        eprintln!("checked lifecycle host interpretations={}", interpretations.len());
         let effects = crate::core::effect::foreign_host_outward_row(
             &row,
             &interpretations,
@@ -141,6 +145,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             Origin::Source(span),
             EffectOperation::NativeInterpret(boundary),
         )?;
+        #[cfg(test)]
+        eprintln!("checked lifecycle host finish complete");
         values.push(TypedNode {
             node,
             ty: ty.into_inner(),

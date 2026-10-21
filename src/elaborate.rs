@@ -5159,12 +5159,16 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             return Err(invalid_state());
         }
 
+        #[cfg(test)]
+        eprintln!("checked lifecycle finish module bodies entered");
         let (globals, mut context) = self.finish_prepared_definitions(globals)?;
         let result = ResolvedExpr {
             kind: ResolvedExprKind::Unit,
             span: module.span(),
         };
         self.elaborate_result(&result, &mut context)?;
+        #[cfg(test)]
+        eprintln!("checked lifecycle module result complete");
         let incoming = self.prepare_evidence_publication()?;
         let publication = if let Some(mut previous) = previous_publication {
             previous
@@ -5180,6 +5184,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             self.zonk_builder_types_since(None, false)
                 .map_err(TypeError::Internal)?;
         }
+        #[cfg(test)]
+        eprintln!("checked lifecycle module evidence and zonk complete");
         let generic_type_origin = self
             .builder
             .generic_cell_dependency_origin(&mut self.type_work)
@@ -5265,7 +5271,11 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }
         let (method_routes, method_adapters) =
             self.capture_method_routes(publication, module, facts)?;
+        #[cfg(test)]
+        eprintln!("checked lifecycle completed capture cleanup start");
         self.solve_cleanup_rows(roots, &imports, &method_routes, &method_adapters)?;
+        #[cfg(test)]
+        eprintln!("checked lifecycle completed capture check start");
         let captures = crate::core::capture::check_builder(
             &self.builder,
             roots,
@@ -5275,7 +5285,11 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             &method_adapters,
             &mut self.type_work,
         )
-        .map_err(|failure| capture_failure(failure, &mut self.type_work))?;
+        .map_err(|failure| {
+            #[cfg(test)]
+            eprintln!("checked lifecycle capture failure: {failure:?}");
+            capture_failure(failure, &mut self.type_work)
+        })?;
         Ok(captures)
     }
 
@@ -11685,6 +11699,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .binders
             .remove(&fact.binder)
             .ok_or_else(invalid_state)?;
+        #[cfg(test)]
+        eprintln!("checked lifecycle prepared definition complete");
         prepared.globals.push(ElaboratedBinding {
             binder,
             initializer: function.node,
@@ -12203,6 +12219,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         if !self.monomorphic_recursive.remove(&recursive_binder) {
             return Err(invalid_state());
         }
+        #[cfg(test)]
+        eprintln!("checked lifecycle definition {recursive_binder:?} synthesized={:?} close={close_result:?} source_close={source_close:?} leave={leave_result:?}", definition_result.as_ref().map(|_| ()) );
         let (name, mut function) = definition_result?;
         close_result?;
         source_close?;
@@ -22757,6 +22775,8 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
             source_provider.as_ref(),
             elaborator.builder.rewrite_work_limit(),
         )?;
+        #[cfg(test)]
+        eprintln!("checked lifecycle source templates compile complete");
         if let Some(code) = &source_resources {
             elaborator.provider_codes.retain_source(
                 resolved.module(),
@@ -22764,6 +22784,8 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
                 &mut elaborator.type_work,
             )?;
         }
+        #[cfg(test)]
+        eprintln!("checked lifecycle source code retention complete");
         let (implementation_facts, mut publication) = elaborator.check_module_bodies(
             &resolved,
             &mut schemes,
@@ -22773,6 +22795,8 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
             &mut started_bodies,
             constraint_work,
         )?;
+        #[cfg(test)]
+        eprintln!("checked lifecycle module bodies complete");
         let selector = elaborator.selection.as_ref().ok_or_else(invalid_state)?;
         audit_checked_body_evidence(
             resolved.definitions(),
@@ -43036,3 +43060,7 @@ impl CoreElaborator<EffectOperationFamily> {
             .map_err(|failure| (Elaboration(failure.into()), used))
     }
 }
+
+#[cfg(test)]
+#[path = "elaborate/checked_owner_lifecycle_tests.rs"]
+mod checked_owner_lifecycle_tests;

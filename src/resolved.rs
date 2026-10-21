@@ -25211,6 +25211,14 @@ impl ResolvedRegistry {
     ) -> Result<(), ResolvedBuildFailure> {
         work.charge(1)
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        #[cfg(test)]
+        eprintln!(
+            "checked lifecycle original provider slot present={} exact={}",
+            self.provider_contracts.contains_key(&original.module()),
+            self.provider_contracts
+                .get(&original.module())
+                .is_some_and(|certificate| Arc::ptr_eq(certificate, original.code().contracts()))
+        );
         if self
             .provider_contracts
             .get(&original.module())
@@ -25229,16 +25237,32 @@ impl ResolvedRegistry {
     ) -> Result<(), ResolvedBuildFailure> {
         work.charge(self.provider_contracts.len())
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        #[cfg(test)]
+        eprintln!(
+            "checked lifecycle category counts provider={} source={} foreign={} native={} preflight={} kinds={}",
+            self.provider_contracts.len(),
+            self.source_resource_facts.len(),
+            self.source_foreign_nominals.len(),
+            self.native_symbols.len(),
+            self.scalar_preflights.len(),
+            self.abstract_nominal_kinds.len()
+        );
         for (module, certificate) in &self.provider_contracts {
             if *module != certificate.module() {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
             if let Some(original) = original.filter(|original| original.module() == *module) {
-                original.authenticate(certificate, work)?;
+                let diagnostic = original.authenticate(certificate, work);
+                #[cfg(test)]
+                eprintln!("checked lifecycle original provider certificate: {diagnostic:?}");
+                diagnostic?;
             } else {
                 certificate.authenticate(true, work)?;
             }
-            certificate.authenticate_linked_native_facts(self, work)?;
+            let diagnostic = certificate.authenticate_linked_native_facts(self, work);
+            #[cfg(test)]
+            eprintln!("checked lifecycle linked native certificate: {diagnostic:?}");
+            diagnostic?;
             work.charge(certificate.resource_count())
                 .map_err(|()| ResolvedBuildFailure::TypeResource)?;
             families
@@ -25310,6 +25334,8 @@ impl ResolvedRegistry {
                 }
             }
         }
+        #[cfg(test)]
+        eprintln!("checked lifecycle category provider contracts complete");
         work.charge(self.source_resource_facts.len())
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
         families
@@ -25390,6 +25416,8 @@ impl ResolvedRegistry {
                 }
             }
         }
+        #[cfg(test)]
+        eprintln!("checked lifecycle category source resource kinds complete");
         work.charge(self.source_foreign_nominals.len())
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
         for candidate in &self.source_foreign_nominals {
@@ -25484,6 +25512,8 @@ impl ResolvedRegistry {
                 }
             }
         }
+        #[cfg(test)]
+        eprintln!("checked lifecycle category source foreign kinds complete");
         // Only the exact common opaque role carried by an independently
         // reconstructed native call codec belongs to this category. Other
         // ordinary frozen nominals require their own original authority.
@@ -25535,7 +25565,10 @@ impl ResolvedRegistry {
                 {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
-                match codecs.entry(original.module()) {
+                // Legacy pure preflights retain Call while checked natives use
+                // CheckedCall in the same common module. Reconstruct each exact
+                // role independently; both authenticate the same opaque error.
+                match codecs.entry(original.ids().call) {
                     std::collections::hash_map::Entry::Vacant(entry) => {
                         let codec =
                             crate::foreign::checked_source::CheckedForeignCallCodec::authenticate(
@@ -25557,6 +25590,13 @@ impl ResolvedRegistry {
                     std::collections::hash_map::Entry::Occupied(entry) => {
                         let codec = entry.get();
                         if codec.source() != original.source() || codec.ids() != original.ids() {
+                            #[cfg(test)]
+                            eprintln!(
+                                "checked lifecycle codec collision module={:?} retained={:?} incoming={:?}",
+                                original.module(),
+                                codec.ids(),
+                                original.ids()
+                            );
                             return Err(ResolvedBuildFailure::InvalidState);
                         }
                     }
@@ -25577,6 +25617,13 @@ impl ResolvedRegistry {
                 families.insert(extent);
             }
         }
+        #[cfg(test)]
+        eprintln!(
+            "checked lifecycle category inventories family={} names={} kinds={}",
+            families.len(),
+            self.abstract_nominal_names.len(),
+            self.abstract_nominal_kinds.len()
+        );
         if families.len() != self.abstract_nominal_names.len()
             || families.len() != self.abstract_nominal_kinds.len()
         {
@@ -43251,3 +43298,7 @@ impl ImportedGlobalScheme {
         self
     }
 }
+
+#[cfg(test)]
+#[path = "resolved/checked_codec_category_tests.rs"]
+mod checked_codec_category_tests;

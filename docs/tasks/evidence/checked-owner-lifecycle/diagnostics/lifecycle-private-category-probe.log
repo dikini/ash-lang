@@ -1,0 +1,31 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi/foreign-adapter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 35s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 1 test
+checked lifecycle original-source proof: Ok(())
+checked lifecycle builtin bytes: Ok(())
+checked lifecycle scalar originals: Ok(())
+checked lifecycle category counts provider=0 source=1 foreign=1 native=2 preflight=10 kinds=3
+checked lifecycle category provider contracts complete
+checked lifecycle category source resource kinds complete
+checked lifecycle category source foreign kinds complete
+checked lifecycle codec collision module=ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 } retained=ForeignCallCodecIds { call: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, owner: Module, declaration: 12 }, returned: ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, owner: Module, declaration: 12 }, constructor: 0 }, conversion_failed: ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, owner: Module, declaration: 12 }, constructor: 1 }, conversion_error: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, owner: Module, declaration: 0 } } incoming=ForeignCallCodecIds { call: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, owner: Module, declaration: 1 }, returned: ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, owner: Module, declaration: 1 }, constructor: 0 }, conversion_failed: ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, owner: Module, declaration: 1 }, constructor: 1 }, conversion_error: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, owner: Module, declaration: 0 } }
+checked lifecycle provider categories: Err(InvalidState)
+checked lifecycle registry proof: Err(ValidationError { reason: Registry, node: None, cause: None })
+checked lifecycle original structure answer=false: Err(ValidationError { reason: Registry, node: None, cause: None })
+
+thread 'elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_canonical_source_retains_originals' (1292681) panicked at src/elaborate/checked_owner_lifecycle_tests.rs:188:39:
+canonical checked lifecycle source must pass before any negative control receives credit: Source(TypeDiagnostic { diagnostic: Diagnostic { reason: Argument, primary: SourceLabel { span: Span { source: SourceId(0), range: ByteRange { start: 1261, end: 3066 } }, message: "source resource lifecycle and handlers must preserve the admitted owner flow" }, related: [], expected: None, found: None, help: None }, context: Plain })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_canonical_source_retains_originals ... FAILED
+
+failures:
+
+failures:
+    elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_canonical_source_retains_originals
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2041 filtered out; finished in 0.04s
+
+error: test failed, to rerun pass `-p ash --lib`
