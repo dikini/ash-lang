@@ -88,6 +88,13 @@ pub(crate) fn bind_foreign_owner(
     registry: &ResolvedRegistry,
     work: &mut TypeWorkBudget,
 ) -> Result<CheckedForeignOwner, ForeignAdmissionError> {
+    if prepared.checked_contract().is_some() {
+        charge(work, 1, prepared.origin().primary_span())?;
+        return Err(failure(
+            ForeignAdmissionReason::InvalidLibrary,
+            prepared.origin().primary_span(),
+        ));
+    }
     let (ids, span) = owner_parameter_ids(
         library.module(),
         &prepared,
@@ -1067,10 +1074,17 @@ mod tests {
         let module = project_module(&source, &parse(lex(&source).unwrap())).unwrap();
         let id = ModuleId::from(source.id());
         let prepared = Arc::new(
-            super::super::source_contract::prepare_foreign_library(
-                id,
-                &module.foreign_libraries[0],
-            )
+            if module.foreign_libraries[0].checked.is_some() {
+                super::super::source_contract::prepare_checked_foreign_library(
+                    id,
+                    &module.foreign_libraries[0],
+                )
+            } else {
+                super::super::source_contract::prepare_foreign_library(
+                    id,
+                    &module.foreign_libraries[0],
+                )
+            }
             .unwrap(),
         );
         let owner = &module.foreign_libraries[0].members[3];
@@ -1103,6 +1117,37 @@ mod tests {
         )
         .with_type_parameters(vec![(nominal, parameters)]);
         (prepared, nominal, registry)
+    }
+
+    #[test]
+    fn checked_profile_does_not_authenticate_a_legacy_owner() {
+        let checked = SOURCE
+            .replace("foreign library", "foreign checked library")
+            .replace("owned R", "owned R\n            host T")
+            .replace(
+                "operand 0 from",
+                "host T\n            assumes {}\n            operand 0 from",
+            );
+        for (text, checked) in [(SOURCE, false), (checked.as_str(), true)] {
+            let (prepared, nominal, registry) = fixture_from(text);
+            let result = bind_foreign_owner(
+                NativeLibraryId::new(prepared.module(), 0),
+                Arc::clone(&prepared),
+                0,
+                nominal,
+                registry.nominal_parameters(nominal).unwrap(),
+                &registry,
+                &mut TypeWorkBudget::default(),
+            );
+            if checked {
+                assert_eq!(
+                    result.unwrap_err().reason(),
+                    super::ForeignAdmissionReason::InvalidLibrary
+                );
+            } else {
+                assert!(result.is_ok());
+            }
+        }
     }
 
     #[test]

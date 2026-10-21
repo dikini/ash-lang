@@ -70,6 +70,7 @@ foreign_library_declaration ::=
   { line_end foreign_member } [ line_end ] "}" ;
 foreign_member ::=
     "profile" string_literal
+  | "assumption" upper_identifier string_literal
   | "repr" upper_identifier "=" foreign_representation
   | foreign_constant
   | foreign_sentinel
@@ -90,6 +91,7 @@ foreign_owner ::=
   "owner" upper_identifier type_parameters
   "{" line_end "representation" foreign_reference line_end
   "owned" upper_identifier line_end
+  { "host" upper_identifier line_end }
   [ "retains" upper_identifier { "," upper_identifier } line_end ]
   "teardown" foreign_reference [ line_end ] "}" ;
 foreign_access ::=
@@ -109,7 +111,9 @@ abi_operand ::= abi_representation | "out" "(" abi_representation ")" ;
 abi_representation ::=
     foreign_reference | "pointer" "(" foreign_reference ")" | "void" ;
 foreign_call_contract ::=
-    "operand" native_position "from" source_position foreign_operand_role
+    "host" upper_identifier
+  | "assumes" "{" [ foreign_reference { "," foreign_reference } ] "}"
+  | "operand" native_position "from" source_position foreign_operand_role
   | "operand" native_position "from" "constant" foreign_reference
   | "operand" native_position "from" "null"
   | "destruction_operand" native_position "from" source_position "scalar"
@@ -326,9 +330,15 @@ line_end ::= /logical-newline-in-module-or-block-context/ ;
 ```
 
 The contextual `checked` library marker records explicit checked-profile intent.
-This implementation checkpoint retains its source span but refuses the declaration
-before legacy foreign ABI preparation. It grants no checked host or native
-execution authority; the remaining checked profile forms are not yet admitted.
+The parser retains named assumption declarations, owner/symbol `host` selections
+and symbol `assumes` sets, including their original spans. Checked metadata
+preparation requires exactly one host selection for each owner/symbol and one
+explicit assumption set for each symbol. Duplicate syntax retains enough
+information to reject rather than silently choose a value.
+This source-checking checkpoint still refuses checked declarations before legacy
+ABI admission. Metadata grants no checked host, source operation or native
+execution authority; host scopes and the remaining profile forms are not yet
+admitted. Checked metadata clauses in an ordinary library also refuse.
 
 `line_end` is the logical boundary defined by [lexical
 structure](lexical-structure.md#whitespace-and-logical-lines). Imports must

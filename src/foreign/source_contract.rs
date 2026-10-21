@@ -35,6 +35,13 @@ pub use access_contract::{
     PreparedAccessApplication, PreparedAccessResult, PreparedForeignAccess, PreparedForeignExtent,
 };
 
+#[path = "checked_profile.rs"]
+mod checked_profile;
+pub use checked_profile::{
+    CheckedNativeAssumption, PreparedCheckedForeignContract, PreparedCheckedOwnerContract,
+    PreparedCheckedSymbolContract, PreparedForeignAssumption,
+};
+
 const PROFILE: &str = "x86_64-unknown-linux-gnu";
 
 /// The cause of source foreign ABI preparation refusal.
@@ -60,6 +67,7 @@ pub enum ForeignContractReason {
     InvalidParameters,
     InvalidNativeName,
     UnimplementedContract,
+    InvalidCheckedContract,
     WorkExhausted,
     StorageRefused,
 }
@@ -147,6 +155,9 @@ impl fmt::Display for ForeignContractError {
             }
             ForeignContractReason::UnimplementedContract => {
                 "foreign contract form is not implemented by this preparation slice"
+            }
+            ForeignContractReason::InvalidCheckedContract => {
+                "checked foreign host or assumption metadata is inconsistent"
             }
             ForeignContractReason::WorkExhausted => "foreign contract preparation work exhausted",
             ForeignContractReason::StorageRefused => "foreign contract preparation storage refused",
@@ -840,6 +851,7 @@ impl PreparedForeignNominalRole {
 /// Immutable source ABI preparation, not resolved foreign operation authority.
 #[derive(Debug)]
 pub struct PreparedForeignLibrary {
+    checked_contract: Option<PreparedCheckedForeignContract>,
     module: ModuleId,
     name: String,
     public: bool,
@@ -852,6 +864,11 @@ pub struct PreparedForeignLibrary {
     origin: Origin,
 }
 impl PreparedForeignLibrary {
+    /// Checked-profile metadata, not resolved host or executable authority.
+    #[must_use]
+    pub const fn checked_contract(&self) -> Option<&PreparedCheckedForeignContract> {
+        self.checked_contract.as_ref()
+    }
     #[must_use]
     pub const fn module(&self) -> ModuleId {
         self.module
@@ -923,11 +940,51 @@ pub(crate) fn prepare_foreign_library_with_budget(
     source: &SurfaceForeignLibrary,
     work: &mut TypeWorkBudget,
 ) -> Result<PreparedForeignLibrary, ForeignContractError> {
+    prepare_foreign_library_for_profile(module, source, false, work)
+}
+
+/// Prepares explicit checked-profile metadata on the original ABI contracts.
+///
+/// This is passive authoring data. Resolved binding, summaries, Core/image
+/// validation, configured host admission and native execution remain separate.
+///
+/// # Errors
+/// Refuses a missing checked marker, inconsistent host/assumption relationships,
+/// unsupported ABI forms and exhausted preparation work/storage. The legacy
+/// preparation and executable paths do not accept the resulting checked data.
+pub fn prepare_checked_foreign_library(
+    module: ModuleId,
+    source: &SurfaceForeignLibrary,
+) -> Result<PreparedForeignLibrary, ForeignContractError> {
+    prepare_checked_foreign_library_with_budget(module, source, &mut TypeWorkBudget::default())
+}
+
+pub(crate) fn prepare_checked_foreign_library_with_budget(
+    module: ModuleId,
+    source: &SurfaceForeignLibrary,
+    work: &mut TypeWorkBudget,
+) -> Result<PreparedForeignLibrary, ForeignContractError> {
+    prepare_foreign_library_for_profile(module, source, true, work)
+}
+
+fn prepare_foreign_library_for_profile(
+    module: ModuleId,
+    source: &SurfaceForeignLibrary,
+    checked: bool,
+    work: &mut TypeWorkBudget,
+) -> Result<PreparedForeignLibrary, ForeignContractError> {
     charge(work, source.members.len(), source.span)?;
-    if let Some(checked) = source.checked {
+    if !checked {
+        if let Some(marker) = source.checked {
+            return Err(failure(
+                ForeignContractReason::UnimplementedContract,
+                marker,
+            ));
+        }
+    } else if source.checked.is_none() {
         return Err(failure(
-            ForeignContractReason::UnimplementedContract,
-            checked,
+            ForeignContractReason::InvalidCheckedContract,
+            source.span,
         ));
     }
     let mut profile = false;
@@ -954,6 +1011,15 @@ pub(crate) fn prepare_foreign_library_with_budget(
                 profile = true;
                 continue;
             }
+            SurfaceForeignMember::Assumption(value) => {
+                if !checked {
+                    return Err(failure(
+                        ForeignContractReason::UnimplementedContract,
+                        value.span,
+                    ));
+                }
+                &value.name
+            }
             SurfaceForeignMember::Representation(value) => {
                 representation_count += 1;
                 &value.name
@@ -967,6 +1033,12 @@ pub(crate) fn prepare_foreign_library_with_budget(
                 &value.name
             }
             SurfaceForeignMember::Owner(value) => {
+                if !checked && !value.host_bindings.is_empty() {
+                    return Err(failure(
+                        ForeignContractReason::UnimplementedContract,
+                        value.span,
+                    ));
+                }
                 owner_count += 1;
                 &value.name
             }
@@ -975,6 +1047,14 @@ pub(crate) fn prepare_foreign_library_with_budget(
                 &value.name
             }
             SurfaceForeignMember::Symbol(value) => {
+                if !checked
+                    && (!value.host_bindings.is_empty() || !value.assumption_sets.is_empty())
+                {
+                    return Err(failure(
+                        ForeignContractReason::UnimplementedContract,
+                        value.span,
+                    ));
+                }
                 symbol_count += 1;
                 &value.name
             }
@@ -990,6 +1070,7 @@ pub(crate) fn prepare_foreign_library_with_budget(
         return Err(failure(ForeignContractReason::MissingProfile, source.span));
     }
     let mut prepared = PreparedForeignLibrary {
+        checked_contract: None,
         module,
         name: text(&source.name.text, source.name.span, work)?,
         public: source.public,
@@ -1131,6 +1212,9 @@ pub(crate) fn prepare_foreign_library_with_budget(
     validate_owner_teardowns(&prepared, work)?;
     validate_destruction_operands(&prepared, work)?;
     access_contract::validate_preserving_symbols(&prepared, work)?;
+    if checked {
+        prepared.checked_contract = Some(checked_profile::prepare(&prepared, source, work)?);
+    }
     Ok(prepared)
 }
 
@@ -4125,6 +4209,7 @@ pub(crate) fn restore_prepared_library(
     // Conversion moves decoded strings/vectors; it performs no new byte copy.
     // Reserve every owned staging row before moving any of its records.
     let mut result = PreparedForeignLibrary {
+        checked_contract: None,
         module: parts.module,
         name: parts.name,
         public: parts.public,
@@ -4292,6 +4377,12 @@ pub(crate) fn same_prepared_library_parts(
     candidate: &PrivatePreparedLibraryParts,
     work: &mut TypeWorkBudget,
 ) -> Result<bool, ForeignContractError> {
+    // The legacy image form cannot encode checked host/assumption relations.
+    // It must refuse rather than silently discard that canonical projection.
+    if original.checked_contract.is_some() {
+        charge(work, 1, candidate.span)?;
+        return Ok(false);
+    }
     let span = candidate.span;
     charge(work, 5, span)?;
     if !access_image::same_accesses(&original.accesses, &candidate.accesses, span, work)? {

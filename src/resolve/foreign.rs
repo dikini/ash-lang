@@ -266,7 +266,9 @@ impl Resolver {
             })?;
             for member in &library.members {
                 let name = match member {
-                    SurfaceForeignMember::Profile(_) => continue,
+                    SurfaceForeignMember::Profile(_) | SurfaceForeignMember::Assumption(_) => {
+                        continue;
+                    }
                     SurfaceForeignMember::Representation(member) => &member.name,
                     SurfaceForeignMember::Constant(member) => &member.name,
                     SurfaceForeignMember::Sentinel(member) => &member.name,
@@ -1215,4 +1217,49 @@ pub(super) fn retain_module_declaration_order(
         ));
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod checked_metadata_tests {
+    use super::*;
+    use crate::{
+        lexer::lex,
+        module::ModuleId,
+        parser::{parse, project_module},
+        source::SourceFile,
+    };
+
+    #[test]
+    fn checked_assumptions_do_not_publish_or_reserve_module_member_names() {
+        let text = r#"foreign checked library First {
+    assumption Behavior "First original."
+}
+foreign checked library Second {
+    assumption Behavior "Distinct second original."
+}
+foreign checked library Third {
+    symbol Behavior<H> : Unit -> Unit {
+        name "noop"
+        abi () -> void
+        host H
+        assumes {}
+    }
+}
+"#;
+        let source = SourceFile::new("checked-name-collisions.ash", text).unwrap();
+        let tree = parse(lex(&source).unwrap());
+        assert!(tree.parse_diagnostics().is_empty());
+        let surface = project_module(&source, &tree).unwrap();
+        let mut resolver = Resolver::new(ModuleId::from(source.id()));
+        resolver.validate_source_foreign_members(&surface).unwrap();
+        // Only published members still collide across libraries.
+        let mut duplicate = surface.clone();
+        let symbol = duplicate.foreign_libraries[2].members[0].clone();
+        duplicate.foreign_libraries[0].members.push(symbol);
+        assert!(
+            Resolver::new(ModuleId::from(source.id()))
+                .validate_source_foreign_members(&duplicate)
+                .is_err()
+        );
+    }
 }

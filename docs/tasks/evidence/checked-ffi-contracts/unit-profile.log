@@ -1,0 +1,15 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi/foreign-adapter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 49.77s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 6 tests
+test foreign::source_contract::checked_profile::tests::checked_profile_preparation_charges_exact_cumulative_work_and_refuses_one_short ... ok
+test foreign::source_contract::checked_profile::tests::checked_profile_metadata_cannot_be_erased_by_legacy_private_reconstruction ... ok
+test foreign::source_contract::checked_profile::tests::checked_profile_assumption_description_copy_uses_the_same_work_meter ... ok
+test foreign::source_contract::checked_profile::tests::checked_profile_charges_assumption_reference_cardinality_before_selection ... ok
+test foreign::checked_source::tests::checked_profile_preparation_does_not_authenticate_a_legacy_operation ... ok
+test foreign::source_owner::tests::checked_profile_does_not_authenticate_a_legacy_owner ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 1940 filtered out; finished in 0.00s
+
