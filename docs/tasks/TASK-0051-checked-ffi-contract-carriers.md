@@ -175,10 +175,20 @@ still exposes acceptance after an imported original is erased following real
 resolution. The next frozen batch authenticates imported originals before
 checker use, preserves bounded prerequisite provenance, and adds selected
 method union, opaque/re-export, complete native row and independent Core controls.
-The repaired batch passes 14 selected private/Core controls; 58 affected
-implementation regressions pass after refreshing their exact publication-work
-ledgers. Body-free integration and final verification remain pending; no new
-partial acceptance is claimed.
+The final [verification receipt](evidence/checked-ffi-selected/verification.json)
+retains 473 distinct passing focused tests, including 15 selected private/Core
+controls, 58 implementation regressions, 86 integrations and targeted Clippy.
+The imported selection is explicitly 33/34: its one default-startup failure also
+occurs at the exact retained base and remains assigned to issue #91. A paid lazy
+host census preserves the ordinary no-host ordering tariff; it grants no host
+permission. Independent review, integration and partial acceptance remain
+pending. No whole-task criterion is accepted.
+
+The selected checkpoint's affected regression selection also reproduces the
+existing imported native-buffer default-startup failure at retained `0a856957`.
+[Issue #91](https://github.com/dikini/ash-lang/issues/91) owns its repair after this
+checkpoint, before nominal/resource closure. The default allowance and required
+F-core gate remain unchanged; the selected delivery must qualify this failure.
 
 ## Verification
 

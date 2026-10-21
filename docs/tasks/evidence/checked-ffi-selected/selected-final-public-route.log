@@ -1,0 +1,16 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 9 tests
+test resolved::tests::linked_public_authorization_move_has_an_exact_preflight_budget ... ok
+test resolved::tests::linked_public_authorization_move_charges_two_records_plus_every_hop ... ok
+test evidence_validation::tests::rejects_a_repeated_public_authorization_route ... ok
+test evidence_validation::tests::rejects_a_forged_public_authorization_hop_span ... ok
+test evidence_validation::tests::rejects_a_disconnected_public_authorization_route ... ok
+test evidence_validation::tests::rejects_a_public_authorization_with_a_forged_final_owner ... ok
+test evidence_validation::tests::rejects_an_unused_forged_public_authorization_before_occurrences ... ok
+test evidence_validation::tests::rejects_a_forged_intermediate_public_authorization_suffix ... ok
+test elaborate::tests::link_retains_public_authorization_tables_at_an_exact_limit ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 1982 filtered out; finished in 0.63s
+

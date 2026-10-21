@@ -6714,29 +6714,32 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         Ok(false)
     }
 
-    fn is_foreign_host_parameter(
+    fn foreign_host_parameters(
         &self,
-        id: crate::types::TypeVariableId,
-    ) -> Result<bool, ValidationError> {
-        self.charge_type_work(1)?;
-        if !self
-            .program
-            .registry
-            .type_variable(id)
-            .is_some_and(|parameter| parameter.kind == Kind::Type)
-        {
-            return Ok(false);
-        }
+    ) -> Result<HashSet<crate::types::TypeVariableId>, ValidationError> {
+        // This operation-local census classifies ordering only. Full host,
+        // source and lexical-scope authentication remains independent.
+        self.charge_type_work(self.program.nodes.len())?;
+        let mut identities = HashSet::new();
         for node in &self.program.nodes {
-            self.charge_type_work(1)?;
-            if F::foreign_host(&node.kind).is_some_and(|host| host.identity() == id) {
-                // A registered body binder is allocated after declaration headers;
-                // its source span need not follow those headers. This classifies
-                // ordering only: the independent host/source checks still apply.
-                return Ok(true);
+            let Some(host) = F::foreign_host(&node.kind) else {
+                continue;
+            };
+            self.charge_type_work(3)?; // carrier, registered kind and retained slot
+            if host.identity().module().is_some()
+                && self
+                    .program
+                    .registry
+                    .type_variable(host.identity())
+                    .is_some_and(|parameter| parameter.kind == Kind::Type)
+            {
+                identities
+                    .try_reserve(1)
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                identities.insert(host.identity());
             }
         }
-        Ok(false)
+        Ok(identities)
     }
 
     fn is_lexical_source_parameter(
@@ -9410,56 +9413,75 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 parameter.origin.primary_span().range().start(),
             )
         });
-        let mut next_type_variable = HashMap::<ModuleId, u32>::new();
-        let mut previous_type_variable_start = HashMap::new();
-        for parameter in type_variables {
-            let Some(module) = parameter.id.module() else {
-                return Err(ValidationError::new(ValidationReason::Registry, None));
-            };
-            let Some(source) = relation.get(&module).copied() else {
-                return Err(ValidationError::new(ValidationReason::Registry, None));
-            };
-            let expected = next_type_variable.entry(module).or_insert(0);
-            while original.is_some_and(|proof| {
-                proof
-                    .omitted_builtin_formals
-                    .contains(&crate::types::TypeVariableId::resolved(module, *expected))
-            }) {
+        // Preserve the ordinary valid-path tariff. Only an ordering failure
+        // triggers one paid actual-host census and a paid retry of this census.
+        let mut foreign_host_parameters: Option<HashSet<crate::types::TypeVariableId>> = None;
+        'type_ordering: loop {
+            let mut next_type_variable = HashMap::<ModuleId, u32>::new();
+            let mut previous_type_variable_start = HashMap::new();
+            for parameter in &type_variables {
+                let Some(module) = parameter.id.module() else {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                };
+                let Some(source) = relation.get(&module).copied() else {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                };
+                let expected = next_type_variable.entry(module).or_insert(0);
+                while original.is_some_and(|proof| {
+                    proof
+                        .omitted_builtin_formals
+                        .contains(&crate::types::TypeVariableId::resolved(module, *expected))
+                }) {
+                    self.charge_type_work(1)?;
+                    *expected = expected
+                        .checked_add(1)
+                        .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+                }
+                let parameter_span = parameter.origin.primary_span();
+                let parameter_range = parameter_span.range();
                 self.charge_type_work(1)?;
-                *expected = expected
-                    .checked_add(1)
-                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
-            }
-            let parameter_span = parameter.origin.primary_span();
-            let parameter_range = parameter_span.range();
-            self.charge_type_work(1)?;
-            let contextual = self.is_lexical_source_parameter(parameter.id)?
-                || self.is_foreign_host_parameter(parameter.id)?
-                || self.is_provider_declaration_parameter(parameter.id)?
-                || source_owner_parameters.contains(&parameter.id)
-                || source_window_parameters.contains(&parameter.id)
-                || generatives.is_some_and(|original| original.contains(&parameter.id))
-                || original.is_some() && self.unused_ordering.borrow().contains(&parameter.id);
-            if self.contextual_registry.is_none() && parameter.id.local() != *expected
-                || parameter_span.source() != source
-                || !origin_depth_within_limit(&parameter.origin)
-                || !valid_upper_spelling(&parameter.spelling)
-                || parameter_range.start() >= parameter_range.end()
-                || self.contextual_registry.is_none()
+                let contextual = self.is_lexical_source_parameter(parameter.id)?
+                    || foreign_host_parameters
+                        .as_ref()
+                        .is_some_and(|identities| identities.contains(&parameter.id))
+                    || self.is_provider_declaration_parameter(parameter.id)?
+                    || source_owner_parameters.contains(&parameter.id)
+                    || source_window_parameters.contains(&parameter.id)
+                    || generatives.is_some_and(|original| original.contains(&parameter.id))
+                    || original.is_some() && self.unused_ordering.borrow().contains(&parameter.id);
+                if self.contextual_registry.is_none() && parameter.id.local() != *expected
+                    || parameter_span.source() != source
+                    || !origin_depth_within_limit(&parameter.origin)
+                    || !valid_upper_spelling(&parameter.spelling)
+                    || parameter_range.start() >= parameter_range.end()
+                {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+                if self.contextual_registry.is_none()
                     && !contextual
                     && previous_type_variable_start
                         .get(&module)
                         .is_some_and(|previous| parameter_range.start() <= *previous)
-            {
-                return Err(ValidationError::new(ValidationReason::Registry, None));
+                {
+                    if foreign_host_parameters.is_some() {
+                        return Err(ValidationError::new(ValidationReason::Registry, None));
+                    }
+                    let identities = self.foreign_host_parameters()?;
+                    if identities.is_empty() {
+                        return Err(ValidationError::new(ValidationReason::Registry, None));
+                    }
+                    foreign_host_parameters = Some(identities);
+                    continue 'type_ordering;
+                }
+                *expected = expected
+                    .checked_add(1)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+                if !contextual {
+                    previous_type_variable_start.insert(module, parameter_range.start());
+                }
+                self.validate_origin(&parameter.origin, self.program.root)?;
             }
-            *expected = expected
-                .checked_add(1)
-                .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
-            if !contextual {
-                previous_type_variable_start.insert(module, parameter_range.start());
-            }
-            self.validate_origin(&parameter.origin, self.program.root)?;
+            break;
         }
 
         let mut parameter_owners = HashMap::new();

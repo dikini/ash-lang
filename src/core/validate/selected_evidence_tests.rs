@@ -237,7 +237,12 @@ fn checked_selected_host_ordering_does_not_exempt_unrelated_header_parameters() 
             .with_additional_type_variables([ordinary]),
     );
     let validator = Validator::new_modules(&changed, &sources, &modules).unwrap();
-    assert!(!validator.is_foreign_host_parameter(ordinary_id).unwrap());
+    assert!(
+        !validator
+            .foreign_host_parameters()
+            .unwrap()
+            .contains(&ordinary_id)
+    );
     assert_eq!(
         validator.validate_registry().unwrap_err().reason(),
         ValidationReason::Registry
@@ -288,5 +293,41 @@ fn checked_selected_core_preserves_transforms_and_rejects_catalog_substitutions(
             validation_work(&changed, &graph, None).0.is_some(),
             "changed selected method catalog was accepted: {mutation:?}"
         );
+    }
+}
+
+#[test]
+fn checked_selected_host_census_has_one_paid_scan_and_exact_refusal() {
+    for source in [SELECTED_HOST, "main : Unit -> Int\nmain () = 1\n"] {
+        let (program, graph) = super::foreign_host_tests::original(source);
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let modules = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        let expected_hosts = usize::from(source == SELECTED_HOST);
+        let required = program.nodes.len() + 3 * expected_hosts;
+        for (allowance, succeeds) in [(required, true), (required - 1, false), (required, true)] {
+            let mut validator = Validator::new_modules(&program, &sources, &modules).unwrap();
+            let prefix = 7;
+            validator.type_work_limit = prefix + allowance;
+            validator.charge_type_work(prefix).unwrap();
+            match validator.foreign_host_parameters() {
+                Ok(identities) => {
+                    assert!(succeeds);
+                    assert_eq!(identities.len(), expected_hosts);
+                    assert_eq!(validator.type_work.get(), prefix + required);
+                }
+                Err(error) => {
+                    assert!(!succeeds);
+                    assert_eq!(error.reason(), ValidationReason::Resource);
+                }
+            }
+        }
     }
 }
