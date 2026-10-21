@@ -141,10 +141,16 @@ capture-erasure probe exposes missing defining-global correspondence. Checkpoint
 through imports, projection authentication, and iterative final-owner teardown.
 Seven private controls pass for that checkpoint, including donor/stale originals,
 coordinated erasure, alias/import identity, prefixed work bounds and deep teardown.
-Final distinct-row/contract-union controls and affected regression evidence remain
-pending. Selected-evidence carrier/anti-erasure coverage, checked owners and
-primitive/image/runtime obligations remain outside this partial delivery; their
-original criteria stay unchecked.
+The final wrapper candidate passes 181 distinct focused tests, including distinct
+nonempty row actuals, exact two-contract/assumption union, body-free default-profile
+refusal, publication/source/table erasure controls, deep teardown and affected
+legacy regressions. The generated legacy build/run and targeted Clippy pass on
+the same final source/configuration manifest. The
+[verification receipt](evidence/checked-ffi-wrappers/verification.json) retains
+all commands, raw logs and pins; independent review and retention are pending.
+Selected-evidence carrier/anti-erasure coverage, complete nominal/resource
+closure erasure, checked owners and primitive/image/runtime obligations remain
+outside this partial delivery; their original criteria stay unchecked.
 
 ## Verification
 

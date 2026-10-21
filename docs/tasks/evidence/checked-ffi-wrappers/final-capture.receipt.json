@@ -1,0 +1,20 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "ash",
+    "--locked",
+    "--lib",
+    "core::capture::tests::imported_capture_carriers_authenticate_identity_and_unknown_state",
+    "--",
+    "--exact",
+    "--nocapture"
+  ],
+  "exit": 0,
+  "elapsed_seconds": 0.401,
+  "source_configuration_before_after_equal": true,
+  "file_count": 520,
+  "source_configuration_tree_sha256": "0a042cd9ffceb29b394b8f92c8ab6c91c3abf35e21c8c7d15d1756596538b8c5",
+  "log_sha256": "67b4b7c4fd2b8783807776c2cb81f6d261aae5ac90104da7d8785d52a69defc4"
+}

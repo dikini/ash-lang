@@ -1,0 +1,35 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.77s
+     Running tests/effect_modules.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/effect_modules-425c5e7b19e4d601)
+
+running 13 tests
+test operation_rows_are_rejected_for_public_and_private_effects ... ok
+test inline_result_rows_survive_resolution_and_checking ... ok
+test public_effect_identity_survives_facade_reexport ... ok
+test local_and_imported_effect_rows_authenticate_effect_arity ... ok
+test hidden_effect_signature_closure_survives_facade_and_diamond_routes ... ok
+test effect_namespace_privacy_and_diamond_routes_preserve_one_identity ... ok
+test discard_summary_survives_import_and_facade_reexport ... ok
+test imported_registration_is_closed_inside_the_selected_capture ... ok
+test registration_factory_dependencies_survive_opaque_facade_exports ... ok
+test capture_summaries_cover_helpers_importing_only_effect_declarations ... ok
+test imported_residual_returns_continue_into_the_callers_suffix ... ok
+test imported_handlers_are_selected_after_type_specialization ... ok
+test imported_residual_graphs_preserve_live_and_completed_clause_owners ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+     Running tests/module_elaboration.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/module_elaboration-5a2440d6ca4901ad)
+
+running 8 tests
+test failed_module_body_never_publishes_an_export_summary ... ok
+test checked_modules_keep_their_stable_graph_identity ... ok
+test linker_rejects_an_omitted_direct_dependency_even_when_the_import_is_unused ... ok
+test linker_rejects_an_unrelated_checked_module_from_another_graph ... ok
+test linker_rejects_a_surplus_module_that_depends_on_the_selected_entry ... ok
+test linker_rejects_a_direct_dependency_after_its_importer ... ok
+test imported_polymorphic_scheme_instantiates_at_unrelated_types_without_re_generalizing ... ok
+test linked_modules_form_dependency_ordered_core_groups_and_evaluate ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

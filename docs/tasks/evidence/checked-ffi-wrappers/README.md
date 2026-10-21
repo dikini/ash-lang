@@ -70,3 +70,33 @@ reject. Native library/member/symbol correspondence remains exact. The compiler
 owned builtin-host exception retains its existing immutable-byte/shape proof.
 All-test compilation passes; final frozen tests and independent review remain
 pending. Resident source is provenance input, not callable requirement inference.
+
+## Final wrapper checkpoint
+
+The final frozen batch passes 181 distinct focused tests, the generated legacy
+host build/run and targeted Clippy. [Verification](verification.json) retains
+all 12 exact commands, exit statuses, raw-log hashes, compiler/cache settings,
+changed source/specification pins and the [complete manifest](source-configuration.json).
+Each command independently captured identical before/after source/configuration
+inputs. The aggregate covers all files under `src/` and `tests/`, plus
+`Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `.cargo/config.toml` and `build.rs`.
+Hash the sorted path-to-SHA256 map as compact UTF-8 JSON with no trailing newline;
+the receipt gives the exact algorithm. The test count deduplicates raw test names
+across overlapping filters.
+
+This batch supersedes intermediate passing and failing checkpoints above. A final
+exact-ledger fixture adjustment changed `src/resolve/module_tests.rs`; because
+that file also contributes to the build fingerprint, every required command was
+rerun on the final manifest. No generated-artifact pass is transferred across
+that change. Raw outputs retain their exact trailing blank lines and are excluded
+from whitespace checking.
+
+The delivered subset authenticates ordinary wrapper publications, transitive
+native/assumption requirements, complete discriminating Type/Row substitutions,
+alias/re-export continuity, deep iterative teardown and effect references in
+callable graphs/nested Type/Row metadata. Resident source snapshots authenticate
+original declaration classification only; consumers never infer wrapper
+requirements from dependency bodies. Independent review and retention are pending.
+Selected-evidence and complete nominal/resource closure erasure, checked owners,
+copy/lifecycle, executable admission and whole F3 remain pending. This is no
+checked native execution, containment or full-workspace gate receipt.

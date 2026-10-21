@@ -1,0 +1,50 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 42 tests
+test elaborate::provider_globals::tests::provider_globals_refuse_interface_carriers_before_copying_metadata ... ok
+test elaborate::provider_globals::tests::provider_globals_preserve_two_requirement_and_method_orders ... ok
+test elaborate::provider_globals::tests::provider_globals_match_final_unconstrained_polymorphic_and_row_abis ... ok
+test evidence_audit::tests::accepts_filled_global_and_method_slots_and_unconstrained_occurrences ... ok
+test elaborate::provider_globals::tests::provider_globals_reject_conflicting_same_identity_facts ... ok
+test evidence_audit::tests::rejects_empty_extra_unknown_method_and_malformed_global_slots ... ok
+test core::transform::tests::unchecked_transforms_share_the_exact_nonempty_global_row_registry ... ok
+test elaborate::provider_globals::tests::provider_globals_budget_duplicate_interface_authentication_cumulatively ... ok
+test core::validate::tests::linked_core_sequential_bind_cannot_claim_a_resolved_global_row ... ok
+test kind::tests::determined_global_deferral_reads_only_authenticated_key_positions ... ok
+test elaborate::provider_globals::tests::provider_globals_use_cumulative_exact_budget_and_leave_inputs_reusable ... ok
+test kind::tests::global_application_shape_and_membership_prefixes_are_exact ... ok
+test evidence_validation::tests::linked_global_dependent_only_authentication_has_an_exact_retry_boundary ... ok
+test resolve::module_tests::a_renamed_imported_type_does_not_conflict_with_a_local_global ... ok
+test elaborate::provider_globals::tests::provider_globals_preserve_defining_identity_through_alias_and_reexport ... ok
+test resolve::module_tests::local_method_and_global_report_a_duplicate_global ... ok
+test resolve::module_tests::local_method_cannot_shadow_a_targeted_global_term ... ok
+test resolve::tests::global_registry_binder_retention_is_exact_and_atomic ... ok
+test resolve::module_tests::targeted_import_cannot_shadow_a_local_global ... ok
+test resolved::tests::combine_checked_excludes_non_global_and_empty_parameter_owners ... ok
+test resolve::tests::hidden_impl_binder_exhaustion_precedes_global_body_resolution ... ok
+test evidence_validation::tests::rejects_hidden_implementation_method_binder_reused_by_a_global ... ok
+test evidence_validation::tests::rejects_checked_global_parameter_kind_mirror_before_core ... ok
+test resolve::tests::duplicate_global_route_compares_nominal_closure_without_recloning_it ... ok
+test resolved::tests::detached_global_requirement_index_rejects_same_determined_key_exactly ... ok
+test resolved::tests::detached_global_scheme_authenticates_only_dependent_only_binders ... ok
+test resolved::tests::combine_checked_retains_borrowed_global_parameter_rows_in_dependency_order ... ok
+test resolved::tests::combine_checked_rejects_duplicate_global_parameter_row_owners_before_type_precharge ... ok
+test resolved::tests::raw_global_duplicate_requirements_reach_summary_admission_exactly_and_atomically ... ok
+test evidence_validation::tests::linked_global_dependent_only_allowance_rejects_coherent_tampering ... ok
+test elaborate::provider::tests::contextual_structure_keeps_external_global_admission_closed ... ok
+test elaborate::tests::recursive_global_elaboration_does_not_clone_the_complete_context ... ok
+test elaborate::provider::tests::external::provider_external_plain_helper_rejects_private_and_unimported_globals ... ok
+test evidence_validation::tests::linked_registry_rejects_every_resolved_global_parameter_row_mutation_before_core ... ok
+test core::validate::tests::concrete_monomorphic_adapter_edges_reject_same_typed_global_sources_after_every_rebuild ... ok
+test core::validate::tests::catalogued_monomorphic_nested_sources_reject_same_typed_global_leaves ... ok
+test resolved::tests::duplicate_imported_global_is_dismantled_on_a_small_stack ... ok
+test resolved::tests::imported_global_order_failure_dismantles_deep_input_on_a_small_stack ... ok
+test resolve::module_tests::globals_and_implementation_methods_share_capture_scans_per_import_edge ... ok
+test elaborate::provider_globals::tests::provider_globals_dispose_deep_snapshots_after_late_failure_on_small_stack ... ok
+payload helper image restoration exact work=230734; prefix/one-short/two retries and four loan/copy refusals
+test build::image::source_resource_image::tests::payload_helper_image_closes_global_loans_and_rejects_copied_donors ... ok
+test elaborate::provider_globals::tests::provider_globals_constrained_method_application_failure_drains_substituted_type ... ok
+
+test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 1934 filtered out; finished in 2.19s
+
