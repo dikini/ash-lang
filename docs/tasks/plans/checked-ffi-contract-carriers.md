@@ -392,6 +392,16 @@ constructor-payload closure. Publish this plan in an early item draft.
    startup/image checks if production admission changes. Independent exact-head
    review precedes root-authorized GitHub integration and partial acceptance.
 
+The current [delivery evidence](../evidence/checked-constructor-closure/README.md#final-delivery-verification)
+records the demonstrated coherent-donor summary/consumer red and independent
+Core refusals. The bounded repair reuses the defining checked registry reference
+inside existing constructor carriers; it does not copy a new publication fact.
+It preserves newtype effective payloads, original continuity and selected access.
+A real nonempty latent-row mirror red also required the fused kind walk to
+reject mixed pure/effectful presentations unless their row is empty. Final
+focused verification passes 331 distinct tests and Clippy, including image 16/16
+and unchanged startup limits. Review/integration/acceptance remain pending.
+
 Generic actual/row, recursive/shared payload and deeper resource closure remain
 later red-driven controls unless essential to this fixture. ResourceApply already
 has resolver/contract traversal. Whole F3, F-core, checked owners, copy/lifecycle,

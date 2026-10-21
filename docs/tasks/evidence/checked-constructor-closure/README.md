@@ -19,7 +19,7 @@ coherently with the valid same-kind `Donor` passes summary authentication: the
 expected-rejection test is red. Both hidden kind rows, completed global
 publications, capture graphs, defining sources, native originals and effect
 identities remain intact. This observation establishes the summary boundary;
-changed-consumer and independent Core mutation results remain pending.
+changed-consumer and independent Core mutation results were pending at this snapshot.
 
 The four `test-first` commands share the exact before/after 560-input manifest
 in `test-first/inputs.json`. Their receipts retain commands, raw hashes, elapsed
@@ -114,3 +114,48 @@ distinct test names, including constructor 90/90 and images 16/16. The Clippy
 command still fails solely on a needless Box replacement in the test-only
 scheme mutation. Its raw refusal/map is in `pre-lint-fix`. Final uniform
 verification after that allocation cleanup remains pending.
+
+## Final delivery verification
+
+The final nine commands all exit zero on the same 562 source/spec/configuration
+inputs before and after every command, matching delivered bytes. Their sorted
+compact-JSON aggregate is
+`cc9718c67151303d8274ad3019226bfe932b22a24bd88515ba6acf8de656721b`.
+The [verification script](final/verify.py) checks current pins, full manifests,
+raw log digests and explicit command names without building or executing Ash.
+[Delivery pins](final/delivery.json) retain all changed source/spec hashes and
+the tested source commit; [verification](final/verification.json) records counts.
+
+| Selection | Passing tests |
+| --- | ---: |
+| Constructor/original/Core and exact ledger regressions | 90 |
+| Kind and mirror callers | 31 |
+| Checked summary/carrier controls | 40 |
+| Imported correspondence | 34 |
+| Existing owner post-record controls | 10 |
+| Core capture | 36 |
+| Wrapper, newtype, library import and ADT integrations | 89 |
+| Source-resource images | 16 |
+
+There are 331 distinct passing test names across 346 pass lines; overlapping
+filters are not additional tests. Targeted library/test Clippy with warnings
+denied exits zero. Image/default controls pass 16/16, with final buffer work
+318817 and dependent-discard work 314686 under unchanged 327680. The owner
+post-record cases use existing injected callbacks, not checked native execution.
+No generated host image or external native-library callee was executed by this
+checkpoint.
+
+The delivered guards reject missing/donor/stale originals, coherent payload
+substitution, scheme-only mutation after real resolution, and erased/reminted
+re-export witnesses. They preserve newtype effective representation and ordinary
+constructor/import behavior. Independent Core mutations retain a valid control
+and avoid a dense-ordinal erasure confound. The unrelated private type stays
+unrequired. Hidden dependencies and the backing registry grant no source name
+or constructor access.
+
+Formatting, Ash fixture indentation, changed Markdown lint, local links,
+JSON/Python parsing and whitespace checks excluding preserved raw logs/patches
+are separate light checks. Review, GitHub integration and partial acceptance
+remain pending at this author checkpoint. Generic/recursive payloads, deeper
+resource/donor/opacity graphs, checked owners/copy/lifecycle, runtime/image
+activation, F-core, whole F3 and Main acceptance remain separate obligations.

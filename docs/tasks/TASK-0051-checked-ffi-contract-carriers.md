@@ -206,14 +206,20 @@ tree equality. The author partial readback, independent retained-result audit an
 are complete. Capture-root nominal-kind membership, selected parity and the
 assigned TASK-0052 retirement/link cleanup are delivered; whole F3 remains open.
 
-The next [constructor-payload checkpoint](plans/checked-ffi-contract-carriers.md#constructor-payload-declaration-closure-checkpoint)
+The [constructor-payload checkpoint](plans/checked-ffi-contract-carriers.md#constructor-payload-declaration-closure-checkpoint)
 starts from that retained commit on `codex/checked-ffi-constructor-closure`.
-It first proves Leaf is reachable only through a public Envelope constructor's
-payload/scheme, then tests missing hidden metadata and coherent same-kind Donor
-substitution across summary, consumer/link and independent Core boundaries.
-Existing rejection is a valid tests-only result. Production repair requires a
-demonstrated gap and existing authority; broader resource/graph cases remain
-separate.
+Its actual Leaf/Envelope payload-only control passes source, summary, body-free
+consumer, linking, independent Core and identity/fold checks. Missing hidden
+Leaf already rejected; coherent Donor substitution exposed summary and
+checker-admission gaps. The repair retains the existing defining registry on
+constructor projections and forwards it unchanged, with paid exact owner,
+formals, effective payload, scheme and origin checks. A latent-row mirror guard
+preserves exactness while avoiding duplicate summary traversal. The final
+[evidence](evidence/checked-constructor-closure/README.md#final-delivery-verification)
+records 331 distinct passes and Clippy on uniform inputs, image 16/16 and both
+unchanged-default startup cases. Independent review, integration and partial
+acceptance are pending; broader declaration/resource graphs and whole F3 remain
+open.
 
 ## Verification
 
@@ -274,9 +280,9 @@ payload and missing final-ordinal Leaf after valid controls. These separate
 binding the existing constructor projections to the completed defining registry;
 source coordinates do not reconstruct semantic payload meaning. The bounded
 repair forwards that same registry reference through imports and re-exports,
-with paid exact correspondence and independent checker entry. Verification and
-acceptance of the repair remain pending; no new constructor access or execution
-authority follows from retaining the reference.
+with paid exact correspondence and independent checker entry. The final focused batch passes; independent review, integration and partial
+acceptance remain pending. No new constructor access or execution authority
+follows from retaining the reference.
 
 ## Deviations
 
