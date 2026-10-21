@@ -34,9 +34,14 @@ The probe is disposable tooling; its output is evidence only for those checks.
 Stage B needs a concrete deployment configuration: launcher implementation,
 static test images, configured non-root UID/GID mappings, delegated controller
 root and dedicated disposable storage. The repository does not yet contain this launcher/test realization, and this
-probe establishes no delegated controller/storage configuration. Do not substitute ambient privileges or weaken controls to
-obtain a pass. Missing prerequisites leave Stage B unexecuted, with the isolated
-profile unavailable in this environment until proven otherwise.
+probe establishes no complete delegated controller/storage configuration. The
+[deployment prerequisite probe](linux-profile-probe/README.md#deployment-prerequisite-evidence)
+subsequently identifies host user-cgroup delegation, but its attempted trusted
+credential setup cannot clear supplementary groups. Its fail-closed result
+starts no worker and leaves Stage B unexecuted. A deployment-supplied trusted
+credential launcher and the remaining controls still need evidence. Do not
+substitute ambient privileges or weaken controls to obtain a pass. The isolated
+profile remains unavailable through this tested setup until proven otherwise.
 
 Before Stage B code runs, freeze exact kernel, compiler/linker/native archives,
 headers, image/receipt/bridge/contract digests, launcher/filter configuration,
