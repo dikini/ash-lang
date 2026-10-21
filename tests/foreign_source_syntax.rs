@@ -112,6 +112,7 @@ fn projected_contract_retains_member_order_kinds_positions_and_spans() {
     );
     let library = &module.foreign_libraries[0];
     assert!(library.public);
+    assert!(library.checked.is_none());
     assert_eq!(library.name.text, "Native");
     let SurfaceForeignMember::Constant(negative) = &library.members[3] else {
         panic!("constant role lost");
@@ -185,4 +186,51 @@ fn foreign_declaration_does_not_admit_negative_ordinary_expressions() {
     .unwrap();
     let tree = parse(lex(&source).unwrap());
     assert!(project_module(&source, &tree).is_err());
+}
+
+#[test]
+fn checked_library_prefix_parses_without_changing_legacy_declaration_words() {
+    for public in [false, true] {
+        let text = if public {
+            SCALAR.replace("pub foreign library", "pub foreign checked library")
+        } else {
+            SCALAR.replace("pub foreign library", "foreign checked library")
+        };
+        let source = SourceFile::new("checked-library.ash", text).unwrap();
+        let tree = parse(lex(&source).unwrap());
+        assert!(
+            tree.parse_diagnostics().is_empty(),
+            "{:?}",
+            tree.parse_diagnostics()
+        );
+        let module = project_module(&source, &tree).unwrap();
+        assert_eq!(module.foreign_libraries.len(), 1);
+        assert_eq!(module.foreign_libraries[0].public, public);
+        let library = &module.foreign_libraries[0];
+        assert_eq!(library.name.text, "Native");
+        let checked = library
+            .checked
+            .expect("checked intent must survive projection");
+        let range = checked.range();
+        assert_eq!(
+            &source.text()[range.start() as usize..range.end() as usize],
+            "checked"
+        );
+    }
+}
+
+#[test]
+fn checked_remains_an_ordinary_identifier_outside_library_prefixes() {
+    let source = SourceFile::new(
+        "checked-name.ash",
+        "checked : Int -> Int\nchecked value = value\nmain : Unit -> Int\nmain () = checked(42)\n",
+    )
+    .unwrap();
+    let tree = parse(lex(&source).unwrap());
+    assert!(
+        tree.parse_diagnostics().is_empty(),
+        "{:?}",
+        tree.parse_diagnostics()
+    );
+    assert!(project_module(&source, &tree).is_ok());
 }

@@ -4,10 +4,15 @@ use super::*;
 
 pub(super) fn starts_library(parser: &Parser<'_>) -> bool {
     let offset = usize::from(parser.at(&TokenKind::Pub));
+    let library = offset
+        + 1
+        + usize::from(
+            matches!(parser.nth(offset + 1), Some(TokenKind::Identifier(word)) if word == "checked"),
+        );
     matches!(parser.nth(offset), Some(TokenKind::Identifier(word)) if word == "foreign")
-        && matches!(parser.nth(offset + 1), Some(TokenKind::Identifier(word)) if word == "library")
-        && matches!(parser.nth(offset + 2), Some(TokenKind::UpperIdentifier(_)))
-        && parser.nth(offset + 3) == Some(&TokenKind::LeftBrace)
+        && matches!(parser.nth(library), Some(TokenKind::Identifier(word)) if word == "library")
+        && matches!(parser.nth(library + 1), Some(TokenKind::UpperIdentifier(_)))
+        && parser.nth(library + 2) == Some(&TokenKind::LeftBrace)
 }
 
 fn at_word(parser: &Parser<'_>, word: &str) -> bool {
@@ -94,6 +99,9 @@ pub(super) fn library(parser: &mut Parser<'_>) -> TypeParametersOutcome {
         let _ = parser.bump();
     }
     let _ = word(parser, "foreign");
+    if at_word(parser, "checked") {
+        let _ = parser.bump();
+    }
     let _ = word(parser, "library");
     expect_upper_identifier(parser);
     let _ = parser.expect(&TokenKind::LeftBrace, ExpectedForm::LeftBrace);

@@ -381,3 +381,11 @@ fn void_abi_result_prepares_with_empty_outcome_facts() {
         ForeignContractReason::Readability
     );
 }
+
+#[test]
+fn checked_library_cannot_enter_legacy_abi_preparation() {
+    let text = SCALAR.replace("foreign library", "foreign checked library");
+    let error = prepare(&text).expect_err("checked intent must not grant legacy executable facts");
+    assert_eq!(error.reason(), ForeignContractReason::UnimplementedContract);
+    assert_eq!(error.span().range().end() - error.span().range().start(), 7);
+}

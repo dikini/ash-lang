@@ -59,6 +59,17 @@ Follow the [task-owned implementation plan](plans/checked-ffi-contract-carriers.
 - [ ] Charged checking work, exact/one-short bounds and affected regressions.
 - [ ] Independent review and retained verification of complete F3 scope.
 
+Candidate first-slice behavior is implemented and passes 35 focused tests,
+targeted library/test Clippy, formatting, changed Markdown lint and whitespace.
+The [verification receipt](evidence/checked-ffi-marker/verification.json) records
+source/configuration hashes, compiler/cache settings and the observed red cases.
+[Raw review reproduction](evidence/checked-ffi-marker/review-reproduction.json)
+retains exact final test/Clippy outputs and before/after pin equality.
+Awaiting: independent candidate review and verified milestone retention.
+Remaining: assumptions/H, host scopes, module/Core/image carriers and complete F3
+acceptance. Owner: developer supplies/retains the candidate and updates acceptance;
+reviewer checks the exact head; orchestrator confirms advancement.
+
 The first slice is deliberately incomplete: it retains the checked marker and
 refuses legacy ABI preparation for that declaration. It grants no checked
 execution, assumption discharge, host authority or milestone acceptance.
@@ -70,7 +81,7 @@ through explicit `CARGO_TARGET_DIR`; preserve the old product source checkout.
 Each slice records exact commands, outcomes, candidate/retaining commits and
 review findings. Add behavior/negative tests before changing product code.
 
-The first slice runs `foreign_source_syntax`, `foreign_source_contracts` and
+The first slice ran `foreign_source_syntax`, `foreign_source_contracts` and
 `foreign_source_admission`, plus formatting and affected lint/doc checks. Later
 slices add imported/opaque/re-exported full Type/Row substitutions, forged
 independence, hidden captures, host-effect erasure, wrong-host/stale sessions,

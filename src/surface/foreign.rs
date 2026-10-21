@@ -7,6 +7,8 @@ use crate::{integer::Integer, source::Span};
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SurfaceForeignLibrary {
     pub public: bool,
+    /// Explicit checked-profile intent, not validated execution authority.
+    pub checked: Option<Span>,
     pub name: SurfaceName,
     pub members: Vec<SurfaceForeignMember>,
     pub span: Span,

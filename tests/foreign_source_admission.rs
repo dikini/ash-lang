@@ -447,3 +447,18 @@ fn noncallable_sentinels_never_publish_ordinary_values_or_callable_symbols() {
         assert!(run_path(fixture.configuration()).is_err(), "{entry}");
     }
 }
+
+#[test]
+fn checked_library_is_rejected_before_legacy_module_admission() {
+    let source = format!(
+        "{}\nmain : Unit -> Int\nmain () = 42\n",
+        CONTRACT.replace("pub foreign library", "pub foreign checked library")
+    );
+    let fixture = Fixture::new(&source);
+    let failure = run_path(fixture.configuration())
+        .expect_err("unchecked legacy module facts cannot implement a checked declaration");
+    assert!(
+        matches!(failure.pipeline_failure(), Some(PipelineFailure::Resolution(error)) if error.reason == ResolveReason::ForeignContract),
+        "{failure:?}"
+    );
+}
