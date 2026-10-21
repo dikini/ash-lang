@@ -400,12 +400,62 @@ It preserves newtype effective payloads, original continuity and selected access
 A real nonempty latent-row mirror red also required the fused kind walk to
 reject mixed pure/effectful presentations unless their row is empty. Final
 focused verification passes 331 distinct tests and Clippy, including image 16/16
-and unchanged startup limits. Review/integration/acceptance remain pending.
+and unchanged startup limits. PR #95 retained this reviewed subset at
+`2532f528795e5cdc3974685d10313e6cb4b778a9`; author acceptance, reviewer
+retained-result audit and PM confirmation are complete.
 
 Generic actual/row, recursive/shared payload and deeper resource closure remain
 later red-driven controls unless essential to this fixture. ResourceApply already
 has resolver/contract traversal. Whole F3, F-core, checked owners, copy/lifecycle,
 image/runtime activation, deployment and Main integration remain pending.
+
+### Static checked-owner binding prerequisite
+
+Start from PR #95 retained `2532f528795e5cdc3974685d10313e6cb4b778a9`
+after its independent retained-result audit and PM-confirmed partial #59 record.
+Accepted CP-0024 selects explicit exact H for owners and symbols, and requires
+ordinary lifecycle handling to retain H until the lexical host closes it. Current
+static checked resolution only binds scalar symbols; the legacy owner binder
+refuses checked contracts. Resource host/checked_scope admission is a later,
+separate boundary. No binding fact supplies executable or lifecycle permission.
+
+The first individual PR is the dependency-ordered binding prerequisite:
+
+1. Establish an actual checked prepared opaque State<H,R> owner with distinct
+   explicit Type H and owned R, nullable acquisition and void disposition
+   teardown. Test canonical original owner/symbol binding and full ordered
+   vectors under the explicit static profile. Keep default/legacy binding
+   refusal and checked dependency/access/unsupported call refusal explicit.
+2. Extend the existing owner and symbol binders, not a parallel registry. Exact
+   original nominal/parameter/origin/host correspondence must survive binding;
+   acquisition, teardown and owner operands select the same H. Use canonical
+   CheckedCall with unchanged inner Output/Nullable/Disposition relations.
+3. Observe the red before production changes. Mutate H/R positions, original
+   State, host selections, owner applications, source/origins and codec roles at
+   the actual binding boundary. Preserve complete Type/Row actuals and authored
+   assumptions. Pay lookup, clone and publication work before committing facts;
+   test exact, nonzero prefix, one-short, spent and fresh allowances.
+4. Require real source static resolution/checking of passive owner declarations
+   once binding is connected. Body-free summary/import/re-export and independent
+   Core may retain passive facts only if each existing authority check supports
+   them; name an unsupported boundary rather than claiming lifecycle completion.
+   Run affected scalar/owner/foreign, import, default-image and Clippy controls.
+5. Freeze inputs and raw receipts for independent review. Root assigns GitHub
+   integration, followed by partial acceptance; no whole TASK-0051 criterion is
+   accepted by this prerequisite alone.
+
+The next dependency checkpoint connects resource host selection and canonical
+checked_scope/CheckedFinish/CheckedScope to existing Acquired/Refused and finish
+phase rules. It requires actual source/summary/body-free consumer/link/Core and
+identity/fold positives, then independent wrong-H acquire/free/State/resource,
+nested-host, donor-R, erased completion Host and fake-codec negatives. The host
+boundary must never interpret owner operations. A mismatch with CP-0024's O/K
+transition rules returns to proposal/design; no new disposition rule is selected
+locally. Declared C-to-S owner dependencies remain separate.
+
+Checked byte/copy/lifecycle execution, K/quarantine, runtime/image activation,
+protected storage/deployment, SQLite, F4/F6, whole F3 and F-core remain pending.
+AD-0015 remains owner-free; this static work grants no deployment permission.
 
 ## Slice 5: Independently validate retained Core and private images
 

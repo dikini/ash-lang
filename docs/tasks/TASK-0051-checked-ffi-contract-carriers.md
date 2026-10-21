@@ -288,3 +288,12 @@ follows from retaining the reference.
 
 None. A semantic gap returns to CP-0024; an unsupported partial route refuses.
 Runtime protocol/completion and executor realization are separate F4/F2/F7 work.
+
+
+The next authorized checkpoint starts from PR #95 retained
+`2532f528795e5cdc3974685d10313e6cb4b778a9`, independently audited and
+PM-confirmed in issue #59. The owned plan splits exact checked owner/symbol
+original binding from connected resource host/checked_scope lifecycle admission.
+The prerequisite grants no lifecycle or runtime permission. Complete static
+source/summary/Core owner correspondence remains required after that bounded PR;
+all original incomplete criteria above remain unchecked.
