@@ -3116,10 +3116,18 @@ fn dispatch_entry(
                         Control::Evaluate(window.state(), environment.clone()),
                         Frame::SourceWindowInitializer { node, environment },
                     ),
-                    EffectOperation::SourceResourceScope(scope) => Transition::suspend(
-                        Control::Evaluate(scope.initializer, environment.clone()),
-                        Frame::SourceResourceInitializer { node, environment },
-                    ),
+                    EffectOperation::SourceResourceScope(scope) => {
+                        if matches!(
+                            scope.header().codec.report,
+                            crate::core::source_resource::SourceResourceReportCodec::CheckedScope { .. }
+                        ) {
+                            return Err(RuntimeFailure::ForeignBinding);
+                        }
+                        Transition::suspend(
+                            Control::Evaluate(scope.initializer, environment.clone()),
+                            Frame::SourceResourceInitializer { node, environment },
+                        )
+                    }
                     EffectOperation::Registration(_) => {
                         return Err(RuntimeFailure::InvalidControlState);
                     }

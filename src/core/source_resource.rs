@@ -3,6 +3,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+mod checked_codec;
 mod handler_rows;
 pub(in crate::core) use handler_rows::SourceHandlerGraph;
 pub(crate) use handler_rows::SourceHandlerRowInputs;
@@ -143,6 +144,10 @@ pub(crate) struct SourceResourceCodec {
 /// Checked report roles retain defining identities, including their field order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SourceResourceReportCodec {
+    CheckedScope {
+        report: [ConstructorId; 2],
+        completion: [ConstructorId; 3],
+    },
     Scope {
         report: [ConstructorId; 2],
         completion: [ConstructorId; 3],
@@ -155,7 +160,7 @@ pub(crate) enum SourceResourceReportCodec {
 impl SourceResourceReportCodec {
     pub(crate) fn refusal(self) -> ConstructorId {
         match self {
-            Self::Scope { report, .. } => report[0],
+            Self::Scope { report, .. } | Self::CheckedScope { report, .. } => report[0],
             Self::AcquiredOnly { report } => report[1],
         }
     }
@@ -584,11 +589,30 @@ impl CheckedSourceResourceHeader {
             .source_owner_candidates()
             .find(|(_, _, id, _)| *id == state)
             .ok_or_else(invalid)?;
-        // Checked owners require checked_scope and its owner-specific finish
-        // witnesses. Passive binding must not activate either legacy codec.
-        if prepared.checked_contract().is_some() {
+        let checked = prepared.checked_contract().is_some();
+        charge(work, 1)?;
+        if checked
+            != matches!(
+                header.codec.kind,
+                SurfaceResourceReportCodecKind::CheckedScope
+            )
+            || checked != header.host.is_some()
+        {
             return Err(invalid());
         }
+        let host_identity = if let Some(host) = header.host {
+            charge(work, 1)?;
+            let parameter = header.parameters.get(host.position).ok_or_else(invalid)?;
+            if host.position == header.owned_position
+                || parameter.kind != Kind::Type
+                || host.span.source() != header.owned_origin.primary_span().source()
+            {
+                return Err(invalid());
+            }
+            Some(parameter.id)
+        } else {
+            None
+        };
         crate::foreign::source_owner::authenticate_source_owner_candidate(
             prepared, index, state, parameters, registry, work,
         )
@@ -613,43 +637,49 @@ impl CheckedSourceResourceHeader {
                 invalid()
             }
         })?;
-        let (acquisition, acquisition_arguments) = application(&header.acquisition.ty, work)?;
-        let (finish, finish_arguments) = application(&header.completion.ty, work)?;
-        let (scope, scope_arguments) = application(&header.result.ty, work)?;
-        if acquisition_arguments.len() != 3
-            || finish_arguments.len() != 2
-            || !same(acquisition_arguments[0], &header.state.ty, work)?
-            || !same(acquisition_arguments[1], &header.data.ty, work)?
-            || !same(finish_arguments[0], &header.state.ty, work)?
-        {
-            return Err(invalid());
-        }
-        let acquire_codec = acquire_codec(acquisition, registry, work)?;
-        let finish_codec = finish_codec(finish, registry, work)?;
-        let report = match header.codec.kind {
-            SurfaceResourceReportCodecKind::CheckedScope => return Err(invalid()),
-            SurfaceResourceReportCodecKind::Scope => {
-                if scope_arguments.len() != 3
-                    || !same(acquisition_arguments[2], scope_arguments[0], work)?
-                    || !same(finish_arguments[1], scope_arguments[1], work)?
-                    || !variable(scope_arguments[2], header.answer.id)
-                {
-                    return Err(invalid());
+        let (acquire_codec, finish_codec, report) = if checked {
+            let codec = checked_codec::authenticate(header, registry, work)?;
+            (codec.acquire, codec.finish, codec.report)
+        } else {
+            let (acquisition, acquisition_arguments) = application(&header.acquisition.ty, work)?;
+            let (finish, finish_arguments) = application(&header.completion.ty, work)?;
+            let (scope, scope_arguments) = application(&header.result.ty, work)?;
+            if acquisition_arguments.len() != 3
+                || finish_arguments.len() != 2
+                || !same(acquisition_arguments[0], &header.state.ty, work)?
+                || !same(acquisition_arguments[1], &header.data.ty, work)?
+                || !same(finish_arguments[0], &header.state.ty, work)?
+            {
+                return Err(invalid());
+            }
+            let acquire_codec = acquire_codec(acquisition, registry, work)?;
+            let finish_codec = finish_codec(finish, registry, work)?;
+            let report = match header.codec.kind {
+                SurfaceResourceReportCodecKind::CheckedScope => return Err(invalid()),
+                SurfaceResourceReportCodecKind::Scope => {
+                    if scope_arguments.len() != 3
+                        || !same(acquisition_arguments[2], scope_arguments[0], work)?
+                        || !same(finish_arguments[1], scope_arguments[1], work)?
+                        || !variable(scope_arguments[2], header.answer.id)
+                    {
+                        return Err(invalid());
+                    }
+                    let (report, completion) = report_codec(scope, registry, work)?;
+                    SourceResourceReportCodec::Scope { report, completion }
                 }
-                let (report, completion) = report_codec(scope, registry, work)?;
-                SourceResourceReportCodec::Scope { report, completion }
-            }
-            SurfaceResourceReportCodecKind::AcquiredOnly => {
-                let report = acquired_only_codec(
-                    scope,
-                    &scope_arguments,
-                    header.answer.id,
-                    acquisition_arguments[2],
-                    registry,
-                    work,
-                )?;
-                SourceResourceReportCodec::AcquiredOnly { report }
-            }
+                SurfaceResourceReportCodecKind::AcquiredOnly => {
+                    let report = acquired_only_codec(
+                        scope,
+                        &scope_arguments,
+                        header.answer.id,
+                        acquisition_arguments[2],
+                        registry,
+                        work,
+                    )?;
+                    SourceResourceReportCodec::AcquiredOnly { report }
+                }
+            };
+            (acquire_codec, finish_codec, report)
         };
         let mut acquiring = None;
         let mut tearing_down = None;
@@ -658,6 +688,37 @@ impl CheckedSourceResourceHeader {
             let operation = OperationId::new(effect.instance.effect(), 0);
             let symbol = registry.native_symbol(operation).ok_or_else(invalid)?;
             let owner = symbol.owner().ok_or_else(invalid)?;
+            if let Some(host_identity) = host_identity {
+                let contract = owner.prepared().checked_contract().ok_or_else(invalid)?;
+                charge(work, contract.owners().len())?;
+                let selection = contract
+                    .owners()
+                    .iter()
+                    .find(|selection| selection.member_index() == owner.owner().member_index())
+                    .ok_or_else(invalid)?;
+                if state_arguments.get(selection.host_parameter()).is_none_or(|argument|
+                    !matches!(argument, crate::foreign::source_owner::StateArgument::Type(ty) if variable(ty, host_identity)))
+                { return Err(invalid()); }
+                let instance = crate::foreign::checked_source::checked_host_instance(
+                    symbol,
+                    &effect.instance,
+                    work,
+                )
+                .map_err(|error| {
+                    if error.is_resource_exhaustion() {
+                        resource()
+                    } else {
+                        invalid()
+                    }
+                })?
+                .ok_or_else(invalid)?;
+                if !matches!(instance.arguments(), [KindedArgument::TypeArg(Type::Variable(id))] if *id == host_identity)
+                {
+                    return Err(invalid());
+                }
+            } else if symbol.prepared().checked_contract().is_some() {
+                return Err(invalid());
+            }
             if owner.nominal() != state
                 || owner.parameter_ids().len() != state_arguments.len()
                 || state_arguments
@@ -766,6 +827,31 @@ impl CheckedSourceResourceHeader {
                 crate::foreign::source_contract::PreparedAbiResult::Scalar(_)
             )
         ) {
+            return Err(invalid());
+        }
+        if checked
+            && (!owner.owner().retained_parameters().is_empty()
+                || !matches!(
+                    owner.owner().representation(),
+                    PreparedAddressRepresentation::Opaque
+                )
+                || !matches!(
+                    acquire.owner_role(),
+                    Some(PreparedOwnerCall::Acquire {
+                        initialized_bytes: None,
+                        ..
+                    })
+                )
+                || !matches!(
+                    teardown.owner_role(),
+                    Some(PreparedOwnerCall::Teardown { .. })
+                )
+                || !matches!(
+                    teardown.symbol().result(),
+                    crate::foreign::source_contract::PreparedAbiResult::Void
+                )
+                || teardown.symbol().operands().len() != 1)
+        {
             return Err(invalid());
         }
         let owned = header.parameters[header.owned_position].id;
@@ -1550,6 +1636,8 @@ struct SourcePhaseCalls {
 #[derive(Debug)]
 enum FlowFact<'a> {
     Independent,
+    // Only the exact admitted checked finish request can mint this payload.
+    FinishBoundary(NodeId),
     ScalarLiteral(&'a crate::integer::Integer),
     Fresh,
     Current,
@@ -1626,7 +1714,10 @@ impl<'a> FlowFacts<'a> {
         while let Some(id) = pending.pop() {
             charge(work, 1)?;
             match self.fact(id)? {
-                FlowFact::Independent | FlowFact::PayloadCallable | FlowFact::ScalarLiteral(_) => {}
+                FlowFact::Independent
+                | FlowFact::FinishBoundary(_)
+                | FlowFact::PayloadCallable
+                | FlowFact::ScalarLiteral(_) => {}
                 FlowFact::InputNominal(_, identities) if identities.is_empty() => {}
                 FlowFact::Tuple(fields) => {
                     charge(work, fields.len())?;
@@ -1655,6 +1746,7 @@ impl<'a> FlowFacts<'a> {
             charge(work, 1)?;
             match self.fact(id)? {
                 FlowFact::Independent
+                | FlowFact::FinishBoundary(_)
                 | FlowFact::ScalarLiteral(_)
                 | FlowFact::Constructor(_, None) => {}
                 FlowFact::Current if current => {}
@@ -1798,6 +1890,7 @@ struct FlowPath {
     acquired: bool,
     consumed: bool,
     attempted_teardown: bool,
+    checked_finish_request: Option<NodeId>,
     blocked: bool,
     windows: Vec<(NodeId, usize)>,
     ordinary_owners: Vec<(super::HandlerId, crate::resolved::ResumeId)>,
@@ -1810,6 +1903,7 @@ impl FlowPath {
             acquired: false,
             consumed: false,
             attempted_teardown: false,
+            checked_finish_request: None,
             blocked: false,
             windows: Vec::new(),
             ordinary_owners: Vec::new(),
@@ -1850,6 +1944,7 @@ impl FlowPath {
             acquired: self.acquired,
             consumed: self.consumed,
             attempted_teardown: self.attempted_teardown,
+            checked_finish_request: self.checked_finish_request,
             blocked: self.blocked,
             windows,
             ordinary_owners,
@@ -2820,6 +2915,15 @@ fn eval_flow<'a>(
                     }
                     let refusal = facts.wrapped(call.conversion_failed, 0, work)?;
                     push(&mut results, (refusal, path.copy(work)?), work)?;
+                    if matches!(
+                        header.codec.report,
+                        SourceResourceReportCodec::CheckedScope { .. }
+                    ) {
+                        charge(work, 1)?;
+                        let failed = ConstructorId::new(call.call, 2);
+                        let outcome = facts.wrapped(failed, 0, work)?;
+                        push(&mut results, (outcome, path.copy(work)?), work)?;
+                    }
                     let null = facts.add(
                         FlowFact::Constructor(codec.nullable_constructors()[0], None),
                         work,
@@ -2909,6 +3013,41 @@ fn eval_flow<'a>(
                         return Err(invalid());
                     }
                     path.attempted_teardown = true;
+                    if matches!(
+                        header.codec.report,
+                        SourceResourceReportCodec::CheckedScope { .. }
+                    ) {
+                        // This signature has only authenticated Current and a void
+                        // result. It has no fallible scalar/result conversion.
+                        // Source arms remain typed/exhaustive; impossible generic
+                        // codec alternatives supply no path or finish witness.
+                        if expected.symbol().operands().len() != 1
+                            || !matches!(
+                                expected.symbol().result(),
+                                crate::foreign::source_contract::PreparedAbiResult::Void
+                            )
+                        {
+                            return Err(invalid());
+                        }
+                        let PreparedOwnerCall::Teardown { consumes, .. } = role else {
+                            return Err(invalid());
+                        };
+                        charge(work, 1)?;
+                        path.checked_finish_request = Some(id);
+                        let boundary = facts.add(FlowFact::FinishBoundary(id), work)?;
+                        let outcome =
+                            facts.wrapped(ConstructorId::new(call.call, 2), boundary, work)?;
+                        push(&mut results, (outcome, path.copy(work)?), work)?;
+                        path.consumed = *consumes;
+                        let disposition = facts.wrapped(
+                            codec.disposition_constructors()[usize::from(!consumes)],
+                            0,
+                            work,
+                        )?;
+                        let outcome = facts.wrapped(call.returned, disposition, work)?;
+                        push(&mut results, (outcome, path), work)?;
+                        continue;
+                    }
                     // Current/Enclosing are authenticated guarded addresses.
                     // Their refusal is terminal, not ordinary scalar conversion.
                     // Preserve the existing void profile's flow/accounting.
@@ -3366,6 +3505,42 @@ fn check_flow(
         return Err(invalid());
     }
     for (value, path) in results {
+        if phase == SourceResourcePhase::Finish
+            && matches!(
+                header.codec.report,
+                SourceResourceReportCodec::CheckedScope { .. }
+            )
+        {
+            let request = path.checked_finish_request.ok_or_else(invalid)?;
+            let FlowFact::Constructor(constructor, Some(payload)) = facts.fact(value)? else {
+                return Err(invalid());
+            };
+            if *constructor == header.codec.finish[0] {
+                if !path.consumed || !facts.independent(*payload, work)? {
+                    return Err(invalid());
+                }
+            } else if *constructor == header.codec.finish[1] {
+                let FlowFact::Tuple(fields) = facts.fact(*payload)? else {
+                    return Err(invalid());
+                };
+                if path.consumed
+                    || fields.len() != 2
+                    || !matches!(facts.fact(fields[0])?, FlowFact::Current)
+                    || !facts.independent(fields[1], work)?
+                {
+                    return Err(invalid());
+                }
+            } else if *constructor == header.codec.finish[2] {
+                if path.consumed
+                    || !matches!(facts.fact(*payload)?, FlowFact::FinishBoundary(original) if *original == request)
+                {
+                    return Err(invalid());
+                }
+            } else {
+                return Err(invalid());
+            }
+            continue;
+        }
         match (phase, facts.fact(value)?) {
             (SourceResourcePhase::Acquire, FlowFact::Constructor(id, Some(payload)))
                 if *id == header.codec.acquire[0] =>

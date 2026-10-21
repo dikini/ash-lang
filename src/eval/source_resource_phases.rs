@@ -528,6 +528,9 @@ impl Machine<'_> {
                     .take()
                     .ok_or(RuntimeFailure::InvalidControlState)?;
                 let report = match protocol.report {
+                    crate::core::source_resource::SourceResourceReportCodec::CheckedScope {
+                        ..
+                    } => return Err(RuntimeFailure::ForeignBinding),
                     crate::core::source_resource::SourceResourceReportCodec::Scope {
                         report,
                         completion,

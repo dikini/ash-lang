@@ -25,3 +25,11 @@ failure on equal 573-input maps, aggregate
 The candidate carries the explicit host position/span in the existing immutable
 header and refuses it in private images. Checked codec admission is still a
 refusal here; no finish-flow permission follows from successful parsing.
+
+The first header/flow candidate compiles and passes syntax and explicit
+resolution, then rejects during template/lifecycle admission with Argument. Its
+575-input maps are equal (`fe77cc4d...`) and the raw result is retained. This is
+not a connected lifecycle positive. Independent inspection also identified that
+request identity alone must be strengthened with an exact outcome category:
+BoundaryFailed must not be reported as native retention. The required source
+mutation and independently reconstructed Core control remain pending.

@@ -2861,6 +2861,7 @@ fn compile_source_resource_capture_control<F: CoreOperationFamily>(
         matches!(
             scope.header().codec.report,
             super::source_resource::SourceResourceReportCodec::Scope { .. }
+                | super::source_resource::SourceResourceReportCodec::CheckedScope { .. }
         ),
         budget,
     )?;

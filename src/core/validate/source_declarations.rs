@@ -4,6 +4,7 @@
 //! particular, a retained nominal/effect ID cannot choose its defining slot.
 
 mod coordinate_loan;
+mod resource_selectors;
 
 pub(crate) use coordinate_loan::DeclarationCoordinateLoan;
 
@@ -91,6 +92,7 @@ pub(crate) struct DeclarationCoordinates {
     effects: Vec<EffectCoordinate>,
     effect_origins: HashMap<Span, usize>,
     resource_binders: ResourceBinderCoordinates,
+    resource_selectors: Vec<resource_selectors::ResourceSelectors>,
 }
 
 fn registry() -> ValidationError {
@@ -606,6 +608,11 @@ impl DeclarationCoordinates {
                         charge(work, 1)?;
                         is_source |= matches!(child, ConcreteElement::Node(child) if child.kind == NodeKind::SourceResourceField);
                     }
+                    if is_source {
+                        let selectors =
+                            resource_selectors::ResourceSelectors::from_node(node, tokens, work)?;
+                        push(&mut result.resource_selectors, selectors, work)?;
+                    }
                     let name = name(node, tokens, work)?;
                     let coordinate = NominalCoordinate {
                         origin: name,
@@ -1116,6 +1123,16 @@ fn authenticate_module(
         {
             return Err(registry_error());
         }
+        let mut selectors = None;
+        for candidate in &coordinates.resource_selectors {
+            charge(work, 1)?;
+            if candidate.name == coordinate.name && selectors.replace(candidate).is_some() {
+                return Err(registry_error());
+            }
+        }
+        selectors
+            .ok_or_else(registry_error)?
+            .authenticate(source, fact, work)?;
     }
     for (_, certificate) in registry.provider_contracts() {
         charge(work, 1)?;
