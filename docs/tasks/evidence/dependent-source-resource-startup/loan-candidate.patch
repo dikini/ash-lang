@@ -1,0 +1,616 @@
+diff --git a/src/build/image.rs b/src/build/image.rs
+index 08553bf..47b081a 100644
+--- a/src/build/image.rs
++++ b/src/build/image.rs
+@@ -12097,7 +12097,39 @@ impl PureImage {
+             decoder.work.used(),
+             decoder.work.used(),
+         );
+-        let templates = decoder.source_templates(&registry, &symbols, &binder_ids)?;
++        // Freeze ownership of the admitted coordinate arena outside the
++        // decoder. The syntax loan borrows these exact immutable objects;
++        // original registry/forest sessions remain separate per template.
++        let Decoder {
++            image,
++            expected_fact_prefixes,
++            sources,
++            modules,
++            source_pending_rows,
++            source_declaration_catalogs,
++            decoded_types,
++            work,
++        } = decoder;
++        let source_arena = sources.into_owned()?;
++        let module_arena = modules.into_owned()?;
++        let coordinate_loan = crate::core::validate::DeclarationCoordinateLoan::new(
++            &source_arena,
++            &module_arena,
++            work,
++        )
++        .map_err(ImageFailure::Validation)?;
++        let mut decoder = Decoder {
++            image,
++            expected_fact_prefixes,
++            sources: CoordinateStorage::Borrowed(&source_arena),
++            modules: CoordinateStorage::Borrowed(&module_arena),
++            source_pending_rows,
++            source_declaration_catalogs,
++            decoded_types,
++            work,
++        };
++        let templates =
++            decoder.source_templates(&registry, &symbols, &binder_ids, &coordinate_loan)?;
+         #[cfg(test)]
+         crate::core::validate::startup_measurement::record(
+             "restore:main-enter",
+@@ -12213,8 +12245,10 @@ impl PureImage {
+         // coordinate arena into its private registration owner without copying.
+         drop(sources);
+         drop(module_sources);
+-        let sources = decoder.sources.into_owned()?;
+-        let modules = decoder.modules.into_owned()?;
++        drop(decoder);
++        drop(coordinate_loan);
++        let sources = source_arena;
++        let modules = module_arena;
+         Ok(RestoredEffectImage {
+             provenance,
+             program,
+diff --git a/src/build/source_resource_image.rs b/src/build/source_resource_image.rs
+index 0dc4277..e0a0701 100644
+--- a/src/build/source_resource_image.rs
++++ b/src/build/source_resource_image.rs
+@@ -1808,6 +1808,7 @@ impl Decoder<'_> {
+         registry: &Arc<ResolvedRegistry>,
+         symbols: &[Arc<crate::foreign::checked_source::CheckedForeignSymbol>],
+         binders: &[crate::resolved::BinderId],
++        coordinate_loan: &crate::core::validate::DeclarationCoordinateLoan<'_>,
+     ) -> Result<Vec<RestoredSourceTemplate>, ImageFailure> {
+         let mut templates = Vec::new();
+         for record in &self.image.source_templates {
+@@ -1914,10 +1915,12 @@ impl Decoder<'_> {
+             }
+             let declared_globals = globals.len();
+             // The three forests share this exact defining view. A different
+-            // original template owns another registry allocation/context and
+-            // must not inherit the previous template's registry receipt.
++            // original template still gets a fresh registry receipt; only
++            // syntax coordinates borrow the fixed source arena across views.
+             let mut structure_session =
+-                crate::core::validate::SourceResourceStructureSession::default();
++                crate::core::validate::SourceResourceStructureSession::with_coordinate_loan(
++                    coordinate_loan,
++                );
+             #[cfg(test)]
+             crate::core::validate::startup_measurement::record(
+                 "template:admit-enter",
+diff --git a/src/core/validate.rs b/src/core/validate.rs
+index 77d1c97..b469503 100644
+--- a/src/core/validate.rs
++++ b/src/core/validate.rs
+@@ -6,6 +6,8 @@ mod foreign_host_tests;
+ mod selected_evidence_tests;
+ pub(crate) mod semantic_type_variables;
+ mod source_declarations;
++
++pub(crate) use source_declarations::DeclarationCoordinateLoan;
+ #[cfg(test)]
+ pub(crate) mod startup_measurement;
+ pub(crate) use source_declarations::DeclarationCoordinates;
+@@ -3800,6 +3802,7 @@ fn check_source_resource_structure_with_handler_graph(
+ #[derive(Default)]
+ pub(crate) struct SourceResourceStructureSession<'context> {
+     admitted: Option<OriginalTemplateRegistryAdmission>,
++    coordinate_loan: Option<&'context DeclarationCoordinateLoan<'context>>,
+     original_provider:
+         Option<&'context crate::elaborate::provider::SourceOriginalProviderContext<'context>>,
+ }
+@@ -3822,9 +3825,21 @@ impl<'context> SourceResourceStructureSession<'context> {
+     ) -> Self {
+         Self {
+             admitted: None,
++            coordinate_loan: None,
+             original_provider,
+         }
+     }
++
++    pub(crate) fn with_coordinate_loan(
++        coordinate_loan: &'context DeclarationCoordinateLoan<'context>,
++    ) -> Self {
++        Self {
++            admitted: None,
++            coordinate_loan: Some(coordinate_loan),
++            original_provider: None,
++        }
++    }
++
+     #[cfg(test)]
+     pub(crate) fn check(
+         &mut self,
+@@ -3948,6 +3963,7 @@ impl<'context> SourceResourceStructureSession<'context> {
+             return result;
+         }
+         let mut validator = Validator::new_modules(program, sources, module_sources)?;
++        validator.source_coordinate_loan = self.coordinate_loan;
+         validator.provider_external_types = Some(globals);
+         if !program
+             .registry
+@@ -4405,6 +4421,7 @@ struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily
+     source_handler_graph: Option<&'program super::source_resource::SourceHandlerGraph<'program>>,
+     provider_fragment_locals: Option<&'program [crate::types::NominalTypeId]>,
+     source_resource_context: SourceResourceValidationContext,
++    source_coordinate_loan: Option<&'program DeclarationCoordinateLoan<'source>>,
+     authenticated_abstract_nominals: std::cell::RefCell<HashSet<crate::types::NominalTypeId>>,
+     unused_ordering: std::cell::RefCell<HashSet<crate::types::TypeVariableId>>,
+     type_work: Cell<usize>,
+@@ -4811,6 +4828,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
+             source_handler_graph: None,
+             provider_fragment_locals: None,
+             source_resource_context: SourceResourceValidationContext::FinalProgram,
++            source_coordinate_loan: None,
+             authenticated_abstract_nominals: std::cell::RefCell::new(HashSet::new()),
+             unused_ordering: std::cell::RefCell::new(HashSet::new()),
+             type_work: Cell::new(0),
+@@ -16245,14 +16263,26 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
+             );
+             #[cfg(test)]
+             startup_measurement::count("core.original-proof.enter");
+-            let result = source_declarations::authenticate(
+-                &self.program.registry,
+-                &self.sources,
+-                self.module_sources
+-                    .as_ref()
+-                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?,
+-                &mut work,
+-            );
++            let modules = self
++                .module_sources
++                .as_ref()
++                .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
++            let result = if let Some(loan) = self.source_coordinate_loan {
++                source_declarations::authenticate_with_coordinate_loan(
++                    &self.program.registry,
++                    &self.sources,
++                    modules,
++                    &mut work,
++                    loan,
++                )
++            } else {
++                source_declarations::authenticate(
++                    &self.program.registry,
++                    &self.sources,
++                    modules,
++                    &mut work,
++                )
++            };
+             #[cfg(test)]
+             startup_measurement::record(
+                 if result.is_ok() {
+diff --git a/src/core/validate/source_declarations.rs b/src/core/validate/source_declarations.rs
+index bcd47d6..1b54882 100644
+--- a/src/core/validate/source_declarations.rs
++++ b/src/core/validate/source_declarations.rs
+@@ -3,6 +3,10 @@
+ //! This syntax-only check grants no semantic or executable authority. In
+ //! particular, a retained nominal/effect ID cannot choose its defining slot.
+ 
++mod coordinate_loan;
++
++pub(crate) use coordinate_loan::DeclarationCoordinateLoan;
++
+ use std::collections::{HashMap, HashSet};
+ 
+ use super::{ValidationError, ValidationReason};
+@@ -893,13 +897,46 @@ pub(super) fn authenticate(
+     sources: &HashMap<SourceId, &SourceFile>,
+     modules: &HashMap<ModuleId, SourceId>,
+     work: &mut TypeWorkBudget,
++) -> Result<OriginalDeclarationProvenance, ValidationError> {
++    authenticate_with_coordinates(registry, sources, modules, work, None)
++}
++
++pub(super) fn authenticate_with_coordinate_loan(
++    registry: &ResolvedRegistry,
++    sources: &HashMap<SourceId, &SourceFile>,
++    modules: &HashMap<ModuleId, SourceId>,
++    work: &mut TypeWorkBudget,
++    loan: &DeclarationCoordinateLoan<'_>,
++) -> Result<OriginalDeclarationProvenance, ValidationError> {
++    authenticate_with_coordinates(registry, sources, modules, work, Some(loan))
++}
++
++fn authenticate_with_coordinates(
++    registry: &ResolvedRegistry,
++    sources: &HashMap<SourceId, &SourceFile>,
++    modules: &HashMap<ModuleId, SourceId>,
++    work: &mut TypeWorkBudget,
++    loan: Option<&DeclarationCoordinateLoan<'_>>,
+ ) -> Result<OriginalDeclarationProvenance, ValidationError> {
+     let mut original = OriginalDeclarationProvenance::default();
+     for (module, source) in modules {
+         charge(work, 1)?;
+         let source = *sources.get(source).ok_or_else(registry_error)?;
+-        let coordinates = DeclarationCoordinates::from_source(source, work)?;
+-        authenticate_module(registry, *module, source, &coordinates, work, &mut original)?;
++        let shared = loan
++            .map(|loan| loan.get(*module, source, work))
++            .transpose()?;
++        let fresh = if shared.is_none() {
++            Some(DeclarationCoordinates::from_source(source, work)?)
++        } else {
++            None
++        };
++        let coordinates = shared
++            .as_deref()
++            .or(fresh.as_ref())
++            .expect("one coordinate owner");
++        // Only syntax is shared. Each immutable registry/context still proves
++        // all declarations, retained resource binders and unused candidates.
++        authenticate_module(registry, *module, source, coordinates, work, &mut original)?;
+         coordinates.resource_binders.authenticate(
+             registry,
+             *module,
+@@ -1444,6 +1481,100 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn coordinate_loan_never_reuses_registry_or_original_binder_authority() {
++        let source_arena = [owner_access_source()];
++        let source = &source_arena[0];
++        let module = ModuleId::from(source.id());
++        let module_arena = [module];
++        let registry = owner_access_registry(source, [0, 1]);
++        let permuted = owner_access_registry(source, [1, 0]);
++        let sources = HashMap::from([(source.id(), source)]);
++        let modules = HashMap::from([(module, source.id())]);
++        let mut work = TypeWorkBudget::default();
++        let loan = DeclarationCoordinateLoan::new(&source_arena, &module_arena, &mut work).unwrap();
++        let cold = authenticate(&registry, &sources, &modules, &mut work).unwrap();
++        let original =
++            authenticate_with_coordinate_loan(&registry, &sources, &modules, &mut work, &loan)
++                .unwrap();
++        assert_eq!(original.nominal_positions, cold.nominal_positions);
++        let retained = loan.get(module, source, &mut work).unwrap();
++        assert_eq!(
++            authenticate_with_coordinate_loan(&permuted, &sources, &modules, &mut work, &loan,)
++                .unwrap_err()
++                .reason(),
++            ValidationReason::Registry
++        );
++        assert!(Arc::ptr_eq(
++            &retained,
++            &loan.get(module, source, &mut work).unwrap()
++        ));
++        let again =
++            authenticate_with_coordinate_loan(&registry, &sources, &modules, &mut work, &loan)
++                .unwrap();
++        assert_eq!(again.nominal_positions, original.nominal_positions);
++
++        // A clone has identical bytes and SourceId, and passes the cold proof.
++        // It is still another source object and cannot use this operation loan.
++        let clone = source.clone();
++        let cloned_sources = HashMap::from([(clone.id(), &clone)]);
++        authenticate(&registry, &cloned_sources, &modules, &mut work).unwrap();
++        assert_eq!(
++            authenticate_with_coordinate_loan(
++                &registry,
++                &cloned_sources,
++                &modules,
++                &mut work,
++                &loan,
++            )
++            .unwrap_err()
++            .reason(),
++            ValidationReason::Registry
++        );
++    }
++
++    #[test]
++    fn coordinate_loan_whole_original_admission_keeps_cumulative_work() {
++        let source_arena = [owner_access_source()];
++        let source = &source_arena[0];
++        let module = ModuleId::from(source.id());
++        let module_arena = [module];
++        let registry = owner_access_registry(source, [0, 1]);
++        let sources = HashMap::from([(source.id(), source)]);
++        let modules = HashMap::from([(module, source.id())]);
++        let operation = |work: &mut TypeWorkBudget| -> Result<(), ValidationError> {
++            let loan = DeclarationCoordinateLoan::new(&source_arena, &module_arena, work)?;
++            let first =
++                authenticate_with_coordinate_loan(&registry, &sources, &modules, work, &loan)?;
++            let second =
++                authenticate_with_coordinate_loan(&registry, &sources, &modules, work, &loan)?;
++            assert_eq!(first.nominal_positions, second.nominal_positions);
++            Ok(())
++        };
++        let mut measured = TypeWorkBudget::default();
++        operation(&mut measured).unwrap();
++        let cost = measured.used();
++        for prefix in [0, 17] {
++            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
++            short.charge(prefix).unwrap();
++            assert_eq!(
++                operation(&mut short).unwrap_err().reason(),
++                ValidationReason::Resource
++            );
++            assert!(short.used() <= short.limit());
++            for _ in 0..2 {
++                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
++                exact.charge(prefix).unwrap();
++                operation(&mut exact).unwrap();
++                assert_eq!(exact.used(), prefix + cost);
++                assert_eq!(
++                    operation(&mut exact).unwrap_err().reason(),
++                    ValidationReason::Resource
++                );
++            }
++        }
++    }
++
+     fn effect_registry(source: &SourceFile, permutation: [u32; 2]) -> ResolvedRegistry {
+         let module = ModuleId::from(source.id());
+         let declarations = surface(source);
+diff --git a/src/core/validate/source_declarations/coordinate_loan.rs b/src/core/validate/source_declarations/coordinate_loan.rs
+new file mode 100644
+index 0000000..5125028
+--- /dev/null
++++ b/src/core/validate/source_declarations/coordinate_loan.rs
+@@ -0,0 +1,257 @@
++//! Operation-local, source-only coordinate loans. No registry proof is retained.
++
++use std::{
++    cell::RefCell,
++    collections::{HashMap, HashSet},
++    sync::Arc,
++};
++
++use super::{
++    DeclarationCoordinates, ModuleId, SourceFile, SourceId, TypeWorkBudget, ValidationError,
++    charge, registry_error, resource,
++};
++
++/// Lazy syntax coordinates anchored to a live immutable source arena.
++///
++/// The reconstruction operation owns this loan. Each consuming validator still
++/// authenticates its module relation, registry, binders and complete forest.
++/// Nothing in this value records successful semantic authentication.
++pub(crate) struct DeclarationCoordinateLoan<'source> {
++    anchors: HashMap<ModuleId, &'source SourceFile>,
++    coordinates: RefCell<HashMap<(ModuleId, SourceId), Arc<DeclarationCoordinates>>>,
++}
++
++impl<'source> DeclarationCoordinateLoan<'source> {
++    pub(crate) fn new(
++        sources: &'source [SourceFile],
++        modules: &[ModuleId],
++        work: &mut TypeWorkBudget,
++    ) -> Result<Self, ValidationError> {
++        charge(work, 1)?;
++        if sources.len() != modules.len() {
++            return Err(registry_error());
++        }
++        charge(work, sources.len().checked_mul(2).ok_or_else(resource)?)?;
++        let mut anchors = HashMap::new();
++        let mut source_ids = HashSet::new();
++        anchors.try_reserve(sources.len()).map_err(|_| resource())?;
++        source_ids
++            .try_reserve(sources.len())
++            .map_err(|_| resource())?;
++        for (module, source) in modules.iter().copied().zip(sources) {
++            charge(work, 2)?;
++            if anchors.insert(module, source).is_some() || !source_ids.insert(source.id()) {
++                return Err(registry_error());
++            }
++        }
++        Ok(Self {
++            anchors,
++            coordinates: RefCell::new(HashMap::new()),
++        })
++    }
++
++    /// Borrows complete syntax only, after exact live context correspondence.
++    pub(super) fn get(
++        &self,
++        module: ModuleId,
++        source: &SourceFile,
++        work: &mut TypeWorkBudget,
++    ) -> Result<Arc<DeclarationCoordinates>, ValidationError> {
++        // Account for anchor lookup, source identity checks and cache lookup.
++        charge(work, 3)?;
++        let anchored = self.anchors.get(&module).ok_or_else(registry_error)?;
++        if anchored.id() != source.id() || !std::ptr::eq(*anchored, source) {
++            return Err(registry_error());
++        }
++        let key = (module, source.id());
++        if let Some(coordinates) = self.coordinates.borrow().get(&key) {
++            charge(work, 1)?;
++            #[cfg(test)]
++            super::super::startup_measurement::count("core.coordinates.loan.hit");
++            return Ok(Arc::clone(coordinates));
++        }
++        charge(work, 1)?;
++        #[cfg(test)]
++        super::super::startup_measurement::count("core.coordinates.loan.miss");
++        let coordinates = DeclarationCoordinates::from_source(source, work)?;
++        // No failed/partial syntax or unpaid retention becomes a future hit.
++        charge(work, 1)?;
++        let mut retained = self.coordinates.borrow_mut();
++        retained.try_reserve(1).map_err(|_| resource())?;
++        let coordinates = Arc::new(coordinates);
++        retained.insert(key, Arc::clone(&coordinates));
++        Ok(coordinates)
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::core::validate::ValidationReason;
++
++    fn source(name: &str) -> SourceFile {
++        SourceFile::new(
++            name,
++            "type First = One\n| Two(Int)\nnewtype Last = Last(Int)\n",
++        )
++        .unwrap()
++    }
++
++    fn modules(sources: &[SourceFile]) -> Vec<ModuleId> {
++        sources
++            .iter()
++            .map(|source| ModuleId::from(source.id()))
++            .collect()
++    }
++
++    fn assert_registry<T>(result: Result<T, ValidationError>) {
++        assert_eq!(result.err().unwrap().reason(), ValidationReason::Registry);
++    }
++
++    fn assert_resource<T>(result: Result<T, ValidationError>) {
++        assert_eq!(result.err().unwrap().reason(), ValidationReason::Resource);
++    }
++
++    #[test]
++    fn coordinate_loan_hits_only_exact_live_source_and_module() {
++        let sources = [source("first"), source("second")];
++        let modules = modules(&sources);
++        let mut work = TypeWorkBudget::default();
++        let loan = DeclarationCoordinateLoan::new(&sources, &modules, &mut work).unwrap();
++        let first = loan.get(modules[0], &sources[0], &mut work).unwrap();
++        let second = loan.get(modules[1], &sources[1], &mut work).unwrap();
++        assert!(!Arc::ptr_eq(&first, &second));
++        assert!(Arc::ptr_eq(
++            &first,
++            &loan.get(modules[0], &sources[0], &mut work).unwrap()
++        ));
++        assert!(Arc::ptr_eq(
++            &second,
++            &loan.get(modules[1], &sources[1], &mut work).unwrap()
++        ));
++        assert_eq!(first.nominals.len(), 2);
++        assert_eq!(first.constructors.len(), 3);
++        let clone = sources[0].clone();
++        assert_eq!(clone.id(), sources[0].id());
++        let donor = source("donor");
++        for (module, source) in [
++            (modules[0], &clone),
++            (modules[0], &donor),
++            (modules[0], &sources[1]),
++            (modules[1], &sources[0]),
++            (ModuleId::from(donor.id()), &donor),
++        ] {
++            assert_registry(loan.get(module, source, &mut work));
++        }
++        assert_eq!(loan.coordinates.borrow().len(), 2);
++    }
++
++    #[test]
++    fn coordinate_loan_constructor_rejects_duplicate_or_incomplete_associations() {
++        let sources = [source("first"), source("second")];
++        let ids = modules(&sources);
++        assert_registry(DeclarationCoordinateLoan::new(
++            &sources,
++            &ids[..1],
++            &mut TypeWorkBudget::default(),
++        ));
++        assert_registry(DeclarationCoordinateLoan::new(
++            &sources,
++            &[ids[0], ids[0]],
++            &mut TypeWorkBudget::default(),
++        ));
++        let clones = [sources[0].clone(), sources[0].clone()];
++        assert_registry(DeclarationCoordinateLoan::new(
++            &clones,
++            &ids,
++            &mut TypeWorkBudget::default(),
++        ));
++        let mut measured = TypeWorkBudget::default();
++        DeclarationCoordinateLoan::new(&sources, &ids, &mut measured).unwrap();
++        let required = measured.used();
++        for prefix in [0, 17] {
++            let mut short = TypeWorkBudget::with_limit(prefix + required - 1);
++            short.charge(prefix).unwrap();
++            assert_resource(DeclarationCoordinateLoan::new(&sources, &ids, &mut short));
++            let mut exact = TypeWorkBudget::with_limit(prefix + required);
++            exact.charge(prefix).unwrap();
++            DeclarationCoordinateLoan::new(&sources, &ids, &mut exact).unwrap();
++            assert_eq!(exact.used(), prefix + required);
++        }
++    }
++
++    #[test]
++    fn coordinate_loan_failed_extraction_and_retention_never_publish() {
++        let sources = [source("first")];
++        let ids = modules(&sources);
++        let loan =
++            DeclarationCoordinateLoan::new(&sources, &ids, &mut TypeWorkBudget::default()).unwrap();
++        let mut extraction = TypeWorkBudget::default();
++        DeclarationCoordinates::from_source(&sources[0], &mut extraction).unwrap();
++        let syntax_work = extraction.used();
++        // Four paid lookup/fresh units precede extraction; one retained-row
++        // unit follows it. Refuse independently in extraction and retention.
++        for limit in [4 + syntax_work - 1, 4 + syntax_work] {
++            let mut short = TypeWorkBudget::with_limit(limit);
++            assert_resource(loan.get(ids[0], &sources[0], &mut short));
++            assert!(loan.coordinates.borrow().is_empty());
++            assert_eq!(short.used(), limit);
++        }
++        let mut exact = TypeWorkBudget::with_limit(5 + syntax_work);
++        loan.get(ids[0], &sources[0], &mut exact).unwrap();
++        assert_eq!(exact.used(), 5 + syntax_work);
++        assert_eq!(loan.coordinates.borrow().len(), 1);
++
++        let malformed = [SourceFile::new("malformed", "type Value =\n").unwrap()];
++        let ids = modules(&malformed);
++        let loan = DeclarationCoordinateLoan::new(&malformed, &ids, &mut TypeWorkBudget::default())
++            .unwrap();
++        for _ in 0..2 {
++            assert_registry(loan.get(ids[0], &malformed[0], &mut TypeWorkBudget::default()));
++            assert!(loan.coordinates.borrow().is_empty());
++        }
++    }
++
++    #[test]
++    fn coordinate_loan_work_is_cumulative_exact_and_fresh_per_operation() {
++        let sources = [source("first")];
++        let ids = modules(&sources);
++        let operation = |work: &mut TypeWorkBudget| {
++            let loan = DeclarationCoordinateLoan::new(&sources, &ids, work)?;
++            let first = loan.get(ids[0], &sources[0], work)?;
++            let again = loan.get(ids[0], &sources[0], work)?;
++            assert!(Arc::ptr_eq(&first, &again));
++            Ok::<_, ValidationError>(first)
++        };
++        let mut measured = TypeWorkBudget::default();
++        let first = operation(&mut measured).unwrap();
++        let required = measured.used();
++        for prefix in [0, 37] {
++            let mut short = TypeWorkBudget::with_limit(prefix + required - 1);
++            short.charge(prefix).unwrap();
++            assert_resource(operation(&mut short));
++            for _ in 0..2 {
++                let mut exact = TypeWorkBudget::with_limit(prefix + required);
++                exact.charge(prefix).unwrap();
++                let fresh = operation(&mut exact).unwrap();
++                assert!(!Arc::ptr_eq(&first, &fresh));
++                assert_eq!(exact.used(), prefix + required);
++                assert_resource(operation(&mut exact));
++            }
++        }
++        // A warm hit still requires its paid work; refusal leaves syntax intact.
++        let loan =
++            DeclarationCoordinateLoan::new(&sources, &ids, &mut TypeWorkBudget::default()).unwrap();
++        let warm = loan
++            .get(ids[0], &sources[0], &mut TypeWorkBudget::default())
++            .unwrap();
++        let mut short = TypeWorkBudget::with_limit(3);
++        assert_resource(loan.get(ids[0], &sources[0], &mut short));
++        let mut exact = TypeWorkBudget::with_limit(4);
++        assert!(Arc::ptr_eq(
++            &warm,
++            &loan.get(ids[0], &sources[0], &mut exact).unwrap()
++        ));
++        assert_eq!(exact.used(), 4);
++    }
++}

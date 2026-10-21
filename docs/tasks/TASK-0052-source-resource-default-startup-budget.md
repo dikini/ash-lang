@@ -47,7 +47,7 @@ separately derived allowance. Neither allowance changes here.
 5. Preserve independent original header/forest and final copied-scope/Core
    checks, exact native contracts/registrations, owner phases, lineage, rows,
    cleanup and capture obligations. Expected-fact byte equality supplies data,
-   not Core permission. Publish no completed reuse entry on resource refusal.
+   not Core permission. Publish no completed registry or forest reuse entry on resource refusal.
 6. Verify the original test cumulatively under its unchanged default, related
    import/owner/image controls, exact/one-short/nonzero-prefix/retry boundaries
    and forged/mismatched contexts. Update documentation only for implemented
@@ -157,3 +157,11 @@ caller allowance. Separate template sessions each correctly authenticate their
 registry, but each repeats pure source-coordinate extraction costing 9172 and
 20442 units. This is measured candidate duplication, not a reusable registry or
 forest proof; no dependent-case repair or acceptance follows yet.
+
+The [borrow-backed coordinate candidate](evidence/dependent-source-resource-startup/README.md#borrowed-coordinate-candidate)
+passes six focused loan controls and the complete image filter 16/16, including
+dependent-discard at 314686/327680 and imported-buffer at 318817/327680. Exact
+live source/module hits establish the measured repetition; every template still
+authenticates its own registry, binders and forests. These results use disposable
+probes. Final acceptance requires fresh verification after probe removal and
+independent review; no instrumented result transfers to cleaned inputs.

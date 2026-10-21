@@ -1,0 +1,20 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "ash",
+    "--locked",
+    "--lib",
+    "build::image::source_resource_image::tests::dependent_discard_image_checks_original_facts_under_normal_cumulative_work",
+    "--",
+    "--exact",
+    "--nocapture"
+  ],
+  "exit": 0,
+  "elapsed_seconds": 2.13,
+  "source_configuration_before_after_equal": true,
+  "file_count": 526,
+  "source_configuration_tree_sha256": "9a8966d5439fa750d9ba516b2f65a253c8ac4add9c6e0c9da9864aa6f29f89d2",
+  "log_sha256": "6320563f3ca9489c8b3002f28ff503d8bd094266ab3a8a27dcf2df8b385ad1a7"
+}

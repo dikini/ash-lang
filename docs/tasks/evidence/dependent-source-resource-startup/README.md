@@ -36,7 +36,7 @@ same-context forest hits. Each original declaration proof costs 33467 units. In
 both contexts, pure declaration-coordinate extraction repeats costs of 9172 and
 20442 for the two resident sources. These are candidate repeated syntax costs,
 not permission to reuse either template's registry or forest proof. No product
-repair has been selected or verified by this receipt.
+repair is verified by that initial receipt.
 
 ## Remaining verification
 
@@ -45,3 +45,42 @@ buffer default, metering/tamper/context controls, owner/import/capture regressio
 Clippy and independent review remain pending. Whole TASK-0052 and F-core are not
 accepted by this diagnostic. Disposable counters must be removed before final
 verification on delivered inputs.
+
+## Borrowed coordinate candidate
+
+The next three receipts share an unchanged 526-file source/configuration map,
+aggregate `9a8966d5439fa750d9ba516b2f65a253c8ac4add9c6e0c9da9864aa6f29f89d2`.
+`loan-candidate.patch` reconstructs this candidate from measurement commit
+`7ff58a2`, including its new loan helper. This remains an instrumented candidate;
+final delivered-source verification must follow removal of the broad probes.
+
+The reconstruction holds its immutable source/module arena outside Decoder. A
+private operation-owned loan retains those live references and lazily extracts
+syntax coordinates. A hit requires the exact ModuleId, SourceId and SourceFile
+object; source bytes cannot change under the retained immutable borrow. Parser
+configuration is fixed compiled code. Each template keeps its own fresh registry
+session and independently authenticates declarations, retained resource binders,
+unused candidates and complete forests. No coordinate entry contains a registry,
+OriginalDeclarationProvenance, semantic result or executable permission.
+
+| Candidate command | Result |
+| --- | --- |
+| Coordinate-loan controls | 6 passed |
+| Exact dependent-discard test | passed; cumulative 314686/327680 |
+| Complete source-resource image filter | 16/16 passed |
+
+The actual dependent run records two syntax misses for the first template and
+two exact live-object/module hits for the second. Both registry sessions remain
+fresh, with four same-context forest hits. The first original proof costs 33477;
+the second still performs its independent semantic work at 3861 units. The
+original imported-buffer regression also passes within the image filter at
+318817/327680. Different temporary fixture paths/process IDs can change encoded
+byte costs; these runs do not assert identical image bytes or total demands to
+the earlier failing process.
+
+Controls include coherent bad-registry rejection after a warm syntax entry,
+equal-ID clone cold-positive/loan-negative, source/module/donor mismatches,
+malformed and short-budget extraction/retention without publication, and paid
+exact/one-short/nonzero-prefix/spent/fresh operation boundaries. A later semantic
+refusal cannot turn retained syntax into a proof. No scheduling path or allowance
+changes. Whole-task acceptance still awaits final clean-source checks and review.

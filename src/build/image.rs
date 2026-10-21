@@ -12097,7 +12097,39 @@ impl PureImage {
             decoder.work.used(),
             decoder.work.used(),
         );
-        let templates = decoder.source_templates(&registry, &symbols, &binder_ids)?;
+        // Freeze ownership of the admitted coordinate arena outside the
+        // decoder. The syntax loan borrows these exact immutable objects;
+        // original registry/forest sessions remain separate per template.
+        let Decoder {
+            image,
+            expected_fact_prefixes,
+            sources,
+            modules,
+            source_pending_rows,
+            source_declaration_catalogs,
+            decoded_types,
+            work,
+        } = decoder;
+        let source_arena = sources.into_owned()?;
+        let module_arena = modules.into_owned()?;
+        let coordinate_loan = crate::core::validate::DeclarationCoordinateLoan::new(
+            &source_arena,
+            &module_arena,
+            work,
+        )
+        .map_err(ImageFailure::Validation)?;
+        let mut decoder = Decoder {
+            image,
+            expected_fact_prefixes,
+            sources: CoordinateStorage::Borrowed(&source_arena),
+            modules: CoordinateStorage::Borrowed(&module_arena),
+            source_pending_rows,
+            source_declaration_catalogs,
+            decoded_types,
+            work,
+        };
+        let templates =
+            decoder.source_templates(&registry, &symbols, &binder_ids, &coordinate_loan)?;
         #[cfg(test)]
         crate::core::validate::startup_measurement::record(
             "restore:main-enter",
@@ -12213,8 +12245,10 @@ impl PureImage {
         // coordinate arena into its private registration owner without copying.
         drop(sources);
         drop(module_sources);
-        let sources = decoder.sources.into_owned()?;
-        let modules = decoder.modules.into_owned()?;
+        drop(decoder);
+        drop(coordinate_loan);
+        let sources = source_arena;
+        let modules = module_arena;
         Ok(RestoredEffectImage {
             provenance,
             program,
