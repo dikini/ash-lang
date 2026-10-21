@@ -66,13 +66,9 @@ impl<'source> DeclarationCoordinateLoan<'source> {
         let key = (module, source.id());
         if let Some(coordinates) = self.coordinates.borrow().get(&key) {
             charge(work, 1)?;
-            #[cfg(test)]
-            super::super::startup_measurement::count("core.coordinates.loan.hit");
             return Ok(Arc::clone(coordinates));
         }
         charge(work, 1)?;
-        #[cfg(test)]
-        super::super::startup_measurement::count("core.coordinates.loan.miss");
         let coordinates = DeclarationCoordinates::from_source(source, work)?;
         // No failed/partial syntax or unpaid retention becomes a future hit.
         charge(work, 1)?;

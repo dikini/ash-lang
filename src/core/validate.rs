@@ -8,8 +8,6 @@ pub(crate) mod semantic_type_variables;
 mod source_declarations;
 
 pub(crate) use source_declarations::DeclarationCoordinateLoan;
-#[cfg(test)]
-pub(crate) mod startup_measurement;
 pub(crate) use source_declarations::DeclarationCoordinates;
 
 use std::{
@@ -3897,22 +3895,12 @@ impl<'context> SourceResourceStructureSession<'context> {
         handler_graph: Option<&super::source_resource::SourceHandlerGraph<'_>>,
         work: &mut TypeWorkBudget,
     ) -> Result<(), ValidationError> {
-        #[cfg(test)]
-        startup_measurement::count("core.session.enter");
-        #[cfg(test)]
-        let session_before = work.used();
         // Conditional source originals retain the same complete ordinary check.
         // Their separately reconstructed graph authorizes only exact row positions.
         // Pending transactions always receive a fresh complete admission; a
         // completed cache entry cannot retarget another facts/publication loan.
         if handler_graph.is_some() || self.original_provider.is_some() {
-            #[cfg(test)]
-            startup_measurement::count(if handler_graph.is_some() {
-                "core.session.bypass.handler"
-            } else {
-                "core.session.bypass.provider"
-            });
-            let result = check_source_resource_structure_with_handler_graph(
+            return check_source_resource_structure_with_handler_graph(
                 program,
                 original,
                 answer,
@@ -3923,25 +3911,12 @@ impl<'context> SourceResourceStructureSession<'context> {
                 self.original_provider,
                 work,
             );
-            #[cfg(test)]
-            startup_measurement::record(
-                if result.is_ok() {
-                    "core.session.bypass.ok"
-                } else {
-                    "core.session.bypass.err"
-                },
-                session_before,
-                work.used(),
-            );
-            return result;
         }
         // Registry parameter ordering can depend on lexical method owners and
         // their graph-local provider instances. Those contexts keep their full
         // fresh registry check; the receipt carries no lexical exemption.
         if !program.method_evidence.lexical_owners().is_empty() {
-            #[cfg(test)]
-            startup_measurement::count("core.session.bypass.lexical");
-            let result = check_source_resource_structure_with_globals(
+            return check_source_resource_structure_with_globals(
                 program,
                 original,
                 answer,
@@ -3950,17 +3925,6 @@ impl<'context> SourceResourceStructureSession<'context> {
                 Some(globals),
                 work,
             );
-            #[cfg(test)]
-            startup_measurement::record(
-                if result.is_ok() {
-                    "core.session.lexical.ok"
-                } else {
-                    "core.session.lexical.err"
-                },
-                session_before,
-                work.used(),
-            );
-            return result;
         }
         let mut validator = Validator::new_modules(program, sources, module_sources)?;
         validator.source_coordinate_loan = self.coordinate_loan;
@@ -4019,45 +3983,15 @@ impl<'context> SourceResourceStructureSession<'context> {
                     let native = AuthenticatedNativeRegistry {
                         registry: &program.registry,
                     };
-                    #[cfg(test)]
-                    startup_measurement::count("core.session.hit");
                     return validator.run_effect_with_registry(&admitted.parameters, &native);
                 }
             }
             // No completed unused-order proof may survive a changed semantic
             // footprint or scheme context, including a failed fresh admission.
             self.admitted = None;
-            #[cfg(test)]
-            startup_measurement::count("core.session.fresh");
             {
-                #[cfg(test)]
-                let registry_before = validator.type_work.get();
-                let authentication = validator.authenticate_effect_registry_phase();
-                #[cfg(test)]
-                startup_measurement::record(
-                    if authentication.is_ok() {
-                        "core.session.registry.ok"
-                    } else {
-                        "core.session.registry.err"
-                    },
-                    registry_before,
-                    validator.type_work.get(),
-                );
-                let (parameters, native) = authentication?;
-                #[cfg(test)]
-                let forest_before = validator.type_work.get();
-                let forest = validator.run_effect_with_registry(&parameters, &native);
-                #[cfg(test)]
-                startup_measurement::record(
-                    if forest.is_ok() {
-                        "core.session.forest.ok"
-                    } else {
-                        "core.session.forest.err"
-                    },
-                    forest_before,
-                    validator.type_work.get(),
-                );
-                forest?;
+                let (parameters, native) = validator.authenticate_effect_registry_phase()?;
+                validator.run_effect_with_registry(&parameters, &native)?;
                 validator.charge_type_work(1 + sources.len())?;
                 let mut source_objects = HashMap::new();
                 source_objects
@@ -4084,16 +4018,6 @@ impl<'context> SourceResourceStructureSession<'context> {
                 Ok(())
             }
         })();
-        #[cfg(test)]
-        startup_measurement::record(
-            if result.is_ok() {
-                "core.session.result.ok"
-            } else {
-                "core.session.result.err"
-            },
-            session_before,
-            session_before + validator.type_work.get() - prefix,
-        );
         work.charge(validator.type_work.get() - prefix)
             .map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
         result
@@ -16261,8 +16185,6 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             let mut work = TypeWorkBudget::with_limit(
                 self.type_work_limit.saturating_sub(self.type_work.get()),
             );
-            #[cfg(test)]
-            startup_measurement::count("core.original-proof.enter");
             let modules = self
                 .module_sources
                 .as_ref()
@@ -16283,16 +16205,6 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     &mut work,
                 )
             };
-            #[cfg(test)]
-            startup_measurement::record(
-                if result.is_ok() {
-                    "core.original-proof.ok"
-                } else {
-                    "core.original-proof.err"
-                },
-                0,
-                work.used(),
-            );
             self.charge_type_work(work.used())?;
             let original = result?;
             let unused = self.unused_ordering_candidates(&original.ordering_candidates)?;
@@ -16347,36 +16259,9 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
     }
 
     fn run_effect(&mut self) -> Result<(), ValidationError> {
-        #[cfg(test)]
-        let registry_before = self.type_work.get();
-        #[cfg(test)]
-        startup_measurement::record("core.run.registry.enter", registry_before, registry_before);
-        let authentication = self.authenticate_effect_registry_phase();
-        #[cfg(test)]
-        startup_measurement::record(
-            if authentication.is_ok() {
-                "core.run.registry.ok"
-            } else {
-                "core.run.registry.err"
-            },
-            registry_before,
-            self.type_work.get(),
-        );
-        let (nominal_parameter_owners, native_registry) = authentication?;
-        #[cfg(test)]
-        let body_before = self.type_work.get();
-        let result = self.run_effect_with_registry(&nominal_parameter_owners, &native_registry);
-        #[cfg(test)]
-        startup_measurement::record(
-            if result.is_ok() {
-                "core.run.body.ok"
-            } else {
-                "core.run.body.err"
-            },
-            body_before,
-            self.type_work.get(),
-        );
-        result
+        let (nominal_parameter_owners, native_registry) =
+            self.authenticate_effect_registry_phase()?;
+        self.run_effect_with_registry(&nominal_parameter_owners, &native_registry)
     }
 
     fn run_effect_with_registry(
@@ -16384,134 +16269,32 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         nominal_parameter_owners: &RegistryParameterOwners,
         native_registry: &AuthenticatedNativeRegistry<'_>,
     ) -> Result<(), ValidationError> {
-        #[cfg(test)]
-        startup_measurement::record(
-            "core.body.method",
-            self.type_work.get(),
-            self.type_work.get(),
-        );
         let authenticated_method_evidence = self.validate_method_evidence_authority()?;
-        #[cfg(test)]
-        startup_measurement::record(
-            "core.body.envelopes",
-            self.type_work.get(),
-            self.type_work.get(),
-        );
         self.validate_envelopes(&authenticated_method_evidence)?;
-        #[cfg(test)]
-        startup_measurement::record(
-            "core.body.graph",
-            self.type_work.get(),
-            self.type_work.get(),
-        );
         self.validate_graph()?;
-        #[cfg(test)]
-        startup_measurement::record(
-            "core.body.binders",
-            self.type_work.get(),
-            self.type_work.get(),
-        );
         let abstraction_owners = self.collect_binders(&authenticated_method_evidence)?;
-        #[cfg(test)]
-        startup_measurement::record(
-            "core.body.type-binders",
-            self.type_work.get(),
-            self.type_work.get(),
-        );
         let type_binders =
             self.collect_type_binders(nominal_parameter_owners, &abstraction_owners)?;
-        #[cfg(test)]
-        startup_measurement::record(
-            "core.body.method-type-owners",
-            self.type_work.get(),
-            self.type_work.get(),
-        );
         self.validate_method_evidence_type_owners(&type_binders)?;
-        #[cfg(test)]
-        startup_measurement::record(
-            "core.body.node-types",
-            self.type_work.get(),
-            self.type_work.get(),
-        );
         self.validate_node_types(
             nominal_parameter_owners,
             &type_binders,
             &authenticated_method_evidence,
         )?;
-        #[cfg(test)]
-        startup_measurement::record(
-            "core.body.effect-nodes",
-            self.type_work.get(),
-            self.type_work.get(),
-        );
         let has_discard = self.validate_effect_nodes(&type_binders, native_registry)?;
         if self.source_resource_context == SourceResourceValidationContext::FinalProgram {
-            #[cfg(test)]
-            startup_measurement::record(
-                "core.body.owner-coverage",
-                self.type_work.get(),
-                self.type_work.get(),
-            );
             self.validate_source_owner_request_coverage()?;
-            #[cfg(test)]
-            startup_measurement::record(
-                "core.body.byte-coverage",
-                self.type_work.get(),
-                self.type_work.get(),
-            );
             self.validate_source_byte_call_coverage()?;
-            #[cfg(test)]
-            startup_measurement::record(
-                "core.body.window-coverage",
-                self.type_work.get(),
-                self.type_work.get(),
-            );
             self.validate_source_window_coverage()?;
         }
-        #[cfg(test)]
-        startup_measurement::record(
-            "core.body.registration",
-            self.type_work.get(),
-            self.type_work.get(),
-        );
         self.validate_registration_edges()?;
-        #[cfg(test)]
-        startup_measurement::record(
-            "core.body.abstraction-shapes",
-            self.type_work.get(),
-            self.type_work.get(),
-        );
         self.validate_effect_abstraction_shapes(&authenticated_method_evidence)?;
-        #[cfg(test)]
-        startup_measurement::record(
-            "core.body.scopes",
-            self.type_work.get(),
-            self.type_work.get(),
-        );
         self.validate_scopes()?;
-        #[cfg(test)]
-        startup_measurement::record(
-            "core.body.type-scopes",
-            self.type_work.get(),
-            self.type_work.get(),
-        );
         self.validate_type_scopes()?;
         // Ordinary authentication precedes dependency reconstruction. Generic
         // computations force that proof even in private provider preparations.
-        #[cfg(test)]
-        startup_measurement::record(
-            "core.body.generic",
-            self.type_work.get(),
-            self.type_work.get(),
-        );
         let has_generic = self.generic_cell_computations()?;
 
-        #[cfg(test)]
-        startup_measurement::record(
-            "core.body.resource-census",
-            self.type_work.get(),
-            self.type_work.get(),
-        );
         let mut has_resource = false;
         for node in &self.program.nodes {
             self.charge_type_work(1)?;
@@ -16537,12 +16320,6 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         {
             return Ok(());
         }
-        #[cfg(test)]
-        startup_measurement::record(
-            "core.body.capture",
-            self.type_work.get(),
-            self.type_work.get(),
-        );
         let mut capture_work =
             TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let operation: for<'a> fn(

@@ -84,3 +84,11 @@ malformed and short-budget extraction/retention without publication, and paid
 exact/one-short/nonzero-prefix/spent/fresh operation boundaries. A later semantic
 refusal cannot turn retained syntax into a proof. No scheduling path or allowance
 changes. Whole-task acceptance still awaits final clean-source checks and review.
+
+The broad probes and isolated diagnostic were removed after the measured candidate
+passed. Only the coordinate loan, its source/Decoder/session wiring and permanent
+controls remain. The warm semantic test now additionally requires an empty valid
+projection to receive its own empty provenance, then rechecks the full view.
+That strengthening was not part of the earlier instrumented run. Final checks
+must use the cleaned source and record new input manifests; no previous result
+or artifact fingerprint transfers across this cleanup.
