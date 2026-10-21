@@ -2598,20 +2598,74 @@ impl<'a> Analysis<'a> {
         roots: &[usize],
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
+        #[cfg(test)]
+        crate::core::validate::startup_measurement::count("control.check.enter");
         self.entries.clear();
         self.candidates.clear();
         self.payloads.clear();
-        self.discover(roots, None, budget)?;
+        #[cfg(test)]
+        let phase_before = budget.used();
+        let phase_result = self.discover(roots, None, budget);
+        #[cfg(test)]
+        crate::core::validate::startup_measurement::record(
+            if phase_result.is_ok() {
+                "control.check.discover.ok"
+            } else {
+                "control.check.discover.err"
+            },
+            phase_before,
+            budget.used(),
+        );
+        phase_result?;
         // Passive row records describe the whole original discovery. Focused
         // safety queries remain strict and do not invent additional row sites.
         self.collect_cleanup_rows = false;
         if self.infer_cleanup_rows {
             return Ok(());
         }
-        self.check_payloads(budget)?;
-        self.check_cell_retentions(budget)?;
+        #[cfg(test)]
+        let phase_before = budget.used();
+        let phase_result = self.check_payloads(budget);
+        #[cfg(test)]
+        crate::core::validate::startup_measurement::record(
+            if phase_result.is_ok() {
+                "control.check.payloads.ok"
+            } else {
+                "control.check.payloads.err"
+            },
+            phase_before,
+            budget.used(),
+        );
+        phase_result?;
+        #[cfg(test)]
+        let phase_before = budget.used();
+        let phase_result = self.check_cell_retentions(budget);
+        #[cfg(test)]
+        crate::core::validate::startup_measurement::record(
+            if phase_result.is_ok() {
+                "control.check.cell-retentions.ok"
+            } else {
+                "control.check.cell-retentions.err"
+            },
+            phase_before,
+            budget.used(),
+        );
+        phase_result?;
         if let Some(data) = &mut self.data {
-            data.close(budget)?;
+            #[cfg(test)]
+            let phase_before = budget.used();
+            let phase_result = data.close(budget);
+            #[cfg(test)]
+            crate::core::validate::startup_measurement::record(
+                if phase_result.is_ok() {
+                    "control.check.data-close.ok"
+                } else {
+                    "control.check.data-close.err"
+                },
+                phase_before,
+                budget.used(),
+            );
+            phase_result?;
             for candidate in data.resource_candidates(budget)? {
                 charge(budget, 1)?;
                 self.candidates
@@ -2620,7 +2674,32 @@ impl<'a> Analysis<'a> {
                 self.candidates.insert(candidate);
             }
         }
-        self.check_focused_entries(budget)
+        #[cfg(test)]
+        crate::core::validate::startup_measurement::record(
+            "control.check.focused-entry-candidates.count",
+            0,
+            self.entries.len(),
+        );
+        #[cfg(test)]
+        crate::core::validate::startup_measurement::record(
+            "control.check.resource-candidates.count",
+            0,
+            self.candidates.len(),
+        );
+        #[cfg(test)]
+        let focused_before = budget.used();
+        let result = self.check_focused_entries(budget);
+        #[cfg(test)]
+        crate::core::validate::startup_measurement::record(
+            if result.is_ok() {
+                "control.check.focused.ok"
+            } else {
+                "control.check.focused.err"
+            },
+            focused_before,
+            budget.used(),
+        );
+        result
     }
 
     fn discover(
@@ -2634,179 +2713,256 @@ impl<'a> Analysis<'a> {
         let mut calls: Vec<ObservedCall> = Vec::new();
         let mut cell_requests = HashSet::new();
         let mut observed_calls = HashMap::new();
-        let mut revision = self
-            .data
-            .as_ref()
-            .map_or(0, super::value::Analysis::revision);
-        if let Some(seed) = seed {
-            Self::enqueue(seed.copy(budget)?, &mut pending, &mut visited, budget)?;
-        }
-        for root in roots {
-            let value_context = if let Some(data) = &mut self.data {
-                let context = data.root_context(*root, budget)?;
-                // Linked Core retains globals as ordinary outer bindings. Demand
-                // the actual root so its lexical initializers feed callable ports.
-                data.port(*root, context, budget)?;
-                context
-            } else {
-                0
-            };
-            Self::enqueue(
-                State {
-                    position: Position {
-                        code: *root,
-                        next: 0,
+        #[cfg(test)]
+        let discover_before = budget.used();
+        #[cfg(test)]
+        let mut processed = 0usize;
+        #[cfg(test)]
+        crate::core::validate::startup_measurement::count(if self.focusing {
+            "control.discover.focused.enter"
+        } else {
+            "control.discover.full.enter"
+        });
+        let result = (|| {
+            let mut revision = self
+                .data
+                .as_ref()
+                .map_or(0, super::value::Analysis::revision);
+            if let Some(seed) = seed {
+                Self::enqueue(seed.copy(budget)?, &mut pending, &mut visited, budget)?;
+            }
+            for root in roots {
+                let value_context = if let Some(data) = &mut self.data {
+                    let context = data.root_context(*root, budget)?;
+                    // Linked Core retains globals as ordinary outer bindings. Demand
+                    // the actual root so its lexical initializers feed callable ports.
+                    data.port(*root, context, budget)?;
+                    context
+                } else {
+                    0
+                };
+                Self::enqueue(
+                    State {
+                        position: Position {
+                            code: *root,
+                            next: 0,
+                        },
+                        context: 0,
+                        value_context,
+                        stack: Address::Empty,
+                        heap: Vec::new(),
+                        cells: Vec::new(),
+                        abandoned: None,
                     },
-                    context: 0,
-                    value_context,
-                    stack: Address::Empty,
-                    heap: Vec::new(),
-                    cells: Vec::new(),
-                    abandoned: None,
-                },
-                &mut pending,
-                &mut visited,
-                budget,
-            )?;
-        }
-        loop {
-            while let Some(state) = pending.pop_front() {
-                charge(budget, 1)?;
-                let code = state.position.code;
-                match &self.graph.code[code] {
-                    Control::Return => self.returned(state, &mut pending, &mut visited, budget)?,
-                    Control::Unavailable => return Err(Failure::Invalid),
-                    Control::Sequence(children) => {
-                        self.discover_sequence(
-                            state,
-                            children,
-                            &mut pending,
-                            &mut visited,
-                            budget,
-                        )?;
+                    &mut pending,
+                    &mut visited,
+                    budget,
+                )?;
+            }
+            loop {
+                while let Some(state) = pending.pop_front() {
+                    #[cfg(test)]
+                    {
+                        processed += 1;
                     }
-                    Control::Choice(children) => {
-                        for child in children {
-                            let mut next = state.copy(budget)?;
-                            next.position = Position {
-                                code: *child,
-                                next: 0,
-                            };
-                            Self::enqueue_normalized(next, &mut pending, &mut visited, budget)?;
+                    charge(budget, 1)?;
+                    let code = state.position.code;
+                    match &self.graph.code[code] {
+                        Control::Return => {
+                            self.returned(state, &mut pending, &mut visited, budget)?
                         }
-                    }
-                    Control::Handler { body, .. }
-                    | Control::Cleanup { body, .. }
-                    | Control::Resource { body, .. }
-                    | Control::Registration { body, .. }
-                    | Control::NativeInterpret { body, .. } => {
-                        self.discover_boundary(state, *body, &mut pending, &mut visited, budget)?;
-                    }
-                    Control::Request(request) => {
-                        if request.effect.as_ref().is_some_and(|effect| {
-                            effect.effect().module().is_builtin_generic_cell()
-                        }) {
-                            state.charge_key(budget)?;
-                            if !cell_requests.contains(&state) {
-                                cell_requests
-                                    .try_reserve(1)
-                                    .map_err(|_| Failure::Resource)?;
-                                let saved = state.copy(budget)?;
-                                state.charge_key(budget)?;
-                                cell_requests.insert(saved);
-                            }
-                        }
-                        let label = self.label(code, state.context, budget)?;
-                        let port = self
-                            .data
-                            .as_mut()
-                            .map(|data| data.port(code, state.value_context, budget))
-                            .transpose()?;
-                        self.requested(
-                            &state,
-                            Event {
-                                code,
-                                label,
-                                unknown: false,
-                                port,
-                            },
-                            &mut pending,
-                            &mut visited,
-                            budget,
-                        )?;
-                    }
-                    Control::Call { .. } => {
-                        self.discover_call(
-                            state,
-                            &mut calls,
-                            &mut observed_calls,
-                            &mut pending,
-                            &mut visited,
-                            budget,
-                        )?;
-                    }
-                    Control::Resume { owner, value } => {
-                        if state.position.next == 0 {
-                            let value = *value;
-                            let mut next = state;
-                            next.push(
-                                Frame::Next {
-                                    position: Position { code, next: 1 },
-                                    context: next.context,
-                                    value_context: next.value_context,
-                                },
-                                budget,
-                            )?;
-                            next.position = Position {
-                                code: value,
-                                next: 0,
-                            };
-                            Self::enqueue(next, &mut pending, &mut visited, budget)?;
-                        } else {
-                            self.completed(
+                        Control::Unavailable => return Err(Failure::Invalid),
+                        Control::Sequence(children) => {
+                            self.discover_sequence(
                                 state,
-                                *owner,
-                                true,
+                                children,
                                 &mut pending,
                                 &mut visited,
                                 budget,
                             )?;
                         }
-                    }
-                    Control::Discard { owner, .. } => {
-                        self.completed(state, *owner, false, &mut pending, &mut visited, budget)?
+                        Control::Choice(children) => {
+                            for child in children {
+                                let mut next = state.copy(budget)?;
+                                next.position = Position {
+                                    code: *child,
+                                    next: 0,
+                                };
+                                Self::enqueue_normalized(next, &mut pending, &mut visited, budget)?;
+                            }
+                        }
+                        Control::Handler { body, .. }
+                        | Control::Cleanup { body, .. }
+                        | Control::Resource { body, .. }
+                        | Control::Registration { body, .. }
+                        | Control::NativeInterpret { body, .. } => {
+                            self.discover_boundary(
+                                state,
+                                *body,
+                                &mut pending,
+                                &mut visited,
+                                budget,
+                            )?;
+                        }
+                        Control::Request(request) => {
+                            if request.effect.as_ref().is_some_and(|effect| {
+                                effect.effect().module().is_builtin_generic_cell()
+                            }) {
+                                state.charge_key(budget)?;
+                                if !cell_requests.contains(&state) {
+                                    cell_requests
+                                        .try_reserve(1)
+                                        .map_err(|_| Failure::Resource)?;
+                                    let saved = state.copy(budget)?;
+                                    state.charge_key(budget)?;
+                                    cell_requests.insert(saved);
+                                }
+                            }
+                            let label = self.label(code, state.context, budget)?;
+                            let port = self
+                                .data
+                                .as_mut()
+                                .map(|data| data.port(code, state.value_context, budget))
+                                .transpose()?;
+                            self.requested(
+                                &state,
+                                Event {
+                                    code,
+                                    label,
+                                    unknown: false,
+                                    port,
+                                },
+                                &mut pending,
+                                &mut visited,
+                                budget,
+                            )?;
+                        }
+                        Control::Call { .. } => {
+                            self.discover_call(
+                                state,
+                                &mut calls,
+                                &mut observed_calls,
+                                &mut pending,
+                                &mut visited,
+                                budget,
+                            )?;
+                        }
+                        Control::Resume { owner, value } => {
+                            if state.position.next == 0 {
+                                let value = *value;
+                                let mut next = state;
+                                next.push(
+                                    Frame::Next {
+                                        position: Position { code, next: 1 },
+                                        context: next.context,
+                                        value_context: next.value_context,
+                                    },
+                                    budget,
+                                )?;
+                                next.position = Position {
+                                    code: value,
+                                    next: 0,
+                                };
+                                Self::enqueue(next, &mut pending, &mut visited, budget)?;
+                            } else {
+                                self.completed(
+                                    state,
+                                    *owner,
+                                    true,
+                                    &mut pending,
+                                    &mut visited,
+                                    budget,
+                                )?;
+                            }
+                        }
+                        Control::Discard { owner, .. } => self.completed(
+                            state,
+                            *owner,
+                            false,
+                            &mut pending,
+                            &mut visited,
+                            budget,
+                        )?,
                     }
                 }
+                let Some(data) = &mut self.data else {
+                    break;
+                };
+                data.close(budget)?;
+                if data.revision() == revision {
+                    // Native transfers remain live during value growth. Missing
+                    // operands reject only after both discovery queues stabilize.
+                    data.check_native_storage(budget)?;
+                    break;
+                }
+                revision = data.revision();
+                // Only calls choose control successors from growing value facts.
+                // Replay them directly; ordinary enqueue would suppress visited states.
+                charge(budget, calls.len())?;
+                pending
+                    .try_reserve(calls.len())
+                    .map_err(|_| Failure::Resource)?;
+                for call in &calls {
+                    pending.push_back(call.state.copy(budget)?);
+                }
+                charge(budget, cell_requests.len())?;
+                pending
+                    .try_reserve(cell_requests.len())
+                    .map_err(|_| Failure::Resource)?;
+                for request in &cell_requests {
+                    pending.push_back(request.copy(budget)?);
+                }
             }
-            let Some(data) = &mut self.data else {
-                break;
-            };
-            data.close(budget)?;
-            if data.revision() == revision {
-                // Native transfers remain live during value growth. Missing
-                // operands reject only after both discovery queues stabilize.
-                data.check_native_storage(budget)?;
-                break;
-            }
-            revision = data.revision();
-            // Only calls choose control successors from growing value facts.
-            // Replay them directly; ordinary enqueue would suppress visited states.
-            charge(budget, calls.len())?;
-            pending
-                .try_reserve(calls.len())
-                .map_err(|_| Failure::Resource)?;
-            for call in &calls {
-                pending.push_back(call.state.copy(budget)?);
-            }
-            charge(budget, cell_requests.len())?;
-            pending
-                .try_reserve(cell_requests.len())
-                .map_err(|_| Failure::Resource)?;
-            for request in &cell_requests {
-                pending.push_back(request.copy(budget)?);
-            }
+            Ok(())
+        })();
+        #[cfg(test)]
+        {
+            crate::core::validate::startup_measurement::record(
+                if result.is_ok() {
+                    "control.discover.ok"
+                } else {
+                    "control.discover.err"
+                },
+                discover_before,
+                budget.used(),
+            );
+            crate::core::validate::startup_measurement::record(
+                "control.discover.roots.count",
+                0,
+                roots.len(),
+            );
+            crate::core::validate::startup_measurement::record(
+                "control.discover.processed.count",
+                0,
+                processed,
+            );
+            crate::core::validate::startup_measurement::record(
+                "control.discover.visited-new-states.count",
+                0,
+                visited.len(),
+            );
+            crate::core::validate::startup_measurement::record(
+                "control.discover.pending.count",
+                0,
+                pending.len(),
+            );
+            crate::core::validate::startup_measurement::record(
+                "control.discover.calls.count",
+                0,
+                calls.len(),
+            );
+            crate::core::validate::startup_measurement::record(
+                "control.discover.observed-calls.count",
+                0,
+                observed_calls.len(),
+            );
+            crate::core::validate::startup_measurement::record(
+                "control.discover.cell-requests.count",
+                0,
+                cell_requests.len(),
+            );
         }
-        Ok(())
+        result
     }
 
     // Dispatch-specific owned temporaries must not remain live while a different

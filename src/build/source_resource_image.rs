@@ -1815,19 +1815,55 @@ impl Decoder<'_> {
             if view.header != record.header {
                 return Err(ImageFailure::InvalidRecord);
             }
+            #[cfg(test)]
+            crate::core::validate::startup_measurement::record(
+                "template:view-enter",
+                self.work.used(),
+                self.work.used(),
+            );
             let original_registry = self.source_registry_view(registry, view)?;
+            #[cfg(test)]
+            crate::core::validate::startup_measurement::record(
+                "template:view-exit",
+                self.work.used(),
+                self.work.used(),
+            );
             let registry = &original_registry;
             let header_record = *get(&self.image.resource_headers, record.header)?;
             let id = self.resource_identity(header_record.id)?;
             let original = registry
                 .source_resource_fact(id)
                 .ok_or(ImageFailure::InvalidRecord)?;
+            #[cfg(test)]
+            crate::core::validate::startup_measurement::record(
+                "template:header-enter",
+                self.work.used(),
+                self.work.used(),
+            );
             let header = CheckedSourceResourceHeader::admit(original, registry, self.work)
                 .map_err(ImageFailure::Validation)?;
+            #[cfg(test)]
+            crate::core::validate::startup_measurement::record(
+                "template:acquire-enter",
+                self.work.used(),
+                self.work.used(),
+            );
             let (acquire, acquire_nodes, _) =
                 self.source_graph(registry, symbols, binders, record.acquire, None)?;
+            #[cfg(test)]
+            crate::core::validate::startup_measurement::record(
+                "template:finish-enter",
+                self.work.used(),
+                self.work.used(),
+            );
             let (finish, finish_nodes, _) =
                 self.source_graph(registry, symbols, binders, record.finish, None)?;
+            #[cfg(test)]
+            crate::core::validate::startup_measurement::record(
+                "template:handler-enter",
+                self.work.used(),
+                self.work.used(),
+            );
             let inputs = record
                 .handler_inputs
                 .map(|blob| self.source_row_inputs_record(blob))
@@ -1837,6 +1873,12 @@ impl Decoder<'_> {
             let handler = self.source_graph(registry, symbols, binders, record.handler, inputs);
             self.source_pending_rows = saved_pending;
             let (handler, handler_nodes, handler_inputs) = handler?;
+            #[cfg(test)]
+            crate::core::validate::startup_measurement::record(
+                "template:handler-exit",
+                self.work.used(),
+                self.work.used(),
+            );
             let mut globals = crate::core::source_resource::SourceResourceGlobals::new();
             for slot in record.globals.get(&self.image.node_children)? {
                 let binding = *get(&self.image.binders, *slot)?;
@@ -1876,6 +1918,12 @@ impl Decoder<'_> {
             // must not inherit the previous template's registry receipt.
             let mut structure_session =
                 crate::core::validate::SourceResourceStructureSession::default();
+            #[cfg(test)]
+            crate::core::validate::startup_measurement::record(
+                "template:admit-enter",
+                self.work.used(),
+                self.work.used(),
+            );
             let template = CheckedSourceResourceTemplate::admit_with_globals(
                 Arc::new(header),
                 acquire,
@@ -1889,6 +1937,12 @@ impl Decoder<'_> {
                 &mut structure_session,
             )
             .map_err(ImageFailure::Validation)?;
+            #[cfg(test)]
+            crate::core::validate::startup_measurement::record(
+                "template:admit-exit",
+                self.work.used(),
+                self.work.used(),
+            );
             if template.globals().len() != declared_globals {
                 return Err(ImageFailure::InvalidRecord);
             }
@@ -3383,6 +3437,7 @@ Buffer.Success (Buffer.Success 7)
             .image
             .encode_native_expectations(&mut TypeWorkBudget::default())
             .unwrap();
+        crate::core::validate::startup_measurement::reset();
         let mut work = TypeWorkBudget::default();
         let decoded = PureImage::decode_bytes(&bytes, &mut work).unwrap();
         println!("buffer startup after decode: {}", work.used());
@@ -3395,6 +3450,12 @@ Buffer.Success (Buffer.Success 7)
         );
         let result = decoded.restore_effect(&mut work);
         println!("buffer startup after reconstruction: {}", work.used());
+        for event in crate::core::validate::startup_measurement::snapshot() {
+            println!(
+                "startup measurement: {} {} {}",
+                event.stage, event.before, event.after
+            );
+        }
         if let Err(error) = result {
             panic!("buffer startup: {error:?}");
         }

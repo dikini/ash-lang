@@ -59,7 +59,7 @@ F-core remains a separate required checkpoint.
 
 ## Progress
 
-- [ ] Retain phase/counter measurements under the existing default.
+- [x] Retain phase/counter measurements under the existing default.
 - [ ] Repair only the demonstrated cost without weakening admission.
 - [ ] Original reproducer and affected boundaries pass focused verification.
 - [ ] Independent review, GitHub retention and acceptance readback complete.
@@ -88,10 +88,16 @@ receipts accompany the final candidate. No old F-core receipt transfers.
 
 ## Discoveries
 
-The current three printed checkpoints do not separate registry reconstruction,
-source forests or final Core. Existing session reuse is bound to exact immutable
-registry/source/module/global and unused-ordering-footprint context; conditional,
-provider and lexical contexts deliberately require separate admission.
+[Three red measurements](evidence/source-resource-startup-budget/README.md)
+localize refusal to strict capture control analysis. Template admission uses one
+fresh registry check and two session hits; main reconstruction completes at207355.
+Final Core's registry, graph, owner, byte/window and scope checks complete before
+the capture query exhausts the remaining allowance. Capture graph construction
+itself completes. No reuse repair follows from these measurements yet.
+
+Existing session reuse is bound to exact immutable registry/source/module/global
+and unused-ordering-footprint context; conditional, provider and lexical contexts
+deliberately require separate admission.
 
 ## Deviations
 

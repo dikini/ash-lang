@@ -1,0 +1,20 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "ash",
+    "--locked",
+    "--lib",
+    "build::image::source_resource_image::tests::imported_buffer_two_owner_discard_has_normal_startup_budget",
+    "--",
+    "--exact",
+    "--nocapture"
+  ],
+  "exit": 101,
+  "elapsed_seconds": 55.933,
+  "source_configuration_before_after_equal": true,
+  "file_count": 524,
+  "source_configuration_tree_sha256": "23f63fd09cfaaf868d826b3b55715e4f6432f605ae746f461e5a65801ebebe32",
+  "log_sha256": "3243a79a1e60a87a65779d61b0ca0e280763537083c8daba5c0998e4a406401d"
+}

@@ -552,159 +552,189 @@ impl DeclarationCoordinates {
         source: &SourceFile,
         work: &mut TypeWorkBudget,
     ) -> Result<Self, ValidationError> {
-        let tree = syntax(source, work)?;
-        let root = tree.root().ok_or_else(registry)?;
-        let tokens = tree.tokens();
-        let mut result = Self {
-            resource_binders: ResourceBinderCoordinates::from_tree(root, tokens, work)?,
-            ..Self::default()
-        };
-        let mut ordinary_resources = Vec::new();
-        let mut source_resources = Vec::new();
-        let mut foreign_nominals = Vec::new();
-        let mut next_library = 0usize;
-        for element in &root.children {
-            charge(work, 1)?;
-            let ConcreteElement::Node(node) = element else {
-                continue;
+        #[cfg(test)]
+        let measurement_before = work.used();
+        #[cfg(test)]
+        super::startup_measurement::count("core.coordinates.enter");
+        let result = (|| {
+            #[cfg(test)]
+            let parse_before = work.used();
+            let tree = syntax(source, work);
+            #[cfg(test)]
+            super::startup_measurement::record(
+                if tree.is_ok() {
+                    "core.coordinates.syntax.ok"
+                } else {
+                    "core.coordinates.syntax.err"
+                },
+                parse_before,
+                work.used(),
+            );
+            let tree = tree?;
+            let root = tree.root().ok_or_else(registry)?;
+            let tokens = tree.tokens();
+            let mut result = Self {
+                resource_binders: ResourceBinderCoordinates::from_tree(root, tokens, work)?,
+                ..Self::default()
             };
-            match node.kind {
-                NodeKind::TypeDeclaration | NodeKind::NewtypeDeclaration => {
-                    let owner = ordinal(result.nominals.len())?;
-                    let mut constructors = 0usize;
-                    for child in &node.children {
-                        charge(work, 1)?;
-                        if let ConcreteElement::Node(child) = child
-                            && child.kind == NodeKind::ConstructorDeclaration
-                        {
-                            let coordinate = ConstructorCoordinate {
-                                owner,
-                                ordinal: ordinal(constructors)?,
-                                origin: span(child, tokens, work)?,
-                            };
-                            push(&mut result.constructors, coordinate, work)?;
-                            constructors = constructors.checked_add(1).ok_or_else(resource)?;
+            let mut ordinary_resources = Vec::new();
+            let mut source_resources = Vec::new();
+            let mut foreign_nominals = Vec::new();
+            let mut next_library = 0usize;
+            for element in &root.children {
+                charge(work, 1)?;
+                let ConcreteElement::Node(node) = element else {
+                    continue;
+                };
+                match node.kind {
+                    NodeKind::TypeDeclaration | NodeKind::NewtypeDeclaration => {
+                        let owner = ordinal(result.nominals.len())?;
+                        let mut constructors = 0usize;
+                        for child in &node.children {
+                            charge(work, 1)?;
+                            if let ConcreteElement::Node(child) = child
+                                && child.kind == NodeKind::ConstructorDeclaration
+                            {
+                                let coordinate = ConstructorCoordinate {
+                                    owner,
+                                    ordinal: ordinal(constructors)?,
+                                    origin: span(child, tokens, work)?,
+                                };
+                                push(&mut result.constructors, coordinate, work)?;
+                                constructors = constructors.checked_add(1).ok_or_else(resource)?;
+                            }
                         }
+                        let coordinate = NominalCoordinate {
+                            origin: span(node, tokens, work)?,
+                            name: name(node, tokens, work)?,
+                            role: NominalRole::Data {
+                                newtype: node.kind == NodeKind::NewtypeDeclaration,
+                                constructors,
+                            },
+                        };
+                        push(&mut result.nominals, coordinate, work)?;
                     }
-                    let coordinate = NominalCoordinate {
-                        origin: span(node, tokens, work)?,
-                        name: name(node, tokens, work)?,
-                        role: NominalRole::Data {
-                            newtype: node.kind == NodeKind::NewtypeDeclaration,
-                            constructors,
-                        },
-                    };
-                    push(&mut result.nominals, coordinate, work)?;
-                }
-                NodeKind::ResourceDefinition => {
-                    let mut is_source = false;
-                    for child in &node.children {
-                        charge(work, 1)?;
-                        is_source |= matches!(child, ConcreteElement::Node(child) if child.kind == NodeKind::SourceResourceField);
+                    NodeKind::ResourceDefinition => {
+                        let mut is_source = false;
+                        for child in &node.children {
+                            charge(work, 1)?;
+                            is_source |= matches!(child, ConcreteElement::Node(child) if child.kind == NodeKind::SourceResourceField);
+                        }
+                        let name = name(node, tokens, work)?;
+                        let coordinate = NominalCoordinate {
+                            origin: name,
+                            name,
+                            role: NominalRole::Resource {
+                                source: is_source,
+                                ordinal: 0,
+                            },
+                        };
+                        push(
+                            if is_source {
+                                &mut source_resources
+                            } else {
+                                &mut ordinary_resources
+                            },
+                            coordinate,
+                            work,
+                        )?;
                     }
-                    let name = name(node, tokens, work)?;
-                    let coordinate = NominalCoordinate {
-                        origin: name,
-                        name,
-                        role: NominalRole::Resource {
-                            source: is_source,
-                            ordinal: 0,
-                        },
-                    };
-                    push(
-                        if is_source {
-                            &mut source_resources
-                        } else {
-                            &mut ordinary_resources
-                        },
-                        coordinate,
-                        work,
-                    )?;
+                    NodeKind::EffectDeclaration => {
+                        let name = name(node, tokens, work)?;
+                        let coordinate = EffectCoordinate {
+                            origin: name,
+                            span: span(node, tokens, work)?,
+                            name,
+                            foreign: None,
+                        };
+                        push(&mut result.effects, coordinate, work)?;
+                    }
+                    NodeKind::ForeignLibrary => {
+                        result.library(
+                            node,
+                            tokens,
+                            ordinal(next_library)?,
+                            &mut foreign_nominals,
+                            work,
+                        )?;
+                        next_library = next_library.checked_add(1).ok_or_else(resource)?;
+                    }
+                    _ => {}
                 }
-                NodeKind::EffectDeclaration => {
-                    let name = name(node, tokens, work)?;
-                    let coordinate = EffectCoordinate {
-                        origin: name,
-                        span: span(node, tokens, work)?,
-                        name,
-                        foreign: None,
-                    };
-                    push(&mut result.effects, coordinate, work)?;
+            }
+            for (index, mut coordinate) in ordinary_resources
+                .into_iter()
+                .chain(source_resources)
+                .enumerate()
+            {
+                charge(work, 1)?;
+                let NominalRole::Resource { source, .. } = coordinate.role else {
+                    return Err(registry());
+                };
+                coordinate.role = NominalRole::Resource {
+                    source,
+                    ordinal: ordinal(index)?,
+                };
+                push(&mut result.nominals, coordinate, work)?;
+            }
+            for coordinate in foreign_nominals {
+                push(&mut result.nominals, coordinate, work)?;
+            }
+            for (index, coordinate) in result.nominals.iter().enumerate() {
+                charge(work, 1)?;
+                result
+                    .nominal_origins
+                    .try_reserve(1)
+                    .map_err(|_| resource())?;
+                if result
+                    .nominal_origins
+                    .insert(coordinate.origin, index)
+                    .is_some()
+                {
+                    return Err(registry());
                 }
-                NodeKind::ForeignLibrary => {
-                    result.library(
-                        node,
-                        tokens,
-                        ordinal(next_library)?,
-                        &mut foreign_nominals,
-                        work,
-                    )?;
-                    next_library = next_library.checked_add(1).ok_or_else(resource)?;
+            }
+            for (index, coordinate) in result.effects.iter().enumerate() {
+                charge(work, 1)?;
+                result
+                    .effect_origins
+                    .try_reserve(1)
+                    .map_err(|_| resource())?;
+                if result
+                    .effect_origins
+                    .insert(coordinate.origin, index)
+                    .is_some()
+                {
+                    return Err(registry());
                 }
-                _ => {}
             }
-        }
-        for (index, mut coordinate) in ordinary_resources
-            .into_iter()
-            .chain(source_resources)
-            .enumerate()
-        {
-            charge(work, 1)?;
-            let NominalRole::Resource { source, .. } = coordinate.role else {
-                return Err(registry());
-            };
-            coordinate.role = NominalRole::Resource {
-                source,
-                ordinal: ordinal(index)?,
-            };
-            push(&mut result.nominals, coordinate, work)?;
-        }
-        for coordinate in foreign_nominals {
-            push(&mut result.nominals, coordinate, work)?;
-        }
-        for (index, coordinate) in result.nominals.iter().enumerate() {
-            charge(work, 1)?;
-            result
-                .nominal_origins
-                .try_reserve(1)
-                .map_err(|_| resource())?;
-            if result
-                .nominal_origins
-                .insert(coordinate.origin, index)
-                .is_some()
-            {
-                return Err(registry());
+            for (index, coordinate) in result.constructors.iter().enumerate() {
+                charge(work, 1)?;
+                result
+                    .constructor_origins
+                    .try_reserve(1)
+                    .map_err(|_| resource())?;
+                if result
+                    .constructor_origins
+                    .insert(coordinate.origin, index)
+                    .is_some()
+                {
+                    return Err(registry());
+                }
             }
-        }
-        for (index, coordinate) in result.effects.iter().enumerate() {
-            charge(work, 1)?;
-            result
-                .effect_origins
-                .try_reserve(1)
-                .map_err(|_| resource())?;
-            if result
-                .effect_origins
-                .insert(coordinate.origin, index)
-                .is_some()
-            {
-                return Err(registry());
-            }
-        }
-        for (index, coordinate) in result.constructors.iter().enumerate() {
-            charge(work, 1)?;
-            result
-                .constructor_origins
-                .try_reserve(1)
-                .map_err(|_| resource())?;
-            if result
-                .constructor_origins
-                .insert(coordinate.origin, index)
-                .is_some()
-            {
-                return Err(registry());
-            }
-        }
-        Ok(result)
+            Ok(result)
+        })();
+        #[cfg(test)]
+        super::startup_measurement::record(
+            if result.is_ok() {
+                "core.coordinates.ok"
+            } else {
+                "core.coordinates.err"
+            },
+            measurement_before,
+            work.used(),
+        );
+        result
     }
 
     fn library(
