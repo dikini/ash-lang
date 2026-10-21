@@ -349,6 +349,54 @@ traversal; do not patch its visitor based on appearance alone. Checked owners,
 copy/lifecycle, executable image/runtime activation, whole F3 and F-core remain
 pending. A genuine semantic gap returns to CP-0024.
 
+### Constructor-payload declaration-closure checkpoint
+
+Start from retained `2d04de76463febaaf36e082e7bccd8f6e85dc26b` after independently
+reviewed PR #94 and PM-confirmed partial issue #59 acceptance. PR #94 closes
+capture-root nominal-kind membership, including existing kind-only resource
+families, and retires TASK-0052. Its result does not establish transitive
+constructor-payload closure. Publish this plan in an early item draft.
+
+1. Establish private `Leaf(Int)` and public transparent `Envelope(Leaf)`, with
+   exported make/inspect functions and the supported closed checked scalar
+   wrapper. Use no ABI-unused Leaf native actual. Require actual source,
+   summary, body-free DependencyExports consumer, separate producer linkage,
+   independent Core and identity/fold positives. Assert Leaf is required by
+   Envelope's retained constructor payload and scheme, but absent from public
+   global schemes and callable type roots. Hidden Leaf metadata grants no Leaf
+   source name or constructor access. Refine the fixture if that edge is absent;
+   no product gap is inferred from a malformed or rescued control.
+2. Remove only required Leaf hidden lookup/order metadata while preserving
+   Envelope's identity, constructor payload/scheme/origins, complete original
+   global publications, captures, native facts and resident sources. Name the
+   first rejection boundary; distinguish summary, real consumer and separately
+   mutated already-valid Core. Retain an unrelated unused nominal contrast.
+3. Establish a same-kind Donor through an independently valid declaration route
+   (for example another public constructor payload), without giving Leaf an
+   additional capture/global root. Coherently replace Leaf with Donor in both
+   Envelope constructor payload and scheme, preserving arity, IDs, provenance,
+   access and all original publications. Assert the unchanged donor control
+   succeeds before testing summary, import/link and Core correspondence. A
+   mismatched payload/scheme is not a coherent substitution control. Compare
+   against actual defining facts and supported constructor uses; no imported
+   projection may mint a replacement original.
+4. Existing checks may already reject every case; a tests-only checkpoint is
+   valid. Repair only a demonstrated missing boundary using existing canonical
+   declaration facts and paid worklists. A missing semantic or architectural
+   authority returns to CP-0024/design before product changes; do not create an
+   FFI registry, constructor access or stronger inferred source semantics.
+5. Exercise supported alias/re-export and identity/fold paths plus exact,
+   one-short, nonzero-prefix, spent and fresh Type/constraint ledgers at the
+   actual boundary. Freeze source/configuration inputs and retain raw outcomes;
+   run affected import/nominal/Core/capture regressions and Clippy, including
+   startup/image checks if production admission changes. Independent exact-head
+   review precedes root-authorized GitHub integration and partial acceptance.
+
+Generic actual/row, recursive/shared payload and deeper resource closure remain
+later red-driven controls unless essential to this fixture. ResourceApply already
+has resolver/contract traversal. Whole F3, F-core, checked owners, copy/lifecycle,
+image/runtime activation, deployment and Main integration remain pending.
+
 ## Slice 5: Independently validate retained Core and private images
 
 Extend existing Core and private-image reconstruction with canonical checked

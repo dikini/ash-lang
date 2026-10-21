@@ -200,14 +200,20 @@ is retired at this documentation checkpoint; its durable evidence remains.
 The PR #89 imported result stays labelled historical 33/34. Whole F3 and F-core
 remain pending.
 
-The next nominal declaration-closure checkpoint starts from retained `036c3668`
-on `codex/checked-ffi-nominal-closure`. Its
-[owned plan](plans/checked-ffi-contract-carriers.md#capture-only-nominal-declaration-closure-checkpoint)
-first requires an actual private `Held(Int)` capture edge through a closed checked
-scalar wrapper, hidden metadata and body-free import/Core positives. Only then
-may complete required declaration metadata be erased and a demonstrated gap
-repaired. Selected-only implementation parity follows the same test-first boundary;
-resource and deeper declaration cases remain separately red-driven.
+PR #94 retained `2d04de76463febaaf36e082e7bccd8f6e85dc26b` with exact reviewed
+tree equality. The author partial readback, independent retained-result audit and
+[PM confirmation](https://github.com/dikini/ash-lang/issues/59#issuecomment-6318443119)
+are complete. Capture-root nominal-kind membership, selected parity and the
+assigned TASK-0052 retirement/link cleanup are delivered; whole F3 remains open.
+
+The next [constructor-payload checkpoint](plans/checked-ffi-contract-carriers.md#constructor-payload-declaration-closure-checkpoint)
+starts from that retained commit on `codex/checked-ffi-constructor-closure`.
+It first proves Leaf is reachable only through a public Envelope constructor's
+payload/scheme, then tests missing hidden metadata and coherent same-kind Donor
+substitution across summary, consumer/link and independent Core boundaries.
+Existing rejection is a valid tests-only result. Production repair requires a
+demonstrated gap and existing authority; broader resource/graph cases remain
+separate.
 
 ## Verification
 
@@ -252,8 +258,8 @@ resource families. Final [delivery evidence](evidence/checked-nominal-closure/RE
 records 141 distinct passes and Clippy, selected-only parity, exact missing-kind
 and budget controls, separate consumer/Core mutations, hidden re-export and
 identity/fold positives. Images pass 16/16, with original buffer/dependent startup
-318827/314696 under unchanged 327680. Independent review/integration remain
-pending; broader declaration/resource closure and whole F3/F-core are incomplete.
+318827/314696 under unchanged 327680. Independent review, GitHub integration and partial acceptance completed at
+`2d04de76`; broader declaration/resource closure and whole F3/F-core are incomplete.
 Hidden identity/kind metadata carries no constructor access, so the control uses
 the metadata actually retained by that route.
 
