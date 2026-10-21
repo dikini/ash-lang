@@ -1,0 +1,20 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 1 test
+
+thread 'resolved::checked_constructor_closure_tests::checked_constructor_closure_rejects_coherent_payload_donor' (79) panicked at src/resolved/checked_constructor_closure_tests.rs:176:5:
+assertion `left == right` failed: coherent constructor declaration closure mutation requires independent rejection
+  left: Ok(())
+ right: Err(InvalidState)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test resolved::checked_constructor_closure_tests::checked_constructor_closure_rejects_coherent_payload_donor ... FAILED
+
+failures:
+
+failures:
+    resolved::checked_constructor_closure_tests::checked_constructor_closure_rejects_coherent_payload_donor
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2012 filtered out; finished in 0.05s
+
+error: test failed, to rerun pass `-p ash --lib`

@@ -200,14 +200,26 @@ is retired at this documentation checkpoint; its durable evidence remains.
 The PR #89 imported result stays labelled historical 33/34. Whole F3 and F-core
 remain pending.
 
-The next nominal declaration-closure checkpoint starts from retained `036c3668`
-on `codex/checked-ffi-nominal-closure`. Its
-[owned plan](plans/checked-ffi-contract-carriers.md#capture-only-nominal-declaration-closure-checkpoint)
-first requires an actual private `Held(Int)` capture edge through a closed checked
-scalar wrapper, hidden metadata and body-free import/Core positives. Only then
-may complete required declaration metadata be erased and a demonstrated gap
-repaired. Selected-only implementation parity follows the same test-first boundary;
-resource and deeper declaration cases remain separately red-driven.
+PR #94 retained `2d04de76463febaaf36e082e7bccd8f6e85dc26b` with exact reviewed
+tree equality. The author partial readback, independent retained-result audit and
+[PM confirmation](https://github.com/dikini/ash-lang/issues/59#issuecomment-6318443119)
+are complete. Capture-root nominal-kind membership, selected parity and the
+assigned TASK-0052 retirement/link cleanup are delivered; whole F3 remains open.
+
+The [constructor-payload checkpoint](plans/checked-ffi-contract-carriers.md#constructor-payload-declaration-closure-checkpoint)
+starts from that retained commit on `codex/checked-ffi-constructor-closure`.
+Its actual Leaf/Envelope payload-only control passes source, summary, body-free
+consumer, linking, independent Core and identity/fold checks. Missing hidden
+Leaf already rejected; coherent Donor substitution exposed summary and
+checker-admission gaps. The repair retains the existing defining registry on
+constructor projections and forwards it unchanged, with paid exact owner,
+formals, effective payload, scheme and origin checks. A latent-row mirror guard
+preserves exactness while avoiding duplicate summary traversal. The final
+[evidence](evidence/checked-constructor-closure/README.md#final-delivery-verification)
+records 331 distinct passes and Clippy on uniform inputs, image 16/16 and both
+unchanged-default startup cases. Independent review, integration and partial
+acceptance are pending; broader declaration/resource graphs and whole F3 remain
+open.
 
 ## Verification
 
@@ -252,10 +264,25 @@ resource families. Final [delivery evidence](evidence/checked-nominal-closure/RE
 records 141 distinct passes and Clippy, selected-only parity, exact missing-kind
 and budget controls, separate consumer/Core mutations, hidden re-export and
 identity/fold positives. Images pass 16/16, with original buffer/dependent startup
-318827/314696 under unchanged 327680. Independent review/integration remain
-pending; broader declaration/resource closure and whole F3/F-core are incomplete.
+318827/314696 under unchanged 327680. Independent review, GitHub integration and partial acceptance completed at
+`2d04de76`; broader declaration/resource closure and whole F3/F-core are incomplete.
 Hidden identity/kind metadata carries no constructor access, so the control uses
 the metadata actually retained by that route.
+
+The PR #95 constructor-payload controls establish private Leaf through public
+Envelope's payload and constructor scheme, with no Leaf root in public global
+schemes or callable types. Missing Leaf metadata already rejects. A coherent
+same-kind Donor substitution preserves both hidden kinds and completed global,
+native and source facts but passes summary authentication and real body-free
+consumer resolution/checking. Independent linked Core rejects both changed
+payload and missing final-ordinal Leaf after valid controls. These separate
+[test-first results](evidence/checked-constructor-closure/README.md) justify
+binding the existing constructor projections to the completed defining registry;
+source coordinates do not reconstruct semantic payload meaning. The bounded
+repair forwards that same registry reference through imports and re-exports,
+with paid exact correspondence and independent checker entry. The final focused batch passes; independent review, integration and partial
+acceptance remain pending. No new constructor access or execution authority
+follows from retaining the reference.
 
 ## Deviations
 

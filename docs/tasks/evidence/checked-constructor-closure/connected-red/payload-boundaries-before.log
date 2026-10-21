@@ -1,0 +1,32 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 9 tests
+
+thread 'resolved::checked_constructor_closure_tests::checked_constructor_closure_rejects_coherent_payload_donor' (84) panicked at src/resolved/checked_constructor_closure_tests.rs:176:5:
+assertion `left == right` failed: coherent constructor declaration closure mutation requires independent rejection
+  left: Ok(())
+ right: Err(InvalidState)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test resolved::checked_constructor_closure_tests::checked_constructor_closure_rejects_coherent_payload_donor ... FAILED
+test resolved::checked_constructor_closure_tests::checked_constructor_closure_summary_work_is_exact_and_operation_local ... ok
+test resolved::checked_constructor_closure_tests::checked_constructor_closure_unreferenced_spare_is_not_required ... ok
+test resolved::checked_constructor_closure_tests::checked_constructor_closure_rejects_missing_payload_leaf ... ok
+test core::validate::declaration_closure_tests::checked_constructor_closure_core_independently_rejects_missing_final_leaf ... ok
+test core::validate::declaration_closure_tests::checked_constructor_closure_core_independently_rejects_coherent_payload_donor ... ok
+test resolved::checked_constructor_closure_tests::checked_constructor_closure_body_free_consumer_rejects_missing_leaf ... ok
+test resolved::checked_constructor_closure_tests::checked_constructor_closure_payload_only_control ... ok
+
+thread 'resolved::checked_constructor_closure_tests::checked_constructor_closure_body_free_consumer_rejects_coherent_donor' (81) panicked at src/resolved/checked_constructor_closure_tests.rs:346:21:
+coherent constructor mutation passed body-free resolution and checking
+test resolved::checked_constructor_closure_tests::checked_constructor_closure_body_free_consumer_rejects_coherent_donor ... FAILED
+
+failures:
+
+failures:
+    resolved::checked_constructor_closure_tests::checked_constructor_closure_body_free_consumer_rejects_coherent_donor
+    resolved::checked_constructor_closure_tests::checked_constructor_closure_rejects_coherent_payload_donor
+
+test result: FAILED. 7 passed; 2 failed; 0 ignored; 0 measured; 2009 filtered out; finished in 0.11s
+
+error: test failed, to rerun pass `-p ash --lib`

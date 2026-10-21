@@ -7068,7 +7068,7 @@ impl Resolver {
                         work.checked_add(Self::constructor_scheme_retention_type_work(
                             &exported.scheme,
                         )?)
-                        .and_then(|work| work.checked_add(1))
+                        .and_then(|work| work.checked_add(2)) // record plus original reference
                         .ok_or(())
                     })
                     .map_err(|()| {
@@ -7154,12 +7154,28 @@ impl Resolver {
                         "imported constructor scheme retention could not reserve storage",
                     )
                 })?;
+            let original = exported
+                .original
+                .as_ref()
+                .ok_or_else(|| {
+                    imported_fact_comparison_error(ResolvedBuildFailure::InvalidState, span)
+                })?
+                .retain(&mut TypeWorkBudget::with_limit(1))
+                .map_err(|failure| imported_fact_comparison_error(failure, span))?;
+            let origin = crate::resolved::clone_effect_origin_with_budget(
+                &exported.origin,
+                &mut self.type_work,
+            )
+            .map_err(|()| {
+                imported_fact_comparison_error(ResolvedBuildFailure::TypeResource, span)
+            })?;
             staged_constructors.push(ImportedConstructorFact {
+                original: Some(original),
                 id: exported.id,
                 spelling: Self::clone_imported_string_after_precharge(&exported.spelling, span)?,
                 payload: payload.map(IterativeTypeOwner::into_inner),
                 scheme,
-                origin: exported.origin.clone(),
+                origin,
             });
         }
 
@@ -15913,7 +15929,7 @@ mod tests {
     #[test]
     fn nullary_constructor_family_transaction_and_route_cache_are_exact_atomic_and_reusable() {
         const FIRST_CONSTRAINT_WORK: usize = 9;
-        const FIRST_TYPE_WORK: usize = 11;
+        const FIRST_TYPE_WORK: usize = 13;
         const DUPLICATE_CONSTRAINT_WORK: usize = 16;
 
         let source = SourceFile::new("nullary-constructor-family.ash", "First Second")
@@ -16116,10 +16132,10 @@ mod tests {
     #[test]
     fn shared_foreign_nominal_constructor_family_transaction_is_exact_atomic_and_reusable() {
         const FIRST_CONSTRAINT_WORK: usize = 19;
-        const FIRST_TYPE_WORK: usize = 20;
+        const FIRST_TYPE_WORK: usize = 22;
         const DUPLICATE_CONSTRAINT_WORK: usize = 32;
         const DEFERRED_FOREIGN_CONFLICT_WORK: usize = 31;
-        const LATE_SIBLING_CONFLICT_WORK: usize = 21;
+        const LATE_SIBLING_CONFLICT_WORK: usize = 19;
 
         std::thread::Builder::new()
             .name("shared-foreign-constructor-family".to_owned())
@@ -16184,10 +16200,16 @@ mod tests {
                     )
                 };
                 let clean = make_summary(Origin::Source(span), Origin::Source(span));
-                let foreign_conflicting =
+                let mut foreign_conflicting =
                     make_summary(Origin::Source(forged_span), Origin::Source(span));
-                let late_sibling_conflicting =
+                let mut late_sibling_conflicting =
                     make_summary(Origin::Source(forged_span), Origin::Source(forged_span));
+                // Unchanged sibling meanings retain their actual original;
+                // only the conflicting second sibling has another witness.
+                for id in [first, second] {
+                    foreign_conflicting.share_constructor_original_for_test(&clean, id);
+                }
+                late_sibling_conflicting.share_constructor_original_for_test(&clean, first);
                 for candidate in [&clean, &foreign_conflicting, &late_sibling_conflicting] {
                     candidate
                         .authenticate(
@@ -16338,8 +16360,8 @@ mod tests {
                 assert_eq!(resolver.type_work.used(), 0);
                 assert_clean_snapshot(&resolver);
 
-                // A late second-sibling fact disagreement owns failure before the
-                // same route's foreign-closure disagreement can run.
+                // A late second-sibling original-reference disagreement owns
+                // failure before that route's foreign closure can run.
                 resolver.type_work = TypeWorkBudget::with_limit(0);
                 resolver.constraint_work =
                     InterfaceConstraintBudget::with_limit(LATE_SIBLING_CONFLICT_WORK - 1);
@@ -16351,7 +16373,9 @@ mod tests {
                         &late_sibling_conflicting,
                         span,
                     )
-                    .expect_err("one missing late sibling Origin cell must preserve the family");
+                    .expect_err(
+                        "one missing late sibling comparison cell must preserve the family",
+                    );
                 assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
                 assert_eq!(
                     resolver.constraint_work.used(),
@@ -16413,9 +16437,9 @@ mod tests {
     #[test]
     fn constructor_family_transaction_rejects_a_late_sibling_conflict_before_owner_metadata() {
         const FIRST_CONSTRAINT_WORK: usize = 9;
-        const LATE_CONFLICT_WORK: usize = 13;
+        const LATE_CONFLICT_WORK: usize = 11;
         const CLEAN_RETRY_WORK: usize = 16;
-        const TYPE_WORK: usize = 11;
+        const TYPE_WORK: usize = 13;
 
         let source = SourceFile::new(
             "late-constructor-family-conflict.ash",
@@ -16450,7 +16474,8 @@ mod tests {
             )
         };
         let clean = summary(Origin::Source(span));
-        let conflicting = summary(Origin::Source(forged_span));
+        let mut conflicting = summary(Origin::Source(forged_span));
+        conflicting.share_constructor_original_for_test(&clean, first);
         for candidate in [&clean, &conflicting] {
             candidate
                 .authenticate(
@@ -16515,7 +16540,7 @@ mod tests {
                 &conflicting,
                 span,
             )
-            .expect_err("the late second-constructor Origin conflict must reject");
+            .expect_err("the late second-constructor original conflict must reject");
         assert_eq!(error.reason, ResolveReason::InternalState);
         assert_eq!(
             resolver.constraint_work.used(),
@@ -16547,7 +16572,7 @@ mod tests {
     {
         const MISSING_CONSTRAINT_WORK: usize = 8;
         const CLEAN_RETRY_WORK: usize = 9;
-        const TYPE_WORK: usize = 11;
+        const TYPE_WORK: usize = 13;
 
         let source = SourceFile::new("late-missing-constructor-family.ash", "First Second")
             .expect("the late-missing source should fit");
@@ -16664,7 +16689,7 @@ mod tests {
     #[test]
     fn named_and_targeted_constructor_routes_share_one_family_transaction_in_both_orders() {
         const ROUTE_CONSTRAINT_WORK: usize = 12;
-        const TYPE_WORK: usize = 11;
+        const TYPE_WORK: usize = 13;
 
         let source = SourceFile::new("named-targeted-constructor-family.ash", "First Second")
             .expect("the named-targeted source should fit");
@@ -16775,10 +16800,10 @@ mod tests {
         // the two public reverse-index records add two. Type authentication performs one fused body-free Kind walk
         // over the physical scheme and its independently retained payload,
         // collecting its exact owner-variable closure in that same walk.
-        const RAW_CONSTRAINT_WORK: usize = 9;
-        const RAW_CONSTRAINT_PRE_CLOSE: usize = 6;
-        const RAW_CONSTRAINT_PRE_REVERSE: usize = 7;
-        const RAW_TYPE_WORK: usize = 5 * DEPTH + 11;
+        const RAW_CONSTRAINT_WORK: usize = 4 * DEPTH + 12;
+        const RAW_CONSTRAINT_PRE_CLOSE: usize = 4 * DEPTH + 9;
+        const RAW_CONSTRAINT_PRE_REVERSE: usize = 4 * DEPTH + 10;
+        const RAW_TYPE_WORK: usize = 5 * DEPTH + 23;
         // First-route constraint work validates the two-cell owner shape,
         // retains one constructor-family transaction action, then discovers
         // nominal identities in the 2D+3-node physical scheme and independently
@@ -16788,7 +16813,7 @@ mod tests {
         // First-route Type work retains the three-cell owner, one prepared
         // nominal action, one staged constructor record, the 2D+1-node payload,
         // the 2D+3-node scheme, and one constructor-map record.
-        const RETAIN_TYPE_WORK: usize = 4 * DEPTH + 10;
+        const RETAIN_TYPE_WORK: usize = 4 * DEPTH + 11;
         // A repeated route validates the two-cell owner shape, retains one
         // constructor-family transaction action, compares one metadata and
         // Source-Origin cell, the 4D+6 scheme pair and 4D+2 payload pair,
@@ -16898,6 +16923,7 @@ mod tests {
                         .try_reserve(1)
                         .expect("the abandoned-fact guard should reserve one record");
                     abandoned.push(ImportedConstructorFact {
+                        original: None,
                         id: exported.id,
                         spelling: exported.spelling.clone(),
                         payload: payload.map(IterativeTypeOwner::into_inner),

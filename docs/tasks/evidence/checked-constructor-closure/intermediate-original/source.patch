@@ -1,0 +1,255 @@
+--- a/src/resolved.rs
++++ b/src/resolved.rs
+@@ -30376,41 +30376,6 @@
+             })
+             .collect::<Vec<_>>()
+             .into_boxed_slice();
+-        // Inject one complete flat original for this metadata-only fixture.
+-        // Physical omissions below affect only the projection, not its source.
+-        let original_registry = Arc::new(
+-            ResolvedRegistry::new(
+-                vec![ResolvedNominalType {
+-                    id: owner,
+-                    declaration_kind: ResolvedNominalDeclarationKind::Data,
+-                    spelling: "Family".to_owned(),
+-                    constructors: family.clone(),
+-                    representation: None,
+-                    representation_provenance: None,
+-                    origin: Origin::Source(span),
+-                }],
+-                family
+-                    .iter()
+-                    .copied()
+-                    .enumerate()
+-                    .map(|(index, id)| ResolvedConstructor {
+-                        id,
+-                        owner,
+-                        spelling: format!("Value{index}"),
+-                        payload: None,
+-                        origin: Origin::Source(span),
+-                    })
+-                    .collect(),
+-            )
+-            .with_type_parameters_with_budget(
+-                vec![(owner, Vec::new())],
+-                &mut TypeWorkBudget::default(),
+-            )
+-            .expect("the injected family original has complete empty formals"),
+-        );
+-        let original =
+-            ConstructorOriginal::from_checked(&original_registry, &mut TypeWorkBudget::default())
+-                .expect("retain one injected family original");
+         let mut summary = ExportSummary::empty(summary_module);
+         match carrier {
+             FamilyCarrierForTest::Public { aliases } => {
+@@ -30472,11 +30437,7 @@
+                 }
+                 let spelling = format!("Value{index}");
+                 let constructor = ExportedConstructor {
+-                    original: Some(
+-                        original
+-                            .retain(&mut TypeWorkBudget::default())
+-                            .expect("share the one injected family original"),
+-                    ),
++                    original: None,
+                     id: identity,
+                     spelling: spelling.clone(),
+                     payload: None,
+@@ -30525,11 +30486,10 @@
+         // Each public spelling contributes one fused order/namespace cell.
+         // Each alias after the canonical nominal contributes one Source-Origin
+         // equality cell before the batched public reverse-index charge.
+-        // Each physical constructor also compares its original Source origin.
+         const PUBLIC_PRE_REVERSE: usize =
+-            ALIASES * WIDTH + 2 * ALIASES + 3 * WIDTH + 2 + (ALIASES - 1);
++            ALIASES * WIDTH + 2 * ALIASES + 2 * WIDTH + 2 + (ALIASES - 1);
+         const PUBLIC_EXACT: usize = PUBLIC_PRE_REVERSE + ALIASES + WIDTH;
+-        const HIDDEN_TRANSPARENT_EXACT: usize = 4 * WIDTH + 4;
++        const HIDDEN_TRANSPARENT_EXACT: usize = 3 * WIDTH + 4;
+         const HIDDEN_IDENTITY_EXACT: usize = 4;
+         assert_clean(
+             &family_authentication_summary(
+@@ -30553,8 +30513,8 @@
+ 
+         for omitted in [0, WIDTH - 1] {
+             for (carrier, exact) in [
+-                (FamilyCarrierForTest::Public { aliases: 1 }, 4 * WIDTH + 1),
+-                (FamilyCarrierForTest::HiddenTransparent, 4 * WIDTH + 1),
++                (FamilyCarrierForTest::Public { aliases: 1 }, 3 * WIDTH + 2),
++                (FamilyCarrierForTest::HiddenTransparent, 3 * WIDTH + 2),
+             ] {
+                 let summary = family_authentication_summary(carrier, WIDTH, Some(omitted));
+                 let mut short = crate::interface::InterfaceConstraintBudget::with_limit(exact - 1);
+@@ -30575,7 +30535,7 @@
+             }
+         }
+ 
+-        const REVERSE_PRECHARGE_PREFIX: usize = 4 * WIDTH + 4;
++        const REVERSE_PRECHARGE_PREFIX: usize = 3 * WIDTH + 4;
+         const REVERSE_EXACT: usize = REVERSE_PRECHARGE_PREFIX + WIDTH + 1;
+         for constructor in [false, true] {
+             let mut summary = family_authentication_summary(
+@@ -39700,41 +39660,6 @@
+                 )
+             })
+             .collect::<Vec<_>>();
+-        // One defining registry backs all aliases and hidden siblings. This
+-        // is injected fixture metadata, not a product publication path.
+-        let original_registry = Arc::new(
+-            ResolvedRegistry::new(
+-                vec![ResolvedNominalType {
+-                    id: nominal,
+-                    declaration_kind: ResolvedNominalDeclarationKind::Data,
+-                    spelling: "Family".to_owned(),
+-                    constructors: constructors.clone().into_boxed_slice(),
+-                    representation: None,
+-                    representation_provenance: None,
+-                    origin: Origin::Source(span),
+-                }],
+-                constructors
+-                    .iter()
+-                    .copied()
+-                    .enumerate()
+-                    .map(|(index, id)| ResolvedConstructor {
+-                        id,
+-                        owner: nominal,
+-                        spelling: format!("Member{index}"),
+-                        payload: None,
+-                        origin: Origin::Source(span),
+-                    })
+-                    .collect(),
+-            )
+-            .with_type_parameters_with_budget(
+-                vec![(nominal, Vec::new())],
+-                &mut TypeWorkBudget::default(),
+-            )
+-            .expect("the injected constructor original has complete empty formals"),
+-        );
+-        let original =
+-            ConstructorOriginal::from_checked(&original_registry, &mut TypeWorkBudget::default())
+-                .expect("retain the injected defining registry once");
+         let mut imported = ImportedFacts::default();
+         imported
+             .merge_nominal(
+@@ -39760,11 +39685,7 @@
+             imported
+                 .insert_constructor(
+                     ImportedConstructorFact {
+-                        original: Some(
+-                            original
+-                                .retain(&mut constructor_work)
+-                                .expect("share one defining registry across the fixture family"),
+-                        ),
++                        original: None,
+                         id: constructor,
+                         spelling: format!("Member{index}"),
+                         payload: None,
+@@ -39829,21 +39750,10 @@
+         // retains one complete hidden nominal family. Authentication retains
+         // its nominal kind in two cells and checks each unique constructor's
+         // result identity and kind in four cells.
+-        // Original references add one paid retain per physical record;
+-        // authentication adds four lookups and both spelling byte lengths.
+-        const PHYSICAL_RECORDS: usize = ALIAS_COUNT + FAMILY_WIDTH - 1;
+-        const ALL_MEMBER_BYTES: usize =
+-            "Member".len() * FAMILY_WIDTH + 10 + 2 * 90 + 3 * (FAMILY_WIDTH - 100);
+-        const PHYSICAL_SPELLING_BYTES: usize =
+-            ALIAS_COUNT * "Member0".len() + ALL_MEMBER_BYTES - "Member0".len();
+-        const STAGING_WORK: usize = 2 * ALIAS_COUNT + 8 * FAMILY_WIDTH + 4 + PHYSICAL_RECORDS;
+-        const FULL_EXACT: usize = STAGING_WORK
+-            + 2
+-            + 4 * FAMILY_WIDTH
+-            + 4 * PHYSICAL_RECORDS
+-            + 2 * PHYSICAL_SPELLING_BYTES;
+-
+-        let traversal_exact = 3 * ALIAS_COUNT + UNIQUE_OWNER_WORK + 1 + FAMILY_ENTRY_WORK;
++        const STAGING_WORK: usize = 2 * ALIAS_COUNT + 8 * FAMILY_WIDTH + 4;
++        const FULL_EXACT: usize = STAGING_WORK + 2 + 4 * FAMILY_WIDTH;
++
++        let traversal_exact = 2 * ALIAS_COUNT + UNIQUE_OWNER_WORK + 1 + FAMILY_ENTRY_WORK;
+         let (traversal_short, traversal_short_used) =
+             freeze_transparent_constructor_aliases_with_limit(
+                 FAMILY_WIDTH,
+@@ -39853,7 +39763,7 @@
+         assert_eq!(traversal_short, Err(ResolvedBuildFailure::TypeResource));
+         assert_eq!(
+             traversal_short_used,
+-            3 * ALIAS_COUNT + UNIQUE_OWNER_WORK + 1,
++            2 * ALIAS_COUNT + UNIQUE_OWNER_WORK + 1,
+         );
+ 
+         let (publication_short, publication_short_used) =
+--- a/src/resolved/checked_constructor_closure_tests.rs
++++ b/src/resolved/checked_constructor_closure_tests.rs
+@@ -638,71 +638,3 @@
+         );
+     }
+ }
+-
+-#[test]
+-fn checked_constructor_closure_fused_mirror_preserves_latent_rows_and_empty_equivalence() {
+-    let summary = wrapper_summary_from_source(&format!(
+-        "{PRODUCER}\npub effect Ping {{\n    ping : Unit -> Int\n}}\npub type Callback = Callback(Unit -> Int ! {{Ping}})\n"
+-    ));
+-    authenticate_default(&summary).unwrap();
+-    let constructor = &summary.constructors["Callback"];
+-    let payload = constructor.payload.as_ref().unwrap();
+-    assert!(
+-        matches!(payload, Type::EffectfulFunction(_, computation) if !computation.effects().is_empty())
+-    );
+-    let mut kinds = super::checked_wrapper_tests::capture_kinds_for_test(&summary);
+-    kinds
+-        .install_retained_effects(
+-            &summary.effects,
+-            &mut TypeWorkBudget::default(),
+-            constructor.origin.primary_span(),
+-        )
+-        .unwrap();
+-    let parameters = &summary.nominals["Callback"].parameters;
+-    let check = |domain: Type, mirror: &Type| {
+-        let scheme = Type::Function(
+-            Box::new(domain),
+-            Box::new(Type::Nominal(constructor.id.owner())),
+-        );
+-        kinds
+-            .expect_body_free_constructor_value_type_with_ledger(
+-                &scheme,
+-                Some(mirror),
+-                parameters,
+-                constructor.origin.primary_span(),
+-                &mut TypeWorkBudget::default(),
+-            )
+-            .is_ok()
+-    };
+-    assert!(check(
+-        clone_type_with_budget(payload, &mut TypeWorkBudget::default()).unwrap(),
+-        payload
+-    ));
+-    let pure = || Type::Function(Box::new(Type::Unit), Box::new(Type::Int));
+-    let empty = || {
+-        Type::EffectfulFunction(
+-            Box::new(Type::Unit),
+-            Box::new(crate::types::ComputationType::pure(Type::Int)),
+-        )
+-    };
+-    let mixed = [
+-        check(pure(), payload),
+-        check(
+-            clone_type_with_budget(payload, &mut TypeWorkBudget::default()).unwrap(),
+-            &pure(),
+-        ),
+-    ];
+-    assert_eq!(
+-        mixed,
+-        [false, false],
+-        "mixed function presentations cannot erase a known latent effect"
+-    );
+-    for domain in [pure(), empty()] {
+-        for mirror in [pure(), empty()] {
+-            assert!(check(
+-                clone_type_with_budget(&domain, &mut TypeWorkBudget::default()).unwrap(),
+-                &mirror
+-            ));
+-        }
+-    }
+-}

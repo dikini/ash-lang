@@ -1,0 +1,20 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi/foreign-adapter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 47.63s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 1 test
+
+thread 'resolved::checked_constructor_closure_tests::checked_constructor_closure_fused_mirror_preserves_latent_rows_and_empty_equivalence' (717) panicked at src/resolved/checked_wrapper_tests.rs:36:37:
+called `Result::unwrap()` on an `Err` value: Os { code: 17, kind: AlreadyExists, message: "File exists" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test resolved::checked_constructor_closure_tests::checked_constructor_closure_fused_mirror_preserves_latent_rows_and_empty_equivalence ... FAILED
+
+failures:
+
+failures:
+    resolved::checked_constructor_closure_tests::checked_constructor_closure_fused_mirror_preserves_latent_rows_and_empty_equivalence
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2025 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p ash --lib`

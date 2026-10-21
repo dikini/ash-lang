@@ -1,0 +1,38 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 31 tests
+test kind::tests::canonical_retention_preserves_kind_cause ... ok
+test kind::tests::effect_row_binders_are_limited_to_schemes_and_generalized_locals ... ok
+test kind::tests::absent_method_lists_preserve_predecessor_owner_install_accounting ... ok
+test kind::tests::body_free_interface_method_separates_allowed_variables_from_required_seed ... ok
+test kind::tests::canonical_owner_authentication_precedes_declaration_consumers ... ok
+test kind::tests::fixed_environment_lookups_are_exact_and_missing_entries_are_charged ... ok
+test kind::tests::declaration_order_is_a_complete_exact_and_atomic_partition ... ok
+test kind::tests::body_free_interface_method_accepts_a_closed_effectful_function ... ok
+test kind::tests::determined_global_deferral_reads_only_authenticated_key_positions ... ok
+test kind::tests::following_methods_cannot_see_an_explicit_predecessor_local ... ok
+test kind::tests::implementation_prerequisite_only_parameters_reject_effect_rows_during_preflight ... ok
+test kind::tests::function_synthesis_and_source_diagnostic_retention_have_exact_formulas ... ok
+test kind::tests::global_application_shape_and_membership_prefixes_are_exact ... ok
+test kind::tests::implementation_head_and_wide_prerequisite_shape_prefixes_are_exact ... ok
+test kind::tests::lexical_kind_walk_precharges_even_empty_method_groups ... ok
+test kind::tests::malformed_body_free_kinds_and_duplicate_environments_are_internal ... ok
+test kind::tests::packed_builtin_kinds_authenticate_exact_mirrors ... ok
+test kind::tests::kind_presentation_does_not_invent_an_absent_declaration ... ok
+test kind::tests::newtype_payload_provenance_identity_is_authenticated_before_representation_work ... ok
+test kind::tests::method_parameter_state_rejects_explicit_empty_and_preserves_valid_states ... ok
+test kind::tests::module_gate_charges_missing_indexes_and_authenticates_constructor_pairing ... ok
+test kind::tests::written_effect_arity_labels_are_exact_and_retained_carriers_stay_internal ... ok
+test kind::tests::nested_block_results_are_scheduled_once ... ok
+test kind::tests::relational_interface_shape_is_charged_in_environment_and_declaration_passes ... ok
+test kind::tests::kind_resource_presentation_retains_stage_and_span ... ok
+test kind::tests::kind_gate_failure_dismantles_unpublished_deep_module_parts_iteratively ... ok
+test kind::tests::deep_fixed_kind_lookup_is_stack_safe_and_exact ... ok
+test kind::tests::expression_work_is_exact_and_deep_traversal_is_stack_safe ... ok
+test kind::tests::synthesis_work_storage_is_exact_for_left_deep_applications_and_wide_tuples ... ok
+test kind::tests::retained_kind_mirror_continuations_are_exact_for_both_deep_spines ... ok
+test kind::tests::kind_internal_causes_are_retained_without_parsing_legacy_text ... ok
+
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 1995 filtered out; finished in 2.30s
+

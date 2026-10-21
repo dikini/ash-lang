@@ -561,3 +561,43 @@ fn checked_selected_capture_only_private_nominal_survives_body_free_core() {
     let folded = ash::core::transform::fold_effect_literal_primitives(&identity).unwrap();
     ash::core::validate_effect_modules(folded, &sources, &modules).unwrap();
 }
+
+#[test]
+fn checked_constructor_payload_private_leaf_survives_body_free_consumer_and_core() {
+    let fixture = Fixture::new(
+        include_str!("fixtures/checked-constructor-closure/producer.ash"),
+        "import @builtin.foreign as Foreign\nimport native as Native\nmain : Unit -> Foreign.CheckedCall<Int>\nmain () = Native.inspect (Native.make 7)\n",
+    );
+    let graph = fixture.graph();
+    // checked_with_profile passes only DependencyExports to consumer checking;
+    // core supplies independently checked producer code at linking.
+    let valid = core(&graph);
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let modules = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let identity = ash::core::transform::identity_effect_traversal(&valid).unwrap();
+    let identity = ash::core::validate_effect_modules(identity, &sources, &modules).unwrap();
+    let folded = ash::core::transform::fold_effect_literal_primitives(&identity).unwrap();
+    ash::core::validate_effect_modules(folded, &sources, &modules).unwrap();
+}
+
+#[test]
+fn checked_constructor_payload_private_leaf_survives_renamed_reexport() {
+    let fixture = Fixture::new(
+        include_str!("fixtures/checked-constructor-closure/producer.ash"),
+        "import @builtin.foreign as Foreign\nimport facade as Facade\nmain : Unit -> Foreign.CheckedCall<Int>\nmain () = Facade.read (Facade.build 7)\n",
+    );
+    std::fs::write(
+        fixture.0.join("facade.ash"),
+        "pub import native (Envelope as Packet, make as build, inspect as read)\n",
+    )
+    .unwrap();
+    let _ = core(&fixture.graph());
+}

@@ -1,0 +1,160 @@
+{
+  "commands": [
+    {
+      "name": "constructors",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "ash",
+        "--locked",
+        "--lib",
+        "constructor",
+        "--",
+        "--nocapture"
+      ],
+      "pass_lines": 90,
+      "seconds": 56.708
+    },
+    {
+      "name": "images",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "ash",
+        "--locked",
+        "--lib",
+        "source_resource_image",
+        "--",
+        "--nocapture"
+      ],
+      "pass_lines": 16,
+      "seconds": 3.336
+    },
+    {
+      "name": "kind",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "ash",
+        "--locked",
+        "--lib",
+        "kind::tests",
+        "--",
+        "--nocapture"
+      ],
+      "pass_lines": 31,
+      "seconds": 1.37
+    },
+    {
+      "name": "carriers",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "ash",
+        "--locked",
+        "--lib",
+        "resolved::checked_",
+        "--",
+        "--nocapture"
+      ],
+      "pass_lines": 40,
+      "seconds": 0.47
+    },
+    {
+      "name": "imports",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "ash",
+        "--locked",
+        "--lib",
+        "imported_",
+        "--",
+        "--nocapture"
+      ],
+      "pass_lines": 34,
+      "seconds": 2.217
+    },
+    {
+      "name": "owners",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "ash",
+        "--locked",
+        "--lib",
+        "source_owner_post_record",
+        "--",
+        "--nocapture"
+      ],
+      "pass_lines": 10,
+      "seconds": 1.369
+    },
+    {
+      "name": "capture",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "ash",
+        "--locked",
+        "--lib",
+        "core::capture::tests",
+        "--",
+        "--nocapture"
+      ],
+      "pass_lines": 36,
+      "seconds": 0.405
+    },
+    {
+      "name": "integrations",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "ash",
+        "--locked",
+        "--test",
+        "checked_foreign_wrappers",
+        "--test",
+        "module_newtypes",
+        "--test",
+        "library_imports",
+        "--test",
+        "data_and_adts",
+        "--",
+        "--nocapture"
+      ],
+      "pass_lines": 89,
+      "seconds": 121.023
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "ash",
+        "--locked",
+        "--lib",
+        "--tests",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "pass_lines": 0,
+      "seconds": 107.925
+    }
+  ],
+  "input_count": 562,
+  "input_aggregate_sha256": "cc9718c67151303d8274ad3019226bfe932b22a24bd88515ba6acf8de656721b",
+  "all_before_after_and_current_pins_equal": true,
+  "distinct_passing_test_names": 331,
+  "clippy_exit_code": 0
+}
