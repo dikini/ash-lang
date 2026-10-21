@@ -4743,7 +4743,10 @@ impl ConstrainedScheme {
             requirements.push(CheckedRequirement {
                 id: requirement.id,
                 application: requirement.application.clone_with_budget(budget)?,
-                origin: requirement.origin.clone(),
+                origin: crate::resolved::clone_effect_origin_with_budget(
+                    &requirement.origin,
+                    budget,
+                )?,
                 span: requirement.span,
             });
         }

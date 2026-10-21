@@ -1,0 +1,29 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "ash",
+    "--locked",
+    "--test",
+    "checked_foreign_wrappers",
+    "--test",
+    "interface_modules",
+    "--test",
+    "interface_generic_summary",
+    "--test",
+    "interface_identity_diamond",
+    "--test",
+    "interface_selection",
+    "--test",
+    "interface_validation",
+    "--",
+    "--nocapture"
+  ],
+  "exit": 0,
+  "elapsed_seconds": 21.435,
+  "source_configuration_before_after_equal": true,
+  "file_count": 523,
+  "source_configuration_tree_sha256": "34de4cca6f3d106f005f7df2d72efcff97f4ab464ecfb499fba986427d0d342a",
+  "log_sha256": "16dbc5bd438df49b8f1edb34996ff8d1c632507db08d4b124bd145abbd4afd5c"
+}

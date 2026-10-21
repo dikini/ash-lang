@@ -5266,6 +5266,22 @@ impl Resolver {
         Ok(())
     }
 
+    fn clone_implementation_origin_for_retention(
+        &mut self,
+        origin: &Origin,
+        span: Span,
+    ) -> Result<Origin, ResolveError> {
+        crate::resolved::clone_effect_origin_with_budget(origin, &mut self.type_work).map_err(
+            |()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "imported implementation provenance exceeded its type-work budget",
+                )
+            },
+        )
+    }
+
     fn retain_imported_implementation_fact<'a>(
         &mut self,
         exported: &'a AuthorizedImplementationFact,
@@ -5282,6 +5298,13 @@ impl Resolver {
             )
         })?;
         let fact = exported.fact();
+        crate::resolved::authenticate_implementation_publication(
+            fact,
+            exported.publication(),
+            &mut self.type_work,
+            &mut self.constraint_work,
+        )
+        .map_err(|failure| imported_fact_comparison_error(failure, span))?;
         let authorization_is_well_formed = exported
             .authorization()
             .is_well_formed_for(summary.module(), fact, &mut self.constraint_work)
@@ -5304,6 +5327,16 @@ impl Resolver {
             }));
         }
         if let Some(existing) = self.imported.implementation(fact.id) {
+            if !matches!(
+                (self.imported.implementation_import(fact.id).and_then(|entry| entry.publication.as_ref()), exported.publication()),
+                (Some(left), Some(right)) if std::sync::Arc::ptr_eq(left, right)
+            ) {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    span,
+                    "alternate implementation routes disagree on the completed original",
+                ));
+            }
             let mut nominal_identities = MatchedNominalIdentities::default();
             let matches = same_checked_implementation_fact_observing_nominals_with_budget(
                 existing,
@@ -5587,7 +5620,8 @@ impl Resolver {
                             "imported prerequisite exceeded its type-work budget",
                         )
                     })?,
-                origin: prerequisite.origin.clone(),
+                origin: self
+                    .clone_implementation_origin_for_retention(&prerequisite.origin, span)?,
                 span: prerequisite.span,
             });
         }
@@ -5817,26 +5851,29 @@ impl Resolver {
                         )
                     })?,
                 head_type_parameter_count: method.head_type_parameter_count(),
-                origin: method.origin.clone(),
+                origin: self.clone_implementation_origin_for_retention(&method.origin, span)?,
                 span: method.span,
             });
         }
+        let application = fact
+            .application()
+            .clone_with_budget(&mut self.type_work)
+            .map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "imported implementation head exceeded its type-work budget",
+                )
+            })?;
+        // Preserve the iterative parameter/method buffers through the final fallible clone.
+        let origin = self.clone_implementation_origin_for_retention(&fact.origin, span)?;
         let cloned_fact = CheckedImplementationFact {
             id: fact.id,
-            application: fact
-                .application()
-                .clone_with_budget(&mut self.type_work)
-                .map_err(|()| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        span,
-                        "imported implementation head exceeded its type-work budget",
-                    )
-                })?,
+            application,
             head_parameters: head_parameters.into_boxed_slice(),
             prerequisites: prerequisites.into_boxed_slice(),
             methods: methods.into_boxed_slice(),
-            origin: fact.origin.clone(),
+            origin,
             span: fact.span,
         };
         self.imported.reserve_implementation().map_err(|()| {
@@ -5855,6 +5892,20 @@ impl Resolver {
                     "implementation route ordering exceeded its work budget",
                 )
             })?;
+        self.type_work.charge(1).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "completed implementation publication retention exceeded its type-work budget",
+            )
+        })?;
+        let publication = std::sync::Arc::clone(exported.publication().ok_or_else(|| {
+            error(
+                ResolveReason::InternalState,
+                span,
+                "completed implementation publication is absent",
+            )
+        })?);
         if self
             .implementation_route_ranks
             .insert(fact.id, selection.route_rank)
@@ -5886,8 +5937,12 @@ impl Resolver {
                 problem: "duplicate",
             }));
         }
-        self.imported
-            .insert_implementation(cloned_fact, authorization, public_authorization);
+        self.imported.insert_implementation_with_publication(
+            cloned_fact,
+            publication,
+            authorization,
+            public_authorization,
+        );
         if needs_public_order {
             self.imported
                 .mark_implementation_public(fact.id)
@@ -17426,11 +17481,11 @@ mod tests {
         // canonical Token definition is header+Source-Origin 2. Two one-hop
         // prepends and the effective/public hop comparisons complete the route.
         const PUBLIC_DUPLICATE_CONSTRAINT_WORK: usize =
-            1 + 1 + (2 + 2 + 2 + 1 + 7 + 6) + 2 + 1 + 1 + 1 + 1;
+            1 + 1 + (2 + 2 + 2 + 1 + 7 + 6) + 2 + 1 + 1 + 1 + 1 + 18;
         // A private-to-public promotion replaces the public hop comparison with
         // one public-order/rank reservation cell, so its exact total is equal.
         const PUBLIC_PROMOTION_CONSTRAINT_WORK: usize =
-            1 + 1 + (2 + 2 + 2 + 1 + 7 + 6) + 2 + 1 + 1 + 1 + 1;
+            1 + 1 + (2 + 2 + 2 + 1 + 7 + 6) + 2 + 1 + 1 + 1 + 1 + 18;
 
         let fixture = ImportBudgetFixture::create(ENTRY, DEPENDENCY);
         let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
@@ -17465,6 +17520,8 @@ mod tests {
             );
         }
         let capture_work = capture_work.used();
+        // One completed-original header and two independent capture comparisons.
+        let comparison_type_work = 1 + 2 * capture_work;
         assert!(capture_work > 0);
         let token = summary
             .nominal("Token")
@@ -17536,7 +17593,7 @@ mod tests {
             public_baseline.1,
             vec![(token, ImportedTypeAccess::Hidden, Vec::new())],
         );
-        duplicate.type_work = TypeWorkBudget::with_limit(capture_work - 1);
+        duplicate.type_work = TypeWorkBudget::with_limit(comparison_type_work - 1);
         duplicate.constraint_work =
             InterfaceConstraintBudget::with_limit(PUBLIC_DUPLICATE_CONSTRAINT_WORK);
         let error = duplicate
@@ -17550,7 +17607,7 @@ mod tests {
         assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
         assert_eq!(snapshot(&duplicate), public_baseline);
 
-        duplicate.type_work = TypeWorkBudget::with_limit(capture_work);
+        duplicate.type_work = TypeWorkBudget::with_limit(comparison_type_work);
         duplicate.constraint_work =
             InterfaceConstraintBudget::with_limit(PUBLIC_DUPLICATE_CONSTRAINT_WORK - 1);
         let error = duplicate
@@ -17566,10 +17623,10 @@ mod tests {
             duplicate.constraint_work.used(),
             PUBLIC_DUPLICATE_CONSTRAINT_WORK - 1,
         );
-        assert_eq!(duplicate.type_work.used(), capture_work);
+        assert_eq!(duplicate.type_work.used(), comparison_type_work);
         assert_eq!(snapshot(&duplicate), public_baseline);
 
-        duplicate.type_work = TypeWorkBudget::with_limit(capture_work);
+        duplicate.type_work = TypeWorkBudget::with_limit(comparison_type_work);
         duplicate.constraint_work =
             InterfaceConstraintBudget::with_limit(PUBLIC_DUPLICATE_CONSTRAINT_WORK);
         duplicate
@@ -17584,7 +17641,7 @@ mod tests {
             duplicate.constraint_work.used(),
             PUBLIC_DUPLICATE_CONSTRAINT_WORK,
         );
-        assert_eq!(duplicate.type_work.used(), capture_work);
+        assert_eq!(duplicate.type_work.used(), comparison_type_work);
         assert_eq!(snapshot(&duplicate), public_baseline);
 
         let mut promotion = Resolver::new(entry.id());
@@ -17599,7 +17656,7 @@ mod tests {
         let private_baseline = snapshot(&promotion);
         assert!(private_baseline.0[0].2.is_none());
         assert!(private_baseline.4.is_empty());
-        promotion.type_work = TypeWorkBudget::with_limit(capture_work);
+        promotion.type_work = TypeWorkBudget::with_limit(comparison_type_work);
         promotion.constraint_work =
             InterfaceConstraintBudget::with_limit(PUBLIC_PROMOTION_CONSTRAINT_WORK - 1);
         let error = promotion
@@ -17615,10 +17672,10 @@ mod tests {
             promotion.constraint_work.used(),
             PUBLIC_PROMOTION_CONSTRAINT_WORK - 1,
         );
-        assert_eq!(promotion.type_work.used(), capture_work);
+        assert_eq!(promotion.type_work.used(), comparison_type_work);
         assert_eq!(snapshot(&promotion), private_baseline);
 
-        promotion.type_work = TypeWorkBudget::with_limit(capture_work);
+        promotion.type_work = TypeWorkBudget::with_limit(comparison_type_work);
         promotion.constraint_work =
             InterfaceConstraintBudget::with_limit(PUBLIC_PROMOTION_CONSTRAINT_WORK);
         promotion
@@ -17633,7 +17690,7 @@ mod tests {
             promotion.constraint_work.used(),
             PUBLIC_PROMOTION_CONSTRAINT_WORK,
         );
-        assert_eq!(promotion.type_work.used(), capture_work);
+        assert_eq!(promotion.type_work.used(), comparison_type_work);
         let promoted = snapshot(&promotion);
         assert_eq!(promoted.0.len(), 1);
         assert_eq!(promoted.1, private_baseline.1);
@@ -20412,7 +20469,8 @@ mod tests {
             + (HEAD_RECORDS + KIND_NODES + VALUE_CELLS)
             + ARGUMENT_CELLS
             + 1 // retained head spelling
-            + 2 * (DEPTH + 1); // full retained head provenance
+            + 2 * (DEPTH + 1) // full retained head provenance
+            + 2; // completed original authentication and retained Arc reference
         const ENTRY: &str = "import dependency (impl Marker)\n";
         const DEPENDENCY: &str = "pub interface Marker<A> {\nmark : A -> A\n}\n";
 

@@ -22591,6 +22591,10 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
     resolved
         .authenticate_owner_definitions(type_work)
         .map_err(resolved_build_error)?;
+    resolved
+        .imported_facts()
+        .authenticate_implementation_publications(type_work, constraint_work)
+        .map_err(resolved_build_error)?;
     let checked_interfaces = check_interface_declarations(&resolved, constraint_work)?;
     check_global_requirements(&resolved, &checked_interfaces, constraint_work)?;
     let registry = Arc::new(
@@ -34317,8 +34321,8 @@ mod tests {
             .registry()
             .checker_view(module.imported_facts(), &mut TypeWorkBudget::default())
             .expect("the overlap authority registry should build");
-        let first = crate::resolved::ImportedImplementationFact {
-            fact: CheckedImplementationFact {
+        let first = crate::resolved::ImportedImplementationFact::for_test(
+            CheckedImplementationFact {
                 id: crate::interface::ImplId::new(ModuleId::new(90), 0),
                 application: InterfaceApplication::new(interface, Box::new([Type::Int])),
                 head_parameters: Box::new([]),
@@ -34327,7 +34331,7 @@ mod tests {
                 origin: Origin::Source(first_definition),
                 span: first_definition,
             },
-            authorization: crate::resolved::ImplementationAuthorization::from_hops(vec![
+            crate::resolved::ImplementationAuthorization::from_hops(vec![
                 crate::resolved::ImplementationRouteHop {
                     from: ModuleId::new(1),
                     to: ModuleId::new(80),
@@ -34339,10 +34343,10 @@ mod tests {
                     import_span: first_route_suffix,
                 },
             ]),
-            public_authorization: None,
-        };
-        let second = crate::resolved::ImportedImplementationFact {
-            fact: CheckedImplementationFact {
+            None,
+        );
+        let second = crate::resolved::ImportedImplementationFact::for_test(
+            CheckedImplementationFact {
                 id: crate::interface::ImplId::new(ModuleId::new(10), 0),
                 application: InterfaceApplication::new(interface, Box::new([Type::Int])),
                 head_parameters: Box::new([]),
@@ -34351,7 +34355,7 @@ mod tests {
                 origin: Origin::Source(second_definition),
                 span: second_definition,
             },
-            authorization: crate::resolved::ImplementationAuthorization::from_hops(vec![
+            crate::resolved::ImplementationAuthorization::from_hops(vec![
                 crate::resolved::ImplementationRouteHop {
                     from: ModuleId::new(1),
                     to: ModuleId::new(20),
@@ -34363,8 +34367,8 @@ mod tests {
                     import_span: second_route_suffix,
                 },
             ]),
-            public_authorization: None,
-        };
+            None,
+        );
         let effective = [
             ImplementationHeadRef::Imported(&first),
             ImplementationHeadRef::Imported(&second),
@@ -34462,8 +34466,8 @@ mod tests {
         let second_route = span(12, 14);
         let second_route_suffix = span(15, 17);
         let interface = InterfaceId::new(ModuleId::new(70), 0);
-        let first = crate::resolved::ImportedImplementationFact {
-            fact: CheckedImplementationFact {
+        let first = crate::resolved::ImportedImplementationFact::for_test(
+            CheckedImplementationFact {
                 id: ImplId::new(ModuleId::new(90), 0),
                 application: InterfaceApplication::new(interface, Box::new([Type::Int, Type::Int])),
                 head_parameters: Box::new([]),
@@ -34472,7 +34476,7 @@ mod tests {
                 origin: Origin::Source(first_definition),
                 span: first_definition,
             },
-            authorization: crate::resolved::ImplementationAuthorization::from_hops(vec![
+            crate::resolved::ImplementationAuthorization::from_hops(vec![
                 crate::resolved::ImplementationRouteHop {
                     from: ModuleId::new(1),
                     to: ModuleId::new(80),
@@ -34484,10 +34488,10 @@ mod tests {
                     import_span: first_route_suffix,
                 },
             ]),
-            public_authorization: None,
-        };
-        let second = crate::resolved::ImportedImplementationFact {
-            fact: CheckedImplementationFact {
+            None,
+        );
+        let second = crate::resolved::ImportedImplementationFact::for_test(
+            CheckedImplementationFact {
                 id: ImplId::new(ModuleId::new(10), 0),
                 application: InterfaceApplication::new(
                     interface,
@@ -34499,7 +34503,7 @@ mod tests {
                 origin: Origin::Source(second_definition),
                 span: second_definition,
             },
-            authorization: crate::resolved::ImplementationAuthorization::from_hops(vec![
+            crate::resolved::ImplementationAuthorization::from_hops(vec![
                 crate::resolved::ImplementationRouteHop {
                     from: ModuleId::new(1),
                     to: ModuleId::new(20),
@@ -34511,8 +34515,8 @@ mod tests {
                     import_span: second_route_suffix,
                 },
             ]),
-            public_authorization: None,
-        };
+            None,
+        );
         let effective = [
             ImplementationHeadRef::Imported(&first),
             ImplementationHeadRef::Imported(&second),
@@ -34661,8 +34665,8 @@ mod tests {
             Type::Application(Box::new(Type::Variable(function)), Box::new(Type::Int));
         let second_argument =
             Type::Application(Box::new(Type::Nominal(option)), Box::new(Type::Int));
-        let first = crate::resolved::ImportedImplementationFact {
-            fact: CheckedImplementationFact {
+        let first = crate::resolved::ImportedImplementationFact::for_test(
+            CheckedImplementationFact {
                 id: first_id,
                 application: InterfaceApplication::new(interface, Box::new([first_argument])),
                 head_parameters: vec![ResolvedTypeVariable {
@@ -34677,11 +34681,11 @@ mod tests {
                 origin: Origin::Source(span),
                 span,
             },
-            authorization: crate::resolved::ImplementationAuthorization::from_hops(Vec::new()),
-            public_authorization: None,
-        };
-        let second = crate::resolved::ImportedImplementationFact {
-            fact: CheckedImplementationFact {
+            crate::resolved::ImplementationAuthorization::from_hops(Vec::new()),
+            None,
+        );
+        let second = crate::resolved::ImportedImplementationFact::for_test(
+            CheckedImplementationFact {
                 id: second_id,
                 application: InterfaceApplication::new(interface, Box::new([second_argument])),
                 head_parameters: Box::new([]),
@@ -34690,9 +34694,9 @@ mod tests {
                 origin: Origin::Source(span),
                 span,
             },
-            authorization: crate::resolved::ImplementationAuthorization::from_hops(Vec::new()),
-            public_authorization: None,
-        };
+            crate::resolved::ImplementationAuthorization::from_hops(Vec::new()),
+            None,
+        );
         let effective = [
             ImplementationHeadRef::Imported(&first),
             ImplementationHeadRef::Imported(&second),

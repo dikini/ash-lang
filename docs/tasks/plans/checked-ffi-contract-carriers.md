@@ -237,6 +237,65 @@ admission are excluded from this wrapper checkpoint. They remain original F3 or
 connected F4/F6 obligations; this subset cannot close TASK-0051. Missing proposed
 semantics return to CP-0024 rather than becoming local implementation choices.
 
+### Selected ordinary implementation-method checkpoint
+
+Start from retained `284e6046499a43dcf48b600ecb3e61fd55286483` on
+`codex/checked-ffi-f3-selected-evidence`. PR #86 retained ordinary-global
+publication and callable effect closure; PR #88 added evidence only. Publish this
+plan as an early draft before implementation. Authority remains accepted CP-0024
+and this task's original summary/evidence obligations; no new source semantics.
+
+1. Build a passing connected control using a module-level public interface
+   implementation method that calls a closed checked scalar wrapper. A generic
+   consumer selects that implementation through an imported prerequisite DAG.
+   Its checker receives only `DependencyExports`; producer code enters separately
+   at linking and independent Core validation. The explicit static profile must
+   pass, while default profile refuses the transitive checked requirement despite
+   an empty outward row. Lexical `with` alone cannot establish this control.
+2. Extend controls through aliases/re-exports and opaque views, generic heads and
+   complete distinct Type/Row actuals. Inspect exact original implementation,
+   interface method, method binder, prerequisite and operation/assumption union;
+   use two distinct native contracts so a dropped branch is observable. Internal
+   H remains bound in host provenance, never free authority or an adapter-created
+   replacement. Preserve existing unsupported runtime/image refusal.
+3. After the unmodified fixture authenticates, mutate method capture alone and
+   capture/native/effect tables together. Test missing, same-shaped donor and
+   stale original facts, wrong route/owner/head/actuals, prerequisite and adapter
+   substitutions. Route authorization is not proof of a completed method body.
+   Retain each meaningful failure before implementing a repair. If existing
+   canonical facts already reject a case, preserve that evidence without adding
+   duplicate metadata or changing authority.
+4. Repair only demonstrated gaps using the existing completed implementation/
+   method fact and original publication pattern. Mint a defining publication
+   only from successful local checking, retain the same original through import
+   and re-export projections, and compare owner/method/binder, full scheme,
+   head-parameter boundary, prerequisites and capture. Never mint from an import
+   or trust a serialized flag; linking/Core still checks producer correspondence.
+   Charge traversal/cloning/comparison/reservation before publication; preserve
+   iterative destruction and failure atomicity.
+5. Exercise independent selected-evidence/Core reconstruction after a valid
+   source control: mutate selected binder/complete actuals/prerequisite/adapter,
+   and preserve valid identity/fold transforms. Test shared prerequisite/capture
+   DAG memo work with exact, one-short, spent-prefix and fresh sufficient budgets,
+   including refusal without partial published authority. Select affected ordinary
+   implementation/import/summary/capture regressions and targeted Clippy after
+   freezing source/configuration; one build operator owns the shared cache.
+
+The intended locations are `tests/checked_foreign_wrappers.rs`, a dedicated
+private selected-evidence test module beside `checked_wrapper_tests.rs`, and the
+existing implementation/evidence/Core carrier seams in `src/resolved.rs`,
+`src/core/capture.rs` and elaboration as the red controls require. Add or update
+specification wording only for behavior actually delivered and independently
+verified. Send the exact candidate to independent review, then use the current
+GitHub integration/acceptance workflow; keep clean committed checkpoints.
+
+Nominal/resource declaration-closure erasure remains a separate red-driven
+checkpoint unless a concrete dependency prevents this selected-method control.
+Checked owners, copy/lifecycle, full image admission, F4/F6 runtime, whole F3 and
+F-core remain pending. Do not infer their delivery from a generic refusal or an
+ordinary resource fixture. A missing semantic rule returns to CP-0024 rather
+than becoming a local permission or method-name special case.
+
 ## Slice 5: Independently validate retained Core and private images
 
 Extend existing Core and private-image reconstruction with canonical checked

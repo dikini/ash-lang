@@ -96,7 +96,7 @@ fn generic_cell_duplicate_import_routes_reject_erased_contents_capture_fact() {
                     );
                     assert!(
                         format!("{error:?}")
-                            .contains("alternate global routes disagree on the checked fact"),
+                            .contains("a dependency summary failed body-free authentication"),
                         "{error:?}"
                     );
                 } else {

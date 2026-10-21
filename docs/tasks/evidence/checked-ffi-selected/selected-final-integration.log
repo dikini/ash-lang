@@ -1,0 +1,124 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 20.92s
+     Running tests/checked_foreign_wrappers.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/checked_foreign_wrappers-d19b8ff85fbff406)
+
+running 14 tests
+test checked_closed_wrapper_requires_opt_in_for_a_body_free_consumer ... ok
+test checked_imported_generic_wrapper_preserves_complete_actuals_through_core ... ok
+test checked_opaque_snapshot_keeps_native_requirements_without_constructor_access ... ok
+test checked_selected_method_only_requires_body_free_consumer_opt_in ... ok
+test checked_imported_wrapper_rejects_a_reordered_host_actual ... ok
+test checked_higher_order_wrapper_retains_its_private_closed_callee ... ok
+test legacy_native_wrapper_summary_remains_valid_without_checked_opt_in ... ok
+test checked_closed_wrapper_reexport_preserves_its_original_host_contract ... ok
+test checked_closed_wrapper_keeps_internal_host_bound_across_two_instantiations ... ok
+test checked_branch_only_native_dependencies_survive_a_closed_host_row ... ok
+test checked_recursive_wrapper_retains_its_private_closed_callee ... ok
+test checked_selected_module_direct_method_preserves_body_free_core ... ok
+test checked_selected_module_method_prerequisites_preserve_body_free_core ... ok
+test checked_selected_opaque_prerequisite_reexport_preserves_two_contract_core ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running tests/interface_generic_summary.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/interface_generic_summary-db4ea46da1ce691b)
+
+running 4 tests
+test determined_generic_implementation_crosses_an_honest_body_free_summary ... ok
+test generic_checked_summary_binds_every_retained_parameter_occurrence ... ok
+test determined_key_decrease_with_dependent_growth_crosses_an_honest_summary ... ok
+test detached_summary_preserves_complete_method_scheme ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/interface_identity_diamond.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/interface_identity_diamond-9db603a5e27edd79)
+
+running 2 tests
+test determined_implementation_reexport_diamond_deduplicates_one_stable_identity ... ok
+test preserves_all_interface_identity_families_through_dependency_diamond ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/interface_modules.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/interface_modules-8734ee5e1ff0ceca)
+
+running 24 tests
+test private_interface_and_method_are_not_qualified_import_bindings ... ok
+test private_method_is_not_a_qualified_import_binding ... ok
+test qualified_public_interface_and_method_keep_their_defining_identities ... ok
+test private_impl_fact_remains_local_to_its_defining_module ... ok
+test private_impl_head_spelling_and_constructor_remain_unavailable ... ok
+test public_impl_fact_is_available_on_an_explicit_selector_edge ... ok
+test public_impl_retains_its_private_head_identity_as_hidden_metadata ... ok
+test alternate_direct_routes_to_one_impl_identity_do_not_self_overlap ... ok
+test rejects_external_opaque_constructor_and_pattern_in_impl_body ... ok
+test targeted_interface_conflicts_with_same_spelled_local_interface ... ok
+test targeted_interface_conflicts_with_same_spelled_local_nominal ... ok
+test targeted_method_conflicts_with_same_spelled_local_method ... ok
+test targeted_method_renamed_uppercase_conflicts_with_same_spelled_local_constructor ... ok
+test determined_interface_methods_cross_a_body_free_dependency_summary ... ok
+test rejects_foreign_interface_and_foreign_nominal_impl_as_orphan ... ok
+test rejects_primitive_impl_for_foreign_interface_as_orphan ... ok
+test imported_and_local_determined_heads_conflict_at_the_first_combiner ... ok
+test hidden_interface_metadata_in_a_constrained_summary_is_not_reexported ... ok
+test imported_and_local_determined_heads_overlap_at_the_first_combiner ... ok
+test targeted_method_import_resolves_without_importing_its_interface_spelling ... ok
+test public_implementation_selectors_reexport_through_an_intermediary ... ok
+test targeted_interface_is_usable_in_a_requirement_and_local_nominal_impl ... ok
+test targeted_same_spelled_interface_and_constructor_bind_distinct_namespaces ... ok
+test hidden_and_opaque_dependents_cross_summaries_without_access_widening ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/interface_selection.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/interface_selection-d874c2be3883366c)
+
+running 40 tests
+test absent_candidate_reports_constraint_unsatisfied ... ok
+test complete_determined_goal_without_a_source_is_unsatisfied ... ok
+test exact_current_key_improves_recursive_determined_dispatch ... ok
+test constrained_method_selects_its_exact_abstract_requirement_before_a_matching_impl ... ok
+test abstract_key_source_precedes_a_conflicting_visible_concrete_source ... ok
+test expected_dependent_agrees_with_mandatory_improvement ... ok
+test exact_current_polymorphic_recursion_retains_the_method_local_diagnostic ... ok
+test determined_failed_body_rigidity_improves_only_its_matching_recursive_root ... ok
+test earlier_implementation_body_error_precedes_later_global_body_error ... ok
+test earlier_global_body_error_precedes_later_implementation_body_error ... ok
+test constrained_global_occurrence_retains_one_abstract_selection_per_requirement_in_source_order ... ok
+test failed_body_rigidity_diagnostic_matches_the_same_recursive_application ... ok
+test complete_composite_key_improves_only_its_dependent_tuple ... ok
+test expected_dependent_conflict_is_owned_by_determination ... ok
+test failed_body_keeps_its_error_when_matching_determination_conflicts ... ok
+test higher_kinded_prerequisite_cycle_is_preserved_through_a_method_occurrence ... ok
+test direct_recursive_polymorphic_method_reuses_rigid_arguments ... ok
+test concrete_candidate_retains_impl_substitution_prerequisite_and_ordered_method_identity ... ok
+test higher_kinded_abstract_requirement_wins_before_a_matching_concrete_candidate ... ok
+test known_key_without_an_improvement_source_remains_ambiguous ... ok
+test improvement_does_not_add_higher_order_key_matching ... ok
+test identity_equal_abstract_prerequisite_dispatch_instantiates_method_locals_normally ... ok
+test generic_first_order_key_match_supplies_the_instantiated_dependent ... ok
+test imported_implementation_route_retains_its_exact_direct_dependency_identity ... ok
+test nested_same_method_calls_prefer_the_whole_failed_application ... ok
+test known_key_improves_the_complete_goal_before_selection ... ok
+test rejects_public_global_obligation_instead_of_inferring_exported_requirement ... ok
+test polymorphic_method_with_unresolved_interface_argument_remains_constraint_ambiguous ... ok
+test polymorphic_method_occurrence_does_not_add_higher_order_matching ... ok
+test incomplete_determined_keys_remain_ambiguous_without_reverse_inference ... ok
+test method_local_argument_never_participates_in_determined_key_matching ... ok
+test ordinary_candidate_search_does_not_refine_a_rigid_higher_kinded_goal ... ok
+test undetermined_obligation_reports_constraint_ambiguous_without_type_guessing ... ok
+test recursive_constrained_global_reuses_its_declared_abstract_evidence ... ok
+test higher_kinded_concrete_candidate_retains_ordered_substitution_and_evidence ... ok
+test polymorphic_implementation_method_selects_exact_current_impl_and_retains_ordered_prerequisites ... ok
+test link_modules_retains_the_checked_occurrences_evidence_selection ... ok
+test snapshot_ineligibility_survives_an_earlier_source_order_improvement ... ok
+test polymorphic_method_arguments_never_influence_candidate_selection ... ok
+test unrelated_selection_failure_does_not_mask_matching_polymorphic_recursion ... ok
+
+test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/interface_validation.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/interface_validation-4395219229d65720)
+
+running 2 tests
+test validates_cross_module_concrete_selection_before_core ... ok
+test linked_groups_retain_only_public_implementation_authorization_routes ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

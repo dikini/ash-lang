@@ -5342,8 +5342,14 @@ impl AuthenticatedProviderExternals<'_> {
         }
         let mut implementations = Vec::new();
         for imported in self.imported.implementations() {
-            charge(work, 1)?;
+            charge(work, 2)?;
             implementations.try_reserve(1).map_err(|_| resource())?;
+            let publication = std::sync::Arc::clone(
+                imported
+                    .publication
+                    .as_ref()
+                    .ok_or_else(|| invalid(self.program.root))?,
+            );
             let fact = &imported.fact;
             let mut head_parameters = RetainedHandlerParameters(Vec::new());
             charge(work, fact.head_parameters.len())?;
@@ -5390,19 +5396,22 @@ impl AuthenticatedProviderExternals<'_> {
                     span: method.span,
                 });
             }
+            let application = fact
+                .application()
+                .clone_with_budget(work)
+                .map_err(|()| resource())?;
+            let origin = clone_external_origin(&fact.origin, work)?;
             let retained = crate::resolved::CheckedImplementationFact {
                 id: fact.id,
-                application: fact
-                    .application()
-                    .clone_with_budget(work)
-                    .map_err(|()| resource())?,
+                application,
                 head_parameters: std::mem::take(&mut head_parameters.0).into_boxed_slice(),
                 prerequisites: prerequisites.into_boxed_slice(),
                 methods: methods.into_boxed_slice(),
-                origin: clone_external_origin(&fact.origin, work)?,
+                origin,
                 span: fact.span,
             };
             implementations.push(crate::resolved::ImportedImplementationFact {
+                publication: Some(publication),
                 fact: retained,
                 authorization: retain_handler_authorization(&imported.authorization, work)?,
                 public_authorization: imported

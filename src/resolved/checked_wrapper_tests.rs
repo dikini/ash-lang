@@ -1,6 +1,6 @@
 use super::*;
 
-const WRAPPER_SOURCE: &str = r#"import @builtin.foreign as Foreign
+pub(super) const WRAPPER_SOURCE: &str = r#"import @builtin.foreign as Foreign
 foreign checked library Native {
     profile "x86_64-unknown-linux-gnu"
     repr I32 = signed(32)
@@ -25,7 +25,7 @@ fn wrapper_summary() -> ExportSummary {
     wrapper_summary_from_source(WRAPPER_SOURCE)
 }
 
-fn wrapper_summary_from_source(source: &str) -> ExportSummary {
+pub(super) fn wrapper_summary_from_source(source: &str) -> ExportSummary {
     use std::sync::atomic::{AtomicUsize, Ordering};
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let directory = std::env::temp_dir().join(format!(
@@ -63,7 +63,7 @@ fn wrapper_summary_from_source(source: &str) -> ExportSummary {
     checked.pop().unwrap().into_exports()
 }
 
-fn authenticate(summary: &ExportSummary) -> Result<(), ResolvedBuildFailure> {
+pub(super) fn authenticate(summary: &ExportSummary) -> Result<(), ResolvedBuildFailure> {
     summary.authenticate(
         &mut TypeWorkBudget::unbounded(),
         &mut crate::interface::InterfaceConstraintBudget::with_limit(usize::MAX),

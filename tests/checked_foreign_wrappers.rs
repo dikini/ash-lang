@@ -357,3 +357,113 @@ fn checked_imported_wrapper_rejects_a_reordered_host_actual() {
     }
     panic!("consumer module missing");
 }
+
+#[test]
+fn checked_selected_module_method_prerequisites_preserve_body_free_core() {
+    let methods = r#"pub type Box<A> = Box(A)
+pub interface Read<A> {
+    read : A -> Foreign.CheckedCall<Int>
+}
+pub impl Read<Int> {
+    read value = closed value
+}
+pub impl<A> Read<Box<A>> where Read<A> {
+    read (Box value) = read value
+}
+pub invoke<A> : A -> Foreign.CheckedCall<Int> where Read<A>
+invoke value = read value
+"#;
+    let fixture = Fixture::new(
+        &format!(
+            "{}{}{}",
+            LIBRARY,
+            methods,
+            CLOSED.replace("pub closed", "closed")
+        ),
+        "import @builtin.foreign as Foreign\nimport native as Native\nimport native (impl Read)\nmain : Unit -> Foreign.CheckedCall<Int>\nmain () = Native.invoke (Native.Box (Native.Box 7))\n",
+    );
+    let graph = fixture.graph();
+    let _ = core(&graph);
+}
+
+#[test]
+fn checked_selected_module_direct_method_preserves_body_free_core() {
+    let methods = r#"pub interface Read<A> {
+    read : A -> Foreign.CheckedCall<Int>
+}
+pub impl Read<Int> {
+    read value = closed value
+}
+"#;
+    let fixture = Fixture::new(
+        &format!(
+            "{}{}{}",
+            LIBRARY,
+            methods,
+            CLOSED.replace("pub closed", "closed")
+        ),
+        "import @builtin.foreign as Foreign\nimport native as Native\nimport native (impl Read)\nmain : Unit -> Foreign.CheckedCall<Int>\nmain () = Native.read 7\n",
+    );
+    let graph = fixture.graph();
+    let _ = core(&graph);
+}
+
+#[test]
+fn checked_selected_opaque_prerequisite_reexport_preserves_two_contract_core() {
+    let fixture = Fixture::new(
+        include_str!("fixtures/checked-foreign-selected/native.ash"),
+        "import @builtin.foreign as Foreign\nimport facade as Facade\nimport facade (impl Read)\nmain : Unit -> Foreign.CheckedCall<Int>\nmain () = Facade.invoke (Facade.wrap (Facade.wrap (Facade.before, Facade.after)))\n",
+    );
+    std::fs::write(
+        fixture.0.join("facade.ash"),
+        "pub import native (Box, wrap, Read, read, invoke, before, after, impl Read)\n",
+    )
+    .unwrap();
+    let _ = core(&fixture.graph());
+}
+
+#[test]
+fn checked_selected_method_only_requires_body_free_consumer_opt_in() {
+    let methods = "pub interface Read<A> {\n    read : A -> Foreign.CheckedCall<Int>\n}\npub impl Read<Int> {\n    read value = closed value\n}\n";
+    let fixture = Fixture::new(
+        &format!(
+            "{LIBRARY}{methods}{}",
+            CLOSED.replace("pub closed", "closed")
+        ),
+        "import @builtin.foreign as Foreign\nimport native as Native\nimport native (impl Read)\nmain : Unit -> Foreign.CheckedCall<Int>\nmain () = Native.read 7\n",
+    );
+    let graph = fixture.graph();
+    let mut producers: Vec<CheckedModule> = Vec::new();
+    for loaded in graph.modules() {
+        let dependencies = loaded
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                ash::resolve::DependencyExports::new(
+                    edge,
+                    producers
+                        .iter()
+                        .find(|module| module.module() == edge.target())
+                        .unwrap()
+                        .exports(),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        if loaded.id() == graph.entry() {
+            assert!(
+                matches!(ash::resolve::resolve_module(loaded, &dependencies),
+                Err(ash::resolve::ResolveModuleError::Resolution(error))
+                if error.reason == ash::resolve::ResolveReason::ForeignContract)
+            );
+            return;
+        }
+        producers.push(
+            ash::elaborate::check_module(
+                ash::resolve::resolve_checked_foreign_module(loaded, &dependencies).unwrap(),
+            )
+            .unwrap(),
+        );
+    }
+    panic!("consumer module missing");
+}

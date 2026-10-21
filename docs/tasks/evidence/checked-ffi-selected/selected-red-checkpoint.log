@@ -1,0 +1,24 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 3 tests
+
+thread 'resolved::checked_selected_tests::checked_selected_method_rejects_capture_erasure' (24) panicked at src/resolved/checked_selected_tests.rs:48:5:
+selected method capture erasure was accepted
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test resolved::checked_selected_tests::checked_selected_method_rejects_capture_erasure ... FAILED
+test resolved::checked_selected_tests::checked_selected_method_control_retains_native_assumptions ... ok
+
+thread 'resolved::checked_selected_tests::checked_selected_method_rejects_coordinated_capture_and_native_erasure' (25) panicked at src/resolved/checked_selected_tests.rs:70:5:
+coordinated selected method closure erasure was accepted
+test resolved::checked_selected_tests::checked_selected_method_rejects_coordinated_capture_and_native_erasure ... FAILED
+
+failures:
+
+failures:
+    resolved::checked_selected_tests::checked_selected_method_rejects_capture_erasure
+    resolved::checked_selected_tests::checked_selected_method_rejects_coordinated_capture_and_native_erasure
+
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 1977 filtered out; finished in 0.04s
+
+error: test failed, to rerun pass `-p ash --lib`

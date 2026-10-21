@@ -147,10 +147,48 @@ refusal, publication/source/table erasure controls, deep teardown and affected
 legacy regressions. The generated legacy build/run and targeted Clippy pass on
 the same final source/configuration manifest. The
 [verification receipt](evidence/checked-ffi-wrappers/verification.json) retains
-all commands, raw logs and pins; independent review and retention are pending.
+all commands, raw logs and pins. Independent review cleared head `2a99cd3`;
+[PR #86](https://github.com/dikini/ash-lang/pull/86) was GitHub squash-retained at
+`83d050b40c92572b98b2d337f04126311373cd22` with its exact reviewed tree. The author
+read back partial issue #59 acceptance, reviewer audited actual retention and PM
+confirmed advancement. No additional whole-task criterion was accepted.
 Selected-evidence carrier/anti-erasure coverage, complete nominal/resource
 closure erasure, checked owners and primitive/image/runtime obligations remain
 outside this partial delivery; their original criteria stay unchecked.
+
+The next assigned checkpoint starts from retained `284e604` on
+`codex/checked-ffi-f3-selected-evidence`. Its
+[owned plan](plans/checked-ffi-contract-carriers.md#selected-ordinary-implementation-method-checkpoint)
+first establishes body-free module-level selected-method/prerequisite controls,
+then tests capture/table erasure against canonical completed facts. It covers
+exact original owner/head/actuals/assumption union, aliases/opaque/re-export routes,
+independent Core transforms and paid work. Implementation follows demonstrated
+failures; nominal/resource closure, owners/copy/runtime/image and whole F3 remain
+pending. The early draft publishes this plan before long implementation. The
+[first retained controls](evidence/checked-ffi-selected/README.md) pass direct
+module-level selection and a generic prerequisite chain through independent
+Core. They expose accepted capture/table erasure in a canonical selected summary
+and a source-order-dependent host registry refusal. Checkpoint `458d848`
+repairs the two summary erasures with completed implementation publications and
+passes four actual-host ordering controls. Its later checker-boundary mutation
+still exposes acceptance after an imported original is erased following real
+resolution. The next frozen batch authenticates imported originals before
+checker use, preserves bounded prerequisite provenance, and adds selected
+method union, opaque/re-export, complete native row and independent Core controls.
+The final [verification receipt](evidence/checked-ffi-selected/verification.json)
+retains 473 distinct passing focused tests, including 15 selected private/Core
+controls, 58 implementation regressions, 86 integrations and targeted Clippy.
+The imported selection is explicitly 33/34: its one default-startup failure also
+occurs at the exact retained base and remains assigned to issue #91. A paid lazy
+host census preserves the ordinary no-host ordering tariff; it grants no host
+permission. Independent review, integration and partial acceptance remain
+pending. No whole-task criterion is accepted.
+
+The selected checkpoint's affected regression selection also reproduces the
+existing imported native-buffer default-startup failure at retained `0a856957`.
+[Issue #91](https://github.com/dikini/ash-lang/issues/91) owns its repair after this
+checkpoint, before nominal/resource closure. The default allowance and required
+F-core gate remain unchanged; the selected delivery must qualify this failure.
 
 ## Verification
 

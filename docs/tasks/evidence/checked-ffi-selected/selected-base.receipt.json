@@ -1,0 +1,24 @@
+{
+  "source_commit": "0a85695774edbf9df082aef7f3ac9605243a6825",
+  "source_root": "/tmp/ash-pr89-base-upndun0s",
+  "archive_sha256": "035988a0c30f807d7251a94e3736348ea22685ddfa0516ca348f5203a04bdf82",
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "ash",
+    "--locked",
+    "--lib",
+    "build::image::source_resource_image::tests::imported_buffer_two_owner_discard_has_normal_startup_budget",
+    "--",
+    "--exact",
+    "--nocapture"
+  ],
+  "exit": 101,
+  "elapsed_seconds": 401.495,
+  "source_configuration_before_after_equal": true,
+  "file_count": 520,
+  "source_configuration_tree_sha256": "0a042cd9ffceb29b394b8f92c8ab6c91c3abf35e21c8c7d15d1756596538b8c5",
+  "log_sha256": "b2636935572e21cb5bebe67f03805c0bf1371b8b135e6c854ed5b5f3c8245bb4",
+  "configuration_difference": "Tracked bytes from retained commit; CARGO_MANIFEST_DIR and source paths refer to disposable /tmp archive instead of managed worktree. Same shared target, one job, empty RUSTC_WRAPPER. No native execution requested."
+}

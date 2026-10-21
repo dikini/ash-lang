@@ -22,7 +22,7 @@ main () = foreign host H {
 }
 "#;
 
-fn original(
+pub(super) fn original(
     text: &str,
 ) -> (
     crate::core::UnvalidatedEffectProgram,
