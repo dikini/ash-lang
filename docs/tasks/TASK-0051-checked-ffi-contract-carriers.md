@@ -147,10 +147,24 @@ refusal, publication/source/table erasure controls, deep teardown and affected
 legacy regressions. The generated legacy build/run and targeted Clippy pass on
 the same final source/configuration manifest. The
 [verification receipt](evidence/checked-ffi-wrappers/verification.json) retains
-all commands, raw logs and pins; independent review and retention are pending.
+all commands, raw logs and pins. Independent review cleared head `2a99cd3`;
+[PR #86](https://github.com/dikini/ash-lang/pull/86) was GitHub squash-retained at
+`83d050b40c92572b98b2d337f04126311373cd22` with its exact reviewed tree. The author
+read back partial issue #59 acceptance, reviewer audited actual retention and PM
+confirmed advancement. No additional whole-task criterion was accepted.
 Selected-evidence carrier/anti-erasure coverage, complete nominal/resource
 closure erasure, checked owners and primitive/image/runtime obligations remain
 outside this partial delivery; their original criteria stay unchecked.
+
+The next assigned checkpoint starts from retained `284e604` on
+`codex/checked-ffi-f3-selected-evidence`. Its
+[owned plan](plans/checked-ffi-contract-carriers.md#selected-ordinary-implementation-method-checkpoint)
+first establishes body-free module-level selected-method/prerequisite controls,
+then tests capture/table erasure against canonical completed facts. It covers
+exact original owner/head/actuals/assumption union, aliases/opaque/re-export routes,
+independent Core transforms and paid work. Implementation follows demonstrated
+failures; nominal/resource closure, owners/copy/runtime/image and whole F3 remain
+pending. The early draft publishes this plan before long implementation.
 
 ## Verification
 
