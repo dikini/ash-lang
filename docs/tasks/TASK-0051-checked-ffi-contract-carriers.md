@@ -280,11 +280,30 @@ payload and missing final-ordinal Leaf after valid controls. These separate
 binding the existing constructor projections to the completed defining registry;
 source coordinates do not reconstruct semantic payload meaning. The bounded
 repair forwards that same registry reference through imports and re-exports,
-with paid exact correspondence and independent checker entry. The final focused batch passes; independent review, integration and partial
-acceptance remain pending. No new constructor access or execution authority
+with paid exact correspondence and independent checker entry. The final focused batch passed; independent review, GitHub integration at
+`2532f528` and PM-confirmed partial acceptance completed. No new constructor access or execution authority
 follows from retaining the reference.
 
 ## Deviations
 
 None. A semantic gap returns to CP-0024; an unsupported partial route refuses.
 Runtime protocol/completion and executor realization are separate F4/F2/F7 work.
+
+The next authorized checkpoint starts from PR #95 retained
+`2532f528795e5cdc3974685d10313e6cb4b778a9`, independently audited and
+PM-confirmed in issue #59. The owned plan splits exact checked owner/symbol
+original binding from connected resource host/checked_scope lifecycle admission.
+The prerequisite grants no lifecycle or runtime permission. Complete static
+source/summary/Core owner correspondence remains required after that bounded PR;
+all original incomplete criteria above remain unchecked.
+
+PR #96 delivers the passive checked-owner binding prerequisite, with selected
+original H/R and complete nullable/void teardown signature relations preserved.
+The real binding refusal and unintended legacy Scope-header admission were
+recorded before repair. The shared header now refuses checked owners for both
+legacy codecs. [Final evidence](evidence/checked-owner-binding/README.md#final-delivery-verification)
+records 223 distinct passes, source-resource 30/30, images 16/16 and Clippy;
+startup 318857/314727 remains below unchanged 327680. A baseline-confirmed
+node-location assertion was corrected without weakening standalone Registry
+refusal or the four independent scope mutations. Review/integration are pending.
+This accepts no whole F3 criterion or connected lifecycle/Core/runtime authority.

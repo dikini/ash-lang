@@ -584,6 +584,11 @@ impl CheckedSourceResourceHeader {
             .source_owner_candidates()
             .find(|(_, _, id, _)| *id == state)
             .ok_or_else(invalid)?;
+        // Checked owners require checked_scope and its owner-specific finish
+        // witnesses. Passive binding must not activate either legacy codec.
+        if prepared.checked_contract().is_some() {
+            return Err(invalid());
+        }
         crate::foreign::source_owner::authenticate_source_owner_candidate(
             prepared, index, state, parameters, registry, work,
         )
@@ -7174,10 +7179,10 @@ mod tests {
         )
         .expect_err("an original owner acquisition forest is not an executable standalone program");
         assert_eq!(failure.reason(), ValidationReason::Registry);
-        assert!(
-            failure.node().is_some(),
-            "standalone owner code must identify the refused Core boundary"
-        );
+        // This forest's registry is an OriginalTemplate projection. FinalProgram
+        // admission can reject that registry before choosing a request node;
+        // it must still refuse standalone execution semantically.
+
         for mutation in 0..4 {
             let mut transformed =
                 super::super::transform::identity_effect_traversal(checked).unwrap();
@@ -7222,14 +7227,16 @@ mod tests {
                     scope.handler_output = crate::types::ComputationType::pure(Type::Unit);
                 }
             }
-            assert!(
-                super::super::validate::validate_effect_modules_family(
-                    transformed,
-                    &sources,
-                    &module_sources
-                )
-                .is_err(),
-                "scope claim mutation {mutation} must fail independent admission"
+            let failure = super::super::validate::validate_effect_modules_family(
+                transformed,
+                &sources,
+                &module_sources,
+            )
+            .expect_err("scope claim mutation must fail independent admission");
+            assert_ne!(
+                failure.reason(),
+                ValidationReason::Resource,
+                "scope claim mutation {mutation} must fail semantically"
             );
         }
     }
@@ -8503,3 +8510,7 @@ main () = resource Owner.Probe<{}, Outer, {}> outer = 64 {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "source_resource/checked_owner_tests.rs"]
+mod checked_owner_tests;

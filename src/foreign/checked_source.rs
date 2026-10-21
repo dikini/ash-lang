@@ -617,15 +617,33 @@ pub(crate) fn bind_checked_foreign_symbol(
     work: &mut TypeWorkBudget,
 ) -> Result<CheckedForeignSymbol, ForeignAdmissionError> {
     charge(work, 1, effect.span)?;
-    if prepared.checked_contract().is_none()
-        || !matches!(
-            prepared
-                .symbols()
-                .get(symbol_index)
-                .map(PreparedForeignSymbol::call),
-            Some(PreparedForeignCall::Scalar { .. })
-        )
+    let supported = match prepared
+        .symbols()
+        .get(symbol_index)
+        .map(PreparedForeignSymbol::call)
     {
+        Some(PreparedForeignCall::Scalar { .. }) => true,
+        Some(PreparedForeignCall::Owner(
+            super::source_contract::PreparedOwnerCall::Acquire {
+                application,
+                initialized_bytes: None,
+                ..
+            }
+            | super::source_contract::PreparedOwnerCall::Teardown { application, .. },
+        )) => {
+            charge(work, 1, effect.span)?;
+            prepared
+                .owners()
+                .get(application.owner())
+                .is_some_and(|owner| {
+                    owner.retained_parameters().is_empty()
+                        && owner.representation()
+                            == super::source_contract::PreparedAddressRepresentation::Opaque
+                })
+        }
+        _ => false,
+    };
+    if prepared.checked_contract().is_none() || !supported {
         return Err(failure(ForeignAdmissionReason::InvalidLibrary, effect.span));
     }
     bind_foreign_symbol_for_profile(library, prepared, symbol_index, effect, context, work)

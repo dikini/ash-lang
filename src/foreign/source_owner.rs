@@ -95,6 +95,66 @@ pub(crate) fn bind_foreign_owner(
             prepared.origin().primary_span(),
         ));
     }
+    bind_foreign_owner_for_profile(
+        library,
+        prepared,
+        owner_index,
+        nominal,
+        parameters,
+        registry,
+        work,
+    )
+}
+
+/// Binds only the dependency-free opaque checked-owner prerequisite. This does
+/// not admit a resource lifecycle, native interpretation or executable image.
+pub(crate) fn bind_checked_foreign_owner(
+    library: NativeLibraryId,
+    prepared: Arc<PreparedForeignLibrary>,
+    owner_index: usize,
+    nominal: NominalTypeId,
+    parameters: &[ResolvedTypeVariable],
+    registry: &ResolvedRegistry,
+    work: &mut TypeWorkBudget,
+) -> Result<CheckedForeignOwner, ForeignAdmissionError> {
+    let span = prepared.origin().primary_span();
+    charge(work, 5, span)?;
+    let invalid = || failure(ForeignAdmissionReason::InvalidLibrary, span);
+    let contract = prepared.checked_contract().ok_or_else(invalid)?;
+    let owner = prepared.owners().get(owner_index).ok_or_else(invalid)?;
+    let selected = contract.owners().get(owner_index).ok_or_else(invalid)?;
+    if selected.member_index() != owner.member_index()
+        || selected.host_parameter() == owner.owned_parameter()
+        || owner
+            .parameters()
+            .get(selected.host_parameter())
+            .map(|p| p.kind())
+            != Some(&Kind::Type)
+        || !owner.retained_parameters().is_empty()
+        || owner.representation() != super::source_contract::PreparedAddressRepresentation::Opaque
+    {
+        return Err(invalid());
+    }
+    bind_foreign_owner_for_profile(
+        library,
+        prepared,
+        owner_index,
+        nominal,
+        parameters,
+        registry,
+        work,
+    )
+}
+
+fn bind_foreign_owner_for_profile(
+    library: NativeLibraryId,
+    prepared: Arc<PreparedForeignLibrary>,
+    owner_index: usize,
+    nominal: NominalTypeId,
+    parameters: &[ResolvedTypeVariable],
+    registry: &ResolvedRegistry,
+    work: &mut TypeWorkBudget,
+) -> Result<CheckedForeignOwner, ForeignAdmissionError> {
     let (ids, span) = owner_parameter_ids(
         library.module(),
         &prepared,
@@ -1022,6 +1082,10 @@ pub(super) fn validate_owner_symbol(
 }
 
 #[cfg(test)]
+#[path = "source_owner/checked_binding_tests.rs"]
+mod checked_binding_tests;
+
+#[cfg(test)]
 mod tests {
     use super::bind_foreign_owner;
     use crate::{
@@ -1038,7 +1102,7 @@ mod tests {
     };
     use std::sync::Arc;
 
-    const SOURCE: &str = r#"foreign library Memory {
+    pub(super) const SOURCE: &str = r#"foreign library Memory {
         profile "x86_64-unknown-linux-gnu"
         repr Size = size_t
         repr Address = opaque
@@ -1069,7 +1133,9 @@ mod tests {
         fixture_from(SOURCE)
     }
 
-    fn fixture_from(text: &str) -> (Arc<PreparedForeignLibrary>, NominalTypeId, ResolvedRegistry) {
+    pub(super) fn fixture_from(
+        text: &str,
+    ) -> (Arc<PreparedForeignLibrary>, NominalTypeId, ResolvedRegistry) {
         let source = SourceFile::new("source-owner.ash", text).unwrap();
         let module = project_module(&source, &parse(lex(&source).unwrap())).unwrap();
         let id = ModuleId::from(source.id());

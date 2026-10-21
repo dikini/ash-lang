@@ -1,0 +1,21 @@
+{
+  "source_checkpoint": "c9f18e214d94499cdaa9135e158ff8233a012845",
+  "base": "2532f528795e5cdc3974685d10313e6cb4b778a9",
+  "changed_source_spec_sha256": {
+    "spec/static-semantics.md": "0a72cc26d14d0cf258c4bab3ce75d553b00a2ca6cff8f424626e0e87d3665bcc",
+    "src/core/source_resource.rs": "011895be388d37d1d8854794463b25bebc105135c036211c19de68ce4c4ea158",
+    "src/core/source_resource/checked_owner_tests.rs": "330f474dfc9eddfeb6038875b08a370b9c59541515ad88621b4ec72686a8171d",
+    "src/foreign/checked_source.rs": "e3b8a3e9aaa608b253b07a2ca31e2be1447bca0ef32451df70c27e90051741e7",
+    "src/foreign/source_owner.rs": "24d2ce3288adf27f0cdb1c558c0ac559d8e38a5df4b94aee7a0853f9a0c0f45b",
+    "src/foreign/source_owner/checked_binding_tests.rs": "4928ca79ab3f95f2ef3fbdb3fd312d6921785ffe960a9b53ca1f1a31a2fe9a00",
+    "src/resolve/foreign.rs": "18b3eac07bffcbd3ba315ef7977c257eccebba1dc58f46d70bdda6b37f09c2cc",
+    "tests/checked_foreign_owners.rs": "4bc40103f2728a0875cca8f2f4c87947786f8f5d34dae3720130edea2ea21e44",
+    "tests/fixtures/checked-owner-binding/owner.ash": "511d4fc3e4c3d7dbc48bbfa97dff76a095f9f9699461363127fa6da29e7575f5"
+  },
+  "final_input_count": 571,
+  "final_input_aggregate_sha256": "f0f8e98014212afd675c0c3311b3307c85e5661941a03eb9a6b05f9f54372848",
+  "requested_model": "Sol 6.1 medium",
+  "effective_model_independently_observable": false,
+  "scope": "Static passive binding only; no lifecycle/runtime/F-core acceptance",
+  "historical_scope_qualification": "Earlier maps include adapter path dependency but omit three bundled libraries; expanded final maps add libraries and runner/verifier."
+}

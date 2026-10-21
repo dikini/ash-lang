@@ -1,0 +1,18 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 1 test
+
+thread 'core::source_resource::tests::independently_revalidated_source_scope_rejects_incomplete_or_forged_claims' (1183636) panicked at src/core/source_resource.rs:7182:9:
+standalone owner code must identify the refused Core boundary
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test core::source_resource::tests::independently_revalidated_source_scope_rejects_incomplete_or_forged_claims ... FAILED
+
+failures:
+
+failures:
+    core::source_resource::tests::independently_revalidated_source_scope_rejects_incomplete_or_forged_claims
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2032 filtered out; finished in 0.29s
+
+error: test failed, to rerun pass `-p ash --lib`

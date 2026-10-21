@@ -1,0 +1,20 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi/foreign-adapter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 36s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 1 test
+
+thread 'core::source_resource::checked_owner_tests::checked_owner_legacy_resource_codecs_refuse_at_independent_header_admission' (1155086) panicked at src/core/source_resource/checked_owner_tests.rs:96:14:
+legacy resource codec must not admit checked owner lifecycle: ()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test core::source_resource::checked_owner_tests::checked_owner_legacy_resource_codecs_refuse_at_independent_header_admission ... FAILED
+
+failures:
+
+failures:
+    core::source_resource::checked_owner_tests::checked_owner_legacy_resource_codecs_refuse_at_independent_header_admission
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2031 filtered out; finished in 0.07s
+
+error: test failed, to rerun pass `-p ash --lib`

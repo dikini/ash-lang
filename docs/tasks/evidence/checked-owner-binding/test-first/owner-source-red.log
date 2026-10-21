@@ -1,0 +1,19 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.63s
+     Running tests/checked_foreign_owners.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/checked_foreign_owners-0ae7b1c4bdbbd419)
+
+running 1 test
+
+thread 'checked_foreign_passive_owner_declarations_resolve_and_check_explicitly' (1144856) panicked at tests/checked_foreign_owners.rs:130:10:
+the explicit static profile must bind passive checked owner declarations: Resolution(ResolveError(ResolveErrorData { diagnostic: Diagnostic { reason: ForeignContract, primary: SourceLabel { span: Span { source: SourceId(0), range: ByteRange { start: 35, end: 1025 } }, message: "foreign source admission rejected InvalidLibrary" }, related: [], expected: None, found: None, help: None }, context: None }))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test checked_foreign_passive_owner_declarations_resolve_and_check_explicitly ... FAILED
+
+failures:
+
+failures:
+    checked_foreign_passive_owner_declarations_resolve_and_check_explicitly
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.03s
+
+error: test failed, to rerun pass `-p ash --test checked_foreign_owners`

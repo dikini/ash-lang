@@ -595,7 +595,11 @@ impl Resolver {
                         )
                     })?;
                 owners.push(Arc::new(
-                    crate::foreign::source_owner::bind_foreign_owner(
+                    (if self.checked_foreign_profile {
+                        crate::foreign::source_owner::bind_checked_foreign_owner
+                    } else {
+                        crate::foreign::source_owner::bind_foreign_owner
+                    })(
                         NativeLibraryId::new(self.module, ordinal),
                         Arc::clone(&library.prepared),
                         index,
