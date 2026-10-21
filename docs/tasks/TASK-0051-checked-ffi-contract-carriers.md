@@ -134,8 +134,17 @@ consumer accepts the outward-pure closed wrapper. The [initial red receipt](evid
 records two passes and this expected failure before product changes. The draft
 remains incomplete. The first guard repair now passes all three controls by
 requiring explicit profile from authenticated retained contracts, independently
-of the outward row. Erasure, alias/re-export, branch/higher-order and bounded-work
-evidence remain pending.
+of the outward row. Subsequent controls cover aliases/re-exports, opaque access,
+branches, recursion and returned functions through independent Core. A private
+capture-erasure probe exposes missing defining-global correspondence. Checkpoint
+`1c70442` retains the repair: immutable completed global publications shared
+through imports, projection authentication, and iterative final-owner teardown.
+Seven private controls pass for that checkpoint, including donor/stale originals,
+coordinated erasure, alias/import identity, prefixed work bounds and deep teardown.
+Final distinct-row/contract-union controls and affected regression evidence remain
+pending. Selected-evidence carrier/anti-erasure coverage, checked owners and
+primitive/image/runtime obligations remain outside this partial delivery; their
+original criteria stay unchecked.
 
 ## Verification
 

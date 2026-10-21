@@ -41,3 +41,13 @@ and capture against that original, including duplicate aliases. Missing original
 reject. Original facts have iterative provenance destruction, including final
 shared-owner, refusal and replacement paths. Final tests for this repair are
 running; the earlier flow and red receipts do not certify the changed source.
+
+The next red probe distinguishes a second closure failure: removing both native
+effect and native-table entries while retaining the immutable original capture
+graph is accepted. Seven other private controls pass, including exact two-contract
+and authored-assumption union, an unused-symbol contrast, recursive/higher-order
+requirements and publication ownership. [Output](table-erasure-red.log),
+[receipt](table-erasure-red-receipt.json) and
+[manifest](table-erasure-red-source-configuration.json) retain this checkpoint.
+All 59 other summary regression controls pass on the same source. The graph-to-
+dependency-table closure repair and final regression evidence remain pending.

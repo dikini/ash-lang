@@ -126,7 +126,7 @@ fn checked_imported_generic_wrapper_preserves_complete_actuals_through_core() {
     let fixture = Fixture::new(
         &format!("{LIBRARY}{DIRECT}")
             .replace("foreign checked library", "pub foreign checked library"),
-        "import @builtin.foreign as Foreign\nimport native as Native\nmain : Unit -> Foreign.CheckedCall<Int>\nmain () = foreign host Session {\n    let invoke : (Bool, Int) -> Foreign.CheckedCall<Int> ! {Native.Abs<{}, Session, Bool, {}>, Foreign.NativeHost<Session>} = Native.call\n    invoke (true, 1)\n}\n",
+        "import @builtin.foreign as Foreign\nimport native as Native\neffect First {\n    first : Unit -> Unit\n}\neffect Last {\n    last : Unit -> Unit\n}\nmain : Unit -> Foreign.CheckedCall<Int>\nmain () = foreign host Session {\n    let invoke : (Bool, Int) -> Foreign.CheckedCall<Int> ! {Native.Abs<{First}, Session, Bool, {Last}>, Foreign.NativeHost<Session>} = Native.call\n    invoke (true, 1)\n}\n",
     );
     let graph = fixture.graph();
     let _ = core(&graph);

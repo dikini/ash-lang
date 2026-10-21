@@ -220,6 +220,11 @@ Write positive and negative cases before changing behavior:
 - New summary/capture reconstruction work has exact, one-short, cumulative and
   fresh sufficient-budget controls. Existing legacy exports remain valid.
 
+This wrapper checkpoint covers ordinary globals and callable control summaries.
+Selected-evidence carrier/anti-erasure coverage remains pending under the original
+F3 criterion; these controls do not establish it. Checked owner/copy/lifecycle and
+executable-image obligations also remain separate.
+
 Freeze and independently review each coherent subset. Preserve the scalar and
 legacy image/owner regressions; select focused checks for changed boundaries and
 retain exact raw results. Keep the active worktree committed and clean between

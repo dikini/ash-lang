@@ -1,18 +1,6 @@
 use super::*;
 
-fn wrapper_summary() -> ExportSummary {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    static NEXT: AtomicUsize = AtomicUsize::new(0);
-    let directory = std::env::temp_dir().join(format!(
-        "ash-wrapper-summary-{}-{}",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    ));
-    std::fs::create_dir(&directory).unwrap();
-    let entry = directory.join("entry.ash");
-    std::fs::write(
-        &entry,
-        r#"import @builtin.foreign as Foreign
+const WRAPPER_SOURCE: &str = r#"import @builtin.foreign as Foreign
 foreign checked library Native {
     profile "x86_64-unknown-linux-gnu"
     repr I32 = signed(32)
@@ -31,9 +19,23 @@ pub closed<T> : T -> Foreign.CheckedCall<Int>
 closed unused = foreign host Local {
     perform Abs<Local>.call 1
 }
-"#,
-    )
-    .unwrap();
+"#;
+
+fn wrapper_summary() -> ExportSummary {
+    wrapper_summary_from_source(WRAPPER_SOURCE)
+}
+
+fn wrapper_summary_from_source(source: &str) -> ExportSummary {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let directory = std::env::temp_dir().join(format!(
+        "ash-wrapper-summary-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir(&directory).unwrap();
+    let entry = directory.join("entry.ash");
+    std::fs::write(&entry, source).unwrap();
     let graph =
         crate::module::load_module_graph(&entry, &crate::module::ModuleRoots::empty()).unwrap();
     std::fs::remove_dir_all(directory).unwrap();
@@ -120,6 +122,18 @@ fn checked_wrapper_summary_rejects_erased_native_and_capture_requirements() {
                 .for_each(|effect| effect.native_contract = None);
         },
         |summary| summary.erase_exported_capture_for_test("closed"),
+        |summary| {
+            summary.native_symbols.clear();
+            summary
+                .effects
+                .retain(|effect| effect.native_contract.is_none());
+            summary.effect_positions = summary
+                .effects
+                .iter()
+                .enumerate()
+                .map(|(index, effect)| (effect.id, index))
+                .collect();
+        },
         |summary| {
             summary.erase_exported_capture_for_test("closed");
             summary.native_symbols.clear();
@@ -314,6 +328,13 @@ fn checked_wrapper_aliases_share_one_original_and_reject_replacement() {
             .spelling,
         "closed"
     );
+    summary.terms.get_mut("renamed").unwrap().capture =
+        crate::core::capture::CaptureValueSummary::default();
+    assert!(
+        authenticate(&summary).is_err(),
+        "an alias cannot erase capture while retaining the original allocation"
+    );
+    summary.terms.get_mut("renamed").unwrap().capture = summary.terms["closed"].capture.clone();
     let mut alias = summary.terms.remove("renamed").unwrap();
     alias.publication = None;
     alias = alias.with_fixture_publication();
@@ -322,4 +343,78 @@ fn checked_wrapper_aliases_share_one_original_and_reject_replacement() {
         authenticate(&summary).is_err(),
         "same-binder aliases cannot mint another original"
     );
+}
+
+#[test]
+fn checked_wrapper_branch_and_callable_paths_preserve_original_contract_union() {
+    let other = r#"    assumption OtherCallee "the other admitted contract holds"
+    symbol Other<H> : Int -> Foreign.CheckedCall<Int> {
+        name "abs"
+        abi (I32) -> I32
+        host H
+        assumes { OtherCallee }
+        operand 0 from 0 scalar
+        output result as scalar
+        outcome otherwise { readable result }
+    }
+"#;
+    let library = WRAPPER_SOURCE.replace("}\npub closed", &format!("{other}}}\npub closed"));
+    let branch = |callee| {
+        format!(
+            "{library}pub choose : Bool -> Foreign.CheckedCall<Int>\nchoose first = foreign host Local {{\n    match first {{\n        true => perform Abs<Local>.call 1\n        false => perform {callee}<Local>.call 2\n    }}\n}}\n"
+        )
+    };
+    let without_other = wrapper_summary_from_source(&branch("Abs"));
+    authenticate(&without_other).unwrap();
+    assert_eq!(
+        without_other.native_symbols.len(),
+        1,
+        "an unused private symbol supplies no branch requirement"
+    );
+    let summary = wrapper_summary_from_source(&branch("Other"));
+    authenticate(&summary).unwrap();
+    assert_eq!(summary.native_symbols.len(), 2);
+    let mut authored = HashSet::new();
+    let mut operations = HashSet::new();
+    for (operation, symbol) in &summary.native_symbols {
+        operations.insert(*operation);
+        let prepared = symbol.prepared();
+        let contract = prepared.checked_contract().unwrap();
+        let member = prepared.symbols()[symbol.symbol_index()].member_index();
+        let role = contract
+            .symbols()
+            .iter()
+            .find(|role| role.member_index() == member)
+            .unwrap();
+        assert!(!role.minimum_assumptions().is_empty());
+        for member in role.assumption_members() {
+            let assumption = contract
+                .assumptions()
+                .iter()
+                .find(|assumption| assumption.member_index() == *member)
+                .unwrap();
+            authored.insert(assumption.name().to_owned());
+        }
+    }
+    assert_eq!(operations.len(), 2);
+    assert_eq!(
+        authored,
+        HashSet::from(["Callee".to_owned(), "OtherCallee".to_owned()])
+    );
+    for wrapper in [
+        "pub repeat : Int -> Foreign.CheckedCall<Int>\nrepeat count = match count == 0 {\n    true => closed count\n    false => repeat 0\n}\n",
+        "pub select : Bool -> (Int -> Foreign.CheckedCall<Int>)\nselect first = match first {\n    true => closed\n    false => fn(value) {\n        closed value\n    }\n}\n",
+    ] {
+        let summary = wrapper_summary_from_source(&format!(
+            "{}{wrapper}",
+            WRAPPER_SOURCE.replace("pub closed", "closed")
+        ));
+        authenticate(&summary).unwrap();
+        assert_eq!(summary.native_symbols.len(), 1);
+        assert!(
+            summary
+                .requires_checked_foreign_profile(&mut TypeWorkBudget::unbounded())
+                .unwrap()
+        );
+    }
 }

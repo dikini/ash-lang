@@ -491,7 +491,9 @@ fn malformed_summary_admission_precedes_later_type_resource_in_dependency_order(
                 ResolveReason::TypeResourceExhausted
             },
         );
-        assert_eq!(type_work.used(), if malformed_first { 0 } else { 3 });
+        // The first summary's completed publication consumes the fixed
+        // original/provenance admission cells before this boundary fails.
+        assert_eq!(type_work.used(), 3);
     }
 }
 

@@ -9460,9 +9460,6 @@ fn same_imported_global_fact_with_optional_nominal_observer(
             .charge(1)
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
     }
-    constraint_work
-        .charge(1)
-        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
     if !matches!((&left.publication, &right.publication), (Some(left), Some(right)) if Arc::ptr_eq(left, right))
         || left.binder != right.binder
         || !same_scalar_preflight(
@@ -9481,6 +9478,7 @@ fn same_imported_global_fact_with_optional_nominal_observer(
         .type_parameters
         .len()
         .checked_add(right.scheme.requirements.len())
+        .and_then(|work| work.checked_add(1))
         .ok_or(ResolvedBuildFailure::ConstraintResource)?;
     constraint_work
         .charge(metadata_work)
@@ -11687,7 +11685,6 @@ impl ExportSummary {
             .try_reserve(term_binder_count)
             .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
         for (_, global) in self.terms() {
-            authenticate_global_publication(global, type_work, constraint_work)?;
             match &global.scalar_preflight {
                 Some(fact) => {
                     type_work
@@ -11725,10 +11722,11 @@ impl ExportSummary {
                 }
             }
             if let Some(existing) = canonical_globals.get(&global.binder) {
-                constraint_work
-                    .charge(1)
-                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
                 if !matches!((&existing.publication, &global.publication), (Some(left), Some(right)) if Arc::ptr_eq(left, right))
+                    || !existing
+                        .capture
+                        .same_with_budget(&global.capture, type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?
                     || !same_constrained_schemes_with_constraint_budget(
                         &existing.scheme,
                         &global.scheme,
@@ -11750,6 +11748,7 @@ impl ExportSummary {
                 }
                 continue;
             }
+            authenticate_global_publication(global, type_work, constraint_work)?;
             canonical_globals.insert(global.binder, global);
             term_binders.insert(global.binder);
             register_summary_scheme_parameters(
@@ -31358,7 +31357,8 @@ mod tests {
         // The interface carrier costs 15 cells. The global adds one expression,
         // canonical-global, and term-binder cell; six closed-type collection
         // cells; two first-group index cells; and two Unit comparison cells.
-        const EXACT_CONSTRAINT_WORK: usize = 15 + 3 + 6 + 2 + 2 + 2;
+        // Ten more cells compare the projected scheme with its original.
+        const EXACT_CONSTRAINT_WORK: usize = 15 + 3 + 6 + 2 + 2 + 2 + 10;
         let summary = interface_summary_with_duplicate_global_requirements();
 
         let mut measured = crate::interface::InterfaceConstraintBudget::default();
@@ -31570,7 +31570,10 @@ mod tests {
                     summary.terms.insert(
                         spelling,
                         ExportedGlobal {
-                            publication: None,
+                            publication: summary
+                                .terms
+                                .get("global0")
+                                .and_then(|global| global.publication.as_ref().map(Arc::clone)),
                             scalar_preflight: None,
                             capture: crate::core::capture::CaptureValueSummary::default(),
                             binder,
@@ -31695,11 +31698,11 @@ mod tests {
                 for (carrier, single_constraint, double_constraint, short_used, early, late) in [
                     (
                         SummaryAliasCarrierForTest::Global,
-                        5,
+                        7,
+                        DEPTH + 13,
+                        DEPTH + 12,
+                        10,
                         DEPTH + 11,
-                        DEPTH + 10,
-                        8,
-                        DEPTH + 9,
                     ),
                     (
                         SummaryAliasCarrierForTest::Nominal,
@@ -33406,8 +33409,9 @@ mod tests {
 
     #[test]
     fn body_free_summary_admission_has_exact_independent_limits_and_is_reusable() {
-        const CONSTRAINT_WORK: usize = 5;
-        const TYPE_WORK: usize = 5;
+        // Original comparison adds two constraint and two Type cells.
+        const CONSTRAINT_WORK: usize = 7;
+        const TYPE_WORK: usize = 7;
         let source = SourceFile::new("summary-admission.ash", "unit")
             .expect("the summary fixture should fit");
         let span = source
@@ -33463,8 +33467,10 @@ mod tests {
     #[test]
     fn deep_body_free_summary_admission_and_rejection_are_exact_and_stack_safe() {
         const DEPTH: usize = 32_768;
-        const CONSTRAINT_WORK: usize = 4 * DEPTH + 5;
-        const TYPE_WORK: usize = 9 * DEPTH + 5;
+        // Original type comparison adds 4D+2 constraints; its source origin
+        // and fixed record add two Type cells.
+        const CONSTRAINT_WORK: usize = 8 * DEPTH + 7;
+        const TYPE_WORK: usize = 9 * DEPTH + 7;
 
         std::thread::Builder::new()
             .name("deep-summary-admission".into())
@@ -39981,7 +39987,8 @@ mod tests {
         // public spelling, one hidden interface index, two global/binder
         // entries, eight scheme/requirement type visits, two requirement-index
         // entries, one interface-parameter entry, and one complete argument tag.
-        const EXACT_WORK: usize = 15 + 1 + 1 + 2 + 8 + 2 + 1 + 1;
+        // The completed original adds ten scheme/requirement comparisons.
+        const EXACT_WORK: usize = 15 + 1 + 1 + 2 + 8 + 2 + 1 + 1 + 10;
         let (short, short_used) = freeze_hidden_interface_summary_with_limit(14);
         assert_eq!(short, Err(ResolvedBuildFailure::ConstraintResource));
         assert_eq!(short_used, 14);
