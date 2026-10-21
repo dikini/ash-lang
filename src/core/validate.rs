@@ -6714,6 +6714,31 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         Ok(false)
     }
 
+    fn is_foreign_host_parameter(
+        &self,
+        id: crate::types::TypeVariableId,
+    ) -> Result<bool, ValidationError> {
+        self.charge_type_work(1)?;
+        if !self
+            .program
+            .registry
+            .type_variable(id)
+            .is_some_and(|parameter| parameter.kind == Kind::Type)
+        {
+            return Ok(false);
+        }
+        for node in &self.program.nodes {
+            self.charge_type_work(1)?;
+            if F::foreign_host(&node.kind).is_some_and(|host| host.identity() == id) {
+                // A registered body binder is allocated after declaration headers;
+                // its source span need not follow those headers. This classifies
+                // ordering only: the independent host/source checks still apply.
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     fn is_lexical_source_parameter(
         &self,
         id: crate::types::TypeVariableId,
@@ -9409,6 +9434,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             let parameter_range = parameter_span.range();
             self.charge_type_work(1)?;
             let contextual = self.is_lexical_source_parameter(parameter.id)?
+                || self.is_foreign_host_parameter(parameter.id)?
                 || self.is_provider_declaration_parameter(parameter.id)?
                 || source_owner_parameters.contains(&parameter.id)
                 || source_window_parameters.contains(&parameter.id)

@@ -1,0 +1,27 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi/foreign-adapter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6m 20s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 8 tests
+test resolved::checked_selected_tests::checked_selected_method_rejects_capture_erasure ... ok
+test resolved::checked_selected_tests::checked_selected_method_rejects_coordinated_capture_and_native_erasure ... ok
+test resolved::checked_selected_tests::checked_selected_publication_comparison_has_exact_prefixed_and_fresh_budgets ... ok
+test resolved::checked_selected_tests::checked_selected_method_control_retains_native_assumptions ... ok
+test resolved::checked_selected_tests::checked_selected_import_routes_share_original_and_reject_same_fact_reminting ... ok
+
+thread 'resolved::checked_selected_tests::checked_selected_resolved_import_still_requires_the_completed_original' (682) panicked at src/resolved/checked_selected_tests.rs:392:5:
+post-resolution imported original erasure was accepted
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test resolved::checked_selected_tests::checked_selected_resolved_import_still_requires_the_completed_original ... FAILED
+test resolved::checked_selected_tests::checked_selected_publication_deep_origins_clone_refuse_replace_and_drop_iteratively ... ok
+test resolved::checked_selected_tests::checked_selected_publication_rejects_absent_donor_stale_and_full_head_changes ... ok
+
+failures:
+
+failures:
+    resolved::checked_selected_tests::checked_selected_resolved_import_still_requires_the_completed_original
+
+test result: FAILED. 7 passed; 1 failed; 0 ignored; 0 measured; 1980 filtered out; finished in 0.16s
+
+error: test failed, to rerun pass `-p ash --lib`

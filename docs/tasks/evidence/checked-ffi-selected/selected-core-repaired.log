@@ -1,0 +1,11 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 4 tests
+test core::validate::selected_evidence_tests::checked_selected_host_ordering_does_not_exempt_unrelated_header_parameters ... ok
+test core::validate::selected_evidence_tests::checked_selected_host_single_module_authenticates_each_core_phase ... ok
+test core::validate::selected_evidence_tests::checked_selected_host_ordering_preserves_independent_host_authentication ... ok
+test core::validate::selected_evidence_tests::checked_selected_host_ordering_is_charged_exact_short_spent_and_fresh ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 1984 filtered out; finished in 0.06s
+

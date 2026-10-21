@@ -32,3 +32,21 @@ Repairs, further complete substitutions/union/forgery/budget evidence, final
 focused verification and independent review remain pending. Raw outputs retain
 exact bytes. Nominal/resource closure, checked owners/copy/lifecycle, image/runtime
 admission and F-core remain outside this checkpoint.
+
+The first completed-publication repair passes seven private controls, including
+both original erasures, donor/stale/missing summary originals, full head/prerequisite
+correspondence, same-original route continuity, exact work and deep iterative
+clone/refusal/replacement/drop. One distinguishing later-boundary control remains
+red: erase the original from a real resolved consumer before `check_module`;
+the checker accepts it. [Output](selected-publication-second.log),
+[receipt](selected-publication-second.receipt.json) and the
+[checkpoint manifest](publication-checkpoint-source-configuration.json) retain
+seven passes and that failure. The next repair must authenticate the imported
+publication at independent checking, without inferring producer bodies.
+
+The narrow actual-host contextual-order repair separately passes four Core
+controls: original failing source order, independent carrier negatives, unrelated
+ordinary ordering rejection, and exact/one-short/prefixed/fresh budgets.
+[Output](selected-core-repaired.log) and [receipt](selected-core-repaired.receipt.json)
+share the same unchanged 522-file source/configuration snapshot. Later complete
+substitution/union/opaque/Core evidence and final checks remain pending.

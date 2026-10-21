@@ -5266,6 +5266,22 @@ impl Resolver {
         Ok(())
     }
 
+    fn clone_implementation_origin_for_retention(
+        &mut self,
+        origin: &Origin,
+        span: Span,
+    ) -> Result<Origin, ResolveError> {
+        crate::resolved::clone_effect_origin_with_budget(origin, &mut self.type_work).map_err(
+            |()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "imported implementation provenance exceeded its type-work budget",
+                )
+            },
+        )
+    }
+
     fn retain_imported_implementation_fact<'a>(
         &mut self,
         exported: &'a AuthorizedImplementationFact,
@@ -5282,6 +5298,13 @@ impl Resolver {
             )
         })?;
         let fact = exported.fact();
+        crate::resolved::authenticate_implementation_publication(
+            fact,
+            exported.publication(),
+            &mut self.type_work,
+            &mut self.constraint_work,
+        )
+        .map_err(|failure| imported_fact_comparison_error(failure, span))?;
         let authorization_is_well_formed = exported
             .authorization()
             .is_well_formed_for(summary.module(), fact, &mut self.constraint_work)
@@ -5304,6 +5327,16 @@ impl Resolver {
             }));
         }
         if let Some(existing) = self.imported.implementation(fact.id) {
+            if !matches!(
+                (self.imported.implementation_import(fact.id).and_then(|entry| entry.publication.as_ref()), exported.publication()),
+                (Some(left), Some(right)) if std::sync::Arc::ptr_eq(left, right)
+            ) {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    span,
+                    "alternate implementation routes disagree on the completed original",
+                ));
+            }
             let mut nominal_identities = MatchedNominalIdentities::default();
             let matches = same_checked_implementation_fact_observing_nominals_with_budget(
                 existing,
@@ -5587,7 +5620,8 @@ impl Resolver {
                             "imported prerequisite exceeded its type-work budget",
                         )
                     })?,
-                origin: prerequisite.origin.clone(),
+                origin: self
+                    .clone_implementation_origin_for_retention(&prerequisite.origin, span)?,
                 span: prerequisite.span,
             });
         }
@@ -5817,26 +5851,29 @@ impl Resolver {
                         )
                     })?,
                 head_type_parameter_count: method.head_type_parameter_count(),
-                origin: method.origin.clone(),
+                origin: self.clone_implementation_origin_for_retention(&method.origin, span)?,
                 span: method.span,
             });
         }
+        let application = fact
+            .application()
+            .clone_with_budget(&mut self.type_work)
+            .map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "imported implementation head exceeded its type-work budget",
+                )
+            })?;
+        // Preserve the iterative parameter/method buffers through the final fallible clone.
+        let origin = self.clone_implementation_origin_for_retention(&fact.origin, span)?;
         let cloned_fact = CheckedImplementationFact {
             id: fact.id,
-            application: fact
-                .application()
-                .clone_with_budget(&mut self.type_work)
-                .map_err(|()| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        span,
-                        "imported implementation head exceeded its type-work budget",
-                    )
-                })?,
+            application,
             head_parameters: head_parameters.into_boxed_slice(),
             prerequisites: prerequisites.into_boxed_slice(),
             methods: methods.into_boxed_slice(),
-            origin: fact.origin.clone(),
+            origin,
             span: fact.span,
         };
         self.imported.reserve_implementation().map_err(|()| {
@@ -5855,6 +5892,20 @@ impl Resolver {
                     "implementation route ordering exceeded its work budget",
                 )
             })?;
+        self.type_work.charge(1).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "completed implementation publication retention exceeded its type-work budget",
+            )
+        })?;
+        let publication = std::sync::Arc::clone(exported.publication().ok_or_else(|| {
+            error(
+                ResolveReason::InternalState,
+                span,
+                "completed implementation publication is absent",
+            )
+        })?);
         if self
             .implementation_route_ranks
             .insert(fact.id, selection.route_rank)
@@ -5886,8 +5937,12 @@ impl Resolver {
                 problem: "duplicate",
             }));
         }
-        self.imported
-            .insert_implementation(cloned_fact, authorization, public_authorization);
+        self.imported.insert_implementation_with_publication(
+            cloned_fact,
+            publication,
+            authorization,
+            public_authorization,
+        );
         if needs_public_order {
             self.imported
                 .mark_implementation_public(fact.id)

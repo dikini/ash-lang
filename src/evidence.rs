@@ -7868,8 +7868,8 @@ mod tests {
         authority_selector.add_interface_raw(interface, interface_parameter, Vec::new());
         let registry = authority_selector.canonical_registry_for_test();
 
-        let imported = ImportedImplementationFact {
-            fact: CheckedImplementationFact {
+        let imported = ImportedImplementationFact::for_test(
+            CheckedImplementationFact {
                 id: implementation,
                 application: unary_application(interface, Type::Int),
                 head_parameters: Box::new([]),
@@ -7878,13 +7878,13 @@ mod tests {
                 origin: Origin::Source(span),
                 span,
             },
-            authorization: ImplementationAuthorization::from_hops(vec![ImplementationRouteHop {
+            ImplementationAuthorization::from_hops(vec![ImplementationRouteHop {
                 from: ModuleId::new(1),
                 to: module,
                 import_span: span,
             }]),
-            public_authorization: None,
-        };
+            None,
+        );
         let resolved = ResolvedImplementation {
             id: implementation,
             public: false,
@@ -8071,8 +8071,8 @@ mod tests {
         let registry = authority_selector
             .canonical_registry_for_test()
             .with_additional_type_variables([parameter.clone()]);
-        let imported = ImportedImplementationFact {
-            fact: CheckedImplementationFact {
+        let imported = ImportedImplementationFact::for_test(
+            CheckedImplementationFact {
                 id: implementation,
                 application: unary_application(interface, argument.clone()),
                 head_parameters: Box::new([parameter.clone()]),
@@ -8081,13 +8081,13 @@ mod tests {
                 origin: Origin::Source(span),
                 span,
             },
-            authorization: ImplementationAuthorization::from_hops(vec![ImplementationRouteHop {
+            ImplementationAuthorization::from_hops(vec![ImplementationRouteHop {
                 from: ModuleId::new(1),
                 to: module,
                 import_span: span,
             }]),
-            public_authorization: None,
-        };
+            None,
+        );
         let resolved = ResolvedImplementation {
             id: implementation,
             public: false,
@@ -8263,8 +8263,8 @@ mod tests {
                     types,
                 )
             } else {
-                let imported = ImportedImplementationFact {
-                    fact: CheckedImplementationFact {
+                let imported = ImportedImplementationFact::for_test(
+                    CheckedImplementationFact {
                         id: implementation,
                         application: unary_application(interface, Type::Int),
                         head_parameters: Box::new([]),
@@ -8273,15 +8273,13 @@ mod tests {
                         origin: Origin::Source(span),
                         span,
                     },
-                    authorization: ImplementationAuthorization::from_hops(vec![
-                        ImplementationRouteHop {
-                            from: module,
-                            to: imported_module,
-                            import_span: span,
-                        },
-                    ]),
-                    public_authorization: None,
-                };
+                    ImplementationAuthorization::from_hops(vec![ImplementationRouteHop {
+                        from: module,
+                        to: imported_module,
+                        import_span: span,
+                    }]),
+                    None,
+                );
                 selector.add_implementation_fact(&registry, &imported, constraints, types)
             }
         };
@@ -8735,8 +8733,8 @@ mod tests {
             span,
         };
         let imported = |parameters: Vec<ResolvedTypeVariable>, prerequisite_argument| {
-            ImportedImplementationFact {
-                fact: CheckedImplementationFact {
+            ImportedImplementationFact::for_test(
+                CheckedImplementationFact {
                     id: implementation,
                     application: unary_application(interface, application(function, Type::Int)),
                     head_parameters: parameters.into_boxed_slice(),
@@ -8765,15 +8763,13 @@ mod tests {
                     origin: Origin::Source(span),
                     span,
                 },
-                authorization: ImplementationAuthorization::from_hops(vec![
-                    ImplementationRouteHop {
-                        from: ModuleId::new(1),
-                        to: module,
-                        import_span: span,
-                    },
-                ]),
-                public_authorization: None,
-            }
+                ImplementationAuthorization::from_hops(vec![ImplementationRouteHop {
+                    from: ModuleId::new(1),
+                    to: module,
+                    import_span: span,
+                }]),
+                None,
+            )
         };
         let resolved =
             |parameters: Vec<ResolvedTypeVariable>, prerequisite_argument| ResolvedImplementation {
@@ -10817,18 +10813,20 @@ mod tests {
         let definition = span(6, 8);
         let interface = InterfaceId::new(ModuleId::new(11), 0);
         let implementation_id = ImplId::new(ModuleId::new(11), 0);
-        let imported = |hops| ImportedImplementationFact {
-            fact: CheckedImplementationFact {
-                id: implementation_id,
-                application: unary_application(interface, Type::Int),
-                head_parameters: Box::new([]),
-                prerequisites: Box::new([]),
-                methods: Box::new([]),
-                origin: Origin::Source(definition),
-                span: definition,
-            },
-            authorization: ImplementationAuthorization::from_hops(hops),
-            public_authorization: None,
+        let imported = |hops| {
+            ImportedImplementationFact::for_test(
+                CheckedImplementationFact {
+                    id: implementation_id,
+                    application: unary_application(interface, Type::Int),
+                    head_parameters: Box::new([]),
+                    prerequisites: Box::new([]),
+                    methods: Box::new([]),
+                    origin: Origin::Source(definition),
+                    span: definition,
+                },
+                ImplementationAuthorization::from_hops(hops),
+                None,
+            )
         };
         let one_hop = imported(vec![ImplementationRouteHop {
             from: ModuleId::new(1),

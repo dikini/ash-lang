@@ -5759,15 +5759,33 @@ impl ImportedFacts {
         self.interface_positions.try_reserve(1).map_err(|_| ())
     }
 
+    #[cfg(test)]
     pub(crate) fn insert_implementation(
         &mut self,
         fact: CheckedImplementationFact,
         authorization: ImplementationAuthorization,
         public_authorization: Option<ImplementationAuthorization>,
     ) {
+        let publication = implementation_publication_for_test(&fact);
+        self.insert_implementation_with_publication(
+            fact,
+            publication,
+            authorization,
+            public_authorization,
+        );
+    }
+
+    pub(crate) fn insert_implementation_with_publication(
+        &mut self,
+        fact: CheckedImplementationFact,
+        publication: Arc<CheckedImplementationFact>,
+        authorization: ImplementationAuthorization,
+        public_authorization: Option<ImplementationAuthorization>,
+    ) {
         let position = self.implementations.len();
         self.implementation_positions.insert(fact.id, position);
         self.implementations.push(ImportedImplementationFact {
+            publication: Some(publication),
             fact,
             authorization,
             public_authorization,
@@ -6565,6 +6583,8 @@ pub struct CheckedImplementationFact {
 /// One checked implementation selected through an authenticated import route.
 #[derive(Debug, Eq, PartialEq)]
 pub struct ImportedImplementationFact {
+    /// Completed defining publication shared unchanged across import routes.
+    pub(crate) publication: Option<Arc<CheckedImplementationFact>>,
     /// Defining implementation fact retained without a body.
     pub fact: CheckedImplementationFact,
     pub(crate) authorization: ImplementationAuthorization,
@@ -6589,7 +6609,34 @@ impl CheckedImplementationFact {
     }
 }
 
+#[cfg(test)]
+fn implementation_publication_for_test(
+    fact: &CheckedImplementationFact,
+) -> Arc<CheckedImplementationFact> {
+    Arc::new(
+        clone_checked_implementation_fact(
+            fact,
+            &mut TypeWorkBudget::unbounded(),
+            &mut crate::interface::InterfaceConstraintBudget::with_limit(usize::MAX),
+        )
+        .unwrap(),
+    )
+}
+
 impl ImportedImplementationFact {
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        fact: CheckedImplementationFact,
+        authorization: ImplementationAuthorization,
+        public_authorization: Option<ImplementationAuthorization>,
+    ) -> Self {
+        Self {
+            publication: Some(implementation_publication_for_test(&fact)),
+            fact,
+            authorization,
+            public_authorization,
+        }
+    }
     /// Returns the canonical effective-availability route.
     #[must_use]
     pub const fn authorization(&self) -> &ImplementationAuthorization {
@@ -6685,7 +6732,8 @@ fn clone_checked_requirement(
             .application()
             .clone_with_budget(type_work)
             .map_err(|()| ResolvedBuildFailure::TypeResource)?,
-        origin: requirement.origin.clone(),
+        origin: clone_effect_origin_with_budget(&requirement.origin, type_work)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?,
         span: requirement.span,
     })
 }
@@ -6946,23 +6994,44 @@ pub(crate) fn clone_checked_implementation_fact(
                 .clone_with_budget(type_work)
                 .map_err(|()| ResolvedBuildFailure::TypeResource)?,
             head_type_parameter_count: method.head_type_parameter_count,
-            origin: method.origin.clone(),
+            origin: clone_effect_origin_with_budget(&method.origin, type_work)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?,
             span: method.span,
         });
     }
 
+    let application = fact
+        .application()
+        .clone_with_budget(type_work)
+        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+    // Keep parameter/method/prerequisite drop guards until the last fallible clone.
+    let origin = clone_effect_origin_with_budget(&fact.origin, type_work)
+        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
     Ok(CheckedImplementationFact {
         id: fact.id,
-        application: fact
-            .application()
-            .clone_with_budget(type_work)
-            .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+        application,
         head_parameters: head_parameters.into_boxed_slice(),
         prerequisites: prerequisites.into_boxed_slice(),
         methods: methods.into_boxed_slice(),
-        origin: fact.origin.clone(),
+        origin,
         span: fact.span,
     })
+}
+
+pub(crate) fn authenticate_implementation_publication(
+    fact: &CheckedImplementationFact,
+    original: Option<&Arc<CheckedImplementationFact>>,
+    type_work: &mut TypeWorkBudget,
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<(), ResolvedBuildFailure> {
+    type_work
+        .charge(1)
+        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+    let original = original.ok_or(ResolvedBuildFailure::InvalidState)?;
+    if !same_checked_implementation_fact_with_budget(fact, original, type_work, constraint_work)? {
+        return Err(ResolvedBuildFailure::InvalidState);
+    }
+    Ok(())
 }
 
 /// One imported checked global scheme.
@@ -6984,6 +7053,7 @@ pub struct ImportedGlobalScheme {
 /// One checked implementation published with its complete authorization route.
 #[derive(Debug, Eq, PartialEq)]
 pub struct AuthorizedImplementationFact {
+    publication: Option<Arc<CheckedImplementationFact>>,
     fact: CheckedImplementationFact,
     authorization: ImplementationAuthorization,
 }
@@ -6991,10 +7061,17 @@ pub struct AuthorizedImplementationFact {
 impl AuthorizedImplementationFact {
     #[cfg(test)]
     pub(crate) fn local_for_test(fact: CheckedImplementationFact) -> Self {
+        let original = implementation_publication_for_test(&fact);
         Self {
+            publication: Some(original),
             fact,
             authorization: ImplementationAuthorization::local(),
         }
+    }
+
+    /// Borrows the completed defining publication; absent authority refuses admission.
+    pub(crate) fn publication(&self) -> Option<&Arc<CheckedImplementationFact>> {
+        self.publication.as_ref()
     }
 
     /// Returns the original checked implementation fact.
@@ -9780,7 +9857,6 @@ fn same_checked_interface_fact_with_optional_nominal_observer(
     Ok(true)
 }
 
-#[cfg(test)]
 pub(crate) fn same_checked_implementation_fact_with_budget(
     left: &CheckedImplementationFact,
     right: &CheckedImplementationFact,
@@ -9893,6 +9969,7 @@ fn same_checked_implementation_fact_with_optional_nominal_observer(
     }
     for (left, right) in left.methods.iter().zip(&right.methods) {
         if left.id != right.id
+            || left.head_type_parameter_count != right.head_type_parameter_count
             || !left
                 .capture
                 .same_with_budget(&right.capture, type_work)
@@ -11787,6 +11864,12 @@ impl ExportSummary {
         }
         for (position, implementation) in self.implementations.iter().enumerate() {
             let fact = &implementation.fact;
+            authenticate_implementation_publication(
+                fact,
+                implementation.publication.as_ref(),
+                type_work,
+                constraint_work,
+            )?;
             if fact.interface().module().is_builtin_resource() {
                 {
                     return Err(ResolvedBuildFailure::InvalidState);
@@ -13282,7 +13365,15 @@ impl ExportSummary {
             if !implementation.public {
                 continue;
             }
-            let fact = clone_checked_implementation_fact(checked, type_work, constraint_work)?;
+            type_work
+                .charge(1)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            let publication = Arc::new(clone_checked_implementation_fact(
+                checked,
+                type_work,
+                constraint_work,
+            )?);
+            let fact = clone_checked_implementation_fact(&publication, type_work, constraint_work)?;
             let authorization = ImplementationAuthorization::local();
             if !authorization
                 .is_well_formed_for(resolved.module, &fact, constraint_work)
@@ -13303,6 +13394,7 @@ impl ExportSummary {
                 }
             }
             summary.implementations.push(AuthorizedImplementationFact {
+                publication: Some(publication),
                 fact,
                 authorization,
             });
@@ -13326,6 +13418,21 @@ impl ExportSummary {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
             }
+            authenticate_implementation_publication(
+                &imported.fact,
+                imported.publication.as_ref(),
+                type_work,
+                constraint_work,
+            )?;
+            type_work
+                .charge(1)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            let publication = Arc::clone(
+                imported
+                    .publication
+                    .as_ref()
+                    .ok_or(ResolvedBuildFailure::InvalidState)?,
+            );
             let fact =
                 clone_checked_implementation_fact(&imported.fact, type_work, constraint_work)?;
             let authorization = public_authorization
@@ -13342,6 +13449,7 @@ impl ExportSummary {
                 }
             }
             summary.implementations.push(AuthorizedImplementationFact {
+                publication: Some(publication),
                 fact,
                 authorization,
             });
