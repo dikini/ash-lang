@@ -3,8 +3,8 @@
 This TASK-0051 checkpoint implements no lifecycle or runtime authority.
 The passive dependency-free opaque State<H,R> fixture uses exact distinct
 host H and owned R, nullable acquisition, void teardown and canonical checked
-call results. Its explicit-profile source resolution currently refuses owner
-binding with ForeignContract/InvalidLibrary before source checking.
+call results. At the test-first snapshot, explicit-profile source resolution
+refuses owner binding with ForeignContract/InvalidLibrary before source checking.
 
 The three preparation/default-resolution/legacy-ABI controls pass. Both commands
 have equal before/after 564-file manifests, compact sorted-JSON aggregate
@@ -45,3 +45,30 @@ lookup and two compile-only test API errors were corrected without a production
 change. The final uniform affected regression/Clippy batch remains pending.
 Neither passive imports nor these refusals establish connected resource
 host/checked_scope, lifecycle, independent owner Core or runtime permission.
+
+## Inherited diagnostic assertion
+
+The first uniform nine-command batch passes 217 distinct tests and Clippy, but
+its source-resource selection is 24/30. All six failures stop at one shared
+assertion requiring a node location for a standalone original acquisition forest's
+Registry rejection. That assertion prevents four independent scope mutations
+from running; it is not a successful forgery or runtime observation. All nine
+566-file maps equal aggregate
+`92e904b1257facad0ba95e4821496b48182511b398bb46742d6cee079317fcda`;
+`pre-assertion-fix` preserves the failed command and every other result.
+
+The same isolated selector fails at exact retained base
+`2532f528795e5cdc3974685d10313e6cb4b778a9`, with the identical node-location
+assertion after Registry refusal. All 562 baseline inputs match Git blobs and
+the disposable archive before/after (aggregate `cc9718c6...`); `baseline` retains
+complete pins, command/configuration, raw log and binary digest. Its archive
+changes CARGO_MANIFEST_DIR/source paths, so this is not a byte-identical full
+environment claim. The shared target, one job and default limits are preserved.
+
+OriginalTemplate registry provenance is intentionally not a FinalProgram proof.
+Standalone validation can reject the projected registry before selecting a
+request node. The test-only correction keeps exact Registry refusal and the
+unchanged copied-full-scope positive, removes only the unsupported node-location
+promise, and requires each of the four preserved scope mutations to reject with
+a non-Resource error. It changes no product validation, provenance or allowance.
+Fresh verification after this test correction remains pending.

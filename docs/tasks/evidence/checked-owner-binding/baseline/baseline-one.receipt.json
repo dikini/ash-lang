@@ -1,0 +1,36 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "ash",
+    "--locked",
+    "--lib",
+    "core::source_resource::tests::independently_revalidated_source_scope_rejects_incomplete_or_forged_claims",
+    "--",
+    "--exact",
+    "--nocapture"
+  ],
+  "cwd": "/tmp/ash-pr96-base-esuhu_m2",
+  "base": "2532f528795e5cdc3974685d10313e6cb4b778a9",
+  "exit_code": 101,
+  "seconds": 435.082,
+  "inputs_equal": true,
+  "all_git_and_archive_pins_equal": true,
+  "count": 562,
+  "aggregate": "cc9718c67151303d8274ad3019226bfe932b22a24bd88515ba6acf8de656721b",
+  "log_sha256": "24ea64ea90f29019d9e3d26c33594c79edbc4931ddab07a86f88b4d91e047387",
+  "environment": {
+    "RUSTC_WRAPPER": "",
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+    "RUSTFLAGS": null,
+    "CARGO_ENCODED_RUSTFLAGS": null
+  },
+  "qualification": "Archive changes CARGO_MANIFEST_DIR/source path; no claim of identical full environment. Shared Cargo target and default limits retained.",
+  "unit_artifact": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168",
+    "bytes": 842975768,
+    "sha256": "eb3fcc84ed25a89593df6a658b1c31661172fac2198aabf6192bb1d7c8a6b06a"
+  }
+}
