@@ -526,7 +526,7 @@ fn checked_constructor_closure_checker_rejects_unused_constructor_scheme_only_mu
     let Type::Function(domain, _) = &mut constructor.scheme.value_type else {
         panic!("unary constructor scheme");
     };
-    *domain = Box::new(Type::Int);
+    **domain = Type::Int;
     assert!(
         crate::elaborate::check_module(changed).is_err(),
         "scheme-only corruption must reject at checker entry without a constructor use"

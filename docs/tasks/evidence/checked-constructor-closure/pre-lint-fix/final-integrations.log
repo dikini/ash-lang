@@ -1,0 +1,116 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.12s
+     Running tests/checked_foreign_wrappers.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/checked_foreign_wrappers-d19b8ff85fbff406)
+
+running 19 tests
+test checked_closed_wrapper_requires_opt_in_for_a_body_free_consumer ... ok
+test checked_selected_method_only_requires_body_free_consumer_opt_in ... ok
+test checked_imported_wrapper_rejects_a_reordered_host_actual ... ok
+test checked_closed_wrapper_keeps_internal_host_bound_across_two_instantiations ... ok
+test checked_selected_module_direct_method_preserves_body_free_core ... ok
+test checked_branch_only_native_dependencies_survive_a_closed_host_row ... ok
+test checked_closed_wrapper_reexport_preserves_its_original_host_contract ... ok
+test checked_recursive_wrapper_retains_its_private_closed_callee ... ok
+test checked_higher_order_wrapper_retains_its_private_closed_callee ... ok
+test checked_capture_only_private_nominal_survives_hidden_reexport ... ok
+test checked_constructor_payload_private_leaf_survives_renamed_reexport ... ok
+test checked_constructor_payload_private_leaf_survives_body_free_consumer_and_core ... ok
+test checked_opaque_snapshot_keeps_native_requirements_without_constructor_access ... ok
+test checked_selected_capture_only_private_nominal_survives_body_free_core ... ok
+test checked_selected_module_method_prerequisites_preserve_body_free_core ... ok
+test legacy_native_wrapper_summary_remains_valid_without_checked_opt_in ... ok
+test checked_imported_generic_wrapper_preserves_complete_actuals_through_core ... ok
+test checked_capture_only_private_nominal_survives_body_free_consumer_and_core ... ok
+test checked_selected_opaque_prerequisite_reexport_preserves_two_contract_core ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+     Running tests/data_and_adts.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/data_and_adts-0fd07d1b0dc53f7d)
+
+running 32 tests
+test an_empty_match_is_rejected_by_the_retained_syntax_stage ... ok
+test excluded_pattern_families_remain_rejected ... ok
+test declaration_and_constructor_names_have_stable_rejections ... ok
+test match_trace_enters_the_scrutinee_once_and_only_the_selected_body ... ok
+test equation_groups_reject_inconsistent_pattern_arity ... ok
+test constructor_tuple_payloads_enter_elements_strictly_left_to_right ... ok
+test constructor_guarded_recursive_data_renders_cycles_structurally ... ok
+test local_tuple_patterns_are_irrefutable ... ok
+test contextually_typed_matches_check_every_anonymous_function_arm ... ok
+test mixed_recursive_groups_support_functions_and_guarded_data ... ok
+test retained_data_syntax_failures_keep_the_exact_current_token_span ... ok
+test operational_tuple_domains_are_distinct_from_curried_functions ... ok
+test finite_nominal_tree_patterns_execute ... ok
+test payload_constructors_are_higher_order_unary_values ... ok
+test nominal_declarations_are_file_wide_recursive_and_distinct ... ok
+test recursive_data_requires_a_constructor_root_and_guarded_occurrences ... ok
+test explicit_match_and_equations_have_equivalent_recursive_coverage ... ok
+test coverage_handles_bool_unit_tuples_and_recursive_nominals ... ok
+test pattern_typing_has_stable_rejections ... ok
+test shared_pipeline_elaborates_and_validates_finite_data_core ... ok
+test tuple_domain_anonymous_functions_receive_one_expected_tuple ... ok
+test single_clause_function_domain_patterns_must_be_irrefutable ... ok
+test pattern_equations_use_the_retained_pipeline_without_data_markers ... ok
+test rendering_repeats_shared_values_and_marks_only_active_cycles ... ok
+test admitted_nested_patterns_complete_the_full_pipeline_on_a_small_stack ... ok
+test shared_pipeline_validates_equations_tuple_domains_and_local_patterns ... ok
+test admitted_type_depth_survives_synthesized_tuple_and_function_wrappers ... ok
+test wider_tuple_syntax_reports_a_structured_internal_resource_failure ... ok
+test an_over_budget_case_group_reports_an_internal_resource_failure ... ok
+test a_wide_constructor_set_has_practical_exhaustive_coverage ... ok
+test a_wide_tuple_case_group_charges_type_and_specialization_cells ... ok
+test ten_thousand_member_cycle_evaluates_renders_and_drops_on_a_small_stack has been running for over 60 seconds
+test ten_thousand_member_cycle_evaluates_renders_and_drops_on_a_small_stack ... ok
+
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 102.66s
+
+     Running tests/library_imports.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/library_imports-5ee6a5f8918d0ada)
+
+running 17 tests
+test implementation_selector_rejects_a_public_nominal ... ok
+test implementation_selector_rejects_an_unavailable_interface ... ok
+test conflicting_public_name_import_retains_the_second_selector ... ok
+test name_only_import_does_not_select_implementation ... ok
+test implementation_only_import_selects_evidence_without_binding_names ... ok
+test public_targeted_import_reexports_each_selected_name_namespace ... ok
+test unreferenced_private_constructor_families_do_not_invalidate_exports ... ok
+test partial_transparent_name_reexports_retain_hidden_constructor_family ... ok
+test public_implementation_selector_crosses_a_three_module_facade ... ok
+test opaque_constructor_diagnostics_follow_facade_import_order ... ok
+test owner_distinct_opaque_constructor_markers_survive_one_shared_facade ... ok
+test method_only_reexport_and_imported_scheme_retain_hidden_interface_closure ... ok
+test name_reexports_preserve_privacy_opacity_and_identity ... ok
+test implementation_routes_choose_the_deterministic_shortest_path ... ok
+test opaque_constructor_family_withholding_crosses_nominal_only_facades ... ok
+test method_rich_capture_publication_fits_the_default_type_work_budget ... ok
+test shared_capture_graph_exports_fit_the_default_type_work_budget ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/module_newtypes.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/module_newtypes-b1da38208c68e0da)
+
+running 21 tests
+test module_newtype_constructor_must_repeat_its_nominal_spelling ... ok
+test module_newtype_representation_cycle_is_rejected_after_kinding ... ok
+test module_newtype_cycle_primary_is_the_first_closing_representation_occurrence ... ok
+test module_parameterized_newtype_cycle_uses_the_applied_nominal_identity ... ok
+test module_newtype_cycle_through_effect_argument_retains_the_closing_occurrence ... ok
+test module_newtype_representation_kind_failure_precedes_cycle_checking ... ok
+test module_newtype_cycle_stops_at_an_ordinary_data_boundary ... ok
+test module_opaque_newtype_keeps_its_representation_only_for_facade_linkage ... ok
+test module_parameterized_newtype_preserves_its_canonical_parameter_through_a_facade ... ok
+test mixed_newtype_match_fallback_binder_keeps_the_nominal_value ... ok
+test module_newtype_identity_survives_facade_reexport ... ok
+test irrefutable_newtype_function_and_binding_patterns_preserve_payload_binders ... ok
+test newtype_nominal_mismatch_precedes_coverage_and_payload_coverage_is_retained ... ok
+test module_newtype_targeted_renames_merge_one_defining_fact_across_a_diamond ... ok
+test transparent_newtype_constructor_expression_wraps_its_representation ... ok
+test opaque_newtype_constructor_is_inaccessible_in_expressions_and_patterns ... ok
+test transparent_newtype_constructor_pattern_unwraps_its_representation ... ok
+test newtype_patterns_cover_parameterized_nested_and_refutable_representations ... ok
+test module_newtype_constructors_are_first_class_across_representation_shapes ... ok
+test opaque_newtype_combined_import_keeps_constructor_rejection_source_owned ... ok
+test opaque_newtype_named_and_scheme_routes_merge_without_exposing_constructors ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.36s
+
