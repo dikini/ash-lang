@@ -1,0 +1,16 @@
+--- a/src/resolved.rs
++++ b/src/resolved.rs
+@@ -14940,8 +14940,11 @@
+             // identities too; its completed publication cannot replace them.
+             work.charge(2)
+                 .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+-            self.nominal_fact(nominal)
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
++            self.nominal_fact(nominal).ok_or_else(|| {
++                #[cfg(test)]
++                eprintln!("closure missing nominal={nominal:?} summary={:?} source-families={:?} hidden={:?}", self.module, self.source_resource_facts.values().map(|fact| (fact.id, fact.family)).collect::<Vec<_>>(), self.hidden_nominals.keys().collect::<Vec<_>>());
++                ResolvedBuildFailure::InvalidState
++            })?;
+         }
+         work.charge(required.len())
+             .map_err(|()| ResolvedBuildFailure::TypeResource)?;

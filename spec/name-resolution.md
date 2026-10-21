@@ -308,6 +308,10 @@ Exported function values also retain compiler-inferred control summaries for
 capture checking. These summaries describe possible calls, requests and handler
 control; they do not import dependency source bodies. Admission authenticates
 their defining function identity and retained type and effect identities.
+Nonlexical nominal references in global or selected-method callable type metadata
+must retain authenticated nominal identity and kind facts even when the outward
+scheme omits them. This hidden metadata grants no constructor access; lexical
+type identities remain local to their callable graph.
 Each exported ordinary global view retains the same completed defining fact
 through imports and re-exports. Admission compares its binder, scheme, provenance
 and callable summary against that original. It authenticates effect identities

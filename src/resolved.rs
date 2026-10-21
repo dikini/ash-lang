@@ -3,6 +3,8 @@
 #[cfg(test)]
 mod checked_declaration_closure_tests;
 #[cfg(test)]
+mod checked_selected_declaration_closure_tests;
+#[cfg(test)]
 mod checked_selected_tests;
 #[cfg(test)]
 mod checked_wrapper_tests;
@@ -14909,6 +14911,7 @@ impl ExportSummary {
             return Ok(());
         }
         let mut required = HashSet::new();
+        let mut required_nominals = HashSet::new();
         for effect in capture
             .effects(work)
             .map_err(|()| ResolvedBuildFailure::TypeResource)?
@@ -14926,6 +14929,19 @@ impl ExportSummary {
         {
             collect_effect_identities(ty, &mut required, work)
                 .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            collect_capture_external_nominals(ty, &mut required_nominals, work)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        }
+        work.charge(required_nominals.len())
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        for nominal in required_nominals {
+            // The summary's public/hidden declarations have already passed
+            // their kind/original checks. Callable metadata must retain those
+            // identities too; its completed publication cannot replace them.
+            work.charge(2)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            self.nominal_fact(nominal)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
         }
         work.charge(required.len())
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;

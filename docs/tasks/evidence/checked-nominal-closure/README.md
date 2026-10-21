@@ -35,3 +35,30 @@ repair remain pending. Whole F3, F-core and runtime gates remain pending.
 these four commands. The raw diagnostic predates that revised fixture and is
 not transferred as a result on the vector input. Logs retain original bytes,
 including any trailing blank lines. No native call executes.
+
+## Ordinary nominal lookup attempt
+
+The next frozen batch used an ordinary public/hidden nominal lookup for each
+nonlexical captured type identity. The new controls passed, including the
+selected-only method, body-free erased consumer and independent nonresource Core
+refusal. Wrapper integrations passed 17/17, checked carriers 27/27, imports 34/34,
+owners 10/10, capture 36/36 and Clippy. The image filter passed 15/16: the existing
+`source_control_image_retains_original_pending_owner_and_each_actual_request`
+failed during source checking with `Typing(Internal(InvalidState))`. This is not
+a budget refusal. Original buffer and dependent startup checks still passed at
+318827 and 314697 under the unchanged 327680 default.
+
+The eight exact commands, raw logs and unchanged 557-file before/after input maps
+are retained in `membership-only-attempt/`. Its aggregate uses compact sorted
+JSON (specified by each receipt), distinct from the earlier NUL-delimited test-first
+aggregate. This failed attempt is not final verification or product acceptance.
+A diagnostic must identify the exact missing retained-kind category before any
+correction; no unknown-identity or source-name exception is authorized.
+
+The bounded diagnostic identifies the missing nominal as admitted module4,
+declaration1, exactly the same module's source-resource ordinal0 access family
+`Probe<R>`. Existing summary admission already installs that complete original
+family in its canonical kind environment without an ordinary nominal row. The
+probe patch, exact input pins and raw result are retained; the probe is removed.
+The correction must query the same authenticated kind environment, with paid
+exact identity lookup, rather than exempting unknown identities or resource names.

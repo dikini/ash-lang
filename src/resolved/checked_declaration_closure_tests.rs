@@ -226,3 +226,178 @@ fn checked_declaration_closure_unreferenced_private_spare_is_not_required() {
     );
     assert!(summary.hidden_nominals.contains_key(&held));
 }
+
+#[test]
+fn checked_declaration_closure_nominal_roots_are_paid_and_operation_local() {
+    let summary = summary();
+    let capture = &summary.terms["select"].capture;
+    let mut measured = TypeWorkBudget::default();
+    summary
+        .authenticate_capture_effect_closure(
+            capture,
+            &mut crate::core::capture::CaptureGraphVisits::default(),
+            &mut OriginalEffectMemo::new(),
+            &mut measured,
+        )
+        .unwrap();
+    let required = measured.used();
+    assert!(required > 3);
+    for short in [false, true, false] {
+        let mut work = TypeWorkBudget::with_limit(7 + required - usize::from(short));
+        work.charge(7).unwrap();
+        let result = summary.authenticate_capture_effect_closure(
+            capture,
+            &mut crate::core::capture::CaptureGraphVisits::default(),
+            &mut OriginalEffectMemo::new(),
+            &mut work,
+        );
+        assert_eq!(
+            result,
+            if short {
+                Err(ResolvedBuildFailure::TypeResource)
+            } else {
+                Ok(())
+            }
+        );
+    }
+    let mut work = TypeWorkBudget::with_limit(required);
+    for expected in [Ok(()), Err(ResolvedBuildFailure::TypeResource)] {
+        assert_eq!(
+            summary.authenticate_capture_effect_closure(
+                capture,
+                &mut crate::core::capture::CaptureGraphVisits::default(),
+                &mut OriginalEffectMemo::new(),
+                &mut work,
+            ),
+            expected
+        );
+    }
+    let mut shared_work = TypeWorkBudget::default();
+    let mut visits = crate::core::capture::CaptureGraphVisits::default();
+    let mut originals = OriginalEffectMemo::new();
+    summary
+        .authenticate_capture_effect_closure(capture, &mut visits, &mut originals, &mut shared_work)
+        .unwrap();
+    let before = shared_work.used();
+    summary
+        .authenticate_capture_effect_closure(capture, &mut visits, &mut originals, &mut shared_work)
+        .unwrap();
+    assert!(shared_work.used() > before);
+    assert!(shared_work.used() - before < required);
+}
+
+#[test]
+fn checked_declaration_closure_body_free_consumer_rejects_erased_kind_metadata() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let directory = std::env::temp_dir().join(format!(
+        "ash-nominal-consumer-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir(&directory).unwrap();
+    std::fs::write(directory.join("native.ash"), GLOBAL_SOURCE).unwrap();
+    std::fs::write(directory.join("entry.ash"), "import @builtin.foreign as Foreign\nimport native as Native\nmain : Unit -> Foreign.CheckedCall<Int>\nmain () = {\n    let call = Native.select 7\n    call ()\n}\n").unwrap();
+    let graph = crate::module::load_module_graph(
+        &directory.join("entry.ash"),
+        &crate::module::ModuleRoots::empty(),
+    )
+    .unwrap();
+    std::fs::remove_dir_all(directory).unwrap();
+    let mut summaries: Vec<ExportSummary> = Vec::new();
+    for loaded in graph.modules() {
+        if loaded.id() == graph.entry() {
+            let canonical_dependencies = loaded
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    crate::resolve::DependencyExports::new(
+                        edge,
+                        summaries
+                            .iter()
+                            .find(|summary| summary.module == edge.target())
+                            .unwrap(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let canonical =
+                crate::resolve::resolve_checked_foreign_module(loaded, &canonical_dependencies)
+                    .unwrap();
+            crate::elaborate::check_module(canonical).unwrap();
+            let producer = summaries
+                .iter_mut()
+                .find(|summary| summary.terms.contains_key("select"))
+                .unwrap();
+            let held = assert_capture_only_held(producer);
+            erase_hidden_nominal(producer, held);
+        }
+        let dependencies = loaded
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                crate::resolve::DependencyExports::new(
+                    edge,
+                    summaries
+                        .iter()
+                        .find(|summary| summary.module == edge.target())
+                        .unwrap(),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let resolved = crate::resolve::resolve_checked_foreign_module(loaded, &dependencies);
+        if loaded.id() == graph.entry() {
+            let error = match resolved {
+                Err(crate::resolve::ResolveModuleError::Resolution(error)) => error,
+                other => panic!("expected dependency-summary authentication refusal: {other:?}"),
+            };
+            assert_eq!(error.reason, crate::resolve::ResolveReason::InternalState);
+            assert_eq!(
+                error.subject_fact(),
+                Some((
+                    "cause",
+                    "resolver-internal-cause",
+                    "dependency-summary-invalid"
+                ))
+            );
+            return;
+        }
+        summaries.push(
+            crate::elaborate::check_module(resolved.unwrap())
+                .unwrap()
+                .into_exports(),
+        );
+    }
+    panic!("consumer missing");
+}
+
+impl ResolvedRegistry {
+    pub(crate) fn erase_nominal_for_closure_core_test(&mut self, id: NominalTypeId) -> bool {
+        let before = self.nominals.len();
+        self.nominals = std::mem::take(&mut self.nominals)
+            .into_vec()
+            .into_iter()
+            .filter(|fact| fact.id != id)
+            .collect();
+        self.nominal_positions = self
+            .nominals
+            .iter()
+            .enumerate()
+            .map(|(index, fact)| (fact.id, index))
+            .collect();
+        self.constructors = std::mem::take(&mut self.constructors)
+            .into_vec()
+            .into_iter()
+            .filter(|fact| fact.id.owner() != id)
+            .collect();
+        self.constructor_positions = self
+            .constructors
+            .iter()
+            .enumerate()
+            .map(|(index, fact)| (fact.id, index))
+            .collect();
+        self.nominal_parameters.remove(&id);
+        before != self.nominals.len()
+    }
+}

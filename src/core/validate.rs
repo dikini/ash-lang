@@ -1,6 +1,8 @@
 //! Independent validation for unchecked pure Core arenas.
 
 #[cfg(test)]
+mod declaration_closure_tests;
+#[cfg(test)]
 mod foreign_host_tests;
 #[cfg(test)]
 mod selected_evidence_tests;
