@@ -1,0 +1,40 @@
+
+running 4 tests
+checked lifecycle hidden interface collection complete
+checked lifecycle summary collection failed: InvalidState
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection failed: InvalidState
+checked lifecycle summary collection complete
+checked lifecycle summary collection failed: InvalidState
+checked lifecycle summary collection failed: InvalidState
+checked lifecycle summary collection failed: InvalidState
+checked lifecycle summary authentication failed: InvalidState
+checked lifecycle hidden interface collection complete
+test resolved::tests::freeze_rejects_coherently_forged_checked_method_binder_before_publication ... checked lifecycle hidden nominal collection start
+ok
+checked lifecycle summary collection complete
+test resolved::tests::freeze_rejects_forged_monomorphic_method_source_mirror_before_publication ... ok
+checked lifecycle summary authentication failed: InvalidState
+test resolved::tests::freeze_rejects_unbacked_foreign_opaque_owner_before_publication ... ok
+checked lifecycle hidden interface collection complete
+checked lifecycle hidden nominal collection start
+checked lifecycle missing nominal params NominalTypeId { module: ModuleId { namespace: Admitted, graph: 0, value: 8002 }, owner: Module, declaration: 0 } Hidden
+checked lifecycle summary collection failed: InvalidState
+
+thread 'freeze-missing-local-hidden-nominal' (1411829) panicked at src/resolved.rs:39463:17:
+assertion `left == right` failed: missing local authority must reject before any parameter clone cell
+  left: 16
+ right: 6
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'resolved::tests::freeze_rejects_missing_local_hidden_nominal_before_cloning_deep_parameters' (1411827) panicked at src/resolved.rs:39473:14:
+rejected deep hidden authority must tear down iteratively: Any { .. }
+test resolved::tests::freeze_rejects_missing_local_hidden_nominal_before_cloning_deep_parameters ... FAILED
+
+failures:
+
+failures:
+    resolved::tests::freeze_rejects_missing_local_hidden_nominal_before_cloning_deep_parameters
+
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 2051 filtered out; finished in 0.01s
+

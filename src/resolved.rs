@@ -8438,6 +8438,8 @@ fn authenticate_identity_order<K: Copy + Eq + Hash, V>(
 }
 
 fn map_summary_kind_failure(failure: KindFailure) -> ResolvedBuildFailure {
+    #[cfg(test)]
+    eprintln!("checked lifecycle summary kind failure: {failure:?}");
     match failure {
         KindFailure::Resource(_) => ResolvedBuildFailure::TypeResource,
         KindFailure::Internal(_) | KindFailure::Source(_) => ResolvedBuildFailure::InvalidState,
@@ -11794,10 +11796,9 @@ impl ExportSummary {
                 .map_err(map_summary_kind_failure)?;
         }
         for interface in &self.hidden_interfaces {
-            if interface.id.module() == self.module
-                || interface_facts
-                    .insert(interface.id, interface.as_ref())
-                    .is_some()
+            if interface_facts
+                .insert(interface.id, interface.as_ref())
+                .is_some()
             {
                 {
                     return Err(ResolvedBuildFailure::InvalidState);
@@ -11831,6 +11832,14 @@ impl ExportSummary {
                     type_work,
                 )
                 .map_err(map_summary_kind_failure)?;
+        }
+        type_work
+            .charge(self.source_resource_facts.len())
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        for fact in self.source_resource_facts.values() {
+            if !interface_facts.contains_key(&fact.provider.interface.id) {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
         }
         constraint_work
             .charge(self.interface_names.len())
@@ -12788,8 +12797,18 @@ impl ExportSummary {
             providers,
             type_work,
             constraint_work,
-        )?;
-        summary.authenticate_with_provider_commit(false, type_work, constraint_work)?;
+        ).map_err(|failure| {
+            #[cfg(test)]
+            eprintln!("checked lifecycle summary collection failed: {failure:?}");
+            failure
+        })?;
+        #[cfg(test)]
+        eprintln!("checked lifecycle summary collection complete");
+        summary.authenticate_with_provider_commit(false, type_work, constraint_work).map_err(|failure| {
+            #[cfg(test)]
+            eprintln!("checked lifecycle summary authentication failed: {failure:?}");
+            failure
+        })?;
         Ok(summary)
     }
 
@@ -13732,24 +13751,33 @@ impl ExportSummary {
                 .try_reserve(referenced_interface_order.len())
                 .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
             for interface in referenced_interface_order {
-                let fact = resolved
-                    .imported
-                    .shared_interface(interface)
-                    .ok_or(ResolvedBuildFailure::InvalidState)?;
-                if fact.id.module() == resolved.module {
-                    {
-                        return Err(ResolvedBuildFailure::InvalidState);
-                    }
+                let (source, fact) = if interface.module() == resolved.module {
+                    checked_interfaces_by_id
+                        .get(&interface)
+                        .map(|(source, fact)| (Some(*source), *fact))
+                } else {
+                    resolved
+                        .imported
+                        .shared_interface(interface)
+                        .map(|fact| (None, fact))
+                }
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+                if fact.id != interface
+                    || (source.is_some() != (fact.id.module() == resolved.module))
+                {
+                    return Err(ResolvedBuildFailure::InvalidState);
                 }
                 summary.hidden_interfaces.push(share_checked_interface_fact(
                     fact,
-                    None,
+                    source,
                     type_work,
                     constraint_work,
                 )?);
             }
         }
 
+        #[cfg(test)]
+        eprintln!("checked lifecycle hidden interface collection complete");
         summary
             .nominals
             .try_reserve(resolved.export_candidate.nominals.len())
@@ -14819,6 +14847,8 @@ impl ExportSummary {
         type_work
             .charge(resolved.export_candidate.hidden_nominals.len())
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        #[cfg(test)]
+        eprintln!("checked lifecycle hidden nominal collection start");
         for identity in &resolved.export_candidate.hidden_nominal_order {
             let candidate = resolved
                 .export_candidate
@@ -14831,11 +14861,19 @@ impl ExportSummary {
             let source_parameters = resolved
                 .registry
                 .nominal_parameters(candidate.id)
-                .ok_or(ResolvedBuildFailure::InvalidState)?;
+                .ok_or_else(|| {
+                    #[cfg(test)]
+                    eprintln!("checked lifecycle missing nominal params {:?} {}", candidate.id, candidate.spelling);
+                    ResolvedBuildFailure::InvalidState
+                })?;
             let nominal = resolved
                 .registry
                 .nominal(candidate.id)
-                .ok_or(ResolvedBuildFailure::InvalidState)?;
+                .ok_or_else(|| {
+                    #[cfg(test)]
+                    eprintln!("checked lifecycle missing nominal row {:?} {}", candidate.id, candidate.spelling);
+                    ResolvedBuildFailure::InvalidState
+                })?;
             let constructor_count = nominal.constructors.len();
             type_work
                 .charge(2)
@@ -43302,3 +43340,7 @@ impl ImportedGlobalScheme {
 #[cfg(test)]
 #[path = "resolved/checked_codec_category_tests.rs"]
 mod checked_codec_category_tests;
+
+#[cfg(test)]
+#[path = "resolved/checked_hidden_provider_interface_tests.rs"]
+mod checked_hidden_provider_interface_tests;

@@ -1,0 +1,203 @@
+warning: Missing auto-load script at offset 0 in section .debug_gdb_scripts
+of file /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168.
+Use `info auto-load python-scripts [REGEXP]' to list them.
+Breakpoint 1 at 0x8806648: file src/resolved.rs, line 10894.
+Breakpoint 2 at 0x87f333b: file src/resolved.rs, line 10903.
+Breakpoint 3 at 0x880631e: file src/resolved.rs, line 10918.
+Breakpoint 4 at 0x88065a4: file src/resolved.rs, line 10931.
+Breakpoint 5 at 0x87f3716: file src/resolved.rs, line 10939.
+Breakpoint 6 at 0x880600c: file src/resolved.rs, line 10964.
+Breakpoint 7 at 0x87f39fc: file src/resolved.rs, line 10977.
+Breakpoint 8 at 0x87f4148: file src/resolved.rs, line 11014.
+Breakpoint 9 at 0x87f4665: file src/resolved.rs, line 11043.
+Breakpoint 10 at 0x87f4e28: file src/resolved.rs, line 11074.
+Breakpoint 11 at 0x88058fd: file src/resolved.rs, line 11084.
+Breakpoint 12 at 0x8805b37: file src/resolved.rs, line 11108.
+Breakpoint 13 at 0x8804efb: file src/resolved.rs, line 11211.
+Breakpoint 14 at 0x8804d75: file src/resolved.rs, line 11222.
+Breakpoint 15 at 0x8803c0d: file src/resolved.rs, line 11232.
+Breakpoint 16 at 0x8803cf3: file src/resolved.rs, line 11277.
+Breakpoint 17 at 0x88048ad: file src/resolved.rs, line 11288.
+Breakpoint 18 at 0x8804b3a: file src/resolved.rs, line 11309.
+Breakpoint 19 at 0x87f598e: file src/resolved.rs, line 11323.
+Breakpoint 20 at 0x880279f: file src/resolved.rs, line 11368.
+Breakpoint 21 at 0x8802914: file src/resolved.rs, line 11415.
+Breakpoint 22 at 0x8803a90: file src/resolved.rs, line 11423.
+Breakpoint 23 at 0x88030c3: file src/resolved.rs, line 11461.
+Breakpoint 24 at 0x88018c0: file src/resolved.rs, line 11528.
+Breakpoint 25 at 0x880191d: file src/resolved.rs, line 11565.
+Breakpoint 26 at 0x880264d: file src/resolved.rs, line 11573.
+Breakpoint 27 at 0x880157b: file src/resolved.rs, line 11666.
+Breakpoint 28 at 0x8801373: file src/resolved.rs, line 11698.
+Breakpoint 29 at 0x880132c: file src/resolved.rs, line 11712.
+Breakpoint 30 at 0x87f6660: file src/resolved.rs, line 11736.
+Breakpoint 31 at 0x87f66dd: file src/resolved.rs, line 11744.
+Breakpoint 32 at 0x88005e6: file src/resolved.rs, line 11766.
+Breakpoint 33 at 0x87ffed1: file src/resolved.rs, line 11804.
+Breakpoint 34 at 0x87ffdc4: file src/resolved.rs, line 11846.
+Breakpoint 35 at 0x87f710f: file src/resolved.rs, line 11865.
+Breakpoint 36 at 0x87ffd81: file src/resolved.rs, line 11874.
+Breakpoint 37 at 0x87ff289: file src/resolved.rs, line 11930.
+Breakpoint 38 at 0x87ff097: file src/resolved.rs, line 11938.
+Breakpoint 39 at 0x87ff58f: file src/resolved.rs, line 11944.
+Breakpoint 40 at 0x87ff721: file src/resolved.rs, line 11969.
+Breakpoint 41 at 0x87feb2c: file src/resolved.rs, line 12002.
+Breakpoint 42 at 0x87fec7b: file src/resolved.rs, line 12013.
+Breakpoint 43 at 0x87fefa7: file src/resolved.rs, line 12027.
+Breakpoint 44 at 0x87fe4e9: file src/resolved.rs, line 12075.
+Breakpoint 45 at 0x87fd363: file src/resolved.rs, line 12111.
+Breakpoint 46 at 0x87fd497: file src/resolved.rs, line 12116.
+Breakpoint 47 at 0x87fdaec: file src/resolved.rs, line 12138.
+Breakpoint 48 at 0x87fbdf8: file src/resolved.rs, line 12198.
+Breakpoint 49 at 0x87fbef7: file src/resolved.rs, line 12205.
+Breakpoint 50 at 0x87fc5c2: file src/resolved.rs, line 12271.
+Breakpoint 51 at 0x87fcc8a: file src/resolved.rs, line 12312.
+Breakpoint 52 at 0x87fd136: file src/resolved.rs, line 12332.
+Breakpoint 53 at 0x87fbd31: file src/resolved.rs, line 12350.
+Breakpoint 54 at 0x87fbc09: file src/resolved.rs, line 12369.
+Breakpoint 55 at 0x87fbc60: file src/resolved.rs, line 12378.
+Breakpoint 56 at 0x87f882d: file src/resolved.rs, line 12385.
+Breakpoint 57 at 0x87fbad2: file src/resolved.rs, line 12395.
+Breakpoint 58 at 0x87fbb29: file src/resolved.rs, line 12404.
+Breakpoint 59 at 0x87f8a9c: file src/resolved.rs, line 12411.
+Breakpoint 60 at 0x87f8f7c: file src/resolved.rs, line 12422.
+Breakpoint 61 at 0x87fb510: file src/resolved.rs, line 12441.
+Breakpoint 62 at 0x87fb6fa: file src/resolved.rs, line 12449.
+Breakpoint 63 at 0x87f96cf: file src/resolved.rs, line 12496.
+Breakpoint 64 at 0x87f9900: file src/resolved.rs, line 12508.
+Breakpoint 65 at 0x87f9bb9: file src/resolved.rs, line 12529.
+Breakpoint 66 at 0x87fb269: file src/resolved.rs, line 12560.
+Breakpoint 67 at 0x87f9f47: file src/resolved.rs, line 12569.
+Breakpoint 68 at 0x87fa196: file src/resolved.rs, line 12579.
+Breakpoint 69 at 0x87fa418: file src/resolved.rs, line 12590.
+Breakpoint 70 at 0x87fabac: file src/resolved.rs, line 12638.
+Breakpoint 71 at 0x8834691: file src/resolved.rs, line 15117.
+Breakpoint 72 at 0x88340b3: file src/resolved.rs, line 15153.
+Breakpoint 73 at 0x883287e: file src/resolved.rs, line 15230.
+Breakpoint 74 at 0x8832ec9: file src/resolved.rs, line 15246.
+Breakpoint 75 at 0x8832d45: file src/resolved.rs, line 15256.
+Breakpoint 76 at 0x8832e57: file src/resolved.rs, line 15262.
+Breakpoint 77 at 0x8831c2c: file src/resolved.rs, line 15278.
+Breakpoint 78 at 0x8831b04: file src/resolved.rs, line 15292.
+Breakpoint 79 at 0x883175a: file src/resolved.rs, line 15336.
+Breakpoint 80 at 0x8831209: file src/resolved.rs, line 15363.
+Breakpoint 81 at 0x8830c5f: file src/resolved.rs, line 15390.
+Breakpoint 82 at 0x8830f83: file src/resolved.rs, line 15399.
+Breakpoint 83 at 0x8831d57: file src/resolved.rs, line 15444.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/x86_64-linux-gnu/libthread_db.so.1".
+
+running 1 test
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 1 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 2 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 3 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 4 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 5 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 6 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 7 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 8 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 9 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 10 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle finish module bodies entered
+checked lifecycle module result complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle capture finite values complete
+checked lifecycle capture typed data complete
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle module bodies complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle hidden interface collection complete
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle original-source proof: Ok(())
+checked lifecycle builtin bytes: Ok(())
+checked lifecycle scalar originals: Ok(())
+checked lifecycle category counts provider=0 source=1 foreign=1 native=2 preflight=10 kinds=3
+checked lifecycle category provider contracts complete
+checked lifecycle category source resource kinds complete
+checked lifecycle category source foreign kinds complete
+checked lifecycle category inventories family=3 names=3 kinds=3
+checked lifecycle provider categories: Ok(())
+checked lifecycle foreign nominal NominalTypeId { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, owner: Module, declaration: 2 }: Ok(())
+checked lifecycle registry pre-variable inventory complete
+checked lifecycle registry variables complete
+checked lifecycle registry nominal formals complete
+checked lifecycle registry proof: Ok(())
+checked lifecycle effect registry proof: Ok(())
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle original structure answer=true: Ok(())
+checked lifecycle header complete
+checked lifecycle association complete
+checked lifecycle entries complete
+checked lifecycle flow Acquire results=4
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=true consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, owner: Module, declaration: 0 }, constructor: 0 }, Some(18))
+checked lifecycle flow Finish results=2
+checked lifecycle result Finish acquired=false consumed=false request=Some(NodeId { arena: ArenaId(2), index: 2 }) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, owner: Module, declaration: 14 }, constructor: 2 }, Some(4))
+checked lifecycle result Finish acquired=false consumed=true request=Some(NodeId { arena: ArenaId(2), index: 2 }) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, owner: Module, declaration: 14 }, constructor: 0 }, Some(11))
+checked lifecycle all admitted template records complete
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle instance schedule entered
+checked lifecycle instance template selected
+checked lifecycle instance actuals complete
+checked lifecycle instance finish entered
+checked lifecycle instance rows complete
+checked lifecycle instance copies prepared
+checked lifecycle instance copies lowered
+checked lifecycle instance scope admitted
+checked lifecycle host finish entered
+checked lifecycle host interpretations=0
+checked lifecycle host finish complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle finish module bodies entered
+checked lifecycle module result complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle capture finite values complete
+checked lifecycle capture typed data complete
+checked lifecycle synthetic host control 113 for <effect:builtin.foreign:1:1:0><<type-variable:1:0:14>>
+checked lifecycle synthetic host control 117 for <effect:builtin.foreign:1:1:0><<type-variable:1:0:14>>
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle strict query roots complete
+checked lifecycle strict analysis constructed
+checked lifecycle strict discovery complete
+checked lifecycle strict payload complete
+checked lifecycle strict cell retention complete
+checked lifecycle module bodies complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle hidden interface collection complete
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+[Switching to Thread 0x7ffff7bff6c0 (LWP 1412749)]
+
+Thread 2 "elaborate::chec" hit Breakpoint 50, ash::resolved::ExportSummary::authenticate_with_provider_commit (self=0x7ffff7be3b20, committed=false, type_work=0x7ffff7bf1250, constraint_work=0x7ffff7bfa630) at src/resolved.rs:12271
+12271	                    return Err(ResolvedBuildFailure::InvalidState);
+#0  ash::resolved::ExportSummary::authenticate_with_provider_commit (self=0x7ffff7be3b20, committed=false, type_work=0x7ffff7bf1250, constraint_work=0x7ffff7bfa630) at src/resolved.rs:12271
+#1  0x000055555dd5d344 in ash::resolved::ExportSummary::freeze_with_providers (resolved=0x7ffff7bf9490, checked_globals=..., checked_interfaces=..., admitted_implementations=..., checked_implementations=..., providers=..., type_work=0x7ffff7bf1250, constraint_work=0x7ffff7bfa630) at src/resolved.rs:12799
+#2  0x000055555c06bbaf in ash::elaborate::check_module_with_budget_family::{closure#0}<ash::core::effect::EffectOperationFamily> () at src/elaborate.rs:22853
+#3  0x000055555bfad975 in ash::elaborate::check_module_with_budget_family<ash::core::effect::EffectOperationFamily> (resolved=..., provider_codes=0x7ffff7bfa5d0, type_work=0x7ffff7bfa5e0, coverage_work=0x7ffff7bfa628, constraint_work=0x7ffff7bfa630, rewrite_work=..., source_capture_observer=...) at src/elaborate.rs:22642
+#4  0x000055555bb00265 in ash::elaborate::check_module_with_budget_and_provider_codes_and_rewrite_work (resolved=..., provider_codes=0x7ffff7bfa5d0, type_work=0x7ffff7bfa5e0, coverage_work=0x7ffff7bfa628, constraint_work=0x7ffff7bfa630, rewrite_work=...) at src/elaborate.rs:22537
+#5  0x000055555aa7b097 in ash::elaborate::checked_owner_lifecycle_tests::check_graph (graph=0x7ffff7bfe050) at src/elaborate/checked_owner_lifecycle_tests.rs:72
+#6  0x000055555aa7d603 in ash::elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_canonical_source_retains_originals () at src/elaborate/checked_owner_lifecycle_tests.rs:188
+#7  0x000055555a982147 in ash::elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_canonical_source_retains_originals::{closure#0} () at src/elaborate/checked_owner_lifecycle_tests.rs:186
+#8  0x000055555a40a086 in core::ops::function::FnOnce::call_once<ash::elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_canonical_source_retains_originals::{closure_env#0}, ()> () at /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs:250
+#9  0x000055555e0ba0db in core::ops::function::FnOnce::call_once<fn() -> core::result::Result<(), alloc::string::String>, ()> () at library/core/src/ops/function.rs:250
+#0  ash::resolved::ExportSummary::authenticate_with_provider_commit (self=0x7ffff7be3b20, committed=false, type_work=0x7ffff7bf1250, constraint_work=0x7ffff7bfa630) at src/resolved.rs:12271
+12271	                    return Err(ResolvedBuildFailure::InvalidState);

@@ -3443,6 +3443,27 @@ impl Graph {
         Ok(())
     }
 
+    /// A sealed Host control event has independent Unit payload and reply.
+    /// Its native request retains its separate real operand/value equation.
+    pub(super) fn position_independent_request(
+        &mut self,
+        code: usize,
+        source: Span,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let scalar = self.push(Expr::Scalar, source, budget)?;
+        let request = self.push(
+            Expr::Request {
+                operand: scalar,
+                scalar: true,
+                reply: Some(scalar),
+            },
+            source,
+            budget,
+        )?;
+        self.position(code, request, budget)
+    }
+
     /// Distinct existing value equations for authenticated source-control
     /// phases. No cut may substitute the enclosing report for a completed
     /// acquisition or for a still-live cleanup/handler result.
@@ -13849,3 +13870,7 @@ mod tests {
     }
     // ASH_INPUT169_END_TESTS
 }
+
+#[cfg(test)]
+#[path = "value/host_request_tests.rs"]
+mod host_request_tests;

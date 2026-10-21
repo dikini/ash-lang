@@ -3173,6 +3173,7 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
                 let host_request = Request::effect(host, source, budget)?;
                 #[cfg(test)]
                 eprintln!("checked lifecycle synthetic host control {} for {host:?}", graph.code.len());
+                data.position_independent_request(graph.code.len(), source, budget)?;
                 steps.push(graph.code.len());
                 graph.code.push(Control::Request(host_request));
             }

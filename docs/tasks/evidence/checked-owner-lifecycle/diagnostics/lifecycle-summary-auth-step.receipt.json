@@ -1,0 +1,25 @@
+{
+  "command": [
+    "gdb",
+    "--batch",
+    "-q",
+    "-x",
+    "/tmp/ash-pr97/summary-auth-step.gdb",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168"
+  ],
+  "cwd": "/home/dikini/Projects/ash-lang/.worktree/checked-ffi",
+  "exit_code": 0,
+  "seconds": 12.713,
+  "inputs_equal": true,
+  "count": 579,
+  "aggregate_algorithm": "SHA256 of sorted-key compact JSON UTF-8 no newline",
+  "aggregate_sha256": "1fc7c22f5c3f740972a5298c5d79bcf79a0add04941a948e79063d22a8854763",
+  "log_sha256": "d09ea886b44a18b20f3d0e4f198dfaa37fcf9052b0a68900e25ec3f54a806d1b",
+  "environment": {
+    "RUSTC_WRAPPER": "",
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+    "RUSTFLAGS": null,
+    "CARGO_ENCODED_RUSTFLAGS": null
+  }
+}

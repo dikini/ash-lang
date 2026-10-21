@@ -22810,6 +22810,8 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
             EvidenceAuditFailure::InvalidState => invalid_state(),
             EvidenceAuditFailure::ConstraintResource => constraint_resource(),
         })?;
+        #[cfg(test)]
+        eprintln!("checked lifecycle body evidence audit complete");
         let defining = if F::EFFECTS
             && !resolved.resources().is_empty()
             && elaborator.pending_local_provider.is_none()
@@ -22846,6 +22848,8 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
             return Err(unsupported_provider_resource());
         };
 
+        #[cfg(test)]
+        eprintln!("checked lifecycle provider group complete");
         let exports = ExportSummary::freeze_with_providers(
             &resolved,
             &schemes,
@@ -22856,7 +22860,13 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
             &mut elaborator.type_work,
             constraint_work,
         )
-        .map_err(resolved_build_error)?;
+        .map_err(|failure| {
+            #[cfg(test)]
+            eprintln!("checked lifecycle export freeze failure: {failure:?}");
+            resolved_build_error(failure)
+        })?;
+        #[cfg(test)]
+        eprintln!("checked lifecycle exports frozen");
 
         Ok((
             schemes,
@@ -22870,7 +22880,11 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
         ))
     })();
     let result = result.and_then(|checked| {
+        #[cfg(test)]
+        eprintln!("checked lifecycle source finalization entered");
         elaborator.finalize_source_provider_plans()?;
+        #[cfg(test)]
+        eprintln!("checked lifecycle source finalization complete");
         #[cfg(test)]
         if let Some(observer) = source_capture_observer {
             let builder = F::effect_builder(&mut elaborator.builder).ok_or_else(invalid_state)?;

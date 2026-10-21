@@ -31,7 +31,7 @@ foreign checked library Memory {
     }
 }
 
-type Acquire<S, D, I> = Acquired(S, D)
+pub type Acquire<S, D, I> = Acquired(S, D)
     | Refused(I)
 
 effect Trace {

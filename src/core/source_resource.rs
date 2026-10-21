@@ -1894,12 +1894,26 @@ impl<'a> FlowFacts<'a> {
         Ok(selected)
     }
 }
+#[derive(Clone, Copy, Debug)]
+enum CheckedFinishOutcome {
+    Consumed(NodeId),
+    Retained(NodeId),
+    Boundary(NodeId),
+}
+impl CheckedFinishOutcome {
+    fn request(self) -> NodeId {
+        match self {
+            Self::Consumed(request) | Self::Retained(request) | Self::Boundary(request) => request,
+        }
+    }
+}
+
 struct FlowPath {
     locals: HashMap<crate::resolved::BinderId, usize>,
     acquired: bool,
     consumed: bool,
     attempted_teardown: bool,
-    checked_finish_request: Option<NodeId>,
+    checked_finish_outcome: Option<CheckedFinishOutcome>,
     blocked: bool,
     windows: Vec<(NodeId, usize)>,
     ordinary_owners: Vec<(super::HandlerId, crate::resolved::ResumeId)>,
@@ -1912,7 +1926,7 @@ impl FlowPath {
             acquired: false,
             consumed: false,
             attempted_teardown: false,
-            checked_finish_request: None,
+            checked_finish_outcome: None,
             blocked: false,
             windows: Vec::new(),
             ordinary_owners: Vec::new(),
@@ -1953,7 +1967,7 @@ impl FlowPath {
             acquired: self.acquired,
             consumed: self.consumed,
             attempted_teardown: self.attempted_teardown,
-            checked_finish_request: self.checked_finish_request,
+            checked_finish_outcome: self.checked_finish_outcome,
             blocked: self.blocked,
             windows,
             ordinary_owners,
@@ -2500,7 +2514,10 @@ fn eval_flow<'a>(
                                 .scalar_preflight(function)
                                 .ok_or_else(invalid)?;
                             if fact.role().data_parameter(fact.module()).is_some() {
-                                if phase == SourceResourcePhase::Acquire || path.consumed {
+                                if phase == SourceResourcePhase::Acquire
+                                    || path.consumed
+                                    || path.checked_finish_outcome.is_some()
+                                {
                                     return Err(invalid());
                                 }
                                 let replace = fact.role() == crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ReplaceData;
@@ -2751,7 +2768,10 @@ fn eval_flow<'a>(
                             && !path.blocked
                     }
                     FlowFact::Current => {
-                        phase != SourceResourcePhase::Acquire && !path.consumed && !path.blocked
+                        phase != SourceResourcePhase::Acquire
+                            && !path.consumed
+                            && !path.blocked
+                            && path.checked_finish_outcome.is_none()
                     }
                     FlowFact::Enclosing(identity) => {
                         charge(work, header.dependencies.len())?;
@@ -2891,7 +2911,7 @@ fn eval_flow<'a>(
                     current_operand, ..
                 }) = expected.owner_role()
                 {
-                    if path.consumed || path.blocked {
+                    if path.consumed || path.blocked || path.checked_finish_outcome.is_some() {
                         return Err(invalid());
                     }
                     let crate::foreign::source_contract::PreparedOperandSource::Current(selection) =
@@ -3042,12 +3062,17 @@ fn eval_flow<'a>(
                             return Err(invalid());
                         };
                         charge(work, 1)?;
-                        path.checked_finish_request = Some(id);
+                        path.checked_finish_outcome = Some(CheckedFinishOutcome::Boundary(id));
                         let boundary = facts.add(FlowFact::FinishBoundary(id), work)?;
                         let outcome =
                             facts.wrapped(ConstructorId::new(call.call, 2), boundary, work)?;
                         push(&mut results, (outcome, path.copy(work)?), work)?;
                         path.consumed = *consumes;
+                        path.checked_finish_outcome = Some(if *consumes {
+                            CheckedFinishOutcome::Consumed(id)
+                        } else {
+                            CheckedFinishOutcome::Retained(id)
+                        });
                         let disposition = facts.wrapped(
                             codec.disposition_constructors()[usize::from(!consumes)],
                             0,
@@ -3530,7 +3555,7 @@ fn check_flow(
                 "checked lifecycle result {phase:?} acquired={} consumed={} request={:?} value={:?}",
                 path.acquired,
                 path.consumed,
-                path.checked_finish_request,
+                path.checked_finish_outcome,
                 facts.fact(value)?
             );
         }
@@ -3540,19 +3565,24 @@ fn check_flow(
                 SourceResourceReportCodec::CheckedScope { .. }
             )
         {
-            let request = path.checked_finish_request.ok_or_else(invalid)?;
+            let outcome = path.checked_finish_outcome.ok_or_else(invalid)?;
+            let request = outcome.request();
             let FlowFact::Constructor(constructor, Some(payload)) = facts.fact(value)? else {
                 return Err(invalid());
             };
             if *constructor == header.codec.finish[0] {
-                if !path.consumed || !facts.independent(*payload, work)? {
+                if !matches!(outcome, CheckedFinishOutcome::Consumed(_))
+                    || !path.consumed
+                    || !facts.independent(*payload, work)?
+                {
                     return Err(invalid());
                 }
             } else if *constructor == header.codec.finish[1] {
                 let FlowFact::Tuple(fields) = facts.fact(*payload)? else {
                     return Err(invalid());
                 };
-                if path.consumed
+                if !matches!(outcome, CheckedFinishOutcome::Retained(_))
+                    || path.consumed
                     || fields.len() != 2
                     || !matches!(facts.fact(fields[0])?, FlowFact::Current)
                     || !facts.independent(fields[1], work)?
@@ -3560,7 +3590,8 @@ fn check_flow(
                     return Err(invalid());
                 }
             } else if *constructor == header.codec.finish[2] {
-                if path.consumed
+                if !matches!(outcome, CheckedFinishOutcome::Boundary(_))
+                    || path.consumed
                     || !matches!(facts.fact(*payload)?, FlowFact::FinishBoundary(original) if *original == request)
                 {
                     return Err(invalid());

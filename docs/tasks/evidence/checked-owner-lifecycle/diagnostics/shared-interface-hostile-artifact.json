@@ -1,0 +1,12 @@
+{
+  "binary": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168",
+  "sha256_after": "0867646d31105d90e7bbf0baa78ca2ee2a6dc8379e057a5a49b5155801a0b52b",
+  "matches_compiled_579_input_artifact": false,
+  "compilation_receipt": null,
+  "compiled_source_aggregate": null,
+  "execution_receipt": "lifecycle-shared-interface-hostile-artifact.receipt.json",
+  "current_source_delta": "src/resolve.rs private hidden-candidate repair was compiling separately; this command invokes the preexisting unit artifact and is not final candidate evidence",
+  "result": "3 pass / 1 hardcoded early TypeWork assertion failure (16 vs 6); no baseline or pass claim",
+  "artifact_attribution": "Unverified first invocation: the newly compiled candidate had completed before the operator polled it; the prior-artifact attribution was not established. Do not transfer this command as old-artifact or final evidence.",
+  "superseded_by": "lifecycle-shared-interface-hostile-refresh.receipt.json with private-state-artifact-before/after.json"
+}

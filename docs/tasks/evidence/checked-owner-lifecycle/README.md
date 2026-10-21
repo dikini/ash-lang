@@ -72,3 +72,70 @@ independent request/reply equation for each payload-free Host event, preserving
 its exact H control label, sequence and continuation. It does not reuse the native
 operand, omit the event or introduce a missing-position fallback. This correction
 and connected acceptance remain pending at this diagnostic checkpoint.
+
+The resolver now registers an exact private foreign Owner/Access hidden candidate
+using its canonical registry identity, complete formal count and original origin,
+while retaining its withheld source name. The previous candidate required State
+but its private-candidate inventory contained only Acquire; no opaque-owner guard
+was relaxed. The next pinned debugger refusal is the private local Acquire codec:
+its collected constructor facts conflict with intentional Hidden/no-constructor
+access. This checkpoint refines the fixture to the existing public acquisition
+codec route (`pub type Acquire`), keeping State, Probe and its provider private.
+Private local acquisition-codec publication remains an unsupported declaration-
+closure case; the refusal is retained rather than weakening privacy or minting
+constructor access. This is a fixture boundary, not a lifecycle-positive claim.
+
+One direct shared-helper artifact command was initially attributed to the older
+unit binary before the author observed that a new candidate had finished. That
+attribution is unverified and explicitly superseded by the pinned refresh. The
+refresh records three hostile shared-helper passes and one early deep-hidden-
+nominal work assertion failure (used16, expected6); no baseline or tariff repair
+is inferred. Debugger command success describes stopping/inspection, never a
+passing source test or checked execution. Exact binary digests and scripts are
+retained without binary copies.
+
+The public generic acquisition-codec fixture now passes actual source checking,
+summary publication and exact original-fact assertions. Its 579-input map is
+unchanged before/after (compact sorted-key JSON SHA-256 f69329fcb5d5f03d4d90314108e8b7f147b4c99c76ca74c3871d0100dc482316).
+This is not yet a body-free consumer or independent Core positive: the consumer
+reaches the remaining local-hidden interface import prohibition. The same-source
+negative batch separately demonstrates that BoundaryFailed can be relabeled
+FinishedRetained, and the corrected typed-let postattempt test demonstrates that
+data_of can still read Current in the boundary branch. Both are actual source
+admission gaps, not checked execution observations. The first postattempt test
+used unsupported term type application and is retained only as fixture evidence.
+
+The twelve hidden-provider/State controls pass eight cases at that snapshot.
+Required-provider deletion still authenticates; two private-name tests encounter
+the same interface-import prohibition, and the unused-owner contrast has a
+foreign member spelling collision. Those are separate outcomes. Raw logs/maps
+and exact source overlays are retained; no blanket closure or lifecycle claim
+is transferred from the canonical source result.
+
+The next connected checkpoint passes the real body-free consumer, linking,
+independent default Core, identity and fold revalidation. The consumer's full
+local registry is not required to flatten a dependency's nested native inventory;
+original native/header Arcs are instead checked in the producer's immutable
+source templates and the linked defining registry, with the same source-code Arc
+forwarded into the linked producer group.
+
+At 582 unchanged source/configuration inputs (compact sorted-key JSON SHA-256
+2b4f7ca895bfbe1818e12310e604dfe36970ce7b0108bac84de460eee4db9671), the
+expanded lifecycle command passes 11/14 and the separate hidden-interface/State
+command passes 12/12. The genuine fallible scalar teardown first prepares and
+binds with its required acquisition `destruction_operand 1 from 0 scalar`, then
+refuses unsupported lifecycle admission: all three integration controls pass.
+The earlier fallible fixture omitted that mapping and receives no refinement
+credit. The unused-private-owner contrast is a separate passive one-library
+source after the canonical used-State positive; the failed two-library connected
+fixture remains unaccepted broader evidence, not that contrast's coverage.
+
+Three expanded controls remain unresolved at this checkpoint: inspecting
+independent boundary diagnostics while forwarding the original whole witness
+fails symbolic template admission; the latest-D callback fixture fails template
+admission before its capture-escape distinction; and the first discard test has
+an ordinary Unit/report type mismatch. The latter is setup-only and requires a
+correctly typed post-discard report with exact DiscardUnsafe refusal. No whole
+F3, runtime, image execution, K, deployment or F-core gate follows from the
+connected static positive. Temporary phase traces remain and must be removed
+before final delivered-source verification.

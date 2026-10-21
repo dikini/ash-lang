@@ -161,24 +161,6 @@ fn assert_producer_originals(checked: &[CheckedModule]) {
                 .assumption_members()
                 .contains(&callee.member_index())
         );
-        for consumer in checked.iter().filter(|module| {
-            module.module() != producer.module()
-                && module
-                    .direct_dependencies()
-                    .iter()
-                    .any(|edge| edge.target() == producer.module())
-        }) {
-            let imported = consumer
-                .registry()
-                .native_symbol(original.operation())
-                .expect("real passive consumer retains the captured native original");
-            assert!(Arc::ptr_eq(imported, original));
-            let retained = consumer
-                .registry()
-                .source_resource_fact(header.id)
-                .expect("real passive consumer retains the required resource header");
-            assert!(Arc::ptr_eq(retained, header));
-        }
     }
 }
 
@@ -197,8 +179,55 @@ fn checked_owner_lifecycle_body_free_consumer_links_core_and_transforms() {
     let checked = check_graph(&graph)
         .expect("real body-free consumer checks the canonical checked lifecycle publication");
     assert_producer_originals(&checked);
+    let producer = checked
+        .iter()
+        .find(|module| module.source_resource_code().is_some())
+        .unwrap();
+    let producer_id = producer.module();
+    let original_code = Arc::clone(producer.source_resource_code().unwrap());
+    let original_header = Arc::clone(original_code.headers().next().unwrap());
+    let originals = [
+        Arc::clone(&original_header.acquire),
+        Arc::clone(&original_header.teardown),
+    ];
+    for original in &originals {
+        assert!(Arc::ptr_eq(
+            original_code
+                .resource(0)
+                .unwrap()
+                .original_registry()
+                .native_symbol(original.operation())
+                .unwrap(),
+            original,
+        ));
+    }
     let linked =
         link_modules(checked, graph.entry()).expect("canonical lifecycle module closure links");
+    for original in &originals {
+        assert!(Arc::ptr_eq(
+            linked
+                .registry()
+                .native_symbol(original.operation())
+                .unwrap(),
+            original
+        ));
+    }
+    assert!(Arc::ptr_eq(
+        linked
+            .registry()
+            .source_resource_fact(original_header.original.id)
+            .unwrap(),
+        &original_header.original
+    ));
+    let producer_group = linked
+        .groups()
+        .iter()
+        .find(|group| group.module() == producer_id)
+        .unwrap();
+    assert!(Arc::ptr_eq(
+        producer_group.source_resource_code().unwrap(),
+        &original_code
+    ));
     let linked = crate::evidence_validation::validate_interface_evidence(linked)
         .expect("canonical lifecycle evidence authenticates");
     let mut elaborator =
@@ -235,8 +264,9 @@ fn source_refusal_after_canonical(replacement: &str) {
     let arm = "Foreign.BoundaryFailed(reason) => Foreign.FinishedBoundary reason";
     assert_eq!(PRODUCER.matches(arm).count(), 1);
     let changed = PRODUCER.replace(arm, replacement);
-    let error =
-        check_graph(&graph(&changed, false)).expect_err("changed checked finish must be rejected");
+    let error = check_graph(&graph(&changed, false))
+        .err()
+        .expect("changed checked finish must be rejected");
     assert!(
         matches!(error, TypeError::Source(_)),
         "expected semantic source refusal, not resource exhaustion or an internal failure: {error:?}"
@@ -253,7 +283,7 @@ fn checked_owner_lifecycle_boundary_failure_cannot_claim_retention() {
 #[test]
 fn checked_owner_lifecycle_boundary_failure_retires_ordinary_state_access() {
     source_refusal_after_canonical(
-        "Foreign.BoundaryFailed(reason) => {\n                let ignored = Foreign.data_of<State<H, R>, Unit> state\n                Foreign.FinishedBoundary reason\n            }",
+        "Foreign.BoundaryFailed(reason) => {\n                let ignored : Unit = Foreign.data_of state\n                Foreign.FinishedBoundary reason\n            }",
     );
 }
 
@@ -286,4 +316,210 @@ fn checked_owner_lifecycle_default_profile_refuses_the_same_source() {
         }
     }
     panic!("default profile must refuse checked lifecycle source");
+}
+
+fn retained_void_teardown_source() -> String {
+    let consumed = "outcome otherwise { consumed 0 }";
+    assert_eq!(PRODUCER.matches(consumed).count(), 1);
+    PRODUCER.replace(consumed, "outcome otherwise { retained 0 }")
+}
+
+fn assert_retained_void_teardown_source(source: &str) {
+    let checked = check_graph(&graph(source, false))
+        .expect("genuine retained void teardown source must pass before retained-outcome controls");
+    assert_producer_originals(&checked);
+    let producer = checked
+        .iter()
+        .find(|module| module.source_resource_code().is_some())
+        .unwrap();
+    let free = producer
+        .registry()
+        .effects()
+        .iter()
+        .find(|effect| effect.id.module() == producer.module() && effect.spelling == "Free")
+        .unwrap();
+    let original = producer
+        .registry()
+        .native_symbol(crate::types::OperationId::new(free.id, 0))
+        .unwrap();
+    assert!(
+        matches!(
+            original.owner_role(),
+            Some(
+                crate::foreign::source_contract::PreparedOwnerCall::Teardown {
+                    consumes: false,
+                    ..
+                }
+            )
+        ),
+        "the actual prepared teardown outcome must be retained, not a source-only result relabel"
+    );
+}
+
+fn source_refusal_after_retained_canonical(arm: &str, replacement: &str) {
+    let canonical = retained_void_teardown_source();
+    assert_retained_void_teardown_source(&canonical);
+    assert_eq!(canonical.matches(arm).count(), 1);
+    let changed = canonical.replace(arm, replacement);
+    let error = check_graph(&graph(&changed, false))
+        .err()
+        .expect("changed retained teardown finish must be rejected");
+    assert!(
+        matches!(error, TypeError::Source(_)),
+        "expected semantic source refusal after canonical retained source, not setup/resource failure: {error:?}"
+    );
+}
+
+#[test]
+fn checked_owner_lifecycle_boundary_failure_cannot_claim_consumption() {
+    source_refusal_after_canonical(
+        "Foreign.BoundaryFailed(reason) => Foreign.FinishedConsumed Foreign.FinishOk",
+    );
+}
+
+#[test]
+fn checked_owner_lifecycle_retained_void_teardown_has_a_genuine_canonical_source() {
+    assert_retained_void_teardown_source(&retained_void_teardown_source());
+}
+
+#[test]
+fn checked_owner_lifecycle_retained_native_outcome_cannot_claim_consumption() {
+    source_refusal_after_retained_canonical(
+        "Foreign.CheckedReturned(Foreign.Retained(())) => Foreign.FinishedRetained(state, ())",
+        "Foreign.CheckedReturned(Foreign.Retained(())) => Foreign.FinishedConsumed Foreign.FinishOk",
+    );
+}
+
+#[test]
+fn checked_owner_lifecycle_boundary_failure_cannot_borrow_retained_native_outcome() {
+    source_refusal_after_retained_canonical(
+        "Foreign.BoundaryFailed(reason) => Foreign.FinishedBoundary reason",
+        "Foreign.BoundaryFailed(reason) => Foreign.FinishedRetained(state, ())",
+    );
+}
+
+#[test]
+fn checked_owner_lifecycle_constructed_boundary_record_cannot_replace_request_witness() {
+    source_refusal_after_canonical(
+        "Foreign.BoundaryFailed(reason) => {\n                let forged = Foreign.SessionLost (Foreign.BoundaryRecord(Foreign.NoNativeStatus, Foreign.NativeUnknown, false, Foreign.DiagnosticUnavailable Foreign.NotRequested))\n                Foreign.FinishedBoundary forged\n            }",
+    );
+}
+
+// Intended as a staged extension of the existing private lifecycle tests.
+// The fragment uses existing graph(source, false) and check_graph helpers.
+#[test]
+fn checked_owner_lifecycle_latest_completion_e_retains_only_the_outer_owner() {
+    let producer =
+        include_str!("../../tests/fixtures/checked-owner-lifecycle/latest_payload_producer.ash");
+    let within =
+        include_str!("../../tests/fixtures/checked-owner-lifecycle/latest_payload_within.ash");
+    let escape =
+        include_str!("../../tests/fixtures/checked-owner-lifecycle/latest_payload_escape.ash");
+    for retained in [false, true] {
+        let producer = if retained {
+            assert_eq!(
+                producer.matches("outcome otherwise { consumed 0 }").count(),
+                1
+            );
+            producer.replace(
+                "outcome otherwise { consumed 0 }",
+                "outcome otherwise { retained 0 }",
+            )
+        } else {
+            producer.to_owned()
+        };
+        let local = format!("{producer}{within}");
+        check_graph(&graph(&local, false)).expect(
+            "replacement E is usable while its distinct outer ordinary owner C remains live",
+        );
+        // The escaping control is legal when the stored replacement callback
+        // is independent, distinguishing the latest E edge from blanket refusal.
+        let independent =
+            format!("{producer}{escape}").replace("let retained = outer", "let retained = 1");
+        check_graph(&graph(&independent, false))
+            .expect("an independent latest callback permits the report to leave C");
+        let changed = format!("{producer}{escape}");
+        let error = check_graph(&graph(&changed, false))
+            .expect_err("the latest callback must not escape C through CheckedCompletion E");
+        assert!(
+            matches!(error, TypeError::Source(ref diagnostic) if diagnostic.reason == TypeReason::ResourceEscape),
+            "expected actual outer-owner capture refusal after both source positives: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn checked_owner_lifecycle_boundary_data_can_be_inspected_while_forwarding_original() {
+    check_graph(&graph(PRODUCER, false)).unwrap();
+    let arm = "Foreign.BoundaryFailed(reason) => Foreign.FinishedBoundary reason";
+    let changed = PRODUCER.replace(arm, "Foreign.BoundaryFailed(reason) => {\n                let ignored = match reason {\n                    Foreign.SessionLost(_) => ()\n                    Foreign.DependencyBlocked(_) => ()\n                    Foreign.Quarantined(_) => ()\n                }\n                Foreign.FinishedBoundary reason\n            }");
+    check_graph(&graph(&changed, false)).expect("independent boundary data can be inspected while forwarding the original whole witnessed reason");
+}
+
+#[test]
+fn checked_owner_lifecycle_required_trace_survives_resource_and_host_boundaries() {
+    let source = PRODUCER.replace(
+        "pub run : Unit -> Foreign.CheckedScope<Int, Unit, Unit>\nrun () = handle (foreign host H {",
+        "pub run : Unit -> Foreign.CheckedScope<Int, Unit, Unit> ! {Trace}\nrun () = foreign host H {",
+    ).replace("}) with Trace {\n    note ignored => resume ()\n}", "}");
+    assert_ne!(source, PRODUCER);
+    let checked = check_graph(&graph(&source, false))
+        .expect("required source Trace remains an outward effect after resource/host subtraction");
+    let producer = checked
+        .iter()
+        .find(|module| module.source_resource_code().is_some())
+        .unwrap();
+    let trace = producer
+        .effects()
+        .iter()
+        .find(|effect| effect.spelling == "Trace")
+        .unwrap()
+        .id;
+    let template = producer
+        .source_resource_code()
+        .unwrap()
+        .resource(0)
+        .unwrap();
+    let row = template
+        .lifecycle_row(false, &mut TypeWorkBudget::default())
+        .unwrap();
+    assert!(
+        row.known()
+            .iter()
+            .any(|instance| instance.effect() == trace)
+    );
+    assert!(
+        row.known()
+            .iter()
+            .any(|instance| instance.effect().declaration()
+                == crate::module::FOREIGN_NATIVE_HOST_LOCAL
+                && instance.effect().module().is_builtin_foreign())
+    );
+    let run = producer
+        .schemes()
+        .iter()
+        .find(|global| global.spelling == "run")
+        .unwrap();
+    let outward = run
+        .scheme
+        .value_type
+        .function_view()
+        .unwrap()
+        .effects()
+        .unwrap();
+    assert_eq!(outward.known().len(), 1);
+    assert_eq!(outward.known()[0].effect(), trace);
+}
+
+#[test]
+fn checked_owner_lifecycle_required_postrequest_source_continuation_cannot_be_discarded() {
+    check_graph(&graph(PRODUCER, false)).unwrap();
+    let source = PRODUCER.replace("note ignored => resume ()", "note ignored => discard");
+    let error = check_graph(&graph(&source, false))
+        .err()
+        .expect("required post-finish source continuation cannot be abandoned");
+    assert!(
+        matches!(error, TypeError::Source(_)),
+        "semantic refusal required: {error:?}"
+    );
 }

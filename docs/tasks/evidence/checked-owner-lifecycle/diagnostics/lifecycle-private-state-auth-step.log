@@ -1,0 +1,1623 @@
+warning: Missing auto-load script at offset 0 in section .debug_gdb_scripts
+of file /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168.
+Use `info auto-load python-scripts [REGEXP]' to list them.
+Breakpoint 1 at 0x87f303a: file src/resolved.rs, line 10882.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/x86_64-linux-gnu/libthread_db.so.1".
+
+running 1 test
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 1 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 2 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 3 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 4 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 5 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 6 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 7 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 8 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 9 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle definition Resolved { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, local: 10 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle finish module bodies entered
+checked lifecycle module result complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle capture finite values complete
+checked lifecycle capture typed data complete
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle module bodies complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle hidden interface collection complete
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+checked lifecycle exports frozen
+checked lifecycle source finalization entered
+checked lifecycle source finalization complete
+checked lifecycle original-source proof: Ok(())
+checked lifecycle builtin bytes: Ok(())
+checked lifecycle scalar originals: Ok(())
+checked lifecycle category counts provider=0 source=1 foreign=1 native=2 preflight=10 kinds=3
+checked lifecycle category provider contracts complete
+checked lifecycle category source resource kinds complete
+checked lifecycle category source foreign kinds complete
+checked lifecycle category inventories family=3 names=3 kinds=3
+checked lifecycle provider categories: Ok(())
+checked lifecycle foreign nominal NominalTypeId { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, owner: Module, declaration: 2 }: Ok(())
+checked lifecycle registry pre-variable inventory complete
+checked lifecycle registry variables complete
+checked lifecycle registry nominal formals complete
+checked lifecycle registry proof: Ok(())
+checked lifecycle effect registry proof: Ok(())
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle original structure answer=true: Ok(())
+checked lifecycle header complete
+checked lifecycle association complete
+checked lifecycle entries complete
+checked lifecycle flow Acquire results=4
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=false consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, owner: Module, declaration: 0 }, constructor: 1 }, Some(0))
+checked lifecycle result Acquire acquired=true consumed=false request=None value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, owner: Module, declaration: 0 }, constructor: 0 }, Some(18))
+checked lifecycle flow Finish results=2
+checked lifecycle result Finish acquired=false consumed=false request=Some(NodeId { arena: ArenaId(2), index: 2 }) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, owner: Module, declaration: 14 }, constructor: 2 }, Some(4))
+checked lifecycle result Finish acquired=false consumed=true request=Some(NodeId { arena: ArenaId(2), index: 2 }) value=Constructor(ConstructorId { owner: NominalTypeId { module: ModuleId { namespace: BuiltinForeign, graph: 1, value: 1 }, owner: Module, declaration: 14 }, constructor: 0 }, Some(11))
+checked lifecycle all admitted template records complete
+checked lifecycle source templates compile complete
+checked lifecycle source code retention complete
+checked lifecycle instance schedule entered
+checked lifecycle instance template selected
+checked lifecycle instance actuals complete
+checked lifecycle instance finish entered
+checked lifecycle instance rows complete
+checked lifecycle instance copies prepared
+checked lifecycle instance copies lowered
+checked lifecycle instance scope admitted
+checked lifecycle host finish entered
+checked lifecycle host interpretations=0
+checked lifecycle host finish complete
+checked lifecycle definition Resolved { module: ModuleId { namespace: Admitted, graph: 1, value: 0 }, local: 0 } synthesized=Ok(()) close=Ok(()) source_close=Ok(()) leave=Ok(())
+checked lifecycle finish module bodies entered
+checked lifecycle module result complete
+checked lifecycle module evidence and zonk complete
+checked lifecycle completed capture cleanup start
+checked lifecycle completed capture check start
+checked lifecycle capture finite values complete
+checked lifecycle capture typed data complete
+checked lifecycle synthetic host control 113 for <effect:builtin.foreign:1:1:0><<type-variable:1:0:14>>
+checked lifecycle synthetic host control 117 for <effect:builtin.foreign:1:1:0><<type-variable:1:0:14>>
+checked lifecycle capture control compilation complete
+checked lifecycle capture graph complete
+checked lifecycle strict query roots complete
+checked lifecycle strict analysis constructed
+checked lifecycle strict discovery complete
+checked lifecycle strict payload complete
+checked lifecycle strict cell retention complete
+checked lifecycle module bodies complete
+checked lifecycle body evidence audit complete
+checked lifecycle provider group complete
+checked lifecycle hidden interface collection complete
+checked lifecycle hidden nominal collection start
+checked lifecycle summary collection complete
+[Switching to Thread 0x7ffff7bff6c0 (LWP 1412033)]
+
+Thread 2 "elaborate::chec" hit Breakpoint 1, ash::resolved::ExportSummary::authenticate_with_provider_commit (self=0x7ffff7be3b20, committed=false, type_work=0x7ffff7bf1250, constraint_work=0x7ffff7bfa630) at src/resolved.rs:10882
+10882	        let mut authenticated_native_facts = crate::foreign::NativeAuthenticationMemo::default();
+DIAGNOSTIC ENTRY ash::resolved::ExportSummary::authenticate_with_provider_commit
+$1 = ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::Admitted, graph: 1, value: 0}
+
+10883	        self.authenticate_foreign_facts(
+10883	        self.authenticate_foreign_facts(
+10890	            .charge(self.provider_groups.len())
+10891	            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+10889	        type_work
+10892	        for (module, contracts) in &self.provider_groups {
+10902	        if self.resource_types.len() != self.resource_type_order.len() {
+10906	            .charge(self.resource_type_order.len())
+10906	            .charge(self.resource_type_order.len())
+10907	            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+10905	        type_work
+10908	        let mut resource_spellings = HashSet::new();
+10910	            .try_reserve(self.resource_type_order.len())
+10910	            .try_reserve(self.resource_type_order.len())
+10911	            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+10909	        resource_spellings
+10912	        for spelling in &self.resource_type_order {
+10936	            .charge(self.source_resource_type_order.len())
+10937	            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+10935	        type_work
+10938	        if self.source_resource_types.len() != self.source_resource_type_order.len() {
+10941	        let mut source_spellings = std::collections::HashSet::new();
+10943	            .try_reserve(self.source_resource_type_order.len())
+10943	            .try_reserve(self.source_resource_type_order.len())
+10944	            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+10942	        source_spellings
+10945	        for spelling in &self.source_resource_type_order {
+10967	        self.authenticate_resource_facts()?;
+10968	        if self.terms.len() != self.term_order.len()
+10969	            || self.nominals.len() != self.nominal_order.len()
+10969	            || self.nominals.len() != self.nominal_order.len()
+10970	            || self.constructors.len() != self.constructor_order.len()
+10971	            || self.interface_names.len() != self.interface_name_order.len()
+10972	            || self.effect_names.len() != self.effect_name_order.len()
+10973	            || self.method_names.len() != self.method_name_order.len()
+10974	            || self.effects.len() != self.effect_positions.len()
+10981	            &self.hidden_constructors,
+10982	            &self.hidden_constructor_order,
+10980	        authenticate_identity_order(
+10986	            &self.hidden_nominals,
+10987	            &self.hidden_nominal_order,
+10985	        authenticate_identity_order(
+10993	            .len()
+10994	            .checked_add(self.method_name_order.len())
+10995	            .and_then(|count| count.checked_add(self.constructor_order.len()))
+10996	            .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+10991	        let expression_count = self
+10997	        let mut expression_spellings = HashSet::new();
+10999	            .charge(expression_count)
+11000	            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+10998	        constraint_work
+11002	            .try_reserve(expression_count)
+11003	            .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+11001	        expression_spellings
+11004	        if self.term_order.iter().any(|spelling| {
+11006	        }) || self.method_name_order.iter().any(|spelling| {
+11006	        }) || self.method_name_order.iter().any(|spelling| {
+11009	        }) || self.constructor_order.iter().any(|spelling| {
+11017	        let type_count = self
+11019	            .len()
+11020	            .checked_add(self.interface_name_order.len())
+11021	            .and_then(|count| count.checked_add(self.effect_name_order.len()))
+11022	            .and_then(|count| count.checked_add(self.source_resource_type_order.len()))
+11023	            .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+11017	        let type_count = self
+11024	        let mut type_spellings = HashSet::new();
+11026	            .charge(type_count)
+11027	            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+11025	        constraint_work
+11029	            .try_reserve(type_count)
+11030	            .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+11028	        type_spellings
+11031	        if self.nominal_order.iter().any(|spelling| {
+11033	        }) || self.interface_name_order.iter().any(|spelling| {
+11033	        }) || self.interface_name_order.iter().any(|spelling| {
+11036	        }) || self.effect_name_order.iter().any(|spelling| {
+11038	        }) || self.source_resource_type_order.iter().any(|spelling| {
+11048	            .charge(self.withheld.len())
+11049	            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+11047	        constraint_work
+11050	        let withheld_count = self
+11052	            .values()
+11053	            .try_fold(0usize, |count, withheld| count.checked_add(withheld.len()?))
+11054	            .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+11050	        let withheld_count = self
+11055	        let withheld_storage_work = self
+11057	            .len()
+11058	            .checked_mul(2)
+11059	            .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+11055	        let withheld_storage_work = self
+11061	            .charge(withheld_storage_work)
+11062	            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+11060	        constraint_work
+11063	        let mut seen_withheld = HashSet::new();
+11065	            .try_reserve(self.withheld_order.len())
+11065	            .try_reserve(self.withheld_order.len())
+11066	            .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+11064	        seen_withheld
+11068	            HashMap::<(NominalTypeId, WithheldExportKind), usize>::new();
+11070	            .try_reserve(self.withheld_order.len())
+11070	            .try_reserve(self.withheld_order.len())
+11071	            .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+11069	        withheld_constructor_counts
+11072	        if withheld_count != self.withheld_order.len() {
+11077	        for entry in &self.withheld_order {
+11077	        for entry in &self.withheld_order {
+11078	            let Some(withheld) = self
+11080	                .get(&entry.spelling)
+11081	                .and_then(|withheld| withheld.get_ordered(entry))
+11078	            let Some(withheld) = self
+11087	            let semantics_are_valid = match entry.namespace {
+11089	                    entry.owner.is_none()
+11089	                    entry.owner.is_none()
+11090	                        && entry.constructor_index.is_none()
+11091	                        && withheld.owner.is_none()
+11092	                        && withheld.kind == WithheldExportKind::Private
+11092	                        && withheld.kind == WithheldExportKind::Private
+11101	                entry.spelling.as_str(),
+11102	                entry.namespace,
+11103	                entry.owner,
+11104	                entry.constructor_index,
+11100	            if !seen_withheld.insert((
+11105	            )) || !semantics_are_valid
+11111	            if entry.namespace == WithheldNamespace::Constructor {
+11078	            let Some(withheld) = self
+11080	                .get(&entry.spelling)
+11081	                .and_then(|withheld| withheld.get_ordered(entry))
+11078	            let Some(withheld) = self
+11087	            let semantics_are_valid = match entry.namespace {
+11089	                    entry.owner.is_none()
+11089	                    entry.owner.is_none()
+11090	                        && entry.constructor_index.is_none()
+11091	                        && withheld.owner.is_none()
+11092	                        && withheld.kind == WithheldExportKind::Private
+11092	                        && withheld.kind == WithheldExportKind::Private
+11101	                entry.spelling.as_str(),
+11102	                entry.namespace,
+11103	                entry.owner,
+11104	                entry.constructor_index,
+11100	            if !seen_withheld.insert((
+11105	            )) || !semantics_are_valid
+11111	            if entry.namespace == WithheldNamespace::Constructor {
+11078	            let Some(withheld) = self
+11080	                .get(&entry.spelling)
+11081	                .and_then(|withheld| withheld.get_ordered(entry))
+11078	            let Some(withheld) = self
+11087	            let semantics_are_valid = match entry.namespace {
+11089	                    entry.owner.is_none()
+11089	                    entry.owner.is_none()
+11090	                        && entry.constructor_index.is_none()
+11091	                        && withheld.owner.is_none()
+11092	                        && withheld.kind == WithheldExportKind::Private
+11092	                        && withheld.kind == WithheldExportKind::Private
+11101	                entry.spelling.as_str(),
+11102	                entry.namespace,
+11103	                entry.owner,
+11104	                entry.constructor_index,
+11100	            if !seen_withheld.insert((
+11105	            )) || !semantics_are_valid
+11111	            if entry.namespace == WithheldNamespace::Constructor {
+11078	            let Some(withheld) = self
+11080	                .get(&entry.spelling)
+11081	                .and_then(|withheld| withheld.get_ordered(entry))
+11078	            let Some(withheld) = self
+11087	            let semantics_are_valid = match entry.namespace {
+11095	                    entry.owner.is_some()
+11095	                    entry.owner.is_some()
+11096	                        && entry.constructor_index.is_some()
+11097	                        && withheld.owner == entry.owner
+11101	                entry.spelling.as_str(),
+11102	                entry.namespace,
+11103	                entry.owner,
+11104	                entry.constructor_index,
+11100	            if !seen_withheld.insert((
+11105	            )) || !semantics_are_valid
+11111	            if entry.namespace == WithheldNamespace::Constructor {
+11112	                let owner = entry.owner.ok_or(ResolvedBuildFailure::InvalidState)?;
+11114	                    .entry((owner, withheld.kind))
+11115	                    .or_default();
+11113	                let count = withheld_constructor_counts
+11116	                *count = count
+11117	                    .checked_add(1)
+11118	                    .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+11116	                *count = count
+11111	            if entry.namespace == WithheldNamespace::Constructor {
+11078	            let Some(withheld) = self
+11080	                .get(&entry.spelling)
+11081	                .and_then(|withheld| withheld.get_ordered(entry))
+11078	            let Some(withheld) = self
+11087	            let semantics_are_valid = match entry.namespace {
+11095	                    entry.owner.is_some()
+11095	                    entry.owner.is_some()
+11096	                        && entry.constructor_index.is_some()
+11097	                        && withheld.owner == entry.owner
+11101	                entry.spelling.as_str(),
+11102	                entry.namespace,
+11103	                entry.owner,
+11104	                entry.constructor_index,
+11100	            if !seen_withheld.insert((
+11105	            )) || !semantics_are_valid
+11111	            if entry.namespace == WithheldNamespace::Constructor {
+11112	                let owner = entry.owner.ok_or(ResolvedBuildFailure::InvalidState)?;
+11114	                    .entry((owner, withheld.kind))
+11115	                    .or_default();
+11113	                let count = withheld_constructor_counts
+11116	                *count = count
+11117	                    .checked_add(1)
+11118	                    .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+11116	                *count = count
+11111	            if entry.namespace == WithheldNamespace::Constructor {
+11078	            let Some(withheld) = self
+11080	                .get(&entry.spelling)
+11081	                .and_then(|withheld| withheld.get_ordered(entry))
+11078	            let Some(withheld) = self
+11087	            let semantics_are_valid = match entry.namespace {
+11089	                    entry.owner.is_none()
+11089	                    entry.owner.is_none()
+11090	                        && entry.constructor_index.is_none()
+11091	                        && withheld.owner.is_none()
+11092	                        && withheld.kind == WithheldExportKind::Private
+11092	                        && withheld.kind == WithheldExportKind::Private
+11101	                entry.spelling.as_str(),
+11102	                entry.namespace,
+11103	                entry.owner,
+11104	                entry.constructor_index,
+11100	            if !seen_withheld.insert((
+11105	            )) || !semantics_are_valid
+11111	            if entry.namespace == WithheldNamespace::Constructor {
+11078	            let Some(withheld) = self
+11080	                .get(&entry.spelling)
+11081	                .and_then(|withheld| withheld.get_ordered(entry))
+11078	            let Some(withheld) = self
+11087	            let semantics_are_valid = match entry.namespace {
+11089	                    entry.owner.is_none()
+11089	                    entry.owner.is_none()
+11090	                        && entry.constructor_index.is_none()
+11091	                        && withheld.owner.is_none()
+11092	                        && withheld.kind == WithheldExportKind::Private
+11092	                        && withheld.kind == WithheldExportKind::Private
+11101	                entry.spelling.as_str(),
+11102	                entry.namespace,
+11103	                entry.owner,
+11104	                entry.constructor_index,
+11100	            if !seen_withheld.insert((
+11105	            )) || !semantics_are_valid
+11111	            if entry.namespace == WithheldNamespace::Constructor {
+11078	            let Some(withheld) = self
+11080	                .get(&entry.spelling)
+11081	                .and_then(|withheld| withheld.get_ordered(entry))
+11078	            let Some(withheld) = self
+11087	            let semantics_are_valid = match entry.namespace {
+11089	                    entry.owner.is_none()
+11089	                    entry.owner.is_none()
+11090	                        && entry.constructor_index.is_none()
+11091	                        && withheld.owner.is_none()
+11092	                        && withheld.kind == WithheldExportKind::Private
+11092	                        && withheld.kind == WithheldExportKind::Private
+11101	                entry.spelling.as_str(),
+11102	                entry.namespace,
+11103	                entry.owner,
+11104	                entry.constructor_index,
+11100	            if !seen_withheld.insert((
+11105	            )) || !semantics_are_valid
+11111	            if entry.namespace == WithheldNamespace::Constructor {
+11078	            let Some(withheld) = self
+11080	                .get(&entry.spelling)
+11081	                .and_then(|withheld| withheld.get_ordered(entry))
+11078	            let Some(withheld) = self
+11087	            let semantics_are_valid = match entry.namespace {
+11089	                    entry.owner.is_none()
+11089	                    entry.owner.is_none()
+11090	                        && entry.constructor_index.is_none()
+11091	                        && withheld.owner.is_none()
+11092	                        && withheld.kind == WithheldExportKind::Private
+11092	                        && withheld.kind == WithheldExportKind::Private
+11101	                entry.spelling.as_str(),
+11102	                entry.namespace,
+11103	                entry.owner,
+11104	                entry.constructor_index,
+11100	            if !seen_withheld.insert((
+11105	            )) || !semantics_are_valid
+11111	            if entry.namespace == WithheldNamespace::Constructor {
+11078	            let Some(withheld) = self
+11080	                .get(&entry.spelling)
+11081	                .and_then(|withheld| withheld.get_ordered(entry))
+11078	            let Some(withheld) = self
+11087	            let semantics_are_valid = match entry.namespace {
+11089	                    entry.owner.is_none()
+11089	                    entry.owner.is_none()
+11090	                        && entry.constructor_index.is_none()
+11091	                        && withheld.owner.is_none()
+11092	                        && withheld.kind == WithheldExportKind::Private
+11092	                        && withheld.kind == WithheldExportKind::Private
+11101	                entry.spelling.as_str(),
+11102	                entry.namespace,
+11103	                entry.owner,
+11104	                entry.constructor_index,
+11100	            if !seen_withheld.insert((
+11105	            )) || !semantics_are_valid
+11111	            if entry.namespace == WithheldNamespace::Constructor {
+11078	            let Some(withheld) = self
+11080	                .get(&entry.spelling)
+11081	                .and_then(|withheld| withheld.get_ordered(entry))
+11078	            let Some(withheld) = self
+11087	            let semantics_are_valid = match entry.namespace {
+11089	                    entry.owner.is_none()
+11089	                    entry.owner.is_none()
+11090	                        && entry.constructor_index.is_none()
+11091	                        && withheld.owner.is_none()
+11092	                        && withheld.kind == WithheldExportKind::Private
+11092	                        && withheld.kind == WithheldExportKind::Private
+11101	                entry.spelling.as_str(),
+11102	                entry.namespace,
+11103	                entry.owner,
+11104	                entry.constructor_index,
+11100	            if !seen_withheld.insert((
+11105	            )) || !semantics_are_valid
+11111	            if entry.namespace == WithheldNamespace::Constructor {
+11122	        let mut environments = KindEnvironments::new();
+11123	        if let Some(effect) = self.effects.first() {
+11123	        if let Some(effect) = self.effects.first() {
+11125	                .install_retained_effects(&self.effects, type_work, effect.span)
+11125	                .install_retained_effects(&self.effects, type_work, effect.span)
+11126	                .map_err(map_summary_kind_failure)?;
+11124	            environments
+11128	        for contracts in self.provider_groups.values() {
+11128	        for contracts in self.provider_groups.values() {
+11165	            .charge(self.source_resource_facts.len())
+11166	            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+11164	        type_work
+11167	        for fact in self.source_resource_facts.values() {
+11168	            if fact
+11168	            if fact
+11170	                .iter()
+11168	            if fact
+11171	                .any(|parameter| parameter.kind == Kind::EffectRow)
+11168	            if fact
+11185	                        fact.family,
+11185	                        fact.family,
+11186	                        &fact.parameters,
+11187	                        fact.origin.primary_span(),
+11184	                    .insert_nominal(
+11190	                    .map_err(map_summary_kind_failure)?;
+11183	                environments
+11193	        let mut named_effects = HashSet::new();
+11196	                self.effect_name_order
+11197	                    .len()
+11198	                    .saturating_add(self.effects.len()),
+ash::resolved::ExportSummary::authenticate_with_provider_commit (self=0x7ffff7be3b20, committed=false, type_work=0x7ffff7bf1250, constraint_work=0x7ffff7bfa630) at src/resolved.rs:11195
+11195	            .charge(
+11200	            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+11194	        constraint_work
+11202	            .try_reserve(self.effect_name_order.len())
+11203	            .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+11201	        named_effects
+11204	        for spelling in &self.effect_name_order {
+11216	        let mut native_effect_count = 0;
+11218	            .charge(self.source_owners.len())
+11219	            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+11217	        type_work
+11220	        for (nominal, owner) in &self.source_owners {
+11221	            if *nominal != owner.nominal() {
+11221	            if *nominal != owner.nominal() {
+11224	            self.authenticate_source_owner_nominal(owner, type_work)?;
+11224	            self.authenticate_source_owner_nominal(owner, type_work)?;
+11226	        let source_owners = &self.source_owners;
+11227	        for (position, effect) in self.effects.iter().enumerate() {
+11228	            if let Some(api) = ResourceApi::for_module(effect.id.module())
+11228	            if let Some(api) = ResourceApi::for_module(effect.id.module())
+11235	            if self.effect_positions.get(&effect.id) != Some(&position)
+11235	            if self.effect_positions.get(&effect.id) != Some(&position)
+11236	                || (named_effects.contains(&effect.id) && !effect.public)
+11236	                || (named_effects.contains(&effect.id) && !effect.public)
+11237	                || if effect.id.module().is_builtin_foreign() {
+11237	                || if effect.id.module().is_builtin_foreign() {
+11273	                    effect.operations.is_empty()
+11273	                    effect.operations.is_empty()
+11237	                || if effect.id.module().is_builtin_foreign() {
+11280	            if let Some(symbol) = &effect.native_contract {
+11281	                self.authenticate_source_native_effect(effect, symbol, type_work)?;
+11281	                self.authenticate_source_native_effect(effect, symbol, type_work)?;
+11282	                if let Some(owner) = symbol.owner() {
+11284	                        .get(&owner.nominal())
+11284	                        .get(&owner.nominal())
+11285	                        .ok_or(ResolvedBuildFailure::InvalidState)?;
+11283	                    let original = source_owners
+11286	                    if !matches!(original, crate::foreign::source_access::CheckedForeignNominal::Owner(original) if Arc::ptr_eq(original, owner))
+11291	                native_effect_count += 1;
+11291	                native_effect_count += 1;
+11280	            if let Some(symbol) = &effect.native_contract {
+11294	                &effect.parameters,
+11295	                SummaryBinderOwner::Effect(effect.id),
+11293	            register_summary_parameters(
+11293	            register_summary_parameters(
+11299	            for (operation_index, operation) in effect.operations.iter().enumerate() {
+11300	                if operation.id.owner() != effect.id
+11301	                    || usize::try_from(operation.id.operation()) != Ok(operation_index)
+11301	                    || usize::try_from(operation.id.operation()) != Ok(operation_index)
+11302	                    || operation
+11305	                        .function_view()
+11306	                        .is_none_or(|view| view.effects().is_some())
+11302	                    || operation
+11313	                    &operation.annotation.ty,
+11314	                    effect.parameters.iter().map(|parameter| parameter.id),
+11312	                authenticate_summary_type_variables(
+11228	            if let Some(api) = ResourceApi::for_module(effect.id.module())
+11228	            if let Some(api) = ResourceApi::for_module(effect.id.module())
+11235	            if self.effect_positions.get(&effect.id) != Some(&position)
+11235	            if self.effect_positions.get(&effect.id) != Some(&position)
+11236	                || (named_effects.contains(&effect.id) && !effect.public)
+11236	                || (named_effects.contains(&effect.id) && !effect.public)
+11237	                || if effect.id.module().is_builtin_foreign() {
+11237	                || if effect.id.module().is_builtin_foreign() {
+11273	                    effect.operations.is_empty()
+11273	                    effect.operations.is_empty()
+11237	                || if effect.id.module().is_builtin_foreign() {
+11280	            if let Some(symbol) = &effect.native_contract {
+11281	                self.authenticate_source_native_effect(effect, symbol, type_work)?;
+11281	                self.authenticate_source_native_effect(effect, symbol, type_work)?;
+11282	                if let Some(owner) = symbol.owner() {
+11284	                        .get(&owner.nominal())
+11284	                        .get(&owner.nominal())
+11285	                        .ok_or(ResolvedBuildFailure::InvalidState)?;
+11283	                    let original = source_owners
+11286	                    if !matches!(original, crate::foreign::source_access::CheckedForeignNominal::Owner(original) if Arc::ptr_eq(original, owner))
+11291	                native_effect_count += 1;
+11291	                native_effect_count += 1;
+11280	            if let Some(symbol) = &effect.native_contract {
+11294	                &effect.parameters,
+11295	                SummaryBinderOwner::Effect(effect.id),
+11293	            register_summary_parameters(
+11293	            register_summary_parameters(
+11299	            for (operation_index, operation) in effect.operations.iter().enumerate() {
+11300	                if operation.id.owner() != effect.id
+11301	                    || usize::try_from(operation.id.operation()) != Ok(operation_index)
+11301	                    || usize::try_from(operation.id.operation()) != Ok(operation_index)
+11302	                    || operation
+11305	                        .function_view()
+11306	                        .is_none_or(|view| view.effects().is_some())
+11302	                    || operation
+11313	                    &operation.annotation.ty,
+11314	                    effect.parameters.iter().map(|parameter| parameter.id),
+11312	                authenticate_summary_type_variables(
+11228	            if let Some(api) = ResourceApi::for_module(effect.id.module())
+11228	            if let Some(api) = ResourceApi::for_module(effect.id.module())
+11235	            if self.effect_positions.get(&effect.id) != Some(&position)
+11235	            if self.effect_positions.get(&effect.id) != Some(&position)
+11236	                || (named_effects.contains(&effect.id) && !effect.public)
+11236	                || (named_effects.contains(&effect.id) && !effect.public)
+11237	                || if effect.id.module().is_builtin_foreign() {
+11237	                || if effect.id.module().is_builtin_foreign() {
+11273	                    effect.operations.is_empty()
+11273	                    effect.operations.is_empty()
+11237	                || if effect.id.module().is_builtin_foreign() {
+11280	            if let Some(symbol) = &effect.native_contract {
+11294	                &effect.parameters,
+11295	                SummaryBinderOwner::Effect(effect.id),
+11293	            register_summary_parameters(
+11293	            register_summary_parameters(
+11299	            for (operation_index, operation) in effect.operations.iter().enumerate() {
+11300	                if operation.id.owner() != effect.id
+11301	                    || usize::try_from(operation.id.operation()) != Ok(operation_index)
+11301	                    || usize::try_from(operation.id.operation()) != Ok(operation_index)
+11302	                    || operation
+11305	                        .function_view()
+11306	                        .is_none_or(|view| view.effects().is_some())
+11302	                    || operation
+11313	                    &operation.annotation.ty,
+11314	                    effect.parameters.iter().map(|parameter| parameter.id),
+11312	                authenticate_summary_type_variables(
+11228	            if let Some(api) = ResourceApi::for_module(effect.id.module())
+11228	            if let Some(api) = ResourceApi::for_module(effect.id.module())
+11235	            if self.effect_positions.get(&effect.id) != Some(&position)
+11235	            if self.effect_positions.get(&effect.id) != Some(&position)
+11236	                || (named_effects.contains(&effect.id) && !effect.public)
+11236	                || (named_effects.contains(&effect.id) && !effect.public)
+11237	                || if effect.id.module().is_builtin_foreign() {
+11237	                || if effect.id.module().is_builtin_foreign() {
+11273	                    effect.operations.is_empty()
+11273	                    effect.operations.is_empty()
+11237	                || if effect.id.module().is_builtin_foreign() {
+11280	            if let Some(symbol) = &effect.native_contract {
+11294	                &effect.parameters,
+11295	                SummaryBinderOwner::Effect(effect.id),
+11293	            register_summary_parameters(
+11293	            register_summary_parameters(
+11299	            for (operation_index, operation) in effect.operations.iter().enumerate() {
+11300	                if operation.id.owner() != effect.id
+11301	                    || usize::try_from(operation.id.operation()) != Ok(operation_index)
+11301	                    || usize::try_from(operation.id.operation()) != Ok(operation_index)
+11302	                    || operation
+11305	                        .function_view()
+11306	                        .is_none_or(|view| view.effects().is_some())
+11302	                    || operation
+11313	                    &operation.annotation.ty,
+11314	                    effect.parameters.iter().map(|parameter| parameter.id),
+11312	                authenticate_summary_type_variables(
+11228	            if let Some(api) = ResourceApi::for_module(effect.id.module())
+11228	            if let Some(api) = ResourceApi::for_module(effect.id.module())
+11235	            if self.effect_positions.get(&effect.id) != Some(&position)
+11235	            if self.effect_positions.get(&effect.id) != Some(&position)
+11236	                || (named_effects.contains(&effect.id) && !effect.public)
+11236	                || (named_effects.contains(&effect.id) && !effect.public)
+11237	                || if effect.id.module().is_builtin_foreign() {
+11237	                || if effect.id.module().is_builtin_foreign() {
+11239	                        .charge(self.defining_sources.len())
+11239	                        .charge(self.defining_sources.len())
+11240	                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+11238	                    type_work
+11241	                    let source = self
+11243	                        .iter()
+11241	                    let source = self
+11244	                        .find(|(module, _)| *module == effect.id.module())
+11245	                        .ok_or(ResolvedBuildFailure::InvalidState)?;
+11241	                    let source = self
+11247	                        .charge(source.1.text().len())
+11248	                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+11246	                    type_work
+11249	                    source.1.text() != crate::module::foreign_builtin_source_text()
+11252	                            source
+11257	                                        u32::try_from(source.1.text().len())
+11258	                                            .map_err(|_| ResolvedBuildFailure::InvalidState)?,
+11257	                                        u32::try_from(source.1.text().len())
+11255	                                    crate::source::ByteRange::new(
+11260	                                    .map_err(|_| ResolvedBuildFailure::InvalidState)?,
+11255	                                    crate::source::ByteRange::new(
+11254	                                .span(
+11262	                                .map_err(|_| ResolvedBuildFailure::InvalidState)?,
+11252	                            source
+11250	                        || !crate::foreign::checked_builtins::is_canonical_native_host_declaration(
+11265	                        .map_err(|failure| {
+11250	                        || !crate::foreign::checked_builtins::is_canonical_native_host_declaration(
+11249	                    source.1.text() != crate::module::foreign_builtin_source_text()
+11237	                || if effect.id.module().is_builtin_foreign() {
+11280	            if let Some(symbol) = &effect.native_contract {
+11294	                &effect.parameters,
+11295	                SummaryBinderOwner::Effect(effect.id),
+11293	            register_summary_parameters(
+11293	            register_summary_parameters(
+11299	            for (operation_index, operation) in effect.operations.iter().enumerate() {
+11322	        if native_effect_count != self.native_symbols.len() {
+11325	        let mut canonical_nominals = HashMap::<
+11339	        let nominal_carrier_count = self
+11341	            .len()
+11342	            .checked_add(self.hidden_nominals.len())
+11343	            .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+11339	        let nominal_carrier_count = self
+11345	            .charge(nominal_carrier_count)
+11346	            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+11344	        constraint_work
+11348	            .try_reserve(nominal_carrier_count)
+11349	            .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+11347	        canonical_nominals
+11351	            .nominals()
+11352	            .map(|(_, nominal)| nominal.constructors.len())
+11354	                self.hidden_nominals()
+11355	                    .map(|nominal| nominal.constructors.len()),
+11353	            .chain(
+11357	            .try_fold(0usize, |work, family_len| work.checked_add(family_len))
+11358	            .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+11350	        let family_ordinal_work = self
+11360	            .charge(family_ordinal_work)
+11361	            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+11359	        constraint_work
+11363	        for (_, nominal) in self.nominals() {
+11523	        for nominal in self.hidden_nominals() {
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11531	            if nominal.id.is_lexical()
+11531	            if nominal.id.is_lexical()
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11534	                || nominal.parameter_count != nominal.parameters.len()
+11535	                || nominal.constructor_count == 0 && !source_owners.contains_key(&nominal.id)
+11535	                || nominal.constructor_count == 0 && !source_owners.contains_key(&nominal.id)
+11537	                    nominal.declaration_kind,
+11536	                || matches!(
+11539	                ) && nominal.representation.is_some()
+11541	                    nominal.declaration_kind,
+11540	                || matches!(
+11543	                ) && nominal.representation_provenance.is_some()
+11545	                    nominal.declaration_kind,
+11544	                || matches!(
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11551	                || match nominal.access {
+11556	                        !nominal.constructors.is_empty()
+11556	                        !nominal.constructors.is_empty()
+11551	                || match nominal.access {
+11559	                || (nominal.id.module() == self.module
+11560	                    && (nominal.access != ImportedTypeAccess::Hidden
+11561	                        || !nominal.constructors.is_empty()
+11562	                        || !nominal.display_is_private))
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11578	                &nominal.parameters,
+11579	                SummaryBinderOwner::Nominal(nominal.id),
+11577	            register_summary_parameters(
+11583	            match source_owners.get(&nominal.id) {
+11584	                Some(crate::foreign::source_access::CheckedForeignNominal::Owner(owner)) => {
+11586	                        owner,
+11587	                        &nominal.parameters,
+11588	                        nominal.origin.primary_span(),
+11585	                    environments.insert_source_owner_nominal(
+11599	            .map_err(map_summary_kind_failure)?;
+11583	            match source_owners.get(&nominal.id) {
+11601	                nominal.representation.as_ref(),
+11602	                nominal.representation_provenance.as_ref(),
+11600	            if let (Some(representation), Some(provenance)) = (
+11621	                nominal.id,
+11623	                    &nominal.parameters,
+11624	                    nominal.declaration_kind,
+11625	                    nominal.constructor_count,
+11626	                    &nominal.constructors,
+11627	                    nominal.access,
+11628	                    &nominal.origin,
+11629	                    nominal.representation.as_ref(),
+11630	                    nominal.representation_provenance.as_ref(),
+11622	                (
+11620	            canonical_nominals.insert(
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11531	            if nominal.id.is_lexical()
+11531	            if nominal.id.is_lexical()
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11534	                || nominal.parameter_count != nominal.parameters.len()
+11535	                || nominal.constructor_count == 0 && !source_owners.contains_key(&nominal.id)
+11537	                    nominal.declaration_kind,
+11536	                || matches!(
+11539	                ) && nominal.representation.is_some()
+11541	                    nominal.declaration_kind,
+11540	                || matches!(
+11543	                ) && nominal.representation_provenance.is_some()
+11545	                    nominal.declaration_kind,
+11544	                || matches!(
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11551	                || match nominal.access {
+11556	                        !nominal.constructors.is_empty()
+11556	                        !nominal.constructors.is_empty()
+11551	                || match nominal.access {
+11559	                || (nominal.id.module() == self.module
+11560	                    && (nominal.access != ImportedTypeAccess::Hidden
+11561	                        || !nominal.constructors.is_empty()
+11562	                        || !nominal.display_is_private))
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11578	                &nominal.parameters,
+11579	                SummaryBinderOwner::Nominal(nominal.id),
+11577	            register_summary_parameters(
+11583	            match source_owners.get(&nominal.id) {
+11593	                    nominal.id,
+11594	                    &nominal.parameters,
+11595	                    nominal.origin.primary_span(),
+11592	                _ => environments.insert_nominal(
+11599	            .map_err(map_summary_kind_failure)?;
+11583	            match source_owners.get(&nominal.id) {
+11601	                nominal.representation.as_ref(),
+11602	                nominal.representation_provenance.as_ref(),
+11600	            if let (Some(representation), Some(provenance)) = (
+11621	                nominal.id,
+11623	                    &nominal.parameters,
+11624	                    nominal.declaration_kind,
+11625	                    nominal.constructor_count,
+11626	                    &nominal.constructors,
+11627	                    nominal.access,
+11628	                    &nominal.origin,
+11629	                    nominal.representation.as_ref(),
+11630	                    nominal.representation_provenance.as_ref(),
+11622	                (
+11620	            canonical_nominals.insert(
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11531	            if nominal.id.is_lexical()
+11531	            if nominal.id.is_lexical()
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11534	                || nominal.parameter_count != nominal.parameters.len()
+11535	                || nominal.constructor_count == 0 && !source_owners.contains_key(&nominal.id)
+11537	                    nominal.declaration_kind,
+11536	                || matches!(
+11539	                ) && nominal.representation.is_some()
+11541	                    nominal.declaration_kind,
+11540	                || matches!(
+11543	                ) && nominal.representation_provenance.is_some()
+11545	                    nominal.declaration_kind,
+11544	                || matches!(
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11551	                || match nominal.access {
+11556	                        !nominal.constructors.is_empty()
+11556	                        !nominal.constructors.is_empty()
+11551	                || match nominal.access {
+11559	                || (nominal.id.module() == self.module
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11578	                &nominal.parameters,
+11579	                SummaryBinderOwner::Nominal(nominal.id),
+11577	            register_summary_parameters(
+11583	            match source_owners.get(&nominal.id) {
+11593	                    nominal.id,
+11594	                    &nominal.parameters,
+11595	                    nominal.origin.primary_span(),
+11592	                _ => environments.insert_nominal(
+11599	            .map_err(map_summary_kind_failure)?;
+11583	            match source_owners.get(&nominal.id) {
+11601	                nominal.representation.as_ref(),
+11602	                nominal.representation_provenance.as_ref(),
+11600	            if let (Some(representation), Some(provenance)) = (
+11621	                nominal.id,
+11623	                    &nominal.parameters,
+11624	                    nominal.declaration_kind,
+11625	                    nominal.constructor_count,
+11626	                    &nominal.constructors,
+11627	                    nominal.access,
+11628	                    &nominal.origin,
+11629	                    nominal.representation.as_ref(),
+11630	                    nominal.representation_provenance.as_ref(),
+11622	                (
+11620	            canonical_nominals.insert(
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11531	            if nominal.id.is_lexical()
+11531	            if nominal.id.is_lexical()
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11534	                || nominal.parameter_count != nominal.parameters.len()
+11535	                || nominal.constructor_count == 0 && !source_owners.contains_key(&nominal.id)
+11537	                    nominal.declaration_kind,
+11536	                || matches!(
+11539	                ) && nominal.representation.is_some()
+11541	                    nominal.declaration_kind,
+11540	                || matches!(
+11543	                ) && nominal.representation_provenance.is_some()
+11545	                    nominal.declaration_kind,
+11544	                || matches!(
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11551	                || match nominal.access {
+11556	                        !nominal.constructors.is_empty()
+11556	                        !nominal.constructors.is_empty()
+11551	                || match nominal.access {
+11559	                || (nominal.id.module() == self.module
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11578	                &nominal.parameters,
+11579	                SummaryBinderOwner::Nominal(nominal.id),
+11577	            register_summary_parameters(
+11583	            match source_owners.get(&nominal.id) {
+11593	                    nominal.id,
+11594	                    &nominal.parameters,
+11595	                    nominal.origin.primary_span(),
+11592	                _ => environments.insert_nominal(
+11599	            .map_err(map_summary_kind_failure)?;
+11583	            match source_owners.get(&nominal.id) {
+11601	                nominal.representation.as_ref(),
+11602	                nominal.representation_provenance.as_ref(),
+11600	            if let (Some(representation), Some(provenance)) = (
+11621	                nominal.id,
+11623	                    &nominal.parameters,
+11624	                    nominal.declaration_kind,
+11625	                    nominal.constructor_count,
+11626	                    &nominal.constructors,
+11627	                    nominal.access,
+11628	                    &nominal.origin,
+11629	                    nominal.representation.as_ref(),
+11630	                    nominal.representation_provenance.as_ref(),
+11622	                (
+11620	            canonical_nominals.insert(
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11531	            if nominal.id.is_lexical()
+11531	            if nominal.id.is_lexical()
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11534	                || nominal.parameter_count != nominal.parameters.len()
+11535	                || nominal.constructor_count == 0 && !source_owners.contains_key(&nominal.id)
+11537	                    nominal.declaration_kind,
+11536	                || matches!(
+11539	                ) && nominal.representation.is_some()
+11541	                    nominal.declaration_kind,
+11540	                || matches!(
+11543	                ) && nominal.representation_provenance.is_some()
+11545	                    nominal.declaration_kind,
+11544	                || matches!(
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11551	                || match nominal.access {
+11556	                        !nominal.constructors.is_empty()
+11556	                        !nominal.constructors.is_empty()
+11551	                || match nominal.access {
+11559	                || (nominal.id.module() == self.module
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11578	                &nominal.parameters,
+11579	                SummaryBinderOwner::Nominal(nominal.id),
+11577	            register_summary_parameters(
+11583	            match source_owners.get(&nominal.id) {
+11593	                    nominal.id,
+11594	                    &nominal.parameters,
+11595	                    nominal.origin.primary_span(),
+11592	                _ => environments.insert_nominal(
+11599	            .map_err(map_summary_kind_failure)?;
+11583	            match source_owners.get(&nominal.id) {
+11601	                nominal.representation.as_ref(),
+11602	                nominal.representation_provenance.as_ref(),
+11600	            if let (Some(representation), Some(provenance)) = (
+11621	                nominal.id,
+11623	                    &nominal.parameters,
+11624	                    nominal.declaration_kind,
+11625	                    nominal.constructor_count,
+11626	                    &nominal.constructors,
+11627	                    nominal.access,
+11628	                    &nominal.origin,
+11629	                    nominal.representation.as_ref(),
+11630	                    nominal.representation_provenance.as_ref(),
+11622	                (
+11620	            canonical_nominals.insert(
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11531	            if nominal.id.is_lexical()
+11531	            if nominal.id.is_lexical()
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11534	                || nominal.parameter_count != nominal.parameters.len()
+11535	                || nominal.constructor_count == 0 && !source_owners.contains_key(&nominal.id)
+11537	                    nominal.declaration_kind,
+11536	                || matches!(
+11539	                ) && nominal.representation.is_some()
+11541	                    nominal.declaration_kind,
+11540	                || matches!(
+11543	                ) && nominal.representation_provenance.is_some()
+11545	                    nominal.declaration_kind,
+11544	                || matches!(
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11551	                || match nominal.access {
+11556	                        !nominal.constructors.is_empty()
+11556	                        !nominal.constructors.is_empty()
+11551	                || match nominal.access {
+11559	                || (nominal.id.module() == self.module
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11578	                &nominal.parameters,
+11579	                SummaryBinderOwner::Nominal(nominal.id),
+11577	            register_summary_parameters(
+11583	            match source_owners.get(&nominal.id) {
+11593	                    nominal.id,
+11594	                    &nominal.parameters,
+11595	                    nominal.origin.primary_span(),
+11592	                _ => environments.insert_nominal(
+11599	            .map_err(map_summary_kind_failure)?;
+11583	            match source_owners.get(&nominal.id) {
+11601	                nominal.representation.as_ref(),
+11602	                nominal.representation_provenance.as_ref(),
+11600	            if let (Some(representation), Some(provenance)) = (
+11621	                nominal.id,
+11623	                    &nominal.parameters,
+11624	                    nominal.declaration_kind,
+11625	                    nominal.constructor_count,
+11626	                    &nominal.constructors,
+11627	                    nominal.access,
+11628	                    &nominal.origin,
+11629	                    nominal.representation.as_ref(),
+11630	                    nominal.representation_provenance.as_ref(),
+11622	                (
+11620	            canonical_nominals.insert(
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11531	            if nominal.id.is_lexical()
+11531	            if nominal.id.is_lexical()
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11534	                || nominal.parameter_count != nominal.parameters.len()
+11535	                || nominal.constructor_count == 0 && !source_owners.contains_key(&nominal.id)
+11537	                    nominal.declaration_kind,
+11536	                || matches!(
+11539	                ) && nominal.representation.is_some()
+11541	                    nominal.declaration_kind,
+11540	                || matches!(
+11543	                ) && nominal.representation_provenance.is_some()
+11545	                    nominal.declaration_kind,
+11544	                || matches!(
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11551	                || match nominal.access {
+11556	                        !nominal.constructors.is_empty()
+11556	                        !nominal.constructors.is_empty()
+11551	                || match nominal.access {
+11559	                || (nominal.id.module() == self.module
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11578	                &nominal.parameters,
+11579	                SummaryBinderOwner::Nominal(nominal.id),
+11577	            register_summary_parameters(
+11583	            match source_owners.get(&nominal.id) {
+11593	                    nominal.id,
+11594	                    &nominal.parameters,
+11595	                    nominal.origin.primary_span(),
+11592	                _ => environments.insert_nominal(
+11599	            .map_err(map_summary_kind_failure)?;
+11583	            match source_owners.get(&nominal.id) {
+11601	                nominal.representation.as_ref(),
+11602	                nominal.representation_provenance.as_ref(),
+11600	            if let (Some(representation), Some(provenance)) = (
+11621	                nominal.id,
+11623	                    &nominal.parameters,
+11624	                    nominal.declaration_kind,
+11625	                    nominal.constructor_count,
+11626	                    &nominal.constructors,
+11627	                    nominal.access,
+11628	                    &nominal.origin,
+11629	                    nominal.representation.as_ref(),
+11630	                    nominal.representation_provenance.as_ref(),
+11622	                (
+11620	            canonical_nominals.insert(
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11531	            if nominal.id.is_lexical()
+11531	            if nominal.id.is_lexical()
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11534	                || nominal.parameter_count != nominal.parameters.len()
+11535	                || nominal.constructor_count == 0 && !source_owners.contains_key(&nominal.id)
+11537	                    nominal.declaration_kind,
+11536	                || matches!(
+11539	                ) && nominal.representation.is_some()
+11541	                    nominal.declaration_kind,
+11540	                || matches!(
+11543	                ) && nominal.representation_provenance.is_some()
+11545	                    nominal.declaration_kind,
+11544	                || matches!(
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11551	                || match nominal.access {
+11553	                        nominal.constructors.len() != nominal.constructor_count
+11551	                || match nominal.access {
+11559	                || (nominal.id.module() == self.module
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11569	                if constructor.owner() != nominal.id
+11569	                if constructor.owner() != nominal.id
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11569	                if constructor.owner() != nominal.id
+11569	                if constructor.owner() != nominal.id
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11578	                &nominal.parameters,
+11579	                SummaryBinderOwner::Nominal(nominal.id),
+11577	            register_summary_parameters(
+11583	            match source_owners.get(&nominal.id) {
+11593	                    nominal.id,
+11594	                    &nominal.parameters,
+11595	                    nominal.origin.primary_span(),
+11592	                _ => environments.insert_nominal(
+11599	            .map_err(map_summary_kind_failure)?;
+11583	            match source_owners.get(&nominal.id) {
+11601	                nominal.representation.as_ref(),
+11602	                nominal.representation_provenance.as_ref(),
+11600	            if let (Some(representation), Some(provenance)) = (
+11621	                nominal.id,
+11623	                    &nominal.parameters,
+11624	                    nominal.declaration_kind,
+11625	                    nominal.constructor_count,
+11626	                    &nominal.constructors,
+11627	                    nominal.access,
+11628	                    &nominal.origin,
+11629	                    nominal.representation.as_ref(),
+11630	                    nominal.representation_provenance.as_ref(),
+11622	                (
+11620	            canonical_nominals.insert(
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11531	            if nominal.id.is_lexical()
+11531	            if nominal.id.is_lexical()
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11534	                || nominal.parameter_count != nominal.parameters.len()
+11535	                || nominal.constructor_count == 0 && !source_owners.contains_key(&nominal.id)
+11537	                    nominal.declaration_kind,
+11536	                || matches!(
+11539	                ) && nominal.representation.is_some()
+11541	                    nominal.declaration_kind,
+11540	                || matches!(
+11543	                ) && nominal.representation_provenance.is_some()
+11545	                    nominal.declaration_kind,
+11544	                || matches!(
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11551	                || match nominal.access {
+11553	                        nominal.constructors.len() != nominal.constructor_count
+11551	                || match nominal.access {
+11559	                || (nominal.id.module() == self.module
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11569	                if constructor.owner() != nominal.id
+11569	                if constructor.owner() != nominal.id
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11569	                if constructor.owner() != nominal.id
+11569	                if constructor.owner() != nominal.id
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11569	                if constructor.owner() != nominal.id
+11569	                if constructor.owner() != nominal.id
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11569	                if constructor.owner() != nominal.id
+11569	                if constructor.owner() != nominal.id
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11578	                &nominal.parameters,
+11579	                SummaryBinderOwner::Nominal(nominal.id),
+11577	            register_summary_parameters(
+11583	            match source_owners.get(&nominal.id) {
+11593	                    nominal.id,
+11594	                    &nominal.parameters,
+11595	                    nominal.origin.primary_span(),
+11592	                _ => environments.insert_nominal(
+11599	            .map_err(map_summary_kind_failure)?;
+11583	            match source_owners.get(&nominal.id) {
+11601	                nominal.representation.as_ref(),
+11602	                nominal.representation_provenance.as_ref(),
+11600	            if let (Some(representation), Some(provenance)) = (
+11621	                nominal.id,
+11623	                    &nominal.parameters,
+11624	                    nominal.declaration_kind,
+11625	                    nominal.constructor_count,
+11626	                    &nominal.constructors,
+11627	                    nominal.access,
+11628	                    &nominal.origin,
+11629	                    nominal.representation.as_ref(),
+11630	                    nominal.representation_provenance.as_ref(),
+11622	                (
+11620	            canonical_nominals.insert(
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11531	            if nominal.id.is_lexical()
+11531	            if nominal.id.is_lexical()
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11534	                || nominal.parameter_count != nominal.parameters.len()
+11535	                || nominal.constructor_count == 0 && !source_owners.contains_key(&nominal.id)
+11537	                    nominal.declaration_kind,
+11536	                || matches!(
+11539	                ) && nominal.representation.is_some()
+11541	                    nominal.declaration_kind,
+11540	                || matches!(
+11543	                ) && nominal.representation_provenance.is_some()
+11545	                    nominal.declaration_kind,
+11544	                || matches!(
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11551	                || match nominal.access {
+11553	                        nominal.constructors.len() != nominal.constructor_count
+11551	                || match nominal.access {
+11559	                || (nominal.id.module() == self.module
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11569	                if constructor.owner() != nominal.id
+11569	                if constructor.owner() != nominal.id
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11569	                if constructor.owner() != nominal.id
+11569	                if constructor.owner() != nominal.id
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11569	                if constructor.owner() != nominal.id
+11569	                if constructor.owner() != nominal.id
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11569	                if constructor.owner() != nominal.id
+11569	                if constructor.owner() != nominal.id
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11569	                if constructor.owner() != nominal.id
+11569	                if constructor.owner() != nominal.id
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11569	                if constructor.owner() != nominal.id
+11569	                if constructor.owner() != nominal.id
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11578	                &nominal.parameters,
+11579	                SummaryBinderOwner::Nominal(nominal.id),
+11577	            register_summary_parameters(
+11583	            match source_owners.get(&nominal.id) {
+11593	                    nominal.id,
+11594	                    &nominal.parameters,
+11595	                    nominal.origin.primary_span(),
+11592	                _ => environments.insert_nominal(
+11599	            .map_err(map_summary_kind_failure)?;
+11583	            match source_owners.get(&nominal.id) {
+11601	                nominal.representation.as_ref(),
+11602	                nominal.representation_provenance.as_ref(),
+11600	            if let (Some(representation), Some(provenance)) = (
+11621	                nominal.id,
+11623	                    &nominal.parameters,
+11624	                    nominal.declaration_kind,
+11625	                    nominal.constructor_count,
+11626	                    &nominal.constructors,
+11627	                    nominal.access,
+11628	                    &nominal.origin,
+11629	                    nominal.representation.as_ref(),
+11630	                    nominal.representation_provenance.as_ref(),
+11622	                (
+11620	            canonical_nominals.insert(
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11531	            if nominal.id.is_lexical()
+11531	            if nominal.id.is_lexical()
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11534	                || nominal.parameter_count != nominal.parameters.len()
+11535	                || nominal.constructor_count == 0 && !source_owners.contains_key(&nominal.id)
+11537	                    nominal.declaration_kind,
+11536	                || matches!(
+11539	                ) && nominal.representation.is_some()
+11541	                    nominal.declaration_kind,
+11540	                || matches!(
+11543	                ) && nominal.representation_provenance.is_some()
+11545	                    nominal.declaration_kind,
+11544	                || matches!(
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11551	                || match nominal.access {
+11553	                        nominal.constructors.len() != nominal.constructor_count
+11551	                || match nominal.access {
+11559	                || (nominal.id.module() == self.module
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11569	                if constructor.owner() != nominal.id
+11569	                if constructor.owner() != nominal.id
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11569	                if constructor.owner() != nominal.id
+11569	                if constructor.owner() != nominal.id
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11578	                &nominal.parameters,
+11579	                SummaryBinderOwner::Nominal(nominal.id),
+11577	            register_summary_parameters(
+11583	            match source_owners.get(&nominal.id) {
+11593	                    nominal.id,
+11594	                    &nominal.parameters,
+11595	                    nominal.origin.primary_span(),
+11592	                _ => environments.insert_nominal(
+11599	            .map_err(map_summary_kind_failure)?;
+11583	            match source_owners.get(&nominal.id) {
+11601	                nominal.representation.as_ref(),
+11602	                nominal.representation_provenance.as_ref(),
+11600	            if let (Some(representation), Some(provenance)) = (
+11621	                nominal.id,
+11623	                    &nominal.parameters,
+11624	                    nominal.declaration_kind,
+11625	                    nominal.constructor_count,
+11626	                    &nominal.constructors,
+11627	                    nominal.access,
+11628	                    &nominal.origin,
+11629	                    nominal.representation.as_ref(),
+11630	                    nominal.representation_provenance.as_ref(),
+11622	                (
+11620	            canonical_nominals.insert(
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11531	            if nominal.id.is_lexical()
+11531	            if nominal.id.is_lexical()
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11534	                || nominal.parameter_count != nominal.parameters.len()
+11535	                || nominal.constructor_count == 0 && !source_owners.contains_key(&nominal.id)
+11537	                    nominal.declaration_kind,
+11536	                || matches!(
+11539	                ) && nominal.representation.is_some()
+11541	                    nominal.declaration_kind,
+11540	                || matches!(
+11543	                ) && nominal.representation_provenance.is_some()
+11545	                    nominal.declaration_kind,
+11544	                || matches!(
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11551	                || match nominal.access {
+11553	                        nominal.constructors.len() != nominal.constructor_count
+11551	                || match nominal.access {
+11559	                || (nominal.id.module() == self.module
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11569	                if constructor.owner() != nominal.id
+11569	                if constructor.owner() != nominal.id
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11578	                &nominal.parameters,
+11579	                SummaryBinderOwner::Nominal(nominal.id),
+11577	            register_summary_parameters(
+11583	            match source_owners.get(&nominal.id) {
+11593	                    nominal.id,
+11594	                    &nominal.parameters,
+11595	                    nominal.origin.primary_span(),
+11592	                _ => environments.insert_nominal(
+11599	            .map_err(map_summary_kind_failure)?;
+11583	            match source_owners.get(&nominal.id) {
+11601	                nominal.representation.as_ref(),
+11602	                nominal.representation_provenance.as_ref(),
+11600	            if let (Some(representation), Some(provenance)) = (
+11621	                nominal.id,
+11623	                    &nominal.parameters,
+11624	                    nominal.declaration_kind,
+11625	                    nominal.constructor_count,
+11626	                    &nominal.constructors,
+11627	                    nominal.access,
+11628	                    &nominal.origin,
+11629	                    nominal.representation.as_ref(),
+11630	                    nominal.representation_provenance.as_ref(),
+11622	                (
+11620	            canonical_nominals.insert(
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11531	            if nominal.id.is_lexical()
+11531	            if nominal.id.is_lexical()
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11534	                || nominal.parameter_count != nominal.parameters.len()
+11535	                || nominal.constructor_count == 0 && !source_owners.contains_key(&nominal.id)
+11537	                    nominal.declaration_kind,
+11536	                || matches!(
+11539	                ) && nominal.representation.is_some()
+11541	                    nominal.declaration_kind,
+11540	                || matches!(
+11543	                ) && nominal.representation_provenance.is_some()
+11545	                    nominal.declaration_kind,
+11544	                || matches!(
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11551	                || match nominal.access {
+11553	                        nominal.constructors.len() != nominal.constructor_count
+11551	                || match nominal.access {
+11559	                || (nominal.id.module() == self.module
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11569	                if constructor.owner() != nominal.id
+11569	                if constructor.owner() != nominal.id
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11569	                if constructor.owner() != nominal.id
+11569	                if constructor.owner() != nominal.id
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11569	                if constructor.owner() != nominal.id
+11569	                if constructor.owner() != nominal.id
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11578	                &nominal.parameters,
+11579	                SummaryBinderOwner::Nominal(nominal.id),
+11577	            register_summary_parameters(
+11583	            match source_owners.get(&nominal.id) {
+11593	                    nominal.id,
+11594	                    &nominal.parameters,
+11595	                    nominal.origin.primary_span(),
+11592	                _ => environments.insert_nominal(
+11599	            .map_err(map_summary_kind_failure)?;
+11583	            match source_owners.get(&nominal.id) {
+11601	                nominal.representation.as_ref(),
+11602	                nominal.representation_provenance.as_ref(),
+11600	            if let (Some(representation), Some(provenance)) = (
+11621	                nominal.id,
+11623	                    &nominal.parameters,
+11624	                    nominal.declaration_kind,
+11625	                    nominal.constructor_count,
+11626	                    &nominal.constructors,
+11627	                    nominal.access,
+11628	                    &nominal.origin,
+11629	                    nominal.representation.as_ref(),
+11630	                    nominal.representation_provenance.as_ref(),
+11622	                (
+11620	            canonical_nominals.insert(
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11531	            if nominal.id.is_lexical()
+11531	            if nominal.id.is_lexical()
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11534	                || nominal.parameter_count != nominal.parameters.len()
+11535	                || nominal.constructor_count == 0 && !source_owners.contains_key(&nominal.id)
+11537	                    nominal.declaration_kind,
+11536	                || matches!(
+11539	                ) && nominal.representation.is_some()
+11541	                    nominal.declaration_kind,
+11540	                || matches!(
+11543	                ) && nominal.representation_provenance.is_some()
+11545	                    nominal.declaration_kind,
+11544	                || matches!(
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11551	                || match nominal.access {
+11556	                        !nominal.constructors.is_empty()
+11556	                        !nominal.constructors.is_empty()
+11551	                || match nominal.access {
+11559	                || (nominal.id.module() == self.module
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11578	                &nominal.parameters,
+11579	                SummaryBinderOwner::Nominal(nominal.id),
+11577	            register_summary_parameters(
+11583	            match source_owners.get(&nominal.id) {
+11593	                    nominal.id,
+11594	                    &nominal.parameters,
+11595	                    nominal.origin.primary_span(),
+11592	                _ => environments.insert_nominal(
+11599	            .map_err(map_summary_kind_failure)?;
+11583	            match source_owners.get(&nominal.id) {
+11601	                nominal.representation.as_ref(),
+11602	                nominal.representation_provenance.as_ref(),
+11600	            if let (Some(representation), Some(provenance)) = (
+11621	                nominal.id,
+11623	                    &nominal.parameters,
+11624	                    nominal.declaration_kind,
+11625	                    nominal.constructor_count,
+11626	                    &nominal.constructors,
+11627	                    nominal.access,
+11628	                    &nominal.origin,
+11629	                    nominal.representation.as_ref(),
+11630	                    nominal.representation_provenance.as_ref(),
+11622	                (
+11620	            canonical_nominals.insert(
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11531	            if nominal.id.is_lexical()
+11531	            if nominal.id.is_lexical()
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11534	                || nominal.parameter_count != nominal.parameters.len()
+11535	                || nominal.constructor_count == 0 && !source_owners.contains_key(&nominal.id)
+11537	                    nominal.declaration_kind,
+11536	                || matches!(
+11539	                ) && nominal.representation.is_some()
+11541	                    nominal.declaration_kind,
+11540	                || matches!(
+11543	                ) && nominal.representation_provenance.is_some()
+11545	                    nominal.declaration_kind,
+11544	                || matches!(
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11551	                || match nominal.access {
+11553	                        nominal.constructors.len() != nominal.constructor_count
+11551	                || match nominal.access {
+11559	                || (nominal.id.module() == self.module
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11569	                if constructor.owner() != nominal.id
+11569	                if constructor.owner() != nominal.id
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11569	                if constructor.owner() != nominal.id
+11569	                if constructor.owner() != nominal.id
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11578	                &nominal.parameters,
+11579	                SummaryBinderOwner::Nominal(nominal.id),
+11577	            register_summary_parameters(
+11583	            match source_owners.get(&nominal.id) {
+11593	                    nominal.id,
+11594	                    &nominal.parameters,
+11595	                    nominal.origin.primary_span(),
+11592	                _ => environments.insert_nominal(
+11599	            .map_err(map_summary_kind_failure)?;
+11583	            match source_owners.get(&nominal.id) {
+11601	                nominal.representation.as_ref(),
+11602	                nominal.representation_provenance.as_ref(),
+11600	            if let (Some(representation), Some(provenance)) = (
+11621	                nominal.id,
+11623	                    &nominal.parameters,
+11624	                    nominal.declaration_kind,
+11625	                    nominal.constructor_count,
+11626	                    &nominal.constructors,
+11627	                    nominal.access,
+11628	                    &nominal.origin,
+11629	                    nominal.representation.as_ref(),
+11630	                    nominal.representation_provenance.as_ref(),
+11622	                (
+11620	            canonical_nominals.insert(
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11531	            if nominal.id.is_lexical()
+11531	            if nominal.id.is_lexical()
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11534	                || nominal.parameter_count != nominal.parameters.len()
+11535	                || nominal.constructor_count == 0 && !source_owners.contains_key(&nominal.id)
+11537	                    nominal.declaration_kind,
+11536	                || matches!(
+11539	                ) && nominal.representation.is_some()
+11541	                    nominal.declaration_kind,
+11540	                || matches!(
+11543	                ) && nominal.representation_provenance.is_some()
+11545	                    nominal.declaration_kind,
+11544	                || matches!(
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11551	                || match nominal.access {
+11553	                        nominal.constructors.len() != nominal.constructor_count
+11551	                || match nominal.access {
+11559	                || (nominal.id.module() == self.module
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11569	                if constructor.owner() != nominal.id
+11569	                if constructor.owner() != nominal.id
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11569	                if constructor.owner() != nominal.id
+11569	                if constructor.owner() != nominal.id
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11569	                if constructor.owner() != nominal.id
+11569	                if constructor.owner() != nominal.id
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11578	                &nominal.parameters,
+11579	                SummaryBinderOwner::Nominal(nominal.id),
+11577	            register_summary_parameters(
+11583	            match source_owners.get(&nominal.id) {
+11593	                    nominal.id,
+11594	                    &nominal.parameters,
+11595	                    nominal.origin.primary_span(),
+11592	                _ => environments.insert_nominal(
+11599	            .map_err(map_summary_kind_failure)?;
+11583	            match source_owners.get(&nominal.id) {
+11601	                nominal.representation.as_ref(),
+11602	                nominal.representation_provenance.as_ref(),
+11600	            if let (Some(representation), Some(provenance)) = (
+11621	                nominal.id,
+11623	                    &nominal.parameters,
+11624	                    nominal.declaration_kind,
+11625	                    nominal.constructor_count,
+11626	                    &nominal.constructors,
+11627	                    nominal.access,
+11628	                    &nominal.origin,
+11629	                    nominal.representation.as_ref(),
+11630	                    nominal.representation_provenance.as_ref(),
+11622	                (
+11620	            canonical_nominals.insert(
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11524	            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+11531	            if nominal.id.is_lexical()
+11531	            if nominal.id.is_lexical()
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11532	                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+11534	                || nominal.parameter_count != nominal.parameters.len()
+11535	                || nominal.constructor_count == 0 && !source_owners.contains_key(&nominal.id)
+11537	                    nominal.declaration_kind,
+11536	                || matches!(
+11539	                ) && nominal.representation.is_some()
+11541	                    nominal.declaration_kind,
+11540	                || matches!(
+11543	                ) && nominal.representation_provenance.is_some()
+11545	                    nominal.declaration_kind,
+11544	                || matches!(
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11550	                || canonical_nominals.contains_key(&nominal.id)
+11551	                || match nominal.access {
+11553	                        nominal.constructors.len() != nominal.constructor_count
+11551	                || match nominal.access {
+11559	                || (nominal.id.module() == self.module
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11568	            for (index, constructor) in nominal.constructors.iter().enumerate() {
+11569	                if constructor.owner() != nominal.id
+11569	                if constructor.owner() != nominal.id
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11569	                if constructor.owner() != nominal.id
+11569	                if constructor.owner() != nominal.id
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11569	                if constructor.owner() != nominal.id
+11569	                if constructor.owner() != nominal.id
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11570	                    || usize::try_from(constructor.constructor()) != Ok(index)
+11578	                &nominal.parameters,
+11579	                SummaryBinderOwner::Nominal(nominal.id),
+11577	            register_summary_parameters(
+11583	            match source_owners.get(&nominal.id) {
+11593	                    nominal.id,
+11594	                    &nominal.parameters,
+11595	                    nominal.origin.primary_span(),
+11592	                _ => environments.insert_nominal(
+11599	            .map_err(map_summary_kind_failure)?;
+11583	            match source_owners.get(&nominal.id) {
+11601	                nominal.representation.as_ref(),
+11602	                nominal.representation_provenance.as_ref(),
+11600	            if let (Some(representation), Some(provenance)) = (
+11621	                nominal.id,
+11623	                    &nominal.parameters,
+11624	                    nominal.declaration_kind,
+11625	                    nominal.constructor_count,
+11626	                    &nominal.constructors,
+11627	                    nominal.access,
+11628	                    &nominal.origin,
+11629	                    nominal.representation.as_ref(),
+11630	                    nominal.representation_provenance.as_ref(),
+11622	                (
+DIAGNOSTIC LAST SOURCE LINES [('src/resolved.rs', 11569), ('src/resolved.rs', 11569), ('src/resolved.rs', 11570), ('src/resolved.rs', 11570), ('src/resolved.rs', 11569), ('src/resolved.rs', 11569), ('src/resolved.rs', 11570), ('src/resolved.rs', 11570), ('src/resolved.rs', 11578), ('src/resolved.rs', 11579), ('src/resolved.rs', 11577), ('src/resolved.rs', 11583), ('src/resolved.rs', 11593), ('src/resolved.rs', 11594), ('src/resolved.rs', 11595), ('src/resolved.rs', 11592), ('src/resolved.rs', 11599), ('src/resolved.rs', 11583), ('src/resolved.rs', 11601), ('src/resolved.rs', 11602), ('src/resolved.rs', 11600), ('src/resolved.rs', 11621), ('src/resolved.rs', 11623), ('src/resolved.rs', 11624), ('src/resolved.rs', 11625), ('src/resolved.rs', 11626), ('src/resolved.rs', 11627), ('src/resolved.rs', 11628), ('src/resolved.rs', 11629), ('src/resolved.rs', 11630)]
+#0  ash::resolved::ExportSummary::authenticate_with_provider_commit (self=0x7ffff7be3b20, committed=false, type_work=0x7ffff7bf1250, constraint_work=0x7ffff7bfa630) at src/resolved.rs:11622
+#1  0x000055555dd5d344 in ash::resolved::ExportSummary::freeze_with_providers (resolved=0x7ffff7bf9490, checked_globals=..., checked_interfaces=..., admitted_implementations=..., checked_implementations=..., providers=..., type_work=0x7ffff7bf1250, constraint_work=0x7ffff7bfa630) at src/resolved.rs:12799
+#2  0x000055555c06bbaf in ash::elaborate::check_module_with_budget_family::{closure#0}<ash::core::effect::EffectOperationFamily> () at src/elaborate.rs:22853
+#3  0x000055555bfad975 in ash::elaborate::check_module_with_budget_family<ash::core::effect::EffectOperationFamily> (resolved=..., provider_codes=0x7ffff7bfa5d0, type_work=0x7ffff7bfa5e0, coverage_work=0x7ffff7bfa628, constraint_work=0x7ffff7bfa630, rewrite_work=..., source_capture_observer=...) at src/elaborate.rs:22642
+#4  0x000055555bb00265 in ash::elaborate::check_module_with_budget_and_provider_codes_and_rewrite_work (resolved=..., provider_codes=0x7ffff7bfa5d0, type_work=0x7ffff7bfa5e0, coverage_work=0x7ffff7bfa628, constraint_work=0x7ffff7bfa630, rewrite_work=...) at src/elaborate.rs:22537
+#5  0x000055555aa7b097 in ash::elaborate::checked_owner_lifecycle_tests::check_graph (graph=0x7ffff7bfe050) at src/elaborate/checked_owner_lifecycle_tests.rs:72
+#6  0x000055555aa7d603 in ash::elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_canonical_source_retains_originals () at src/elaborate/checked_owner_lifecycle_tests.rs:188
+#7  0x000055555a982147 in ash::elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_canonical_source_retains_originals::{closure#0} () at src/elaborate/checked_owner_lifecycle_tests.rs:186
+

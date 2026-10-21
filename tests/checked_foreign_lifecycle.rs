@@ -68,7 +68,7 @@ impl Drop for TemporarySource {
 #[test]
 fn checked_owner_lifecycle_fallible_scalar_finish_does_not_borrow_void_refinement() {
     let source = include_str!("fixtures/checked-owner-lifecycle/owner.ash");
-    let original = source.split("\ntype Acquire").next().unwrap();
+    let original = source.split("\npub type Acquire").next().unwrap();
     let fallible = original
         .replace(
             "symbol Free<H, R> : State<H, R> ->",
@@ -81,6 +81,10 @@ fn checked_owner_lifecycle_fallible_scalar_finish_does_not_borrow_void_refinemen
         .replace(
             "operand 0 from 0 current",
             "operand 0 from 0 current\n        operand 1 from 1 scalar",
+        )
+        .replace(
+            "output result as owner(State<H, R>)",
+            "destruction_operand 1 from 0 scalar\n        output result as owner(State<H, R>)",
         );
     assert_ne!(fallible, original);
     let passive = TemporarySource::new(&format!(
