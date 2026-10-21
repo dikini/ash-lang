@@ -41311,6 +41311,14 @@ pub(crate) struct SourceWindowDeclaration {
     pub(crate) span: Span,
 }
 
+/// Written host selector into a source resource's complete formal vector.
+/// This syntax fact grants neither host nor lifecycle authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourceResourceHost {
+    pub position: usize,
+    pub span: Span,
+}
+
 /// Body-free product source resource header. It grants no lifecycle permission.
 #[derive(Debug, Eq, PartialEq)]
 pub struct SourceResourceTypeFact {
@@ -41328,6 +41336,8 @@ pub struct SourceResourceTypeFact {
     pub owned_position: usize,
     /// Original owned-selector occurrence.
     pub owned_origin: Origin,
+    /// Optional exact host formal selection for the checked codec.
+    pub host: Option<SourceResourceHost>,
     /// Preceding-scope initializer type.
     pub input: ResolvedType,
     /// Native state type template.

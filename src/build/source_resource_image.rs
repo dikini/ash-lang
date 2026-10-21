@@ -679,6 +679,14 @@ impl Encoder<'_> {
         header: &Arc<SourceResourceTypeFact>,
     ) -> Result<u32, ImageFailure> {
         charge(self.work, 1)?;
+        if header.host.is_some()
+            || matches!(
+                header.codec.kind,
+                crate::surface::SurfaceResourceReportCodecKind::CheckedScope
+            )
+        {
+            return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
+        }
         if let Some((pointer, slot)) = self.source_headers.get(&header.id) {
             return if *pointer == Arc::as_ptr(header) {
                 Ok(*slot)
@@ -1580,6 +1588,7 @@ impl Decoder<'_> {
             parameters: parameters.into_boxed_slice(),
             owned_position,
             owned_origin: owned_origin.take(),
+            host: None,
             input: input.take(),
             state: state.take(),
             data: data.take(),

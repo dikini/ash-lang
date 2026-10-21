@@ -2864,7 +2864,7 @@ fn source_resource_fields(parser: &mut Parser<'_>) {
             }
             "codec" => {
                 if matches!(parser.current(), Some(TokenKind::Identifier(codec))
-                    if codec == "scope" || codec == "acquired_only")
+                    if codec == "scope" || codec == "acquired_only" || codec == "checked_scope")
                 {
                     let _ = parser.bump();
                 } else {
@@ -2893,6 +2893,17 @@ fn source_resource_fields(parser: &mut Parser<'_>) {
         }
         if !parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd) {
             break;
+        }
+        if word == "owned"
+            && matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "host")
+        {
+            parser.start(NodeKind::SourceResourceField);
+            resource_field_word(parser, "host");
+            expect_upper_identifier(parser);
+            parser.finish();
+            if !parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd) {
+                break;
+            }
         }
     }
 }

@@ -728,6 +728,16 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
                     {
                         shape.token(&TokenKind::LineEnd)?;
                     }
+                    if index == 0
+                        && shape.peek_node().is_some_and(|field| {
+                            field.kind == NodeKind::SourceResourceField
+                                && direct_tokens(field, tokens).next().is_some_and(|token|
+                                    matches!(&token.kind, TokenKind::Identifier(word) if word == "host"))
+                        })
+                    {
+                        shape.node(NodeKind::SourceResourceField)?;
+                        shape.token(&TokenKind::LineEnd)?;
+                    }
                 }
                 shape.token(&TokenKind::RightBrace)?;
                 return shape.finish();
@@ -793,7 +803,7 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             };
             shape.token_matching(|kind| matches!(kind, TokenKind::Identifier(_)))?;
             match word.as_str() {
-                "owned" => {
+                "owned" | "host" => {
                     shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?
                 }
                 "input" | "state" | "data" | "acquisition" | "completion" | "provider" => {
@@ -808,7 +818,7 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
                 }
                 "codec" => shape.token_matching(|kind| {
                     matches!(kind, TokenKind::Identifier(word)
-                        if word == "scope" || word == "acquired_only")
+                        if word == "scope" || word == "acquired_only" || word == "checked_scope")
                 })?,
                 "interpret" => {
                     shape.node(NodeKind::EffectInstance)?;
@@ -3832,10 +3842,23 @@ fn project_source_resource_definition(
     node: &ConcreteNode,
     tokens: &[Token],
 ) -> Result<crate::surface::SurfaceSourceResourceDefinition, ProjectionError> {
-    let mut fields = child_nodes(node).filter(|child| child.kind == NodeKind::SourceResourceField);
-    let fields_array: [Option<&ConcreteNode>; 14] = std::array::from_fn(|_| fields.next());
+    let mut fields = child_nodes(node)
+        .filter(|child| child.kind == NodeKind::SourceResourceField)
+        .peekable();
+    let owned = fields.next().ok_or(ProjectionError::MalformedTree(
+        InternalReason::UnexpectedShape,
+    ))?;
+    let host = if fields.peek().is_some_and(|field| {
+        direct_tokens(field, tokens).next().is_some_and(
+            |token| matches!(&token.kind, TokenKind::Identifier(word) if word == "host"),
+        )
+    }) {
+        fields.next()
+    } else {
+        None
+    };
+    let fields_array: [Option<&ConcreteNode>; 13] = std::array::from_fn(|_| fields.next());
     let [
-        Some(owned),
         Some(input),
         Some(state),
         Some(data),
@@ -3877,6 +3900,9 @@ fn project_source_resource_definition(
         TokenKind::Identifier(word) if word == "acquired_only" => {
             crate::surface::SurfaceResourceReportCodecKind::AcquiredOnly
         }
+        TokenKind::Identifier(word) if word == "checked_scope" => {
+            crate::surface::SurfaceResourceReportCodecKind::CheckedScope
+        }
         _ => return malformed(InternalReason::UnexpectedShape),
     };
     Ok(crate::surface::SurfaceSourceResourceDefinition {
@@ -3894,6 +3920,13 @@ fn project_source_resource_definition(
         owned: surface_name(direct_tokens(owned, tokens).nth(1).ok_or(
             ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
         )?)?,
+        host: host
+            .map(|field| {
+                surface_name(direct_tokens(field, tokens).nth(1).ok_or(
+                    ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
+                )?)
+            })
+            .transpose()?,
         input: field_type(input)?,
         state: field_type(state)?,
         data: field_type(data)?,
@@ -4087,6 +4120,83 @@ mod tests {
             .expect("the shape fixture should fit");
         let lexed = lex(&source).expect("the shape fixture should lex");
         (source, parse(lexed))
+    }
+
+    #[test]
+    fn checked_resource_projection_preserves_host_and_rechecks_optional_field_order() {
+        let text = include_str!("../../tests/fixtures/checked-owner-lifecycle/owner.ash");
+        let source = SourceFile::new("checked-resource-shape.ash", text).unwrap();
+        let baseline = parse(lex(&source).unwrap());
+        assert!(
+            baseline.parse_diagnostics().is_empty(),
+            "{:?}",
+            baseline.parse_diagnostics()
+        );
+        let projected = project_module(&source, &baseline).unwrap();
+        let resource = &projected.source_resources[0];
+        assert_eq!(resource.owned.text, "R");
+        assert_eq!(resource.host.as_ref().unwrap().text, "H");
+        assert_eq!(
+            resource.codec.kind,
+            crate::surface::SurfaceResourceReportCodecKind::CheckedScope
+        );
+
+        for mutation in 0..2 {
+            let mut tree = baseline.clone();
+            let declaration =
+                find_node_mut(tree.root.as_mut().unwrap(), NodeKind::ResourceDefinition).unwrap();
+            let fields = declaration.children.iter().enumerate().filter_map(|(index, child)| {
+                matches!(child, ConcreteElement::Node(field) if field.kind == NodeKind::SourceResourceField).then_some(index)
+            }).collect::<Vec<_>>();
+            assert_eq!(fields.len(), 15);
+            if mutation == 0 {
+                declaration.children.swap(fields[1], fields[2]);
+            } else {
+                let host = declaration.children[fields[1]].clone();
+                let line_end = declaration.children[fields[1] + 1].clone();
+                declaration.children.insert(fields[2], line_end);
+                declaration.children.insert(fields[2], host);
+            }
+            assert_eq!(
+                project_module(&source, &tree),
+                Err(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape
+                ))
+            );
+        }
+        for bad in [
+            text.replace(
+                "    host H\n    input Int",
+                "    host H\n    host H\n    input Int",
+            ),
+            text.replace("    host H\n    input Int", "    input Int\n    host H"),
+        ] {
+            let source = SourceFile::new("misplaced-host.ash", bad).unwrap();
+            assert!(!parse(lex(&source).unwrap()).parse_diagnostics().is_empty());
+        }
+
+        let legacy = include_str!("../../tests/fixtures/source-owner/owner.ash");
+        for (codec, expected) in [
+            (
+                "scope",
+                crate::surface::SurfaceResourceReportCodecKind::Scope,
+            ),
+            (
+                "acquired_only",
+                crate::surface::SurfaceResourceReportCodecKind::AcquiredOnly,
+            ),
+        ] {
+            let source = SourceFile::new(
+                "legacy-resource-shape.ash",
+                legacy.replace("codec scope", &format!("codec {codec}")),
+            )
+            .unwrap();
+            let tree = parse(lex(&source).unwrap());
+            assert!(tree.parse_diagnostics().is_empty());
+            let projected = project_module(&source, &tree).unwrap();
+            assert!(projected.source_resources[0].host.is_none());
+            assert_eq!(projected.source_resources[0].codec.kind, expected);
+        }
     }
 
     #[test]

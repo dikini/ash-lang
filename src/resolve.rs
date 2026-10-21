@@ -21764,6 +21764,41 @@ impl Resolver {
                     "owned must select a kind-Type resource parameter",
                 ));
             }
+            let host = source
+                .host
+                .as_ref()
+                .map(|host| {
+                    self.type_work.charge(parameters.0.len()).map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            host.span,
+                            "resource host selection exceeded its budget",
+                        )
+                    })?;
+                    let position = parameters
+                        .0
+                        .iter()
+                        .position(|parameter| parameter.spelling == host.text)
+                        .ok_or_else(|| {
+                            error(
+                                ResolveReason::TypeKind,
+                                host.span,
+                                "host must select a declared resource parameter",
+                            )
+                        })?;
+                    if position == owned_position || parameters.0[position].kind != Kind::Type {
+                        return Err(error(
+                            ResolveReason::TypeKind,
+                            host.span,
+                            "host must select a distinct kind-Type resource parameter",
+                        ));
+                    }
+                    Ok(crate::resolved::SourceResourceHost {
+                        position,
+                        span: host.span,
+                    })
+                })
+                .transpose()?;
             validate_explicit_type_parameters(Some(&source.result_parameters))?;
             if source.result_parameters.len() != 1 {
                 return Err(error(
@@ -21956,6 +21991,7 @@ impl Resolver {
                             parameters: parameters.into_vec().into_boxed_slice(),
                             owned_position,
                             owned_origin: Origin::Source(source.owned.span),
+                            host,
                             input: input.into_inner(),
                             state: state.into_inner(),
                             data: data.into_inner(),

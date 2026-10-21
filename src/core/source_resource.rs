@@ -627,6 +627,7 @@ impl CheckedSourceResourceHeader {
         let acquire_codec = acquire_codec(acquisition, registry, work)?;
         let finish_codec = finish_codec(finish, registry, work)?;
         let report = match header.codec.kind {
+            SurfaceResourceReportCodecKind::CheckedScope => return Err(invalid()),
             SurfaceResourceReportCodecKind::Scope => {
                 if scope_arguments.len() != 3
                     || !same(acquisition_arguments[2], scope_arguments[0], work)?

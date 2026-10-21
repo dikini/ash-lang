@@ -944,6 +944,8 @@ pub struct SurfaceSourceResourceDefinition {
     pub parameters: Vec<SurfaceTypeParameter>,
     /// Written selector for the fresh Type-kind identity position.
     pub owned: SurfaceName,
+    /// Optional written checked host selector; checking supplies identity authority.
+    pub host: Option<SurfaceName>,
     /// Initializer type template.
     pub input: SurfaceType,
     /// Native state type template.
@@ -991,13 +993,15 @@ pub struct SurfaceResourceReportCodec {
     pub span: Span,
 }
 
-/// The two accepted report assembly spellings.
+/// The accepted report assembly spellings.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SurfaceResourceReportCodecKind {
     /// The complete acquisition/completion report.
     Scope,
     /// The acquired-only Success/Failure report.
     AcquiredOnly,
+    /// The checked owner acquisition/completion report.
+    CheckedScope,
 }
 
 /// A resource instance retaining its complete written Type/Row vector.
