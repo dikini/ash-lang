@@ -26,6 +26,8 @@ separate aggregation group.
 | `startup91-control-analysis` | exit101, original Resource; isolated diagnostic succeeds | Original initial discovery refuses after172 processed states. The separately metered same-graph solver completes74308 units, including68262 discovery units and459 retained states; it supplies no startup result. |
 | `startup91-discovery-costs` | exit101, original Resource; isolated diagnostic succeeds | Isolated call dispatch costs32485 units across74 dispatches; inner value-close rounds cost333. Nested State totals overlap dispatch and must not be added to it. |
 | `startup91-call-costs` | exit101, original Resource; isolated diagnostic succeeds | Ordinary call value-close work26229 dominates; fixed borrowed-result closes cost642, so deferring those is not a useful repair. Two identical builtin-role reconstructions within one original proof cost15535 and15545. |
+| `startup91-single-builtin-proof` | exit101, original Resource | Same-call proof consolidation saves15536 units; templates finish169986 and final Core enters191819. Isolated control demand is unchanged. |
+| `startup91-single-proof-controls` | exit0, two tests pass | Exact builtin bytes/role and selective no-host/omission controls, including malformed/stale/missing identities and paid census bounds, remain enforced. |
 
 The first three measurements rule out missing template-session hits and localize
 the refusal to strict capture control analysis. They do not yet identify a safe
@@ -40,4 +42,7 @@ immutable graph with a fresh standalone default. Its result cannot replace the
 original cumulative startup result or give its caller credit.
 
 Raw output bytes and hashes are preserved. No passing reconstruction, changed
-limit, new execution permission or full-gate result is claimed here.
+limit, new execution permission or full-gate result is claimed here. The first
+production repair shares only the completed same-call builtin check with the
+existing omitted-formal provenance field; it creates no cache or cross-phase
+authority. Startup still requires another measured reduction.

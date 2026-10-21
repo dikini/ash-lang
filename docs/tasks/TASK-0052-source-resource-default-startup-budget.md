@@ -93,7 +93,10 @@ localize refusal to strict capture control analysis. Template admission uses one
 fresh registry check and two session hits; main reconstruction completes at207355.
 Final Core's registry, graph, owner, byte/window and scope checks complete before
 the capture query exhausts the remaining allowance. Capture graph construction
-itself completes. No reuse repair follows from these measurements yet.
+itself completes. The first repair removes an exactly duplicated same-call builtin check by
+populating the existing omitted-formal provenance immediately after its one
+complete authentication. This saves15536 units and preserves both provenance
+controls; the original startup test remains red. Further reduction is pending.
 
 Existing session reuse is bound to exact immutable registry/source/module/global
 and unused-ordering-footprint context; conditional, provider and lexical contexts

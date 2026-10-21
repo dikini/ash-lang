@@ -899,55 +899,7 @@ pub(super) fn authenticate(
         charge(work, 1)?;
         let source = *sources.get(source).ok_or_else(registry_error)?;
         let coordinates = DeclarationCoordinates::from_source(source, work)?;
-        authenticate_module(
-            registry,
-            *module,
-            source,
-            &coordinates,
-            work,
-            &mut original.nominal_positions,
-        )?;
-        if module.is_builtin_foreign() {
-            charge(work, 1)?;
-            if let Some(host) = registry.effect(EffectId::new(
-                *module,
-                crate::module::FOREIGN_NATIVE_HOST_LOCAL,
-            )) {
-                #[cfg(test)]
-                let repeated_host_before = work.used();
-                charge(work, source.text().len().saturating_add(10))?;
-                if source.text() != crate::module::foreign_builtin_source_text()
-                    || !crate::foreign::checked_builtins::is_canonical_native_host(
-                        host, registry, work,
-                    )
-                    .map_err(|error| {
-                        if error.is_resource_exhaustion() {
-                            resource()
-                        } else {
-                            registry_error()
-                        }
-                    })?
-                {
-                    return Err(registry_error());
-                }
-                #[cfg(test)]
-                super::startup_measurement::record(
-                    "source.omitted-host-role.ok",
-                    repeated_host_before,
-                    work.used(),
-                );
-                original
-                    .omitted_builtin_formals
-                    .try_reserve(10)
-                    .map_err(|_| resource())?;
-                for local in 4..14 {
-                    let id = TypeVariableId::resolved(*module, local);
-                    if registry.type_variable(id).is_none() {
-                        original.omitted_builtin_formals.insert(id);
-                    }
-                }
-            }
-        }
+        authenticate_module(registry, *module, source, &coordinates, work, &mut original)?;
         coordinates.resource_binders.authenticate(
             registry,
             *module,
@@ -980,7 +932,7 @@ fn authenticate_module(
     source: &SourceFile,
     coordinates: &DeclarationCoordinates,
     work: &mut TypeWorkBudget,
-    nominal_positions: &mut HashMap<NominalTypeId, (u32, Span)>,
+    original: &mut OriginalDeclarationProvenance,
 ) -> Result<(), ValidationError> {
     for nominal in registry.nominals() {
         charge(work, 1)?;
@@ -1008,8 +960,12 @@ fn authenticate_module(
             _ => return Err(registry_error()),
         }
         charge(work, 1)?;
-        nominal_positions.try_reserve(1).map_err(|_| resource())?;
-        if nominal_positions
+        original
+            .nominal_positions
+            .try_reserve(1)
+            .map_err(|_| resource())?;
+        if original
+            .nominal_positions
             .insert(nominal.id, (expected, origin))
             .is_some()
         {
@@ -1123,6 +1079,20 @@ fn authenticate_module(
                 original_host_before,
                 work.used(),
             );
+            // This completed exact builtin check is also the original proof
+            // for omitted legacy formal slots in this immutable registry loan.
+            // No declaration or executable authority is supplied by an omission.
+            charge(work, 10)?;
+            original
+                .omitted_builtin_formals
+                .try_reserve(10)
+                .map_err(|_| resource())?;
+            for local in 4..14 {
+                let id = TypeVariableId::resolved(module, local);
+                if registry.type_variable(id).is_none() {
+                    original.omitted_builtin_formals.insert(id);
+                }
+            }
             continue;
         }
         coordinates.authenticate_effect(module, source, effect, work)?;
@@ -3127,7 +3097,7 @@ main () = 42
                 loaded.source(),
                 &coordinates,
                 &mut TypeWorkBudget::unbounded(),
-                &mut HashMap::new()
+                &mut OriginalDeclarationProvenance::default()
             )
             .is_ok()
         );
@@ -3138,7 +3108,7 @@ main () = 42
                 &rewritten,
                 &coordinates,
                 &mut TypeWorkBudget::unbounded(),
-                &mut HashMap::new()
+                &mut OriginalDeclarationProvenance::default()
             )
             .unwrap_err()
             .reason(),
