@@ -61,3 +61,25 @@ at aggregate `c32d08ade9e1947ae5c3e371cd0d2c305f01ebd85005bb3603f35f19a49f6e7e`.
 This intermediate candidate is incomplete; exact domain/payload comparison is
 required before final verification. Original defining registry metadata does
 not replace selected projected kind or access facts.
+
+## Fused latent-row mirror
+
+The fixed original and checker guards pass 12 constructor-closure controls and
+four original/route/teardown controls on the `28d14de6...` intermediate input
+snapshot. Images pass 16/16 there, with buffer/dependent work 318807/314677 under
+unchanged 327680. A wider constructor selection passes 78/89; its failures
+include injected-original setup and exact tariff expectations, plus a deep
+public-admission constraint refusal caused by overlapping domain comparisons.
+These are intermediate results, not the final delivery batch.
+
+The existing fused kind walk cannot yet replace the new standalone summary
+domain comparison: a real `Callback(Unit -> Int ! {Ping})` source checks and its
+canonical mirror succeeds, but both mixed pure/effectful mirror directions
+accept the nonempty latent row. The frozen `fused-row-red` target demonstrates
+`[true, true]` rather than two refusals at aggregate
+`7eb9685cc160d9574a52ca9a3bb469ebdb77a025a722a6b70664e5de0a1e2430`.
+The earlier exploratory invocation overlapped disjoint test-helper formatting
+and has unequal input maps; it is not a frozen receipt or transferred evidence.
+The retained repeat has equal before/after inputs. A faithful fused row guard
+must precede removing any overlapping comparison; empty-row equivalence and the
+independent checker-entry comparison must remain.

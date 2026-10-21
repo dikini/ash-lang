@@ -356,6 +356,14 @@ through the summary, and does not export a hidden spelling or constructor.
 Privacy and opacity therefore remain properties of source access even when a
 public scheme or implementation route carries the hidden identity.
 
+A transparent constructor projection preserves the defining checked constructor
+meaning: owner, declaration kind, ordered parameter identities and kinds,
+effective payload, constructor scheme and provenance. Admission authenticates
+that correspondence independently of the projected payload's kind. Imports and
+re-exports preserve the same defining fact, and body checking re-authenticates
+retained imported projections. The defining reference supplies no missing
+projected kind metadata, hidden source name or constructor access.
+
 For a `newtype`, that authenticated closure also retains the declaration kind,
 owner, ordered parameter identities and kinds, sole same-spelled constructor,
 canonical representation and provenance, and constructor access. A transparent

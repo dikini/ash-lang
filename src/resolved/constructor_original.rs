@@ -42,6 +42,21 @@ impl ConstructorOriginal {
         Self::from_checked(&self.0, work)
     }
 
+    #[cfg(test)]
+    pub(super) fn reminted_for_test(&self) -> Self {
+        Self(Arc::new((*self.0).clone()))
+    }
+
+    #[cfg(test)]
+    pub(super) fn stale_payload_for_test(&self, id: ConstructorId, payload: Type) -> Self {
+        let mut registry = (*self.0).clone();
+        let position = registry.constructor_positions[&id];
+        if let Some(previous) = registry.constructors[position].payload.replace(payload) {
+            discard_type_iteratively(previous);
+        }
+        Self(Arc::new(registry))
+    }
+
     /// Compare just this constructor meaning and its ordered owner formals.
     /// Parent scheme, kind, publication and access checks remain independent.
     #[expect(
@@ -120,5 +135,74 @@ impl ConstructorOriginal {
             return Err(invalid());
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn constructor_original_last_owner_refusal_and_replacement_drop_iteratively() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source =
+                    crate::source::SourceFile::new("constructor-original-drop", "C").unwrap();
+                let span = source
+                    .span(crate::source::ByteRange::new(0, 1).unwrap())
+                    .unwrap();
+                let id = NominalTypeId::new(ModuleId::new(10998), 0);
+                let fact = || {
+                    let mut origin = Origin::Source(span);
+                    let mut payload = Type::Int;
+                    for _ in 0..32768 {
+                        origin = Origin::Generated {
+                            cause: Box::new(origin),
+                            reason: crate::source::GeneratedReason::TypeChecking,
+                        };
+                        payload = Type::Function(Box::new(Type::Int), Box::new(payload));
+                    }
+                    let constructor = ConstructorId::new(id, 0);
+                    let mut registry = ResolvedRegistry::new(
+                        vec![ResolvedNominalType {
+                            id,
+                            declaration_kind: ResolvedNominalDeclarationKind::Data,
+                            spelling: "C".to_owned(),
+                            constructors: Box::new([constructor]),
+                            representation: None,
+                            representation_provenance: None,
+                            origin: Origin::Source(span),
+                        }],
+                        vec![ResolvedConstructor {
+                            id: constructor,
+                            owner: id,
+                            spelling: "C".to_owned(),
+                            payload: Some(payload),
+                            origin,
+                        }],
+                    );
+                    registry.nominal_parameters.insert(id, Box::new([]));
+                    ConstructorOriginal::from_checked(
+                        &Arc::new(registry),
+                        &mut TypeWorkBudget::with_limit(1),
+                    )
+                    .unwrap()
+                };
+                let original = fact();
+                assert!(original.retain(&mut TypeWorkBudget::with_limit(0)).is_err());
+                assert_eq!(Arc::strong_count(&original.0), 1);
+                let retained = original.retain(&mut TypeWorkBudget::with_limit(1)).unwrap();
+                assert_eq!(original, retained);
+                drop(original);
+                drop(retained);
+                let mut slot = Some(fact());
+                let previous = slot.replace(fact());
+                drop(previous);
+                drop(slot);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 }

@@ -532,3 +532,177 @@ fn checked_constructor_closure_checker_rejects_unused_constructor_scheme_only_mu
         "scheme-only corruption must reject at checker entry without a constructor use"
     );
 }
+
+#[test]
+fn checked_constructor_closure_original_rejects_missing_donor_stale_and_wrong_owner_kind() {
+    let mut projection = summary();
+    let (leaf, donor) = assert_payload_only_leaf(&projection);
+    let constructor = &projection.constructors["Envelope"];
+    let parameters = &projection.nominals["Envelope"].parameters;
+    let original = constructor.original.as_ref().unwrap();
+    for kind in [
+        ResolvedNominalDeclarationKind::Data,
+        ResolvedNominalDeclarationKind::Newtype,
+    ] {
+        assert_eq!(
+            original.authenticate(
+                constructor.id,
+                kind,
+                &constructor.spelling,
+                constructor.payload.as_ref(),
+                &constructor.origin,
+                parameters,
+                &mut TypeWorkBudget::default(),
+                &mut crate::interface::InterfaceConstraintBudget::default()
+            ),
+            if kind == ResolvedNominalDeclarationKind::Data {
+                Ok(())
+            } else {
+                Err(ResolvedBuildFailure::InvalidState)
+            }
+        );
+    }
+    let stale = original.stale_payload_for_test(constructor.id, Type::Nominal(donor));
+    projection
+        .constructors
+        .get_mut("Envelope")
+        .unwrap()
+        .original = Some(stale);
+    assert_eq!(
+        authenticate_default(&projection),
+        Err(ResolvedBuildFailure::InvalidState)
+    );
+    projection
+        .constructors
+        .get_mut("Envelope")
+        .unwrap()
+        .original = summary()
+        .constructors
+        .get_mut("Envelope")
+        .unwrap()
+        .original
+        .take();
+    assert_eq!(
+        authenticate_default(&projection),
+        Err(ResolvedBuildFailure::InvalidState)
+    );
+    projection
+        .constructors
+        .get_mut("Envelope")
+        .unwrap()
+        .original = None;
+    assert_eq!(
+        authenticate_default(&projection),
+        Err(ResolvedBuildFailure::InvalidState)
+    );
+    assert!(
+        projection.hidden_nominals.contains_key(&leaf)
+            && projection.hidden_nominals.contains_key(&donor)
+    );
+}
+
+#[test]
+fn checked_constructor_closure_resolved_import_keeps_original_and_payload_correspondence() {
+    crate::elaborate::check_module(resolved_constructor_consumer()).unwrap();
+    for mutation in 0..3 {
+        let mut changed = resolved_constructor_consumer();
+        let fact = changed
+            .imported
+            .constructors
+            .values_mut()
+            .find(|fact| fact.spelling == "Envelope")
+            .unwrap();
+        match mutation {
+            0 => fact.original = None,
+            1 => {
+                fact.original = summary()
+                    .constructors
+                    .get_mut("Envelope")
+                    .unwrap()
+                    .original
+                    .take()
+            }
+            2 => {
+                fact.original = Some(
+                    fact.original
+                        .as_ref()
+                        .unwrap()
+                        .stale_payload_for_test(fact.id, Type::Int),
+                )
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            crate::elaborate::check_module(changed).is_err(),
+            "resolved original corruption {mutation}"
+        );
+    }
+}
+
+#[test]
+fn checked_constructor_closure_fused_mirror_preserves_latent_rows_and_empty_equivalence() {
+    let summary = wrapper_summary_from_source(&format!(
+        "{PRODUCER}\npub effect Ping {{\n    ping : Unit -> Int\n}}\npub type Callback = Callback(Unit -> Int ! {{Ping}})\n"
+    ));
+    authenticate_default(&summary).unwrap();
+    let constructor = &summary.constructors["Callback"];
+    let payload = constructor.payload.as_ref().unwrap();
+    assert!(
+        matches!(payload, Type::EffectfulFunction(_, computation) if !computation.effects().is_empty())
+    );
+    let mut kinds = super::checked_wrapper_tests::capture_kinds_for_test(&summary);
+    kinds
+        .install_retained_effects(
+            &summary.effects,
+            &mut TypeWorkBudget::default(),
+            constructor.origin.primary_span(),
+        )
+        .unwrap();
+    let parameters = &summary.nominals["Callback"].parameters;
+    let check = |domain: Type, mirror: &Type| {
+        let scheme = Type::Function(
+            Box::new(domain),
+            Box::new(Type::Nominal(constructor.id.owner())),
+        );
+        kinds
+            .expect_body_free_constructor_value_type_with_ledger(
+                &scheme,
+                Some(mirror),
+                parameters,
+                constructor.origin.primary_span(),
+                &mut TypeWorkBudget::default(),
+            )
+            .is_ok()
+    };
+    assert!(check(
+        clone_type_with_budget(payload, &mut TypeWorkBudget::default()).unwrap(),
+        payload
+    ));
+    let pure = || Type::Function(Box::new(Type::Unit), Box::new(Type::Int));
+    let empty = || {
+        Type::EffectfulFunction(
+            Box::new(Type::Unit),
+            Box::new(crate::types::ComputationType::pure(Type::Int)),
+        )
+    };
+    let mixed = [
+        check(pure(), payload),
+        check(
+            clone_type_with_budget(payload, &mut TypeWorkBudget::default()).unwrap(),
+            &pure(),
+        ),
+    ];
+    assert_eq!(
+        mixed,
+        [false, false],
+        "mixed function presentations cannot erase a known latent effect"
+    );
+    for domain in [pure(), empty()] {
+        for mirror in [pure(), empty()] {
+            assert!(check(
+                clone_type_with_budget(&domain, &mut TypeWorkBudget::default()).unwrap(),
+                &mirror
+            ));
+        }
+    }
+}
