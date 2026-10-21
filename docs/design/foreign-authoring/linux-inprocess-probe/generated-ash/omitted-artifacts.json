@@ -1,0 +1,37 @@
+{
+  "reason": "Large binary/map/symbol evidence remains local by exact digest, not committed. The manifest equals the retained PR86 520-file manifest; no independent source-body inference or runtime-loaded closure is claimed.",
+  "artifacts": {
+    "whole-static.map": {
+      "sha256": "37f513443d247c81d2ee08cc172e363bd8227dcd47e157a55d99d76e83caba51",
+      "size_bytes": 223228495
+    },
+    "loader-reverse-callers.json": {
+      "sha256": "829d2b7789fc0b84aaf9167361556626838544e40fc766bba9f6aeb83337d9de",
+      "size_bytes": 21431
+    },
+    "image-symbols.txt": {
+      "sha256": "3303273834e836f22357bd362de2373af898cf23a8dff781a10b20cb96e02c10",
+      "size_bytes": 29496195
+    },
+    "source-configuration.json": {
+      "sha256": "d45733e793e0be34fe4373cdb04d81eeae0ea6b80e1826cb38c54390a9267d5d",
+      "size_bytes": 59285
+    },
+    "source-configuration-after.json": {
+      "sha256": "d45733e793e0be34fe4373cdb04d81eeae0ea6b80e1826cb38c54390a9267d5d",
+      "size_bytes": 59285
+    },
+    "static-host": {
+      "sha256": "45417a6db6fc41bd17b372b47423e06c57ecf55973a0a848c51a14f456537405",
+      "size_bytes": 70880176
+    },
+    "ordinary-host": {
+      "sha256": "bf54e71aeaaacdd7183fb8e0c10bfe18651af7075664a8a110e4e285df31bb50",
+      "size_bytes": 474876600
+    }
+  },
+  "local_root": "/tmp/ash-generated-scalar.d771qtm9",
+  "map_loads": 76,
+  "available_map_loads": 67,
+  "missing_compiler_temporary_map_loads": 9
+}

@@ -1,0 +1,56 @@
+{
+  "source": "83d050b40c92572b98b2d337f04126311373cd22",
+  "tree": "b22c8e6378b054e0c866faf5b2a171e89e06f16e",
+  "source_configuration_sha256": "0a042cd9ffceb29b394b8f92c8ab6c91c3abf35e21c8c7d15d1756596538b8c5",
+  "environment_overrides": {
+    "RUSTC_WRAPPER": "",
+    "RUSTC_WORKSPACE_WRAPPER": "",
+    "CARGO_BUILD_JOBS": "1"
+  },
+  "unset_environment": [
+    "RUSTFLAGS",
+    "CARGO_ENCODED_RUSTFLAGS",
+    "CARGO_BUILD_TARGET"
+  ],
+  "commands": [
+    {
+      "name": "compiler-build",
+      "command": [
+        "cargo",
+        "build",
+        "--offline",
+        "--locked",
+        "--jobs",
+        "1",
+        "--bin",
+        "ash",
+        "--target-dir",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target"
+      ],
+      "exit": 0,
+      "elapsed_seconds": 176.549,
+      "log_sha256": "cb446c9a5a1a49d12d91731d69399253a63eeaddf29a39c02ffeff8d7049281a"
+    },
+    {
+      "name": "ordinary-prepare",
+      "command": [
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/ash",
+        "build",
+        "--target",
+        "x86_64-unknown-linux-gnu",
+        "--cargo-target-dir",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+        "--native-static",
+        "/usr/lib/x86_64-linux-gnu/libc.a",
+        "--output",
+        "/tmp/ash-generated-scalar.dwlpe5nj/ordinary-host",
+        "/tmp/ash-generated-scalar.dwlpe5nj/entry.ash"
+      ],
+      "exit": 1,
+      "elapsed_seconds": 0.018,
+      "log_sha256": "d31067b59c93562735e7ebbd995d72f1380d7922a0e5f14d098e7d354f6621cb"
+    }
+  ],
+  "executed_generated_image": false,
+  "compiler_sha256": "a6068524ee48775391f72c3e49234c46becff06da68541bf4126e9537ed56dab"
+}

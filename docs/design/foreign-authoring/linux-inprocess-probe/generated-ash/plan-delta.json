@@ -1,0 +1,31 @@
+{
+  "authorized_input_delta": {
+    "author": "sole developer, after root approved the recommended correction",
+    "basis": "Existing signed foreign constant syntax; no source parser or product semantics change",
+    "changes": [
+      "Add passive foreign member const Negative : CInt = -7",
+      "Replace Abs.call (0 - 7) with Abs.call Negative"
+    ],
+    "compiler_reuse": "Same exact compiler, with full source/configuration manifest equality checked by sole operator",
+    "directory": "/tmp/ash-generated-scalar.d771qtm9",
+    "input_sha256": "885b517cce5d0af84d392e65b1881f54da1202b96700b1b196ee7d8da516f3ed",
+    "receipt_requirement": "Retain a new preparation/build receipt; original refusal and input remain unchanged."
+  },
+  "compiler_sha256": "a6068524ee48775391f72c3e49234c46becff06da68541bf4126e9537ed56dab",
+  "current_authority": "Preparation/static rebuild/inspection only, under sole build operator coordination. No generated image execution, approval-store provisioning, checked runtime permission or architecture acceptance.",
+  "frozen_source": "83d050b40c92572b98b2d337f04126311373cd22",
+  "original_attempt": {
+    "directory": "/tmp/ash-generated-scalar.dwlpe5nj",
+    "generated_image_executed": false,
+    "input_sha256": "084a9158b728396200ee1b243f30e32bc90a027ab1878beac1656c3a6d8322ee",
+    "observed_reasons": [
+      "parse.unclosed-group",
+      "parse.expected-form"
+    ],
+    "observed_stage": "Parser refusal before .ash-build generation",
+    "preparation_log_sha256": "d31067b59c93562735e7ebbd995d72f1380d7922a0e5f14d098e7d354f6621cb",
+    "receipt_sha256": "fa4a09e59a8d9c8119ec7e6f268ec5859ccaccf4869121918652987404725211"
+  },
+  "original_unexecuted_plan_sha256": "54f17dc169e44e77510f4c06b3c5b8c0324b4da0129f6b0830929f494e9d18fb",
+  "version": 1
+}

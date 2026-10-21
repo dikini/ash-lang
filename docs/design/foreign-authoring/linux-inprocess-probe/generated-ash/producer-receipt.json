@@ -1,0 +1,153 @@
+{
+  "version": 1,
+  "kind": "experimental-existing-profile-generated-ash-packaging",
+  "status": "inspection-only; static-closure acceptance unresolved; execution not approved",
+  "source_commit": "83d050b40c92572b98b2d337f04126311373cd22",
+  "source_tree": "b22c8e6378b054e0c866faf5b2a171e89e06f16e",
+  "source_configuration_sha256": "0a042cd9ffceb29b394b8f92c8ab6c91c3abf35e21c8c7d15d1756596538b8c5",
+  "original_failed_directory": "/tmp/ash-generated-scalar.dwlpe5nj",
+  "executed_new_image": false,
+  "artifacts": {
+    ".ash-build/ash-host-9-0/Cargo.lock": {
+      "sha256": "ed35efe81e41d4a43cac29f9c1751f74c70d89c12a30632afd2593902d70ad7c",
+      "size_bytes": 10121
+    },
+    ".ash-build/ash-host-9-0/Cargo.toml": {
+      "sha256": "4eebcef1d6245aa626bfa91680f20a290b957040880c6d2e74b1f670acb26af7",
+      "size_bytes": 253
+    },
+    ".ash-build/ash-host-9-0/native-build.log": {
+      "sha256": "3f6495146d41eda8eb9ed5870ac74e67d2cffc320622c321cff4718982601f54",
+      "size_bytes": 2080
+    },
+    ".ash-build/ash-host-9-0/rust-toolchain.toml": {
+      "sha256": "cdb9bea833b62d4c26fbba417000b2929746d667ba25ad4eee40dfa61aa75a89",
+      "size_bytes": 103
+    },
+    ".ash-build/ash-host-9-0/src/expected-facts.bin": {
+      "sha256": "d336689c4c7204996f9488fb8c134864b80c755ff4c250d3882d4ccf15236802",
+      "size_bytes": 6955
+    },
+    ".ash-build/ash-host-9-0/src/main.rs": {
+      "sha256": "5385e329cff8ccb607d843da0b66f1c9f7987fb5c46dd59253ea22c47107db91",
+      "size_bytes": 2793
+    },
+    ".ash-build/ash-host-9-0/src/program-image.bin": {
+      "sha256": "790599b7cecf17af18f263cd0f3b1b539c655895673680242521ea555cc888c3",
+      "size_bytes": 7833
+    },
+    "cargo-version.txt": {
+      "sha256": "2c97e98dc885dca3222f3d89cc82868f7e3bad5405cf7a8a0b6603fdfd9dde1b",
+      "size_bytes": 338
+    },
+    "cc-version.txt": {
+      "sha256": "f6ab9d76ae8dcab3e133254944fbc77f41e0ba766287e289345c1ab77df09c45",
+      "size_bytes": 238
+    },
+    "entry.ash": {
+      "sha256": "885b517cce5d0af84d392e65b1881f54da1202b96700b1b196ee7d8da516f3ed",
+      "size_bytes": 437
+    },
+    "generated-inputs.json": {
+      "sha256": "43daf66d38b76e80e378ce5f2c23d4fb011f11900c781e5d21032fd225c10ddb",
+      "size_bytes": 684
+    },
+    "image-elf.txt": {
+      "sha256": "f20128ea938c190348cf507a953cfa1b0baaad6f53699aa34ea7620c896dcc40",
+      "size_bytes": 3430
+    },
+    "image-symbols.txt": {
+      "sha256": "3303273834e836f22357bd362de2373af898cf23a8dff781a10b20cb96e02c10",
+      "size_bytes": 29496195
+    },
+    "inspect-loader-callers.py": {
+      "sha256": "0892cc5d05409d0df2997b3162ba801fbd7f673723d8703c5d13b81d05525eb3",
+      "size_bytes": 1351
+    },
+    "inspect-static-loader.py": {
+      "sha256": "d7c24a2b2608e8ae606a27b277f04f3ad5aae0ca952bab71c0534be3031bc795",
+      "size_bytes": 1279
+    },
+    "inspection.md": {
+      "sha256": "ca040d4dfce585f22affeffb21ecf9e27cbbd05453aadb07775002d4dd6f3f9a",
+      "size_bytes": 3286
+    },
+    "ld-version.txt": {
+      "sha256": "90619b44f5e33d31b24e5eaefa374736e4db86d56a01e8b1f6ceb0b4c2cab821",
+      "size_bytes": 281
+    },
+    "linked-input-census.json": {
+      "sha256": "3425ae51c95246304e6ca701d4f7becfd29304474bd3ca36468a86876ad9453a",
+      "size_bytes": 32001
+    },
+    "loader-direct-references.json": {
+      "sha256": "e8bd655a038df73e50370c2a9bbe04d6f2abc4a50b18fa641439b695eb784ec4",
+      "size_bytes": 2221
+    },
+    "loader-reverse-callers.json": {
+      "sha256": "829d2b7789fc0b84aaf9167361556626838544e40fc766bba9f6aeb83337d9de",
+      "size_bytes": 21431
+    },
+    "ordinary-host": {
+      "sha256": "bf54e71aeaaacdd7183fb8e0c10bfe18651af7075664a8a110e4e285df31bb50",
+      "size_bytes": 474876600
+    },
+    "ordinary-prepare.log": {
+      "sha256": "56406cfd310edf53149c6bb5c2a2444b657e5d7f2216ae4460e422b497306f84",
+      "size_bytes": 49
+    },
+    "preparation-receipt.json": {
+      "sha256": "b16601f179e3b2643bad4a5ec2dd880019d3fce8d0d4ada2cdb65fac016c8de9",
+      "size_bytes": 1990
+    },
+    "relink-generated-scalar.py": {
+      "sha256": "01e213dc2b07b54662f03f72677e0606484ce058d2b82da1080641c6b1463192",
+      "size_bytes": 3563
+    },
+    "retry-generated-scalar.py": {
+      "sha256": "3b117e3562d4da8c5cd57380b23ef1ab543aee82a496a4884dbf8c9eee0365d6",
+      "size_bytes": 2850
+    },
+    "run-generated-scalar.py": {
+      "sha256": "1329aeb0f76fc627a51083d6de78a09d8dbd7fc4e418d3466147140f69e8f896",
+      "size_bytes": 3421
+    },
+    "rustc-version.txt": {
+      "sha256": "b2bdf493bcf6d1dc55181a0efc2774b6d9cf7bf5c8dcc5bed592c994b2ad38c4",
+      "size_bytes": 196
+    },
+    "source-configuration-after.json": {
+      "sha256": "d45733e793e0be34fe4373cdb04d81eeae0ea6b80e1826cb38c54390a9267d5d",
+      "size_bytes": 59285
+    },
+    "source-configuration.json": {
+      "sha256": "d45733e793e0be34fe4373cdb04d81eeae0ea6b80e1826cb38c54390a9267d5d",
+      "size_bytes": 59285
+    },
+    "source-pin.txt": {
+      "sha256": "20d28f9a0465af72616eca68cf613c1d16fa605c6c1b2650ef5a2ad1efca88f0",
+      "size_bytes": 991
+    },
+    "source-tree.txt": {
+      "sha256": "770b71f6bced67565318811eb5d67e46d332e405f6c7ba4288fa475b22936aaf",
+      "size_bytes": 41
+    },
+    "static-build-receipt.json": {
+      "sha256": "db59e9c850d895bbff5d26905bb07ad10d82777d7362ab9066c35dd126eb81bd",
+      "size_bytes": 2855
+    },
+    "static-host": {
+      "sha256": "45417a6db6fc41bd17b372b47423e06c57ecf55973a0a848c51a14f456537405",
+      "size_bytes": 70880176
+    },
+    "whole-static-build.log": {
+      "sha256": "87f83821dae6f9c91324c225b113bb9db4f3f7139aa07ddcc3dbfeb7d2472b8d",
+      "size_bytes": 20530
+    },
+    "whole-static.map": {
+      "sha256": "37f513443d247c81d2ee08cc172e363bd8227dcd47e157a55d99d76e83caba51",
+      "size_bytes": 223228495
+    }
+  },
+  "limits": "No production admission or complete runtime-loaded closure claim; all unavailable map intermediates recorded; existing1MiB bound unchanged."
+}

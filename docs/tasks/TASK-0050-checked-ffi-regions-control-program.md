@@ -76,6 +76,14 @@ Main parent, all six design pins, unchanged product/spec/old cell evidence,
 no restored retired artifacts, and 453 local committed links/anchors. Two minor
 wording/index findings are repaired in this preparation revision.
 
+The later F2 [generated Ash packaging comparison](../design/foreign-authoring/linux-inprocess-probe/generated-ash/README.md)
+retains actual compiler/generated bridge/private-payload digests, the initial
+parser refusal and corrected fixture, successful whole-static linking, ELF data
+and linked-input provenance. No image execution accompanied packaging. Retained
+libc loader paths leave the proposed no-loading requirement unmet; a separately
+bounded diagnostic and final evidence review remain pending. This accepts no AD,
+F2 checkbox or product execution authority.
+
 Remaining: current PR retention/review, concrete delegated Linux controls and
 Stage B enforcement evidence, F2 architecture acceptance, product implementation
 and all product gates. Stage A is environmental evidence,
