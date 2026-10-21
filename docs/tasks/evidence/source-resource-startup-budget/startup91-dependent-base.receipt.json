@@ -1,0 +1,33 @@
+{
+  "source_commit": "a301a654bff2b7caed4befc32ce038abcf85dd7e",
+  "source_root": "/tmp/ash-startup91-base-r9c6nkik",
+  "archive_path": "/tmp/checked-ffi-hosts/startup91-dependent-base.tar",
+  "archive_sha256": "3135624b42e8d8bf954b8d701bc3e29b097f10966ad078ee3d32ca6ebe1252b8",
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "ash",
+    "--locked",
+    "--lib",
+    "build::image::source_resource_image::tests::dependent_discard_image_checks_original_facts_under_normal_cumulative_work",
+    "--",
+    "--exact",
+    "--nocapture"
+  ],
+  "environment": {
+    "RUSTC_WRAPPER": "",
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target"
+  },
+  "exit": 101,
+  "elapsed_seconds": 402.784,
+  "tracked_git_blob_comparison": true,
+  "source_configuration_before_after_equal": true,
+  "file_count": 523,
+  "source_configuration_tree_sha256": "34de4cca6f3d106f005f7df2d72efcff97f4ab464ecfb499fba986427d0d342a",
+  "log_sha256": "2eeb2d3095c41cb5b2b794a8ced3becb03a8a8b8e8a1a9ceabe9c9038f510f69",
+  "unit_binary": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168",
+  "unit_binary_sha256": "6a6f5d702829908e5dd460d7e3f144e3f1d2eca56c0348259e98f5102df0e784",
+  "configuration_difference": "Exact tracked bytes verified against retained Git blobs. CARGO_MANIFEST_DIR and source paths refer to this disposable /tmp archive, not the managed worktree. Same shared target, one job, empty RUSTC_WRAPPER. No native execution requested."
+}

@@ -8,8 +8,8 @@
 use super::checked_source::{ForeignAdmissionError, ForeignAdmissionReason, charge, failure};
 use crate::{
     module::{
-        ForeignCheckedNominalRole as Role, ModuleId, foreign_builtin_source_text,
-        foreign_native_host_ranges,
+        ForeignCheckedNominalRole as Role, ForeignNominalCoordinates, ModuleId,
+        foreign_builtin_source_text, foreign_native_host_ranges, foreign_nominal_coordinates,
     },
     resolved::{
         CanonicalNominalKind, ResolvedEffectDeclaration, ResolvedNominalDeclarationKind,
@@ -75,40 +75,29 @@ pub(crate) fn authenticate_checked_builtins(
     {
         return Err(invalid());
     }
-    // Pay the bounded canonical declaration/constructor and host-coordinate scans.
-    charge(work, text.len().saturating_mul(3), source)?;
-    let (mut offset, mut local, mut materialized, mut constructors) = (0, 0, 0, 0);
-    while offset < text.len() {
-        let rest = &text[offset..];
-        if rest.starts_with("pub type ") || rest.starts_with("pub opaque type ") {
-            let end = rest
-                .find("\npub ")
-                .or_else(|| rest.find("\nnative_host_metadata :"))
-                .unwrap_or(rest.len());
-            let declaration = rest[..end].trim_end();
-            let shape = SHAPES.get(local).ok_or_else(invalid)?;
-            if local >= 6 {
-                let role = CHECKED_ROLES.get(local - 6).ok_or_else(invalid)?;
-                if role.local() as usize != local
-                    || role.constructor_count() != shape.constructors.len()
-                {
-                    return Err(invalid());
-                }
-            }
-            let range = coordinates(offset, offset + declaration.len()).ok_or_else(invalid)?;
-            let id = NominalTypeId::new(module, u32::try_from(local).map_err(|_| invalid())?);
-            if authenticate_nominal(registry, source, id, declaration, range, shape, work)? {
-                materialized += 1;
-                constructors += shape.constructors.len();
-            }
-            local += 1;
-            offset += end;
-        } else {
-            offset += rest.find('\n').map_or(rest.len(), |end| end + 1);
-        }
-    }
-    if local != SHAPES.len() {
+    // Expected coordinates come only from immutable compiler text at const
+    // evaluation. Runtime rows still authenticate every supplied original.
+    let expected = foreign_nominal_coordinates();
+    charge(work, expected.len(), source)?;
+    let (mut materialized, mut constructors) = (0, 0);
+    if expected.len() != SHAPES.len() {
         return Err(invalid());
+    }
+    for (local, coordinates) in expected.iter().enumerate() {
+        let shape = SHAPES.get(local).ok_or_else(invalid)?;
+        if local >= 6 {
+            let role = CHECKED_ROLES.get(local - 6).ok_or_else(invalid)?;
+            if role.local() as usize != local
+                || role.constructor_count() != shape.constructors.len()
+            {
+                return Err(invalid());
+            }
+        }
+        let id = NominalTypeId::new(module, u32::try_from(local).map_err(|_| invalid())?);
+        if authenticate_nominal(registry, source, id, coordinates, shape, work)? {
+            materialized += 1;
+            constructors += shape.constructors.len();
+        }
     }
     reject_extra_roles(registry, module, source, materialized, constructors, work)?;
     let host = registry
@@ -297,9 +286,6 @@ const SHAPES: &[NominalShape] = &[
         ],
     },
 ];
-fn coordinates(start: usize, end: usize) -> Option<ByteRange> {
-    ByteRange::new(u32::try_from(start).ok()?, u32::try_from(end).ok()?).ok()
-}
 fn original(origin: &Origin, source: Span, range: ByteRange) -> bool {
     matches!(origin, Origin::Source(span) if span.source() == source.source() && span.range() == range)
 }
@@ -342,13 +328,18 @@ fn authenticate_nominal(
     registry: &ResolvedRegistry,
     source: Span,
     id: NominalTypeId,
-    declaration: &str,
-    range: ByteRange,
+    coordinates: &ForeignNominalCoordinates,
     shape: &NominalShape,
     work: &mut TypeWorkBudget,
 ) -> Result<bool, ForeignAdmissionError> {
     let module = id.module();
     let invalid = || failure(ForeignAdmissionReason::InvalidCodec, source);
+    let range = coordinates.declaration;
+    if coordinates.formals().len() != shape.formals.len()
+        || coordinates.constructors().len() != shape.constructors.len()
+    {
+        return Err(invalid());
+    }
     charge(work, 5, source)?;
     let Some(nominal) = registry.nominal(id) else {
         let kind_matches = match (id.declaration(), registry.nominal_kind(id)) {
@@ -392,12 +383,9 @@ fn authenticate_nominal(
     if parameters.len() != shape.formals.len() {
         return Err(invalid());
     }
-    let declaration_start = usize::try_from(range.start()).map_err(|_| invalid())?;
     for (position, (parameter, local)) in parameters.iter().zip(shape.formals).enumerate() {
         charge(work, 3, source)?;
-        let offset =
-            declaration_start + declaration.find('<').ok_or_else(invalid)? + 1 + position * 3;
-        let formal = coordinates(offset, offset + 1).ok_or_else(invalid)?;
+        let formal = *coordinates.formals().get(position).ok_or_else(invalid)?;
         let canonical = registry
             .type_variable(TypeVariableId::resolved(module, *local))
             .ok_or_else(invalid)?;
@@ -411,21 +399,15 @@ fn authenticate_nominal(
             return Err(invalid());
         }
     }
-    let equal = declaration.find('=').ok_or_else(invalid)?;
-    let mut constructor_start = declaration_start + equal + 1;
-    let mut count = 0;
-    for (ordinal, raw) in declaration[equal + 1..].split('|').enumerate() {
+    for (ordinal, constructor_range) in coordinates.constructors().iter().enumerate() {
         charge(work, 3, source)?;
         let expected = shape.constructors.get(ordinal).ok_or_else(invalid)?;
-        let trimmed = raw.trim();
-        let start = constructor_start + raw.len() - raw.trim_start().len();
-        let constructor_range = coordinates(start, start + trimmed.len()).ok_or_else(invalid)?;
         let identity = ConstructorId::new(id, u32::try_from(ordinal).map_err(|_| invalid())?);
         let constructor = registry.constructor(identity).ok_or_else(invalid)?;
         if nominal.constructors[ordinal] != identity
             || constructor.id != identity
             || constructor.owner != id
-            || !original(&constructor.origin, source, constructor_range)
+            || !original(&constructor.origin, source, *constructor_range)
         {
             return Err(invalid());
         }
@@ -434,11 +416,6 @@ fn authenticate_nominal(
             (Some(expected), Some(actual)) if expected.matches(actual, module, source, work)? => {}
             _ => return Err(invalid()),
         }
-        constructor_start += raw.len() + 1;
-        count += 1;
-    }
-    if count != shape.constructors.len() {
-        return Err(invalid());
     }
     Ok(true)
 }
@@ -532,7 +509,7 @@ pub(crate) fn is_canonical_native_host_declaration(
     source: Span,
     work: &mut TypeWorkBudget,
 ) -> Result<bool, ForeignAdmissionError> {
-    charge(work, foreign_builtin_source_text().len() + 6, source)?;
+    charge(work, 6, source)?;
     let Some((anchor, name, formal)) = foreign_native_host_ranges(source) else {
         return Ok(false);
     };
@@ -687,18 +664,34 @@ mod tests {
         );
         let required = work.used();
         assert!(required > 0);
-        for allowance in [required - 1, required, required] {
-            let result = authenticate_checked_builtins(
-                &registry,
-                module,
-                source,
-                &mut TypeWorkBudget::with_limit(allowance),
-            );
-            if allowance < required {
-                assert!(result.unwrap_err().is_resource_exhaustion());
-            } else {
-                assert_eq!(result.unwrap(), facts);
+        for prefix in [0, 11] {
+            for allowance in [required - 1, required, required] {
+                let mut bounded = TypeWorkBudget::with_limit(prefix + allowance);
+                bounded.charge(prefix).unwrap();
+                let result = authenticate_checked_builtins(&registry, module, source, &mut bounded);
+                if allowance < required {
+                    assert!(result.unwrap_err().is_resource_exhaustion());
+                } else {
+                    assert_eq!(result.unwrap(), facts);
+                    assert_eq!(bounded.used(), prefix + required);
+                    // Const expected coordinates carry no prior registry verdict.
+                    assert!(
+                        authenticate_checked_builtins(&registry, module, source, &mut bounded,)
+                            .unwrap_err()
+                            .is_resource_exhaustion()
+                    );
+                }
             }
+            let mut repeated = TypeWorkBudget::with_limit(prefix + 2 * required);
+            repeated.charge(prefix).unwrap();
+            for _ in 0..2 {
+                assert_eq!(
+                    authenticate_checked_builtins(&registry, module, source, &mut repeated,)
+                        .unwrap(),
+                    facts
+                );
+            }
+            assert_eq!(repeated.used(), prefix + 2 * required);
         }
         assert!(
             is_canonical_native_host(

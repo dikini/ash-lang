@@ -1,0 +1,19 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "ash",
+    "--locked",
+    "--lib",
+    "core::validate::source_declarations::tests::checked_builtin_original",
+    "--",
+    "--nocapture"
+  ],
+  "exit": 0,
+  "elapsed_seconds": 0.427,
+  "source_configuration_before_after_equal": true,
+  "file_count": 524,
+  "source_configuration_tree_sha256": "b9b5beaee042251da30e7c782f1a16e60977ce39a6ea7d74d7aa03c023fa7a98",
+  "log_sha256": "4a4563da9782b27ef01df54795e9553f06aa6ad200e922b56c506d7ca052f601"
+}

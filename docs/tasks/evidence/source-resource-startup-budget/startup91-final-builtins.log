@@ -1,0 +1,10 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 3 tests
+test foreign::checked_builtins::tests::checked_builtin_display_aliases_preserve_roles_but_not_forged_declarations ... ok
+test foreign::checked_builtins::tests::checked_builtin_full_original_inventory_authenticates_at_exact_work ... ok
+test foreign::checked_builtins::tests::checked_builtin_reconstruction_rejects_donor_payload_origin_and_formals ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1989 filtered out; finished in 0.01s
+

@@ -181,13 +181,17 @@ controls, 58 implementation regressions, 86 integrations and targeted Clippy.
 The imported selection is explicitly 33/34: its one default-startup failure also
 occurs at the exact retained base and remains assigned to issue #91. A paid lazy
 host census preserves the ordinary no-host ordering tariff; it grants no host
-permission. Independent review, integration and partial acceptance remain
-pending. No whole-task criterion is accepted.
+permission. Independent review cleared `9ad7ce15`; GitHub squash-retained
+[PR #89](https://github.com/dikini/ash-lang/pull/89) at
+`a301a654bff2b7caed4befc32ce038abcf85dd7e` with its exact reviewed tree. The
+author read back partial issue #59 acceptance, reviewer audited actual retention
+and the orchestrator confirmed advancement. No whole-task criterion is accepted.
 
 The selected checkpoint's affected regression selection also reproduces the
 existing imported native-buffer default-startup failure at retained `0a856957`.
 [Issue #91](https://github.com/dikini/ash-lang/issues/91) owns its repair after this
-checkpoint, before nominal/resource closure. The default allowance and required
+checkpoint under [TASK-0052](TASK-0052-source-resource-default-startup-budget.md),
+before nominal/resource closure. The default allowance and required
 F-core gate remain unchanged; the selected delivery must qualify this failure.
 
 ## Verification
