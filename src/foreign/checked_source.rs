@@ -47,6 +47,43 @@ impl NativeLibraryId {
     }
 }
 
+/// Reconstruct the selected checked H from the complete original actual vector.
+/// The returned row member supplies no native execution capability.
+pub(crate) fn checked_host_instance(
+    symbol: &CheckedForeignSymbol,
+    actual: &crate::types::EffectInstance,
+    work: &mut TypeWorkBudget,
+) -> Result<Option<crate::types::EffectInstance>, ForeignAdmissionError> {
+    let span = symbol.call_codec().source();
+    charge(work, 3, span)?;
+    let Some(contract) = symbol.prepared().checked_contract() else {
+        return Ok(None);
+    };
+    let selected = contract
+        .symbols()
+        .get(symbol.symbol_index())
+        .ok_or_else(|| failure(ForeignAdmissionReason::InvalidParameters, span))?;
+    if actual.effect() != symbol.effect()
+        || actual.arguments().len() != symbol.parameter_ids().len()
+    {
+        return Err(failure(ForeignAdmissionReason::InvalidParameters, span));
+    }
+    let Some(crate::types::KindedArgument::TypeArg(host)) =
+        actual.arguments().get(selected.host_parameter())
+    else {
+        return Err(failure(ForeignAdmissionReason::InvalidParameters, span));
+    };
+    let host = clone_type_with_budget(host, work)
+        .map_err(|()| failure(ForeignAdmissionReason::WorkExhausted, span))?;
+    Ok(Some(crate::types::EffectInstance::new_kinded(
+        EffectId::new(
+            symbol.call_codec().module(),
+            crate::module::FOREIGN_NATIVE_HOST_LOCAL,
+        ),
+        Box::new([crate::types::KindedArgument::TypeArg(host)]),
+    )))
+}
+
 /// Candidate roles supplied by admission of the compiler-owned common module.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ForeignCallCodecIds {
@@ -453,6 +490,18 @@ fn authenticate_codec(
     registry: &ResolvedRegistry,
     work: &mut TypeWorkBudget,
 ) -> Result<(), ForeignAdmissionError> {
+    if ids.call == NominalTypeId::new(module, 12) {
+        let facts =
+            super::checked_builtins::authenticate_checked_builtins(registry, module, source, work)?;
+        if ids.call != facts.checked_call()
+            || ids.returned != facts.returned()
+            || ids.conversion_failed != facts.conversion_failed()
+            || ids.conversion_error != NominalTypeId::new(module, 0)
+        {
+            return Err(failure(ForeignAdmissionReason::InvalidCodec, source));
+        }
+        return Ok(());
+    }
     charge(work, 9, source)?;
     if !module.is_builtin_foreign()
         || ids.conversion_error != NominalTypeId::new(module, 0)
@@ -555,6 +604,41 @@ pub(crate) fn bind_foreign_symbol(
         charge(work, 1, effect.span)?;
         return Err(failure(ForeignAdmissionReason::InvalidLibrary, effect.span));
     }
+    bind_foreign_symbol_for_profile(library, prepared, symbol_index, effect, context, work)
+}
+
+/// Explicit static checked binding; it grants no executable runtime authority.
+pub(crate) fn bind_checked_foreign_symbol(
+    library: NativeLibraryId,
+    prepared: Arc<PreparedForeignLibrary>,
+    symbol_index: usize,
+    effect: &ResolvedEffectDeclaration,
+    context: &ForeignBindingContext<'_>,
+    work: &mut TypeWorkBudget,
+) -> Result<CheckedForeignSymbol, ForeignAdmissionError> {
+    charge(work, 1, effect.span)?;
+    if prepared.checked_contract().is_none()
+        || !matches!(
+            prepared
+                .symbols()
+                .get(symbol_index)
+                .map(PreparedForeignSymbol::call),
+            Some(PreparedForeignCall::Scalar { .. })
+        )
+    {
+        return Err(failure(ForeignAdmissionReason::InvalidLibrary, effect.span));
+    }
+    bind_foreign_symbol_for_profile(library, prepared, symbol_index, effect, context, work)
+}
+
+fn bind_foreign_symbol_for_profile(
+    library: NativeLibraryId,
+    prepared: Arc<PreparedForeignLibrary>,
+    symbol_index: usize,
+    effect: &ResolvedEffectDeclaration,
+    context: &ForeignBindingContext<'_>,
+    work: &mut TypeWorkBudget,
+) -> Result<CheckedForeignSymbol, ForeignAdmissionError> {
     let owner = match prepared
         .symbols()
         .get(symbol_index)
@@ -735,6 +819,12 @@ fn validate_foreign_symbol_source<'effect>(
         .symbols()
         .get(symbol_index)
         .ok_or_else(|| failure(ForeignAdmissionReason::InvalidLibrary, library_span))?;
+    charge(work, 1, library_span)?;
+    if prepared.checked_contract().is_some()
+        != (codec.ids().call == NominalTypeId::new(codec.module(), 12))
+    {
+        return Err(failure(ForeignAdmissionReason::InvalidCodec, library_span));
+    }
     let span = primary_span(symbol.origin(), work, library_span)?;
     if !contains(library_span, span)
         || effect.span != span

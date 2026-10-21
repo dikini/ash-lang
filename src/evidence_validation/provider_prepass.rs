@@ -29,29 +29,50 @@ pub(crate) fn source_provider_occurrences<'a>(
     program: &'a ResolvedModuleProgram,
     work: &mut TypeWorkBudget,
 ) -> Result<Vec<SourceProviderOccurrence<'a>>, EvidenceValidationFailure> {
-    resource_occurrences(program, work, false)
+    resource_occurrences(program, work, false, None)
 }
 
-pub(super) fn source_resource_occurrences<'a>(
+pub(super) struct SourceScopeOccurrences<'a> {
+    pub(super) resources: Vec<SourceProviderOccurrence<'a>>,
+    pub(super) hosts: Vec<(&'a crate::resolved::ResolvedForeignHostExpr, Span)>,
+}
+
+pub(super) fn source_scope_occurrences<'a>(
     program: &'a ResolvedModuleProgram,
     work: &mut TypeWorkBudget,
-) -> Result<Vec<SourceProviderOccurrence<'a>>, EvidenceValidationFailure> {
-    resource_occurrences(program, work, true)
+) -> Result<SourceScopeOccurrences<'a>, EvidenceValidationFailure> {
+    let mut hosts = Vec::new();
+    let resources = resource_occurrences(program, work, true, Some(&mut hosts))?;
+    Ok(SourceScopeOccurrences { resources, hosts })
 }
 
 fn resource_occurrences<'a>(
     program: &'a ResolvedModuleProgram,
     work: &mut TypeWorkBudget,
     source_resource: bool,
+    mut hosts: Option<&mut Vec<(&'a crate::resolved::ResolvedForeignHostExpr, Span)>>,
 ) -> Result<Vec<SourceProviderOccurrence<'a>>, EvidenceValidationFailure> {
     let span = program.result().span;
     // Without an admitted defining family no source provider instance can have
     // passed module checking. Keep the ordinary pipeline's prior work path.
-    if if source_resource {
-        program.registry().source_resource_facts().next().is_none()
+    let host_scan = if hosts.is_some() {
+        work.charge(program.registry().effects().len())
+            .map_err(|()| type_resource(span))?;
+        program
+            .registry()
+            .effects()
+            .iter()
+            .any(|effect| effect.id.module().is_builtin_foreign())
     } else {
-        program.registry().provider_contract_count() == 0
-    } {
+        false
+    };
+    if !host_scan
+        && if source_resource {
+            program.registry().source_resource_facts().next().is_none()
+        } else {
+            program.registry().provider_contract_count() == 0
+        }
+    {
         return Ok(Vec::new());
     }
     let mut pending = Vec::new();
@@ -152,6 +173,22 @@ fn resource_occurrences<'a>(
             }
             SourceItem::Declaration(ResolvedLocalDeclaration::Newtype(_)) => {}
             SourceItem::Expression(expression) => match &expression.kind {
+                ResolvedExprKind::ForeignHost(host) => {
+                    if let Some(hosts) = hosts.as_deref_mut() {
+                        work.charge(1)
+                            .map_err(|()| type_resource(expression.span))?;
+                        hosts
+                            .try_reserve(1)
+                            .map_err(|_| type_resource(expression.span))?;
+                        hosts.push((host, expression.span));
+                    }
+                    push(
+                        &mut pending,
+                        SourceItem::Expression(&host.body),
+                        work,
+                        expression.span,
+                    )?;
+                }
                 ResolvedExprKind::CopyWindow(window) => {
                     push(
                         &mut pending,

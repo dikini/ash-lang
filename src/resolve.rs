@@ -1558,6 +1558,30 @@ pub fn resolve_module(
     resolve_module_with_budget(loaded, dependencies, &mut type_work, &mut constraint_work)
 }
 
+/// Resolves source under the explicit static checked foreign profile.
+///
+/// This checks original source contracts and lexical host authority only. It
+/// supplies no launch policy, native runtime or executable image permission.
+/// Default module resolution, program building and running remain separate.
+///
+/// # Errors
+/// Returns source/name/kind/contract errors or bounded checking exhaustion.
+pub fn resolve_checked_foreign_module(
+    loaded: &LoadedModule,
+    dependencies: &[DependencyExports<'_>],
+) -> Result<ResolvedModule, ResolveModuleError> {
+    let mut type_work = TypeWorkBudget::default();
+    let mut constraint_work = InterfaceConstraintBudget::default();
+    resolve_module_for_foreign_profile(
+        loaded,
+        dependencies,
+        &mut type_work,
+        &mut constraint_work,
+        None,
+        true,
+    )
+}
+
 /// Resolves one module while sharing type-work accounting across a graph pass.
 pub(crate) fn resolve_module_with_budget(
     loaded: &LoadedModule,
@@ -1577,12 +1601,31 @@ pub(crate) fn resolve_module_with_foreign_catalog(
     constraint_work: &mut InterfaceConstraintBudget,
     catalogue: Option<&mut Vec<Arc<crate::foreign::source_contract::PreparedForeignLibrary>>>,
 ) -> Result<ResolvedModule, ResolveModuleError> {
+    resolve_module_for_foreign_profile(
+        loaded,
+        dependencies,
+        type_work,
+        constraint_work,
+        catalogue,
+        false,
+    )
+}
+
+fn resolve_module_for_foreign_profile(
+    loaded: &LoadedModule,
+    dependencies: &[DependencyExports<'_>],
+    type_work: &mut TypeWorkBudget,
+    constraint_work: &mut InterfaceConstraintBudget,
+    catalogue: Option<&mut Vec<Arc<crate::foreign::source_contract::PreparedForeignLibrary>>>,
+    checked_foreign_profile: bool,
+) -> Result<ResolvedModule, ResolveModuleError> {
     let admission = resolve_module_names_with_budget(
         loaded,
         dependencies,
         type_work,
         constraint_work,
         catalogue,
+        checked_foreign_profile,
     )
     .map_err(ResolveModuleError::Resolution)?;
     finish_module_resolution(loaded, dependencies, type_work, admission)
@@ -1655,9 +1698,54 @@ fn resolve_module_names_with_budget(
     type_work: &mut TypeWorkBudget,
     constraint_work: &mut InterfaceConstraintBudget,
     catalogue: Option<&mut Vec<Arc<crate::foreign::source_contract::PreparedForeignLibrary>>>,
+    checked_foreign_profile: bool,
 ) -> Result<ResolvedModuleAdmission, ResolveError> {
     let module = loaded.id();
     let surface = loaded.surface();
+    // Reserved identities are observable coordinates. Authenticate the actual
+    // source bytes before any role can be reconstructed from those coordinates.
+    type_work.charge(dependencies.len()).map_err(|()| {
+        error(
+            ResolveReason::TypeResourceExhausted,
+            surface.span,
+            "builtin dependency-source traversal exceeded its type-work budget",
+        )
+    })?;
+    let mut authenticate_builtin_source = |owner: ModuleId, source: &crate::source::SourceFile| {
+        type_work.charge(1).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                surface.span,
+                "builtin source-candidate traversal exceeded its type-work budget",
+            )
+        })?;
+        if !owner.is_builtin_foreign() {
+            return Ok(());
+        }
+        type_work
+            .charge(source.text().len().saturating_add(1))
+            .map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    surface.span,
+                    "builtin source authentication exceeded its type-work budget",
+                )
+            })?;
+        if source.text() != crate::module::foreign_builtin_source_text() {
+            return Err(error(
+                ResolveReason::ImportConflict,
+                surface.span,
+                "reserved Foreign identity requires the immutable builtin source",
+            ));
+        }
+        Ok(())
+    };
+    authenticate_builtin_source(module, loaded.source())?;
+    for dependency in dependencies {
+        for (owner, source) in dependency.summary.defining_sources() {
+            authenticate_builtin_source(*owner, source)?;
+        }
+    }
     reject_duplicate_module_aliases(surface)?;
     if dependencies.len() != loaded.dependencies().len()
         || surface.imports.len() != loaded.dependencies().len()
@@ -1718,6 +1806,8 @@ fn resolve_module_names_with_budget(
         std::mem::take(type_work),
         std::mem::take(constraint_work),
     );
+    resolver.checked_foreign_profile = checked_foreign_profile;
+    resolver.builtin_foreign_source = module.is_builtin_foreign().then_some(surface.span);
     let result = (|| {
         resolver
             .constraint_work
@@ -2551,6 +2641,8 @@ fn surface_definition_name(definition: &SurfaceDefinition) -> &crate::surface::S
 
 struct Resolver {
     module: ModuleId,
+    checked_foreign_profile: bool,
+    builtin_foreign_source: Option<Span>,
     builtin_cell: Option<ModuleId>,
     resource_families: HashMap<NominalTypeId, crate::resolved::ResourceDefinitionId>,
     source_resource_owned_positions: HashMap<NominalTypeId, usize>,
@@ -3012,6 +3104,8 @@ impl Resolver {
             resource_provider_interfaces: HashMap::new(),
             resource_origins: HashMap::new(),
             next_binder: 0,
+            checked_foreign_profile: false,
+            builtin_foreign_source: None,
             builtin_cell: None,
             next_type_variable: 0,
             next_lexical_nominal: 0,
@@ -11346,14 +11440,28 @@ impl Resolver {
             name.span,
             "type-parameter spelling storage could not be reserved",
         )?;
-        let id = TypeVariableId::resolved(self.module, self.next_type_variable);
-        self.next_type_variable = self.next_type_variable.checked_add(1).ok_or_else(|| {
-            identity_error(
-                ResolveIdentitySpace::TypeBinder,
-                name.span,
-                "the program contains too many type binders",
-            )
-        })?;
+        let local = if let Some(source) = self.builtin_foreign_source {
+            crate::module::foreign_type_formal_local(source, name.span).ok_or_else(|| {
+                error(
+                    ResolveReason::ForeignContract,
+                    name.span,
+                    "builtin foreign formal has no original canonical coordinate",
+                )
+            })?
+        } else {
+            self.next_type_variable
+        };
+        let id = TypeVariableId::resolved(self.module, local);
+        self.next_type_variable = local
+            .checked_add(1)
+            .map(|next| self.next_type_variable.max(next))
+            .ok_or_else(|| {
+                identity_error(
+                    ResolveIdentitySpace::TypeBinder,
+                    name.span,
+                    "the program contains too many type binders",
+                )
+            })?;
         Ok(ResolvedTypeVariable {
             id,
             spelling,
@@ -12056,6 +12164,144 @@ impl Resolver {
     }
 
     // Keep window-only lookup temporaries off ordinary expression frames.
+    fn schedule_foreign_host<'a>(
+        &mut self,
+        source: &'a crate::surface::SurfaceForeignHostExpr,
+        span: Span,
+        tasks: &mut ResolveTaskBuffer<'a>,
+    ) -> Result<(), ResolveError> {
+        if !self.checked_foreign_profile {
+            return Err(error(
+                ResolveReason::ForeignContract,
+                span,
+                "checked foreign hosts require explicit static checked-profile admission",
+            ));
+        }
+        let mut selected = None;
+        for effect in self.imported.effects() {
+            self.type_work.charge(1).map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "host original lookup exhausted its work budget",
+                )
+            })?;
+            if effect.id.module().is_builtin_foreign()
+                && effect.id.declaration() == crate::module::FOREIGN_NATIVE_HOST_LOCAL
+            {
+                if selected.is_some_and(|old| old != effect.id) {
+                    return Err(error(
+                        ResolveReason::ForeignContract,
+                        span,
+                        "host builtin originals disagree",
+                    ));
+                }
+                selected = Some(effect.id);
+            }
+        }
+        let effect = selected.ok_or_else(|| {
+            error(
+                ResolveReason::ForeignContract,
+                span,
+                "a checked host requires its original builtin Foreign dependency",
+            )
+        })?;
+        let identity = self.allocate_type_variable(&source.identity, None, Kind::Type)?;
+        self.type_work
+            .charge(4usize.saturating_add(identity.spelling.len().saturating_mul(2)))
+            .map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "host scope preparation exhausted its work budget",
+                )
+            })?;
+        self.lexical_method_parameters
+            .0
+            .try_reserve(1)
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "host identity retention could not reserve storage",
+                )
+            })?;
+        let retained = self.clone_type_variable_for_retention(
+            &identity,
+            span,
+            "host identity retention exhausted its work budget",
+        )?;
+        let spelling = try_clone_resolution_string(
+            &identity.spelling,
+            source.identity.span,
+            "host scope name could not reserve storage",
+        )?;
+        let mut scope = HashMap::new();
+        scope.try_reserve(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "host type scope could not reserve storage",
+            )
+        })?;
+        scope.insert(spelling, identity.id);
+        self.type_scopes.try_reserve(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "host scope stack could not reserve storage",
+            )
+        })?;
+        tasks.0.try_reserve(2).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "host resolution tasks could not reserve storage",
+            )
+        })?;
+        let type_scope_checkpoint = self.type_scopes.len();
+        self.lexical_method_parameters.push(retained);
+        self.type_scopes.push(scope);
+        tasks.push(ResolveTask::FinishForeignHost(Box::new(
+            PendingForeignHost {
+                identity,
+                effect,
+                type_scope_checkpoint,
+                span,
+            },
+        )));
+        tasks.push(ResolveTask::VisitBlock(&source.body));
+        Ok(())
+    }
+
+    fn finish_foreign_host(
+        &mut self,
+        pending: PendingForeignHost,
+        expressions: &mut ResolvedExpressionBuffer,
+    ) -> Result<(), ResolveError> {
+        let PendingForeignHost {
+            identity,
+            effect,
+            type_scope_checkpoint,
+            span,
+        } = pending;
+        let body = expressions
+            .pop_owned()
+            .ok_or_else(|| error(ResolveReason::InternalState, span, "host body is missing"))?;
+        self.type_scopes.truncate(type_scope_checkpoint);
+        expressions.push(ResolvedExpr {
+            kind: ResolvedExprKind::ForeignHost(Box::new(
+                crate::resolved::ResolvedForeignHostExpr {
+                    identity,
+                    effect,
+                    body: Box::new(body.into_inner()),
+                },
+            )),
+            span,
+        });
+        Ok(())
+    }
+
     fn schedule_copy_window<'a>(
         &mut self,
         source: &'a crate::surface::SurfaceCopyWindowExpr,
@@ -12728,6 +12974,9 @@ impl Resolver {
                 span,
             } => {
                 self.start_copy_window(source, family, position, span, tasks, expressions)?;
+            }
+            ResolveTask::FinishForeignHost(pending) => {
+                self.finish_foreign_host(*pending, expressions)?;
             }
             ResolveTask::FinishCopyWindow(pending) => {
                 self.finish_copy_window(pending, expressions)?;
@@ -13645,6 +13894,9 @@ impl Resolver {
                 });
                 tasks.push(ResolveTask::VisitBlock(&hook.body));
             }
+            SurfaceExprKind::ForeignHost(host) => {
+                self.schedule_foreign_host(host, expression.span, tasks)?;
+            }
             SurfaceExprKind::CopyWindow(source) => {
                 self.schedule_copy_window(source, expression.span, tasks)?;
             }
@@ -14084,6 +14336,13 @@ impl Drop for PendingLexicalResolution<'_> {
     }
 }
 
+struct PendingForeignHost {
+    identity: ResolvedTypeVariable,
+    effect: EffectId,
+    type_scope_checkpoint: usize,
+    span: Span,
+}
+
 struct PendingCopyWindow {
     family: NominalTypeId,
     identity: ResolvedTypeVariable,
@@ -14140,6 +14399,7 @@ enum ResolveTask<'a> {
         position: usize,
         span: Span,
     },
+    FinishForeignHost(Box<PendingForeignHost>),
     FinishCopyWindow(Box<PendingCopyWindow>),
     ProviderResourceInitializer {
         source: &'a crate::surface::SurfaceProviderResourceExpr,
@@ -14260,6 +14520,7 @@ impl ResolveTask<'_> {
             | Self::FinishFunction { span, .. }
             | Self::FinishTuple { span, .. } => *span,
             Self::FinishProviderResource(pending) => pending.span,
+            Self::FinishForeignHost(pending) => pending.span,
             Self::FinishCopyWindow(pending) => pending.span,
             Self::FinishBinding(binding) => binding.span,
             Self::FinishLocalNewtype(declaration) => declaration.span,
@@ -15032,6 +15293,8 @@ fn collect_free_type_names<'a>(
     Ok(())
 }
 
+#[cfg(test)]
+mod foreign_host_tests;
 #[cfg(test)]
 mod module_tests;
 
@@ -16920,6 +17183,7 @@ mod tests {
             &mut type_work,
             &mut constraint_work,
             None,
+            false,
         )
         .map(|admission| ResolvedModule::new(admission.parts));
         (result, constraint_work.used())
@@ -16960,6 +17224,7 @@ mod tests {
             &mut type_work,
             &mut constraint_work,
             None,
+            false,
         )
         .map(|admission| ResolvedModule::new(admission.parts));
         (result, type_work.used())

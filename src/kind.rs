@@ -8064,6 +8064,7 @@ enum BodyWork<'a> {
     Expression(&'a ResolvedExpr),
     ResourceBody(&'a crate::resolved::ResolvedResourceExpr),
     CopyWindowBody(&'a crate::resolved::ResolvedCopyWindowExpr),
+    ForeignHostBody(&'a crate::resolved::ResolvedForeignHostExpr),
     ProviderResourceBody(&'a crate::resolved::ResolvedProviderResourceExpr),
     ResourceExit(&'a crate::resolved::ResolvedTypeVariable),
     Declaration(&'a ResolvedLocalDeclaration),
@@ -8182,6 +8183,56 @@ fn check_expression_work<'a>(
                     budget,
                 )?;
             }
+            BodyWork::ForeignHostBody(host) => {
+                let parameters = std::slice::from_ref(&host.identity);
+                authenticate_owner_parameters(registry, parameters, budget)?;
+                let effect = registry
+                    .effect(host.effect)
+                    .or_else(|| {
+                        environments
+                            .imported_resource_owners
+                            .and_then(|imported| imported.effect(host.effect))
+                    })
+                    .ok_or_else(|| {
+                        KindFailure::internal_cause(span, KindInternalCause::ResourceIdentityKind)
+                    })?;
+                // Source admission authenticates retained defining bytes and
+                // body-free originals. Full codec reconstruction follows in the
+                // checker registry and independently in final Core.
+                let canonical =
+                    crate::foreign::checked_builtins::is_canonical_native_host_declaration(
+                        effect,
+                        effect.span,
+                        budget,
+                    )
+                    .map_err(|failure| {
+                        if failure.is_resource_exhaustion() {
+                            KindFailure::resource(
+                                span,
+                                "foreign host authentication exhausted work",
+                            )
+                        } else {
+                            KindFailure::internal_cause(
+                                span,
+                                KindInternalCause::ResourceIdentityKind,
+                            )
+                        }
+                    })?;
+                if host.identity.kind != Kind::Type || !canonical {
+                    return Err(KindFailure::internal_cause(
+                        span,
+                        KindInternalCause::ResourceIdentityKind,
+                    ));
+                }
+                environments.extend_owner_parameters(parameters, budget)?;
+                push_body_work(
+                    &mut work,
+                    BodyWork::ResourceExit(&host.identity),
+                    span,
+                    budget,
+                )?;
+                push_body_work(&mut work, BodyWork::Expression(&host.body), span, budget)?;
+            }
             BodyWork::CopyWindowBody(window) => {
                 let parameters = std::slice::from_ref(&window.identity);
                 authenticate_owner_parameters(registry, parameters, budget)?;
@@ -8284,6 +8335,14 @@ fn check_expression_work<'a>(
                         &mut work,
                         BodyWork::Expression(&cleanup.body),
                         cleanup.body.span,
+                        budget,
+                    )?;
+                }
+                ResolvedExprKind::ForeignHost(host) => {
+                    push_body_work(
+                        &mut work,
+                        BodyWork::ForeignHostBody(host),
+                        expression.span,
                         budget,
                     )?;
                 }
@@ -8587,6 +8646,7 @@ fn body_work_span(item: BodyWork<'_>) -> Span {
         BodyWork::ProviderResourceBody(resource) => resource.body.span,
         BodyWork::ResourceBody(resource) => resource.acquisition.span,
         BodyWork::CopyWindowBody(window) => window.body.span,
+        BodyWork::ForeignHostBody(host) => host.body.span,
         BodyWork::ResourceExit(identity) => identity.origin.primary_span(),
         BodyWork::Declaration(declaration) => local_declaration_span(declaration),
         BodyWork::LexicalNewtype(nominal) => nominal.origin.primary_span(),

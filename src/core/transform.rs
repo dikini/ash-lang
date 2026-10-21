@@ -513,7 +513,23 @@ impl TransformFamily for EffectOperationFamily {
                         return Err(error);
                     }
                 };
-                builder.native_interpret(body, interpretations, ty.into_inner(), effects, origin)
+                let host = boundary
+                    .host()
+                    .map(|host| -> Result<_, TransformError> {
+                        Ok(super::effect::ForeignHostIdentity {
+                            identity: copy_variable_id(builder, host.identity(), context)?,
+                            effect: host.effect(),
+                        })
+                    })
+                    .transpose()?;
+                builder.native_interpret_with_host(
+                    body,
+                    interpretations,
+                    host,
+                    ty.into_inner(),
+                    effects,
+                    origin,
+                )
             }
             EffectOperation::Request(node) => {
                 let effect = copy_effect_instance(builder, node.effect(), context)?;

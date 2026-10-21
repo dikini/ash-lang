@@ -22,6 +22,7 @@ pub(super) enum ExpressionPrefixForm {
     Resume,
     Resource,
     CopyWindow,
+    ForeignHost,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -148,6 +149,7 @@ const CURRENT_ASH_DIALECT: ParserDialect = ParserDialect {
         ExpressionPrefixForm::Resume,
         ExpressionPrefixForm::Resource,
         ExpressionPrefixForm::CopyWindow,
+        ExpressionPrefixForm::ForeignHost,
     ],
     expression: ExpressionDialect {
         primary_forms: &[
@@ -1582,6 +1584,7 @@ pub(super) fn expression(parser: &mut Parser<'_>) {
         Some(ExpressionPrefixForm::Resume) => resume_expression(parser),
         Some(ExpressionPrefixForm::Resource) => resource_expression(parser),
         Some(ExpressionPrefixForm::CopyWindow) => copy_window_expression(parser),
+        Some(ExpressionPrefixForm::ForeignHost) => foreign_host_expression(parser),
         None => expression::operator_expression(parser),
     }
 }
@@ -1599,6 +1602,10 @@ fn expression_prefix_form(parser: &Parser<'_>) -> Option<ExpressionPrefixForm> {
             ExpressionPrefixForm::Resume => parser.at(&TokenKind::Resume),
             ExpressionPrefixForm::Resource => parser.at(&TokenKind::Resource),
             ExpressionPrefixForm::CopyWindow => parser.at(&TokenKind::CopyWindow),
+            ExpressionPrefixForm::ForeignHost => {
+                matches!(parser.current(), Some(TokenKind::Identifier(word)) if word == "foreign")
+                    && matches!(parser.nth(1), Some(TokenKind::Identifier(word)) if word == "host")
+            }
         })
 }
 
@@ -1606,6 +1613,15 @@ fn resume_expression(parser: &mut Parser<'_>) {
     parser.start(NodeKind::ResumeExpression);
     let _ = parser.bump();
     expression(parser);
+    parser.finish();
+}
+
+fn foreign_host_expression(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::ForeignHostExpression);
+    let _ = parser.bump();
+    let _ = parser.bump();
+    expect_upper_identifier(parser);
+    block(parser);
     parser.finish();
 }
 
@@ -2922,6 +2938,7 @@ mod tests {
             ShadowPrefixForm::Existing(ExpressionPrefixForm::Resume) => "resume parser",
             ShadowPrefixForm::Existing(ExpressionPrefixForm::Resource) => "resource parser",
             ShadowPrefixForm::Existing(ExpressionPrefixForm::CopyWindow) => "copy-window parser",
+            ShadowPrefixForm::Existing(ExpressionPrefixForm::ForeignHost) => "foreign-host parser",
             ShadowPrefixForm::Mock(node) => mock_nested_feature::parse(node),
         }
     }

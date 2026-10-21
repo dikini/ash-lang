@@ -4,6 +4,7 @@ mod cleanup_rows;
 pub(crate) mod provider;
 mod provider_code;
 pub(crate) use provider_code::ProviderCodeAvailability;
+mod foreign_host;
 mod module_bodies;
 pub(crate) mod provider_globals;
 mod provider_instance;
@@ -3168,8 +3169,8 @@ impl CoreLoweringFamily for EffectOperationFamily {
     ) -> Result<NodeId, BuildError> {
         match operation {
             EffectOperation::NativeInterpret(boundary) => {
-                let (body, interpretations) = boundary.into_parts();
-                builder.native_interpret(body, interpretations, ty, effects, origin)
+                let (body, interpretations, host) = boundary.into_parts();
+                builder.native_interpret_with_host(body, interpretations, host, ty, effects, origin)
             }
             EffectOperation::ProviderStateAccess(access) => {
                 builder.provider_state_access(access, ty, effects, origin)
@@ -12703,7 +12704,24 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             clone_effect_instance_with_budget(&request.effect.instance, &mut self.type_work)
                 .map_err(|error| TypeError::Internal(error.into()))?,
         );
-        let effects = self.union_effects(&operand.effects, &requested, span)?;
+        let mut effects = self.union_effects(&operand.effects, &requested, span)?;
+        if let Some(symbol) = self.registry.native_symbol(request.operation) {
+            let host = crate::foreign::checked_source::checked_host_instance(
+                symbol,
+                &request.effect.instance,
+                &mut self.type_work,
+            )
+            .map_err(|failure| {
+                if failure.is_resource_exhaustion() {
+                    type_resource()
+                } else {
+                    invalid_state()
+                }
+            })?;
+            if let Some(host) = host {
+                effects = self.union_effects(&effects, &EffectRow::singleton(host), span)?;
+            }
+        }
         let ty = result.into_inner();
         let core_ty = self.pure_core_type(&ty)?;
         let request_node = RequestNode::new(
@@ -13178,9 +13196,15 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         body: TypedNode,
         rewrite_checkpoint: crate::core::dialect::TypeRewriteCheckpoint,
     ) -> Result<TypedNode, TypeError> {
-        if self
-            .registry
-            .foreign_effect(handler.effect.instance.effect())
+        if handler
+            .effect
+            .instance
+            .effect()
+            .module()
+            .is_builtin_foreign()
+            || self
+                .registry
+                .foreign_effect(handler.effect.instance.effect())
         {
             return Err(foreign_privilege_unavailable());
         }
@@ -15587,6 +15611,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         declarations: &mut ElaboratedDeclarationBuffer,
     ) -> Result<(), TypeError> {
         match &current.kind {
+            ResolvedExprKind::ForeignHost(host) => {
+                self.schedule_foreign_host(host, current.span, tasks)?;
+            }
             ResolvedExprKind::CopyWindow(window) => {
                 self.schedule_copy_window(window, current.span, tasks)?;
             }
@@ -16039,6 +16066,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             }
             ElaborationTask::FinishCopyWindow(progress) => {
                 self.finish_copy_window(progress, values)?;
+            }
+            ElaborationTask::FinishForeignHost { source, span } => {
+                self.finish_foreign_host(source, span, values)?;
             }
             ElaborationTask::Equation(_) => return Err(invalid_state()),
             ElaborationTask::RetainLocalNewtype(owner) => {
@@ -23351,6 +23381,10 @@ enum ElaborationTask<'a> {
     FinishResource(Box<ResourceProgress<'a>>),
     CopyWindowBody(Box<source_window::WindowProgress<'a>>),
     FinishCopyWindow(Box<source_window::WindowProgress<'a>>),
+    FinishForeignHost {
+        source: &'a crate::resolved::ResolvedForeignHostExpr,
+        span: Span,
+    },
     Equation(EquationTask<'a>),
     RetainLocalNewtype(NominalTypeId),
     Synthesize {
@@ -24722,6 +24756,7 @@ fn discard_elaboration_task(task: ElaborationTask<'_>) {
         | ElaborationTask::FinishResource(_)
         | ElaborationTask::CopyWindowBody(_)
         | ElaborationTask::FinishCopyWindow(_)
+        | ElaborationTask::FinishForeignHost { .. }
         | ElaborationTask::FinishPerform(_) => {}
         ElaborationTask::RetainLocalNewtype(_)
         | ElaborationTask::Synthesize { .. }
@@ -25973,6 +26008,9 @@ fn contains_recursive_occurrence(expression: &ResolvedExpr, recursive: &HashSet<
             ResolvedExprKind::Match(match_expression) => {
                 work.push(&match_expression.scrutinee);
                 work.extend(match_expression.arms.iter().map(|arm| &arm.body));
+            }
+            ResolvedExprKind::ForeignHost(host) => {
+                work.push(&host.body);
             }
             ResolvedExprKind::CopyWindow(window) => {
                 work.push(&window.body);
@@ -28547,6 +28585,9 @@ fn resume_usage_with_budget(
                     push(&mut tasks, Task::BeginMatch(&matched.arms), budget)?;
                     push(&mut tasks, Task::Visit(&matched.scrutinee), budget)?;
                 }
+                ResolvedExprKind::ForeignHost(host) => {
+                    push(&mut tasks, Task::Visit(&host.body), budget)?;
+                }
                 ResolvedExprKind::CopyWindow(window) => {
                     push(&mut tasks, Task::Visit(&window.body), budget)?;
                     push(&mut tasks, Task::Visit(&window.state), budget)?;
@@ -28759,6 +28800,9 @@ fn contains_resume_owner_with_budget(
                 if discard.owner == Some(owner) {
                     return Ok(true);
                 }
+            }
+            ResolvedExprKind::ForeignHost(host) => {
+                schedule(&mut pending, &host.body, budget)?;
             }
             ResolvedExprKind::CopyWindow(window) => {
                 schedule(&mut pending, &window.body, budget)?;
@@ -29047,6 +29091,7 @@ pub(crate) fn checked_program_contains_effect_syntax(
             ResolvedExprKind::Cleanup(_)
             | ResolvedExprKind::ProviderResource(_)
             | ResolvedExprKind::CopyWindow(_)
+            | ResolvedExprKind::ForeignHost(_)
             | ResolvedExprKind::Resource(_)
             | ResolvedExprKind::Perform(_)
             | ResolvedExprKind::Handle(_)
@@ -29319,6 +29364,13 @@ fn collect_expression_binders(
                     collect_pattern_binders(&arm.pattern, binders);
                     expressions.push(&arm.body);
                 }
+            }
+            ResolvedExprKind::ForeignHost(host) => {
+                charge(1)?;
+                expressions
+                    .try_reserve(1)
+                    .map_err(|_| BuildError::TypeWorkExceeded)?;
+                expressions.push(&host.body);
             }
             ResolvedExprKind::CopyWindow(window) => {
                 charge(2)?;

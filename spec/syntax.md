@@ -239,6 +239,7 @@ hook_expression ::= "hook" effect_instance block ;
 copy_window_expression ::=
   "copy_window" nominal_type_reference type_arguments
   "from" primary_expression block ;
+foreign_host_expression ::= "foreign" "host" upper_identifier block ;
 registration_expression ::=
   "register" effect_instance primary_expression block ;
 cleanup_expression ::= "cleanup" expression block ;
@@ -251,6 +252,7 @@ expression ::=
   | resume_expression
   | resource_expression
   | copy_window_expression
+  | foreign_host_expression
   | equality_expression ;
 equality_expression ::= additive_expression [ "==" additive_expression ] ;
 additive_expression ::=
@@ -362,6 +364,12 @@ scalar value introduces an ordinary `Int` term binder and may supply an exact
 declared native operand. Scalar-result alternatives declare that bare result
 readable.
 An `out` ABI operand is an initialized private output slot, not a source pointer.
+`foreign host H { body }` binds one fresh Type identity H only in its body.
+`foreign` followed by `host` is contextual expression syntax; it does not reserve
+those spellings in other positions. The explicit static checked foreign profile
+admits this expression; default program building and running refuse its required
+closure. A statically checked host supplies no executable image or native launch.
+
 `copy_window` binds its family's fresh window identity only in its body;
 [static semantics](static-semantics.md#source-foreign-declarations) restricts its
 original family, direct provider phase and exact owner. A byte owner requires an

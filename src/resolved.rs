@@ -1,6 +1,8 @@
 //! Name-resolved, source-spanned syntax passed to typed elaboration.
 
 mod image_registry;
+#[cfg(test)]
+mod image_subset_tests;
 mod provider_instance;
 mod provider_registry;
 mod semantic_type_variables;
@@ -3577,6 +3579,7 @@ impl ResolvedModuleProgram {
                 | ResolvedExprKind::Resume(_)
                 | ResolvedExprKind::ProviderResource(_)
                 | ResolvedExprKind::CopyWindow(_)
+                | ResolvedExprKind::ForeignHost(_)
                 | ResolvedExprKind::Discard(_) => None,
             })
         else {
@@ -10964,7 +10967,44 @@ impl ExportSummary {
             }
             if self.effect_positions.get(&effect.id) != Some(&position)
                 || (named_effects.contains(&effect.id) && !effect.public)
-                || effect.operations.is_empty()
+                || if effect.id.module().is_builtin_foreign() {
+                    type_work
+                        .charge(self.defining_sources.len())
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    let source = self
+                        .defining_sources
+                        .iter()
+                        .find(|(module, _)| *module == effect.id.module())
+                        .ok_or(ResolvedBuildFailure::InvalidState)?;
+                    type_work
+                        .charge(source.1.text().len())
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    source.1.text() != crate::module::foreign_builtin_source_text()
+                        || !crate::foreign::checked_builtins::is_canonical_native_host_declaration(
+                            effect,
+                            source
+                                .1
+                                .span(
+                                    crate::source::ByteRange::new(
+                                        0,
+                                        u32::try_from(source.1.text().len())
+                                            .map_err(|_| ResolvedBuildFailure::InvalidState)?,
+                                    )
+                                    .map_err(|_| ResolvedBuildFailure::InvalidState)?,
+                                )
+                                .map_err(|_| ResolvedBuildFailure::InvalidState)?,
+                            type_work,
+                        )
+                        .map_err(|failure| {
+                            if failure.is_resource_exhaustion() {
+                                ResolvedBuildFailure::TypeResource
+                            } else {
+                                ResolvedBuildFailure::InvalidState
+                            }
+                        })?
+                } else {
+                    effect.operations.is_empty()
+                }
             {
                 {
                     return Err(ResolvedBuildFailure::InvalidState);
@@ -19691,7 +19731,20 @@ fn validate_checked_registries<'a>(
             if effect.id.module() != module
                 || !effect_ids.insert(effect.id)
                 || registry.effect_positions.get(&effect.id) != Some(&position)
-                || effect.operations.is_empty()
+                || if effect.id.module().is_builtin_foreign() {
+                    !crate::foreign::checked_builtins::is_canonical_native_host(
+                        effect, registry, type_work,
+                    )
+                    .map_err(|failure| {
+                        if failure.is_resource_exhaustion() {
+                            ResolvedBuildFailure::TypeResource
+                        } else {
+                            ResolvedBuildFailure::InvalidState
+                        }
+                    })?
+                } else {
+                    effect.operations.is_empty()
+                }
             {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
@@ -21687,11 +21740,6 @@ impl ResolvedRegistry {
             || !self.lexical_constructors.is_empty()
             || !self.lexical_nominal_positions.is_empty()
             || !self.lexical_constructor_positions.is_empty()
-            || !self.effects.is_empty()
-            || !self.owner_definitions.is_empty()
-            || !self.owner_definition_positions.is_empty()
-            || self.owner_signatures != OwnerSignatures::default()
-            || !self.effect_positions.is_empty()
             || !self.abstract_nominal_names.is_empty()
             || !self.abstract_nominal_kinds.is_empty()
             || !self.provider_contracts.is_empty()
@@ -21703,7 +21751,12 @@ impl ResolvedRegistry {
             return Ok(false);
         }
         if self.scalar_preflights.is_empty() {
-            return Ok(self.type_variables.is_empty()
+            return Ok(self.effects.is_empty()
+                && self.effect_positions.is_empty()
+                && self.owner_definitions.is_empty()
+                && self.owner_definition_positions.is_empty()
+                && self.owner_signatures == OwnerSignatures::default()
+                && self.type_variables.is_empty()
                 && self.global_parameter_rows.is_empty()
                 && self.global_parameter_positions.is_empty()
                 && self
@@ -21721,10 +21774,10 @@ impl ResolvedRegistry {
         for fact in self.scalar_preflights.values() {
             match modules.entry(fact.module()) {
                 std::collections::hash_map::Entry::Vacant(entry) => {
-                    crate::foreign::source_owner::CheckedForeignOwnerCodec::authenticate(
+                    crate::foreign::checked_builtins::authenticate_checked_builtins(
+                        self,
                         fact.module(),
                         fact.source(),
-                        self,
                         work,
                     )
                     .map_err(scalar_preflight_failure)?;
@@ -21735,40 +21788,90 @@ impl ResolvedRegistry {
                 _ => return Ok(false),
             }
         }
+        // The only retained effect is each authenticated builtin's inert host.
+        // Owner mirrors must reconstruct that exact declaration, not merely have
+        // the same cardinality or a matching display name.
+        let owners = &self.owner_signatures;
+        if self.effects.len() != modules.len()
+            || self.effect_positions.len() != modules.len()
+            || self.owner_definitions.len() != modules.len()
+            || self.owner_definition_positions.len() != modules.len()
+            || owners.effects.len() != modules.len()
+            || owners.effect_positions.len() != modules.len()
+            || !owners.interfaces.is_empty()
+            || !owners.interface_positions.is_empty()
+            || !owners.resources.is_empty()
+            || !owners.resource_positions.is_empty()
+        {
+            return Ok(false);
+        }
+        self.authenticate_owner_definitions(work)?;
+        work.charge(self.effects.len()).map_err(|()| resource())?;
+        for (position, effect) in self.effects.iter().enumerate() {
+            if !modules.contains_key(&effect.id.module())
+                || effect.id.declaration() != crate::module::FOREIGN_NATIVE_HOST_LOCAL
+                || self.effect_positions.get(&effect.id) != Some(&position)
+            {
+                return Ok(false);
+            }
+        }
         work.charge(self.nominals.len()).map_err(|()| resource())?;
         if self.nominals.iter().any(|nominal| {
             nominal.id.module().is_builtin_foreign()
-                && (!modules.contains_key(&nominal.id.module()) || nominal.id.declaration() > 5)
+                && (!modules.contains_key(&nominal.id.module()) || nominal.id.declaration() > 17)
         }) {
             return Ok(false);
         }
         work.charge(self.global_parameter_rows.len())
             .map_err(|()| resource())?;
         let count = self.global_parameter_rows.iter().try_fold(
-            modules.len().checked_mul(5).ok_or_else(resource)?,
+            modules.len().checked_mul(14).ok_or_else(resource)?,
             |count, row| count.checked_add(row.parameters.len()).ok_or_else(resource),
         )?;
         work.charge(count).map_err(|()| resource())?;
         let mut expected = HashSet::new();
         expected.try_reserve(count).map_err(|_| resource())?;
+        // These are original declaration coordinates, not a polymorphism
+        // permission. Full codec authentication above independently checks all
+        // kinds, payloads and origins before these rows contribute to coverage.
+        const FORMALS: &[(u32, &[u32])] = &[
+            (1, &[0]),
+            (2, &[1]),
+            (3, &[2]),
+            (4, &[3]),
+            (5, &[4]),
+            (12, &[14]),
+            (13, &[15]),
+            (14, &[16, 17]),
+            (15, &[18]),
+            (16, &[19, 20, 21]),
+        ];
         for module in modules.keys() {
-            for ordinal in 1..=5 {
-                let Some([parameter]) =
-                    self.nominal_parameters(NominalTypeId::new(*module, ordinal))
+            for (ordinal, locals) in FORMALS {
+                let Some(parameters) =
+                    self.nominal_parameters(NominalTypeId::new(*module, *ordinal))
                 else {
                     return Ok(false);
                 };
-                let Some(canonical) = self.type_variable(parameter.id) else {
-                    return Ok(false);
-                };
-                if parameter.kind != Kind::Type
-                    || parameter.id.module() != Some(*module)
-                    || !expected.insert(parameter.id)
-                    || !same_checker_type_variable_with_budget(canonical, parameter, work)
-                        .map_err(|()| resource())?
-                {
+                if parameters.len() != locals.len() {
                     return Ok(false);
                 }
+                for (parameter, local) in parameters.iter().zip(*locals) {
+                    let Some(canonical) = self.type_variable(parameter.id) else {
+                        return Ok(false);
+                    };
+                    if parameter.id != TypeVariableId::resolved(*module, *local)
+                        || parameter.kind != Kind::Type
+                        || !expected.insert(parameter.id)
+                        || !same_checker_type_variable_with_budget(canonical, parameter, work)
+                            .map_err(|()| resource())?
+                    {
+                        return Ok(false);
+                    }
+                }
+            }
+            if !expected.insert(TypeVariableId::resolved(*module, 22)) {
+                return Ok(false);
             }
         }
         // Importing scalar checks also retains the two sealed byte schemes.
@@ -21809,11 +21912,29 @@ impl ResolvedRegistry {
             }
         }
         for (nominal, parameters) in &self.nominal_parameters {
-            if !parameters.is_empty()
-                && (!modules.contains_key(&nominal.module())
-                    || !(1..=5).contains(&nominal.declaration())
-                    || parameters.len() != 1)
-            {
+            work.charge(
+                FORMALS
+                    .len()
+                    .checked_add(parameters.len())
+                    .ok_or_else(resource)?,
+            )
+            .map_err(|()| resource())?;
+            if modules.contains_key(&nominal.module()) {
+                let locals = FORMALS
+                    .iter()
+                    .find_map(|(ordinal, locals)| {
+                        (*ordinal == nominal.declaration()).then_some(*locals)
+                    })
+                    .unwrap_or(&[]);
+                if nominal.declaration() > 17
+                    || parameters.len() != locals.len()
+                    || parameters.iter().zip(locals).any(|(parameter, local)| {
+                        parameter.id != TypeVariableId::resolved(nominal.module(), *local)
+                    })
+                {
+                    return Ok(false);
+                }
+            } else if !parameters.is_empty() {
                 return Ok(false);
             }
         }
@@ -23591,6 +23712,12 @@ impl ResolvedRegistry {
     pub(crate) fn with_effects(self, effects: Vec<ResolvedEffectDeclaration>) -> Self {
         self.with_effects_with_budget(effects, &mut TypeWorkBudget::unbounded())
             .expect("an admitted in-memory effect fixture fits the work bound")
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remove_type_variable_for_core_test(mut self, id: TypeVariableId) -> Self {
+        assert!(self.type_variables.remove(&id).is_some());
+        self
     }
 
     #[cfg(test)]
@@ -25999,7 +26126,8 @@ pub struct ResolvedEffectDeclaration {
     pub spelling: String,
     /// Ordered ordinary type parameters.
     pub parameters: Box<[ResolvedTypeVariable]>,
-    /// Nonempty operations in declaration order.
+    /// Operations in declaration order; parsed APIs are nonempty.
+    /// The sealed compiler-synthesized NativeHost builtin is the sole empty API.
     pub operations: Box<[ResolvedEffectOperation]>,
     /// Causal declaration provenance.
     pub origin: Origin,
@@ -26613,6 +26741,11 @@ pub(crate) fn lexical_method_capture_occurrences<'a>(
                     pending.push(&arm.body);
                 }
             }
+            ResolvedExprKind::ForeignHost(host) => {
+                budget.charge(1)?;
+                pending.try_reserve(1).map_err(|_| ())?;
+                pending.push(&host.body);
+            }
             ResolvedExprKind::CopyWindow(window) => {
                 budget.charge(2)?;
                 pending.try_reserve(2).map_err(|_| ())?;
@@ -26752,6 +26885,8 @@ pub enum ResolvedExprKind {
     Discard(ResolvedDiscardExpr),
     /// A scoped resource acquisition with a rigid, nongeneralized identity.
     Resource(Box<ResolvedResourceExpr>),
+    /// An explicit checked foreign host with one fresh lexical identity.
+    ForeignHost(Box<ResolvedForeignHostExpr>),
     /// A fresh finite access window; resolution supplies no executable permission.
     CopyWindow(Box<ResolvedCopyWindowExpr>),
     /// An experimental source-defined resource instance.
@@ -26938,6 +27073,14 @@ impl ResourceAcquisition {
                     && parameter.id.module() == Some(self.provider.module())
             }))
     }
+}
+
+/// Static original of a checked host; this is not configured runtime authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedForeignHostExpr {
+    pub identity: ResolvedTypeVariable,
+    pub effect: EffectId,
+    pub body: Box<ResolvedExpr>,
 }
 
 /// An exact family application with one fresh lexical window argument.
@@ -27438,6 +27581,10 @@ fn discard_resolved_body_work(
                     patterns.push(clause.pattern);
                     expressions.push(clause.body);
                 }
+            }
+            ResolvedExprKind::ForeignHost(host) => {
+                discard_resolved_type_variable(host.identity);
+                expressions.push(*host.body);
             }
             ResolvedExprKind::CopyWindow(window) => {
                 discard_resolved_type_variable(window.identity);

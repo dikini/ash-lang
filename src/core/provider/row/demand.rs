@@ -954,6 +954,9 @@ impl DirectDemandProof {
                     expression = proof.union(expression, &requested, work)?;
                 }
                 EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) => {
+                    if boundary.host().is_some() {
+                        return Err(invalid(equation.node));
+                    }
                     charge(work, boundary.interpretations().len())?;
                     for interpretation in boundary.interpretations() {
                         expression =

@@ -26,14 +26,17 @@ Main-based `.worktree/checked-ffi` checkout, branch `codex/checked-ffi-core`, wi
 `codex/checked-ffi-milestone` as retaining anchor. Both started at the pinned Main
 commit below. The planning source checkout and all its unrelated edits remain
 intact. The user later authorized publishing the planned issues and overall
-milestone, individual work-item PRs, and unsigned squash retention after successful
-review. The [published issue map](plans/checked-ffi-regions-control.md#authority-and-github-workflow)
+milestone and individual work-item PRs after successful review. The latest user
+instruction requires GitHub squash-and-merge, with a GitHub merge commit when
+squash is unavailable. The [published issue map](plans/checked-ffi-regions-control.md#authority-and-github-workflow)
 links the [parent #51](https://github.com/dikini/ash-lang/issues/51),
 [M1 #52](https://github.com/dikini/ash-lang/issues/52), and remaining work.
 Preparation PR [#69](https://github.com/dikini/ash-lang/pull/69) carries P0/F1
-preparation and the initial F3 task. For this run, create per-item unsigned squash
-commits locally and push to the milestone branch after required review/checks;
-this explicit instruction overrides AD-0011's normal merge-commit method.
+preparation and the initial F3 task. Keep locally authored commits unsigned;
+GitHub merge signing follows the selected GitHub method. After required
+review/checks and GitHub integration, fetch and synchronize local/origin milestone
+refs. Earlier local squash receipts remain historical evidence; future delivery
+must use the current GitHub method, which overrides AD-0011's normal merge method.
 Main integration retains its separate gates.
 
 The developer owns implementation, build serialization, integration and

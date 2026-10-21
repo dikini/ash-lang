@@ -173,7 +173,22 @@ impl Resolver {
             )
         })?;
         let codec = Arc::new(codec);
-        if declarations.definitions.len() != 10 {
+        let metadata = declarations.definitions.get(10).and_then(|definition| {
+            if let ResolvedDefinitionKind::Equational(global) = &definition.kind {
+                Some(global)
+            } else {
+                None
+            }
+        });
+        if declarations.definitions.len() != 11
+            || loaded.surface().definitions.get(10).is_none_or(|definition| definition.public)
+            || metadata.is_none_or(|metadata| metadata.interface.name.id != BinderId::resolved(self.module, 10)
+                || !metadata.interface.type_parameters.is_empty()
+                || !metadata.interface.requirements.is_empty()
+                || !matches!(&metadata.interface.annotation.ty,
+                    crate::types::Type::Function(input, output)
+                    if matches!(input.as_ref(), crate::types::Type::Unit) && matches!(output.as_ref(), crate::types::Type::String)))
+        {
             return Err(error(
                 ResolveReason::InternalState,
                 span,
@@ -376,19 +391,26 @@ impl Resolver {
             }) {
                 return Err(error(ResolveReason::ForeignContract, span, message));
             }
-            let facts =
+            let facts = if self.checked_foreign_profile && library.checked.is_some() {
+                crate::foreign::source_contract::prepare_checked_foreign_library_with_budget(
+                    self.module,
+                    library,
+                    &mut self.type_work,
+                )
+            } else {
                 prepare_foreign_library_with_budget(self.module, library, &mut self.type_work)
-                    .map_err(|failure| {
-                        error(
-                            if failure.is_resource_exhaustion() {
-                                ResolveReason::TypeResourceExhausted
-                            } else {
-                                ResolveReason::ForeignContract
-                            },
-                            failure.span(),
-                            &failure.to_string(),
-                        )
-                    })?;
+            }
+            .map_err(|failure| {
+                error(
+                    if failure.is_resource_exhaustion() {
+                        ResolveReason::TypeResourceExhausted
+                    } else {
+                        ResolveReason::ForeignContract
+                    },
+                    failure.span(),
+                    &failure.to_string(),
+                )
+            })?;
             while ordinary
                 .peek()
                 .is_some_and(|effect| effect.span.range().start() < library.span.range().start())
@@ -494,7 +516,32 @@ impl Resolver {
             .registry
             .checker_view(&self.imported, &mut self.type_work)
             .map_err(|failure| source_build_failure(failure, surface.span))?;
-        let call = NominalTypeId::new(common_module, 1);
+        let call = NominalTypeId::new(
+            common_module,
+            if self.checked_foreign_profile { 12 } else { 1 },
+        );
+        // This static checkpoint does not mix a legacy assumption closure into
+        // a checked host. Unsupported mixed graphs fail before publication.
+        if self.checked_foreign_profile {
+            self.type_work.charge(prepared.len()).map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    surface.span,
+                    "checked foreign closure traversal exceeded its work budget",
+                )
+            })?;
+        }
+        if self.checked_foreign_profile
+            && prepared
+                .iter()
+                .any(|library| library.prepared.checked_contract().is_none())
+        {
+            return Err(error(
+                ResolveReason::ForeignContract,
+                surface.span,
+                "checked static source requires checked contracts throughout its foreign closure",
+            ));
+        }
         let ids = ForeignCallCodecIds {
             call,
             returned: ConstructorId::new(call, 0),
@@ -676,7 +723,11 @@ impl Resolver {
                 symbols.push((
                     effect_index,
                     Arc::new(
-                        bind_foreign_symbol(
+                        (if self.checked_foreign_profile {
+                            crate::foreign::checked_source::bind_checked_foreign_symbol
+                        } else {
+                            bind_foreign_symbol
+                        })(
                             NativeLibraryId::new(self.module, ordinal),
                             Arc::clone(&library.prepared),
                             index,

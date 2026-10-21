@@ -991,17 +991,45 @@ main () = true + 1
 
 ## Source foreign declarations
 
-Foreign declarations are passive. A library with the explicit `checked` marker
-records checked-profile intent but is not admitted by this implementation
-checkpoint. It refuses before legacy foreign ABI preparation; erasing the marker
-is not an available source operation and no checked execution permission is
-published. Assumption declarations and `host`/`assumes` metadata cannot be
+Foreign declarations are passive. The explicit static checked foreign profile
+admits `foreign checked library` declarations with owner-free scalar or void
+calls and the canonical checked result codec. Default source resolution,
+program building and running refuse this checked closure before legacy foreign
+ABI preparation. Erasing the marker is not an available source operation;
+static checked binding grants no native execution or executable image permission. Assumption declarations and `host`/`assumes` metadata cannot be
 silently erased by declaring an ordinary library; that legacy path refuses them
 as unsupported. The admitted subset contains owner-free
 calls with scalar or void results, and owner contracts with declared dependencies. Each library
 has exactly one profile, `"x86_64-unknown-linux-gnu"`. Scalar representations
 are signed or unsigned 8-, 32- or 64-bit integers, or `size_t`. These ABI
 representations introduce no ordinary fixed-width Ash integer type.
+
+A checked scalar symbol returns canonical `Foreign.CheckedCall<T>`, with
+`CheckedReturned(T)`, `CheckedConversionFailed(ConversionError)` and
+`BoundaryFailed(BoundaryFailure)` alternatives. Its `host` clause selects one
+exact original Type formal H. The complete original Type/Row vector, authored
+assumption identities and mandatory native premises remain attached to its
+binding. An empty `assumes` set cannot remove the mandatory premises. Ordinary
+library declarations cannot publish these checked roles.
+
+Using a checked symbol requests both its exact original native instance and
+canonical `Foreign.NativeHost<H>` at the selected actual H. A `foreign host H`
+expression introduces a fresh rigid Type identity and interprets only admitted
+checked owner-free native instances selecting that H. It removes those exact
+instances and `NativeHost<H>` from the body's row, preserves its result type
+and unrelated effects, and rejects H escaping through its result or outward
+row, including latent function rows. A different host identity is not
+interchangeable. Ordinary source or Core handlers cannot eliminate NativeHost;
+its canonical effect has no ordinary operations. Ordinary effect declarations
+still require at least one operation.
+
+Builtin role checking reconstructs the original reserved module, immutable
+source bytes, exact declaration/formal identities, origins and codec payloads.
+A same-shaped user type, display alias, copied flag or replayed module identity
+with rewritten source cannot supply that authority. Static Core and its ordinary
+transforms preserve the lexical host binder. Checked owner lifecycles, checked
+byte/copy primitives and executable checked host images remain outside this
+checkpoint and refuse explicitly.
 
 Each symbol has one outer pure source arrow and a complete ordered parameter
 vector containing only `Type` and `EffectRow` parameters. Omitted kinds are

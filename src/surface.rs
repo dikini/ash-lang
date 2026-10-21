@@ -233,7 +233,8 @@ pub struct SurfaceEffectDeclaration {
     pub name: SurfaceName,
     /// Ordered ordinary type parameters.
     pub parameters: Vec<SurfaceTypeParameter>,
-    /// Nonempty operations in declaration order.
+    /// Operations in declaration order; parsed APIs are nonempty.
+    /// The sealed compiler-synthesized NativeHost builtin is the sole empty API.
     pub operations: Vec<SurfaceEffectOperation>,
     /// The complete declaration span.
     pub span: Span,
@@ -412,6 +413,8 @@ pub enum SurfaceExprKind {
     Resume(Box<SurfaceExpr>),
     /// A parsed acquisition, pending resource identity and lifetime checking.
     Resource(Box<SurfaceResourceExpr>),
+    /// An explicit checked foreign host with a fresh lexical Type identity.
+    ForeignHost(Box<SurfaceForeignHostExpr>),
     /// A lexical fresh-window scope rooted in authenticated native state.
     CopyWindow(Box<SurfaceCopyWindowExpr>),
     /// An instance of an experimental source resource assembly.
@@ -431,6 +434,13 @@ pub enum SurfaceExprKind {
 pub enum SurfaceResourceKind {
     /// A scoped mutable integer cell.
     Cell,
+}
+
+/// An explicit host identity scoped only over its source body.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceForeignHostExpr {
+    pub identity: SurfaceName,
+    pub body: SurfaceBlock,
 }
 
 /// Source ownership of one builtin acquisition.

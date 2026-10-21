@@ -307,7 +307,10 @@ impl<'work> UnusedVariables<'work> {
                     use crate::core::effect::EffectOperation;
                     match operation {
                         EffectOperation::NativeInterpret(boundary) => {
-                            self.charge(boundary.interpretations().len())?
+                            self.charge(boundary.interpretations().len())?;
+                            if let Some(host) = boundary.host() {
+                                self.id(host.identity())?;
+                            }
                         }
                         EffectOperation::Handler(handler) => {
                             self.charge(handler.clauses().len())?

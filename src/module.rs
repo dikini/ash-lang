@@ -20,6 +20,12 @@ use crate::{
     syntax_resource::SyntaxBudget,
 };
 
+mod foreign_host;
+pub(crate) use foreign_host::{
+    FOREIGN_NATIVE_HOST_LOCAL, ForeignCheckedNominalRole, foreign_native_host_ranges,
+    foreign_type_formal_local,
+};
+
 /// Maximum source files admitted by one module graph.
 pub const MODULE_SOURCE_LIMIT: usize = 16_384;
 /// Maximum import edges retained by one module graph.
@@ -86,7 +92,26 @@ const FOREIGN_SOURCE: &str = concat!(
     "pub copy_bytes<V> : (V, Extent<V>) -> Call<Bytes>\ncopy_bytes value = copy_bytes value\n",
     "pub copy_nul<V> : (V, Int) -> Call<Bytes>\ncopy_nul value = copy_nul value\n",
     "pub extent_value<V> : Extent<V> -> Int\nextent_value value = extent_value value\n",
+    "pub type NativeStatus = NoNativeStatus\n| NativeStatus(Int)\n",
+    "pub type NativeFact = NoNativeOwner\n| NativeOwned\n| NativeConsumedFact\n| NativeUnknown\n",
+    "pub type DiagnosticAbsence = NotRequested\n| AllowanceRefused\n| NativeAbsent\n| ScanBoundExceeded\n| InvalidDiagnosticEncoding\n| DiagnosticLost\n",
+    "pub type Diagnostic = DiagnosticUnavailable(DiagnosticAbsence)\n| DiagnosticText(String)\n",
+    "pub type BoundaryRecord = BoundaryRecord(NativeStatus, NativeFact, Bool, Diagnostic)\n",
+    "pub type BoundaryFailure = SessionLost(BoundaryRecord)\n| DependencyBlocked(BoundaryRecord)\n| Quarantined(BoundaryRecord)\n",
+    "pub type CheckedCall<T> = CheckedReturned(T)\n| CheckedConversionFailed(ConversionError)\n| BoundaryFailed(BoundaryFailure)\n",
+    "pub type FinishResult<E> = FinishOk\n| FinishError(E)\n",
+    "pub type CheckedFinish<S, E> = FinishedConsumed(FinishResult<E>)\n| FinishedRetained(S, E)\n| FinishedBoundary(BoundaryFailure)\n",
+    "pub type CheckedCompletion<E> = NativeConsumed(FinishResult<E>, BoundaryRecord)\n| NativeRetained(E, BoundaryRecord)\n| LocalBoundary(BoundaryFailure)\n",
+    "pub type CheckedScope<A, I, E> = CheckedNotAcquired(I)\n| CheckedCompleted(A, CheckedCompletion<E>)\n",
+    "pub type ViolationCause = UnexpectedStatus(Int)\n| UnexpectedTag(Int)\n| UnexpectedNull\n| InvalidNativeExtent(Int)\n| ContradictoryNativeResult(Int, Int)\n",
+    "native_host_metadata : Unit -> String\n",
+    "native_host_metadata ignored = \"pub effect NativeHost<H> (compiler-owned; no operations)\"\n",
 );
+
+/// Immutable coordinate data; matching these bytes alone grants no builtin role.
+pub(crate) const fn foreign_builtin_source_text() -> &'static str {
+    FOREIGN_SOURCE
+}
 
 /// Exact source coordinates for compiler-owned scalar preflight declarations.
 /// These roles follow the unchanged canonical foreign nominal inventory.
@@ -1767,7 +1792,7 @@ fn admit_builtin_foreign(
         .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
     text.push_str(FOREIGN_SOURCE);
     let path = PathBuf::from("@builtin.foreign");
-    let (source, surface) =
+    let (source, mut surface) =
         parse_surface_module(&path, text, Some(import_span), &mut budget.syntax_work)?;
     let value = u32::try_from(staged.len())
         .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
@@ -1776,6 +1801,16 @@ fn admit_builtin_foreign(
         graph,
         value,
     };
+    if let Err(resource) = foreign_host::charge_host(&mut budget.syntax_work) {
+        return Err(LoadGraphError::Syntax(Box::new(ModuleSyntaxFailure {
+            lexical: Vec::new(),
+            parser: Vec::new(),
+            resource: Some(resource),
+            source,
+            import_span: Some(import_span),
+        })));
+    }
+    foreign_host::append_host(id, &source, &mut surface)?;
     let owners = OwnerSet::from_paths(&[], budget)?;
     staged.push(StagedModule {
         id,

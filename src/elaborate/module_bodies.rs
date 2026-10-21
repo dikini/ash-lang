@@ -1139,6 +1139,14 @@ fn visit_source_items<'a>(
                     return Ok(true);
                 }
                 match &expression.kind {
+                    ResolvedExprKind::ForeignHost(host) => {
+                        push_source(
+                            &mut pending,
+                            BodySourceItem::Expression(&host.body),
+                            work,
+                            expression.span,
+                        )?;
+                    }
                     ResolvedExprKind::CopyWindow(window) => {
                         push_source(
                             &mut pending,
