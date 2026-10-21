@@ -357,3 +357,53 @@ fn checked_imported_wrapper_rejects_a_reordered_host_actual() {
     }
     panic!("consumer module missing");
 }
+
+#[test]
+fn checked_selected_module_method_prerequisites_preserve_body_free_core() {
+    let methods = r#"pub type Box<A> = Box(A)
+pub interface Read<A> {
+    read : A -> Foreign.CheckedCall<Int>
+}
+pub impl Read<Int> {
+    read value = closed value
+}
+pub impl<A> Read<Box<A>> where Read<A> {
+    read (Box value) = read value
+}
+pub invoke<A> : A -> Foreign.CheckedCall<Int> where Read<A>
+invoke value = read value
+"#;
+    let fixture = Fixture::new(
+        &format!(
+            "{}{}{}",
+            LIBRARY,
+            methods,
+            CLOSED.replace("pub closed", "closed")
+        ),
+        "import @builtin.foreign as Foreign\nimport native as Native\nimport native (impl Read)\nmain : Unit -> Foreign.CheckedCall<Int>\nmain () = Native.invoke (Native.Box (Native.Box 7))\n",
+    );
+    let graph = fixture.graph();
+    let _ = core(&graph);
+}
+
+#[test]
+fn checked_selected_module_direct_method_preserves_body_free_core() {
+    let methods = r#"pub interface Read<A> {
+    read : A -> Foreign.CheckedCall<Int>
+}
+pub impl Read<Int> {
+    read value = closed value
+}
+"#;
+    let fixture = Fixture::new(
+        &format!(
+            "{}{}{}",
+            LIBRARY,
+            methods,
+            CLOSED.replace("pub closed", "closed")
+        ),
+        "import @builtin.foreign as Foreign\nimport native as Native\nimport native (impl Read)\nmain : Unit -> Foreign.CheckedCall<Int>\nmain () = Native.read 7\n",
+    );
+    let graph = fixture.graph();
+    let _ = core(&graph);
+}

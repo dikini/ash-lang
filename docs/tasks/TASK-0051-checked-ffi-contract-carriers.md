@@ -164,7 +164,12 @@ then tests capture/table erasure against canonical completed facts. It covers
 exact original owner/head/actuals/assumption union, aliases/opaque/re-export routes,
 independent Core transforms and paid work. Implementation follows demonstrated
 failures; nominal/resource closure, owners/copy/runtime/image and whole F3 remain
-pending. The early draft publishes this plan before long implementation.
+pending. The early draft publishes this plan before long implementation. The
+[first retained controls](evidence/checked-ffi-selected/README.md) pass direct
+module-level selection and a generic prerequisite chain through independent
+Core. They expose accepted capture/table erasure in a canonical selected summary
+and a source-order-dependent host registry refusal; both remain unrepaired at
+this test-first checkpoint.
 
 ## Verification
 
