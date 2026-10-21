@@ -993,13 +993,14 @@ main () = true + 1
 
 Foreign declarations are passive. The explicit static checked foreign profile
 admits `foreign checked library` declarations with owner-free scalar or void
-calls and the canonical checked result codec. Default source resolution,
+calls, and passive dependency-free opaque owner acquisition and void teardown
+bindings with the canonical checked result codec. Default source resolution,
 program building and running refuse this checked closure before legacy foreign
 ABI preparation. Erasing the marker is not an available source operation;
 static checked binding grants no native execution or executable image permission. Assumption declarations and `host`/`assumes` metadata cannot be
 silently erased by declaring an ordinary library; that legacy path refuses them
-as unsupported. The admitted subset contains owner-free
-calls with scalar or void results, and owner contracts with declared dependencies. Each library
+as unsupported. The existing-profile subset contains owner-free calls with
+scalar or void results and owner contracts with declared dependencies. Each library
 has exactly one profile, `"x86_64-unknown-linux-gnu"`. Scalar representations
 are signed or unsigned 8-, 32- or 64-bit integers, or `size_t`. These ABI
 representations introduce no ordinary fixed-width Ash integer type.
@@ -1038,9 +1039,16 @@ Builtin role checking reconstructs the original reserved module, immutable
 source bytes, exact declaration/formal identities, origins and codec payloads.
 A same-shaped user type, display alias, copied flag or replayed module identity
 with rewritten source cannot supply that authority. Static Core and its ordinary
-transforms preserve the lexical host binder. Checked owner lifecycles, checked
-byte/copy primitives and executable checked host images remain outside this
-checkpoint and refuse explicitly.
+transforms preserve the lexical host binder.
+
+Passive checked owners retain distinct original host and owned formals, exact
+State identity, nullable acquisition and consumed/retained void teardown
+relations. The explicit static profile binds these declarations without creating
+or finishing a source owner. Legacy binding still refuses checked contracts.
+Source resources using either `scope` or `acquired_only` refuse a checked State
+owner; those codecs cannot activate a checked lifecycle. Checked owner lifecycles,
+`checked_scope`, checked byte/copy primitives and executable checked host images
+remain outside this checkpoint and refuse explicitly.
 
 Each symbol has one outer pure source arrow and a complete ordered parameter
 vector containing only `Type` and `EffectRow` parameters. Omitted kinds are

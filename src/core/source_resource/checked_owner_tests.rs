@@ -12,7 +12,11 @@ impl Drop for Fixture {
         let _ = fs::remove_dir_all(&self.0);
     }
 }
-fn header_admission(text: &str, checked: bool) -> Result<(), super::ValidationError> {
+fn header_admission(
+    text: &str,
+    checked: bool,
+    work: &mut TypeWorkBudget,
+) -> Result<(), super::ValidationError> {
     static IDS: AtomicU64 = AtomicU64::new(0);
     let fixture = Fixture(std::env::temp_dir().join(format!(
         "ash-checked-owner-codec-{}-{}",
@@ -53,12 +57,7 @@ fn header_admission(text: &str, checked: bool) -> Result<(), super::ValidationEr
                 .source_resource_facts()
                 .find(|header| header.spelling == "Probe")
                 .unwrap();
-            return CheckedSourceResourceHeader::admit(
-                header,
-                registry,
-                &mut TypeWorkBudget::default(),
-            )
-            .map(|_| ());
+            return CheckedSourceResourceHeader::admit(header, registry, work).map(|_| ());
         }
         modules.push(crate::elaborate::check_module(resolved).unwrap());
     }
@@ -85,18 +84,48 @@ fn checked_source(original: &str) -> String {
             "Foreign.CheckedConversionFailed",
         )
 }
-#[test]
-fn checked_owner_legacy_resource_codecs_refuse_at_independent_header_admission() {
-    for original in [
-        include_str!("../../../tests/fixtures/source-owner/owner.ash"),
-        include_str!("../../../tests/fixtures/source-owner/acquired_only_owner.ash"),
-    ] {
-        header_admission(original, false).expect("the unchanged ordinary resource codec is valid");
-        let failure = header_admission(&checked_source(original), true)
-            .expect_err("legacy resource codec must not admit checked owner lifecycle");
-        assert!(
-            failure.reason() != crate::core::ValidationReason::Resource,
-            "{failure:?}"
+fn legacy_codec_must_refuse_checked(original: &str) {
+    header_admission(original, false, &mut TypeWorkBudget::default())
+        .expect("the unchanged ordinary resource codec is valid");
+    let checked = checked_source(original);
+    let run = |work: &mut TypeWorkBudget| header_admission(&checked, true, work);
+    let mut measured = TypeWorkBudget::default();
+    let failure = run(&mut measured).expect_err("legacy codec must refuse checked owner lifecycle");
+    assert_eq!(failure.reason(), crate::core::ValidationReason::Registry);
+    let cost = measured.used();
+    for prefix in [0, 7] {
+        let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+        short.charge(prefix).unwrap();
+        assert_eq!(
+            run(&mut short).unwrap_err().reason(),
+            crate::core::ValidationReason::Resource
+        );
+        let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+        exact.charge(prefix).unwrap();
+        assert_eq!(
+            run(&mut exact).unwrap_err().reason(),
+            crate::core::ValidationReason::Registry
+        );
+        assert_eq!(exact.used(), prefix + cost);
+        assert_eq!(
+            run(&mut exact).unwrap_err().reason(),
+            crate::core::ValidationReason::Resource
         );
     }
+    assert_eq!(
+        run(&mut TypeWorkBudget::default()).unwrap_err().reason(),
+        crate::core::ValidationReason::Registry
+    );
+}
+#[test]
+fn checked_owner_legacy_scope_refuses_at_independent_header_admission() {
+    legacy_codec_must_refuse_checked(include_str!(
+        "../../../tests/fixtures/source-owner/owner.ash"
+    ));
+}
+#[test]
+fn checked_owner_legacy_acquired_only_refuses_at_independent_header_admission() {
+    legacy_codec_must_refuse_checked(include_str!(
+        "../../../tests/fixtures/source-owner/acquired_only_owner.ash"
+    ));
 }

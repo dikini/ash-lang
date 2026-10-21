@@ -584,6 +584,11 @@ impl CheckedSourceResourceHeader {
             .source_owner_candidates()
             .find(|(_, _, id, _)| *id == state)
             .ok_or_else(invalid)?;
+        // Checked owners require checked_scope and its owner-specific finish
+        // witnesses. Passive binding must not activate either legacy codec.
+        if prepared.checked_contract().is_some() {
+            return Err(invalid());
+        }
         crate::foreign::source_owner::authenticate_source_owner_candidate(
             prepared, index, state, parameters, registry, work,
         )

@@ -26,3 +26,22 @@ is inferred; this exposes an unintended prerequisite bypass to close before
 binding delivery. The header-red commands share a frozen 566-file manifest,
 aggregate `da792bd7bbc2515946f64cec87cd9f90f9290173e575728a407d0903bb5b9541`.
 The separate earlier helper compilation error is not product evidence.
+
+## Guarded candidate
+
+The shared header now refuses the selected checked State before either legacy
+codec grants permission. It leaves ordinary owner/header checking unchanged.
+Seven unit controls pass, including separate Scope and AcquiredOnly canonical
+ordinary controls, checked Registry refusals and exact/nonzero-prefix/short/
+spent/fresh header work. Ten integration controls pass, including complete
+Type/Row formals, consumed/retained passive teardown, actual selected imported
+State/native metadata, wrong host preparation and opaque dependency refusal.
+The source phase checker rejects a direct owner request inside a lexical host;
+this is not evidence that an owner operation reached host lowering.
+
+The integration setup originally inspected the unused imported effects in the
+consumer's local registry. The real imported facts are in ImportedFacts; that
+lookup and two compile-only test API errors were corrected without a production
+change. The final uniform affected regression/Clippy batch remains pending.
+Neither passive imports nor these refusals establish connected resource
+host/checked_scope, lifecycle, independent owner Core or runtime permission.
