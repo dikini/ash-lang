@@ -5204,16 +5204,72 @@ impl<'a> Analysis<'a> {
         delivered: Option<&DeliveredCallPrefix>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(CallSuccessors, PendingCallPrefix), Failure> {
-        let port = self.port(code, context, budget)?;
-        self.close(budget)?;
+        #[cfg(test)]
+        let stage_before = budget.used();
+        let stage_result = self.port(code, context, budget);
+        #[cfg(test)]
+        crate::core::validate::startup_measurement::accumulate(
+            "calls-after.port.total",
+            stage_before,
+            budget.used(),
+        );
+        let port = stage_result?;
+        #[cfg(test)]
+        let stage_before = budget.used();
+        #[cfg(test)]
+        let close_class = match self
+            .slots
+            .get(port)
+            .and_then(|slot| self.graph.expressions.get(slot.key.0))
+        {
+            Some(Expr::BorrowedCallReply { .. }) => "calls-after.close.borrowed.total",
+            Some(Expr::SourceDataCall { .. }) => "calls-after.close.source-data.total",
+            Some(Expr::Call { .. }) => "calls-after.close.ordinary.total",
+            _ => "calls-after.close.other.total",
+        };
+        let stage_result = self.close(budget);
+        #[cfg(test)]
+        crate::core::validate::startup_measurement::accumulate(
+            "calls-after.close.total",
+            stage_before,
+            budget.used(),
+        );
+        #[cfg(test)]
+        crate::core::validate::startup_measurement::accumulate(
+            close_class,
+            stage_before,
+            budget.used(),
+        );
+        stage_result?;
         let (expression, _) = self.slots[port].key;
         if matches!(
             self.graph.expressions[expression],
             Expr::BorrowedCallReply { .. } | Expr::SourceDataCall { .. }
         ) {
+            #[cfg(test)]
+            crate::core::validate::startup_measurement::accumulate(
+                if matches!(
+                    self.graph.expressions[expression],
+                    Expr::BorrowedCallReply { .. }
+                ) {
+                    "calls-after.class.borrowed.total"
+                } else {
+                    "calls-after.class.source-data.total"
+                },
+                0,
+                0,
+            );
             charge(budget, 4)?;
             // This immutable native-call result has no dynamic callable atoms.
             // Keep the completed prefix explicit for ordinary control discovery.
+            #[cfg(test)]
+            crate::core::validate::startup_measurement::accumulate(
+                "calls-after.returns.total",
+                0,
+                0,
+            );
+            #[cfg(test)]
+            crate::core::validate::startup_measurement::record("calls-after.targets.count", 0, 0);
             return Ok((
                 CallSuccessors {
                     targets: Vec::new(),
@@ -5226,7 +5282,22 @@ impl<'a> Analysis<'a> {
         let Expr::Call { function, .. } = self.graph.expressions[expression] else {
             return Err(Failure::Invalid);
         };
-        let function = self.slot(function, context, budget)?;
+        #[cfg(test)]
+        crate::core::validate::startup_measurement::accumulate(
+            "calls-after.class.ordinary.total",
+            0,
+            0,
+        );
+        #[cfg(test)]
+        let stage_before = budget.used();
+        let stage_result = self.slot(function, context, budget);
+        #[cfg(test)]
+        crate::core::validate::startup_measurement::accumulate(
+            "calls-after.function-slot.total",
+            stage_before,
+            budget.used(),
+        );
+        let function = stage_result?;
         // Snapshot BEFORE successor processing can install further live routes.
         // Phase dispatch and the retained endpoint read are bounded scalar work.
         charge(budget, 2)?;
@@ -5235,24 +5306,75 @@ impl<'a> Analysis<'a> {
             Some(prefix) => (prefix.end, prefix.opaque),
             None => (0, 0),
         };
-        let mut targets = Vec::new();
-        for atom in copy_slice(&self.slots[function].atoms[start..end], budget)? {
-            match atom {
-                Atom::Closure(target, _) => {
-                    let context =
-                        self.context(context, Transition::Invoke(expression, target), budget)?;
-                    let target = *self.graph.targets.get(&target).ok_or(Failure::Invalid)?;
-                    targets.try_reserve(1).map_err(|_| Failure::Resource)?;
-                    targets.push((target, context));
-                }
-                Atom::Unknown => opaque |= 1,
-                Atom::Constructor(_) | Atom::IndependentCallable => opaque |= 2,
-                _ => {}
-            }
+        #[cfg(test)]
+        if start == end {
+            crate::core::validate::startup_measurement::accumulate(
+                "calls-after.zero-prefix.total",
+                0,
+                0,
+            );
         }
+        let mut targets = Vec::new();
+        #[cfg(test)]
+        let suffix_before = budget.used();
+        let suffix_result = (|| {
+            for atom in copy_slice(&self.slots[function].atoms[start..end], budget)? {
+                match atom {
+                    Atom::Closure(target, _) => {
+                        #[cfg(test)]
+                        let invoke_before = budget.used();
+                        let invoke_result =
+                            self.context(context, Transition::Invoke(expression, target), budget);
+                        #[cfg(test)]
+                        crate::core::validate::startup_measurement::accumulate(
+                            "calls-after.invoke-context.total",
+                            invoke_before,
+                            budget.used(),
+                        );
+                        let context = invoke_result?;
+                        let target = *self.graph.targets.get(&target).ok_or(Failure::Invalid)?;
+                        targets.try_reserve(1).map_err(|_| Failure::Resource)?;
+                        targets.push((target, context));
+                    }
+                    Atom::Unknown => opaque |= 1,
+                    Atom::Constructor(_) | Atom::IndependentCallable => opaque |= 2,
+                    _ => {}
+                }
+            }
+            Ok::<(), Failure>(())
+        })();
+        #[cfg(test)]
+        crate::core::validate::startup_measurement::accumulate(
+            "calls-after.suffix.total",
+            suffix_before,
+            budget.used(),
+        );
+        suffix_result?;
         // Flags are an exact monotone summary of the delivered ordered prefix.
         // Their two scalar projections replace the original bool assignments.
         charge(budget, 2)?;
+        #[cfg(test)]
+        {
+            crate::core::validate::startup_measurement::record(
+                "calls-after.targets.count",
+                0,
+                targets.len(),
+            );
+            if opaque & 1 != 0 {
+                crate::core::validate::startup_measurement::accumulate(
+                    "calls-after.unknown.total",
+                    0,
+                    0,
+                );
+            }
+            if opaque & 2 != 0 {
+                crate::core::validate::startup_measurement::accumulate(
+                    "calls-after.returns.total",
+                    0,
+                    0,
+                );
+            }
+        }
         Ok((
             CallSuccessors {
                 targets,

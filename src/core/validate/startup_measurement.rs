@@ -44,3 +44,29 @@ pub(crate) fn count(stage: &'static str) {
 pub(crate) fn is_recording() -> bool {
     EVENTS.with(|events| events.borrow().is_some())
 }
+
+/// Aggregate trace-only calls/work. A labelled isolated run starts another group.
+/// For `.total` events, `before` is call count and `after` is summed local work.
+pub(crate) fn accumulate(stage: &'static str, before: usize, after: usize) {
+    EVENTS.with(|events| {
+        if let Some(events) = events.borrow_mut().as_mut() {
+            let start = events
+                .iter()
+                .rposition(|event| event.stage == "control.isolated.enter")
+                .map_or(0, |index| index + 1);
+            if let Some(event) = events[start..]
+                .iter_mut()
+                .find(|event| event.stage == stage)
+            {
+                event.before += 1;
+                event.after += after - before;
+            } else {
+                events.push(Event {
+                    stage,
+                    before: 1,
+                    after: after - before,
+                });
+            }
+        }
+    });
+}

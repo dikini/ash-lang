@@ -913,6 +913,8 @@ pub(super) fn authenticate(
                 *module,
                 crate::module::FOREIGN_NATIVE_HOST_LOCAL,
             )) {
+                #[cfg(test)]
+                let repeated_host_before = work.used();
                 charge(work, source.text().len().saturating_add(10))?;
                 if source.text() != crate::module::foreign_builtin_source_text()
                     || !crate::foreign::checked_builtins::is_canonical_native_host(
@@ -928,6 +930,12 @@ pub(super) fn authenticate(
                 {
                     return Err(registry_error());
                 }
+                #[cfg(test)]
+                super::startup_measurement::record(
+                    "source.omitted-host-role.ok",
+                    repeated_host_before,
+                    work.used(),
+                );
                 original
                     .omitted_builtin_formals
                     .try_reserve(10)
@@ -1092,6 +1100,8 @@ fn authenticate_module(
             // NativeHost is compiler metadata, not a parsed effect declaration.
             // Its exception requires the actual immutable defining source and
             // independently reconstructed complete builtin inventory.
+            #[cfg(test)]
+            let original_host_before = work.used();
             charge(work, source.text().len())?;
             if source.text() != crate::module::foreign_builtin_source_text()
                 || !crate::foreign::checked_builtins::is_canonical_native_host(
@@ -1107,6 +1117,12 @@ fn authenticate_module(
             {
                 return Err(registry_error());
             }
+            #[cfg(test)]
+            super::startup_measurement::record(
+                "source.effect-host-role.ok",
+                original_host_before,
+                work.used(),
+            );
             continue;
         }
         coordinates.authenticate_effect(module, source, effect, work)?;

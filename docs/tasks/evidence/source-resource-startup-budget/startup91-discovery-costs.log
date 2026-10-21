@@ -1,0 +1,194 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi/foreign-adapter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 50s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 1 test
+buffer diagnostic compilation: CompilationWork { source_checking: Some(PhaseCost { completed: true, phase: SourceChecking, used: 214429, allowance: Some(5470400) }), final_elaboration: Some(PhaseCost { completed: true, phase: FinalElaboration, used: 55493, allowance: Some(5470400) }), independent_core: Some(PhaseCost { completed: true, phase: IndependentCore, used: 165336, allowance: Some(2359110) }) }
+buffer startup after decode: 38705
+buffer startup after complete fact authentication: 52747
+buffer startup after reconstruction: 327680
+startup measurement: restore:windows-enter 52748 52748
+startup measurement: restore:sources-enter 53166 53166
+startup measurement: restore:registry-enter 76607 76607
+startup measurement: restore:registry-exit 85448 85448
+startup measurement: restore:binders-enter 85449 85449
+startup measurement: restore:templates-enter 85817 85817
+startup measurement: template:view-enter 85817 85817
+startup measurement: template:view-exit 94658 94658
+startup measurement: template:header-enter 94659 94659
+startup measurement: template:acquire-enter 94743 94743
+startup measurement: template:finish-enter 97388 97388
+startup measurement: template:handler-enter 98868 98868
+startup measurement: template:handler-exit 103173 103173
+startup measurement: template:admit-enter 103193 103193
+startup measurement: core.session.enter 0 0
+startup measurement: core.session.fresh 0 0
+startup measurement: core.original-proof.enter 0 0
+startup measurement: core.coordinates.enter 0 0
+startup measurement: core.coordinates.syntax.ok 1 11186
+startup measurement: core.coordinates.ok 1 13548
+startup measurement: core.coordinates.enter 0 0
+startup measurement: core.coordinates.syntax.ok 13807 21063
+startup measurement: core.coordinates.ok 13807 22979
+startup measurement: core.original-proof.ok 0 54415
+startup measurement: core.session.registry.ok 758767 831222
+startup measurement: core.body.method 831222 831222
+startup measurement: core.body.envelopes 831378 831378
+startup measurement: core.body.graph 831378 831378
+startup measurement: core.body.binders 831378 831378
+startup measurement: core.body.type-binders 831386 831386
+startup measurement: core.body.method-type-owners 831389 831389
+startup measurement: core.body.node-types 831389 831389
+startup measurement: core.body.effect-nodes 832453 832453
+startup measurement: core.body.registration 832898 832898
+startup measurement: core.body.abstraction-shapes 832927 832927
+startup measurement: core.body.scopes 832959 832959
+startup measurement: core.body.type-scopes 832959 832959
+startup measurement: core.body.generic 833317 833317
+startup measurement: core.body.resource-census 833588 833588
+startup measurement: core.session.forest.ok 831222 833617
+startup measurement: core.session.result.ok 103407 178260
+startup measurement: core.session.enter 0 0
+startup measurement: core.session.hit 0 0
+startup measurement: core.body.method 833629 833629
+startup measurement: core.body.envelopes 833715 833715
+startup measurement: core.body.graph 833715 833715
+startup measurement: core.body.binders 833715 833715
+startup measurement: core.body.type-binders 833727 833727
+startup measurement: core.body.method-type-owners 833730 833730
+startup measurement: core.body.node-types 833730 833730
+startup measurement: core.body.effect-nodes 834266 834266
+startup measurement: core.body.registration 834539 834539
+startup measurement: core.body.abstraction-shapes 834554 834554
+startup measurement: core.body.scopes 834572 834572
+startup measurement: core.body.type-scopes 834572 834572
+startup measurement: core.body.generic 834764 834764
+startup measurement: core.body.resource-census 834906 834906
+startup measurement: core.session.result.ok 178260 179561
+startup measurement: core.session.enter 0 0
+startup measurement: core.session.hit 0 0
+startup measurement: core.body.method 834930 834930
+startup measurement: core.body.envelopes 835236 835236
+startup measurement: core.body.graph 835236 835236
+startup measurement: core.body.binders 835239 835239
+startup measurement: core.body.type-binders 835299 835299
+startup measurement: core.body.method-type-owners 835307 835307
+startup measurement: core.body.node-types 835307 835307
+startup measurement: core.body.effect-nodes 836512 836512
+startup measurement: core.body.registration 838639 838639
+startup measurement: core.body.abstraction-shapes 838698 838698
+startup measurement: core.body.scopes 838760 838760
+startup measurement: core.body.type-scopes 838788 838788
+startup measurement: core.body.generic 839337 839337
+startup measurement: core.body.resource-census 839688 839688
+startup measurement: core.session.result.ok 179561 184387
+startup measurement: template:admit-exit 185522 185522
+startup measurement: restore:main-enter 185523 185523
+startup measurement: restore:main-catalog-exit 187229 187229
+startup measurement: restore:main-nodes-enter 188130 188130
+startup measurement: restore:anchors-enter 206137 206137
+startup measurement: restore:builder-finish-enter 207339 207339
+startup measurement: restore:core-enter 207355 207355
+startup measurement: core.run.registry.enter 0 0
+startup measurement: core.run.registry.ok 0 18531
+startup measurement: core.body.method 18531 18531
+startup measurement: core.body.envelopes 24311 24311
+startup measurement: core.body.graph 24311 24311
+startup measurement: core.body.binders 24318 24318
+startup measurement: core.body.type-binders 24669 24669
+startup measurement: core.body.method-type-owners 24705 24705
+startup measurement: core.body.node-types 24705 24705
+startup measurement: core.body.effect-nodes 31165 31165
+startup measurement: core.body.owner-coverage 63392 63392
+startup measurement: core.body.byte-coverage 64239 64239
+startup measurement: core.body.window-coverage 65815 65815
+startup measurement: core.body.registration 66625 66625
+startup measurement: core.body.abstraction-shapes 66940 66940
+startup measurement: core.body.scopes 67286 67286
+startup measurement: core.body.type-scopes 67433 67433
+startup measurement: core.body.generic 70701 70701
+startup measurement: core.body.resource-census 72640 72640
+startup measurement: core.body.capture 72955 72955
+startup measurement: capture.graph.enter 0 0
+startup measurement: capture.graph.ok 0 16175
+startup measurement: capture.control.enter 16175 16175
+startup measurement: capture.cleanup-discovery.enter 16175 16175
+startup measurement: capture.control-roots.enter 16885 16885
+startup measurement: control.queries.ready 17427 17427
+startup measurement: control.query-count 2 2
+startup measurement: control.constructor.ok 17427 21944
+startup measurement: control.check.enter 0 0
+startup measurement: control.discover.full.enter 0 0
+startup measurement: state.normalize.total 41 2080
+startup measurement: state.key.total 383 2501
+startup measurement: state.copy.total 287 1893
+startup measurement: state.enqueue.new.total 176 0
+startup measurement: dispatch.sequence.total 80 2533
+startup measurement: dispatch.choice.total 20 820
+startup measurement: dispatch.boundary.total 24 1764
+startup measurement: dispatch.call.total 11 17238
+startup measurement: state.pop.total 33 548
+startup measurement: dispatch.return.total 31 1219
+startup measurement: state.enqueue.hit.total 9 0
+startup measurement: dispatch.request.total 6 1665
+startup measurement: control.discover.err 21944 47370
+startup measurement: control.discover.roots.count 0 2
+startup measurement: control.discover.processed.count 0 172
+startup measurement: control.discover.visited-new-states.count 0 176
+startup measurement: control.discover.pending.count 0 4
+startup measurement: control.discover.calls.count 0 11
+startup measurement: control.discover.observed-calls.count 0 11
+startup measurement: control.discover.cell-requests.count 0 0
+startup measurement: control.check.discover.err 21944 47370
+startup measurement: control.isolated.enter 0 0
+startup measurement: control.check.enter 0 0
+startup measurement: control.discover.full.enter 0 0
+startup measurement: state.normalize.total 114 10324
+startup measurement: state.key.total 1069 10447
+startup measurement: state.copy.total 863 8601
+startup measurement: state.enqueue.new.total 459 0
+startup measurement: dispatch.sequence.total 186 9048
+startup measurement: dispatch.choice.total 52 3224
+startup measurement: dispatch.boundary.total 28 2216
+startup measurement: dispatch.call.total 74 32485
+startup measurement: state.pop.total 118 2804
+startup measurement: dispatch.return.total 102 6484
+startup measurement: state.enqueue.hit.total 40 0
+startup measurement: dispatch.request.total 16 5497
+startup measurement: dispatch.resume.total 36 6960
+startup measurement: dispatch.discard.total 2 1040
+startup measurement: discover.inner-close.total 2 333
+startup measurement: discover.revision.changed 0 0
+startup measurement: discover.revision.stable 0 0
+startup measurement: control.discover.ok 4517 72779
+startup measurement: control.discover.roots.count 0 2
+startup measurement: control.discover.processed.count 0 496
+startup measurement: control.discover.visited-new-states.count 0 459
+startup measurement: control.discover.pending.count 0 0
+startup measurement: control.discover.calls.count 0 37
+startup measurement: control.discover.observed-calls.count 0 37
+startup measurement: control.discover.cell-requests.count 0 0
+startup measurement: control.check.discover.ok 4517 72779
+startup measurement: control.check.payloads.ok 72779 72847
+startup measurement: control.check.cell-retentions.ok 72847 72847
+startup measurement: control.check.data-close.ok 72847 72847
+startup measurement: control.check.focused-entry-candidates.count 0 4
+startup measurement: control.check.resource-candidates.count 0 0
+startup measurement: control.check.focused.ok 74308 74308
+startup measurement: control.isolated.ok 0 74308
+startup measurement: core.run.body.err 18531 120325
+
+thread 'build::image::source_resource_image::tests::imported_buffer_two_owner_discard_has_normal_startup_budget' (668) panicked at src/build/source_resource_image.rs:3460:13:
+buffer startup: Validation(ValidationError { reason: Resource, node: None, cause: None })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test build::image::source_resource_image::tests::imported_buffer_two_owner_discard_has_normal_startup_budget ... FAILED
+
+failures:
+
+failures:
+    build::image::source_resource_image::tests::imported_buffer_two_owner_discard_has_normal_startup_budget
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1990 filtered out; finished in 0.38s
+
+error: test failed, to rerun pass `-p ash --lib`
