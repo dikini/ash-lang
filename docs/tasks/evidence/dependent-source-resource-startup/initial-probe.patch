@@ -1,0 +1,2288 @@
+diff --git a/src/build/image.rs b/src/build/image.rs
+index 153af41..08553bf 100644
+--- a/src/build/image.rs
++++ b/src/build/image.rs
+@@ -11972,6 +11972,12 @@ impl PureImage {
+         if !self.effect_dialect || self.sources.is_empty() {
+             return Err(ImageFailure::InvalidRecord);
+         }
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::record(
++            "restore:windows-enter",
++            work.used(),
++            work.used(),
++        );
+         let mut windows = Vec::new();
+         charge(work, self.source_windows.len())?;
+         windows
+@@ -12003,6 +12009,12 @@ impl PureImage {
+             modules: CoordinateStorage::Owned(Vec::new()),
+             work,
+         };
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::record(
++            "restore:sources-enter",
++            decoder.work.used(),
++            decoder.work.used(),
++        );
+         let mut seen_common = false;
+         let mut seen_cell = false;
+         let mut seen_generic_cell = false;
+@@ -12052,20 +12064,56 @@ impl PureImage {
+             decoder.sources.push(source, decoder.work)?;
+             decoder.modules.push(module, decoder.work)?;
+         }
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::record(
++            "restore:registry-enter",
++            decoder.work.used(),
++            decoder.work.used(),
++        );
+         let RestoredNativeRegistry {
+             registry,
+             provenance,
+             prepared,
+             symbols,
+         } = decoder.extended_registry()?;
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::record(
++            "restore:registry-exit",
++            decoder.work.used(),
++            decoder.work.used(),
++        );
+         charge(decoder.work, 1)?;
+         let registry = Arc::new(registry);
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::record(
++            "restore:binders-enter",
++            decoder.work.used(),
++            decoder.work.used(),
++        );
+         let binder_ids = decoder.source_binder_reservations()?;
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::record(
++            "restore:templates-enter",
++            decoder.work.used(),
++            decoder.work.used(),
++        );
+         let templates = decoder.source_templates(&registry, &symbols, &binder_ids)?;
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::record(
++            "restore:main-enter",
++            decoder.work.used(),
++            decoder.work.used(),
++        );
+         let catalog = decoder.method_catalog(
+             self.main_method_catalog
+                 .ok_or(ImageFailure::InvalidRecord)?,
+         )?;
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::record(
++            "restore:main-catalog-exit",
++            decoder.work.used(),
++            decoder.work.used(),
++        );
+         let mut builder = crate::core::EffectCoreBuilder::with_registry_and_method_evidence(
+             Arc::clone(&registry),
+             Arc::clone(&catalog),
+@@ -12081,6 +12129,12 @@ impl PureImage {
+         nodes
+             .try_reserve_exact(self.nodes.len())
+             .map_err(|_| ImageFailure::Resource)?;
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::record(
++            "restore:main-nodes-enter",
++            decoder.work.used(),
++            decoder.work.used(),
++        );
+         for record in &self.nodes {
+             charge(decoder.work, 1)?;
+             let ty = decoder.ty(record.ty)?;
+@@ -12101,6 +12155,12 @@ impl PureImage {
+             )?;
+             nodes.push(node);
+         }
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::record(
++            "restore:anchors-enter",
++            decoder.work.used(),
++            decoder.work.used(),
++        );
+         decoder.source_method_anchors(
+             &mut builder,
+             &nodes,
+@@ -12108,6 +12168,12 @@ impl PureImage {
+             self.source_method_anchors
+                 .ok_or(ImageFailure::InvalidRecord)?,
+         )?;
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::record(
++            "restore:builder-finish-enter",
++            decoder.work.used(),
++            decoder.work.used(),
++        );
+         let unchecked = builder.finish_provider_draft(*get(&nodes, self.root)?, decoder.work)?;
+         let mut sources = Vec::new();
+         let mut module_sources = Vec::new();
+@@ -12115,6 +12181,12 @@ impl PureImage {
+             push(&mut sources, source, decoder.work)?;
+             push(&mut module_sources, (*module, source.id()), decoder.work)?;
+         }
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::record(
++            "restore:core-enter",
++            decoder.work.used(),
++            decoder.work.used(),
++        );
+         let program = crate::core::validate::validate_effect_modules_with_work(
+             unchecked,
+             &sources,
+@@ -12122,6 +12194,12 @@ impl PureImage {
+             decoder.work,
+         )
+         .map_err(ImageFailure::Validation)?;
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::record(
++            "restore:core-exit",
++            decoder.work.used(),
++            decoder.work.used(),
++        );
+         charge(decoder.work, 1)?;
+         if !program
+             .node(program.root())
+diff --git a/src/build/source_resource_image.rs b/src/build/source_resource_image.rs
+index fe0ce20..0dc4277 100644
+--- a/src/build/source_resource_image.rs
++++ b/src/build/source_resource_image.rs
+@@ -1815,19 +1815,55 @@ impl Decoder<'_> {
+             if view.header != record.header {
+                 return Err(ImageFailure::InvalidRecord);
+             }
++            #[cfg(test)]
++            crate::core::validate::startup_measurement::record(
++                "template:view-enter",
++                self.work.used(),
++                self.work.used(),
++            );
+             let original_registry = self.source_registry_view(registry, view)?;
++            #[cfg(test)]
++            crate::core::validate::startup_measurement::record(
++                "template:view-exit",
++                self.work.used(),
++                self.work.used(),
++            );
+             let registry = &original_registry;
+             let header_record = *get(&self.image.resource_headers, record.header)?;
+             let id = self.resource_identity(header_record.id)?;
+             let original = registry
+                 .source_resource_fact(id)
+                 .ok_or(ImageFailure::InvalidRecord)?;
++            #[cfg(test)]
++            crate::core::validate::startup_measurement::record(
++                "template:header-enter",
++                self.work.used(),
++                self.work.used(),
++            );
+             let header = CheckedSourceResourceHeader::admit(original, registry, self.work)
+                 .map_err(ImageFailure::Validation)?;
++            #[cfg(test)]
++            crate::core::validate::startup_measurement::record(
++                "template:acquire-enter",
++                self.work.used(),
++                self.work.used(),
++            );
+             let (acquire, acquire_nodes, _) =
+                 self.source_graph(registry, symbols, binders, record.acquire, None)?;
++            #[cfg(test)]
++            crate::core::validate::startup_measurement::record(
++                "template:finish-enter",
++                self.work.used(),
++                self.work.used(),
++            );
+             let (finish, finish_nodes, _) =
+                 self.source_graph(registry, symbols, binders, record.finish, None)?;
++            #[cfg(test)]
++            crate::core::validate::startup_measurement::record(
++                "template:handler-enter",
++                self.work.used(),
++                self.work.used(),
++            );
+             let inputs = record
+                 .handler_inputs
+                 .map(|blob| self.source_row_inputs_record(blob))
+@@ -1837,6 +1873,12 @@ impl Decoder<'_> {
+             let handler = self.source_graph(registry, symbols, binders, record.handler, inputs);
+             self.source_pending_rows = saved_pending;
+             let (handler, handler_nodes, handler_inputs) = handler?;
++            #[cfg(test)]
++            crate::core::validate::startup_measurement::record(
++                "template:handler-exit",
++                self.work.used(),
++                self.work.used(),
++            );
+             let mut globals = crate::core::source_resource::SourceResourceGlobals::new();
+             for slot in record.globals.get(&self.image.node_children)? {
+                 let binding = *get(&self.image.binders, *slot)?;
+@@ -1876,6 +1918,12 @@ impl Decoder<'_> {
+             // must not inherit the previous template's registry receipt.
+             let mut structure_session =
+                 crate::core::validate::SourceResourceStructureSession::default();
++            #[cfg(test)]
++            crate::core::validate::startup_measurement::record(
++                "template:admit-enter",
++                self.work.used(),
++                self.work.used(),
++            );
+             let template = CheckedSourceResourceTemplate::admit_with_globals(
+                 Arc::new(header),
+                 acquire,
+@@ -1889,6 +1937,12 @@ impl Decoder<'_> {
+                 &mut structure_session,
+             )
+             .map_err(ImageFailure::Validation)?;
++            #[cfg(test)]
++            crate::core::validate::startup_measurement::record(
++                "template:admit-exit",
++                self.work.used(),
++                self.work.used(),
++            );
+             if template.globals().len() != declared_globals {
+                 return Err(ImageFailure::InvalidRecord);
+             }
+@@ -3586,6 +3640,10 @@ Buffer.Success (Buffer.Success 7)
+             roots: crate::module::ModuleRoots::empty(),
+         })
+         .unwrap();
++        println!(
++            "dependent compilation work: {:?}",
++            compiled.compilation_work()
++        );
+         let (program, provenance) = compiled.effect_build_input().unwrap();
+         let mut preparation = TypeWorkBudget::default();
+         let build = super::super::encode_effect_for_build(
+@@ -3605,7 +3663,12 @@ Buffer.Success (Buffer.Success 7)
+         drop(fixture);
+         let restore = |work: &mut TypeWorkBudget| -> Result<(), ImageFailure> {
+             let image = PureImage::decode_bytes(&bytes, work)?;
++            println!("dependent startup after decode: {}", work.used());
+             let facts = image.admit_expected_native_facts(&expected, work)?;
++            println!(
++                "dependent startup after fact authentication: {}",
++                work.used()
++            );
+             let restored = image.restore_effect(work)?;
+             for (slot, record) in image.prepared_libraries.iter().enumerate() {
+                 let slot = u32::try_from(slot).unwrap();
+@@ -3629,9 +3692,20 @@ Buffer.Success (Buffer.Success 7)
+             }
+             Ok(())
+         };
++        crate::core::validate::startup_measurement::reset();
+         let mut normal = TypeWorkBudget::default();
+-        restore(&mut normal)
+-            .expect("dependent discard and original libraries fit the unchanged allowance");
++        let result = restore(&mut normal);
++        println!(
++            "dependent startup result: {result:?}, cumulative work {}",
++            normal.used()
++        );
++        for event in crate::core::validate::startup_measurement::snapshot() {
++            println!(
++                "startup measurement: {} {} {}",
++                event.stage, event.before, event.after
++            );
++        }
++        result.expect("dependent discard and original libraries fit the unchanged allowance");
+         let cost = normal.used();
+         assert!(cost < normal.limit());
+         for prefix in [0, 11] {
+diff --git a/src/core/capture.rs b/src/core/capture.rs
+index 592c75d..4704996 100644
+--- a/src/core/capture.rs
++++ b/src/core/capture.rs
+@@ -3705,12 +3705,11 @@ fn analyze_nodes_with_methods<F: CoreOperationFamily>(
+     provider_phase: ProviderCapturePhase,
+     budget: &mut TypeWorkBudget,
+ ) -> Result<Vec<CaptureValueSummary>, Failure> {
+-    let Some(BuiltCaptureGraph {
+-        graph,
+-        roots,
+-        values,
+-        has_discard,
+-    }) = build_capture_graph(
++    #[cfg(test)]
++    let graph_before = budget.used();
++    #[cfg(test)]
++    super::validate::startup_measurement::record("capture.graph.enter", graph_before, graph_before);
++    let built = build_capture_graph(
+         nodes,
+         globals,
+         imports,
+@@ -3726,26 +3725,72 @@ fn analyze_nodes_with_methods<F: CoreOperationFamily>(
+         source_builder,
+         provider_phase,
+         budget,
+-    )?
++    );
++    #[cfg(test)]
++    super::validate::startup_measurement::record(
++        if built.is_ok() {
++            "capture.graph.ok"
++        } else {
++            "capture.graph.err"
++        },
++        graph_before,
++        budget.used(),
++    );
++    let Some(BuiltCaptureGraph {
++        graph,
++        roots,
++        values,
++        has_discard,
++    }) = built?
+     else {
+         return Ok(Vec::new());
+     };
++    #[cfg(test)]
++    super::validate::startup_measurement::record(
++        "capture.control.enter",
++        budget.used(),
++        budget.used(),
++    );
+     if let Some(rows) = rows {
+         *rows = cleanup_requirements(&graph, &roots, budget)?;
+     } else if summary_roots.is_none() {
++        #[cfg(test)]
++        super::validate::startup_measurement::record(
++            "capture.cleanup-discovery.enter",
++            budget.used(),
++            budget.used(),
++        );
+         if has_discard && cleanup_rows_may_be_nonempty(&graph, budget)? {
+             // Strict discovery already visits the original control paths. Keep
+             // its passive row observations instead of constructing a second
+             // inference-only solver; all safety checks still run in strict mode.
++            #[cfg(test)]
++            super::validate::startup_measurement::record(
++                "capture.control-with-rows.enter",
++                budget.used(),
++                budget.used(),
++            );
+             let requirements = check_control_roots_with_rows(&graph, roots, true, budget)?;
+             check_cleanup_rows(nodes, operation, &requirements, budget)?;
+         } else {
+             if has_discard {
+                 check_cleanup_rows(nodes, operation, &[], budget)?;
+             }
++            #[cfg(test)]
++            super::validate::startup_measurement::record(
++                "capture.control-roots.enter",
++                budget.used(),
++                budget.used(),
++            );
+             check_control_roots(&graph, roots, budget)?;
+         }
+     }
++    #[cfg(test)]
++    super::validate::startup_measurement::record(
++        "capture.control.exit",
++        budget.used(),
++        budget.used(),
++    );
+     let graph = Arc::new(graph);
+     let mut summaries = Vec::new();
+     if let Some((roots, _, _, _, _, _)) = summary_roots {
+@@ -6440,9 +6485,62 @@ fn check_control_roots_with_rows(
+                 queries.push(root);
+             }
+         }
+-        let mut analysis = Analysis::new(graph, None, budget)?;
++        #[cfg(test)]
++        super::validate::startup_measurement::record(
++            "control.queries.ready",
++            budget.used(),
++            budget.used(),
++        );
++        #[cfg(test)]
++        super::validate::startup_measurement::record(
++            "control.query-count",
++            queries.len(),
++            queries.len(),
++        );
++        #[cfg(test)]
++        let analysis_before = budget.used();
++        let analysis = Analysis::new(graph, None, budget);
++        #[cfg(test)]
++        super::validate::startup_measurement::record(
++            if analysis.is_ok() {
++                "control.constructor.ok"
++            } else {
++                "control.constructor.err"
++            },
++            analysis_before,
++            budget.used(),
++        );
++        let mut analysis = analysis?;
+         analysis.collect_cleanup_rows = collect_cleanup_rows;
+-        analysis.check(&queries, budget)?;
++        let result = analysis.check(&queries, budget);
++        #[cfg(test)]
++        if matches!(&result, Err(Failure::Resource))
++            && super::validate::startup_measurement::is_recording()
++        {
++            // This separately labelled diagnostic supplies no reconstruction
++            // result or caller credit. The original Result and meter survive.
++            let mut isolated = TypeWorkBudget::default();
++            super::validate::startup_measurement::record(
++                "control.isolated.enter",
++                isolated.used(),
++                isolated.used(),
++            );
++            let diagnostic = (|| {
++                let mut separate = Analysis::new(graph, None, &mut isolated)?;
++                separate.collect_cleanup_rows = collect_cleanup_rows;
++                separate.check(&queries, &mut isolated)
++            })();
++            super::validate::startup_measurement::record(
++                if diagnostic.is_ok() {
++                    "control.isolated.ok"
++                } else {
++                    "control.isolated.err"
++                },
++                0,
++                isolated.used(),
++            );
++        }
++        result?;
+         return Ok(std::mem::take(&mut analysis.cleanup_rows));
+     }
+     Ok(Vec::new())
+diff --git a/src/core/capture/control.rs b/src/core/capture/control.rs
+index 69ef925..38cc72f 100644
+--- a/src/core/capture/control.rs
++++ b/src/core/capture/control.rs
+@@ -838,11 +838,22 @@ impl State {
+     /// Every State-keyed lookup/insertion visits the complete structural key,
+     /// including hits which perform no copying or new state retention.
+     fn charge_key(&self, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+-        charge(
+-            budget,
+-            self.heap.len().checked_add(1).ok_or(Failure::Resource)?,
+-        )?;
+-        self.charge_cells(budget)
++        #[cfg(test)]
++        let measurement_before = budget.used();
++        let result = (|| {
++            charge(
++                budget,
++                self.heap.len().checked_add(1).ok_or(Failure::Resource)?,
++            )?;
++            self.charge_cells(budget)
++        })();
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::accumulate(
++            "state.key.total",
++            measurement_before,
++            budget.used(),
++        );
++        result
+     }
+ 
+     fn edges(&self, address: Address, budget: &mut TypeWorkBudget) -> Result<&[Edge], Failure> {
+@@ -860,23 +871,34 @@ impl State {
+         Ok(&self.heap[start..start + count])
+     }
+     fn copy(&self, budget: &mut TypeWorkBudget) -> Result<Self, Failure> {
+-        charge(budget, self.cells.len())?;
+-        let mut cells = Vec::new();
+-        cells
+-            .try_reserve(self.cells.len())
+-            .map_err(|_| Failure::Resource)?;
+-        for cell in &self.cells {
+-            cells.push(cell.copy(budget)?);
+-        }
+-        Ok(Self {
+-            position: self.position,
+-            context: self.context,
+-            value_context: self.value_context,
+-            stack: self.stack,
+-            heap: copy_slice(&self.heap, budget)?,
+-            cells,
+-            abandoned: self.abandoned,
+-        })
++        #[cfg(test)]
++        let measurement_before = budget.used();
++        let result = (|| {
++            charge(budget, self.cells.len())?;
++            let mut cells = Vec::new();
++            cells
++                .try_reserve(self.cells.len())
++                .map_err(|_| Failure::Resource)?;
++            for cell in &self.cells {
++                cells.push(cell.copy(budget)?);
++            }
++            Ok(Self {
++                position: self.position,
++                context: self.context,
++                value_context: self.value_context,
++                stack: self.stack,
++                heap: copy_slice(&self.heap, budget)?,
++                cells,
++                abandoned: self.abandoned,
++            })
++        })();
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::accumulate(
++            "state.copy.total",
++            measurement_before,
++            budget.used(),
++        );
++        result
+     }
+ 
+     fn rename(
+@@ -1002,15 +1024,26 @@ impl State {
+     }
+ 
+     fn normalize(&mut self, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+-        charge(
+-            budget,
+-            self.heap
+-                .len()
+-                .saturating_mul(self.heap.len().max(1).ilog2() as usize + 1),
+-        )?;
+-        self.heap.sort_unstable();
+-        self.heap.dedup();
+-        self.prune_sorted_heap(budget)
++        #[cfg(test)]
++        let measurement_before = budget.used();
++        let result = (|| {
++            charge(
++                budget,
++                self.heap
++                    .len()
++                    .saturating_mul(self.heap.len().max(1).ilog2() as usize + 1),
++            )?;
++            self.heap.sort_unstable();
++            self.heap.dedup();
++            self.prune_sorted_heap(budget)
++        })();
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::accumulate(
++            "state.normalize.total",
++            measurement_before,
++            budget.used(),
++        );
++        result
+     }
+ 
+     fn prune_sorted_heap(&mut self, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+@@ -1063,36 +1096,47 @@ impl State {
+         root: Address,
+         budget: &mut TypeWorkBudget,
+     ) -> Result<(), Failure> {
+-        let edges = self.edges(root, budget)?;
+-        if edges.len() != 1
+-            || edges[0].next != self.stack
+-            || matches!(
+-                edges[0].frame,
+-                Frame::Clause {
+-                    consumed: false,
+-                    ..
+-                } | Frame::Closing {
+-                    capture: Some(_),
+-                    ..
+-                }
+-            )
+-        {
+-            return self.prune_sorted_heap(budget);
+-        }
+-        // In a normalized graph this sole outgoing edge reached every other
+-        // vertex through its tail. Only the popped root can become unreachable.
+-        for edge in &self.heap {
+-            charge(budget, 1)?;
+-            if edge.next == root
+-                || matches!(edge.frame, Frame::Clause { capture, consumed: false, .. } if capture == root)
+-                || matches!(edge.frame, Frame::Closing { capture: Some(capture), .. } if capture == root)
++        #[cfg(test)]
++        let measurement_before = budget.used();
++        let result = (|| {
++            let edges = self.edges(root, budget)?;
++            if edges.len() != 1
++                || edges[0].next != self.stack
++                || matches!(
++                    edges[0].frame,
++                    Frame::Clause {
++                        consumed: false,
++                        ..
++                    } | Frame::Closing {
++                        capture: Some(_),
++                        ..
++                    }
++                )
+             {
+-                return Ok(());
++                return self.prune_sorted_heap(budget);
+             }
+-        }
+-        charge(budget, self.heap.len())?;
+-        self.heap.retain(|edge| edge.address != root);
+-        Ok(())
++            // In a normalized graph this sole outgoing edge reached every other
++            // vertex through its tail. Only the popped root can become unreachable.
++            for edge in &self.heap {
++                charge(budget, 1)?;
++                if edge.next == root
++                    || matches!(edge.frame, Frame::Clause { capture, consumed: false, .. } if capture == root)
++                    || matches!(edge.frame, Frame::Closing { capture: Some(capture), .. } if capture == root)
++                {
++                    return Ok(());
++                }
++            }
++            charge(budget, self.heap.len())?;
++            self.heap.retain(|edge| edge.address != root);
++            Ok(())
++        })();
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::accumulate(
++            "state.pop.total",
++            measurement_before,
++            budget.used(),
++        );
++        result
+     }
+ }
+ 
+@@ -2064,22 +2108,35 @@ impl<'a> Analysis<'a> {
+         budget: &mut TypeWorkBudget,
+     ) -> Result<usize, Failure> {
+         if let Some(id) = self.call_cache.get(&(code, target, context)) {
++            #[cfg(test)]
++            crate::core::validate::startup_measurement::accumulate("call-context.hit.total", 0, 0);
+             return Ok(*id);
+         }
+-        let Control::Call { ty, source, .. } = &self.graph.code[code] else {
+-            return Err(Failure::Invalid);
+-        };
+-        let mut actual = TypeArguments(Vec::new());
+-        actual.0.try_reserve(1).map_err(|_| Failure::Resource)?;
+-        actual
+-            .0
+-            .push(self.substitute(&self.graph.types.0[*ty], context, budget)?);
+-        let result = self.context_for_actual(target, &actual.0[0], *source, budget)?;
+-        self.call_cache
+-            .try_reserve(1)
+-            .map_err(|_| Failure::Resource)?;
+-        self.call_cache.insert((code, target, context), result);
+-        Ok(result)
++        #[cfg(test)]
++        let miss_before = budget.used();
++        let miss = (|| {
++            let Control::Call { ty, source, .. } = &self.graph.code[code] else {
++                return Err(Failure::Invalid);
++            };
++            let mut actual = TypeArguments(Vec::new());
++            actual.0.try_reserve(1).map_err(|_| Failure::Resource)?;
++            actual
++                .0
++                .push(self.substitute(&self.graph.types.0[*ty], context, budget)?);
++            let result = self.context_for_actual(target, &actual.0[0], *source, budget)?;
++            self.call_cache
++                .try_reserve(1)
++                .map_err(|_| Failure::Resource)?;
++            self.call_cache.insert((code, target, context), result);
++            Ok(result)
++        })();
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::accumulate(
++            "call-context.miss.total",
++            miss_before,
++            budget.used(),
++        );
++        miss
+     }
+ 
+     fn context_for_actual(
+@@ -2438,6 +2495,8 @@ impl<'a> Analysis<'a> {
+         }
+         state.charge_key(budget)?;
+         if visited.contains(&state) {
++            #[cfg(test)]
++            crate::core::validate::startup_measurement::accumulate("state.enqueue.hit.total", 0, 0);
+             return Ok(());
+         }
+         let saved = state.copy(budget)?;
+@@ -2446,6 +2505,8 @@ impl<'a> Analysis<'a> {
+         visited.insert(saved);
+         pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+         pending.push_back(state);
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::accumulate("state.enqueue.new.total", 0, 0);
+         Ok(())
+     }
+ 
+@@ -2598,20 +2659,74 @@ impl<'a> Analysis<'a> {
+         roots: &[usize],
+         budget: &mut TypeWorkBudget,
+     ) -> Result<(), Failure> {
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::count("control.check.enter");
+         self.entries.clear();
+         self.candidates.clear();
+         self.payloads.clear();
+-        self.discover(roots, None, budget)?;
++        #[cfg(test)]
++        let phase_before = budget.used();
++        let phase_result = self.discover(roots, None, budget);
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::record(
++            if phase_result.is_ok() {
++                "control.check.discover.ok"
++            } else {
++                "control.check.discover.err"
++            },
++            phase_before,
++            budget.used(),
++        );
++        phase_result?;
+         // Passive row records describe the whole original discovery. Focused
+         // safety queries remain strict and do not invent additional row sites.
+         self.collect_cleanup_rows = false;
+         if self.infer_cleanup_rows {
+             return Ok(());
+         }
+-        self.check_payloads(budget)?;
+-        self.check_cell_retentions(budget)?;
++        #[cfg(test)]
++        let phase_before = budget.used();
++        let phase_result = self.check_payloads(budget);
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::record(
++            if phase_result.is_ok() {
++                "control.check.payloads.ok"
++            } else {
++                "control.check.payloads.err"
++            },
++            phase_before,
++            budget.used(),
++        );
++        phase_result?;
++        #[cfg(test)]
++        let phase_before = budget.used();
++        let phase_result = self.check_cell_retentions(budget);
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::record(
++            if phase_result.is_ok() {
++                "control.check.cell-retentions.ok"
++            } else {
++                "control.check.cell-retentions.err"
++            },
++            phase_before,
++            budget.used(),
++        );
++        phase_result?;
+         if let Some(data) = &mut self.data {
+-            data.close(budget)?;
++            #[cfg(test)]
++            let phase_before = budget.used();
++            let phase_result = data.close(budget);
++            #[cfg(test)]
++            crate::core::validate::startup_measurement::record(
++                if phase_result.is_ok() {
++                    "control.check.data-close.ok"
++                } else {
++                    "control.check.data-close.err"
++                },
++                phase_before,
++                budget.used(),
++            );
++            phase_result?;
+             for candidate in data.resource_candidates(budget)? {
+                 charge(budget, 1)?;
+                 self.candidates
+@@ -2620,7 +2735,32 @@ impl<'a> Analysis<'a> {
+                 self.candidates.insert(candidate);
+             }
+         }
+-        self.check_focused_entries(budget)
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::record(
++            "control.check.focused-entry-candidates.count",
++            0,
++            self.entries.len(),
++        );
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::record(
++            "control.check.resource-candidates.count",
++            0,
++            self.candidates.len(),
++        );
++        #[cfg(test)]
++        let focused_before = budget.used();
++        let result = self.check_focused_entries(budget);
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::record(
++            if result.is_ok() {
++                "control.check.focused.ok"
++            } else {
++                "control.check.focused.err"
++            },
++            focused_before,
++            budget.used(),
++        );
++        result
+     }
+ 
+     fn discover(
+@@ -2634,179 +2774,299 @@ impl<'a> Analysis<'a> {
+         let mut calls: Vec<ObservedCall> = Vec::new();
+         let mut cell_requests = HashSet::new();
+         let mut observed_calls = HashMap::new();
+-        let mut revision = self
+-            .data
+-            .as_ref()
+-            .map_or(0, super::value::Analysis::revision);
+-        if let Some(seed) = seed {
+-            Self::enqueue(seed.copy(budget)?, &mut pending, &mut visited, budget)?;
+-        }
+-        for root in roots {
+-            let value_context = if let Some(data) = &mut self.data {
+-                let context = data.root_context(*root, budget)?;
+-                // Linked Core retains globals as ordinary outer bindings. Demand
+-                // the actual root so its lexical initializers feed callable ports.
+-                data.port(*root, context, budget)?;
+-                context
+-            } else {
+-                0
+-            };
+-            Self::enqueue(
+-                State {
+-                    position: Position {
+-                        code: *root,
+-                        next: 0,
++        #[cfg(test)]
++        let discover_before = budget.used();
++        #[cfg(test)]
++        let mut processed = 0usize;
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::count(if self.focusing {
++            "control.discover.focused.enter"
++        } else {
++            "control.discover.full.enter"
++        });
++        let result = (|| {
++            let mut revision = self
++                .data
++                .as_ref()
++                .map_or(0, super::value::Analysis::revision);
++            if let Some(seed) = seed {
++                Self::enqueue(seed.copy(budget)?, &mut pending, &mut visited, budget)?;
++            }
++            for root in roots {
++                let value_context = if let Some(data) = &mut self.data {
++                    let context = data.root_context(*root, budget)?;
++                    // Linked Core retains globals as ordinary outer bindings. Demand
++                    // the actual root so its lexical initializers feed callable ports.
++                    data.port(*root, context, budget)?;
++                    context
++                } else {
++                    0
++                };
++                Self::enqueue(
++                    State {
++                        position: Position {
++                            code: *root,
++                            next: 0,
++                        },
++                        context: 0,
++                        value_context,
++                        stack: Address::Empty,
++                        heap: Vec::new(),
++                        cells: Vec::new(),
++                        abandoned: None,
+                     },
+-                    context: 0,
+-                    value_context,
+-                    stack: Address::Empty,
+-                    heap: Vec::new(),
+-                    cells: Vec::new(),
+-                    abandoned: None,
+-                },
+-                &mut pending,
+-                &mut visited,
+-                budget,
+-            )?;
+-        }
+-        loop {
+-            while let Some(state) = pending.pop_front() {
+-                charge(budget, 1)?;
+-                let code = state.position.code;
+-                match &self.graph.code[code] {
+-                    Control::Return => self.returned(state, &mut pending, &mut visited, budget)?,
+-                    Control::Unavailable => return Err(Failure::Invalid),
+-                    Control::Sequence(children) => {
+-                        self.discover_sequence(
+-                            state,
+-                            children,
+-                            &mut pending,
+-                            &mut visited,
+-                            budget,
+-                        )?;
+-                    }
+-                    Control::Choice(children) => {
+-                        for child in children {
+-                            let mut next = state.copy(budget)?;
+-                            next.position = Position {
+-                                code: *child,
+-                                next: 0,
+-                            };
+-                            Self::enqueue_normalized(next, &mut pending, &mut visited, budget)?;
+-                        }
+-                    }
+-                    Control::Handler { body, .. }
+-                    | Control::Cleanup { body, .. }
+-                    | Control::Resource { body, .. }
+-                    | Control::Registration { body, .. }
+-                    | Control::NativeInterpret { body, .. } => {
+-                        self.discover_boundary(state, *body, &mut pending, &mut visited, budget)?;
++                    &mut pending,
++                    &mut visited,
++                    budget,
++                )?;
++            }
++            loop {
++                while let Some(state) = pending.pop_front() {
++                    #[cfg(test)]
++                    {
++                        processed += 1;
+                     }
+-                    Control::Request(request) => {
+-                        if request.effect.as_ref().is_some_and(|effect| {
+-                            effect.effect().module().is_builtin_generic_cell()
+-                        }) {
+-                            state.charge_key(budget)?;
+-                            if !cell_requests.contains(&state) {
+-                                cell_requests
+-                                    .try_reserve(1)
+-                                    .map_err(|_| Failure::Resource)?;
+-                                let saved = state.copy(budget)?;
+-                                state.charge_key(budget)?;
+-                                cell_requests.insert(saved);
++                    charge(budget, 1)?;
++                    let code = state.position.code;
++                    #[cfg(test)]
++                    let dispatch_before = budget.used();
++                    #[cfg(test)]
++                    let dispatch_stage = match &self.graph.code[code] {
++                        Control::Call { .. } => "dispatch.call.total",
++                        Control::Request(_) => "dispatch.request.total",
++                        Control::Return => "dispatch.return.total",
++                        Control::Sequence(_) => "dispatch.sequence.total",
++                        Control::Choice(_) => "dispatch.choice.total",
++                        Control::Resume { .. } => "dispatch.resume.total",
++                        Control::Discard { .. } => "dispatch.discard.total",
++                        _ => "dispatch.boundary.total",
++                    };
++                    let dispatch = (|| {
++                        match &self.graph.code[code] {
++                            Control::Return => {
++                                self.returned(state, &mut pending, &mut visited, budget)?
+                             }
+-                        }
+-                        let label = self.label(code, state.context, budget)?;
+-                        let port = self
+-                            .data
+-                            .as_mut()
+-                            .map(|data| data.port(code, state.value_context, budget))
+-                            .transpose()?;
+-                        self.requested(
+-                            &state,
+-                            Event {
+-                                code,
+-                                label,
+-                                unknown: false,
+-                                port,
+-                            },
+-                            &mut pending,
+-                            &mut visited,
+-                            budget,
+-                        )?;
+-                    }
+-                    Control::Call { .. } => {
+-                        self.discover_call(
+-                            state,
+-                            &mut calls,
+-                            &mut observed_calls,
+-                            &mut pending,
+-                            &mut visited,
+-                            budget,
+-                        )?;
+-                    }
+-                    Control::Resume { owner, value } => {
+-                        if state.position.next == 0 {
+-                            let value = *value;
+-                            let mut next = state;
+-                            next.push(
+-                                Frame::Next {
+-                                    position: Position { code, next: 1 },
+-                                    context: next.context,
+-                                    value_context: next.value_context,
+-                                },
+-                                budget,
+-                            )?;
+-                            next.position = Position {
+-                                code: value,
+-                                next: 0,
+-                            };
+-                            Self::enqueue(next, &mut pending, &mut visited, budget)?;
+-                        } else {
+-                            self.completed(
++                            Control::Unavailable => return Err(Failure::Invalid),
++                            Control::Sequence(children) => {
++                                self.discover_sequence(
++                                    state,
++                                    children,
++                                    &mut pending,
++                                    &mut visited,
++                                    budget,
++                                )?;
++                            }
++                            Control::Choice(children) => {
++                                for child in children {
++                                    let mut next = state.copy(budget)?;
++                                    next.position = Position {
++                                        code: *child,
++                                        next: 0,
++                                    };
++                                    Self::enqueue_normalized(
++                                        next,
++                                        &mut pending,
++                                        &mut visited,
++                                        budget,
++                                    )?;
++                                }
++                            }
++                            Control::Handler { body, .. }
++                            | Control::Cleanup { body, .. }
++                            | Control::Resource { body, .. }
++                            | Control::Registration { body, .. }
++                            | Control::NativeInterpret { body, .. } => {
++                                self.discover_boundary(
++                                    state,
++                                    *body,
++                                    &mut pending,
++                                    &mut visited,
++                                    budget,
++                                )?;
++                            }
++                            Control::Request(request) => {
++                                if request.effect.as_ref().is_some_and(|effect| {
++                                    effect.effect().module().is_builtin_generic_cell()
++                                }) {
++                                    state.charge_key(budget)?;
++                                    if !cell_requests.contains(&state) {
++                                        cell_requests
++                                            .try_reserve(1)
++                                            .map_err(|_| Failure::Resource)?;
++                                        let saved = state.copy(budget)?;
++                                        state.charge_key(budget)?;
++                                        cell_requests.insert(saved);
++                                    }
++                                }
++                                let label = self.label(code, state.context, budget)?;
++                                let port = self
++                                    .data
++                                    .as_mut()
++                                    .map(|data| data.port(code, state.value_context, budget))
++                                    .transpose()?;
++                                self.requested(
++                                    &state,
++                                    Event {
++                                        code,
++                                        label,
++                                        unknown: false,
++                                        port,
++                                    },
++                                    &mut pending,
++                                    &mut visited,
++                                    budget,
++                                )?;
++                            }
++                            Control::Call { .. } => {
++                                self.discover_call(
++                                    state,
++                                    &mut calls,
++                                    &mut observed_calls,
++                                    &mut pending,
++                                    &mut visited,
++                                    budget,
++                                )?;
++                            }
++                            Control::Resume { owner, value } => {
++                                if state.position.next == 0 {
++                                    let value = *value;
++                                    let mut next = state;
++                                    next.push(
++                                        Frame::Next {
++                                            position: Position { code, next: 1 },
++                                            context: next.context,
++                                            value_context: next.value_context,
++                                        },
++                                        budget,
++                                    )?;
++                                    next.position = Position {
++                                        code: value,
++                                        next: 0,
++                                    };
++                                    Self::enqueue(next, &mut pending, &mut visited, budget)?;
++                                } else {
++                                    self.completed(
++                                        state,
++                                        *owner,
++                                        true,
++                                        &mut pending,
++                                        &mut visited,
++                                        budget,
++                                    )?;
++                                }
++                            }
++                            Control::Discard { owner, .. } => self.completed(
+                                 state,
+                                 *owner,
+-                                true,
++                                false,
+                                 &mut pending,
+                                 &mut visited,
+                                 budget,
+-                            )?;
++                            )?,
+                         }
+-                    }
+-                    Control::Discard { owner, .. } => {
+-                        self.completed(state, *owner, false, &mut pending, &mut visited, budget)?
+-                    }
++                        Ok::<_, Failure>(())
++                    })();
++                    #[cfg(test)]
++                    crate::core::validate::startup_measurement::accumulate(
++                        dispatch_stage,
++                        dispatch_before,
++                        budget.used(),
++                    );
++                    dispatch?;
++                }
++                let Some(data) = &mut self.data else {
++                    break;
++                };
++                #[cfg(test)]
++                let close_before = budget.used();
++                let closed = data.close(budget);
++                #[cfg(test)]
++                crate::core::validate::startup_measurement::accumulate(
++                    "discover.inner-close.total",
++                    close_before,
++                    budget.used(),
++                );
++                closed?;
++                #[cfg(test)]
++                crate::core::validate::startup_measurement::count(if data.revision() == revision {
++                    "discover.revision.stable"
++                } else {
++                    "discover.revision.changed"
++                });
++                if data.revision() == revision {
++                    // Native transfers remain live during value growth. Missing
++                    // operands reject only after both discovery queues stabilize.
++                    data.check_native_storage(budget)?;
++                    break;
++                }
++                revision = data.revision();
++                // Only calls choose control successors from growing value facts.
++                // Replay them directly; ordinary enqueue would suppress visited states.
++                charge(budget, calls.len())?;
++                pending
++                    .try_reserve(calls.len())
++                    .map_err(|_| Failure::Resource)?;
++                for call in &calls {
++                    pending.push_back(call.state.copy(budget)?);
++                }
++                charge(budget, cell_requests.len())?;
++                pending
++                    .try_reserve(cell_requests.len())
++                    .map_err(|_| Failure::Resource)?;
++                for request in &cell_requests {
++                    pending.push_back(request.copy(budget)?);
+                 }
+             }
+-            let Some(data) = &mut self.data else {
+-                break;
+-            };
+-            data.close(budget)?;
+-            if data.revision() == revision {
+-                // Native transfers remain live during value growth. Missing
+-                // operands reject only after both discovery queues stabilize.
+-                data.check_native_storage(budget)?;
+-                break;
+-            }
+-            revision = data.revision();
+-            // Only calls choose control successors from growing value facts.
+-            // Replay them directly; ordinary enqueue would suppress visited states.
+-            charge(budget, calls.len())?;
+-            pending
+-                .try_reserve(calls.len())
+-                .map_err(|_| Failure::Resource)?;
+-            for call in &calls {
+-                pending.push_back(call.state.copy(budget)?);
+-            }
+-            charge(budget, cell_requests.len())?;
+-            pending
+-                .try_reserve(cell_requests.len())
+-                .map_err(|_| Failure::Resource)?;
+-            for request in &cell_requests {
+-                pending.push_back(request.copy(budget)?);
+-            }
++            Ok(())
++        })();
++        #[cfg(test)]
++        {
++            crate::core::validate::startup_measurement::record(
++                if result.is_ok() {
++                    "control.discover.ok"
++                } else {
++                    "control.discover.err"
++                },
++                discover_before,
++                budget.used(),
++            );
++            crate::core::validate::startup_measurement::record(
++                "control.discover.roots.count",
++                0,
++                roots.len(),
++            );
++            crate::core::validate::startup_measurement::record(
++                "control.discover.processed.count",
++                0,
++                processed,
++            );
++            crate::core::validate::startup_measurement::record(
++                "control.discover.visited-new-states.count",
++                0,
++                visited.len(),
++            );
++            crate::core::validate::startup_measurement::record(
++                "control.discover.pending.count",
++                0,
++                pending.len(),
++            );
++            crate::core::validate::startup_measurement::record(
++                "control.discover.calls.count",
++                0,
++                calls.len(),
++            );
++            crate::core::validate::startup_measurement::record(
++                "control.discover.observed-calls.count",
++                0,
++                observed_calls.len(),
++            );
++            crate::core::validate::startup_measurement::record(
++                "control.discover.cell-requests.count",
++                0,
++                cell_requests.len(),
++            );
+         }
+-        Ok(())
++        result
+     }
+ 
+     // Dispatch-specific owned temporaries must not remain live while a different
+@@ -2982,12 +3242,21 @@ impl<'a> Analysis<'a> {
+                 });
+                 index
+             };
+-            let (successors, publication) = data.calls_after(
++            #[cfg(test)]
++            let calls_before = budget.used();
++            let call_result = data.calls_after(
+                 code,
+                 state.value_context,
+                 calls[index].delivered.as_ref(),
+                 budget,
+-            )?;
++            );
++            #[cfg(test)]
++            crate::core::validate::startup_measurement::accumulate(
++                "control.calls-after.total",
++                calls_before,
++                budget.used(),
++            );
++            let (successors, publication) = call_result?;
+             (successors, Some((index, publication)))
+         } else {
+             charge(budget, value.targets.len())?;
+diff --git a/src/core/capture/value.rs b/src/core/capture/value.rs
+index 9255ada..6df5f68 100644
+--- a/src/core/capture/value.rs
++++ b/src/core/capture/value.rs
+@@ -5204,16 +5204,72 @@ impl<'a> Analysis<'a> {
+         delivered: Option<&DeliveredCallPrefix>,
+         budget: &mut TypeWorkBudget,
+     ) -> Result<(CallSuccessors, PendingCallPrefix), Failure> {
+-        let port = self.port(code, context, budget)?;
+-        self.close(budget)?;
++        #[cfg(test)]
++        let stage_before = budget.used();
++        let stage_result = self.port(code, context, budget);
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::accumulate(
++            "calls-after.port.total",
++            stage_before,
++            budget.used(),
++        );
++        let port = stage_result?;
++        #[cfg(test)]
++        let stage_before = budget.used();
++        #[cfg(test)]
++        let close_class = match self
++            .slots
++            .get(port)
++            .and_then(|slot| self.graph.expressions.get(slot.key.0))
++        {
++            Some(Expr::BorrowedCallReply { .. }) => "calls-after.close.borrowed.total",
++            Some(Expr::SourceDataCall { .. }) => "calls-after.close.source-data.total",
++            Some(Expr::Call { .. }) => "calls-after.close.ordinary.total",
++            _ => "calls-after.close.other.total",
++        };
++        let stage_result = self.close(budget);
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::accumulate(
++            "calls-after.close.total",
++            stage_before,
++            budget.used(),
++        );
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::accumulate(
++            close_class,
++            stage_before,
++            budget.used(),
++        );
++        stage_result?;
+         let (expression, _) = self.slots[port].key;
+         if matches!(
+             self.graph.expressions[expression],
+             Expr::BorrowedCallReply { .. } | Expr::SourceDataCall { .. }
+         ) {
++            #[cfg(test)]
++            crate::core::validate::startup_measurement::accumulate(
++                if matches!(
++                    self.graph.expressions[expression],
++                    Expr::BorrowedCallReply { .. }
++                ) {
++                    "calls-after.class.borrowed.total"
++                } else {
++                    "calls-after.class.source-data.total"
++                },
++                0,
++                0,
++            );
+             charge(budget, 4)?;
+             // This immutable native-call result has no dynamic callable atoms.
+             // Keep the completed prefix explicit for ordinary control discovery.
++            #[cfg(test)]
++            crate::core::validate::startup_measurement::accumulate(
++                "calls-after.returns.total",
++                0,
++                0,
++            );
++            #[cfg(test)]
++            crate::core::validate::startup_measurement::record("calls-after.targets.count", 0, 0);
+             return Ok((
+                 CallSuccessors {
+                     targets: Vec::new(),
+@@ -5226,7 +5282,22 @@ impl<'a> Analysis<'a> {
+         let Expr::Call { function, .. } = self.graph.expressions[expression] else {
+             return Err(Failure::Invalid);
+         };
+-        let function = self.slot(function, context, budget)?;
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::accumulate(
++            "calls-after.class.ordinary.total",
++            0,
++            0,
++        );
++        #[cfg(test)]
++        let stage_before = budget.used();
++        let stage_result = self.slot(function, context, budget);
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::accumulate(
++            "calls-after.function-slot.total",
++            stage_before,
++            budget.used(),
++        );
++        let function = stage_result?;
+         // Snapshot BEFORE successor processing can install further live routes.
+         // Phase dispatch and the retained endpoint read are bounded scalar work.
+         charge(budget, 2)?;
+@@ -5235,24 +5306,75 @@ impl<'a> Analysis<'a> {
+             Some(prefix) => (prefix.end, prefix.opaque),
+             None => (0, 0),
+         };
++        #[cfg(test)]
++        if start == end {
++            crate::core::validate::startup_measurement::accumulate(
++                "calls-after.zero-prefix.total",
++                0,
++                0,
++            );
++        }
+         let mut targets = Vec::new();
+-        for atom in copy_slice(&self.slots[function].atoms[start..end], budget)? {
+-            match atom {
+-                Atom::Closure(target, _) => {
+-                    let context =
+-                        self.context(context, Transition::Invoke(expression, target), budget)?;
+-                    let target = *self.graph.targets.get(&target).ok_or(Failure::Invalid)?;
+-                    targets.try_reserve(1).map_err(|_| Failure::Resource)?;
+-                    targets.push((target, context));
++        #[cfg(test)]
++        let suffix_before = budget.used();
++        let suffix_result = (|| {
++            for atom in copy_slice(&self.slots[function].atoms[start..end], budget)? {
++                match atom {
++                    Atom::Closure(target, _) => {
++                        #[cfg(test)]
++                        let invoke_before = budget.used();
++                        let invoke_result =
++                            self.context(context, Transition::Invoke(expression, target), budget);
++                        #[cfg(test)]
++                        crate::core::validate::startup_measurement::accumulate(
++                            "calls-after.invoke-context.total",
++                            invoke_before,
++                            budget.used(),
++                        );
++                        let context = invoke_result?;
++                        let target = *self.graph.targets.get(&target).ok_or(Failure::Invalid)?;
++                        targets.try_reserve(1).map_err(|_| Failure::Resource)?;
++                        targets.push((target, context));
++                    }
++                    Atom::Unknown => opaque |= 1,
++                    Atom::Constructor(_) | Atom::IndependentCallable => opaque |= 2,
++                    _ => {}
+                 }
+-                Atom::Unknown => opaque |= 1,
+-                Atom::Constructor(_) | Atom::IndependentCallable => opaque |= 2,
+-                _ => {}
+             }
+-        }
++            Ok::<(), Failure>(())
++        })();
++        #[cfg(test)]
++        crate::core::validate::startup_measurement::accumulate(
++            "calls-after.suffix.total",
++            suffix_before,
++            budget.used(),
++        );
++        suffix_result?;
+         // Flags are an exact monotone summary of the delivered ordered prefix.
+         // Their two scalar projections replace the original bool assignments.
+         charge(budget, 2)?;
++        #[cfg(test)]
++        {
++            crate::core::validate::startup_measurement::record(
++                "calls-after.targets.count",
++                0,
++                targets.len(),
++            );
++            if opaque & 1 != 0 {
++                crate::core::validate::startup_measurement::accumulate(
++                    "calls-after.unknown.total",
++                    0,
++                    0,
++                );
++            }
++            if opaque & 2 != 0 {
++                crate::core::validate::startup_measurement::accumulate(
++                    "calls-after.returns.total",
++                    0,
++                    0,
++                );
++            }
++        }
+         Ok((
+             CallSuccessors {
+                 targets,
+diff --git a/src/core/validate.rs b/src/core/validate.rs
+index eb3ef18..77d1c97 100644
+--- a/src/core/validate.rs
++++ b/src/core/validate.rs
+@@ -6,6 +6,8 @@ mod foreign_host_tests;
+ mod selected_evidence_tests;
+ pub(crate) mod semantic_type_variables;
+ mod source_declarations;
++#[cfg(test)]
++pub(crate) mod startup_measurement;
+ pub(crate) use source_declarations::DeclarationCoordinates;
+ 
+ use std::{
+@@ -3880,12 +3882,22 @@ impl<'context> SourceResourceStructureSession<'context> {
+         handler_graph: Option<&super::source_resource::SourceHandlerGraph<'_>>,
+         work: &mut TypeWorkBudget,
+     ) -> Result<(), ValidationError> {
++        #[cfg(test)]
++        startup_measurement::count("core.session.enter");
++        #[cfg(test)]
++        let session_before = work.used();
+         // Conditional source originals retain the same complete ordinary check.
+         // Their separately reconstructed graph authorizes only exact row positions.
+         // Pending transactions always receive a fresh complete admission; a
+         // completed cache entry cannot retarget another facts/publication loan.
+         if handler_graph.is_some() || self.original_provider.is_some() {
+-            return check_source_resource_structure_with_handler_graph(
++            #[cfg(test)]
++            startup_measurement::count(if handler_graph.is_some() {
++                "core.session.bypass.handler"
++            } else {
++                "core.session.bypass.provider"
++            });
++            let result = check_source_resource_structure_with_handler_graph(
+                 program,
+                 original,
+                 answer,
+@@ -3896,12 +3908,25 @@ impl<'context> SourceResourceStructureSession<'context> {
+                 self.original_provider,
+                 work,
+             );
++            #[cfg(test)]
++            startup_measurement::record(
++                if result.is_ok() {
++                    "core.session.bypass.ok"
++                } else {
++                    "core.session.bypass.err"
++                },
++                session_before,
++                work.used(),
++            );
++            return result;
+         }
+         // Registry parameter ordering can depend on lexical method owners and
+         // their graph-local provider instances. Those contexts keep their full
+         // fresh registry check; the receipt carries no lexical exemption.
+         if !program.method_evidence.lexical_owners().is_empty() {
+-            return check_source_resource_structure_with_globals(
++            #[cfg(test)]
++            startup_measurement::count("core.session.bypass.lexical");
++            let result = check_source_resource_structure_with_globals(
+                 program,
+                 original,
+                 answer,
+@@ -3910,6 +3935,17 @@ impl<'context> SourceResourceStructureSession<'context> {
+                 Some(globals),
+                 work,
+             );
++            #[cfg(test)]
++            startup_measurement::record(
++                if result.is_ok() {
++                    "core.session.lexical.ok"
++                } else {
++                    "core.session.lexical.err"
++                },
++                session_before,
++                work.used(),
++            );
++            return result;
+         }
+         let mut validator = Validator::new_modules(program, sources, module_sources)?;
+         validator.provider_external_types = Some(globals);
+@@ -3967,15 +4003,45 @@ impl<'context> SourceResourceStructureSession<'context> {
+                     let native = AuthenticatedNativeRegistry {
+                         registry: &program.registry,
+                     };
++                    #[cfg(test)]
++                    startup_measurement::count("core.session.hit");
+                     return validator.run_effect_with_registry(&admitted.parameters, &native);
+                 }
+             }
+             // No completed unused-order proof may survive a changed semantic
+             // footprint or scheme context, including a failed fresh admission.
+             self.admitted = None;
++            #[cfg(test)]
++            startup_measurement::count("core.session.fresh");
+             {
+-                let (parameters, native) = validator.authenticate_effect_registry_phase()?;
+-                validator.run_effect_with_registry(&parameters, &native)?;
++                #[cfg(test)]
++                let registry_before = validator.type_work.get();
++                let authentication = validator.authenticate_effect_registry_phase();
++                #[cfg(test)]
++                startup_measurement::record(
++                    if authentication.is_ok() {
++                        "core.session.registry.ok"
++                    } else {
++                        "core.session.registry.err"
++                    },
++                    registry_before,
++                    validator.type_work.get(),
++                );
++                let (parameters, native) = authentication?;
++                #[cfg(test)]
++                let forest_before = validator.type_work.get();
++                let forest = validator.run_effect_with_registry(&parameters, &native);
++                #[cfg(test)]
++                startup_measurement::record(
++                    if forest.is_ok() {
++                        "core.session.forest.ok"
++                    } else {
++                        "core.session.forest.err"
++                    },
++                    forest_before,
++                    validator.type_work.get(),
++                );
++                forest?;
+                 validator.charge_type_work(1 + sources.len())?;
+                 let mut source_objects = HashMap::new();
+                 source_objects
+@@ -4002,6 +4068,16 @@ impl<'context> SourceResourceStructureSession<'context> {
+                 Ok(())
+             }
+         })();
++        #[cfg(test)]
++        startup_measurement::record(
++            if result.is_ok() {
++                "core.session.result.ok"
++            } else {
++                "core.session.result.err"
++            },
++            session_before,
++            session_before + validator.type_work.get() - prefix,
++        );
+         work.charge(validator.type_work.get() - prefix)
+             .map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
+         result
+@@ -16167,6 +16243,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
+             let mut work = TypeWorkBudget::with_limit(
+                 self.type_work_limit.saturating_sub(self.type_work.get()),
+             );
++            #[cfg(test)]
++            startup_measurement::count("core.original-proof.enter");
+             let result = source_declarations::authenticate(
+                 &self.program.registry,
+                 &self.sources,
+@@ -16175,6 +16253,16 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
+                     .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?,
+                 &mut work,
+             );
++            #[cfg(test)]
++            startup_measurement::record(
++                if result.is_ok() {
++                    "core.original-proof.ok"
++                } else {
++                    "core.original-proof.err"
++                },
++                0,
++                work.used(),
++            );
+             self.charge_type_work(work.used())?;
+             let original = result?;
+             let unused = self.unused_ordering_candidates(&original.ordering_candidates)?;
+@@ -16229,9 +16317,36 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
+     }
+ 
+     fn run_effect(&mut self) -> Result<(), ValidationError> {
+-        let (nominal_parameter_owners, native_registry) =
+-            self.authenticate_effect_registry_phase()?;
+-        self.run_effect_with_registry(&nominal_parameter_owners, &native_registry)
++        #[cfg(test)]
++        let registry_before = self.type_work.get();
++        #[cfg(test)]
++        startup_measurement::record("core.run.registry.enter", registry_before, registry_before);
++        let authentication = self.authenticate_effect_registry_phase();
++        #[cfg(test)]
++        startup_measurement::record(
++            if authentication.is_ok() {
++                "core.run.registry.ok"
++            } else {
++                "core.run.registry.err"
++            },
++            registry_before,
++            self.type_work.get(),
++        );
++        let (nominal_parameter_owners, native_registry) = authentication?;
++        #[cfg(test)]
++        let body_before = self.type_work.get();
++        let result = self.run_effect_with_registry(&nominal_parameter_owners, &native_registry);
++        #[cfg(test)]
++        startup_measurement::record(
++            if result.is_ok() {
++                "core.run.body.ok"
++            } else {
++                "core.run.body.err"
++            },
++            body_before,
++            self.type_work.get(),
++        );
++        result
+     }
+ 
+     fn run_effect_with_registry(
+@@ -16239,32 +16354,134 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
+         nominal_parameter_owners: &RegistryParameterOwners,
+         native_registry: &AuthenticatedNativeRegistry<'_>,
+     ) -> Result<(), ValidationError> {
++        #[cfg(test)]
++        startup_measurement::record(
++            "core.body.method",
++            self.type_work.get(),
++            self.type_work.get(),
++        );
+         let authenticated_method_evidence = self.validate_method_evidence_authority()?;
++        #[cfg(test)]
++        startup_measurement::record(
++            "core.body.envelopes",
++            self.type_work.get(),
++            self.type_work.get(),
++        );
+         self.validate_envelopes(&authenticated_method_evidence)?;
++        #[cfg(test)]
++        startup_measurement::record(
++            "core.body.graph",
++            self.type_work.get(),
++            self.type_work.get(),
++        );
+         self.validate_graph()?;
++        #[cfg(test)]
++        startup_measurement::record(
++            "core.body.binders",
++            self.type_work.get(),
++            self.type_work.get(),
++        );
+         let abstraction_owners = self.collect_binders(&authenticated_method_evidence)?;
++        #[cfg(test)]
++        startup_measurement::record(
++            "core.body.type-binders",
++            self.type_work.get(),
++            self.type_work.get(),
++        );
+         let type_binders =
+             self.collect_type_binders(nominal_parameter_owners, &abstraction_owners)?;
++        #[cfg(test)]
++        startup_measurement::record(
++            "core.body.method-type-owners",
++            self.type_work.get(),
++            self.type_work.get(),
++        );
+         self.validate_method_evidence_type_owners(&type_binders)?;
++        #[cfg(test)]
++        startup_measurement::record(
++            "core.body.node-types",
++            self.type_work.get(),
++            self.type_work.get(),
++        );
+         self.validate_node_types(
+             nominal_parameter_owners,
+             &type_binders,
+             &authenticated_method_evidence,
+         )?;
++        #[cfg(test)]
++        startup_measurement::record(
++            "core.body.effect-nodes",
++            self.type_work.get(),
++            self.type_work.get(),
++        );
+         let has_discard = self.validate_effect_nodes(&type_binders, native_registry)?;
+         if self.source_resource_context == SourceResourceValidationContext::FinalProgram {
++            #[cfg(test)]
++            startup_measurement::record(
++                "core.body.owner-coverage",
++                self.type_work.get(),
++                self.type_work.get(),
++            );
+             self.validate_source_owner_request_coverage()?;
++            #[cfg(test)]
++            startup_measurement::record(
++                "core.body.byte-coverage",
++                self.type_work.get(),
++                self.type_work.get(),
++            );
+             self.validate_source_byte_call_coverage()?;
++            #[cfg(test)]
++            startup_measurement::record(
++                "core.body.window-coverage",
++                self.type_work.get(),
++                self.type_work.get(),
++            );
+             self.validate_source_window_coverage()?;
+         }
++        #[cfg(test)]
++        startup_measurement::record(
++            "core.body.registration",
++            self.type_work.get(),
++            self.type_work.get(),
++        );
+         self.validate_registration_edges()?;
++        #[cfg(test)]
++        startup_measurement::record(
++            "core.body.abstraction-shapes",
++            self.type_work.get(),
++            self.type_work.get(),
++        );
+         self.validate_effect_abstraction_shapes(&authenticated_method_evidence)?;
++        #[cfg(test)]
++        startup_measurement::record(
++            "core.body.scopes",
++            self.type_work.get(),
++            self.type_work.get(),
++        );
+         self.validate_scopes()?;
++        #[cfg(test)]
++        startup_measurement::record(
++            "core.body.type-scopes",
++            self.type_work.get(),
++            self.type_work.get(),
++        );
+         self.validate_type_scopes()?;
+         // Ordinary authentication precedes dependency reconstruction. Generic
+         // computations force that proof even in private provider preparations.
++        #[cfg(test)]
++        startup_measurement::record(
++            "core.body.generic",
++            self.type_work.get(),
++            self.type_work.get(),
++        );
+         let has_generic = self.generic_cell_computations()?;
+ 
++        #[cfg(test)]
++        startup_measurement::record(
++            "core.body.resource-census",
++            self.type_work.get(),
++            self.type_work.get(),
++        );
+         let mut has_resource = false;
+         for node in &self.program.nodes {
+             self.charge_type_work(1)?;
+@@ -16290,6 +16507,12 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
+         {
+             return Ok(());
+         }
++        #[cfg(test)]
++        startup_measurement::record(
++            "core.body.capture",
++            self.type_work.get(),
++            self.type_work.get(),
++        );
+         let mut capture_work =
+             TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+         let operation: for<'a> fn(
+diff --git a/src/core/validate/source_declarations.rs b/src/core/validate/source_declarations.rs
+index 65f3e8f..bcd47d6 100644
+--- a/src/core/validate/source_declarations.rs
++++ b/src/core/validate/source_declarations.rs
+@@ -552,159 +552,189 @@ impl DeclarationCoordinates {
+         source: &SourceFile,
+         work: &mut TypeWorkBudget,
+     ) -> Result<Self, ValidationError> {
+-        let tree = syntax(source, work)?;
+-        let root = tree.root().ok_or_else(registry)?;
+-        let tokens = tree.tokens();
+-        let mut result = Self {
+-            resource_binders: ResourceBinderCoordinates::from_tree(root, tokens, work)?,
+-            ..Self::default()
+-        };
+-        let mut ordinary_resources = Vec::new();
+-        let mut source_resources = Vec::new();
+-        let mut foreign_nominals = Vec::new();
+-        let mut next_library = 0usize;
+-        for element in &root.children {
+-            charge(work, 1)?;
+-            let ConcreteElement::Node(node) = element else {
+-                continue;
++        #[cfg(test)]
++        let measurement_before = work.used();
++        #[cfg(test)]
++        super::startup_measurement::count("core.coordinates.enter");
++        let result = (|| {
++            #[cfg(test)]
++            let parse_before = work.used();
++            let tree = syntax(source, work);
++            #[cfg(test)]
++            super::startup_measurement::record(
++                if tree.is_ok() {
++                    "core.coordinates.syntax.ok"
++                } else {
++                    "core.coordinates.syntax.err"
++                },
++                parse_before,
++                work.used(),
++            );
++            let tree = tree?;
++            let root = tree.root().ok_or_else(registry)?;
++            let tokens = tree.tokens();
++            let mut result = Self {
++                resource_binders: ResourceBinderCoordinates::from_tree(root, tokens, work)?,
++                ..Self::default()
+             };
+-            match node.kind {
+-                NodeKind::TypeDeclaration | NodeKind::NewtypeDeclaration => {
+-                    let owner = ordinal(result.nominals.len())?;
+-                    let mut constructors = 0usize;
+-                    for child in &node.children {
+-                        charge(work, 1)?;
+-                        if let ConcreteElement::Node(child) = child
+-                            && child.kind == NodeKind::ConstructorDeclaration
+-                        {
+-                            let coordinate = ConstructorCoordinate {
+-                                owner,
+-                                ordinal: ordinal(constructors)?,
+-                                origin: span(child, tokens, work)?,
+-                            };
+-                            push(&mut result.constructors, coordinate, work)?;
+-                            constructors = constructors.checked_add(1).ok_or_else(resource)?;
++            let mut ordinary_resources = Vec::new();
++            let mut source_resources = Vec::new();
++            let mut foreign_nominals = Vec::new();
++            let mut next_library = 0usize;
++            for element in &root.children {
++                charge(work, 1)?;
++                let ConcreteElement::Node(node) = element else {
++                    continue;
++                };
++                match node.kind {
++                    NodeKind::TypeDeclaration | NodeKind::NewtypeDeclaration => {
++                        let owner = ordinal(result.nominals.len())?;
++                        let mut constructors = 0usize;
++                        for child in &node.children {
++                            charge(work, 1)?;
++                            if let ConcreteElement::Node(child) = child
++                                && child.kind == NodeKind::ConstructorDeclaration
++                            {
++                                let coordinate = ConstructorCoordinate {
++                                    owner,
++                                    ordinal: ordinal(constructors)?,
++                                    origin: span(child, tokens, work)?,
++                                };
++                                push(&mut result.constructors, coordinate, work)?;
++                                constructors = constructors.checked_add(1).ok_or_else(resource)?;
++                            }
+                         }
++                        let coordinate = NominalCoordinate {
++                            origin: span(node, tokens, work)?,
++                            name: name(node, tokens, work)?,
++                            role: NominalRole::Data {
++                                newtype: node.kind == NodeKind::NewtypeDeclaration,
++                                constructors,
++                            },
++                        };
++                        push(&mut result.nominals, coordinate, work)?;
+                     }
+-                    let coordinate = NominalCoordinate {
+-                        origin: span(node, tokens, work)?,
+-                        name: name(node, tokens, work)?,
+-                        role: NominalRole::Data {
+-                            newtype: node.kind == NodeKind::NewtypeDeclaration,
+-                            constructors,
+-                        },
+-                    };
+-                    push(&mut result.nominals, coordinate, work)?;
+-                }
+-                NodeKind::ResourceDefinition => {
+-                    let mut is_source = false;
+-                    for child in &node.children {
+-                        charge(work, 1)?;
+-                        is_source |= matches!(child, ConcreteElement::Node(child) if child.kind == NodeKind::SourceResourceField);
++                    NodeKind::ResourceDefinition => {
++                        let mut is_source = false;
++                        for child in &node.children {
++                            charge(work, 1)?;
++                            is_source |= matches!(child, ConcreteElement::Node(child) if child.kind == NodeKind::SourceResourceField);
++                        }
++                        let name = name(node, tokens, work)?;
++                        let coordinate = NominalCoordinate {
++                            origin: name,
++                            name,
++                            role: NominalRole::Resource {
++                                source: is_source,
++                                ordinal: 0,
++                            },
++                        };
++                        push(
++                            if is_source {
++                                &mut source_resources
++                            } else {
++                                &mut ordinary_resources
++                            },
++                            coordinate,
++                            work,
++                        )?;
+                     }
+-                    let name = name(node, tokens, work)?;
+-                    let coordinate = NominalCoordinate {
+-                        origin: name,
+-                        name,
+-                        role: NominalRole::Resource {
+-                            source: is_source,
+-                            ordinal: 0,
+-                        },
+-                    };
+-                    push(
+-                        if is_source {
+-                            &mut source_resources
+-                        } else {
+-                            &mut ordinary_resources
+-                        },
+-                        coordinate,
+-                        work,
+-                    )?;
+-                }
+-                NodeKind::EffectDeclaration => {
+-                    let name = name(node, tokens, work)?;
+-                    let coordinate = EffectCoordinate {
+-                        origin: name,
+-                        span: span(node, tokens, work)?,
+-                        name,
+-                        foreign: None,
+-                    };
+-                    push(&mut result.effects, coordinate, work)?;
+-                }
+-                NodeKind::ForeignLibrary => {
+-                    result.library(
+-                        node,
+-                        tokens,
+-                        ordinal(next_library)?,
+-                        &mut foreign_nominals,
+-                        work,
+-                    )?;
+-                    next_library = next_library.checked_add(1).ok_or_else(resource)?;
++                    NodeKind::EffectDeclaration => {
++                        let name = name(node, tokens, work)?;
++                        let coordinate = EffectCoordinate {
++                            origin: name,
++                            span: span(node, tokens, work)?,
++                            name,
++                            foreign: None,
++                        };
++                        push(&mut result.effects, coordinate, work)?;
++                    }
++                    NodeKind::ForeignLibrary => {
++                        result.library(
++                            node,
++                            tokens,
++                            ordinal(next_library)?,
++                            &mut foreign_nominals,
++                            work,
++                        )?;
++                        next_library = next_library.checked_add(1).ok_or_else(resource)?;
++                    }
++                    _ => {}
+                 }
+-                _ => {}
+             }
+-        }
+-        for (index, mut coordinate) in ordinary_resources
+-            .into_iter()
+-            .chain(source_resources)
+-            .enumerate()
+-        {
+-            charge(work, 1)?;
+-            let NominalRole::Resource { source, .. } = coordinate.role else {
+-                return Err(registry());
+-            };
+-            coordinate.role = NominalRole::Resource {
+-                source,
+-                ordinal: ordinal(index)?,
+-            };
+-            push(&mut result.nominals, coordinate, work)?;
+-        }
+-        for coordinate in foreign_nominals {
+-            push(&mut result.nominals, coordinate, work)?;
+-        }
+-        for (index, coordinate) in result.nominals.iter().enumerate() {
+-            charge(work, 1)?;
+-            result
+-                .nominal_origins
+-                .try_reserve(1)
+-                .map_err(|_| resource())?;
+-            if result
+-                .nominal_origins
+-                .insert(coordinate.origin, index)
+-                .is_some()
++            for (index, mut coordinate) in ordinary_resources
++                .into_iter()
++                .chain(source_resources)
++                .enumerate()
+             {
+-                return Err(registry());
++                charge(work, 1)?;
++                let NominalRole::Resource { source, .. } = coordinate.role else {
++                    return Err(registry());
++                };
++                coordinate.role = NominalRole::Resource {
++                    source,
++                    ordinal: ordinal(index)?,
++                };
++                push(&mut result.nominals, coordinate, work)?;
+             }
+-        }
+-        for (index, coordinate) in result.effects.iter().enumerate() {
+-            charge(work, 1)?;
+-            result
+-                .effect_origins
+-                .try_reserve(1)
+-                .map_err(|_| resource())?;
+-            if result
+-                .effect_origins
+-                .insert(coordinate.origin, index)
+-                .is_some()
+-            {
+-                return Err(registry());
++            for coordinate in foreign_nominals {
++                push(&mut result.nominals, coordinate, work)?;
+             }
+-        }
+-        for (index, coordinate) in result.constructors.iter().enumerate() {
+-            charge(work, 1)?;
+-            result
+-                .constructor_origins
+-                .try_reserve(1)
+-                .map_err(|_| resource())?;
+-            if result
+-                .constructor_origins
+-                .insert(coordinate.origin, index)
+-                .is_some()
+-            {
+-                return Err(registry());
++            for (index, coordinate) in result.nominals.iter().enumerate() {
++                charge(work, 1)?;
++                result
++                    .nominal_origins
++                    .try_reserve(1)
++                    .map_err(|_| resource())?;
++                if result
++                    .nominal_origins
++                    .insert(coordinate.origin, index)
++                    .is_some()
++                {
++                    return Err(registry());
++                }
+             }
+-        }
+-        Ok(result)
++            for (index, coordinate) in result.effects.iter().enumerate() {
++                charge(work, 1)?;
++                result
++                    .effect_origins
++                    .try_reserve(1)
++                    .map_err(|_| resource())?;
++                if result
++                    .effect_origins
++                    .insert(coordinate.origin, index)
++                    .is_some()
++                {
++                    return Err(registry());
++                }
++            }
++            for (index, coordinate) in result.constructors.iter().enumerate() {
++                charge(work, 1)?;
++                result
++                    .constructor_origins
++                    .try_reserve(1)
++                    .map_err(|_| resource())?;
++                if result
++                    .constructor_origins
++                    .insert(coordinate.origin, index)
++                    .is_some()
++                {
++                    return Err(registry());
++                }
++            }
++            Ok(result)
++        })();
++        #[cfg(test)]
++        super::startup_measurement::record(
++            if result.is_ok() {
++                "core.coordinates.ok"
++            } else {
++                "core.coordinates.err"
++            },
++            measurement_before,
++            work.used(),
++        );
++        result
+     }
+ 
+     fn library(
+diff --git a/src/core/validate/startup_measurement.rs b/src/core/validate/startup_measurement.rs
+new file mode 100644
+index 0000000..5e04916
+--- /dev/null
++++ b/src/core/validate/startup_measurement.rs
+@@ -0,0 +1,72 @@
++//! Opt-in, current-thread startup measurements for the bounded reproducer only.
++//!
++//! These events never supply validation authority or alter charged work. Call
++//! `reset` immediately before reconstruction and `snapshot` before reporting its
++//! Result, including on failure. Snapshot disables recording on this thread.
++
++use std::cell::RefCell;
++
++#[derive(Clone, Debug)]
++pub(crate) struct Event {
++    pub(crate) stage: &'static str,
++    pub(crate) before: usize,
++    pub(crate) after: usize,
++}
++
++thread_local! {
++    static EVENTS: RefCell<Option<Vec<Event>>> = const { RefCell::new(None) };
++}
++
++pub(crate) fn reset() {
++    EVENTS.with(|events| *events.borrow_mut() = Some(Vec::new()));
++}
++
++pub(crate) fn snapshot() -> Vec<Event> {
++    EVENTS.with(|events| events.borrow_mut().take().unwrap_or_default())
++}
++
++pub(crate) fn record(stage: &'static str, before: usize, after: usize) {
++    EVENTS.with(|events| {
++        if let Some(events) = events.borrow_mut().as_mut() {
++            events.push(Event {
++                stage,
++                before,
++                after,
++            });
++        }
++    });
++}
++
++pub(crate) fn count(stage: &'static str) {
++    record(stage, 0, 0);
++}
++
++pub(crate) fn is_recording() -> bool {
++    EVENTS.with(|events| events.borrow().is_some())
++}
++
++/// Aggregate trace-only calls/work. A labelled isolated run starts another group.
++/// For `.total` events, `before` is call count and `after` is summed local work.
++pub(crate) fn accumulate(stage: &'static str, before: usize, after: usize) {
++    EVENTS.with(|events| {
++        if let Some(events) = events.borrow_mut().as_mut() {
++            let start = events
++                .iter()
++                .rposition(|event| event.stage == "control.isolated.enter")
++                .map_or(0, |index| index + 1);
++            if let Some(event) = events[start..]
++                .iter_mut()
++                .find(|event| event.stage == stage)
++            {
++                event.before += 1;
++                event.after += after - before;
++            } else {
++                events.push(Event {
++                    stage,
++                    before: 1,
++                    after: after - before,
++                });
++            }
++        }
++    });
++}

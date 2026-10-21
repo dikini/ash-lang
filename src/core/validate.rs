@@ -6,6 +6,8 @@ mod foreign_host_tests;
 mod selected_evidence_tests;
 pub(crate) mod semantic_type_variables;
 mod source_declarations;
+
+pub(crate) use source_declarations::DeclarationCoordinateLoan;
 pub(crate) use source_declarations::DeclarationCoordinates;
 
 use std::{
@@ -3798,6 +3800,7 @@ fn check_source_resource_structure_with_handler_graph(
 #[derive(Default)]
 pub(crate) struct SourceResourceStructureSession<'context> {
     admitted: Option<OriginalTemplateRegistryAdmission>,
+    coordinate_loan: Option<&'context DeclarationCoordinateLoan<'context>>,
     original_provider:
         Option<&'context crate::elaborate::provider::SourceOriginalProviderContext<'context>>,
 }
@@ -3820,9 +3823,21 @@ impl<'context> SourceResourceStructureSession<'context> {
     ) -> Self {
         Self {
             admitted: None,
+            coordinate_loan: None,
             original_provider,
         }
     }
+
+    pub(crate) fn with_coordinate_loan(
+        coordinate_loan: &'context DeclarationCoordinateLoan<'context>,
+    ) -> Self {
+        Self {
+            admitted: None,
+            coordinate_loan: Some(coordinate_loan),
+            original_provider: None,
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn check(
         &mut self,
@@ -3912,6 +3927,7 @@ impl<'context> SourceResourceStructureSession<'context> {
             );
         }
         let mut validator = Validator::new_modules(program, sources, module_sources)?;
+        validator.source_coordinate_loan = self.coordinate_loan;
         validator.provider_external_types = Some(globals);
         if !program
             .registry
@@ -4329,6 +4345,7 @@ struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily
     source_handler_graph: Option<&'program super::source_resource::SourceHandlerGraph<'program>>,
     provider_fragment_locals: Option<&'program [crate::types::NominalTypeId]>,
     source_resource_context: SourceResourceValidationContext,
+    source_coordinate_loan: Option<&'program DeclarationCoordinateLoan<'source>>,
     authenticated_abstract_nominals: std::cell::RefCell<HashSet<crate::types::NominalTypeId>>,
     unused_ordering: std::cell::RefCell<HashSet<crate::types::TypeVariableId>>,
     type_work: Cell<usize>,
@@ -4735,6 +4752,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             source_handler_graph: None,
             provider_fragment_locals: None,
             source_resource_context: SourceResourceValidationContext::FinalProgram,
+            source_coordinate_loan: None,
             authenticated_abstract_nominals: std::cell::RefCell::new(HashSet::new()),
             unused_ordering: std::cell::RefCell::new(HashSet::new()),
             type_work: Cell::new(0),
@@ -16167,14 +16185,26 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             let mut work = TypeWorkBudget::with_limit(
                 self.type_work_limit.saturating_sub(self.type_work.get()),
             );
-            let result = source_declarations::authenticate(
-                &self.program.registry,
-                &self.sources,
-                self.module_sources
-                    .as_ref()
-                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?,
-                &mut work,
-            );
+            let modules = self
+                .module_sources
+                .as_ref()
+                .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+            let result = if let Some(loan) = self.source_coordinate_loan {
+                source_declarations::authenticate_with_coordinate_loan(
+                    &self.program.registry,
+                    &self.sources,
+                    modules,
+                    &mut work,
+                    loan,
+                )
+            } else {
+                source_declarations::authenticate(
+                    &self.program.registry,
+                    &self.sources,
+                    modules,
+                    &mut work,
+                )
+            };
             self.charge_type_work(work.used())?;
             let original = result?;
             let unused = self.unused_ordering_candidates(&original.ordering_candidates)?;

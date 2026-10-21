@@ -47,7 +47,7 @@ separately derived allowance. Neither allowance changes here.
 5. Preserve independent original header/forest and final copied-scope/Core
    checks, exact native contracts/registrations, owner phases, lineage, rows,
    cleanup and capture obligations. Expected-fact byte equality supplies data,
-   not Core permission. Publish no completed reuse entry on resource refusal.
+   not Core permission. Publish no completed registry or forest reuse entry on resource refusal.
 6. Verify the original test cumulatively under its unchanged default, related
    import/owner/image controls, exact/one-short/nonzero-prefix/retry boundaries
    and forged/mismatched contexts. Update documentation only for implemented
@@ -61,7 +61,7 @@ F-core remains a separate required checkpoint.
 
 - [x] Retain phase/counter measurements under the existing default.
 - [x] Repair only the demonstrated cost without weakening admission.
-- [ ] Original reproducer and affected boundaries pass focused verification.
+- [x] Original reproducer and affected boundaries pass focused verification.
 - [ ] Independent review, GitHub retention and acceptance readback complete.
 
 The [PR #89 baseline comparison](evidence/checked-ffi-selected/README.md#final-focused-verification)
@@ -101,14 +101,14 @@ compiler-owned builtin string, preserving live original checks. The instrumented
 startup passes at 318794/327680. Broad probes are removed; a fresh delivered-source
 run reproduces that result. Coordinate, builtin, original-provenance, owner,
 import, capture and host controls and Clippy pass on the same frozen source inputs.
-The image suite is 15/16: dependent-discard reconstruction still refuses with
+At the PR #92 checkpoint, the image suite was 15/16: dependent-discard reconstruction refused with
 `Resource`. An exact retained-a301 archive shows this test already failed with bare
 `Resource`; the candidate reports `Validation(Resource)`. Internal failure phases
 are not claimed equal. The comparison retains source/configuration equality and
 its path difference. The
 [final evidence](evidence/source-resource-startup-budget/README.md#delivered-source-verification)
-retains both results. A separate follow-up under this task and issue #91 must
-repair that dependent case before whole-task acceptance; F-core remains pending.
+retains both historical results. The remaining slice below repairs the dependent
+case; independent retention and acceptance are still required. F-core remains pending.
 
 Existing session reuse is bound to exact immutable registry/source/module/global
 and unused-ordering-footprint context; conditional, provider and lexical contexts
@@ -118,3 +118,60 @@ deliberately require separate admission.
 
 None. A semantic or architectural gap returns to its governing artifact rather
 than becoming an allowance increase or local permission.
+
+## Remaining dependent-discard slice
+
+PR #92 retained the bounded original-startup repair at
+`f6a2647a03a2172823f38e332c744eba5edeed06`; its independently audited partial
+acceptance keeps this task and issue #91 open. Start this slice from that exact
+commit in the same worktree. The named dependent-discard test reconstructs
+separate Parent and Child template contexts and final copied scopes without
+native execution. The earlier baseline establishes an existing named failure;
+it does not establish that its bare `Resource` arose in the candidate's later
+`Validation(Resource)` phase.
+
+1. Open an individual draft PR before long implementation. Measure decode,
+   expected-fact authentication, original template admission, main reconstruction
+   and final independent Core on the current test's unchanged cumulative default
+   of 327680. Record failures as well as completed phases. Keep optional probes
+   test-only and preserve the original result and meter.
+2. Measure repeated declaration-coordinate work and context-specific checks
+   before selecting a repair. Parent/Child registries, original forests and copied
+   substitutions retain their independent authority. Reuse only demonstrated
+   context-independent work within an immutable operation; no broader proof cache,
+   scheduling change, limit increase or prior-context acceptance transfers.
+3. Require the complete image filter to pass 16/16, including dependent-discard
+   and the original imported-buffer default test. Retain exact/one-short/prefix/
+   retry and tamper/context controls, plus affected owner/import/capture and
+   Clippy checks on the final delivered inputs. Remove broad disposable probes
+   before the final fresh verification.
+4. Obtain independent exact-head review and GitHub squash/merge retention with
+   exact tree/ref and acceptance readback. Whole task and F-core acceptance remain
+   pending until their original obligations are met. Nominal/resource work waits
+   for this repair.
+
+The [initial dependent measurement](evidence/dependent-source-resource-startup/README.md)
+completes both original templates at 243110 and reaches final Core at 256303.
+Final pre-capture checks complete, then strict capture exhausts the unchanged
+caller allowance. Separate template sessions each correctly authenticate their
+registry, but each repeats pure source-coordinate extraction costing 9172 and
+20442 units. This is measured candidate duplication, not a reusable registry or
+forest proof; no dependent-case repair or acceptance follows yet.
+
+The [borrow-backed coordinate candidate](evidence/dependent-source-resource-startup/README.md#borrowed-coordinate-candidate)
+passes six focused loan controls and the complete image filter 16/16, including
+dependent-discard at 314686/327680 and imported-buffer at 318817/327680. Exact
+live source/module hits establish the measured repetition; every template still
+authenticates its own registry, binders and forests. These results use disposable
+probes. Final acceptance requires fresh verification after probe removal and
+independent review; no instrumented result transfers to cleaned inputs.
+
+The [final delivered-source checks](evidence/dependent-source-resource-startup/README.md#final-delivered-source-verification)
+pass after probe removal: dependent-discard 314687/327680, original imported buffer
+318817/327680, complete image filter 16/16 and 117 distinct focused passing tests.
+Clippy also passes on the same unchanged 525-file source/configuration inputs.
+The final tests include fresh empty-projection provenance after a warm loan,
+coherent bad-registry refusal, exact live source identity and paid cumulative
+bounds. No diagnostic result transfers across cleanup. Independent exact-head
+review, GitHub integration and author/PM acceptance remain pending; F-core and
+later checked-FFI gates remain separate.
