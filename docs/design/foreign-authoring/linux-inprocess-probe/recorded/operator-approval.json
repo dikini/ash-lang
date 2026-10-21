@@ -1,0 +1,15 @@
+{
+  "approval_evidence": "Root message: inspected reporter.c and independently verified source, receipt and both image hashes; explicitly approved exact receipt/images before execution. No production image/native unknown authority, F2 AD, isolated or SQLite acceptance.",
+  "authority": "root task, acting under user autonomous recommended-choice delegation",
+  "comparison_image_sha256": "c338f484f853f1f8706ace538269a68c51cd5625c6cfc189f36211e534b76798",
+  "image_sha256": "4fa38655bf249a6e9a10c37da914f00ca391160261cf8eaa3c7b6f407e3eb248",
+  "limitations": [
+    "sandbox local evidence only",
+    "host authority retained",
+    "native/toolchain trust retained",
+    "no isolation or credential clearing claim"
+  ],
+  "receipt_sha256": "a380fb87183305c4f31e5f5b15ce3f91dee88b6b78906a5752d633550e424c8b",
+  "scope": "exact trusted self-authored diagnostic reporter images; bounded fd-exec and pinning experiment only",
+  "version": 1
+}

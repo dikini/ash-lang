@@ -48,6 +48,24 @@ headers, image/receipt/bridge/contract digests, launcher/filter configuration,
 UID/GID maps, storage ownership, quotas and numeric limit policy. No native
 startup may precede isolation. Native faults require a contained test process.
 
+## Independent in-process image-pinning comparison
+
+A subsequent bounded assignment authorized a trusted self-authored static C
+reporter to test common image admission independently of worker setup. Its
+[source, exact approval, build provenance and observations](linux-inprocess-probe/README.md)
+record sealed-fd execution after pathname replacement on the host and EACCES in
+the filesystem sandbox. It retains host authority and tests no worker isolation,
+SQLite, native fault, Ash evaluator or generated bridge. No host policy changed.
+The original isolated Stage B remains unexecuted.
+
+This comparison can inform a separately scoped scalar-only in-process
+architecture. It accepts no AD or F2 checkbox. A real generated Ash whole-image
+packaging comparison and explicit approval/trust/deployment policy still need
+review before narrow architecture acceptance. The [requirement split](linux-inprocess-probe/requirements.md)
+keeps those questions separate from isolated-worker prerequisites and downstream
+F6 product admission/runtime evidence. Missing SQLite and worker group-clearing
+authority do not automatically block every scalar-only in-process profile.
+
 ## Proposed architecture requirements awaiting evidence
 
 These requirements refine design questions; they are not an accepted AD.
