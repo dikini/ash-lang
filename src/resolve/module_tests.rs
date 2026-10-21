@@ -491,7 +491,9 @@ fn malformed_summary_admission_precedes_later_type_resource_in_dependency_order(
                 ResolveReason::TypeResourceExhausted
             },
         );
-        assert_eq!(type_work.used(), if malformed_first { 0 } else { 3 });
+        // The first summary's completed publication consumes the fixed
+        // original/provenance admission cells before this boundary fails.
+        assert_eq!(type_work.used(), 3);
     }
 }
 
@@ -1271,7 +1273,9 @@ fn determined_summary_relationship_authentication_has_an_exact_retry_boundary() 
     // sharing four kind-table records and borrowing the two-ID method domain.
     // Complete function synthesis supplies its intrinsic Type without a pair walk.
     // List<X>'s XI installation also scans its one formal's owner kind.
-    const EXACT_TYPE_WORK: usize = 104 + 1;
+    // Method callable-graph closure adds 27 paid visits even though this
+    // fixture's retained types contain no effect identity.
+    const EXACT_TYPE_WORK: usize = 104 + 1 + 27;
     assert_eq!(
         (measured_constraint.used(), measured_type.used()),
         (EXACT_CONSTRAINT_WORK, EXACT_TYPE_WORK),

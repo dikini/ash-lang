@@ -1,0 +1,19 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "ash",
+    "--locked",
+    "--test",
+    "checked_foreign_wrappers",
+    "--",
+    "--nocapture"
+  ],
+  "exit": 101,
+  "elapsed_seconds": 2.79,
+  "source_configuration_before_after_equal": true,
+  "file_count": 519,
+  "source_configuration_tree_sha256": "ddadbf6e07cb1e8850684fefb41b733efafd7e669b20ad86ccc5991dd5bdbe90",
+  "log_sha256": "dc34cd8b5f99bb44d7eaed108bf264f71ffdc531a8302ff2e01d64d8221d34b1"
+}

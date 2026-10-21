@@ -2323,8 +2323,7 @@ impl Drop for CheckedImplementationFactBuffer {
 impl Drop for CheckedSchemeBuffer {
     fn drop(&mut self) {
         for checked in self.0.drain(..) {
-            drop(checked.scheme);
-            discard_origin_iteratively(checked.origin);
+            drop(checked);
         }
     }
 }

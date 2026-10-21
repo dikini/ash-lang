@@ -4,6 +4,7 @@
 mod foreign_host_tests;
 pub(crate) mod semantic_type_variables;
 mod source_declarations;
+pub(crate) use source_declarations::DeclarationCoordinates;
 
 use std::{
     cell::Cell,

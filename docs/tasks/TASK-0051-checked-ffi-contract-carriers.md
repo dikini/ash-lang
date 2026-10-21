@@ -113,10 +113,44 @@ checked hosts still refuse runtime and image admission. The subset passes 46 foc
 actual generated legacy build/run, plus targeted Clippy. The
 [verification receipt](evidence/checked-ffi-hosts/verification.json) and
 [capture notes](evidence/checked-ffi-hosts/README.md) retain final source/configuration
-pins, raw logs and the two diagnosed compatibility repairs. Independent exact-head
-review and integration remain pending. These observations accept no additional
+pins, raw logs and the two diagnosed compatibility repairs. Independent review cleared head `f19c55d835ba95b1cfc2051acbf4f0e29a696d73`;
+[PR #85](https://github.com/dikini/ash-lang/pull/85) was GitHub squash-merged at
+`bdae57436e33158c931b740886f05ad335b98106`, preserving its exact reviewed tree.
+The author read back GitHub merged state, matching local/origin refs and a clean
+worktree. Reviewer audited actual retention and the issue #59 partial acceptance;
+the orchestrator confirmed advancement. These observations accept no additional
 whole-task criterion and supply no checked native execution or Linux containment
 evidence.
+
+The next wrapper slice starts from the GitHub-retained scalar checkpoint on
+`codex/checked-ffi-f3-wrappers`. Its early draft publishes the owned plan before
+product work. Delivered and remaining criteria stay separate: scalar host/Core
+correspondence is retained; checked owner lifecycle correspondence and complete
+wrapper/module/image obligations remain open.
+
+The first wrapper controls pass imported generic and closed generic wrapper
+source/Core checking. They expose a body-free admission gap: a default-profile
+consumer accepts the outward-pure closed wrapper. The [initial red receipt](evidence/checked-ffi-wrappers/README.md)
+records two passes and this expected failure before product changes. The draft
+remains incomplete. The first guard repair now passes all three controls by
+requiring explicit profile from authenticated retained contracts, independently
+of the outward row. Subsequent controls cover aliases/re-exports, opaque access,
+branches, recursion and returned functions through independent Core. A private
+capture-erasure probe exposes missing defining-global correspondence. Checkpoint
+`1c70442` retains the repair: immutable completed global publications shared
+through imports, projection authentication, and iterative final-owner teardown.
+Seven private controls pass for that checkpoint, including donor/stale originals,
+coordinated erasure, alias/import identity, prefixed work bounds and deep teardown.
+The final wrapper candidate passes 181 distinct focused tests, including distinct
+nonempty row actuals, exact two-contract/assumption union, body-free default-profile
+refusal, publication/source/table erasure controls, deep teardown and affected
+legacy regressions. The generated legacy build/run and targeted Clippy pass on
+the same final source/configuration manifest. The
+[verification receipt](evidence/checked-ffi-wrappers/verification.json) retains
+all commands, raw logs and pins; independent review and retention are pending.
+Selected-evidence carrier/anti-erasure coverage, complete nominal/resource
+closure erasure, checked owners and primitive/image/runtime obligations remain
+outside this partial delivery; their original criteria stay unchecked.
 
 ## Verification
 

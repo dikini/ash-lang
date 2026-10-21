@@ -1012,6 +1012,17 @@ assumption identities and mandatory native premises remain attached to its
 binding. An empty `assumes` set cannot remove the mandatory premises. Ordinary
 library declarations cannot publish these checked roles.
 
+Ordinary global wrappers retain their original native contracts and authored and
+mandatory assumptions through body-free callable summaries. An internal host may
+close the outward row without removing those requirements. Default resolution
+refuses a dependency with required checked native contracts after authenticating
+its summary; an outward-pure wrapper does not bypass the explicit static profile.
+Aliases, re-exports and opaque views preserve the original global publication and
+contract identities. Effect identities referenced by callable controls and nested
+Type/Row metadata require exact authenticated effect declaration entries. Resident source snapshots authenticate original
+declaration classification; consumers do not infer wrapper requirements from
+dependency bodies.
+
 Using a checked symbol requests both its exact original native instance and
 canonical `Foreign.NativeHost<H>` at the selected actual H. A `foreign host H`
 expression introduces a fresh rigid Type identity and interprets only admitted

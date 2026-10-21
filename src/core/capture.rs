@@ -8330,15 +8330,19 @@ mod tests {
             }),
             "the checked Cell.write call retains its generic indexed type"
         );
-        let canonical = || ImportedGlobalScheme {
-            scalar_preflight: exported.scalar_preflight.clone(),
-            binder: exported.binder,
-            scheme: exported
-                .scheme
-                .clone_with_budget(&mut TypeWorkBudget::unbounded())
-                .unwrap(),
-            origin: exported.origin.clone(),
-            capture: exported.capture.clone(),
+        let canonical = || {
+            ImportedGlobalScheme {
+                publication: exported.publication.as_ref().map(Arc::clone),
+                scalar_preflight: exported.scalar_preflight.clone(),
+                binder: exported.binder,
+                scheme: exported
+                    .scheme
+                    .clone_with_budget(&mut TypeWorkBudget::unbounded())
+                    .unwrap(),
+                origin: exported.origin.clone(),
+                capture: exported.capture.clone(),
+            }
+            .with_fixture_publication()
         };
         let matches = |imported: &ImportedGlobalScheme| {
             same_imported_global_fact_with_budget(
@@ -8402,19 +8406,23 @@ mod tests {
             },
         };
         let exported = ExportedGlobal {
+            publication: None,
             scalar_preflight: None,
             binder: BinderId::new(0),
             scheme: ConstrainedScheme::from_rank1_type(Type::Unit),
             origin: origin.clone(),
             capture: capture.clone(),
-        };
+        }
+        .with_fixture_publication();
         let mut imported = ImportedGlobalScheme {
+            publication: exported.publication.as_ref().map(Arc::clone),
             scalar_preflight: None,
             binder: exported.binder,
             scheme: ConstrainedScheme::from_rank1_type(Type::Unit),
             origin,
             capture,
-        };
+        }
+        .with_fixture_publication();
         let matches = |imported: &ImportedGlobalScheme| {
             same_imported_global_fact_with_budget(
                 imported,

@@ -169,6 +169,74 @@ without source-body inference, opaque/re-exported origins, complete Type/Row
 instantiation, hidden captured S/C/H, branch/recursive joins and forged assumption
 or dependency removal. Nearest ordinary-handler precedence remains unchanged.
 
+### Next body-free wrapper checkpoint
+
+Start from retained PR #85 at `bdae57436e33158c931b740886f05ad335b98106`.
+Publish this plan as an early draft PR before implementation. The previous
+checkpoint supplies static scalar hosts and canonical symbol facts, with runtime
+and image refusal. This checkpoint must connect those facts through ordinary
+wrappers rather than infer authority from retained source bodies or effect names.
+
+Use the existing export/import, global scheme, capture and contract carriers.
+Preserve original operation/assumption identities and full Type/Row substitutions
+through generic wrappers, aliases and re-exports. An internal host may remove
+native/H effects from a wrapper's outward row; that cannot erase its required
+native contracts or assumptions. A body-free consumer must retain that dependency
+and the explicit checked-profile requirement. Empty authored assumption sets
+continue to retain automatic native premises. No parallel registry, source-name
+special case or serialized checked flag may supply authority.
+
+An internal H remains lexically bound in portable host provenance. It must not
+be exported as a free Type identity or reused as authority by independent calls.
+The same closed wrapper called twice has separate host activations. Consumer
+checking receives only `DependencyExports`/summaries; producer code is supplied
+separately at linking. Resident bytes authenticate original declarations rather
+than re-infer wrapper requirements. Erasing an outward-pure wrapper's checked
+requirements must reject against independently reconstructed original facts.
+
+The first erasure probe confirms that native-table authentication alone cannot
+prove an outward-pure wrapper's capture requirements were retained. Complete
+local `CheckedGlobalScheme` facts therefore publish once per original binder as
+immutable shared originals. Export/import projections retain that same original
+across aliases and re-exports, compare binder/scheme/origin/capture against it,
+and reject a missing, donor or stale original. Mint only from completed local
+checked facts, never from an imported projection. Clone and comparison work is
+charged before allocation; failure publishes no partial summary. Source consumers
+remain body-free, while linking/Core independently check producer code.
+
+Write positive and negative cases before changing behavior:
+
+- Direct and generic imported scalar wrappers, preserving unused Type/Row actuals
+  and exact H selection, lower through independently validated Core.
+- A wrapper with an internal checked host exposes its transitive contracts after
+  its outward row closes; a body-free default-profile consumer refuses it.
+- Namespace aliases and re-exports preserve original identities; opaque views
+  retain required contract facts without exposing hidden constructors or bodies.
+- Wrong H, reordered complete vectors, hidden/captured host dependencies and
+  erased or substituted assumption/contract metadata reject independently.
+- Branch-only dependencies, selected evidence and bounded recursive/higher-order
+  summaries preserve the union. If a path cannot be reconstructed in this subset,
+  refuse it explicitly and keep that original obligation pending.
+- New summary/capture reconstruction work has exact, one-short, cumulative and
+  fresh sufficient-budget controls. Existing legacy exports remain valid.
+
+This wrapper checkpoint covers ordinary globals and callable control summaries.
+Selected-evidence carrier/anti-erasure coverage remains pending under the original
+F3 criterion. These controls establish effect references in callable and nested
+Type/Row metadata; they do not establish complete nominal/resource type-closure
+erasure coverage. Checked owner/copy/lifecycle and
+executable-image obligations also remain separate.
+
+Freeze and independently review each coherent subset. Preserve the scalar and
+legacy image/owner regressions; select focused checks for changed boundaries and
+retain exact raw results. Keep the active worktree committed and clean between
+handoffs. Continue using one Cargo job and the existing shared target.
+
+Checked owner lifecycle execution, checked byte/copy operations and launch/image
+admission are excluded from this wrapper checkpoint. They remain original F3 or
+connected F4/F6 obligations; this subset cannot close TASK-0051. Missing proposed
+semantics return to CP-0024 rather than becoming local implementation choices.
+
 ## Slice 5: Independently validate retained Core and private images
 
 Extend existing Core and private-image reconstruction with canonical checked

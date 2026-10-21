@@ -1,0 +1,29 @@
+{
+  "command": [
+    "cargo",
+    "clippy",
+    "-p",
+    "ash",
+    "--locked",
+    "--lib",
+    "--test",
+    "checked_foreign_wrappers",
+    "--test",
+    "checked_foreign_host",
+    "--test",
+    "module_elaboration",
+    "--test",
+    "effect_modules",
+    "--test",
+    "program_build",
+    "--",
+    "-D",
+    "warnings"
+  ],
+  "exit": 0,
+  "elapsed_seconds": 24.698,
+  "source_configuration_before_after_equal": true,
+  "file_count": 520,
+  "source_configuration_tree_sha256": "0a042cd9ffceb29b394b8f92c8ab6c91c3abf35e21c8c7d15d1756596538b8c5",
+  "log_sha256": "ac971f99958af5fe4ed11498b3f980afafacc778c16ae8faef8e0c16bdbe38bb"
+}

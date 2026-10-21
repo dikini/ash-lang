@@ -1799,6 +1799,24 @@ fn resolve_module_names_with_budget(
                 };
                 error(reason, dependency.edge.import_span(), message)
             })?;
+        if !checked_foreign_profile
+            && dependency
+                .summary
+                .requires_checked_foreign_profile(type_work)
+                .map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        dependency.edge.import_span(),
+                        "checked dependency-profile inspection exceeded its type-work budget",
+                    )
+                })?
+        {
+            return Err(error(
+                ResolveReason::ForeignContract,
+                dependency.edge.import_span(),
+                "a checked native dependency requires the explicit checked foreign profile",
+            ));
+        }
     }
 
     let mut resolver = Resolver::with_budgets(
@@ -5982,6 +6000,7 @@ impl Resolver {
         self.imported
             .insert_global(
                 ImportedGlobalScheme {
+                    publication: exported.publication.as_ref().map(Arc::clone),
                     scalar_preflight: exported.scalar_preflight.as_ref().map(Arc::clone),
                     capture: exported
                         .capture

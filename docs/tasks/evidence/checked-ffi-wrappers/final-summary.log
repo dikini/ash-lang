@@ -1,0 +1,67 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 60 tests
+test core::capture::control::tests::singleton_pop_matches_full_pruning_for_cycles_captures_and_summary_roots ... ok
+test resolve::module_tests::malformed_summary_admission_precedes_later_type_resource_in_dependency_order ... ok
+test resolve::module_tests::determined_summary_method_seed_has_exact_admission_boundaries ... ok
+test resolve::module_tests::builtin_cell_summary_rejects_well_kinded_operation_tampering ... ok
+test resolve::module_tests::detached_summary_rechecks_variable_head_against_an_alternate_key ... ok
+test resolve::module_tests::detached_summary_rechecks_dependent_coverage_against_an_alternate_key ... ok
+test resolve::module_tests::ordinary_effect_operation_summary_authenticates_retained_nominal_kinds ... ok
+test resolve::module_tests::detached_summary_rechecks_orphan_ownership_against_an_alternate_key ... ok
+test resolve::module_tests::determined_summary_relationship_authentication_has_an_exact_retry_boundary ... ok
+test resolve::module_tests::frozen_summary_retains_authoritative_declaration_order ... ok
+test resolve::module_tests::unselected_constructor_scheme_corruption_fails_summary_admission ... ok
+test resolve::module_tests::relational_summary_application_arity_precedes_a_late_wrong_kind ... ok
+test resolve::module_tests::unselected_kind_invalid_summary_fact_is_rejected_before_local_checking ... ok
+test resolve::module_tests::unselected_implementation_method_corruption_fails_summary_admission ... ok
+test resolve::module_tests::unselected_kind_valid_bare_variable_head_fails_summary_admission ... ok
+test resolve::module_tests::unselected_non_decreasing_prerequisite_fails_summary_admission ... ok
+test core::capture::tests::generic_cell_body_free_write_summary_authenticates_contents_graph_and_return ... ok
+test resolved::source_native_summary_tests::provenance_reflexivity_is_paid_and_independent_arenas_keep_complete_comparison ... ok
+test resolved::tests::checked_impl_summary_clone_uses_its_exact_constraint_budget ... ok
+test resolved::tests::body_free_summary_admission_has_exact_independent_limits_and_is_reusable ... ok
+test resolved::tests::determined_summary_decrease_has_an_exact_retryable_key_boundary ... ok
+test resolve::module_tests::unselected_kind_valid_orphan_head_fails_summary_admission ... ok
+test resolve::module_tests::summary_admission_rejects_every_malformed_private_determination_key ... ok
+test resolved::tests::detached_implementation_summary_rejects_both_invalid_prerequisite_relations ... ok
+test resolved::tests::duplicate_summary_fact_comparisons_are_constraint_only_exact_and_atomic ... ok
+test resolved::tests::determined_summary_pair_coherence_has_an_exact_retryable_boundary ... ok
+test resolved::tests::effectful_interface_method_summary_authenticates_after_head_substitution ... ok
+test resolved::tests::implementation_summary_storage_charges_before_both_reserves ... ok
+test resolved::tests::hidden_interface_summary_closure_uses_its_exact_constraint_budget ... ok
+test resolved::tests::implementation_summary_authentication_has_exact_independent_ledgers ... ok
+test resolved::tests::interface_summary_indexes_have_exact_constraint_work_and_failure_precedence ... ok
+test resolved::tests::determined_summary_selection_key_validates_before_precharging_retention ... ok
+test resolved::tests::linked_constructor_carriers_end_the_physical_summary_scheme_lifecycle ... ok
+test resolved::tests::lexical_partition_survives_checked_combination_but_not_module_summary ... ok
+test resolved::tests::local_summary_publication_authenticates_source_and_fact_determination_metadata ... ok
+test resolved::tests::newtype_summary_authentication_rejects_each_canonical_family_tamper ... ok
+test resolved::tests::public_implementation_summary_charges_storage_and_closure_inspection ... ok
+test resolved::tests::newtype_summary_authentication_rejects_representation_provenance_tampering ... ok
+test resolved::tests::summary_authentication_rejects_a_canonical_representation_for_non_newtype ... ok
+test resolved::tests::summary_authentication_requires_the_opaque_newtype_canonical_representation ... ok
+test resolved::tests::raw_global_duplicate_requirements_reach_summary_admission_exactly_and_atomically ... ok
+test resolved::tests::polymorphic_method_summary_rejects_complete_binder_tampering_matrix ... ok
+test resolved::tests::summary_overlap_retains_kind_context ... ok
+test resolved::tests::summary_selection_key_without_an_edge_precharges_retention_before_reserving ... ok
+test resolved::tests::summary_newtype_representations_reject_cross_owner_parameters_in_public_and_hidden_facts ... ok
+test resolved::tests::transparent_newtype_summary_fixture_authenticates_before_tampering ... ok
+test resolve::module_tests::generic_cell_summary_authenticates_complete_facade_facts ... ok
+test resolved::foreign_certificate_tests::checked_foreign_summary_rejects_changed_certificate_operation_signature ... ok
+test resolve::module_tests::relational_summary_rejects_complete_parameter_and_application_tampering_matrix ... ok
+test resolved::checked_wrapper_tests::checked_wrapper_summary_keeps_original_contract_and_charges_the_profile_scan ... ok
+test resolved::source_native_summary_tests::checked_source_native_summary_authentication_has_exact_retryable_work ... ok
+test resolved::tests::deep_duplicate_summary_comparison_is_reusable_and_stack_safe ... ok
+test resolve::module_tests::exhaustive_summary_orders_indexes_aliases_and_owners_fail_before_local_checking ... ok
+test resolved::checked_wrapper_tests::checked_wrapper_summary_rejects_erased_native_and_capture_requirements ... ok
+test resolved::tests::duplicate_public_summary_aliases_compare_only_on_constraint_work ... ok
+test resolved::tests::deep_body_free_summary_admission_and_rejection_are_exact_and_stack_safe ... ok
+test resolved::tests::summary_carrier_comparisons_are_constraint_only_exact_and_stack_safe ... ok
+test resolve::module_tests::exhaustive_public_and_hidden_summary_carriers_fail_before_local_checking ... ok
+test resolved::source_native_summary_tests::checked_source_native_summaries_reject_changed_original_correspondence ... ok
+test resolved::tests::summary_duplicate_indexes_are_linear_exact_and_stack_safe ... ok
+
+test result: ok. 60 passed; 0 failed; 0 ignored; 0 measured; 1916 filtered out; finished in 1.04s
+

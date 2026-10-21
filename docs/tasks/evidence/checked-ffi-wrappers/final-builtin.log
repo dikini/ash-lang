@@ -1,0 +1,16 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 9 tests
+test foreign::checked_builtins::tests::checked_builtin_full_original_inventory_authenticates_at_exact_work ... ok
+test foreign::checked_builtins::tests::checked_builtin_reconstruction_rejects_donor_payload_origin_and_formals ... ok
+test foreign::checked_builtins::tests::checked_builtin_display_aliases_preserve_roles_but_not_forged_declarations ... ok
+test core::validate::source_declarations::tests::checked_builtin_original_selective_legacy_view_has_no_host_or_omission_proof ... ok
+test resolved::image_subset_tests::checked_builtin_image_subset_preserves_exact_metadata_and_work_limit ... ok
+test build::image::tests::checked_builtin_image_empty_host_refuses_before_registry_and_body_encoding ... ok
+test resolved::image_subset_tests::checked_builtin_image_subset_refuses_altered_roles_and_mirrors ... ok
+test build::image::tests::checked_builtin_image_legacy_import_roundtrip_authenticates_inert_host ... ok
+test core::validate::source_declarations::tests::checked_builtin_original_declarations_require_exact_source_and_host_role ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 1967 filtered out; finished in 0.06s
+
