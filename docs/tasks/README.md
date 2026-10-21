@@ -9,9 +9,6 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-  measures and repairs issue #91 under unchanged defaults and independent
-  source/owner/Core admission.
-
 - [TASK-0051: Checked FFI Contract Carriers](TASK-0051-checked-ffi-contract-carriers.md)
   implements F3 under accepted CP-0024; source/summary/Core/image acceptance remains
   pending until the complete carrier boundary is independently verified.
